@@ -6,6 +6,7 @@ import { type CaptureParent } from "../../src/internal/Association.ts";
 import { startCapture } from "../../src/internal/Capture.ts";
 import { type NativeFrame } from "../../src/internal/Driver.ts";
 import { makeOwner } from "../../src/internal/Owner.ts";
+import { advance, timed } from "./Time.ts";
 import { jpeg, widerJpeg } from "./Jpeg.ts";
 import { fixture as sessionFixture, gate } from "./ScriptedProvider.ts";
 
@@ -15,7 +16,7 @@ interface Case {
 }
 const test = (name: string, run: () => Effect.Effect<void, BrowserbaseError, Scope.Scope>): Case => ({
   name,
-  run: Effect.scoped(Effect.suspend(run)),
+  run: timed(Effect.scoped(Effect.suspend(run))),
 });
 const expectReason = <A, R>(effect: Effect.Effect<A, BrowserbaseError, R>, reason: BrowserbaseError["reason"]) =>
   effect.pipe(Effect.result, Effect.map((result) => {
@@ -216,6 +217,7 @@ export const captureCases: ReadonlyArray<Case> = [
   test("duration expiration ends idle capture without waiting for another callback", () => Effect.gen(function* () {
     const f = yield* makeFixture();
     const interval = yield* startCapture(f.parent, { ...options, maxDurationMillis: 20 });
+    yield* advance(20);
     const summary = yield* interval.completed;
     assert.equal(summary.reason, "duration-limit");
     assert.equal(summary.nativeStop, "confirmed");

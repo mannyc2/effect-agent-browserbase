@@ -1,8 +1,9 @@
 import { Schema } from "effect";
 import type { Browser, BrowserContext, CDPSession, Dialog, Download, ElementHandle, Frame, JSHandle, Page } from "playwright-core";
-import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename, type Viewport } from "../Types.ts";
+import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename } from "../Types.ts";
 import type { CaptureSource, Driver, DriverEvents, DriverOptions, NativeFrame, NativeObservation } from "./Driver.ts";
 import type { Ticket } from "./Owner.ts";
+import { CallbackTasks } from "./CallbackTasks.ts";
 import { pngGeometry } from "./Images.ts";
 
 const failure = (operation: string, reason: BrowserbaseError["reason"], outcome?: BrowserbaseError["outcome"]) =>
@@ -88,7 +89,7 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
   const byPage = new WeakMap<Page, Entry>();
   const frameIds = new WeakMap<Frame, string>();
   const dialogs = new Set<Dialog>();
-  const pending = new Set<Promise<unknown>>();
+  const callbacks = new CallbackTasks(32, () => events.fault());
   let serial = 0, frameSerial = 0, observationSerial = 0, downloadSerial = 0;
   let selected: Entry | undefined;
   let selectedFrame: Frame | undefined;
@@ -105,11 +106,6 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     if (id === undefined) { id = `frame-${++frameSerial}`; frameIds.set(frame, id); }
     return id;
   };
-  const track = (promise: Promise<unknown>) => {
-    if (pending.size >= 32) { events.fault(); return; }
-    const caught = promise.catch(() => { if (!closing) events.fault(); }).finally(() => pending.delete(caught));
-    pending.add(caught);
-  };
   const disposeObservation = async () => {
     const old = observation; observation = undefined;
     if (old !== undefined) {
@@ -123,7 +119,7 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     const entry: Entry = { id: `page-${++serial}`, page, off: [] };
     byPage.set(page, entry);
     if (entries.size >= options.maxPages) {
-      track(closeWithin(() => page.close()));
+      callbacks.submit(() => closeWithin(() => page.close()));
       events.fault();
       return entry;
     }
@@ -142,8 +138,8 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
       if (selectedFrame === frame) { selectedFrame = undefined; changed("target-changed"); }
     };
     const onDialog = (dialog: Dialog) => {
-      if (options.dialogPolicy === "dismiss") track(closeWithin(() => dialog.dismiss()));
-      else if (dialogs.size >= 8) { events.fault(); track(closeWithin(() => dialog.dismiss())); }
+      if (options.dialogPolicy === "dismiss") callbacks.submit(() => closeWithin(() => dialog.dismiss()));
+      else if (dialogs.size >= 8) { events.fault(); callbacks.submit(() => closeWithin(() => dialog.dismiss())); }
       else { dialogs.add(dialog); invalidateObservation(); events.pause(); }
     };
     page.on("close", onClose); page.on("framenavigated", onNavigation);
@@ -151,7 +147,7 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     entry.off.push(() => page.off("close", onClose), () => page.off("framenavigated", onNavigation),
       () => page.off("framedetached", onDetached), () => page.off("dialog", onDialog));
     if (initialized && !creatingPage) {
-      if (options.popupPolicy === "close") track(closeWithin(() => page.close()));
+      if (options.popupPolicy === "close") callbacks.submit(() => closeWithin(() => page.close()));
       else if (options.popupPolicy === "pause") events.pause();
     }
     return entry;
@@ -329,8 +325,9 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     observe: (maximumBytes, controlLimit, ticket) => sanitize("observe", async () => {
       await disposeObservation(); ticket.check();
       const holder = await current().frame.evaluateHandle(({ maximumBytes, controlLimit }) => {
-        const all = Array.from(document.querySelectorAll("a[href],button,input,select,textarea,[role=button]"));
-        const nodes = all.slice(0, controlLimit);
+        const all = document.querySelectorAll("a[href],button,input,select,textarea,[role=button]");
+        const nodes: Element[] = [];
+        for (let i = 0; i < Math.min(all.length, controlLimit); i++) nodes.push(all[i]);
         const source = document.body?.innerText ?? "";
         const encoded = new TextEncoder().encode(source);
         let end = Math.min(encoded.length, maximumBytes);
@@ -444,12 +441,13 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     },
     invalidateObservation,
     disconnect: () => sanitize("disconnect", async () => {
-      closing = true; invalidateObservation();
+      closing = true; callbacks.stop(); invalidateObservation();
       context.off("page", onPage); browser.off("disconnected", onDisconnected);
       for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
       await disposeObservation().catch(() => {});
       await closeWithin(() => Promise.allSettled([...dialogs].map((dialog) => dialog.dismiss()))).catch(() => {});
       dialogs.clear();
+      await closeWithin(() => callbacks.settle()).catch(() => {});
       await closeWithin(() => browserCdp?.detach() ?? Promise.resolve()).catch(() => {});
       await closeWithin(() => browser.close());
       entries.clear(); selected = undefined; selectedFrame = undefined;

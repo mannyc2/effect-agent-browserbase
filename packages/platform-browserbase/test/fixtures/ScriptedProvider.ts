@@ -1,5 +1,5 @@
 import { Effect, Redacted } from "effect";
-import { FrameInfo, PageInfo, Viewport, type BrowserbaseError, type CleanupResult } from "../../src/Types.ts";
+import { FrameInfo, PageInfo, Viewport, type CleanupResult } from "../../src/Types.ts";
 import { makeHttp } from "../../src/internal/Http.ts";
 import { makeProvider } from "../../src/internal/Provider.ts";
 import { acquireSession, type SessionOptions } from "../../src/internal/Session.ts";
@@ -26,6 +26,7 @@ export interface ScriptOptions {
   readonly lifetimeMillis?: number;
   readonly actionMillis?: number;
   readonly maxActions?: number;
+  readonly onDisconnect?: () => void;
   readonly onClick?: (ticket: Ticket) => Promise<string>;
   readonly onObserve?: (events: DriverEvents) => Promise<void>;
   readonly onConnect?: (driver: Driver, events: DriverEvents) => Promise<Driver>;
@@ -93,7 +94,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
       waitFor: async () => {}, clickAndWait: async (_target, ticket) => { ticket.dispatch(); return state.url; },
       clickForDownload: async (_target, ticket) => { ticket.dispatch(); return { downloadId: "native-1", filename: "fixture.txt", state: "completed" }; },
       dismissDialogs: async () => {}, capture: () => options.captureSource ?? ({ start: async () => {}, stop: async () => {} }),
-      invalidateObservation() {}, disconnect: async () => { state.localCloses++; if (options.disconnectFails) throw new Error("PRIVATE-DISCONNECT"); },
+      invalidateObservation() {}, disconnect: async () => { state.localCloses++; options.onDisconnect?.(); if (options.disconnectFails) throw new Error("PRIVATE-DISCONNECT"); },
     };
     return options.onConnect === undefined ? driver : options.onConnect(driver, events);
   };

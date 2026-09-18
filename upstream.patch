@@ -1,0 +1,47 @@
+diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
+new file mode 100644
+index 0000000..4e26a30
+--- /dev/null
++++ b/.changeset/browserbase-interactive.md
+@@ -0,0 +1,5 @@
++---
++"@effect-agent/platform-browserbase": minor
++---
++
++Add scoped Browserbase interaction, cooperative host controls, provider recording and replay access, bounded website downloads, and optional same-page capture with caller-owned encoding.
+diff --git a/.changeset/config.json b/.changeset/config.json
+index 7db06dc..ed0bf01 100644
+--- a/.changeset/config.json
++++ b/.changeset/config.json
+@@ -10,6 +10,7 @@
+   "fixed": [
+     [
+       "@effect-agent/ai-typesafe",
++      "@effect-agent/platform-browserbase",
+       "@effect-agent/platform-cloudflare",
+       "@effect-agent/platform-node",
+       "@effect-agent/pr-review",
+diff --git a/package.json b/package.json
+index 183913d..65ba3eb 100644
+--- a/package.json
++++ b/package.json
+@@ -63,7 +63,8 @@
+     "vite": "catalog:",
+     "vite-plus": "catalog:",
+     "vitepress": "catalog:",
+-    "vue": "catalog:"
++    "vue": "catalog:",
++    "@effect-agent/platform-browserbase": "workspace:*"
+   },
+   "overrides": {
+     "@effect/platform-browser": "catalog:",
+@@ -137,7 +138,8 @@
+     "isomorphic-git": "1.41.9",
+     "memfs": "4.71.0",
+     "@alchemy.run/cloudflare-runtime": "2.0.0-beta.77",
+-    "jose": "6.2.12"
++    "jose": "6.2.12",
++    "playwright-core": "1.63.0"
+   },
+   "patchedDependencies": {
+     "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",

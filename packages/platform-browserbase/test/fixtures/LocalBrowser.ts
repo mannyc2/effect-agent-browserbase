@@ -1,0 +1,133 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Effect, Redacted, Schema } from "effect";
+import { chromium, type BrowserContext, type ConnectOverCDPOptions } from "playwright-core";
+import { BrowserbaseInteractiveHost, type InteractiveOptions } from "@effect-agent/platform-browserbase/interactive-browser";
+import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
+import { FetchHttpClient } from "effect/unstable/http";
+
+export class NativeFixtureError extends Schema.TaggedError<NativeFixtureError>()("NativeFixtureError", {
+  operation: Schema.String,
+}) {}
+const attempt = <A>(operation: string, body: () => Promise<A>) => Effect.tryPromise({
+  try: body, catch: () => new NativeFixtureError({ operation }),
+});
+
+/** Only provider allocation, control-address lookup and status are scripted.
+ * Every allocated session has a DIFFERENT real Chromium process and persistent
+ * default context. The production adapter still crosses connectOverCDP and runs
+ * its actual HTTP/session/page/capture code. This is NOT hosted provider evidence.
+ * No production option allows substituting provider origins or CDP addresses. */
+export const localBrowser = Effect.acquireRelease(attempt("start local fixture", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "browserbase-acceptance-"));
+  const sessions = new Map<string, { context: BrowserContext; endpoint: string; status: string }>();
+  const releaseIds: string[] = [];
+  const createBodies: unknown[] = [];
+  const connections: string[] = [];
+  const requests: string[] = [];
+  let fileRequests = 0;
+  const server = createServer((req, res) => {
+    const path = new URL(req.url ?? "/", "http://fixture.test").pathname;
+    requests.push(path);
+    if (path === "/file") {
+      fileRequests++;
+      res.writeHead(200, { "content-type": "text/plain", "content-disposition": 'attachment; filename="fixture.txt"' });
+      res.end("real browser download\n"); return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    if (path === "/frame") {
+      res.end('<p>frame text</p><button id="inner" onclick="this.textContent=\'frame clicked\'">Frame action</button>'); return;
+    }
+    if (path === "/next") { res.end('<h1>next page</h1><a href="/">Return</a>'); return; }
+    res.end(`<!doctype html><meta charset=utf-8><title>Local browser acceptance</title>
+      <style>body{margin:0;font:18px sans-serif}#motion{width:300px;height:100px;background:#e30;animation:slide 1s linear infinite alternate}@keyframes slide{to{transform:translateX(220px);background:#05c}}.spacer{height:1600px}</style>
+      <h1>Local browser fixture</h1><button id="increment" onclick="count.textContent=Number(count.textContent)+1">Increment</button><span id="count">0</span>
+      <input aria-label="Name" id="name" oninput="echo.textContent=this.value"><span id="echo"></span>
+      <button class="duplicate">Duplicate</button><button class="duplicate">Duplicate</button>
+      <button id="disabled" disabled>Unavailable</button>
+      <a id="next" href="/next">Next page</a><a id="download" href="/file" download>Download</a>
+      <button id="popup" onclick="window.open('/next')">Popup</button>
+      <button id="dialog" onclick="alert('private dialog');echo.textContent='dialog completed'">Dialog</button>
+      <div id="motion"></div><iframe name="child" src="/frame"></iframe><div class="spacer"></div><p>bottom marker</p>`);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject); server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("No fixture port");
+  const url = `http://127.0.0.1:${address.port}/`;
+  const originalConnect = chromium.connectOverCDP.bind(chromium);
+  // Test-only replacement of the provider address resolution, NOT the native engine.
+  // The adapter's configured WSS origin still passes its unmodified validation.
+  chromium.connectOverCDP = async (endpoint: unknown, options?: ConnectOverCDPOptions) => {
+    if (typeof endpoint !== "string") throw new Error("Expected provider URL");
+    const requested = new URL(endpoint);
+    assert.equal(requested.origin, "wss://connect.browserbase.com");
+    const id = requested.searchParams.get("session");
+    const session = id === null ? undefined : sessions.get(id);
+    if (!session) throw new Error("Unknown scripted provider session");
+    connections.push(id!);
+    return originalConnect(session.endpoint, options);
+  };
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const parsed = new URL(request.url);
+    assert.equal(parsed.origin, "https://api.browserbase.com");
+    assert.equal(request.headers.get("x-bb-api-key"), "fixture-key-not-a-credential");
+    if (parsed.pathname === "/v1/sessions" && request.method === "POST") {
+      createBodies.push(await request.json());
+      const id = `session-${createBodies.length}`;
+      const profile = join(directory, id);
+      const context = await chromium.launchPersistentContext(profile, {
+        ...(process.env.BROWSERBASE_CHROMIUM === undefined ? {} : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+        args: ["--remote-debugging-port=0"],
+        headless: true,
+      });
+      try {
+        const port = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0];
+        if (!port || !/^\d+$/.test(port)) throw new Error("Invalid local CDP port");
+        sessions.set(id, { context, endpoint: `http://127.0.0.1:${port}`, status: "RUNNING" });
+      } catch (error) { await context.close(); throw error; }
+      return Response.json({ id, projectId: "project-1", status: "RUNNING", connectUrl: `wss://connect.browserbase.com/?session=${id}` });
+    }
+    const id = parsed.pathname.split("/")[3];
+    const session = sessions.get(id);
+    if (!session) return Response.json({}, { status: 404 });
+    if (parsed.pathname.endsWith("/debug")) {
+      return Response.json({ debuggerFullscreenUrl: "https://www.browserbase.com/view?token=fixture", pages: [] });
+    }
+    if (request.method === "POST") { releaseIds.push(id); session.status = "COMPLETED"; }
+    return Response.json({ id, projectId: "project-1", status: session.status, connectUrl: `wss://connect.browserbase.com/?session=${id}` });
+  };
+  const options: InteractiveOptions = { projectId: "project-1", apiKey: Redacted.make("fixture-key-not-a-credential"),
+    viewport: { width: 640, height: 480 }, actionTimeoutMillis: 5000 };
+  return {
+    directory, url, sessions, releaseIds, createBodies, connections, requests,
+    fileRequests: () => fileRequests,
+    layer: (overrides: Partial<InteractiveOptions> = {}) => BrowserbaseInteractiveHost.layer({ ...options, ...overrides }),
+    fetch,
+    page: (id: string) => {
+      const page = sessions.get(id)?.context.pages()[0];
+      if (!page) throw new Error("No native fixture page");
+      return page;
+    },
+    close: async () => {
+      chromium.connectOverCDP = originalConnect;
+      await Promise.allSettled([...sessions.values()].map((s) => s.context.close()));
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
+}), (fixture) => attempt("close local fixture", fixture.close).pipe(Effect.orDie));
+
+export const policy = InteractiveBrowserPolicy.make({ network: { _tag: "Unrestricted" }, maxActions: 100,
+  maxElapsedMillis: 120000, maxReturnedBytes: 2 * 1024 * 1024 });
+
+export const withProvider = <A, E, R>(fixture: Effect.Success<typeof localBrowser>, effect: Effect.Effect<A, E, R>,
+  options: Partial<InteractiveOptions> = {}) => effect.pipe(
+    Effect.provide(fixture.layer(options)), Effect.provideService(FetchHttpClient.Fetch, fixture.fetch),
+  );

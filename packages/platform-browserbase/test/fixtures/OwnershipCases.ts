@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Clock, Effect, Fiber, Redacted, Schema, type Scope } from "effect";
 import { BrowserbaseError } from "../../src/Types.ts";
 import { makeOwner, native } from "../../src/internal/Owner.ts";
+import { advance, elapse, timed } from "./Time.ts";
 import { fixture, gate } from "./ScriptedProvider.ts";
 
 const expectReason = <A, R>(effect: Effect.Effect<A, BrowserbaseError, R>, reason: BrowserbaseError["reason"]) =>
@@ -10,7 +11,7 @@ const expectReason = <A, R>(effect: Effect.Effect<A, BrowserbaseError, R>, reaso
     if (result._tag === "Failure") assert.equal(result.failure.reason, reason);
   }));
 interface Case { readonly name: string; readonly run: Effect.Effect<void, BrowserbaseError> }
-const test = (name: string, body: () => Effect.Effect<void, BrowserbaseError, Scope.Scope>): Case => ({ name, run: Effect.scoped(Effect.suspend(body)) });
+const test = (name: string, body: () => Effect.Effect<void, BrowserbaseError, Scope.Scope>): Case => ({ name, run: timed(Effect.scoped(Effect.suspend(body))) });
 
 export const ownershipCases: ReadonlyArray<Case> = [
   test("one scoped session spans successive operations and closes once", () => Effect.gen(function* () {
@@ -55,23 +56,23 @@ export const ownershipCases: ReadonlyArray<Case> = [
   test("unconfirmed provider close still disconnects and reports", () => Effect.gen(function* () {
     const f = yield* fixture({ releaseFails: true });
     const session = yield* (yield* f.acquisition).connect;
-    const report = yield* session.close;
+    const report = yield* elapse(session.close, 2000);
     assert.notEqual(report.remote, "confirmed"); assert.equal(report.local, "closed");
     assert.equal(f.state.localCloses, 1); assert.equal(f.state.releases, 1); assert.equal(f.reports.length, 1);
   })),
   test("other-session metadata never proves termination", () => Effect.gen(function* () {
     const f = yield* fixture({ statusMismatch: true });
     const session = yield* (yield* f.acquisition).connect;
-    const report = yield* session.close;
+    const report = yield* elapse(session.close, 2000);
     assert.equal(report.remote, "unknown"); assert.equal(f.state.localCloses, 1);
   })),
   test("pre-dispatch interruption fences a late continuation without poisoning the owner", () => Effect.gen(function* () {
-    const entered = gate<void>(), queried = gate<void>(); let dispatches = 0;
-    const f = yield* fixture({ onClick: async (ticket) => { entered.resolve(); await queried.promise; ticket.dispatch(); dispatches++; return "https://example.test/"; } });
+    const entered = gate<void>(), queried = gate<void>(), settled = gate<void>(); let dispatches = 0;
+    const f = yield* fixture({ onClick: async (ticket) => { entered.resolve(); await queried.promise; try { ticket.dispatch(); dispatches++; return "https://example.test/"; } finally { settled.resolve(); } } });
     const session = yield* (yield* f.acquisition).connect;
     const fiber = yield* session.bind().click("#button").pipe(Effect.forkChild);
     yield* Effect.promise(() => entered.promise); yield* Fiber.interrupt(fiber);
-    queried.resolve(); yield* Effect.sleep(5);
+    queried.resolve(); yield* Effect.promise(() => settled.promise);
     assert.equal(dispatches, 0); assert.equal(yield* session.bind().readText(), "initial");
   })),
   test("interruption after dispatch expires automation without replay", () => Effect.gen(function* () {
@@ -94,12 +95,12 @@ export const ownershipCases: ReadonlyArray<Case> = [
     assert.equal(result._tag, "Failure"); assert.equal(f.state.releases, 1); assert.equal(f.state.localCloses, 1);
   })),
   test("late connection after interruption is locally closed", () => Effect.gen(function* () {
-    const connected = gate<void>(), complete = gate<void>();
-    const f = yield* fixture({ onConnect: async (driver) => { connected.resolve(); await complete.promise; return driver; } });
+    const connected = gate<void>(), complete = gate<void>(), closed = gate<void>();
+    const f = yield* fixture({ onDisconnect: () => closed.resolve(), onConnect: async (driver) => { connected.resolve(); await complete.promise; return driver; } });
     const acquired = yield* f.acquisition;
     const fiber = yield* acquired.connect.pipe(Effect.forkChild);
     yield* Effect.promise(() => connected.promise); yield* Fiber.interrupt(fiber);
-    complete.resolve(); yield* Effect.sleep(10);
+    complete.resolve(); yield* Effect.promise(() => closed.promise);
     assert.equal(f.state.localCloses, 1); assert.equal(f.state.releases, 1);
   })),
   test("handoff pauses automation and fresh observation commits under one permit", () => Effect.gen(function* () {
@@ -143,7 +144,8 @@ export const ownershipCases: ReadonlyArray<Case> = [
   })),
   test("elapsed expiry closes an idle browser while the outer scope stays open", () => Effect.gen(function* () {
     const f = yield* fixture({ lifetimeMillis: 50 }); const session = yield* (yield* f.acquisition).connect;
-    yield* Effect.sleep(80);
+    yield* advance(80);
+    yield* session.close;
     yield* expectReason(session.bind().readText(), "closed"); assert.equal(f.state.localCloses, 1);
   })),
   test("persistent writer lease sees provider cleanup before its finalizer", () => Effect.gen(function* () {

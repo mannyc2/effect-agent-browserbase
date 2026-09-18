@@ -5,6 +5,7 @@ import { BrowserbaseRecordings } from "../../src/Recordings.ts";
 import { BrowserbaseReplays } from "../../src/Replays.ts";
 import { BrowserbaseDownloads } from "../../src/Downloads.ts";
 import { BrowserbaseError, RecordingPageReference, SessionReference } from "../../src/Types.ts";
+import { elapse, timed } from "./Time.ts";
 import { makeHttp } from "../../src/internal/Http.ts";
 
 const ref = SessionReference.make({ provider: "browserbase", projectId: "project-1", sessionId: "session-1" });
@@ -59,13 +60,13 @@ export const artifactCases = [
       if (!String(input).includes("/recording/")) return metadata();
       return Response.json(++reads < 2 ? pending : { downloads: [...completed.downloads, { pageId: "1", status: "FAILED" }] });
     }, (api) => Effect.gen(function* () {
-      const batch = yield* api.wait(ref, { timeoutMillis: 200, intervalMillis: 10 });
+      const batch = yield* elapse(api.wait(ref, { timeoutMillis: 200, intervalMillis: 10 }), 10);
       assert.equal(batch.timedOut, false); assert.deepEqual(batch.pages.map((p) => p.status), ["COMPLETED", "FAILED"]);
     }));
   }) },
   { name: "bounded recording polling returns latest partial status, not a fabricated permanent failure", run: Effect.gen(function* () {
     yield* useRecordings(async (input) => String(input).includes("/recording/") ? Response.json(pending) : metadata(), (api) => Effect.gen(function* () {
-      const batch = yield* api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 });
+      const batch = yield* elapse(api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 }), 30);
       assert.equal(batch.timedOut, true); assert.equal(batch.pages[0]?.status, "PENDING");
     }));
   }) },
@@ -129,7 +130,7 @@ export const artifactCases = [
   { name: "GET retry budget is separate from non-retried POST mutations", run: Effect.gen(function* () {
     let calls = 0;
     const http = yield* makeHttp(options, async () => { calls++; return calls < 3 ? Response.json({}, { status: 500 }) : Response.json({ ok: true }); });
-    yield* http.json("GET", "/v1/sessions/session-1"); assert.equal(calls, 3);
+    yield* elapse(http.json("GET", "/v1/sessions/session-1"), 450); assert.equal(calls, 3);
     calls = 0; yield* expectReason(http.json("POST", "/v1/sessions", {}), "provider"); assert.equal(calls, 1);
   }) },
   { name: "HTTP byte limits apply to actual streamed bytes without Content-Length", run: Effect.gen(function* () {
@@ -208,4 +209,4 @@ export const artifactCases = [
     }, (api) => expectReason(Stream.runDrain(api.stream(ref, "download-1", { maxBytes: 100, mimeTypes: ["text/plain"] })), "malformed"));
     assert.equal(contentRequests, 0);
   }) },
-] as const;
+].map((test) => ({ ...test, run: timed(test.run) }));

@@ -10,7 +10,10 @@
   },
   "type": "module",
   "sideEffects": [],
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./interactive-browser": "./src/InteractiveBrowser.ts",
@@ -21,22 +24,33 @@
     "./downloads": "./src/Downloads.ts",
     "./capture": "./src/Capture.ts"
   },
-  "publishConfig": { "access": "public" },
-  "engines": { "node": "^22.18.0 || >=24.11.0" },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "install:test-browser": "playwright-core install --with-deps chromium",
     "example:agent": "bun examples/agent.ts",
     "example:hosted": "bun examples/hosted.ts",
-    "example:record-video": "bun examples/record-video.ts"
+    "example:record-video": "bun examples/record-video.ts",
+    "test:native": "vp test --config vite.native.config.ts --run"
   },
-  "dependencies": { "effect-agent": "workspace:*" },
+  "dependencies": {
+    "effect-agent": "workspace:*"
+  },
   "peerDependencies": {
     "effect": "^4.0.0-rc.115",
     "playwright-core": "1.63.0"
   },
-  "peerDependenciesMeta": { "playwright-core": { "optional": true } },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@effect-agent/testing": "workspace:*",
     "@effect/platform-bun": "catalog:",
