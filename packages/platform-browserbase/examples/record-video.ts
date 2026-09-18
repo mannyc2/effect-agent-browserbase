@@ -2,9 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Schema, Stream } from "effect";
+
 import * as Capture from "@effect-agent/platform-browserbase/capture";
 import type { BrowserbaseSession } from "@effect-agent/platform-browserbase/interactive-browser";
+import { Effect, Schema, Stream } from "effect";
 
 class RecordVideoError extends Schema.TaggedError<RecordVideoError>()("RecordVideoError", {
   operation: Schema.String,
@@ -13,16 +14,29 @@ class RecordVideoError extends Schema.TaggedError<RecordVideoError>()("RecordVid
 
 const processResult = (command: string, args: ReadonlyArray<string>, cwd?: string) =>
   Effect.tryPromise({
-    try: () => new Promise<{ readonly stdout: string; readonly stderr: string }>((resolve, reject) => {
-      const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-      child.once("error", reject);
-      child.once("exit", (code) => code === 0 ? resolve({ stdout, stderr }) :
-        reject(RecordVideoError.make({ operation: `${command} exited ${String(code)}: ${stderr.slice(-2000)}` })));
-    }),
+    try: () =>
+      new Promise<{ readonly stdout: string; readonly stderr: string }>((resolve, reject) => {
+        const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+
+        child.stdout.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString();
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        child.once("error", reject);
+        child.once("exit", (code) =>
+          code === 0
+            ? resolve({ stdout, stderr })
+            : reject(
+                RecordVideoError.make({
+                  operation: `${command} exited ${String(code)}: ${stderr.slice(-2000)}`,
+                }),
+              ),
+        );
+      }),
     catch: (cause) => RecordVideoError.make({ operation: "media-process", cause }),
   });
 
@@ -37,56 +51,94 @@ export const recordInterval = (
   session: BrowserbaseSession,
   outputPath: string,
   durationMillis = 5_000,
-) => Effect.scoped(Effect.gen(function* () {
-  const directory = yield* Effect.acquireRelease(
-    Effect.tryPromise({
-      try: () => mkdtemp(join(tmpdir(), "browserbase-capture-")),
-      catch: (cause) => RecordVideoError.make({ operation: "capture-directory", cause }),
-    }),
-    (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
-  );
-  const interval = yield* Capture.start(session, {
-    maxFrames: 64,
-    maxBufferedBytes: 32 * 1024 * 1024,
-    maxFrameBytes: 4 * 1024 * 1024,
-    maxDurationMillis: durationMillis,
-    quality: 80,
-  });
-  const frames = Array.from(yield* interval.frames.pipe(Stream.runCollect));
-  const summary = yield* interval.completed;
-  if (frames.length < 2) return yield* Effect.die("capture produced fewer than two frames");
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const directory = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () => mkdtemp(join(tmpdir(), "browserbase-capture-")),
+          catch: (cause) => RecordVideoError.make({ operation: "capture-directory", cause }),
+        }),
+        (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
+      );
 
-  const lines: string[] = [];
-  for (let index = 0; index < frames.length; index++) {
-    const frame = frames[index]!;
-    const name = `frame-${String(index).padStart(6, "0")}.jpg`;
-    yield* Effect.tryPromise({
-      try: () => writeFile(join(directory, name), frame.bytes),
-      catch: (cause) => RecordVideoError.make({ operation: "write-frame", cause }),
-    });
-    lines.push(`file '${name}'`);
-    if (index + 1 < frames.length) {
-      const next = frames[index + 1]!;
-      const seconds = Math.max(0.001, (next.sourceTimeMillis - frame.sourceTimeMillis) / 1000);
-      lines.push(`duration ${seconds.toFixed(6)}`);
-    }
-  }
-  // concat requires the final file again so its duration is represented.
-  lines.push(`file 'frame-${String(frames.length - 1).padStart(6, "0")}.jpg'`);
-  yield* Effect.tryPromise({
-    try: () => writeFile(join(directory, "frames.ffconcat"), "ffconcat version 1.0\n" + lines.join("\n") + "\n"),
-    catch: (cause) => RecordVideoError.make({ operation: "write-manifest", cause }),
-  });
-  yield* processResult("ffmpeg", [
-    "-hide_banner", "-loglevel", "error", "-y",
-    "-f", "concat", "-safe", "0", "-i", "frames.ffconcat",
-    "-vsync", "vfr", "-pix_fmt", "yuv420p", outputPath,
-  ], directory);
-  const probe = yield* processResult("ffprobe", [
-    "-v", "error", "-select_streams", "v:0",
-    "-show_entries", "stream=codec_type,width,height,duration:format=duration",
-    "-of", "json", outputPath,
-  ]);
-  const decoded: unknown = JSON.parse(probe.stdout);
-  return { summary, decoded };
-}));
+      const interval = yield* Capture.start(session, {
+        maxFrames: 64,
+        maxBufferedBytes: 32 * 1024 * 1024,
+        maxFrameBytes: 4 * 1024 * 1024,
+        maxDurationMillis: durationMillis,
+        quality: 80,
+      });
+
+      const frames = Array.from(yield* interval.frames.pipe(Stream.runCollect));
+      const summary = yield* interval.completed;
+
+      if (frames.length < 2) return yield* Effect.die("capture produced fewer than two frames");
+
+      const lines: string[] = [];
+
+      for (let index = 0; index < frames.length; index++) {
+        const frame = frames[index]!;
+        const name = `frame-${String(index).padStart(6, "0")}.jpg`;
+
+        yield* Effect.tryPromise({
+          try: () => writeFile(join(directory, name), frame.bytes),
+          catch: (cause) => RecordVideoError.make({ operation: "write-frame", cause }),
+        });
+        lines.push(`file '${name}'`);
+        if (index + 1 < frames.length) {
+          const next = frames[index + 1]!;
+          const seconds = Math.max(0.001, (next.sourceTimeMillis - frame.sourceTimeMillis) / 1000);
+
+          lines.push(`duration ${seconds.toFixed(6)}`);
+        }
+      }
+      // concat requires the final file again so its duration is represented.
+      lines.push(`file 'frame-${String(frames.length - 1).padStart(6, "0")}.jpg'`);
+      yield* Effect.tryPromise({
+        try: () =>
+          writeFile(
+            join(directory, "frames.ffconcat"),
+            "ffconcat version 1.0\n" + lines.join("\n") + "\n",
+          ),
+        catch: (cause) => RecordVideoError.make({ operation: "write-manifest", cause }),
+      });
+      yield* processResult(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          "frames.ffconcat",
+          "-vsync",
+          "vfr",
+          "-pix_fmt",
+          "yuv420p",
+          outputPath,
+        ],
+        directory,
+      );
+
+      const probe = yield* processResult("ffprobe", [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_type,width,height,duration:format=duration",
+        "-of",
+        "json",
+        outputPath,
+      ]);
+
+      const decoded: unknown = JSON.parse(probe.stdout);
+
+      return { summary, decoded };
+    }),
+  );

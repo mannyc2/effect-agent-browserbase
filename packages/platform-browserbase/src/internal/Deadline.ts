@@ -1,4 +1,5 @@
 import { Clock, Duration, Effect } from "effect";
+
 import { BrowserbaseError } from "../Types.ts";
 
 /** Effect's nanosecond clock is monotonic; provider wall-clock dates are kept separately. */
@@ -11,16 +12,26 @@ export const within = <A, E, R>(
   deadline: number,
   operation: string,
   onTimeout?: () => void,
-): Effect.Effect<A, E | BrowserbaseError, R> => Effect.suspend(() =>
-  nowMillis.pipe(Effect.flatMap((now) => {
-    const remaining = deadline - now;
-    const timeout = () => {
-      onTimeout?.();
-      return Effect.fail(BrowserbaseError.make({ operation, reason: "timeout" }));
-    };
-    return remaining <= 0 ? timeout() : effect.pipe(Effect.timeoutOrElse({
-      duration: Duration.millis(remaining),
-      orElse: timeout,
-    }));
-  })),
-);
+): Effect.Effect<A, E | BrowserbaseError, R> =>
+  Effect.suspend(() =>
+    nowMillis.pipe(
+      Effect.flatMap((now) => {
+        const remaining = deadline - now;
+
+        const timeout = () => {
+          onTimeout?.();
+
+          return Effect.fail(BrowserbaseError.make({ operation, reason: "timeout" }));
+        };
+
+        return remaining <= 0
+          ? timeout()
+          : effect.pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(remaining),
+                orElse: timeout,
+              }),
+            );
+      }),
+    ),
+  );

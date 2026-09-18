@@ -11,7 +11,8 @@ export class CallbackTasks {
   private readonly onFault: () => void;
 
   constructor(capacity: number, onFault: () => void) {
-    if (!Number.isSafeInteger(capacity) || capacity < 1) throw new RangeError("Invalid callback capacity");
+    if (!Number.isSafeInteger(capacity) || capacity < 1)
+      throw new RangeError("Invalid callback capacity");
     this.capacity = capacity;
     this.onFault = onFault;
   }
@@ -26,16 +27,27 @@ export class CallbackTasks {
     if (this.stopped || this.faulted) return false;
     if (this.pending.size >= this.capacity) {
       this.fault();
+
       return false;
     }
-    const task = Promise.resolve().then(action).then(
-      () => {},
-      () => this.fault(),
-    ).finally(() => this.pending.delete(task));
+
+    const task = Promise.resolve()
+      .then(action)
+      .then(
+        () => {},
+        () => this.fault(),
+      )
+      .finally(() => this.pending.delete(task));
+
     this.pending.add(task);
+
     return true;
   }
 
-  stop(): void { this.stopped = true; }
-  async settle(): Promise<void> { await Promise.all(this.pending); }
+  stop(): void {
+    this.stopped = true;
+  }
+  async settle(): Promise<void> {
+    await Promise.all(this.pending);
+  }
 }

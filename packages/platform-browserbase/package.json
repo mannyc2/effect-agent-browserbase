@@ -8,12 +8,12 @@
     "url": "git+https://github.com/danieljvdm/effect-agent.git",
     "directory": "packages/platform-browserbase"
   },
-  "type": "module",
-  "sideEffects": [],
   "files": [
     "dist",
     "src"
   ],
+  "type": "module",
+  "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
     "./interactive-browser": "./src/InteractiveBrowser.ts",
@@ -27,9 +27,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "engines": {
-    "node": "^22.18.0 || >=24.11.0"
-  },
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
@@ -42,15 +39,6 @@
   "dependencies": {
     "effect-agent": "workspace:*"
   },
-  "peerDependencies": {
-    "effect": "^4.0.0-rc.115",
-    "playwright-core": "1.63.0"
-  },
-  "peerDependenciesMeta": {
-    "playwright-core": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@effect-agent/testing": "workspace:*",
     "@effect/platform-bun": "catalog:",
@@ -61,5 +49,17 @@
     "playwright-core": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0-rc.115",
+    "playwright-core": "1.63.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
   }
 }
