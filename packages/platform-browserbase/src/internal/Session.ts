@@ -216,7 +216,12 @@ export const acquireSession = Effect.fnUntraced(function* (
         }),
       );
     });
-  const readSelected = Effect.try({ try: capture.target, catch: () => new BrowserbaseError({ operation: "target", reason: "closed" }) });
+  // Reading a target is an ownership operation too. A native mutation that times out
+  // after dispatch fences the owner as uncertain; retaining the last native target
+  // must not manufacture a fresh usable handle in that state.
+  const readSelected = owner.guard("target", () =>
+    Effect.try({ try: capture.target, catch: () => new BrowserbaseError({ operation: "target", reason: "closed", outcome: "undispatched" }) }),
+  { charge: false });
 
   const nativeOperation = <A>(operation: string, action: (driver: Driver, ticket: Ticket) => Promise<A>,
     mutation = false, charge = true) => owner.guard(operation,
