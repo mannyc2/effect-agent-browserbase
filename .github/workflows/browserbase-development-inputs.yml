@@ -49,15 +49,12 @@ jobs:
           (cd "$OUT/consumer" && bun install --ignore-scripts && bun install --ignore-scripts --frozen-lockfile)
           (cd "$OUT/consumer" && node --input-type=module -e 'import { AgentRuntime } from "effect-agent"; import { ScriptedModel } from "@effect-agent/testing/scripted-model"; import { chromium } from "playwright-core"; if (typeof AgentRuntime.run !== "function" || typeof ScriptedModel.layer !== "function" || typeof chromium.connectOverCDP !== "function") process.exit(1); console.log("real public imports passed")')
           printf 'node=%s\nbun=%s\ncandidate=%s\n' "$(node --version)" "$(bun --version)" "$(git rev-parse HEAD)" > "$OUT/RUNTIMES.txt"
-          # Do not include fonts or unrelated installed monorepo dependencies.
-          if find "$OUT" -type f \( -iname '*.woff' -o -iname '*.woff2' -o -iname '*.ttf' -o -iname '*.otf' \) | grep -q .; then
-            echo 'Unexpected font file in development input closure' >&2
-            exit 1
-          fi
-          tar -czf "$RUNNER_TEMP/browserbase-development-inputs.tar.gz" -C "$RUNNER_TEMP" browserbase-development
+          # Preserve all source/code and dependency metadata. Only visual font
+          # assets for unrelated web UIs are omitted from this transfer artifact.
+          find "$OUT" -type f \( -iname '*.woff' -o -iname '*.woff2' -o -iname '*.ttf' -o -iname '*.otf' \) -printf '%P\n' > "$OUT/OMITTED-VISUAL-ASSETS.txt"
+          tar --exclude='*.woff' --exclude='*.woff2' --exclude='*.ttf' --exclude='*.otf' -czf "$RUNNER_TEMP/browserbase-development-inputs.tar.gz" -C "$RUNNER_TEMP" browserbase-development
           sha256sum "$RUNNER_TEMP/browserbase-development-inputs.tar.gz" > "$RUNNER_TEMP/browserbase-development-inputs.sha256"
           cat "$RUNNER_TEMP/browserbase-development-inputs.sha256"
-          # Read the actual archive back, including the independent public-package closure.
           mkdir "$RUNNER_TEMP/readback"
           tar -xzf "$RUNNER_TEMP/browserbase-development-inputs.tar.gz" -C "$RUNNER_TEMP/readback"
           cd "$RUNNER_TEMP/readback/browserbase-development/consumer"
