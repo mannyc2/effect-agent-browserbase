@@ -38,7 +38,10 @@ it.live("real CDP capture: caller encoder produces decodable moving video with s
       expect(Number(probe.format.duration ?? video?.duration ?? "0")).toBeGreaterThan(0.5);
       expect(probe.streams.some((stream) => stream.codec_type === "audio")).toBe(false);
       expect(result.summary.delivered).toBeGreaterThan(1);
-      expect(result.summary.sourceLastMillis! - result.summary.sourceFirstMillis!).toBeGreaterThan(250);
+      if (result.summary.sourceFirstMillis === null || result.summary.sourceLastMillis === null) {
+        return yield* Effect.die("capture summary omitted source timestamps");
+      }
+      expect(result.summary.sourceLastMillis - result.summary.sourceFirstMillis).toBeGreaterThan(250);
       expect((yield* Effect.promise(() => stat(output))).size).toBeGreaterThan(1_000);
       // Child capture/encoding ended; the same browser remains usable.
       expect((yield* session.observe()).text).toContain("Local browser fixture");
