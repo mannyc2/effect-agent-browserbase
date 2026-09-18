@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Redacted, Schema } from "effect";
@@ -103,7 +103,18 @@ export const localBrowser = Effect.acquireRelease(attempt("start local fixture",
           catch { await new Promise<void>((resolve) => setTimeout(resolve, 20)); }
         }
         if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
-        sessions.set(id, { process, endpoint: `http://127.0.0.1:${port}`, status: "RUNNING" });
+        const endpoint = `http://127.0.0.1:${port}`;
+        sessions.set(id, { process, endpoint, status: "RUNNING" });
+        // Provider-side fixture policy: production never chooses a host download path.
+        const downloadPath = join(directory, "downloads", id);
+        await mkdir(downloadPath, { recursive: true });
+        const setup = await originalConnect(endpoint);
+        try {
+          const cdp = await setup.newBrowserCDPSession();
+          try {
+            await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath, eventsEnabled: true });
+          } finally { await cdp.detach(); }
+        } finally { await setup.close(); }
       } catch (error) {
         console.error("Local process fixture allocation failed", error);
         process.kill("SIGKILL");
