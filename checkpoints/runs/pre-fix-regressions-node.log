@@ -1,0 +1,4 @@
+FAILED a retired connection cannot disconnect its replacement
+FAILED a retired target callback cannot invalidate a fresh observation
+FAILED a retired connection cannot pause or fault current automation
+0/3

@@ -1,0 +1,3 @@
+# Preserved checkpoint archives and patches must survive round-trips untouched.
+*.zip binary
+*.patch -text

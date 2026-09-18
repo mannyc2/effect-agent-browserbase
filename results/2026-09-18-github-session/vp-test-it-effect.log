@@ -1,0 +1,50 @@
+import { it } from "@effect/vitest";
+import { ownershipCases } from "./fixtures/OwnershipCases.ts";
+
+for (const test of ownershipCases) it.effect(test.name, () => test.run);
+--- vp available? ---
+vp
+=== vp test (package scoped) ===
+      4| for (const test of artifactCases) it.effect(test.name, () => test.run);
+       |                                      ^
+      5|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  test/capture.test.ts > duration expiration ends idle capture without waiting for another callback
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/capture.test.ts:4:37
+      2| import { captureCases } from "./fixtures/CaptureCases.ts";
+      3|
+      4| for (const test of captureCases) it.effect(test.name, () => test.run);
+       |                                     ^
+      5|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  test/ownership.test.ts > unconfirmed provider close still disconnects and reports
+ FAIL  test/ownership.test.ts > other-session metadata never proves termination
+ FAIL  test/ownership.test.ts > pre-dispatch interruption fences a late continuation without poisoning the owner
+ FAIL  test/ownership.test.ts > late connection after interruption is locally closed
+ FAIL  test/ownership.test.ts > elapsed expiry closes an idle browser while the outer scope stays open
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ test/ownership.test.ts:4:39
+      2| import { ownershipCases } from "./fixtures/OwnershipCases.ts";
+      3|
+      4| for (const test of ownershipCases) it.effect(test.name, () => test.run…
+       |                                       ^
+      5|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+
+ Test Files  3 failed | 1 passed (4)
+      Tests  9 failed | 57 passed (66)
+   Start at  12:42:25
+   Duration  26.03s (transform 520ms, setup 0ms, import 2.38s, tests 45.41s, environment 1ms)
+
+VP-TEST-EXIT=1
+
+[exited with code 0]

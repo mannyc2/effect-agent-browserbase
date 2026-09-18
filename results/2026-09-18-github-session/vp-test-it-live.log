@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /tmp/claude-0/-home-user-effect-agent-browserbase/7f06f45e-4808-542b-b587-e3d0878c8c18/scratchpad/wt/packages/platform-browserbase
+
+
+ Test Files  4 passed (4)
+      Tests  66 passed (66)
+   Start at  12:43:58
+   Duration  3.60s (transform 545ms, setup 0ms, import 2.34s, tests 3.51s, environment 0ms)
+

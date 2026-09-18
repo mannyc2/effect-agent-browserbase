@@ -1,0 +1,67 @@
+PASSED one scoped session spans successive operations and closes once
+PASSED failed connection retains exact identity and still releases
+PASSED lost create reply is not retried and reports an allocation nonce
+PASSED malformed allocation does not fabricate a session identity
+PASSED pending release needs an exact-session terminal read
+PASSED unconfirmed provider close still disconnects and reports
+PASSED other-session metadata never proves termination
+PASSED pre-dispatch interruption fences a late continuation without poisoning the owner
+PASSED interruption after dispatch expires automation without replay
+PASSED close wakes an in-flight native waiter and coalesces teardown
+PASSED late connection after interruption is locally closed
+PASSED handoff pauses automation and fresh observation commits under one permit
+PASSED failed Live View acquisition does not automatically resume
+PASSED resume requires the operator acknowledgement and matching token
+PASSED selecting a tab invalidates old handles without spending an action
+PASSED keep-alive reconnect establishes a new generation and observes actual state
+PASSED elapsed expiry closes an idle browser while the outer scope stays open
+PASSED persistent writer lease sees provider cleanup before its finalizer
+PASSED native failures serialize classification without SDK secrets
+PASSED wall-clock movement does not spend the monotonic lifetime budget
+PASSED recording request inspects status, posts once, and preserves per-page states
+PASSED lost assembly response remains uncertain and is not automatically posted again
+PASSED recording wait returns completed and failed pages independently
+PASSED bounded recording polling returns latest partial status, not a fabricated permanent failure
+PASSED recording API preserves 409 as a bounded typed state
+PASSED recording API preserves 410 as a bounded typed state
+PASSED recording API preserves 422 as a bounded typed state
+PASSED recording API preserves 429 as a bounded typed state
+PASSED BYOS completion without a URL does not become a corrupt download
+PASSED artifact download refreshes access, strips API credentials, and streams owned bytes
+PASSED unapproved signed media origin is rejected before a media request
+PASSED credential-preserving API policy ignores ambient headers and redirect options
+PASSED GET retry budget is separate from non-retried POST mutations
+PASSED HTTP byte limits apply to actual streamed bytes without Content-Length
+PASSED early stream completion releases the request scope
+PASSED redirects do not forward provider credentials or signed-media access
+PASSED malformed UTF-8 is a sanitized protocol failure
+PASSED replay access serves existing VOD material without recording or browser allocation
+PASSED replay rejects encrypted or foreign-origin playlists rather than leaking credentials
+PASSED ordinary download metadata and streaming are separate from recording artifacts
+PASSED unsafe website filenames fail before a content request
+PASSED capture has a bounded drop-oldest queue with explicit sequence gaps
+PASSED byte pressure is enforced independently of the frame count
+PASSED capture copies callback bytes and preserves source time separately from receipt time
+PASSED duplicate timestamps are accounted for, not silently relabeled as new frames
+PASSED a backwards source timestamp ends with a typed partial stream
+PASSED actual JPEG geometry changes terminate an interval even at unchanged CSS dimensions
+PASSED CSS viewport changes segment capture even when image dimensions are unchanged
+PASSED a malformed or oversized frame is rejected before retention
+PASSED stopping one interval permits another and a stale stop cannot end the replacement
+PASSED concurrent stop callers await one native stop rather than returning early
+PASSED a slow native stop quarantines the lease until confirmation
+PASSED native stop failure prevents a second competing screencast without closing the browser
+PASSED consumer cancellation ends capture but does not spend or close browser actions
+PASSED a capture has one consumer and rejects a second without stopping the first
+PASSED scope closure stops capture even when nobody subscribes
+PASSED duration expiration ends idle capture without waiting for another callback
+PASSED parent generation fencing stops callbacks even when native disconnect fails
+PASSED ordinary page mutation leaves capture running but target changes segment it
+PASSED failed native start runs cleanup and leaves no active capture lease
+PASSED interruption during native start observes its late result and cleans the lease
+PASSED interactive configuration is projected before strict HTTP validation
+PASSED an operator-pause event during connection setup never exposes an open handle
+PASSED a retired connection cannot disconnect its replacement
+PASSED a retired target callback cannot invalidate a fresh observation
+PASSED a retired connection cannot pause or fault current automation
+66/66

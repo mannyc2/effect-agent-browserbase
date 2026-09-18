@@ -1,0 +1,261 @@
+diff --git a/packages/platform-browserbase/src/InteractiveBrowser.ts b/packages/platform-browserbase/src/InteractiveBrowser.ts
+--- a/packages/platform-browserbase/src/InteractiveBrowser.ts
++++ b/packages/platform-browserbase/src/InteractiveBrowser.ts
+@@ -12,7 +12,7 @@
+ import { AllocationAttempt, BrowserbaseError, CleanupResult, DownloadObservation, FrameInfo,
+   Identifier, Observation, ObservedElement, PageInfo, SessionReference, Target, Viewport } from "./Types.ts";
+ import { associate } from "./internal/Association.ts";
+-import { decode, makeHttp, type BrowserbaseOptions } from "./internal/Http.ts";
++import { decode, httpOptions, makeHttp, type BrowserbaseOptions } from "./internal/Http.ts";
+ import { makeProvider } from "./internal/Provider.ts";
+ import { acquireSession, type BoundControls, type ContextLease, type SessionControls } from "./internal/Session.ts";
+ export type { BrowserbaseOptions } from "./internal/Http.ts";
+@@ -161,7 +161,7 @@
+ }>()("@effect-agent/platform-browserbase/BrowserbaseInteractiveHost") {
+   static layer(options: InteractiveOptions) {
+     return Layer.effect(this, Effect.gen(function* () {
+-      const http = yield* makeHttp(options);
++      const http = yield* makeHttp(httpOptions(options));
+       const provider = makeProvider(http, options.projectId);
+       const viewport = yield* checked(Viewport, options.viewport ?? { width: 1280, height: 720 }, "configure");
+       const actionTimeoutMillis = options.actionTimeoutMillis ?? 10000;
+diff --git a/packages/platform-browserbase/src/internal/Http.ts b/packages/platform-browserbase/src/internal/Http.ts
+--- a/packages/platform-browserbase/src/internal/Http.ts
++++ b/packages/platform-browserbase/src/internal/Http.ts
+@@ -11,6 +11,14 @@
+   readonly artifactOrigins?: ReadonlyArray<string>;
+   readonly requestTimeoutMillis?: number;
+ }
++
++/** Project an interactive configuration onto the strictly validated HTTP boundary. */
++export const httpOptions = (options: BrowserbaseOptions): BrowserbaseOptions => ({
++  projectId: options.projectId,
++  apiKey: options.apiKey,
++  ...(options.artifactOrigins === undefined ? {} : { artifactOrigins: options.artifactOrigins }),
++  ...(options.requestTimeoutMillis === undefined ? {} : { requestTimeoutMillis: options.requestTimeoutMillis }),
++});
+ 
+ const API_ORIGIN = "https://api.browserbase.com";
+ const MAX_JSON_BYTES = 1024 * 1024;
+diff --git a/packages/platform-browserbase/src/internal/Session.ts b/packages/platform-browserbase/src/internal/Session.ts
+--- a/packages/platform-browserbase/src/internal/Session.ts
++++ b/packages/platform-browserbase/src/internal/Session.ts
+@@ -43,6 +43,9 @@
+   let driver: Driver | undefined;
+   let connection: Redacted.Redacted<unknown> | undefined;
+   let connectPending = false;
++  // Native listeners can outlive disconnect. Authority belongs to this connection
++  // lease, not merely to the current session phase or selected browser target.
++  let activeConnection: object | undefined;
+   let cleanup: CleanupResult | undefined;
+   let handoffToken: string | undefined;
+   let reconnectTarget: string | undefined;
+@@ -73,6 +76,7 @@
+   const terminate = yield* Effect.cached(Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+     owner.fence("closing", "closed");
+     handoffToken = undefined;
++    activeConnection = undefined;
+     const lease = capture.captureLease;
+     if (lease !== undefined) yield* boundedCleanup(lease.stop(), "capture-cleanup");
+     let local: CleanupResult["local"] = connectPending ? "pending" : "not-connected";
+@@ -136,23 +140,34 @@
+   connection = created.connection;
+   const ref = created.reference;
+ 
+-  const events: DriverEvents = {
+-    invalidate: (reason) => owner.invalidate(reason),
++  const connectionEvents = (connectionLease: object): DriverEvents => ({
++    invalidate: (reason) => {
++      if (activeConnection === connectionLease) owner.invalidate(reason);
++    },
+     disconnected: () => {
++      if (activeConnection !== connectionLease) return;
+       if (owner.state.phase !== "closing" && owner.state.phase !== "closed" && owner.state.phase !== "detached") {
+         owner.fence("uncertain", "disconnected");
+       }
+     },
+     pause: () => {
++      if (activeConnection !== connectionLease) return;
+       if (owner.state.phase === "open") owner.fence("paused", "paused");
++      // An unsolicited popup/dialog during setup cannot be silently admitted by
++      // the later connect commit. No usable handle has been exposed: fail closed.
++      else if (owner.state.phase === "acquiring") owner.fence("uncertain", "uncertain");
+     },
+     fault: () => {
++      if (activeConnection !== connectionLease) return;
+       if (owner.state.phase !== "closing" && owner.state.phase !== "closed") owner.fence("uncertain", "uncertain");
+     },
+-  };
++  });
+   const connectNative = (url: Redacted.Redacted<unknown>, nativeOptions: DriverOptions) =>
+     Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
++      const connectionLease = {};
++      activeConnection = connectionLease;
+       connectPending = true;
++      const events = connectionEvents(connectionLease);
+       const acquired = yield* restore(Effect.tryPromise({
+         try: (signal) => {
+           const pending = connector(Redacted.value(url), signal, nativeOptions, events).then(async (acquired) => {
+@@ -162,13 +177,16 @@
+             }
+             return acquired;
+           });
+-          void pending.then(() => { connectPending = false; }, () => { connectPending = false; });
++          const settled = () => {
++            if (activeConnection === connectionLease) connectPending = false;
++          };
++          void pending.then(settled, settled);
+           return pending;
+         },
+         catch: (error) => error instanceof BrowserbaseError ? error : new BrowserbaseError({ operation: "connect", reason: "provider" }),
+       }));
+       driver = acquired;
+-      if (owner.state.phase === "closed" || owner.state.phase === "closing" || owner.state.phase === "uncertain") {
++      if (activeConnection !== connectionLease || owner.state.phase === "closed" || owner.state.phase === "closing" || owner.state.phase === "uncertain") {
+         yield* Effect.tryPromise({ try: () => acquired.disconnect(), catch: () => new BrowserbaseError({ operation: "connect", reason: "provider" }) }).pipe(Effect.ignore);
+         driver = undefined;
+         return yield* new BrowserbaseError({ operation: "connect", reason: "closed" });
+@@ -287,6 +305,7 @@
+       if (!options.keepAlive) return yield* new BrowserbaseError({ operation: "detach", reason: "unsupported", outcome: "undispatched" });
+       reconnectTarget = yield* native("detach", ticket, () => getDriver().selectedTargetId());
+       const acquired = getDriver();
++      activeConnection = undefined;
+       owner.fence("detached", "disconnected");
+       yield* Effect.tryPromise({ try: () => acquired.disconnect(), catch: () => new BrowserbaseError({ operation: "detach", reason: "disconnected" }) });
+       driver = undefined;
+diff --git a/packages/platform-browserbase/test/fixtures/ArtifactCases.ts b/packages/platform-browserbase/test/fixtures/ArtifactCases.ts
+--- a/packages/platform-browserbase/test/fixtures/ArtifactCases.ts
++++ b/packages/platform-browserbase/test/fixtures/ArtifactCases.ts
+@@ -86,7 +86,12 @@
+       const req = new Request(input, init);
+       if (new URL(req.url).origin === "https://media.example.test") {
+         mediaReads++; assert.ok(req.url.includes("fresh")); assert.equal(req.headers.has("x-bb-api-key"), false);
+-        assert.equal(req.redirect, "manual"); assert.equal(req.credentials, "omit");
++        assert.equal(req.redirect, "manual");
++        // Assert the transport argument rather than Bun's reconstructed Request
++        // accessor, which reports "include" even for credentials: "omit".
++        assert.equal(init?.credentials, "omit");
++        assert.equal(req.headers.has("authorization"), false);
++        assert.equal(req.headers.has("cookie"), false);
+         return new Response(first, { headers: { "content-type": "video/mp4" } });
+       }
+       if (req.url.includes("/recording/")) return Response.json({ downloads: [{ pageId: "0", status: "COMPLETED", downloadUrl: `https://media.example.test/video?token=${++statusReads > 1 ? "fresh" : "old"}` }] });
+diff --git a/packages/platform-browserbase/test/fixtures/RecoveryCases.ts b/packages/platform-browserbase/test/fixtures/RecoveryCases.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/platform-browserbase/test/fixtures/RecoveryCases.ts
+@@ -0,0 +1,84 @@
++import assert from "node:assert/strict";
++import { Effect, Redacted } from "effect";
++import { httpOptions, makeHttp } from "../../src/internal/Http.ts";
++import { fixture } from "./ScriptedProvider.ts";
++import type { DriverEvents } from "../../src/internal/Driver.ts";
++
++/** Regressions found by inspecting the preserved checkpoint, not inherited historical results. */
++export const recoveryCases = [
++  {
++    name: "interactive configuration is projected before strict HTTP validation",
++    run: Effect.gen(function* () {
++      const options = { projectId: "project-1", apiKey: Redacted.make("private-test-key"),
++        viewport: { width: 640, height: 480 }, recordSession: true, keepAlive: true };
++      let requests = 0;
++      const http = yield* makeHttp(httpOptions(options), async () => {
++        requests++;
++        return Response.json({ ok: true });
++      });
++      assert.deepEqual(Object.keys(httpOptions(options)).sort(), ["apiKey", "projectId"]);
++      yield* http.json("GET", "/v1/sessions/session-1");
++      assert.equal(requests, 1);
++    }),
++  },
++  {
++    name: "an operator-pause event during connection setup never exposes an open handle",
++    run: Effect.scoped(Effect.gen(function* () {
++      const f = yield* fixture({ onConnect: async (driver, events) => { events.pause(); return driver; } });
++      const acquisition = yield* f.acquisition;
++      const result = yield* acquisition.connect.pipe(Effect.result);
++      assert.equal(result._tag, "Failure");
++      assert.equal(f.state.releases, 1);
++      assert.equal(f.state.localCloses, 1);
++    })),
++  },
++  {
++    name: "a retired connection cannot disconnect its replacement",
++    run: Effect.scoped(Effect.gen(function* () {
++      const connections: DriverEvents[] = [];
++      const f = yield* fixture({ keepAlive: true, onObserve: async (events) => { connections.push(events); } });
++      const session = yield* (yield* f.acquisition).connect;
++      yield* session.observe();
++      yield* session.detach;
++      yield* session.reconnect(true);
++      assert.equal(connections.length, 2);
++      connections[0]!.disconnected();
++      assert.equal(yield* session.bind().readText(), "initial");
++      assert.equal(f.state.connects, 2);
++      assert.equal((yield* session.close).remote, "confirmed");
++    })),
++  },
++  {
++    name: "a retired target callback cannot invalidate a fresh observation",
++    run: Effect.scoped(Effect.gen(function* () {
++      const connections: DriverEvents[] = [];
++      const f = yield* fixture({ keepAlive: true, onObserve: async (events) => { connections.push(events); } });
++      const session = yield* (yield* f.acquisition).connect;
++      yield* session.observe();
++      yield* session.detach;
++      const fresh = yield* session.reconnect(true);
++      connections[0]!.invalidate("target-changed");
++      assert.equal((yield* session.observe()).revision, fresh.revision);
++      connections[1]!.invalidate("observation");
++      assert.equal((yield* session.observe()).revision, fresh.revision + 1);
++    })),
++  },
++  {
++    name: "a retired connection cannot pause or fault current automation",
++    run: Effect.scoped(Effect.gen(function* () {
++      const connections: DriverEvents[] = [];
++      const f = yield* fixture({ keepAlive: true, onObserve: async (events) => { connections.push(events); } });
++      const session = yield* (yield* f.acquisition).connect;
++      yield* session.observe();
++      yield* session.detach;
++      yield* session.reconnect(true);
++      connections[0]!.pause();
++      connections[0]!.fault();
++      assert.equal(yield* session.bind().readText(), "initial");
++      connections[1]!.disconnected();
++      const stopped = yield* session.bind().readText().pipe(Effect.result);
++      assert.equal(stopped._tag, "Failure");
++      if (stopped._tag === "Failure") assert.equal(stopped.failure.reason, "closed");
++    })),
++  },
++];
+diff --git a/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts b/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts
+--- a/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts
++++ b/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts
+@@ -28,7 +28,7 @@
+   readonly maxActions?: number;
+   readonly onClick?: (ticket: Ticket) => Promise<string>;
+   readonly onObserve?: (events: DriverEvents) => Promise<void>;
+-  readonly onConnect?: (driver: Driver) => Promise<Driver>;
++  readonly onConnect?: (driver: Driver, events: DriverEvents) => Promise<Driver>;
+   readonly contextLease?: SessionOptions["contextLease"];
+ }
+ 
+@@ -95,7 +95,7 @@
+       dismissDialogs: async () => {}, capture: () => options.captureSource ?? ({ start: async () => {}, stop: async () => {} }),
+       invalidateObservation() {}, disconnect: async () => { state.localCloses++; if (options.disconnectFails) throw new Error("PRIVATE-DISCONNECT"); },
+     };
+-    return options.onConnect === undefined ? driver : options.onConnect(driver);
++    return options.onConnect === undefined ? driver : options.onConnect(driver, events);
+   };
+   const acquisition = acquireSession(provider, "project-1", {
+     maxActions: options.maxActions ?? 20, maxElapsedMillis: options.lifetimeMillis ?? 5000, actionTimeoutMillis: options.actionMillis ?? 1000,
+diff --git a/packages/platform-browserbase/test/recovery.test.ts b/packages/platform-browserbase/test/recovery.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/platform-browserbase/test/recovery.test.ts
+@@ -0,0 +1,4 @@
++import { it } from "@effect/vitest";
++import { recoveryCases } from "./fixtures/RecoveryCases.ts";
++
++for (const test of recoveryCases) it.effect(test.name, () => test.run);

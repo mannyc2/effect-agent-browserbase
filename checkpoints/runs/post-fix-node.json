@@ -1,0 +1,337 @@
+{
+  "runtime": "v24.11.1",
+  "bun": null,
+  "kind": "independent genuine Effect boundary harness, not repository/framework/native-browser acceptance",
+  "rows": [
+    {
+      "name": "one scoped session spans successive operations and closes once",
+      "status": "passed",
+      "millis": 20.706952
+    },
+    {
+      "name": "failed connection retains exact identity and still releases",
+      "status": "passed",
+      "millis": 3.768538000000035
+    },
+    {
+      "name": "lost create reply is not retried and reports an allocation nonce",
+      "status": "passed",
+      "millis": 1.5905579999999873
+    },
+    {
+      "name": "malformed allocation does not fabricate a session identity",
+      "status": "passed",
+      "millis": 1.792116999999962
+    },
+    {
+      "name": "pending release needs an exact-session terminal read",
+      "status": "passed",
+      "millis": 3.065665000000024
+    },
+    {
+      "name": "unconfirmed provider close still disconnects and reports",
+      "status": "passed",
+      "millis": 1259.90141
+    },
+    {
+      "name": "other-session metadata never proves termination",
+      "status": "passed",
+      "millis": 1262.4759099999999
+    },
+    {
+      "name": "pre-dispatch interruption fences a late continuation without poisoning the owner",
+      "status": "passed",
+      "millis": 9.109106999999767
+    },
+    {
+      "name": "interruption after dispatch expires automation without replay",
+      "status": "passed",
+      "millis": 2.6914999999999054
+    },
+    {
+      "name": "close wakes an in-flight native waiter and coalesces teardown",
+      "status": "passed",
+      "millis": 3.2726119999997536
+    },
+    {
+      "name": "late connection after interruption is locally closed",
+      "status": "passed",
+      "millis": 11.20380299999988
+    },
+    {
+      "name": "handoff pauses automation and fresh observation commits under one permit",
+      "status": "passed",
+      "millis": 4.637106000000131
+    },
+    {
+      "name": "failed Live View acquisition does not automatically resume",
+      "status": "passed",
+      "millis": 2.8671910000002754
+    },
+    {
+      "name": "resume requires the operator acknowledgement and matching token",
+      "status": "passed",
+      "millis": 2.828965000000153
+    },
+    {
+      "name": "selecting a tab invalidates old handles without spending an action",
+      "status": "passed",
+      "millis": 2.022559000000001
+    },
+    {
+      "name": "keep-alive reconnect establishes a new generation and observes actual state",
+      "status": "passed",
+      "millis": 2.728476000000228
+    },
+    {
+      "name": "elapsed expiry closes an idle browser while the outer scope stays open",
+      "status": "passed",
+      "millis": 80.95115099999975
+    },
+    {
+      "name": "persistent writer lease sees provider cleanup before its finalizer",
+      "status": "passed",
+      "millis": 3.0074290000002293
+    },
+    {
+      "name": "native failures serialize classification without SDK secrets",
+      "status": "passed",
+      "millis": 0.9092380000001867
+    },
+    {
+      "name": "wall-clock movement does not spend the monotonic lifetime budget",
+      "status": "passed",
+      "millis": 0.4693560000000616
+    },
+    {
+      "name": "recording request inspects status, posts once, and preserves per-page states",
+      "status": "passed",
+      "millis": 4.900695999999698
+    },
+    {
+      "name": "lost assembly response remains uncertain and is not automatically posted again",
+      "status": "passed",
+      "millis": 2.7969669999997677
+    },
+    {
+      "name": "recording wait returns completed and failed pages independently",
+      "status": "passed",
+      "millis": 12.490800000000036
+    },
+    {
+      "name": "bounded recording polling returns latest partial status, not a fabricated permanent failure",
+      "status": "passed",
+      "millis": 31.255714000000353
+    },
+    {
+      "name": "recording API preserves 409 as a bounded typed state",
+      "status": "passed",
+      "millis": 1.2117070000003878
+    },
+    {
+      "name": "recording API preserves 410 as a bounded typed state",
+      "status": "passed",
+      "millis": 0.9841590000000906
+    },
+    {
+      "name": "recording API preserves 422 as a bounded typed state",
+      "status": "passed",
+      "millis": 0.6939489999999751
+    },
+    {
+      "name": "recording API preserves 429 as a bounded typed state",
+      "status": "passed",
+      "millis": 0.6690220000000409
+    },
+    {
+      "name": "BYOS completion without a URL does not become a corrupt download",
+      "status": "passed",
+      "millis": 2.8109880000001795
+    },
+    {
+      "name": "artifact download refreshes access, strips API credentials, and streams owned bytes",
+      "status": "passed",
+      "millis": 4.494103999999879
+    },
+    {
+      "name": "unapproved signed media origin is rejected before a media request",
+      "status": "passed",
+      "millis": 1.2287519999999859
+    },
+    {
+      "name": "credential-preserving API policy ignores ambient headers and redirect options",
+      "status": "passed",
+      "millis": 0.9324219999998604
+    },
+    {
+      "name": "GET retry budget is separate from non-retried POST mutations",
+      "status": "passed",
+      "millis": 453.19618800000035
+    },
+    {
+      "name": "HTTP byte limits apply to actual streamed bytes without Content-Length",
+      "status": "passed",
+      "millis": 1.3972310000003745
+    },
+    {
+      "name": "early stream completion releases the request scope",
+      "status": "passed",
+      "millis": 0.9813049999997929
+    },
+    {
+      "name": "redirects do not forward provider credentials or signed-media access",
+      "status": "passed",
+      "millis": 0.6444360000000415
+    },
+    {
+      "name": "malformed UTF-8 is a sanitized protocol failure",
+      "status": "passed",
+      "millis": 0.6748109999998633
+    },
+    {
+      "name": "replay access serves existing VOD material without recording or browser allocation",
+      "status": "passed",
+      "millis": 3.0980930000000626
+    },
+    {
+      "name": "replay rejects encrypted or foreign-origin playlists rather than leaking credentials",
+      "status": "passed",
+      "millis": 1.3570720000002439
+    },
+    {
+      "name": "ordinary download metadata and streaming are separate from recording artifacts",
+      "status": "passed",
+      "millis": 3.8330229999996845
+    },
+    {
+      "name": "unsafe website filenames fail before a content request",
+      "status": "passed",
+      "millis": 1.379175000000032
+    },
+    {
+      "name": "capture has a bounded drop-oldest queue with explicit sequence gaps",
+      "status": "passed",
+      "millis": 4.089742999999999
+    },
+    {
+      "name": "byte pressure is enforced independently of the frame count",
+      "status": "passed",
+      "millis": 0.6067599999996673
+    },
+    {
+      "name": "capture copies callback bytes and preserves source time separately from receipt time",
+      "status": "passed",
+      "millis": 0.7271880000002966
+    },
+    {
+      "name": "duplicate timestamps are accounted for, not silently relabeled as new frames",
+      "status": "passed",
+      "millis": 0.725224999999682
+    },
+    {
+      "name": "a backwards source timestamp ends with a typed partial stream",
+      "status": "passed",
+      "millis": 1.050216999999975
+    },
+    {
+      "name": "actual JPEG geometry changes terminate an interval even at unchanged CSS dimensions",
+      "status": "passed",
+      "millis": 0.8842110000000503
+    },
+    {
+      "name": "CSS viewport changes segment capture even when image dimensions are unchanged",
+      "status": "passed",
+      "millis": 0.6740800000002309
+    },
+    {
+      "name": "a malformed or oversized frame is rejected before retention",
+      "status": "passed",
+      "millis": 1.370832000000064
+    },
+    {
+      "name": "stopping one interval permits another and a stale stop cannot end the replacement",
+      "status": "passed",
+      "millis": 0.7422299999998359
+    },
+    {
+      "name": "concurrent stop callers await one native stop rather than returning early",
+      "status": "passed",
+      "millis": 2.437333999999737
+    },
+    {
+      "name": "a slow native stop quarantines the lease until confirmation",
+      "status": "passed",
+      "millis": 0.8634500000002845
+    },
+    {
+      "name": "native stop failure prevents a second competing screencast without closing the browser",
+      "status": "passed",
+      "millis": 0.5926789999998618
+    },
+    {
+      "name": "consumer cancellation ends capture but does not spend or close browser actions",
+      "status": "passed",
+      "millis": 0.5360350000000835
+    },
+    {
+      "name": "a capture has one consumer and rejects a second without stopping the first",
+      "status": "passed",
+      "millis": 0.524887999999919
+    },
+    {
+      "name": "scope closure stops capture even when nobody subscribes",
+      "status": "passed",
+      "millis": 0.4665820000000167
+    },
+    {
+      "name": "duration expiration ends idle capture without waiting for another callback",
+      "status": "passed",
+      "millis": 20.82091300000002
+    },
+    {
+      "name": "parent generation fencing stops callbacks even when native disconnect fails",
+      "status": "passed",
+      "millis": 2.982002000000193
+    },
+    {
+      "name": "ordinary page mutation leaves capture running but target changes segment it",
+      "status": "passed",
+      "millis": 0.5035259999999653
+    },
+    {
+      "name": "failed native start runs cleanup and leaves no active capture lease",
+      "status": "passed",
+      "millis": 0.5126799999998184
+    },
+    {
+      "name": "interruption during native start observes its late result and cleans the lease",
+      "status": "passed",
+      "millis": 0.6782350000003134
+    },
+    {
+      "name": "interactive configuration is projected before strict HTTP validation",
+      "status": "passed",
+      "millis": 0.6833929999997963
+    },
+    {
+      "name": "an operator-pause event during connection setup never exposes an open handle",
+      "status": "passed",
+      "millis": 1.84499599999981
+    },
+    {
+      "name": "a retired connection cannot disconnect its replacement",
+      "status": "passed",
+      "millis": 2.9172559999997247
+    },
+    {
+      "name": "a retired target callback cannot invalidate a fresh observation",
+      "status": "passed",
+      "millis": 3.8023880000000645
+    },
+    {
+      "name": "a retired connection cannot pause or fault current automation",
+      "status": "passed",
+      "millis": 2.5533150000001115
+    }
+  ]
+}

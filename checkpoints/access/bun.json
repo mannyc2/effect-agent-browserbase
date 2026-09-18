@@ -1,0 +1,27 @@
+{
+  "name": "bun",
+  "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip",
+  "command": [
+    "curl",
+    "--fail",
+    "--location",
+    "--silent",
+    "--show-error",
+    "--connect-timeout",
+    "5",
+    "--max-time",
+    "18",
+    "--proto",
+    "=https",
+    "--proto-redir",
+    "=https",
+    "--output",
+    "/mnt/data/browserbase-transfer/access/bun.download",
+    "--write-out",
+    "http=%{http_code} bytes=%{size_download}\n",
+    "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip"
+  ],
+  "exit_code": 6,
+  "stdout": "http=000 bytes=0\n",
+  "stderr": "curl: (6) Could not resolve host: github.com\n"
+}
