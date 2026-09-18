@@ -96,7 +96,7 @@ const operationError = (operation: InteractiveBrowserActionError["operation"], e
 };
 const actionResult = (url: string) => decode(BrowserActionResult, { url }, "action-result");
 const checked = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknown, operation: string) =>
-  Schema.decodeUnknownEffect(schema)(value, { onExcessProperty: "error" }).pipe(Effect.mapError(() => new BrowserbaseError({ operation, reason: "configuration", outcome: "undispatched" })));
+  Schema.decodeUnknownEffect(schema)(value, { onExcessProperty: "error" }).pipe(Effect.mapError(() => BrowserbaseError.make({ operation, reason: "configuration", outcome: "undispatched" })));
 
 const makeHandle = (bound: BoundControls, controls: SessionControls): BrowserHandle => ({
   navigate: (request) => checked(BrowserNavigateRequest, request, "navigate").pipe(
@@ -116,7 +116,7 @@ const makeHandle = (bound: BoundControls, controls: SessionControls): BrowserHan
       implementation: browserbaseInteractiveImplementation, mediaType: "image/png", bytes: new Uint8Array(bytes),
     }, "screenshot")), Effect.mapError((error) => operationError("screenshot", error))),
   close: controls.close.pipe(Effect.flatMap((result) => result.remote === "confirmed" ? Effect.void :
-    Effect.fail(new BrowserbaseError({ operation: "close", reason: "provider", outcome: "unknown" }))),
+    Effect.fail(BrowserbaseError.make({ operation: "close", reason: "provider", outcome: "unknown" }))),
     Effect.mapError((error) => operationError("close", error))),
 });
 
@@ -168,11 +168,11 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
       const maxPages = options.maxPages ?? 10;
       if (!Number.isSafeInteger(actionTimeoutMillis) || actionTimeoutMillis < 1 || actionTimeoutMillis > 60000 ||
           !Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 32) {
-        return yield* new BrowserbaseError({ operation: "configure", reason: "configuration" });
+        return yield* BrowserbaseError.make({ operation: "configure", reason: "configuration" });
       }
       const context = options.context === undefined ? undefined : yield* checked(
         Schema.Struct({ id: Identifier, persist: Schema.Boolean }), options.context, "configure");
-      if (context?.persist && options.contextLease === undefined) return yield* new BrowserbaseError({ operation: "configure", reason: "context-lease" });
+      if (context?.persist && options.contextLease === undefined) return yield* BrowserbaseError.make({ operation: "configure", reason: "context-lease" });
       const popupPolicy = yield* checked(Schema.Literals(["retain", "close", "pause"]), options.popupPolicy ?? "retain", "configure");
       const dialogPolicy = yield* checked(Schema.Literals(["dismiss", "pause"]), options.dialogPolicy ?? "dismiss", "configure");
       const initialPage = options.initialPage === undefined ? undefined : yield* checked(Schema.Union([
@@ -222,6 +222,6 @@ export const browserbaseInteractiveLayer = (options: InteractiveOptions) => Laye
   Effect.gen(function* () {
     const host = yield* BrowserbaseInteractiveHost;
     return InteractiveBrowser.of({ open: (policy) => host.open(policy).pipe(Effect.map((session) => session.handle),
-      Effect.mapError((error) => error instanceof BrowserbaseError ? operationError("navigate", error) : error)) });
+      Effect.mapError((error) => Schema.is(BrowserbaseError)(error) ? operationError("navigate", error) : error)) });
   }),
 ).pipe(Layer.provideMerge(BrowserbaseInteractiveHost.layer(options)));

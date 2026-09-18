@@ -52,7 +52,7 @@ const withinJsonDepth = (text: string, maximum: number): boolean => {
 
 export const decode = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknown, operation: string) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
-    Effect.mapError(() => new BrowserbaseError({ operation, reason: "malformed" })),
+    Effect.mapError(() => BrowserbaseError.make({ operation, reason: "malformed" })),
   );
 
 export const mediaType = (value: string | undefined): string => value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -65,7 +65,7 @@ const retryAfter = (value: string | undefined, now: number): number | undefined 
   return Number.isFinite(date) ? Math.min(60_000, Math.max(0, date - now)) : undefined;
 };
 
-const statusError = (status: number, operation: string, after?: number) => new BrowserbaseError({
+const statusError = (status: number, operation: string, after?: number) => BrowserbaseError.make({
   operation,
   reason: status === 401 || status === 403 ? "authorization" :
     status === 429 ? "rate-limited" : status === 409 ? "active" :
@@ -80,7 +80,7 @@ const collect = (stream: Stream.Stream<Uint8Array, BrowserbaseError>, maximum: n
     const chunks: Uint8Array[] = [];
     let total = 0;
     yield* Stream.runForEach(stream, (chunk) => Effect.suspend(() => {
-      if (chunk.byteLength > maximum - total) return Effect.fail(new BrowserbaseError({ operation, reason: "limit" }));
+      if (chunk.byteLength > maximum - total) return Effect.fail(BrowserbaseError.make({ operation, reason: "limit" }));
       total += chunk.byteLength;
       chunks.push(chunk);
       return Effect.void;
@@ -101,7 +101,7 @@ export const makeHttp = Effect.fnUntraced(function* (
   transport?: typeof globalThis.fetch,
 ) {
   const configured = yield* Schema.decodeEffect(Options)(options, { onExcessProperty: "error" }).pipe(
-    Effect.mapError(() => new BrowserbaseError({ operation: "configure", reason: "configuration" })),
+    Effect.mapError(() => BrowserbaseError.make({ operation: "configure", reason: "configuration" })),
   );
   // Own immutable policy values; later mutation of the caller's options cannot
   // substitute credentials or request limits in an already built service.
@@ -109,13 +109,14 @@ export const makeHttp = Effect.fnUntraced(function* (
   const timeout = configured.requestTimeoutMillis ?? 10_000;
   const origins = new Set<string>();
   for (const origin of configured.artifactOrigins ?? []) {
-    try {
-      const u = new URL(origin);
-      if (u.protocol !== "https:" || u.origin !== origin || u.username || u.password) throw new Error();
-      origins.add(origin);
-    } catch {
-      return yield* new BrowserbaseError({ operation: "configure", reason: "configuration" });
+    const url = yield* Effect.try({
+      try: () => new URL(origin),
+      catch: () => BrowserbaseError.make({ operation: "configure", reason: "configuration" }),
+    });
+    if (url.protocol !== "https:" || url.origin !== origin || url.username || url.password) {
+      return yield* BrowserbaseError.make({ operation: "configure", reason: "configuration" });
     }
+    origins.add(origin);
   }
   const fetch = transport ?? (yield* FetchHttpClient.Fetch);
   const client = yield* HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer));
@@ -130,7 +131,7 @@ export const makeHttp = Effect.fnUntraced(function* (
       Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
       Effect.provideService(HttpClient.TracerPropagationEnabled, false),
       Effect.withTracerEnabled(false),
-      Effect.mapError(() => new BrowserbaseError({ operation, reason: "transport" })),
+      Effect.mapError(() => BrowserbaseError.make({ operation, reason: "transport" })),
     );
 
   const inspect = Effect.fnUntraced(function* (
@@ -144,17 +145,17 @@ export const makeHttp = Effect.fnUntraced(function* (
         retryAfter(response.headers["retry-after"], yield* Clock.currentTimeMillis));
     }
     if (!types.includes(mediaType(response.headers["content-type"]))) {
-      return yield* new BrowserbaseError({ operation, reason: "content-type" });
+      return yield* BrowserbaseError.make({ operation, reason: "content-type" });
     }
     const length = response.headers["content-length"];
     if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > maximum)) {
-      return yield* new BrowserbaseError({ operation, reason: "limit" });
+      return yield* BrowserbaseError.make({ operation, reason: "limit" });
     }
     let received = 0;
     return response.stream.pipe(
-      Stream.mapError(() => new BrowserbaseError({ operation, reason: "transport" })),
+      Stream.mapError(() => BrowserbaseError.make({ operation, reason: "transport" })),
       Stream.mapEffect((chunk) => Effect.suspend(() => {
-        if (chunk.byteLength > maximum - received) return Effect.fail(new BrowserbaseError({ operation, reason: "limit" }));
+        if (chunk.byteLength > maximum - received) return Effect.fail(BrowserbaseError.make({ operation, reason: "limit" }));
         received += chunk.byteLength;
         return Effect.succeed(new Uint8Array(chunk));
       })),
@@ -178,7 +179,7 @@ export const makeHttp = Effect.fnUntraced(function* (
     Stream.unwrap(Effect.gen(function* () {
       if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 2 ** 31 - 1 ||
           !Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
-        return yield* new BrowserbaseError({ operation, reason: "configuration" });
+        return yield* BrowserbaseError.make({ operation, reason: "configuration" });
       }
       const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
       const response = yield* within(execute(apiRequest("GET", path, types[0] ?? "application/octet-stream"), operation), deadline, operation);
@@ -190,29 +191,29 @@ export const makeHttp = Effect.fnUntraced(function* (
     collect(bytes(path, maximum, types, operation), maximum, operation).pipe(
       Effect.flatMap((body) => Effect.try({
         try: () => new TextDecoder("utf-8", { fatal: true }).decode(body),
-        catch: () => new BrowserbaseError({ operation, reason: "malformed" }),
+        catch: () => BrowserbaseError.make({ operation, reason: "malformed" }),
       })),
-      Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.fail(new BrowserbaseError({ operation, reason: "timeout" })) }),
+      Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.fail(BrowserbaseError.make({ operation, reason: "timeout" })) }),
     );
 
   const jsonOnce = Effect.fnUntraced(function* (method: "GET" | "POST", path: string, body?: Schema.Json) {
     const operation = method === "POST" ? "provider-mutation" : "provider-read";
     let request = apiRequest(method, path, "application/json");
     if (body !== undefined) request = yield* HttpClientRequest.bodyJson(request, body).pipe(
-      Effect.mapError(() => new BrowserbaseError({ operation, reason: "configuration" })),
+      Effect.mapError(() => BrowserbaseError.make({ operation, reason: "configuration" })),
     );
     const response = yield* execute(request, operation);
     const stream = yield* inspect(response, operation, ["application/json"], MAX_JSON_BYTES);
     const bodyBytes = yield* collect(stream, MAX_JSON_BYTES, operation);
     const bodyText = yield* Effect.try({
       try: () => new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes),
-      catch: () => new BrowserbaseError({ operation, reason: "malformed" }),
+      catch: () => BrowserbaseError.make({ operation, reason: "malformed" }),
     });
     if (!withinJsonDepth(bodyText, 64)) {
-      return yield* new BrowserbaseError({ operation, reason: "limit" });
+      return yield* BrowserbaseError.make({ operation, reason: "limit" });
     }
     return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(bodyText).pipe(
-      Effect.mapError(() => new BrowserbaseError({ operation, reason: "malformed" })),
+      Effect.mapError(() => BrowserbaseError.make({ operation, reason: "malformed" })),
     );
   }, Effect.scoped, Effect.withTracerEnabled(false));
 
@@ -249,7 +250,7 @@ export const makeHttp = Effect.fnUntraced(function* (
     Stream.unwrap(Effect.gen(function* () {
       if (!validateMediaUrl(Redacted.value(url)) || !Number.isSafeInteger(maximum) || maximum < 1 ||
           maximum > 2 ** 31 - 1 || !Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
-        return yield* new BrowserbaseError({ operation: "media-download", reason: "unsafe-url" });
+        return yield* BrowserbaseError.make({ operation: "media-download", reason: "unsafe-url" });
       }
       const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
       const response = yield* within(execute(HttpClientRequest.get(Redacted.value(url)), "media-download"), deadline, "media-download");

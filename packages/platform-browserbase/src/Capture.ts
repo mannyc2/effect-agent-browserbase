@@ -14,5 +14,5 @@ export const start = (
   options: CaptureOptions = {},
 ): Effect.Effect<CaptureInterval, BrowserbaseError, Scope.Scope> => Effect.suspend(() => {
   const parent = captureParent(session);
-  return parent === undefined ? Effect.fail(new BrowserbaseError({ operation: "capture", reason: "closed" })) : startCapture(parent, options);
+  return parent === undefined ? Effect.fail(BrowserbaseError.make({ operation: "capture", reason: "closed" })) : startCapture(parent, options);
 });

@@ -26,7 +26,7 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
       !Number.isSafeInteger(maxFrameBytes) || maxFrameBytes < 1 || maxFrameBytes > maxBytes ||
       !Number.isSafeInteger(duration) || duration < 1 || duration > 600000 ||
       !Number.isSafeInteger(quality) || quality < 1 || quality > 100) {
-    return yield* new BrowserbaseError({ operation: "capture", reason: "configuration", outcome: "undispatched" });
+    return yield* BrowserbaseError.make({ operation: "capture", reason: "configuration", outcome: "undispatched" });
   }
   const clock = yield* Clock.Clock;
   const wake = yield* Queue.dropping<void>(1);
@@ -67,13 +67,13 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
     finish("stopped");
     // Wait for an in-flight start before stop. If it will not settle, quarantine this lease.
     if (startPromise !== undefined && !startSettled) {
-      yield* restore(Effect.tryPromise({ try: () => startPromise!, catch: () => new BrowserbaseError({ operation: "capture-start", reason: "provider" }) }).pipe(
+      yield* restore(Effect.tryPromise({ try: () => startPromise!, catch: () => BrowserbaseError.make({ operation: "capture-start", reason: "provider" }) }).pipe(
         Effect.timeout(2000), Effect.exit,
       ));
     }
     if (source !== undefined) {
       const stopped = yield* restore(Effect.tryPromise({ try: () => source!.stop(),
-        catch: () => new BrowserbaseError({ operation: "capture-stop", reason: "provider" }),
+        catch: () => BrowserbaseError.make({ operation: "capture-stop", reason: "provider" }),
       }).pipe(Effect.timeout(3000))).pipe(Effect.exit);
       if (Exit.isSuccess(stopped) && startSettled) nativeStop = "confirmed";
     } else nativeStop = "confirmed";
@@ -89,26 +89,26 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
   const receive = (frame: NativeFrame): void => {
     if (ended) return;
     if (target === undefined || parent.owner.state.generation !== target.generation || parent.owner.state.phase !== "open") {
-      finish("parent-unavailable", new BrowserbaseError({ operation: "capture", reason: "closed" })); return;
+      finish("parent-unavailable", BrowserbaseError.make({ operation: "capture", reason: "closed" })); return;
     }
     const sequence = received++;
     try {
       const meta = parseMetadata(frame);
       if (!(frame.data instanceof Uint8Array) || frame.data.length > maxFrameBytes) {
-        rejected++; finish("frame-limit", new BrowserbaseError({ operation: "capture", reason: "limit" })); return;
+        rejected++; finish("frame-limit", BrowserbaseError.make({ operation: "capture", reason: "limit" })); return;
       }
       if (last !== undefined && meta.timestamp < last) {
-        rejected++; finish("timestamp-discontinuity", new BrowserbaseError({ operation: "capture", reason: "timestamp" })); return;
+        rejected++; finish("timestamp-discontinuity", BrowserbaseError.make({ operation: "capture", reason: "timestamp" })); return;
       }
       if (last === meta.timestamp) { duplicates++; rejected++; return; }
       const dimensions = jpegGeometry(frame.data);
       if (dimensions.width > 16384 || dimensions.height > 16384 || dimensions.width * dimensions.height > 33_554_432 ||
           frame.data[frame.data.length - 2] !== 255 || frame.data[frame.data.length - 1] !== 217) {
-        rejected++; finish("frame-limit", new BrowserbaseError({ operation: "capture", reason: "limit" })); return;
+        rejected++; finish("frame-limit", BrowserbaseError.make({ operation: "capture", reason: "limit" })); return;
       }
       if (geometry !== undefined && (geometry.width !== dimensions.width || geometry.height !== dimensions.height ||
           geometry.viewportWidth !== meta.viewportWidth || geometry.viewportHeight !== meta.viewportHeight)) {
-        rejected++; finish("resized", new BrowserbaseError({ operation: "capture", reason: "resized" })); return;
+        rejected++; finish("resized", BrowserbaseError.make({ operation: "capture", reason: "resized" })); return;
       }
       geometry ??= { ...dimensions, viewportWidth: meta.viewportWidth, viewportHeight: meta.viewportHeight };
       first ??= meta.timestamp; last = meta.timestamp;
@@ -120,17 +120,17 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
       });
       Queue.offerUnsafe(wake, undefined);
     } catch {
-      rejected++; finish("malformed-frame", new BrowserbaseError({ operation: "capture", reason: "malformed" }));
+      rejected++; finish("malformed-frame", BrowserbaseError.make({ operation: "capture", reason: "malformed" }));
     }
   };
 
   yield* parent.owner.guard("capture-start", (ticket) => Effect.gen(function* () {
-    if (parent.captureLease !== undefined) return yield* new BrowserbaseError({ operation: "capture", reason: "busy", outcome: "undispatched" });
-    target = yield* Effect.try({ try: parent.target, catch: () => new BrowserbaseError({ operation: "capture", reason: "closed" }) });
+    if (parent.captureLease !== undefined) return yield* BrowserbaseError.make({ operation: "capture", reason: "busy", outcome: "undispatched" });
+    target = yield* Effect.try({ try: parent.target, catch: () => BrowserbaseError.make({ operation: "capture", reason: "closed" }) });
     source = yield* parent.source(ticket);
     lease = {
-      stop: () => stopNative.pipe(Effect.asVoid),
-      invalidate: (why) => finish(why, new BrowserbaseError({ operation: "capture", reason: why === "resized" ? "resized" : "target-changed" })),
+      stop: stopNative.pipe(Effect.asVoid),
+      invalidate: (why) => finish(why, BrowserbaseError.make({ operation: "capture", reason: why === "resized" ? "resized" : "target-changed" })),
     };
     parent.captureLease = lease;
     // Installed before native acquisition. A cancelled capture cannot escape its caller's scope.
@@ -150,7 +150,7 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
         }, () => { startSettled = true; });
         return startPromise;
       },
-      catch: () => new BrowserbaseError({ operation: "capture-start", reason: "provider" }),
+      catch: () => BrowserbaseError.make({ operation: "capture-start", reason: "provider" }),
     });
     ticket.check();
   }), { charge: false }).pipe(
@@ -158,12 +158,9 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
     Effect.onInterrupt(() => target === undefined ? Effect.void : stopNative.pipe(Effect.asVoid)),
   );
   // One monitor, not a fiber per frame. The finalizer also calls stop directly if this monitor is interrupted.
-  yield* Effect.raceFirst(
-    Queue.take(finished).pipe(Effect.as(false)),
-    Effect.sleep(duration).pipe(Effect.as(true)),
-  ).pipe(
-    // Do not publish to the competing queue inside a race branch: finishing the
-    // other branch can interrupt the publisher before its continuation settles.
+  yield* Queue.take(finished).pipe(
+    Effect.as(false),
+    Effect.timeoutOrElse({ duration, onTimeout: () => Effect.succeed(true) }),
     Effect.tap((expired) => expired ? Effect.sync(() => finish("duration-limit")) : Effect.void),
     Effect.andThen(stopNative),
     Effect.forkScoped,
@@ -176,7 +173,7 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
     return Queue.take(wake).pipe(Effect.andThen(next));
   });
   const frames = Stream.unwrap(Effect.suspend(() => {
-    if (subscribed) return Effect.fail(new BrowserbaseError({ operation: "capture-consume", reason: "busy" }));
+    if (subscribed) return Effect.fail(BrowserbaseError.make({ operation: "capture-consume", reason: "busy" }));
     subscribed = true;
     return Effect.succeed(Stream.fromEffectRepeat(next).pipe(Stream.ensuring(stopNative.pipe(Effect.asVoid))));
   }));

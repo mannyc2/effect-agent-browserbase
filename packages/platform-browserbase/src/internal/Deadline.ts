@@ -16,7 +16,7 @@ export const within = <A, E, R>(
     const remaining = deadline - now;
     const timeout = () => {
       onTimeout?.();
-      return Effect.fail(new BrowserbaseError({ operation, reason: "timeout" }));
+      return Effect.fail(BrowserbaseError.make({ operation, reason: "timeout" }));
     };
     return remaining <= 0 ? timeout() : effect.pipe(Effect.timeoutOrElse({
       duration: Duration.millis(remaining),

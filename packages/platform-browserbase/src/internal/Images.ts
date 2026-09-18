@@ -1,6 +1,6 @@
 import { BrowserbaseError } from "../Types.ts";
 
-const malformed = () => new BrowserbaseError({ operation: "image", reason: "malformed" });
+const malformed = () => BrowserbaseError.make({ operation: "image", reason: "malformed" });
 
 /** Parse framing only; a caller decoding media must still validate its complete bitstream. */
 export const pngGeometry = (bytes: Uint8Array): { width: number; height: number } => {

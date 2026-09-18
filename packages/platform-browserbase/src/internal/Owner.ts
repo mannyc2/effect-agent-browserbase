@@ -1,4 +1,4 @@
-import { Clock, Effect, Semaphore } from "effect";
+import { Clock, Effect, Schema, Semaphore } from "effect";
 import { BrowserbaseError } from "../Types.ts";
 import { deadlineAfter, nowMillis, within } from "./Deadline.ts";
 
@@ -56,7 +56,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   ): Effect.Effect<A, BrowserbaseError, R> => semaphore.withPermitsIfAvailable(1)(
     Effect.gen(function* () {
       if (!(options.phases ?? ["open"]).includes(state.phase)) {
-        return yield* new BrowserbaseError({
+        return yield* BrowserbaseError.make({
           operation, reason: state.phase === "paused" ? "busy" : "closed", outcome: "undispatched",
         });
       }
@@ -64,12 +64,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       const now = yield* nowMillis;
       if (now >= lifetimeDeadline) {
         fence("uncertain", "uncertain");
-        return yield* new BrowserbaseError({ operation, reason: "timeout", outcome: "undispatched" });
+        return yield* BrowserbaseError.make({ operation, reason: "timeout", outcome: "undispatched" });
       }
       if (options.charge !== false) {
-        if (state.actions >= limits.maxActions) return yield* new BrowserbaseError({ operation, reason: "limit", outcome: "undispatched" });
+        if (state.actions >= limits.maxActions) return yield* BrowserbaseError.make({ operation, reason: "limit", outcome: "undispatched" });
         state.actions++;
       }
+      // The lifecycle fence must actively abort admitted native work outside the current fiber.
+      // @effect-diagnostics-next-line abortControllerInEffect:off
       const controller = new AbortController();
       active = controller;
       let dispatched = false;
@@ -77,7 +79,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       const allowed = options.phases ?? ["open"];
       const check = () => {
         if (controller.signal.aborted || state.generation !== generation || !allowed.includes(state.phase)) {
-          throw new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" });
+          throw BrowserbaseError.make({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" });
         }
       };
       const ticket: Ticket = {
@@ -94,10 +96,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         if (dispatched && state.phase !== "closing" && state.phase !== "closed") fence("uncertain", "uncertain");
       };
       return yield* within(body(ticket), ticket.deadline, operation, uncertain).pipe(
-        Effect.tap((_) => options.verifyAfter === false ? Effect.void : Effect.try({ try: check, catch: () => new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" }) })),
+        Effect.tap((_) => options.verifyAfter === false ? Effect.void : Effect.try({ try: check, catch: () => BrowserbaseError.make({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" }) })),
         Effect.catch((error) => {
           if (dispatched) uncertain();
-          return Effect.fail(new BrowserbaseError({
+          return Effect.fail(BrowserbaseError.make({
             operation,
             reason: error.reason,
             outcome: error.outcome ?? (dispatched ? "unknown" : "undispatched"),
@@ -112,7 +114,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         })),
       );
     }),
-  ).pipe(Effect.flatMap(Effect.fromOption(() => new BrowserbaseError({ operation, reason: "busy", outcome: "undispatched" }))));
+  ).pipe(Effect.flatMap(Effect.fromOption(() => BrowserbaseError.make({ operation, reason: "busy", outcome: "undispatched" }))));
 
   /** Lifecycle transitions are performed while holding guard's permit; close alone preempts it. */
   return {
@@ -137,7 +139,7 @@ export const native = <A>(operation: string, ticket: Ticket, body: () => Promise
     const abort = () => {
       if (done) return;
       cleanup();
-      resume(Effect.fail(new BrowserbaseError({ operation, reason: "stale", outcome: ticket.dispatched ? "unknown" : "undispatched" })));
+      resume(Effect.fail(BrowserbaseError.make({ operation, reason: "stale", outcome: ticket.dispatched ? "unknown" : "undispatched" })));
     };
     ticket.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -155,6 +157,6 @@ export const native = <A>(operation: string, ticket: Ticket, body: () => Promise
   });
 
 const sanitizeNativeError = (error: unknown, operation: string, dispatched: boolean): BrowserbaseError =>
-  error instanceof BrowserbaseError ? error : new BrowserbaseError({
+  Schema.is(BrowserbaseError)(error) ? error : BrowserbaseError.make({
     operation, reason: "provider", outcome: dispatched ? "unknown" : "undispatched",
   });

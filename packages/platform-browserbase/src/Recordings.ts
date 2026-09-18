@@ -35,7 +35,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
   const read = (ref: SessionReference, deadline?: number) => http.json("GET", path(ref), undefined, deadline).pipe(
     Effect.flatMap((raw) => decode(RawBatch, raw, "recording-status")),
     Effect.filterOrFail((raw) => new Set(raw.downloads.map((p) => p.pageId)).size === raw.downloads.length,
-      () => new BrowserbaseError({ operation: "recording-status", reason: "malformed" })),
+      () => BrowserbaseError.make({ operation: "recording-status", reason: "malformed" })),
   );
   const project = (ref: SessionReference, raw: typeof RawBatch.Type, timedOut = false) => RecordingBatch.make({
     reference: ref, timedOut,
@@ -47,7 +47,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
   });
   const authorize = Effect.fnUntraced(function* (ref: SessionReference, deadline?: number) {
     const status = yield* provider.metadata(ref, deadline);
-    if (!terminal(status.status)) return yield* new BrowserbaseError({ operation: "recording", reason: "active" });
+    if (!terminal(status.status)) return yield* BrowserbaseError.make({ operation: "recording", reason: "active" });
   });
   const status = Effect.fnUntraced(function* (ref: SessionReference) {
     yield* authorize(ref);
@@ -55,7 +55,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
   });
   const request = (ref: SessionReference, mode: "initial" | "retry-failed" = "initial") => requests.withPermits(1)(
     Effect.gen(function* () {
-      if (mode !== "initial" && mode !== "retry-failed") return yield* new BrowserbaseError({ operation: "recording-request", reason: "configuration", outcome: "undispatched" });
+      if (mode !== "initial" && mode !== "retry-failed") return yield* BrowserbaseError.make({ operation: "recording-request", reason: "configuration", outcome: "undispatched" });
       yield* authorize(ref);
       // A prior uncertain POST is reconciled by this GET before any resubmission.
       const before = yield* read(ref);
@@ -64,7 +64,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
       if (!needed) return project(ref, before);
       const raw = yield* http.json("POST", path(ref)).pipe(
         Effect.flatMap((value) => decode(RawBatch, value, "recording-request")),
-        Effect.mapError((error) => new BrowserbaseError({
+        Effect.mapError((error) => BrowserbaseError.make({
           operation: "recording-request",
           reason: error.status !== undefined && error.status >= 400 && error.status < 500 ? error.reason : "assembly-unknown",
           outcome: error.status !== undefined && error.status >= 400 && error.status < 500 ? "rejected" : "unknown",
@@ -80,7 +80,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
     const interval = options.intervalMillis ?? 3000;
     if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 600_000 ||
         !Number.isSafeInteger(interval) || interval < 10 || interval > 30_000) {
-      return yield* new BrowserbaseError({ operation: "recording-wait", reason: "configuration" });
+      return yield* BrowserbaseError.make({ operation: "recording-wait", reason: "configuration" });
     }
     const deadline = yield* deadlineAfter(timeout);
     yield* within(authorize(ref, deadline), deadline, "recording-wait");
@@ -103,16 +103,16 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
     const timeoutMillis = limits.timeoutMillis ?? 60_000;
     if (!Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1 || limits.maxBytes > 2 ** 31 - 1 ||
         !Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
-      return yield* new BrowserbaseError({ operation: "recording-download", reason: "configuration" });
+      return yield* BrowserbaseError.make({ operation: "recording-download", reason: "configuration" });
     }
     const deadline = yield* deadlineAfter(timeoutMillis);
     yield* within(authorize(ref.session, deadline), deadline, "recording-download");
     const latest = yield* within(read(ref.session, deadline), deadline, "recording-download");
     const page = latest.downloads.find((p) => p.pageId === ref.pageId);
-    if (page === undefined) return yield* new BrowserbaseError({ operation: "recording-download", reason: "not-found" });
-    if (page.status === "FAILED") return yield* new BrowserbaseError({ operation: "recording-download", reason: "failed" });
-    if (page.status !== "COMPLETED") return yield* new BrowserbaseError({ operation: "recording-download", reason: "active" });
-    if (page.downloadUrl === undefined) return yield* new BrowserbaseError({ operation: "recording-download", reason: "byos" });
+    if (page === undefined) return yield* BrowserbaseError.make({ operation: "recording-download", reason: "not-found" });
+    if (page.status === "FAILED") return yield* BrowserbaseError.make({ operation: "recording-download", reason: "failed" });
+    if (page.status !== "COMPLETED") return yield* BrowserbaseError.make({ operation: "recording-download", reason: "active" });
+    if (page.downloadUrl === undefined) return yield* BrowserbaseError.make({ operation: "recording-download", reason: "byos" });
     // A fresh GET mints access for this subscription. No URL is persisted in the artifact reference.
     return http.media(Redacted.make(page.downloadUrl), limits.maxBytes, ["video/mp4", "application/octet-stream"], timeoutMillis, deadline);
   }));
