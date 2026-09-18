@@ -45,3 +45,37 @@ index 183913d..65ba3eb 100644
    },
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
+diff --git a/docs/guide/browser.md b/docs/guide/browser.md
+--- a/docs/guide/browser.md
++++ b/docs/guide/browser.md
+@@ -112,6 +112,30 @@
+   action, elapsed-time, and result-byte limits.
+ 
+ Choose `ExactHosts` for a known site. Let a trusted host, never model output, choose
++
++### Browserbase interactive sessions
++
++`@effect-agent/platform-browserbase` implements the same `InteractiveBrowser` contract on trusted
++Node and Bun hosts with Playwright 1.63 over Browserbase CDP. One enclosing Scope owns the remote
++session; application code and model Tools borrow handles from that owner. Provider credentials,
++CDP addresses, persistent-context choices and Live View controls remain host-only.
++
++Browserbase currently supports only a trusted-host `Unrestricted` network policy in this adapter.
++`ExactHosts` fails before allocation because Browserbase `allowedDomains` does not prove exact-host
++coverage for redirects, frames, subresources, popups and service workers. `PublicWeb` also fails
++before allocation because request interception cannot establish connection-time public-address
++containment. Neither mode silently falls back to `Unrestricted`.
++
++The adapter also exposes independent `recordings`, `replays`, and `downloads` entry points.
++Provider MP4 assembly and replay retrieval can outlive the interactive Scope; signed media URLs are
++temporary access material rather than artifact identity. Optional `capture` borrows the selected
++live page and streams bounded JPEG frames with source/receipt clocks and drop accounting. It owns
++no encoder or filesystem and does not claim website-audio capture.
++
++Host handoff pauses automation before returning temporary Live View material. Resume requires an
++explicit operator-release decision and obtains a fresh observation while retaining the mutation
++permit. Keep-alive reconnect creates a new handle generation and never replays a pending mutation.
++Persistent writers require an application-owned exclusive context lease.
+ `Unrestricted`. One policy also fixes maximum actions, elapsed time, and bytes returned by each
+ operation.
+ 
