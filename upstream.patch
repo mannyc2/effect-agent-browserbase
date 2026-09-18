@@ -48,10 +48,10 @@ index 183913d..65ba3eb 100644
 diff --git a/docs/guide/browser.md b/docs/guide/browser.md
 --- a/docs/guide/browser.md
 +++ b/docs/guide/browser.md
-@@ -112,6 +112,30 @@
-   action, elapsed-time, and result-byte limits.
- 
+@@ -114,6 +114,30 @@
  Choose `ExactHosts` for a known site. Let a trusted host, never model output, choose
+ `Unrestricted`. One policy also fixes maximum actions, elapsed time, and bytes returned by each
+ operation.
 +
 +### Browserbase interactive sessions
 +
@@ -76,6 +76,6 @@ diff --git a/docs/guide/browser.md b/docs/guide/browser.md
 +explicit operator-release decision and obtains a fresh observation while retaining the mutation
 +permit. Keep-alive reconnect creates a new handle generation and never replays a pending mutation.
 +Persistent writers require an application-owned exclusive context lease.
- `Unrestricted`. One policy also fixes maximum actions, elapsed time, and bytes returned by each
- operation.
+ 
+ ## Capture one rendered page from Node
  
