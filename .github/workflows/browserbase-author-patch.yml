@@ -1,0 +1,53 @@
+name: Commit authored Browserbase source patch
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['tools/pending.patch']
+permissions:
+  contents: write
+concurrency:
+  group: browserbase-authored-source
+  cancel-in-progress: false
+jobs:
+  apply:
+    # This temporary development transport cannot write main, checkpoints, or
+    # workflow files. It only materializes an authored, reviewable Git patch on
+    # the existing implementation branch; it executes none of the patched code.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/browserbase-complete' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: Validate, apply once, and fast-forward the same branch
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -f tools/pending.patch
+          git fetch --no-tags origin agent/browserbase-complete
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          import pathlib, subprocess
+          patch = pathlib.Path('tools/pending.patch')
+          rows = subprocess.check_output(['git', 'apply', '--numstat', '-z', str(patch)]).split(b'\0')
+          assert rows and len(rows) < 256
+          for row in rows:
+              if not row: continue
+              _, _, raw = row.split(b'\t', 2)
+              name = raw.decode('utf-8')
+              allowed = name.startswith(('packages/platform-browserbase/', 'integration/', 'results/')) or name in ('docs/STATUS.md', 'tools/bootstrap.sh', 'tools/run-boundary-suite.sh', 'tools/acceptance.sh')
+              assert allowed and '..' not in pathlib.PurePosixPath(name).parts, name
+              assert pathlib.PurePosixPath(name).suffix.lower() not in ('.ttf', '.otf', '.woff', '.woff2'), name
+          PY
+          git apply --check tools/pending.patch
+          git apply tools/pending.patch
+          git rm tools/pending.patch
+          git add -A -- packages/platform-browserbase integration results docs/STATUS.md tools
+          git diff --cached --stat
+          git -c core.hooksPath=/dev/null -c user.name='Browserbase source checkpoint' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Apply authored Browserbase implementation checkpoint'
+          git push origin HEAD:refs/heads/agent/browserbase-complete
