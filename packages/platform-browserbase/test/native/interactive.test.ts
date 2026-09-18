@@ -26,9 +26,15 @@ it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation 
       if (stale._tag === "Failure") expect(stale.failure.outcome).toBe("undispatched");
       const duplicate = yield* h.click(BrowserClickRequest.make({ selector: ".duplicate" })).pipe(Effect.result);
       expect(duplicate._tag).toBe("Failure");
+      const viewportPng = yield* h.screenshot(BrowserScreenshotRequest.make({ fullPage: false }));
+      const viewportView = new DataView(viewportPng.bytes.buffer, viewportPng.bytes.byteOffset, viewportPng.bytes.byteLength);
+      expect(viewportView.getUint32(16)).toBe(640);
+      expect(viewportView.getUint32(20)).toBe(480);
       const png = yield* h.screenshot(BrowserScreenshotRequest.make({ fullPage: true }));
       const view = new DataView(png.bytes.buffer, png.bytes.byteOffset, png.bytes.byteLength);
-      expect(view.getUint32(16)).toBe(640);
+      // Full-page width follows Chromium's document geometry; a vertical scrollbar
+      // may make it narrower than the configured viewport. Height proves full-page capture.
+      expect(view.getUint32(16)).toBeGreaterThan(0);
       expect(view.getUint32(20)).toBeGreaterThan(1600);
       yield* h.scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 120 }));
       const frames = yield* session.frames;
