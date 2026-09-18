@@ -26,9 +26,13 @@ status=0
 for runtime in node bun; do
   command -v "$runtime" >/dev/null || { echo "==> $runtime not installed, skipping"; continue; }
   echo "==> $runtime $("$runtime" --version 2>/dev/null || echo '?')"
-  ( cd "$STAGE" && "$runtime" probes/run.mjs all "$OUTDIR/$runtime.json" ) \
-    > "$OUTDIR/$runtime.log" 2>&1 || status=1
-  tail -1 "$OUTDIR/$runtime.log"
+  if ( cd "$STAGE" && "$runtime" probes/run.mjs all "$OUTDIR/$runtime.json" ) \
+    > "$OUTDIR/$runtime.log" 2>&1; then
+    tail -1 "$OUTDIR/$runtime.log"
+  else
+    status=1
+    cat "$OUTDIR/$runtime.log"
+  fi
 done
 
 echo "==> results written to $OUTDIR"
