@@ -114,3 +114,17 @@ Effect TestClock and scripted provider edges. Agent tests use the actual public
 Those boundaries remain distinct from hosted Browserbase evidence. A local CDP
 pass proves native integration, not provider allocation, Live View authorization,
 recording coexistence or Browserbase network behavior.
+
+## Hosted acceptance gate
+
+Ordinary CI never allocates Browserbase. After separate approval, maintainers can
+run `tools/hosted-acceptance.sh <patched-effect-agent-worktree>` with
+`EFFECT_AGENT_BROWSERBASE_LIVE=1`, `BROWSERBASE_API_KEY` and
+`BROWSERBASE_PROJECT_ID`. The command is bounded to one session, 180 seconds,
+10 actions, a three-second live capture, at most 512 MiB of provider-recording
+download, and zero model calls. It records allocation/control/capture/cleanup and
+post-close recording results separately.
+
+That command does not pretend to perform a human takeover: Live View issuance is
+automated, while an actual operator takeover/release and provider-side coexistence
+of Live View, native recording and capture remain explicit hosted/manual checks.
