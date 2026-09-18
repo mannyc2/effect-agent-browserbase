@@ -17,20 +17,20 @@ const completed = { downloads: [{ pageId: "0", status: "COMPLETED", downloadUrl:
 const expectReason = <A, R>(effect: Effect.Effect<A, BrowserbaseError, R>, reason: BrowserbaseError["reason"]) => effect.pipe(Effect.result, Effect.map((result) => {
   assert.equal(result._tag, "Failure"); if (result._tag === "Failure") assert.equal(result.failure.reason, reason);
 }));
-const useRecordings = <A>(fetch: typeof globalThis.fetch, body: (api: BrowserbaseRecordings["Service"]) => Effect.Effect<A, BrowserbaseError>) =>
+const withRecordings = <A>(fetch: typeof globalThis.fetch, body: (api: BrowserbaseRecordings["Service"]) => Effect.Effect<A, BrowserbaseError>) =>
   Effect.gen(function* () { return yield* body(yield* BrowserbaseRecordings); }).pipe(
     Effect.provide(BrowserbaseRecordings.layer(options)), Effect.provideService(FetchHttpClient.Fetch, fetch));
-const useReplays = <A>(fetch: typeof globalThis.fetch, body: (api: BrowserbaseReplays["Service"]) => Effect.Effect<A, BrowserbaseError>) =>
+const withReplays = <A>(fetch: typeof globalThis.fetch, body: (api: BrowserbaseReplays["Service"]) => Effect.Effect<A, BrowserbaseError>) =>
   Effect.gen(function* () { return yield* body(yield* BrowserbaseReplays); }).pipe(
     Effect.provide(BrowserbaseReplays.layer(options)), Effect.provideService(FetchHttpClient.Fetch, fetch));
-const useDownloads = <A>(fetch: typeof globalThis.fetch, body: (api: BrowserbaseDownloads["Service"]) => Effect.Effect<A, BrowserbaseError>) =>
+const withDownloads = <A>(fetch: typeof globalThis.fetch, body: (api: BrowserbaseDownloads["Service"]) => Effect.Effect<A, BrowserbaseError>) =>
   Effect.gen(function* () { return yield* body(yield* BrowserbaseDownloads); }).pipe(
     Effect.provide(BrowserbaseDownloads.layer(options)), Effect.provideService(FetchHttpClient.Fetch, fetch));
 
 export const artifactCases = [
   { name: "recording request inspects status, posts once, and preserves per-page states", run: Effect.gen(function* () {
     let posts = 0;
-    yield* useRecordings(async (input, init) => {
+    yield* withRecordings(async (input, init) => {
       const req = new Request(input, init);
       if (!req.url.includes("/recording/")) return metadata();
       if (req.method === "POST") { posts++; return Response.json(pending, { status: 202 }); }
@@ -43,7 +43,7 @@ export const artifactCases = [
   }) },
   { name: "lost assembly response remains uncertain and is not automatically posted again", run: Effect.gen(function* () {
     let posts = 0;
-    yield* useRecordings(async (input, init) => {
+    yield* withRecordings(async (input, init) => {
       const req = new Request(input, init);
       if (!req.url.includes("/recording/")) return metadata();
       if (req.method === "POST") { posts++; throw new Error("PRIVATE-POST-REPLY"); }
@@ -56,7 +56,7 @@ export const artifactCases = [
   }) },
   { name: "recording wait returns completed and failed pages independently", run: Effect.gen(function* () {
     let reads = 0;
-    yield* useRecordings(async (input) => {
+    yield* withRecordings(async (input) => {
       if (!String(input).includes("/recording/")) return metadata();
       return Response.json(++reads < 2 ? pending : { downloads: [...completed.downloads, { pageId: "1", status: "FAILED" }] });
     }, (api) => Effect.gen(function* () {
@@ -65,17 +65,17 @@ export const artifactCases = [
     }));
   }) },
   { name: "bounded recording polling returns latest partial status, not a fabricated permanent failure", run: Effect.gen(function* () {
-    yield* useRecordings(async (input) => String(input).includes("/recording/") ? Response.json(pending) : metadata(), (api) => Effect.gen(function* () {
+    yield* withRecordings(async (input) => String(input).includes("/recording/") ? Response.json(pending) : metadata(), (api) => Effect.gen(function* () {
       const batch = yield* elapse(api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 }), 30);
       assert.equal(batch.timedOut, true); assert.equal(batch.pages[0]?.status, "PENDING");
     }));
   }) },
   ...([409, 410, 422, 429] as const).map((status) => ({
     name: `recording API preserves ${status} as a bounded typed state`,
-    run: useRecordings(async (input) => String(input).includes("/recording/") ? Response.json({ detail: "PRIVATE-BODY" }, { status, headers: { "retry-after": "60" } }) : metadata(),
+    run: withRecordings(async (input) => String(input).includes("/recording/") ? Response.json({ detail: "PRIVATE-BODY" }, { status, headers: { "retry-after": "60" } }) : metadata(),
       (api) => expectReason(api.status(ref), status === 409 ? "active" : status === 410 ? "expired" : status === 422 ? "disabled" : "rate-limited")),
   })),
-  { name: "BYOS completion without a URL does not become a corrupt download", run: useRecordings(async (input) => String(input).includes("/recording/") ?
+  { name: "BYOS completion without a URL does not become a corrupt download", run: withRecordings(async (input) => String(input).includes("/recording/") ?
     Response.json({ downloads: [{ pageId: "0", status: "COMPLETED" }] }) : metadata(), (api) => Effect.gen(function* () {
       assert.equal((yield* api.status(ref)).pages[0]?.delivery, "external-storage");
       yield* expectReason(Stream.runDrain(api.download(page, { maxBytes: 1000 })), "byos");
@@ -83,7 +83,7 @@ export const artifactCases = [
   { name: "artifact download refreshes access, strips API credentials, and streams owned bytes", run: Effect.gen(function* () {
     let mediaReads = 0, statusReads = 0;
     const first = new Uint8Array([1, 2, 3]);
-    yield* useRecordings(async (input, init) => {
+    yield* withRecordings(async (input, init) => {
       const req = new Request(input, init);
       if (new URL(req.url).origin === "https://media.example.test") {
         mediaReads++; assert.ok(req.url.includes("fresh")); assert.equal(req.headers.has("x-bb-api-key"), false);
@@ -107,7 +107,7 @@ export const artifactCases = [
   }) },
   { name: "unapproved signed media origin is rejected before a media request", run: Effect.gen(function* () {
     let external = 0;
-    yield* useRecordings(async (input) => {
+    yield* withRecordings(async (input) => {
       if (!String(input).startsWith("https://api.browserbase.com")) external++;
       return String(input).includes("/recording/") ? Response.json({ downloads: [{ pageId: "0", status: "COMPLETED", downloadUrl: "https://attacker.invalid/video" }] }) : metadata();
     }, (api) => expectReason(Stream.runDrain(api.download(page, { maxBytes: 1000 })), "unsafe-url"));
@@ -166,7 +166,7 @@ export const artifactCases = [
   }) },
   { name: "replay access serves existing VOD material without recording or browser allocation", run: Effect.gen(function* () {
     const calls: string[] = [];
-    yield* useReplays(async (input, init) => {
+    yield* withReplays(async (input, init) => {
       const req = new Request(input, init); calls.push(req.method);
       if (req.url.endsWith("/replays")) return Response.json({ pageCount: 1, pages: [{ pageId: "0", startTimeMs: 0, endTimeMs: 1000, url: "ignored" }] });
       if (req.url.endsWith("/replays/0")) return new Response('#EXTM3U\n#EXT-X-MAP:URI="https://media.example.test/init?token=PRIVATE"\n#EXTINF:1,\nhttps://media.example.test/segment?token=PRIVATE\n#EXT-X-ENDLIST\n', { headers: { "content-type": "application/vnd.apple.mpegurl" } });
@@ -178,14 +178,14 @@ export const artifactCases = [
     }));
     assert.ok(calls.every((method) => method === "GET"));
   }) },
-  { name: "replay rejects encrypted or foreign-origin playlists rather than leaking credentials", run: useReplays(async (input) => {
+  { name: "replay rejects encrypted or foreign-origin playlists rather than leaking credentials", run: withReplays(async (input) => {
     if (String(input).endsWith("/replays")) return Response.json({ pageCount: 1, pages: [{ pageId: "0", startTimeMs: 0, endTimeMs: 1000, url: "ignored" }] });
     if (String(input).endsWith("/replays/0")) return new Response('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://attacker.invalid/key"\n#EXT-X-ENDLIST\n', { headers: { "content-type": "application/vnd.apple.mpegurl" } });
     return metadata();
   }, (api) => expectReason(api.openPage(page), "malformed")) },
   { name: "ordinary download metadata and streaming are separate from recording artifacts", run: Effect.gen(function* () {
     const file = { id: "download-1", sessionId: "session-1", filename: "fixture.txt", mimeType: "text/plain", size: 3, checksum: "0".repeat(64), createdAt: "2026-09-17T00:00:00Z" };
-    yield* useDownloads(async (input, init) => {
+    yield* withDownloads(async (input, init) => {
       const req = new Request(input, init);
       if (req.url.includes("/v1/downloads?")) return Response.json({ downloads: [file], total: 1 });
       if (req.url.includes("/v1/downloads/")) return req.headers.get("accept") === "application/json" ? Response.json(file) :
@@ -199,7 +199,7 @@ export const artifactCases = [
   }) },
   { name: "unsafe website filenames fail before a content request", run: Effect.gen(function* () {
     let contentRequests = 0;
-    yield* useDownloads(async (input, init) => {
+    yield* withDownloads(async (input, init) => {
       const req = new Request(input, init);
       if (req.url.includes("/v1/downloads/")) {
         if (req.headers.get("accept") !== "application/json") contentRequests++;

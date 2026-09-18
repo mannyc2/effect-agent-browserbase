@@ -1,5 +1,5 @@
 import { Cause, Clock, Deferred, Effect, Exit, Queue, Schema, Stream } from "effect";
-import { CaptureSummary, type CaptureInterval, type CaptureOptions, type CapturedFrame } from "../Capture.ts";
+import { CaptureSummary, type CaptureInterval, type CaptureOptions, type CapturedFrame } from "./CaptureTypes.ts";
 import { BrowserbaseError, Target } from "../Types.ts";
 import { type CaptureLease, type CaptureParent } from "./Association.ts";
 import { FrameBuffer } from "./FrameBuffer.ts";

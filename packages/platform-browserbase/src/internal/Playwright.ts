@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { Browser, BrowserContext, Dialog, Download, ElementHandle, Frame, JSHandle, Page } from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Dialog, Download, ElementHandle, Frame, JSHandle, Page } from "playwright-core";
 import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename } from "../Types.ts";
 import type { CaptureSource, Driver, DriverEvents, DriverOptions, NativeFrame, NativeObservation } from "./Driver.ts";
 import type { Ticket } from "./Owner.ts";

@@ -41,7 +41,7 @@ export const recordInterval = (
     (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
   );
   const interval = yield* Capture.start(session, {
-    maxFrames: 600,
+    maxFrames: 64,
     maxBufferedBytes: 32 * 1024 * 1024,
     maxFrameBytes: 4 * 1024 * 1024,
     maxDurationMillis: durationMillis,

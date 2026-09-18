@@ -7,8 +7,13 @@ export class CallbackTasks {
   private stopped = false;
   private faulted = false;
 
-  constructor(private readonly capacity: number, private readonly onFault: () => void) {
+  private readonly capacity: number;
+  private readonly onFault: () => void;
+
+  constructor(capacity: number, onFault: () => void) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) throw new RangeError("Invalid callback capacity");
+    this.capacity = capacity;
+    this.onFault = onFault;
   }
 
   private fault(): void {
