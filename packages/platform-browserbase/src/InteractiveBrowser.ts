@@ -11,6 +11,7 @@ import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
 import { AllocationAttempt, BrowserbaseError, CleanupResult, DownloadObservation, FrameInfo,
   Identifier, Observation, ObservedElement, PageInfo, SessionReference, Target, Viewport } from "./Types.ts";
+import { NativeConnector } from "./internal/Connector.ts";
 import { associate } from "./internal/Association.ts";
 import { decode, httpOptions, makeHttp, type BrowserbaseOptions } from "./internal/Http.ts";
 import { makeProvider } from "./internal/Provider.ts";
@@ -121,7 +122,7 @@ const makeHandle = (bound: BoundControls, controls: SessionControls): BrowserHan
 });
 
 const makeSession = (controls: SessionControls): BrowserbaseSession => {
-  const currentHandle = controls.currentTarget.pipe(Effect.map(() => makeHandle(controls.bind(), controls)));
+  const currentHandle = controls.bindCurrent.pipe(Effect.map((bound) => makeHandle(bound, controls)));
   const Wait = Schema.Struct({ selector: BrowserClickRequest.fields.selector, state: Schema.Literals(["visible", "hidden", "attached", "detached"]) });
   const session: BrowserbaseSession = {
     reference: controls.reference,
@@ -133,8 +134,8 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
       Effect.flatMap((r) => checked(BrowserFillRequest.fields.value, value, "fill").pipe(Effect.flatMap((v) => controls.bind().fill(r, v)))),
       Effect.flatMap(actionResult)),
     pages: controls.pages, frames: controls.frames,
-    selectPage: (id) => checked(Identifier, id, "select-page").pipe(Effect.flatMap(controls.selectPage), Effect.andThen(currentHandle)),
-    selectFrame: (id) => checked(Identifier, id, "select-frame").pipe(Effect.flatMap(controls.selectFrame), Effect.andThen(currentHandle)),
+    selectPage: (id) => checked(Identifier, id, "select-page").pipe(Effect.flatMap(controls.selectPage), Effect.map((bound) => makeHandle(bound, controls))),
+    selectFrame: (id) => checked(Identifier, id, "select-frame").pipe(Effect.flatMap(controls.selectFrame), Effect.map((bound) => makeHandle(bound, controls))),
     createPage: controls.createPage(), closePage: (id) => checked(Identifier, id, "close-page").pipe(Effect.flatMap(controls.closePage)),
     resizeViewport: (viewport) => checked(Viewport, viewport, "resize").pipe(Effect.flatMap(controls.resize)),
     waitFor: (request) => checked(Wait, request, "wait").pipe(Effect.flatMap((r) => controls.waitFor(r.selector, r.state))),
@@ -144,9 +145,9 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
       Effect.flatMap((r) => controls.clickForDownload(r.selector)),
       Effect.flatMap((raw) => decode(DownloadObservation, { ...raw, reference: controls.reference }, "download-action"))),
     liveView: (ttl = 60) => controls.liveView(ttl), beginHandoff: (ttl = 60) => controls.beginHandoff(ttl),
-    resume: (token, released) => controls.resume(token, released).pipe(Effect.map((observation) => ({ observation, handle: makeHandle(controls.bind(), controls) }))),
+    resume: (token, released) => controls.resume(token, released).pipe(Effect.map(({ observation, bound }) => ({ observation, handle: makeHandle(bound, controls) }))),
     detach: controls.detach,
-    reconnect: (released) => controls.reconnect(released).pipe(Effect.map((observation) => ({ observation, handle: makeHandle(controls.bind(), controls) }))),
+    reconnect: (released) => controls.reconnect(released).pipe(Effect.map(({ observation, bound }) => ({ observation, handle: makeHandle(bound, controls) }))),
     close: controls.close, cleanupResult: controls.cleanupResult,
   };
   associate(session, controls.capture);
@@ -161,6 +162,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
 }>()("@effect-agent/platform-browserbase/BrowserbaseInteractiveHost") {
   static layer(options: InteractiveOptions) {
     return Layer.effect(this, Effect.gen(function* () {
+      const connector = yield* NativeConnector;
       const http = yield* makeHttp(httpOptions(options));
       const provider = makeProvider(http, options.projectId);
       const viewport = yield* checked(Viewport, options.viewport ?? { width: 1280, height: 720 }, "configure");
@@ -201,7 +203,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
         });
         const acquired = yield* acquireSession(provider, options.projectId, {
           maxActions: fixed.maxActions, maxElapsedMillis: fixed.maxElapsedMillis, actionTimeoutMillis,
-        }, { ...settings, maxReturnedBytes: fixed.maxReturnedBytes });
+        }, { ...settings, maxReturnedBytes: fixed.maxReturnedBytes }, connector);
         // One public session object is shared by repeated connect calls in this acquisition's scope.
         const connected = yield* Effect.cached(acquired.connect.pipe(Effect.map(makeSession)));
         return {

@@ -75,16 +75,22 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       let dispatched = false;
       const generation = state.generation;
       const allowed = options.phases ?? ["open"];
+      const deadline = Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline);
       const check = () => {
+        // A native continuation can run before the Effect timeout fiber is scheduled.
+        // Recheck the monotonic deadline at the actual dispatch boundary too.
+        if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline) {
+          throw new BrowserbaseError({ operation, reason: "timeout", outcome: dispatched ? "unknown" : "undispatched" });
+        }
         if (controller.signal.aborted || state.generation !== generation || !allowed.includes(state.phase)) {
           throw new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" });
         }
       };
       const ticket: Ticket = {
         signal: controller.signal,
-        deadline: Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline),
+        deadline,
         generation,
-        remainingMillis: () => Math.max(1, Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline) - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+        remainingMillis: () => Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
         get dispatched() { return dispatched; },
         check,
         dispatch() { check(); if (!dispatched && options.mutation) invalidate("observation"); dispatched = true; },
@@ -94,7 +100,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         if (dispatched && state.phase !== "closing" && state.phase !== "closed") fence("uncertain", "uncertain");
       };
       return yield* within(body(ticket), ticket.deadline, operation, uncertain).pipe(
-        Effect.tap((_) => options.verifyAfter === false ? Effect.void : Effect.try({ try: check, catch: () => new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" }) })),
+        Effect.tap((_) => options.verifyAfter === false ? Effect.void : Effect.try({ try: check, catch: (error) => error instanceof BrowserbaseError ? error : new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" }) })),
         Effect.catch((error) => {
           if (dispatched) uncertain();
           return Effect.fail(new BrowserbaseError({

@@ -58,9 +58,9 @@ export const recoveryCases = [
       yield* session.detach;
       const fresh = yield* session.reconnect(true);
       connections[0]!.invalidate("target-changed");
-      assert.equal((yield* session.observe()).revision, fresh.revision);
+      assert.equal((yield* session.observe()).revision, fresh.observation.revision);
       connections[1]!.invalidate("observation");
-      assert.equal((yield* session.observe()).revision, fresh.revision + 1);
+      assert.equal((yield* session.observe()).revision, fresh.observation.revision + 1);
     })),
   },
   {

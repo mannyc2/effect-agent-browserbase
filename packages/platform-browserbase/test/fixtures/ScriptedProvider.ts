@@ -1,5 +1,5 @@
 import { Effect, Redacted } from "effect";
-import { FrameInfo, PageInfo, Viewport, type BrowserbaseError, type CleanupResult } from "../../src/Types.ts";
+import { FrameInfo, PageInfo, Viewport, type CleanupResult } from "../../src/Types.ts";
 import { makeHttp } from "../../src/internal/Http.ts";
 import { makeProvider } from "../../src/internal/Provider.ts";
 import { acquireSession, type SessionOptions } from "../../src/internal/Session.ts";

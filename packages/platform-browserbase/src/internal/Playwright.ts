@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import type { Browser, BrowserContext, CDPSession, Dialog, Download, ElementHandle, Frame, JSHandle, Page } from "playwright-core";
-import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename, type Viewport } from "../Types.ts";
+import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename } from "../Types.ts";
 import type { CaptureSource, Driver, DriverEvents, DriverOptions, NativeFrame, NativeObservation } from "./Driver.ts";
 import type { Ticket } from "./Owner.ts";
 import { pngGeometry } from "./Images.ts";
@@ -59,6 +59,13 @@ export const connectPlaywright = async (
   try { url = new URL(connection); } catch { throw failure("connect", "malformed"); }
   if (url.protocol !== "wss:" || url.username || url.password || url.port ||
       !url.hostname.endsWith(".browserbase.com")) throw failure("connect", "unsafe-url");
+  return connectEndpoint(connection, signal, options, events);
+};
+
+/** Sibling-only test seam. Production calls this only after Browserbase URL validation. */
+export const connectEndpoint = async (
+  connection: string, signal: AbortSignal, options: DriverOptions, events: DriverEvents,
+): Promise<Driver> => {
   if (signal.aborted) throw failure("connect", "interrupted");
   const { chromium } = await import("playwright-core");
   const browser = await sanitize("connect", () => chromium.connectOverCDP(connection, { timeout: 15000 }));
@@ -89,7 +96,8 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
   const frameIds = new WeakMap<Frame, string>();
   const dialogs = new Set<Dialog>();
   const pending = new Set<Promise<unknown>>();
-  let serial = 0, frameSerial = 0, observationSerial = 0, downloadSerial = 0;
+  let serial = 0, frameSerial = 0, downloadSerial = 0;
+  let faulted = false;
   let selected: Entry | undefined;
   let selectedFrame: Frame | undefined;
   let observation: Snapshot | undefined;
@@ -105,9 +113,17 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     if (id === undefined) { id = `frame-${++frameSerial}`; frameIds.set(frame, id); }
     return id;
   };
-  const track = (promise: Promise<unknown>) => {
-    if (pending.size >= 32) { events.fault(); return; }
-    const caught = promise.catch(() => { if (!closing) events.fault(); }).finally(() => pending.delete(caught));
+  const fault = () => {
+    if (closing || faulted) return;
+    faulted = true;
+    events.fault();
+  };
+  const track = (action: () => Promise<unknown>) => {
+    // Admission precedes invocation. Dropping an already-started Promise would
+    // still allow unbounded native work and unhandled late rejections.
+    if (closing || faulted) return;
+    if (pending.size >= 32) { fault(); return; }
+    const caught = Promise.resolve().then(action).catch(fault).finally(() => pending.delete(caught));
     pending.add(caught);
   };
   const disposeObservation = async () => {
@@ -123,8 +139,8 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     const entry: Entry = { id: `page-${++serial}`, page, off: [] };
     byPage.set(page, entry);
     if (entries.size >= options.maxPages) {
-      track(closeWithin(() => page.close()));
-      events.fault();
+      track(() => closeWithin(() => page.close()));
+      fault();
       return entry;
     }
     entries.set(entry.id, entry);
@@ -142,8 +158,8 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
       if (selectedFrame === frame) { selectedFrame = undefined; changed("target-changed"); }
     };
     const onDialog = (dialog: Dialog) => {
-      if (options.dialogPolicy === "dismiss") track(closeWithin(() => dialog.dismiss()));
-      else if (dialogs.size >= 8) { events.fault(); track(closeWithin(() => dialog.dismiss())); }
+      if (options.dialogPolicy === "dismiss") track(() => closeWithin(() => dialog.dismiss()));
+      else if (dialogs.size >= 8) { fault(); track(() => closeWithin(() => dialog.dismiss())); }
       else { dialogs.add(dialog); invalidateObservation(); events.pause(); }
     };
     page.on("close", onClose); page.on("framenavigated", onNavigation);
@@ -151,7 +167,7 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
     entry.off.push(() => page.off("close", onClose), () => page.off("framenavigated", onNavigation),
       () => page.off("framedetached", onDetached), () => page.off("dialog", onDialog));
     if (initialized && !creatingPage) {
-      if (options.popupPolicy === "close") track(closeWithin(() => page.close()));
+      if (options.popupPolicy === "close") track(() => closeWithin(() => page.close()));
       else if (options.popupPolicy === "pause") events.pause();
     }
     return entry;
@@ -363,7 +379,9 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
           nodes.set(`element-${i}`, element);
         }
         ticket.check();
-        const id = `observation-${++observationSerial}`;
+        // An old reference must not alias the first snapshot on a new connection
+        // (or in another execution); local serial numbers alone are insufficient.
+        const id = `observation-${globalThis.crypto.randomUUID()}`;
         observation = { id, valid: true, nodes };
         const result: NativeObservation = { ...data, observationId: id, url: observationUrl(),
           controls: data.controls.map((control, i) => ObservedControl.make({ ...control, elementId: `element-${i}` })),

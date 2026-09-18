@@ -111,7 +111,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
     const resumed = yield* session.resume(handoff.token, true).pipe(Effect.forkChild);
     yield* Effect.promise(() => entered.promise);
     yield* expectReason(session.bind().click("#button"), "busy");
-    observed.resolve(); assert.equal((yield* Fiber.join(resumed)).text, "human changed this");
+    observed.resolve(); assert.equal((yield* Fiber.join(resumed)).observation.text, "human changed this");
     yield* expectReason(old.readText(), "stale"); assert.equal(f.state.clicks, 0);
   })),
   test("failed Live View acquisition does not automatically resume", () => Effect.gen(function* () {
@@ -138,7 +138,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
     const f = yield* fixture({ keepAlive: true }); const session = yield* (yield* f.acquisition).connect;
     const old = session.bind(); yield* session.detach; f.state.text = "changed while detached";
     const fresh = yield* session.reconnect(true);
-    assert.equal(fresh.text, "changed while detached"); assert.equal(f.state.connects, 2);
+    assert.equal(fresh.observation.text, "changed while detached"); assert.equal(f.state.connects, 2);
     yield* expectReason(old.readText(), "stale");
   })),
   test("elapsed expiry closes an idle browser while the outer scope stays open", () => Effect.gen(function* () {

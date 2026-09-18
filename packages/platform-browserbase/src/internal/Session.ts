@@ -31,6 +31,7 @@ export const acquireSession = Effect.fnUntraced(function* (
   const parentScope = yield* Scope.Scope;
   const resourceScope = yield* Scope.make();
   const ended = yield* Deferred.make<void>();
+  const fatal = yield* Deferred.make<void>();
   const owner = yield* makeOwner(limits);
   const clock = yield* Clock.Clock;
   const attempt = Object.freeze(AllocationAttempt.make({
@@ -148,6 +149,7 @@ export const acquireSession = Effect.fnUntraced(function* (
       if (activeConnection !== connectionLease) return;
       if (owner.state.phase !== "closing" && owner.state.phase !== "closed" && owner.state.phase !== "detached") {
         owner.fence("uncertain", "disconnected");
+        Deferred.doneUnsafe(fatal, Effect.void);
       }
     },
     pause: () => {
@@ -159,7 +161,10 @@ export const acquireSession = Effect.fnUntraced(function* (
     },
     fault: () => {
       if (activeConnection !== connectionLease) return;
-      if (owner.state.phase !== "closing" && owner.state.phase !== "closed") owner.fence("uncertain", "uncertain");
+      if (owner.state.phase !== "closing" && owner.state.phase !== "closed") {
+        owner.fence("uncertain", "uncertain");
+        Deferred.doneUnsafe(fatal, Effect.void);
+      }
     },
   });
   const connectNative = (url: Redacted.Redacted<unknown>, nativeOptions: DriverOptions) =>
@@ -256,6 +261,7 @@ export const acquireSession = Effect.fnUntraced(function* (
     attempt,
     capture,
     bind,
+    bindCurrent: owner.guard("current-handle", () => Effect.sync(bind), { charge: false }),
     currentTarget: readSelected,
     cleanupResult: Effect.sync(result),
     close: closeScope.pipe(Effect.andThen(Effect.suspend(() => cleanup === undefined ?
@@ -271,10 +277,10 @@ export const acquireSession = Effect.fnUntraced(function* (
     pages: nativeOperation("list-pages", (driver, ticket) => driver.listPages(ticket), false, false),
     frames: nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket), false, false),
     selectPage: (id: string) => nativeOperation("select-page", async (driver, ticket) => {
-      await driver.selectPage(id, ticket); owner.state.selection++;
+      await driver.selectPage(id, ticket); owner.state.selection++; return bind();
     }, false, false),
     selectFrame: (id: string) => nativeOperation("select-frame", async (driver, ticket) => {
-      await driver.selectFrame(id, ticket); owner.state.selection++;
+      await driver.selectFrame(id, ticket); owner.state.selection++; return bind();
     }, false, false),
     createPage: () => nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), true, false),
     closePage: (id: string) => nativeOperation("close-page", (driver, ticket) => driver.closePage(id, ticket), true, false),
@@ -299,7 +305,7 @@ export const acquireSession = Effect.fnUntraced(function* (
       const observation = yield* observeInside(ticket);
       // This synchronous commit remains under the same permit as the fresh observation.
       owner.state.phase = "open"; handoffToken = undefined;
-      return observation;
+      return { observation, bound: bind() };
     }), { charge: false, phases: ["paused"], verifyAfter: false }),
     detach: owner.guard("detach", (ticket) => Effect.gen(function* () {
       if (!options.keepAlive) return yield* new BrowserbaseError({ operation: "detach", reason: "unsupported", outcome: "undispatched" });
@@ -322,14 +328,14 @@ export const acquireSession = Effect.fnUntraced(function* (
       yield* connectNative(connection, { ...options.driver, initialTargetId: reconnectTarget, newPage: false, preserveViewport: true });
       const observation = yield* observeInside(ticket);
       owner.state.phase = "open";
-      return observation;
+      return { observation, bound: bind() };
     }), { charge: false, phases: ["detached", "acquiring"], verifyAfter: false }).pipe(
       Effect.onError(() => closeScope), Effect.onInterrupt(() => closeScope),
     ),
   };
   // One timer belongs to the enclosing execution, never to an individual Tool call.
   const remaining = Math.max(0, owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000);
-  yield* Effect.raceFirst(Effect.sleep(remaining).pipe(Effect.as(true)), Deferred.await(ended).pipe(Effect.as(false))).pipe(
+  yield* Effect.raceFirst(Effect.raceFirst(Effect.sleep(remaining), Deferred.await(fatal)).pipe(Effect.as(true)), Deferred.await(ended).pipe(Effect.as(false))).pipe(
     Effect.flatMap((expired) => expired ? closeScope : Effect.void), Effect.forkIn(parentScope),
   );
   return {
