@@ -1,0 +1,111 @@
+name: Browserbase implementation acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['tools/source-update.patch', '.github/workflows/browserbase-completion.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    if: ${{ github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/browserbase-completion' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Only this explicitly selected implementation branch is writable. This
+    # temporary bridge applies a reviewable Git patch; it never changes main.
+    permissions:
+      contents: write
+    env:
+      CI: 'true'
+      VP_GIT_HOOKS: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.14.1'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - name: Apply and commit the exact source delta, preserving checkpoint history
+        id: source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = 1.4.2
+          test "$(node --version)" = v24.14.1
+          if [ -f tools/source-update.patch ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          lines=subprocess.check_output(['git','apply','--numstat','tools/source-update.patch'],text=True).splitlines()
+          for line in lines:
+              path=line.split('\t',2)[2]
+              if not (path.startswith('packages/platform-browserbase/') or path in ('tools/bootstrap.sh','upstream.patch','docs/STATUS.md')):
+                  raise SystemExit('Unexpected source-update path: '+path)
+          PY
+            git apply --check tools/source-update.patch
+            git apply --index tools/source-update.patch
+            git rm tools/source-update.patch
+            git diff --cached --check
+            git fetch origin agent/browserbase-completion
+            test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD"
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Implement verified Browserbase source continuation'
+            git push origin HEAD:agent/browserbase-completion
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git rev-parse HEAD
+      - name: Bootstrap exact upstream and execute independent checks
+        id: checks
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/browserbase-results"
+          mkdir -p "$OUT"
+          git rev-parse HEAD > "$OUT/source-sha.txt"
+          printf 'Node %s\nBun %s\n' "$(node --version)" "$(bun --version)" > "$OUT/runtimes.txt"
+          run() {
+            name="$1"; shift
+            printf '\n== %s ==\n' "$name"
+            "$@" > "$OUT/$name.log" 2>&1
+            code=$?
+            printf '%s %s\n' "$name" "$code" | tee -a "$OUT/statuses.txt"
+            tail -100 "$OUT/$name.log"
+            return "$code"
+          }
+          run bootstrap timeout 600s bash tools/bootstrap.sh "$RUNNER_TEMP/browserbase-work"
+          bootstrap=$?
+          TREE="$RUNNER_TEMP/browserbase-work/tree"
+          if [ "$bootstrap" = 0 ]; then
+            cd "$TREE"
+            cp bun.lock "$OUT/bun.lock"
+            run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
+            run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase install:test-browser
+            cd packages/platform-browserbase
+            run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
+            run native timeout 240s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+            run build timeout 180s ../../node_modules/.bin/vp pack
+            cd "$TREE"
+            run exports timeout 180s ./node_modules/.bin/vp run check:exports
+            run purity timeout 180s ./node_modules/.bin/vp run verify:package-purity
+            git add -N packages/platform-browserbase .changeset
+            git diff --binary > "$OUT/review.patch"
+            tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
+          fi
+          cd "$GITHUB_WORKSPACE"
+          git archive --format=tar.gz HEAD > "$OUT/candidate.tar.gz"
+          cat "$OUT/statuses.txt" >> "$GITHUB_STEP_SUMMARY"
+          if grep -v ' 0$' "$OUT/statuses.txt"; then exit 1; fi
+      - name: Preserve exact source, lockfile, commands and results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browserbase-implementation-${{ github.run_id }}
+          path: ${{ runner.temp }}/browserbase-results
+          retention-days: 7
