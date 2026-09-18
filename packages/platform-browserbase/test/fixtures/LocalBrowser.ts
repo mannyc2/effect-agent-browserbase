@@ -12,9 +12,10 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 export class NativeFixtureError extends Schema.TaggedError<NativeFixtureError>()("NativeFixtureError", {
   operation: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 const attempt = <A>(operation: string, body: () => Promise<A>) => Effect.tryPromise({
-  try: body, catch: () => new NativeFixtureError({ operation }),
+  try: body, catch: (cause) => new NativeFixtureError({ operation, cause }),
 });
 
 /** Only provider allocation, control-address lookup and status are scripted.
