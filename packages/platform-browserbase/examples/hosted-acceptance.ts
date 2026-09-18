@@ -1,4 +1,4 @@
-import { Effect, Layer, Redacted, Stream } from "effect";
+import { Effect, Redacted, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { BrowserNavigateRequest, InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/interactive-browser";
