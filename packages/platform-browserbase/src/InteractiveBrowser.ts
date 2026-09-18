@@ -192,7 +192,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
         ...(options.onAllocationUncertain === undefined ? {} : { onAllocationUncertain: options.onAllocationUncertain }),
       };
       const acquire = Effect.fnUntraced(function* (policy: InteractiveBrowserPolicy) {
-        const fixed = yield* Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(policy).pipe(Effect.mapError(() =>
+        const fixed = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(policy).pipe(Effect.mapError(() =>
           InteractiveBrowserPolicyDeniedError.make({ implementation: browserbaseInteractiveImplementation, message: "The browser policy is malformed" })));
         if (fixed.network._tag !== "Unrestricted") return yield* InteractiveBrowserUnsupportedError.make({
           implementation: browserbaseInteractiveImplementation, feature: "policy",

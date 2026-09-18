@@ -100,7 +100,7 @@ export const makeHttp = Effect.fnUntraced(function* (
   options: BrowserbaseOptions,
   transport?: typeof globalThis.fetch,
 ) {
-  const configured = yield* Schema.decodeUnknownEffect(Options)(options, { onExcessProperty: "error" }).pipe(
+  const configured = yield* Schema.decodeEffect(Options)(options, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() => new BrowserbaseError({ operation: "configure", reason: "configuration" })),
   );
   // Own immutable policy values; later mutation of the caller's options cannot

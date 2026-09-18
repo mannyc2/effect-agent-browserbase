@@ -173,5 +173,5 @@ const expectedCaptureError: Same<Effect.Error<ReturnType<typeof Capture.start>>,
 const encodedObservation = Schema.toCodecJson(ObservedElement);
 it("keeps public typed capture errors and element-reference schemas", () => {
   expect(expectedCaptureError).toBe(true);
-  expect(Schema.decodeUnknownSync(encodedObservation)({ observationId: "observation-1", elementId: "element-0" }).elementId).toBe("element-0");
+  expect(Schema.decodeSync(encodedObservation)({ observationId: "observation-1", elementId: "element-0" }).elementId).toBe("element-0");
 });

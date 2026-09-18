@@ -34,8 +34,8 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
   const path = (ref: SessionReference) => `/v1/sessions/${encodeURIComponent(ref.sessionId)}/recording/downloads`;
   const read = (ref: SessionReference, deadline?: number) => http.json("GET", path(ref), undefined, deadline).pipe(
     Effect.flatMap((raw) => decode(RawBatch, raw, "recording-status")),
-    Effect.flatMap((raw) => new Set(raw.downloads.map((p) => p.pageId)).size === raw.downloads.length ?
-      Effect.succeed(raw) : Effect.fail(new BrowserbaseError({ operation: "recording-status", reason: "malformed" }))),
+    Effect.filterOrFail((raw) => new Set(raw.downloads.map((p) => p.pageId)).size === raw.downloads.length,
+      () => new BrowserbaseError({ operation: "recording-status", reason: "malformed" })),
   );
   const project = (ref: SessionReference, raw: typeof RawBatch.Type, timedOut = false) => RecordingBatch.make({
     reference: ref, timedOut,

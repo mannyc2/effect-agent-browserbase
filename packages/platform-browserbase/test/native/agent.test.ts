@@ -46,7 +46,7 @@ it.live("real AgentRuntime: three interpreter turns borrow one live browser and 
         ];
         const turns = script.map((turn) => ({ ...turn, onStreamFinalize: Effect.sync(() => { modelFinalizers++; }) }));
         const result = yield* AgentRuntime.run(agent, "begin").pipe(
-          Effect.provide(BrowserTools.handlers(session)), Effect.provide(model(turns)), Effect.provide(InMemory.layer),
+          Effect.provide(Layer.mergeAll(BrowserTools.handlers(session), model(turns), InMemory.layer)),
         );
         expect(result.turns).toBe(3);
         expect(result.output.done).toBe(true);
@@ -79,7 +79,7 @@ it.live("real AgentRuntime: declared stale-element failure remains isFailure and
         }, final,
       ];
       const result = yield* AgentRuntime.run(agent, "exercise failure").pipe(
-        Effect.provide(BrowserTools.handlers(session)), Effect.provide(model(turns)), Effect.provide(InMemory.layer),
+        Effect.provide(Layer.mergeAll(BrowserTools.handlers(session), model(turns), InMemory.layer)),
       );
       expect(result.output.done).toBe(true);
       expect(result.turns).toBe(3);
@@ -98,10 +98,10 @@ it.live("real AgentRuntime: interruption closes only the owning execution and it
       const program = Effect.scoped(Effect.gen(function* () {
         const session = yield* host.open(policy);
         return yield* AgentRuntime.run(agent, "wait").pipe(
-          Effect.provide(BrowserTools.handlers(session)), Effect.provide(InMemory.layer), Effect.provide(model([
+          Effect.provide(Layer.mergeAll(BrowserTools.handlers(session), InMemory.layer, model([
             { _tag: "Stream", parts: [], termination: { _tag: "Hang" }, onStreamStart: Deferred.succeed(waiting, undefined),
               onStreamFinalize: Effect.sync(() => { finalized++; }) },
-          ])),
+          ]))),
         );
       }));
       const fiber = yield* program.pipe(Effect.forkChild);
