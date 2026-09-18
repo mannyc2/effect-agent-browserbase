@@ -36,7 +36,15 @@ if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   run exports timeout 180s ./node_modules/.bin/vp run check:exports
   run purity timeout 180s ./node_modules/.bin/vp run verify:package-purity
-  git add -N packages/platform-browserbase .changeset
+  cd "$SOURCE_ROOT"
+  run packed-consumer timeout 300s bash tools/packed-consumer.sh "$TREE" "$OUT"
+  cd "$TREE"
+  # Full repository acceptance is deliberately separate from the targeted package gates.
+  run ready timeout 900s ./node_modules/.bin/vp run ready
+  # Upstream's own release adapter builds and inspects npm-ready manifests without publishing.
+  run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
+  git add -N packages/platform-browserbase .changeset docs/guide/browser.md package.json
+
   git diff --binary > "$OUT/review.patch"
   tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
 fi
