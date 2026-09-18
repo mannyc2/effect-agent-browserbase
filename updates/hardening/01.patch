@@ -1,0 +1,157 @@
+diff --git a/packages/platform-browserbase/src/Capture.ts b/packages/platform-browserbase/src/Capture.ts
+index 9933e1e..7348154 100644
+--- a/packages/platform-browserbase/src/Capture.ts
++++ b/packages/platform-browserbase/src/Capture.ts
+@@ -11,7 +11,10 @@ export interface CapturedFrame {
+   readonly target: Target;
+   readonly sequence: number;
+   readonly sourceTimeMillis: number;
+-  readonly sourceClock: "presentation-unix-millis";
++  /** Preserved Playwright timestamp. The maintained API uses Chromium's presentation
++   * time when present, but may fall back to the engine's receipt wall clock. It
++   * does not identify which source supplied an individual value. */
++  readonly sourceClock: "playwright-unix-millis";
+   readonly receivedMonotonicNanos: bigint;
+   readonly width: number;
+   readonly height: number;
+diff --git a/packages/platform-browserbase/src/Tools.ts b/packages/platform-browserbase/src/Tools.ts
+index d244730..d166460 100644
+--- a/packages/platform-browserbase/src/Tools.ts
++++ b/packages/platform-browserbase/src/Tools.ts
+@@ -12,12 +12,12 @@ export class BrowserbaseToolFailure extends Schema.TaggedError<BrowserbaseToolFa
+ 
+ const failed = (error: BrowserbaseError | InteractiveBrowserError): BrowserbaseToolFailure => {
+   if (error instanceof BrowserbaseError) return BrowserbaseToolFailure.make({ reason: error.reason, outcome: error.outcome ?? "unknown" });
+-  if (error._tag === "InteractiveBrowserBusyError") return BrowserbaseToolFailure.make({ reason: "busy", outcome: "undispatched" });
+-  if (error._tag === "InteractiveBrowserPolicyDeniedError") return BrowserbaseToolFailure.make({ reason: "configuration", outcome: "undispatched" });
+-  if (error._tag === "InteractiveBrowserUnsupportedError") return BrowserbaseToolFailure.make({ reason: "unsupported", outcome: "undispatched" });
+-  // The existing provider-neutral error contract does not preserve dispatch classification.
+-  // Do not guess it from a message or a raw SDK cause. Observed-element host calls retain it explicitly.
+-  return BrowserbaseToolFailure.make({ reason: error._tag === "InteractiveBrowserExpiredError" ? "closed" : "provider", outcome: "unknown" });
++  if (error._tag === "InteractiveBrowserBusyError") return BrowserbaseToolFailure.make({ reason: "busy", outcome: error.outcome ?? "undispatched" });
++  if (error._tag === "InteractiveBrowserPolicyDeniedError") return BrowserbaseToolFailure.make({ reason: "configuration", outcome: error.outcome ?? "undispatched" });
++  if (error._tag === "InteractiveBrowserUnsupportedError") return BrowserbaseToolFailure.make({ reason: "unsupported", outcome: error.outcome ?? "undispatched" });
++  // The optional core field survives Schema encoding; older adapters omit it, meaning unknown.
++  // Never infer dispatch knowledge from diagnostic text or a raw SDK cause.
++  return BrowserbaseToolFailure.make({ reason: error._tag === "InteractiveBrowserExpiredError" ? "closed" : error._tag === "InteractiveBrowserLimitError" ? "limit" : "provider", outcome: error.outcome ?? "unknown" });
+ };
+ 
+ const Navigate = Tool.make("browser_navigate", {
+diff --git a/packages/platform-browserbase/src/Types.ts b/packages/platform-browserbase/src/Types.ts
+index 7101162..4f87d77 100644
+--- a/packages/platform-browserbase/src/Types.ts
++++ b/packages/platform-browserbase/src/Types.ts
+@@ -26,6 +26,13 @@ export class AllocationAttempt extends Schema.Class<AllocationAttempt>("Browserb
+   timeoutSeconds: PositiveInt,
+ }) {}
+ 
++/** Details use the same units as the original interactive policy. */
++export const BrowserBudgetExceeded = Schema.Struct({
++  limit: Schema.Literals(["actions", "elapsed", "returned-bytes"]),
++  maximum: PositiveInt,
++  observed: Schema.Natural,
++});
++
+ /** Serializable host failures intentionally contain neither arbitrary causes nor page data. */
+ export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>()("BrowserbaseError", {
+   operation: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+@@ -40,11 +47,15 @@ export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>()("Br
+   outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
+   status: Schema.optionalKey(Schema.Int),
+   retryAfterMillis: Schema.optionalKey(Schema.Natural),
++  budget: Schema.optionalKey(BrowserBudgetExceeded),
+ }) {}
+ 
+ export class CleanupResult extends Schema.Class<CleanupResult>("BrowserbaseCleanupResult")({
+   reference: SessionReference,
++  /** True only when a release reply was received and validated. */
+   releaseRequested: Schema.Boolean,
++  /** A lost reply remains unknown even if later terminal-state observation succeeds. */
++  release: Schema.optionalKey(Schema.Literals(["not-attempted", "accepted", "unknown", "rejected"])),
+   remote: Schema.Literals(["confirmed", "pending", "unknown"]),
+   local: Schema.Literals(["closed", "failed", "not-connected", "pending"]),
+   observedStatus: Schema.optionalKey(SessionStatus),
+diff --git a/packages/platform-browserbase/src/internal/Capture.ts b/packages/platform-browserbase/src/internal/Capture.ts
+index a91f4a5..6323c24 100644
+--- a/packages/platform-browserbase/src/internal/Capture.ts
++++ b/packages/platform-browserbase/src/internal/Capture.ts
+@@ -114,7 +114,7 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent,
+       first ??= meta.timestamp; last = meta.timestamp;
+       buffer.offer({
+         bytes: new Uint8Array(frame.data), mediaType: "image/jpeg", target, sequence,
+-        sourceTimeMillis: meta.timestamp, sourceClock: "presentation-unix-millis",
++        sourceTimeMillis: meta.timestamp, sourceClock: "playwright-unix-millis",
+         receivedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+         ...dimensions, viewportWidth: meta.viewportWidth, viewportHeight: meta.viewportHeight,
+       });
+diff --git a/packages/platform-browserbase/src/internal/Http.ts b/packages/platform-browserbase/src/internal/Http.ts
+index 44512ce..3114114 100644
+--- a/packages/platform-browserbase/src/internal/Http.ts
++++ b/packages/platform-browserbase/src/internal/Http.ts
+@@ -258,7 +258,7 @@ export const makeHttp = Effect.fnUntraced(function* (
+       return Stream.transformPull(stream, (pull) => Effect.succeed(within(pull, deadline, "media-download")));
+     })).pipe(Stream.scoped);
+ 
+-  return { json, text, bytes, media, validateMediaUrl };
++  return { projectId: configured.projectId, json, text, bytes, media, validateMediaUrl };
+ });
+ 
+ export type Http = Effect.Success<ReturnType<typeof makeHttp>>;
+diff --git a/packages/platform-browserbase/src/internal/Owner.ts b/packages/platform-browserbase/src/internal/Owner.ts
+index 36c1681..e612c26 100644
+--- a/packages/platform-browserbase/src/internal/Owner.ts
++++ b/packages/platform-browserbase/src/internal/Owner.ts
+@@ -64,10 +64,12 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
+       const now = yield* nowMillis;
+       if (now >= lifetimeDeadline) {
+         fence("uncertain", "uncertain");
+-        return yield* new BrowserbaseError({ operation, reason: "timeout", outcome: "undispatched" });
++        return yield* new BrowserbaseError({ operation, reason: "timeout", outcome: "undispatched",
++          budget: { limit: "elapsed", maximum: limits.maxElapsedMillis, observed: Math.ceil(now - lifetimeDeadline + limits.maxElapsedMillis) } });
+       }
+       if (options.charge !== false) {
+-        if (state.actions >= limits.maxActions) return yield* new BrowserbaseError({ operation, reason: "limit", outcome: "undispatched" });
++        if (state.actions >= limits.maxActions) return yield* new BrowserbaseError({ operation, reason: "limit", outcome: "undispatched",
++          budget: { limit: "actions", maximum: limits.maxActions, observed: state.actions + 1 } });
+         state.actions++;
+       }
+       const controller = new AbortController();
+@@ -101,6 +103,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
+             operation,
+             reason: error.reason,
+             outcome: error.outcome ?? (dispatched ? "unknown" : "undispatched"),
++            ...(error.budget === undefined ? {} : { budget: error.budget }),
+             ...(error.status === undefined ? {} : { status: error.status }),
+             ...(error.retryAfterMillis === undefined ? {} : { retryAfterMillis: error.retryAfterMillis }),
+           }));
+diff --git a/packages/platform-browserbase/src/internal/References.ts b/packages/platform-browserbase/src/internal/References.ts
+new file mode 100644
+index 0000000..5135325
+--- /dev/null
++++ b/packages/platform-browserbase/src/internal/References.ts
+@@ -0,0 +1,25 @@
++import { Effect, Schema } from "effect";
++import { BrowserbaseError, RecordingPageReference, SessionReference } from "../Types.ts";
++
++/** Own scalar identities before the first asynchronous authorization request.
++ * A retained Schema.Class instance is still mutable through JavaScript reflection. */
++export const ownSessionReference = (input: SessionReference) => Effect.try({
++  try: () => ({ provider: input.provider, projectId: input.projectId, sessionId: input.sessionId }),
++  catch: () => new BrowserbaseError({ operation: "session-identity", reason: "malformed" }),
++}).pipe(
++  Effect.flatMap(Schema.decodeEffect(SessionReference)),
++  Effect.map((value) => Object.freeze(value)),
++  Effect.mapError(() => new BrowserbaseError({ operation: "session-identity", reason: "malformed" })),
++);
++
++export const ownPageReference = Effect.fnUntraced(function* (input: RecordingPageReference) {
++  const scalars = yield* Effect.try({
++    try: () => ({ session: input.session, pageId: input.pageId }),
++    catch: () => new BrowserbaseError({ operation: "recording-identity", reason: "malformed" }),
++  });
++  const session = yield* ownSessionReference(scalars.session);
++  return yield* Schema.decodeEffect(RecordingPageReference)({ session, pageId: scalars.pageId }).pipe(
++    Effect.map((value) => Object.freeze(value)),
++    Effect.mapError(() => new BrowserbaseError({ operation: "recording-identity", reason: "malformed" })),
++  );
++});
