@@ -278,7 +278,15 @@ export const localBrowser = Effect.acquireRelease(
         );
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
-        await rm(directory, { recursive: true, force: true });
+        // Chromium may finish releasing profile files just after process exit.
+        // Node's recursive rm retries the documented ENOTEMPTY/EBUSY/EPERM class
+        // without weakening the fixture's requirement to remove its whole profile.
+        await rm(directory, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        });
       },
     };
   }),

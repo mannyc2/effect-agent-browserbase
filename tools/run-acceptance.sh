@@ -29,6 +29,9 @@ if [ "$LAST_CODE" = 0 ]; then
   cp bun.lock "$OUT/bun.lock"
   run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
   run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase install:test-browser
+  # record-video intentionally keeps ffmpeg/ffprobe caller-owned; install them only
+  # in this unpaid native acceptance environment rather than as package dependencies.
+  run install-media-tools timeout 300s bash -lc 'sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg && ffmpeg -version && ffprobe -version'
   cd packages/platform-browserbase
   run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
   run native timeout 240s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
@@ -40,7 +43,7 @@ if [ "$LAST_CODE" = 0 ]; then
   run packed-consumer timeout 300s bash tools/packed-consumer.sh "$TREE" "$OUT"
   cd "$TREE"
   # Full repository acceptance is deliberately separate from the targeted package gates.
-  run ready timeout 900s ./node_modules/.bin/vp run ready
+  run ready timeout 1800s ./node_modules/.bin/vp run ready
   # Upstream's own release adapter builds and inspects npm-ready manifests without publishing.
   run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
   git add -N packages/platform-browserbase .changeset docs/guide/browser.md package.json
