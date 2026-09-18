@@ -55,11 +55,11 @@ export const acquireSession = Effect.fnUntraced(function* (
   const capture: CaptureParent = {
     owner,
     target: () => {
-      if (driver === undefined) throw new BrowserbaseError({ operation: "target", reason: "closed" });
+      if (driver === undefined) throw BrowserbaseError.make({ operation: "target", reason: "closed" });
       return Target.make({ generation: owner.state.generation, ...driver.selected() });
     },
     source: (ticket) => native("capture-source", ticket, async () => {
-      if (driver === undefined) throw new BrowserbaseError({ operation: "capture", reason: "closed" });
+      if (driver === undefined) throw BrowserbaseError.make({ operation: "capture", reason: "closed" });
       return driver.capture();
     }),
   };
@@ -70,7 +70,7 @@ export const acquireSession = Effect.fnUntraced(function* (
 
   const boundedCleanup = (effect: Effect.Effect<void>, operation: string) =>
     effect.pipe(Effect.interruptible, Effect.timeoutOrElse({
-      duration: 2000, orElse: () => Effect.fail(new BrowserbaseError({ operation, reason: "timeout" })),
+      duration: 2000, orElse: () => Effect.fail(BrowserbaseError.make({ operation, reason: "timeout" })),
     }), Effect.exit);
 
   const terminate = yield* Effect.cached(Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
@@ -78,7 +78,7 @@ export const acquireSession = Effect.fnUntraced(function* (
     handoffToken = undefined;
     activeConnection = undefined;
     const lease = capture.captureLease;
-    if (lease !== undefined) yield* boundedCleanup(lease.stop(), "capture-cleanup");
+    if (lease !== undefined) yield* boundedCleanup(lease.stop, "capture-cleanup");
     let local: CleanupResult["local"] = connectPending ? "pending" : "not-connected";
     let remote: CleanupResult | undefined;
     // Provider confirmation is attempted independently of local teardown.
@@ -86,16 +86,16 @@ export const acquireSession = Effect.fnUntraced(function* (
       const outcome = yield* restore(provider.reconcile(reference)).pipe(Effect.exit);
       remote = Exit.isSuccess(outcome) ? outcome.value : CleanupResult.make({
         reference, releaseRequested: false, remote: "unknown", local,
-        error: new BrowserbaseError({ operation: "release", reason: "provider" }),
+        error: BrowserbaseError.make({ operation: "release", reason: "provider" }),
       });
     }
     const acquired = driver;
     driver = undefined;
     if (acquired !== undefined) {
       const exit = yield* restore(Effect.tryPromise({ try: () => acquired.disconnect(),
-        catch: () => new BrowserbaseError({ operation: "disconnect", reason: "provider" }),
+        catch: () => BrowserbaseError.make({ operation: "disconnect", reason: "provider" }),
       }).pipe(Effect.timeoutOrElse({ duration: 3000,
-        orElse: () => Effect.fail(new BrowserbaseError({ operation: "disconnect", reason: "timeout" })),
+        orElse: () => Effect.fail(BrowserbaseError.make({ operation: "disconnect", reason: "timeout" })),
       }))).pipe(Effect.exit);
       local = Exit.isSuccess(exit) ? "closed" : "failed";
     }
@@ -113,7 +113,7 @@ export const acquireSession = Effect.fnUntraced(function* (
   yield* Scope.addFinalizer(parentScope, closeScope);
   // Lease teardown runs after browser teardown and receives the actual release facts.
   if (options.context?.persist) {
-    if (options.contextLease === undefined) return yield* new BrowserbaseError({ operation: "context", reason: "context-lease", outcome: "undispatched" });
+    if (options.contextLease === undefined) return yield* BrowserbaseError.make({ operation: "context", reason: "context-lease", outcome: "undispatched" });
     yield* Effect.acquireRelease(
       options.contextLease({ projectId, contextId: options.context.id }),
       (lease) => lease.finalize({ attempt, cleanup: result() }),
@@ -132,7 +132,7 @@ export const acquireSession = Effect.fnUntraced(function* (
   }), owner.lifetimeDeadline, "allocate").pipe(
     Effect.onInterrupt(() => allocationUnknown.pipe(Effect.andThen(closeScope))),
     Effect.onError(() => allocationUnknown.pipe(Effect.andThen(closeScope))),
-    Effect.mapError((error) => reference === undefined ? new BrowserbaseError({
+    Effect.mapError((error) => reference === undefined ? BrowserbaseError.make({
       operation: "allocate", reason: "allocation-unknown", outcome: "unknown",
       ...(error.status === undefined ? {} : { status: error.status }),
     }) : error),
@@ -173,7 +173,7 @@ export const acquireSession = Effect.fnUntraced(function* (
           const pending = connector(Redacted.value(url), signal, nativeOptions, events).then(async (acquired) => {
             if (signal.aborted) {
               await acquired.disconnect().catch(() => {});
-              throw new BrowserbaseError({ operation: "connect", reason: "interrupted" });
+              throw BrowserbaseError.make({ operation: "connect", reason: "interrupted" });
             }
             return acquired;
           });
@@ -183,44 +183,46 @@ export const acquireSession = Effect.fnUntraced(function* (
           void pending.then(settled, settled);
           return pending;
         },
-        catch: (error) => error instanceof BrowserbaseError ? error : new BrowserbaseError({ operation: "connect", reason: "provider" }),
+        catch: (error) => Schema.is(BrowserbaseError)(error) ? error : BrowserbaseError.make({ operation: "connect", reason: "provider" }),
       }));
       driver = acquired;
       if (activeConnection !== connectionLease || owner.state.phase === "closed" || owner.state.phase === "closing" || owner.state.phase === "uncertain") {
-        yield* Effect.tryPromise({ try: () => acquired.disconnect(), catch: () => new BrowserbaseError({ operation: "connect", reason: "provider" }) }).pipe(Effect.ignore);
+        yield* Effect.tryPromise({ try: () => acquired.disconnect(), catch: () => BrowserbaseError.make({ operation: "connect", reason: "provider" }) }).pipe(Effect.ignore);
         driver = undefined;
-        return yield* new BrowserbaseError({ operation: "connect", reason: "closed" });
+        return yield* BrowserbaseError.make({ operation: "connect", reason: "closed" });
       }
       return acquired;
     }));
 
   const getDriver = () => {
-    if (driver === undefined) throw new BrowserbaseError({ operation: "target", reason: "closed", outcome: "undispatched" });
+    if (driver === undefined) throw BrowserbaseError.make({ operation: "target", reason: "closed", outcome: "undispatched" });
     return driver;
   };
   const observeInside = (ticket: Ticket, maximumBytes = Math.min(options.maxReturnedBytes, 16384), controls = 32) =>
     Effect.suspend(() => {
       const revision = owner.state.revision;
       return native("observe", ticket, () => getDriver().observe(maximumBytes, controls, ticket)).pipe(
-        Effect.flatMap((raw) => {
-          if (owner.state.revision !== revision) return Effect.fail(new BrowserbaseError({ operation: "observe", reason: "stale" }));
-          return Effect.try({
-            try: () => {
-              const result = Observation.make({ ...raw, target: capture.target(), revision });
-              const encoded = Schema.encodeSync(Schema.fromJsonString(Observation))(result);
-              if (new TextEncoder().encode(encoded).length > options.maxReturnedBytes) throw new BrowserbaseError({ operation: "observe", reason: "limit" });
-              return result;
-            },
-            catch: (error) => error instanceof BrowserbaseError ? error : new BrowserbaseError({ operation: "observe", reason: "malformed" }),
+        Effect.flatMap((raw) => Effect.gen(function* () {
+          if (owner.state.revision !== revision) return yield* BrowserbaseError.make({ operation: "observe", reason: "stale" });
+          const result = yield* Effect.try({
+            try: () => Observation.make({ ...raw, target: capture.target(), revision }),
+            catch: (error) => Schema.is(BrowserbaseError)(error) ? error : BrowserbaseError.make({ operation: "observe", reason: "malformed" }),
           });
-        }),
+          const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Observation))(result).pipe(
+            Effect.mapError(() => BrowserbaseError.make({ operation: "observe", reason: "malformed" })),
+          );
+          if (new TextEncoder().encode(encoded).length > options.maxReturnedBytes) {
+            return yield* BrowserbaseError.make({ operation: "observe", reason: "limit" });
+          }
+          return result;
+        })),
       );
     });
   // Reading a target is an ownership operation too. A native mutation that times out
   // after dispatch fences the owner as uncertain; retaining the last native target
   // must not manufacture a fresh usable handle in that state.
   const readSelected = owner.guard("target", () =>
-    Effect.try({ try: capture.target, catch: () => new BrowserbaseError({ operation: "target", reason: "closed", outcome: "undispatched" }) }),
+    Effect.try({ try: capture.target, catch: () => BrowserbaseError.make({ operation: "target", reason: "closed", outcome: "undispatched" }) }),
   { charge: false });
 
   const nativeOperation = <A>(operation: string, action: (driver: Driver, ticket: Ticket) => Promise<A>,
@@ -232,7 +234,7 @@ export const acquireSession = Effect.fnUntraced(function* (
     const generation = owner.state.generation, selection = owner.state.selection;
     const check = () => {
       if (owner.state.generation !== generation || owner.state.selection !== selection) {
-        return Effect.fail(new BrowserbaseError({ operation: "handle", reason: "stale", outcome: "undispatched" }));
+        return Effect.fail(BrowserbaseError.make({ operation: "handle", reason: "stale", outcome: "undispatched" }));
       }
       return Effect.void;
     };
@@ -264,12 +266,12 @@ export const acquireSession = Effect.fnUntraced(function* (
     currentTarget: readSelected,
     cleanupResult: Effect.sync(result),
     close: closeScope.pipe(Effect.andThen(Effect.suspend(() => cleanup === undefined ?
-      Effect.fail(new BrowserbaseError({ operation: "close", reason: "malformed" })) : Effect.succeed(cleanup)))),
+      Effect.fail(BrowserbaseError.make({ operation: "close", reason: "malformed" })) : Effect.succeed(cleanup)))),
     observe: (maximumBytes?: number, controlLimit = 32) => {
       const bytes = maximumBytes ?? Math.min(options.maxReturnedBytes, 16384);
       if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > Math.min(options.maxReturnedBytes, 131072) ||
           !Number.isSafeInteger(controlLimit) || controlLimit < 0 || controlLimit > 64) {
-        return Effect.fail(new BrowserbaseError({ operation: "observe", reason: "configuration", outcome: "undispatched" }));
+        return Effect.fail(BrowserbaseError.make({ operation: "observe", reason: "configuration", outcome: "undispatched" }));
       }
       return owner.guard("observe", (ticket) => observeInside(ticket, bytes, controlLimit));
     },
@@ -298,7 +300,7 @@ export const acquireSession = Effect.fnUntraced(function* (
     }), { charge: false, phases: ["open", "paused"], verifyAfter: false }),
     resume: (token: Redacted.Redacted<string>, operatorReleasedControl: boolean) => owner.guard("resume", (ticket) => Effect.gen(function* () {
       if (!operatorReleasedControl || handoffToken === undefined || Redacted.value(token) !== handoffToken) {
-        return yield* new BrowserbaseError({ operation: "resume", reason: "authorization", outcome: "undispatched" });
+        return yield* BrowserbaseError.make({ operation: "resume", reason: "authorization", outcome: "undispatched" });
       }
       yield* native("resume", ticket, () => getDriver().dismissDialogs(ticket));
       const observation = yield* observeInside(ticket);
@@ -307,21 +309,21 @@ export const acquireSession = Effect.fnUntraced(function* (
       return observation;
     }), { charge: false, phases: ["paused"], verifyAfter: false }),
     detach: owner.guard("detach", (ticket) => Effect.gen(function* () {
-      if (!options.keepAlive) return yield* new BrowserbaseError({ operation: "detach", reason: "unsupported", outcome: "undispatched" });
+      if (!options.keepAlive) return yield* BrowserbaseError.make({ operation: "detach", reason: "unsupported", outcome: "undispatched" });
       reconnectTarget = yield* native("detach", ticket, () => getDriver().selectedTargetId());
       const acquired = getDriver();
       activeConnection = undefined;
       owner.fence("detached", "disconnected");
-      yield* Effect.tryPromise({ try: () => acquired.disconnect(), catch: () => new BrowserbaseError({ operation: "detach", reason: "disconnected" }) });
+      yield* Effect.tryPromise({ try: () => acquired.disconnect(), catch: () => BrowserbaseError.make({ operation: "detach", reason: "disconnected" }) });
       driver = undefined;
       return { reference: ref, targetId: reconnectTarget };
     }), { charge: false, verifyAfter: false }).pipe(Effect.onError(() => Effect.sync(() => owner.fence("uncertain", "uncertain")))),
     reconnect: (operatorReleasedControl: boolean) => owner.guard("reconnect", (ticket) => Effect.gen(function* () {
       if (!options.keepAlive || reconnectTarget === undefined || !operatorReleasedControl) {
-        return yield* new BrowserbaseError({ operation: "reconnect", reason: "unsupported", outcome: "undispatched" });
+        return yield* BrowserbaseError.make({ operation: "reconnect", reason: "unsupported", outcome: "undispatched" });
       }
       const status = yield* provider.metadata(ref);
-      if (status.status !== "RUNNING") return yield* new BrowserbaseError({ operation: "reconnect", reason: "expired" });
+      if (status.status !== "RUNNING") return yield* BrowserbaseError.make({ operation: "reconnect", reason: "expired" });
       owner.state.phase = "acquiring";
       connection = Redacted.make(status.connectUrl);
       yield* connectNative(connection, { ...options.driver, initialTargetId: reconnectTarget, newPage: false, preserveViewport: true });
@@ -334,15 +336,18 @@ export const acquireSession = Effect.fnUntraced(function* (
   };
   // One timer belongs to the enclosing execution, never to an individual Tool call.
   const remaining = Math.max(0, owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000);
-  yield* Effect.raceFirst(Effect.sleep(remaining).pipe(Effect.as(true)), Deferred.await(ended).pipe(Effect.as(false))).pipe(
-    Effect.flatMap((expired) => expired ? closeScope : Effect.void), Effect.forkIn(parentScope),
+  yield* Deferred.await(ended).pipe(
+    Effect.as(false),
+    Effect.timeoutOrElse({ duration: remaining, onTimeout: () => Effect.succeed(true) }),
+    Effect.flatMap((expired) => expired ? closeScope : Effect.void),
+    Effect.forkIn(parentScope),
   );
   return {
     reference: ref,
     attempt,
     close: controls.close,
     connect: Effect.suspend(() => owner.state.phase === "closed" || owner.state.phase === "closing" ?
-      Effect.fail(new BrowserbaseError({ operation: "connect", reason: "closed", outcome: "undispatched" })) :
+      Effect.fail(BrowserbaseError.make({ operation: "connect", reason: "closed", outcome: "undispatched" })) :
       connected.pipe(Effect.as(controls))),
   };
 });

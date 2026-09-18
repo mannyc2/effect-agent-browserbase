@@ -2,9 +2,14 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Stream } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import * as Capture from "@effect-agent/platform-browserbase/capture";
 import type { BrowserbaseSession } from "@effect-agent/platform-browserbase/interactive-browser";
+
+class RecordVideoError extends Schema.TaggedError<RecordVideoError>()("RecordVideoError", {
+  operation: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {}
 
 const processResult = (command: string, args: ReadonlyArray<string>, cwd?: string) =>
   Effect.tryPromise({
@@ -16,9 +21,9 @@ const processResult = (command: string, args: ReadonlyArray<string>, cwd?: strin
       child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
       child.once("error", reject);
       child.once("exit", (code) => code === 0 ? resolve({ stdout, stderr }) :
-        reject(new Error(`${command} exited ${String(code)}: ${stderr.slice(-2000)}`)));
+        reject(RecordVideoError.make({ operation: `${command} exited ${String(code)}: ${stderr.slice(-2000)}` })));
     }),
-    catch: (cause) => new Error(`media process failed: ${String(cause)}`),
+    catch: (cause) => RecordVideoError.make({ operation: "media-process", cause }),
   });
 
 /**
@@ -36,7 +41,7 @@ export const recordInterval = (
   const directory = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: () => mkdtemp(join(tmpdir(), "browserbase-capture-")),
-      catch: (cause) => new Error(`cannot create capture directory: ${String(cause)}`),
+      catch: (cause) => RecordVideoError.make({ operation: "capture-directory", cause }),
     }),
     (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
   );
@@ -57,7 +62,7 @@ export const recordInterval = (
     const name = `frame-${String(index).padStart(6, "0")}.jpg`;
     yield* Effect.tryPromise({
       try: () => writeFile(join(directory, name), frame.bytes),
-      catch: (cause) => new Error(`cannot write frame: ${String(cause)}`),
+      catch: (cause) => RecordVideoError.make({ operation: "write-frame", cause }),
     });
     lines.push(`file '${name}'`);
     if (index + 1 < frames.length) {
@@ -70,7 +75,7 @@ export const recordInterval = (
   lines.push(`file 'frame-${String(frames.length - 1).padStart(6, "0")}.jpg'`);
   yield* Effect.tryPromise({
     try: () => writeFile(join(directory, "frames.ffconcat"), "ffconcat version 1.0\n" + lines.join("\n") + "\n"),
-    catch: (cause) => new Error(`cannot write concat manifest: ${String(cause)}`),
+    catch: (cause) => RecordVideoError.make({ operation: "write-manifest", cause }),
   });
   yield* processResult("ffmpeg", [
     "-hide_banner", "-loglevel", "error", "-y",

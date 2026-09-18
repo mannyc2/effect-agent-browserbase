@@ -4,7 +4,7 @@ import type { CaptureSource } from "./Driver.ts";
 import type { Owner, Ticket } from "./Owner.ts";
 
 export interface CaptureLease {
-  readonly stop: () => Effect.Effect<void>;
+  readonly stop: Effect.Effect<void>;
   readonly invalidate: (reason: string) => void;
 }
 export interface CaptureParent {

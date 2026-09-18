@@ -7,7 +7,7 @@ import { CallbackTasks } from "./CallbackTasks.ts";
 import { pngGeometry } from "./Images.ts";
 
 const failure = (operation: string, reason: BrowserbaseError["reason"], outcome?: BrowserbaseError["outcome"]) =>
-  new BrowserbaseError({ operation, reason, ...(outcome === undefined ? {} : { outcome }) });
+  BrowserbaseError.make({ operation, reason, ...(outcome === undefined ? {} : { outcome }) });
 const safeDecode = <A>(codec: Schema.Codec<A, unknown, never, never>, raw: unknown, operation: string): A => {
   try { return Schema.decodeUnknownSync(codec)(raw); }
   catch { throw failure(operation, "malformed"); }
@@ -35,7 +35,7 @@ interface Snapshot {
 /** No raw exception from Playwright is allowed to cross this private boundary. */
 const sanitize = <A>(operation: string, action: () => Promise<A>): Promise<A> =>
   Promise.resolve().then(action).catch((error: unknown) => {
-    throw error instanceof BrowserbaseError ? error : failure(operation, "provider");
+    throw Schema.is(BrowserbaseError)(error) ? error : failure(operation, "provider");
   });
 
 const closeWithin = async (action: () => Promise<unknown>, milliseconds = 2000): Promise<void> => {
@@ -76,7 +76,7 @@ export const connectPlaywright = async (
     return driver;
   } catch (error) {
     await closeWithin(() => browser.close()).catch(() => {});
-    throw error instanceof BrowserbaseError ? error : failure("connect", "provider");
+    throw Schema.is(BrowserbaseError)(error) ? error : failure("connect", "provider");
   }
 };
 

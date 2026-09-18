@@ -15,7 +15,7 @@ export class NativeFixtureError extends Schema.TaggedError<NativeFixtureError>()
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 const attempt = <A>(operation: string, body: () => Promise<A>) => Effect.tryPromise({
-  try: body, catch: (cause) => new NativeFixtureError({ operation, cause }),
+  try: body, catch: (cause) => NativeFixtureError.make({ operation, cause }),
 });
 
 /** Only provider allocation, control-address lookup and status are scripted.

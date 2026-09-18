@@ -41,14 +41,14 @@ export const makeProvider = (http: Http, projectId: string) => {
   });
   const check = (ref: SessionReference, data: typeof Metadata.Type) => {
     if (ref.projectId !== projectId || data.projectId !== ref.projectId || data.id !== ref.sessionId) {
-      return Effect.fail(new BrowserbaseError({ operation: "session-identity", reason: "malformed" }));
+      return Effect.fail(BrowserbaseError.make({ operation: "session-identity", reason: "malformed" }));
     }
     return Effect.succeed(data);
   };
   const metadata = (ref: SessionReference, deadline?: number) =>
     decode(SessionReference, ref, "session-identity").pipe(
       Effect.flatMap((r) => r.projectId !== projectId ?
-        Effect.fail(new BrowserbaseError({ operation: "session-identity", reason: "authorization" })) :
+        Effect.fail(BrowserbaseError.make({ operation: "session-identity", reason: "authorization" })) :
         http.json("GET", `/v1/sessions/${encodeURIComponent(r.sessionId)}`, undefined, deadline)),
       Effect.flatMap((value) => decode(Metadata, value, "session-metadata")),
       Effect.flatMap((value) => check(ref, value)),
@@ -70,7 +70,7 @@ export const makeProvider = (http: Http, projectId: string) => {
       const ref = reference(value);
       // The owner's finalizer is installed before POST; retain identity before validating anything else.
       known(ref);
-      if (value.projectId !== projectId) return yield* new BrowserbaseError({ operation: "session-create", reason: "malformed" });
+      if (value.projectId !== projectId) return yield* BrowserbaseError.make({ operation: "session-create", reason: "malformed" });
       return { reference: ref, connection: Redacted.make(value.connectUrl) };
     }));
 
@@ -83,7 +83,7 @@ export const makeProvider = (http: Http, projectId: string) => {
 
   const reconcile = Effect.fnUntraced(function* (ref: SessionReference, requestRelease = true) {
     yield* decode(SessionReference, ref, "release");
-    if (ref.projectId !== projectId) return yield* new BrowserbaseError({ operation: "release", reason: "authorization" });
+    if (ref.projectId !== projectId) return yield* BrowserbaseError.make({ operation: "release", reason: "authorization" });
     const deadline = yield* deadlineAfter(8000);
     let requested = false;
     let status: SessionStatus | undefined;
@@ -98,7 +98,7 @@ export const makeProvider = (http: Http, projectId: string) => {
       const result = yield* metadata(ref, deadline).pipe(Effect.result);
       if (result._tag === "Success") { status = result.success.status; error = undefined; }
       else { error = result.failure; if (error.reason === "authorization" || error.reason === "not-found") break; }
-      if (!terminalStatus(status)) yield* within(Effect.sleep(250), deadline, "release").pipe(Effect.catch(() => Effect.void));
+      if (!terminalStatus(status)) yield* within(Effect.sleep(250), deadline, "release").pipe(Effect.ignore);
     }
     return CleanupResult.make({
       reference: ref, releaseRequested: requested,
@@ -111,7 +111,7 @@ export const makeProvider = (http: Http, projectId: string) => {
 
   const liveView = Effect.fnUntraced(function* (ref: SessionReference, expiresInSeconds: number) {
     if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 21600) {
-      return yield* new BrowserbaseError({ operation: "live-view", reason: "configuration" });
+      return yield* BrowserbaseError.make({ operation: "live-view", reason: "configuration" });
     }
     yield* metadata(ref);
     const value = yield* http.json("GET", `/v1/sessions/${encodeURIComponent(ref.sessionId)}/debug?expiresIn=${expiresInSeconds}`).pipe(

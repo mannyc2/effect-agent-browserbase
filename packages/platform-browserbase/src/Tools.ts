@@ -11,7 +11,7 @@ export class BrowserbaseToolFailure extends Schema.TaggedError<BrowserbaseToolFa
 }) {}
 
 const failed = (error: BrowserbaseError | InteractiveBrowserError): BrowserbaseToolFailure => {
-  if (error instanceof BrowserbaseError) return BrowserbaseToolFailure.make({ reason: error.reason, outcome: error.outcome ?? "unknown" });
+  if (Schema.is(BrowserbaseError)(error)) return BrowserbaseToolFailure.make({ reason: error.reason, outcome: error.outcome ?? "unknown" });
   if (error._tag === "InteractiveBrowserBusyError") return BrowserbaseToolFailure.make({ reason: "busy", outcome: "undispatched" });
   if (error._tag === "InteractiveBrowserPolicyDeniedError") return BrowserbaseToolFailure.make({ reason: "configuration", outcome: "undispatched" });
   if (error._tag === "InteractiveBrowserUnsupportedError") return BrowserbaseToolFailure.make({ reason: "unsupported", outcome: "undispatched" });

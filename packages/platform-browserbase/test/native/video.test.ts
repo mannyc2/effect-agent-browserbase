@@ -11,8 +11,8 @@ import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts"
 const Probe = Schema.Struct({
   streams: Schema.Array(Schema.Struct({
     codec_type: Schema.String,
-    width: Schema.optionalKey(Schema.Number),
-    height: Schema.optionalKey(Schema.Number),
+    width: Schema.optionalKey(Schema.Finite),
+    height: Schema.optionalKey(Schema.Finite),
     duration: Schema.optionalKey(Schema.String),
   })),
   format: Schema.Struct({ duration: Schema.optionalKey(Schema.String) }),
@@ -30,7 +30,7 @@ it.live("real CDP capture: caller encoder produces decodable moving video with s
       const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
       yield* session.handle.navigate(BrowserNavigateRequest.make({ url: fixture.url }));
       const result = yield* recordInterval(session, output, 2_000);
-      const probe = Schema.decodeUnknownSync(Probe)(result.decoded);
+      const probe = yield* Schema.decodeUnknownEffect(Probe)(result.decoded);
       const video = probe.streams.find((stream) => stream.codec_type === "video");
       expect(video).toBeDefined();
       expect(video?.width).toBeGreaterThan(100);

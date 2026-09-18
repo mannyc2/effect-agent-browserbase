@@ -64,12 +64,11 @@ export const artifactCases = [
       assert.equal(batch.timedOut, false); assert.deepEqual(batch.pages.map((p) => p.status), ["COMPLETED", "FAILED"]);
     }));
   }) },
-  { name: "bounded recording polling returns latest partial status, not a fabricated permanent failure", run: Effect.gen(function* () {
-    yield* withRecordings(async (input) => String(input).includes("/recording/") ? Response.json(pending) : metadata(), (api) => Effect.gen(function* () {
+  { name: "bounded recording polling returns latest partial status, not a fabricated permanent failure", run:
+    withRecordings(async (input) => String(input).includes("/recording/") ? Response.json(pending) : metadata(), (api) => Effect.gen(function* () {
       const batch = yield* elapse(api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 }), 30);
       assert.equal(batch.timedOut, true); assert.equal(batch.pages[0]?.status, "PENDING");
-    }));
-  }) },
+    })) },
   ...([409, 410, 422, 429] as const).map((status) => ({
     name: `recording API preserves ${status} as a bounded typed state`,
     run: withRecordings(async (input) => String(input).includes("/recording/") ? Response.json({ detail: "PRIVATE-BODY" }, { status, headers: { "retry-after": "60" } }) : metadata(),
