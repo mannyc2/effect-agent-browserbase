@@ -1,0 +1,87 @@
+diff --git a/packages/platform-browserbase/src/InteractiveBrowser.ts b/packages/platform-browserbase/src/InteractiveBrowser.ts
+index f56db2b..4ec9390 100644
+--- a/packages/platform-browserbase/src/InteractiveBrowser.ts
++++ b/packages/platform-browserbase/src/InteractiveBrowser.ts
+@@ -192,7 +192,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
+         ...(options.onAllocationUncertain === undefined ? {} : { onAllocationUncertain: options.onAllocationUncertain }),
+       };
+       const acquire = Effect.fnUntraced(function* (policy: InteractiveBrowserPolicy) {
+-        const fixed = yield* Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(policy).pipe(Effect.mapError(() =>
++        const fixed = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(policy).pipe(Effect.mapError(() =>
+           InteractiveBrowserPolicyDeniedError.make({ implementation: browserbaseInteractiveImplementation, message: "The browser policy is malformed" })));
+         if (fixed.network._tag !== "Unrestricted") return yield* InteractiveBrowserUnsupportedError.make({
+           implementation: browserbaseInteractiveImplementation, feature: "policy",
+diff --git a/packages/platform-browserbase/src/Recordings.ts b/packages/platform-browserbase/src/Recordings.ts
+index b8aa061..8773cc7 100644
+--- a/packages/platform-browserbase/src/Recordings.ts
++++ b/packages/platform-browserbase/src/Recordings.ts
+@@ -34,8 +34,8 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
+   const path = (ref: SessionReference) => `/v1/sessions/${encodeURIComponent(ref.sessionId)}/recording/downloads`;
+   const read = (ref: SessionReference, deadline?: number) => http.json("GET", path(ref), undefined, deadline).pipe(
+     Effect.flatMap((raw) => decode(RawBatch, raw, "recording-status")),
+-    Effect.flatMap((raw) => new Set(raw.downloads.map((p) => p.pageId)).size === raw.downloads.length ?
+-      Effect.succeed(raw) : Effect.fail(new BrowserbaseError({ operation: "recording-status", reason: "malformed" }))),
++    Effect.filterOrFail((raw) => new Set(raw.downloads.map((p) => p.pageId)).size === raw.downloads.length,
++      () => new BrowserbaseError({ operation: "recording-status", reason: "malformed" })),
+   );
+   const project = (ref: SessionReference, raw: typeof RawBatch.Type, timedOut = false) => RecordingBatch.make({
+     reference: ref, timedOut,
+diff --git a/packages/platform-browserbase/src/internal/Http.ts b/packages/platform-browserbase/src/internal/Http.ts
+index 53e4365..44512ce 100644
+--- a/packages/platform-browserbase/src/internal/Http.ts
++++ b/packages/platform-browserbase/src/internal/Http.ts
+@@ -100,7 +100,7 @@ export const makeHttp = Effect.fnUntraced(function* (
+   options: BrowserbaseOptions,
+   transport?: typeof globalThis.fetch,
+ ) {
+-  const configured = yield* Schema.decodeUnknownEffect(Options)(options, { onExcessProperty: "error" }).pipe(
++  const configured = yield* Schema.decodeEffect(Options)(options, { onExcessProperty: "error" }).pipe(
+     Effect.mapError(() => new BrowserbaseError({ operation: "configure", reason: "configuration" })),
+   );
+   // Own immutable policy values; later mutation of the caller's options cannot
+diff --git a/packages/platform-browserbase/test/native/agent.test.ts b/packages/platform-browserbase/test/native/agent.test.ts
+index 4f50158..56a3ad6 100644
+--- a/packages/platform-browserbase/test/native/agent.test.ts
++++ b/packages/platform-browserbase/test/native/agent.test.ts
+@@ -46,7 +46,7 @@ it.live("real AgentRuntime: three interpreter turns borrow one live browser and
+         ];
+         const turns = script.map((turn) => ({ ...turn, onStreamFinalize: Effect.sync(() => { modelFinalizers++; }) }));
+         const result = yield* AgentRuntime.run(agent, "begin").pipe(
+-          Effect.provide(BrowserTools.handlers(session)), Effect.provide(model(turns)), Effect.provide(InMemory.layer),
++          Effect.provide(Layer.mergeAll(BrowserTools.handlers(session), model(turns), InMemory.layer)),
+         );
+         expect(result.turns).toBe(3);
+         expect(result.output.done).toBe(true);
+@@ -79,7 +79,7 @@ it.live("real AgentRuntime: declared stale-element failure remains isFailure and
+         }, final,
+       ];
+       const result = yield* AgentRuntime.run(agent, "exercise failure").pipe(
+-        Effect.provide(BrowserTools.handlers(session)), Effect.provide(model(turns)), Effect.provide(InMemory.layer),
++        Effect.provide(Layer.mergeAll(BrowserTools.handlers(session), model(turns), InMemory.layer)),
+       );
+       expect(result.output.done).toBe(true);
+       expect(result.turns).toBe(3);
+@@ -98,10 +98,10 @@ it.live("real AgentRuntime: interruption closes only the owning execution and it
+       const program = Effect.scoped(Effect.gen(function* () {
+         const session = yield* host.open(policy);
+         return yield* AgentRuntime.run(agent, "wait").pipe(
+-          Effect.provide(BrowserTools.handlers(session)), Effect.provide(InMemory.layer), Effect.provide(model([
++          Effect.provide(Layer.mergeAll(BrowserTools.handlers(session), InMemory.layer, model([
+             { _tag: "Stream", parts: [], termination: { _tag: "Hang" }, onStreamStart: Deferred.succeed(waiting, undefined),
+               onStreamFinalize: Effect.sync(() => { finalized++; }) },
+-          ])),
++          ]))),
+         );
+       }));
+       const fiber = yield* program.pipe(Effect.forkChild);
+diff --git a/packages/platform-browserbase/test/native/interactive.test.ts b/packages/platform-browserbase/test/native/interactive.test.ts
+index 1c977b7..b38b14b 100644
+--- a/packages/platform-browserbase/test/native/interactive.test.ts
++++ b/packages/platform-browserbase/test/native/interactive.test.ts
+@@ -173,5 +173,5 @@ const expectedCaptureError: Same<Effect.Error<ReturnType<typeof Capture.start>>,
+ const encodedObservation = Schema.toCodecJson(ObservedElement);
+ it("keeps public typed capture errors and element-reference schemas", () => {
+   expect(expectedCaptureError).toBe(true);
+-  expect(Schema.decodeUnknownSync(encodedObservation)({ observationId: "observation-1", elementId: "element-0" }).elementId).toBe("element-0");
++  expect(Schema.decodeSync(encodedObservation)({ observationId: "observation-1", elementId: "element-0" }).elementId).toBe("element-0");
+ });
