@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Redacted, Schema } from "effect";
-import { chromium, type BrowserContext, type ConnectOverCDPOptions } from "playwright-core";
+import { chromium, type Page, type ConnectOverCDPOptions } from "playwright-core";
 import { BrowserbaseInteractiveHost, type InteractiveOptions } from "@effect-agent/platform-browserbase/interactive-browser";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -23,7 +24,7 @@ const attempt = <A>(operation: string, body: () => Promise<A>) => Effect.tryProm
  * No production option allows substituting provider origins or CDP addresses. */
 export const localBrowser = Effect.acquireRelease(attempt("start local fixture", async () => {
   const directory = await mkdtemp(join(tmpdir(), "browserbase-acceptance-"));
-  const sessions = new Map<string, { context: BrowserContext; endpoint: string; status: string }>();
+  const sessions = new Map<string, { process: ChildProcess; endpoint: string; status: string }>();
   const releaseIds: string[] = [];
   const createBodies: unknown[] = [];
   const connections: string[] = [];
@@ -81,16 +82,32 @@ export const localBrowser = Effect.acquireRelease(attempt("start local fixture",
       createBodies.push(await request.json());
       const id = `session-${createBodies.length}`;
       const profile = join(directory, id);
-      const context = await chromium.launchPersistentContext(profile, {
-        ...(process.env.BROWSERBASE_CHROMIUM === undefined ? {} : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
-        args: ["--remote-debugging-port=0"],
-        headless: true,
-      });
+      // Launch ONLY the process: a launchPersistentContext client would be a
+      // second controller which can auto-dismiss dialogs behind the adapter.
+      const process = spawn(globalThis.process.env.BROWSERBASE_CHROMIUM ?? chromium.executablePath(), [
+        "--headless=new", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
+        "--disable-dev-shm-usage", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+      let diagnostic = "";
+      process.stdout?.resume();
+      process.stderr?.on("data", (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(-4096); });
+      // Always register process cleanup before waiting for the CDP address.
+      sessions.set(id, { process, endpoint: "", status: "RUNNING" });
       try {
-        const port = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0];
-        if (!port || !/^\d+$/.test(port)) throw new Error("Invalid local CDP port");
-        sessions.set(id, { context, endpoint: `http://127.0.0.1:${port}`, status: "RUNNING" });
-      } catch (error) { await context.close(); throw error; }
+        const deadline = performance.now() + 10000;
+        let port: string | undefined;
+        while (!port && performance.now() < deadline) {
+          if (process.exitCode !== null) throw new Error(`Local Chromium exited: ${diagnostic}`);
+          try { port = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]; }
+          catch { await new Promise<void>((resolve) => setTimeout(resolve, 20)); }
+        }
+        if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
+        sessions.set(id, { process, endpoint: `http://127.0.0.1:${port}`, status: "RUNNING" });
+      } catch (error) {
+        console.error("Local process fixture allocation failed", error);
+        process.kill("SIGKILL");
+        throw error;
+      }
       return Response.json({ id, projectId: "project-1", status: "RUNNING", connectUrl: `wss://connect.browserbase.com/?session=${id}` });
     }
     const id = parsed.pathname.split("/")[3];
@@ -109,14 +126,24 @@ export const localBrowser = Effect.acquireRelease(attempt("start local fixture",
     fileRequests: () => fileRequests,
     layer: (overrides: Partial<InteractiveOptions> = {}) => BrowserbaseInteractiveHost.layer({ ...options, ...overrides }),
     fetch,
-    page: (id: string) => {
-      const page = sessions.get(id)?.context.pages()[0];
-      if (!page) throw new Error("No native fixture page");
-      return page;
+    human: async <A>(id: string, action: (page: Page) => Promise<A>): Promise<A> => {
+      const session = sessions.get(id);
+      if (!session) throw new Error("No native fixture session");
+      const browser = await originalConnect(session.endpoint);
+      try {
+        const page = browser.contexts()[0]?.pages()[0];
+        if (!page) throw new Error("No native fixture page");
+        return await action(page);
+      } finally { await browser.close(); }
     },
     close: async () => {
       chromium.connectOverCDP = originalConnect;
-      await Promise.allSettled([...sessions.values()].map((s) => s.context.close()));
+      await Promise.all([...sessions.values()].map((s) => new Promise<void>((resolve) => {
+        if (s.process.exitCode !== null || s.process.signalCode !== null) { resolve(); return; }
+        const timer = setTimeout(() => { s.process.kill("SIGKILL"); }, 2000);
+        s.process.once("exit", () => { clearTimeout(timer); resolve(); });
+        s.process.kill("SIGTERM");
+      })));
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(directory, { recursive: true, force: true });
@@ -128,6 +155,6 @@ export const policy = InteractiveBrowserPolicy.make({ network: { _tag: "Unrestri
   maxElapsedMillis: 120000, maxReturnedBytes: 2 * 1024 * 1024 });
 
 export const withProvider = <A, E, R>(fixture: Effect.Success<typeof localBrowser>, effect: Effect.Effect<A, E, R>,
-  options: Partial<InteractiveOptions> = {}) => effect.pipe(
+  options: Partial<InteractiveOptions> = {}) => Effect.scoped(effect).pipe(
     Effect.provide(fixture.layer(options)), Effect.provideService(FetchHttpClient.Fetch, fixture.fetch),
   );

@@ -56,10 +56,10 @@ it.live("real CDP: DOM replacement invalidates a retained node without clicking 
       yield* session.handle.navigate(BrowserNavigateRequest.make({ url: f.url }));
       const observation = yield* session.observe();
       const control = observation.controls.find((c) => c.label === "Increment")!;
-      yield* Effect.promise(() => f.page(session.reference.sessionId).evaluate(() => {
+      yield* Effect.promise(() => f.human(session.reference.sessionId, (page) => page.evaluate(() => {
         const old = document.querySelector("#increment")!;
         old.replaceWith(old.cloneNode(true));
-      }));
+      })));
       const rejected = yield* session.clickElement(ObservedElement.make({ observationId: observation.observationId, elementId: control.elementId })).pipe(Effect.result);
       expect(rejected._tag).toBe("Failure");
       if (rejected._tag === "Failure") expect(rejected.failure.outcome).toBe("undispatched");
@@ -111,12 +111,12 @@ it.live("real CDP: human takeover, atomic fresh observation and explicit keep-al
       expect(JSON.stringify(handoff)).not.toContain("token=fixture");
       expect((yield* old.click(BrowserClickRequest.make({ selector: "#increment" })).pipe(Effect.result))._tag).toBe("Failure");
       // A separate native client stands in for an operator, not provider Live View.
-      yield* Effect.promise(() => f.page(session.reference.sessionId).locator("#name").fill("human result"));
+      yield* Effect.promise(() => f.human(session.reference.sessionId, (page) => page.locator("#name").fill("human result")));
       const resumed = yield* session.resume(handoff.token, true);
       expect(resumed.observation.text).toContain("human result");
       expect((yield* old.readText(BrowserReadTextRequest.make({})).pipe(Effect.result))._tag).toBe("Failure");
       yield* session.detach;
-      yield* Effect.promise(() => f.page(session.reference.sessionId).locator("#name").fill("detached result"));
+      yield* Effect.promise(() => f.human(session.reference.sessionId, (page) => page.locator("#name").fill("detached result")));
       const reconnected = yield* session.reconnect(true);
       expect(reconnected.observation.text).toContain("detached result");
       expect(f.connections).toEqual(["session-1", "session-1"]);
@@ -162,7 +162,7 @@ it.live("real CDP: finite native action timeout is unknown, fenced and never rep
       expect(failed._tag).toBe("Failure");
       expect((yield* session.currentHandle.pipe(Effect.result))._tag).toBe("Failure");
       expect((yield* session.close).remote).toBe("confirmed");
-    }), { actionTimeoutMillis: 700 });
+    }), { actionTimeoutMillis: 2000 });
     expect(f.releaseIds).toHaveLength(1);
   })),
 );
