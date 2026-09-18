@@ -1,0 +1,390 @@
+diff --git a/packages/platform-browserbase/package.json b/packages/platform-browserbase/package.json
+index 698fa9b9781af1a1ecae8b8741ec2192d7ac4d31..383a56a75204894c92990ed2bff0e457362124cd 100644
+--- a/packages/platform-browserbase/package.json
++++ b/packages/platform-browserbase/package.json
+@@ -12,3 +12,6 @@
+   "sideEffects": [],
+-  "files": ["dist", "src"],
++  "files": [
++    "dist",
++    "src"
++  ],
+   "exports": {
+@@ -21,6 +24,11 @@
+     "./downloads": "./src/Downloads.ts",
+-    "./capture": "./src/Capture.ts"
++    "./capture": "./src/Capture.ts",
++    "./testing": "./src/Testing.ts"
++  },
++  "publishConfig": {
++    "access": "public"
++  },
++  "engines": {
++    "node": "^22.18.0 || >=24.11.0"
+   },
+-  "publishConfig": { "access": "public" },
+-  "engines": { "node": "^22.18.0 || >=24.11.0" },
+   "scripts": {
+@@ -33,3 +41,5 @@
+   },
+-  "dependencies": { "effect-agent": "workspace:*" },
++  "dependencies": {
++    "effect-agent": "workspace:*"
++  },
+   "peerDependencies": {
+@@ -38,3 +48,7 @@
+   },
+-  "peerDependenciesMeta": { "playwright-core": { "optional": true } },
++  "peerDependenciesMeta": {
++    "playwright-core": {
++      "optional": true
++    }
++  },
+   "devDependencies": {
+diff --git a/packages/platform-browserbase/src/InteractiveBrowser.ts b/packages/platform-browserbase/src/InteractiveBrowser.ts
+index f56db2b585b4364cfbac8f7805fd30e8b677cafe..59db0257867ea8fe2c1d1b96bea194dc12e7fa46 100644
+--- a/packages/platform-browserbase/src/InteractiveBrowser.ts
++++ b/packages/platform-browserbase/src/InteractiveBrowser.ts
+@@ -13,2 +13,3 @@ import { AllocationAttempt, BrowserbaseError, CleanupResult, DownloadObservation
+   Identifier, Observation, ObservedElement, PageInfo, SessionReference, Target, Viewport } from "./Types.ts";
++import { NativeConnector } from "./internal/Connector.ts";
+ import { associate } from "./internal/Association.ts";
+@@ -123,3 +124,3 @@ const makeHandle = (bound: BoundControls, controls: SessionControls): BrowserHan
+ const makeSession = (controls: SessionControls): BrowserbaseSession => {
+-  const currentHandle = controls.currentTarget.pipe(Effect.map(() => makeHandle(controls.bind(), controls)));
++  const currentHandle = controls.bindCurrent.pipe(Effect.map((bound) => makeHandle(bound, controls)));
+   const Wait = Schema.Struct({ selector: BrowserClickRequest.fields.selector, state: Schema.Literals(["visible", "hidden", "attached", "detached"]) });
+@@ -135,4 +136,4 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
+     pages: controls.pages, frames: controls.frames,
+-    selectPage: (id) => checked(Identifier, id, "select-page").pipe(Effect.flatMap(controls.selectPage), Effect.andThen(currentHandle)),
+-    selectFrame: (id) => checked(Identifier, id, "select-frame").pipe(Effect.flatMap(controls.selectFrame), Effect.andThen(currentHandle)),
++    selectPage: (id) => checked(Identifier, id, "select-page").pipe(Effect.flatMap(controls.selectPage), Effect.map((bound) => makeHandle(bound, controls))),
++    selectFrame: (id) => checked(Identifier, id, "select-frame").pipe(Effect.flatMap(controls.selectFrame), Effect.map((bound) => makeHandle(bound, controls))),
+     createPage: controls.createPage(), closePage: (id) => checked(Identifier, id, "close-page").pipe(Effect.flatMap(controls.closePage)),
+@@ -146,5 +147,5 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
+     liveView: (ttl = 60) => controls.liveView(ttl), beginHandoff: (ttl = 60) => controls.beginHandoff(ttl),
+-    resume: (token, released) => controls.resume(token, released).pipe(Effect.map((observation) => ({ observation, handle: makeHandle(controls.bind(), controls) }))),
++    resume: (token, released) => controls.resume(token, released).pipe(Effect.map(({ observation, bound }) => ({ observation, handle: makeHandle(bound, controls) }))),
+     detach: controls.detach,
+-    reconnect: (released) => controls.reconnect(released).pipe(Effect.map((observation) => ({ observation, handle: makeHandle(controls.bind(), controls) }))),
++    reconnect: (released) => controls.reconnect(released).pipe(Effect.map(({ observation, bound }) => ({ observation, handle: makeHandle(bound, controls) }))),
+     close: controls.close, cleanupResult: controls.cleanupResult,
+@@ -163,2 +164,3 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
+     return Layer.effect(this, Effect.gen(function* () {
++      const connector = yield* NativeConnector;
+       const http = yield* makeHttp(httpOptions(options));
+@@ -203,3 +205,3 @@ export class BrowserbaseInteractiveHost extends Context.Service<BrowserbaseInter
+           maxActions: fixed.maxActions, maxElapsedMillis: fixed.maxElapsedMillis, actionTimeoutMillis,
+-        }, { ...settings, maxReturnedBytes: fixed.maxReturnedBytes });
++        }, { ...settings, maxReturnedBytes: fixed.maxReturnedBytes }, connector);
+         // One public session object is shared by repeated connect calls in this acquisition's scope.
+diff --git a/packages/platform-browserbase/src/Testing.ts b/packages/platform-browserbase/src/Testing.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..aedd23e16e015efc7c3f2fd993c9df5a6a3ec19f
+--- /dev/null
++++ b/packages/platform-browserbase/src/Testing.ts
+@@ -0,0 +1,34 @@
++import { Effect, Layer } from "effect";
++import { FetchHttpClient } from "effect/unstable/http";
++import { browserbaseInteractiveLayer, type InteractiveOptions } from "./InteractiveBrowser.ts";
++import { BrowserbaseError } from "./Types.ts";
++import { NativeConnector } from "./internal/Connector.ts";
++import { connectEndpoint } from "./internal/Playwright.ts";
++
++/**
++ * Local acceptance only: require both an explicit loopback CDP endpoint and a
++ * scripted provider transport. This uses the production ownership/control path,
++ * not a replacement browser or framework. No browser is launched by this Layer.
++ * The caller owns the local Chromium process. Never imported from a production
++ * entrypoint, and never a way to broaden production Browserbase URL validation.
++ */
++export const localCdpLayer = (
++  options: InteractiveOptions,
++  local: { readonly endpoint: string; readonly fetch: typeof globalThis.fetch },
++) => Layer.unwrap(Effect.gen(function* () {
++  const endpoint = yield* Effect.try({
++    try: () => new URL(local.endpoint),
++    catch: () => new BrowserbaseError({ operation: "local-test-endpoint", reason: "configuration" }),
++  });
++
++  if (!['ws:', 'http:'].includes(endpoint.protocol) || endpoint.username || endpoint.password ||
++      !['127.0.0.1', '[::1]', 'localhost'].includes(endpoint.hostname) || endpoint.hash) {
++    return yield* new BrowserbaseError({ operation: "local-test-endpoint", reason: "configuration" });
++  }
++
++  return browserbaseInteractiveLayer(options).pipe(
++    Layer.provide(Layer.succeed(NativeConnector, (_connection, signal, settings, events) =>
++      connectEndpoint(endpoint.href, signal, settings, events))),
++    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, local.fetch)),
++  );
++}));
+diff --git a/packages/platform-browserbase/src/internal/Connector.ts b/packages/platform-browserbase/src/internal/Connector.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5f2687eac19d860c9a39f414c47689e614b36ae2
+--- /dev/null
++++ b/packages/platform-browserbase/src/internal/Connector.ts
+@@ -0,0 +1,9 @@
++import { Context } from "effect";
++import { connectPlaywright } from "./Playwright.ts";
++import type { Connector } from "./Session.ts";
++
++/** Private injection seam; only the explicit testing subpath supplies a local CDP connection. */
++export const NativeConnector = Context.Reference<Connector>(
++  "@effect-agent/platform-browserbase/internal/NativeConnector",
++  { defaultValue: () => connectPlaywright },
++);
+diff --git a/packages/platform-browserbase/src/internal/Owner.ts b/packages/platform-browserbase/src/internal/Owner.ts
+index 36c168169eb82abeac4c6bcdc4a14c2c7d44f86a..c130b3d8ea2f69b24f35d86aa1146f0b2ba4cd7f 100644
+--- a/packages/platform-browserbase/src/internal/Owner.ts
++++ b/packages/platform-browserbase/src/internal/Owner.ts
+@@ -77,3 +77,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
+       const allowed = options.phases ?? ["open"];
++      const deadline = Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline);
+       const check = () => {
++        // A native continuation can run before the Effect timeout fiber is scheduled.
++        // Recheck the monotonic deadline at the actual dispatch boundary too.
++        if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline) {
++          throw new BrowserbaseError({ operation, reason: "timeout", outcome: dispatched ? "unknown" : "undispatched" });
++        }
+         if (controller.signal.aborted || state.generation !== generation || !allowed.includes(state.phase)) {
+@@ -84,5 +90,5 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
+         signal: controller.signal,
+-        deadline: Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline),
++        deadline,
+         generation,
+-        remainingMillis: () => Math.max(1, Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline) - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
++        remainingMillis: () => Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+         get dispatched() { return dispatched; },
+@@ -96,3 +102,3 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
+       return yield* within(body(ticket), ticket.deadline, operation, uncertain).pipe(
+-        Effect.tap((_) => options.verifyAfter === false ? Effect.void : Effect.try({ try: check, catch: () => new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" }) })),
++        Effect.tap((_) => options.verifyAfter === false ? Effect.void : Effect.try({ try: check, catch: (error) => error instanceof BrowserbaseError ? error : new BrowserbaseError({ operation, reason: "stale", outcome: dispatched ? "unknown" : "undispatched" }) })),
+         Effect.catch((error) => {
+diff --git a/packages/platform-browserbase/src/internal/Playwright.ts b/packages/platform-browserbase/src/internal/Playwright.ts
+index 30db226c191e419b0b8920dc8a71ca18f0d600fd..6d0f38b4e61f55bdb9a2c387dd1cf5770649585a 100644
+--- a/packages/platform-browserbase/src/internal/Playwright.ts
++++ b/packages/platform-browserbase/src/internal/Playwright.ts
+@@ -2,3 +2,3 @@ import { Schema } from "effect";
+ import type { Browser, BrowserContext, CDPSession, Dialog, Download, ElementHandle, Frame, JSHandle, Page } from "playwright-core";
+-import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename, type Viewport } from "../Types.ts";
++import { BrowserbaseError, FrameInfo, Identifier, ObservedControl, ObservedElement, PageInfo, SafeFilename } from "../Types.ts";
+ import type { CaptureSource, Driver, DriverEvents, DriverOptions, NativeFrame, NativeObservation } from "./Driver.ts";
+@@ -61,2 +61,9 @@ export const connectPlaywright = async (
+       !url.hostname.endsWith(".browserbase.com")) throw failure("connect", "unsafe-url");
++  return connectEndpoint(connection, signal, options, events);
++};
++
++/** Sibling-only test seam. Production calls this only after Browserbase URL validation. */
++export const connectEndpoint = async (
++  connection: string, signal: AbortSignal, options: DriverOptions, events: DriverEvents,
++): Promise<Driver> => {
+   if (signal.aborted) throw failure("connect", "interrupted");
+@@ -91,3 +98,4 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
+   const pending = new Set<Promise<unknown>>();
+-  let serial = 0, frameSerial = 0, observationSerial = 0, downloadSerial = 0;
++  let serial = 0, frameSerial = 0, downloadSerial = 0;
++  let faulted = false;
+   let selected: Entry | undefined;
+@@ -107,5 +115,13 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
+   };
+-  const track = (promise: Promise<unknown>) => {
+-    if (pending.size >= 32) { events.fault(); return; }
+-    const caught = promise.catch(() => { if (!closing) events.fault(); }).finally(() => pending.delete(caught));
++  const fault = () => {
++    if (closing || faulted) return;
++    faulted = true;
++    events.fault();
++  };
++  const track = (action: () => Promise<unknown>) => {
++    // Admission precedes invocation. Dropping an already-started Promise would
++    // still allow unbounded native work and unhandled late rejections.
++    if (closing || faulted) return;
++    if (pending.size >= 32) { fault(); return; }
++    const caught = Promise.resolve().then(action).catch(fault).finally(() => pending.delete(caught));
+     pending.add(caught);
+@@ -125,4 +141,4 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
+     if (entries.size >= options.maxPages) {
+-      track(closeWithin(() => page.close()));
+-      events.fault();
++      track(() => closeWithin(() => page.close()));
++      fault();
+       return entry;
+@@ -144,4 +160,4 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
+     const onDialog = (dialog: Dialog) => {
+-      if (options.dialogPolicy === "dismiss") track(closeWithin(() => dialog.dismiss()));
+-      else if (dialogs.size >= 8) { events.fault(); track(closeWithin(() => dialog.dismiss())); }
++      if (options.dialogPolicy === "dismiss") track(() => closeWithin(() => dialog.dismiss()));
++      else if (dialogs.size >= 8) { fault(); track(() => closeWithin(() => dialog.dismiss())); }
+       else { dialogs.add(dialog); invalidateObservation(); events.pause(); }
+@@ -153,3 +169,3 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
+     if (initialized && !creatingPage) {
+-      if (options.popupPolicy === "close") track(closeWithin(() => page.close()));
++      if (options.popupPolicy === "close") track(() => closeWithin(() => page.close()));
+       else if (options.popupPolicy === "pause") events.pause();
+@@ -365,3 +381,5 @@ export const makePlaywrightDriver = async (browser: Browser, options: DriverOpti
+         ticket.check();
+-        const id = `observation-${++observationSerial}`;
++        // An old reference must not alias the first snapshot on a new connection
++        // (or in another execution); local serial numbers alone are insufficient.
++        const id = `observation-${globalThis.crypto.randomUUID()}`;
+         observation = { id, valid: true, nodes };
+diff --git a/packages/platform-browserbase/src/internal/Session.ts b/packages/platform-browserbase/src/internal/Session.ts
+index 9c5176bda6b8e3ef218f31c3b947d3e67a935167..673773f408c6fdf23c2957764f4e93a2b5604d16 100644
+--- a/packages/platform-browserbase/src/internal/Session.ts
++++ b/packages/platform-browserbase/src/internal/Session.ts
+@@ -33,2 +33,3 @@ export const acquireSession = Effect.fnUntraced(function* (
+   const ended = yield* Deferred.make<void>();
++  const fatal = yield* Deferred.make<void>();
+   const owner = yield* makeOwner(limits);
+@@ -150,2 +151,3 @@ export const acquireSession = Effect.fnUntraced(function* (
+         owner.fence("uncertain", "disconnected");
++        Deferred.doneUnsafe(fatal, Effect.void);
+       }
+@@ -161,3 +163,6 @@ export const acquireSession = Effect.fnUntraced(function* (
+       if (activeConnection !== connectionLease) return;
+-      if (owner.state.phase !== "closing" && owner.state.phase !== "closed") owner.fence("uncertain", "uncertain");
++      if (owner.state.phase !== "closing" && owner.state.phase !== "closed") {
++        owner.fence("uncertain", "uncertain");
++        Deferred.doneUnsafe(fatal, Effect.void);
++      }
+     },
+@@ -258,2 +263,3 @@ export const acquireSession = Effect.fnUntraced(function* (
+     bind,
++    bindCurrent: owner.guard("current-handle", () => Effect.sync(bind), { charge: false }),
+     currentTarget: readSelected,
+@@ -273,6 +279,6 @@ export const acquireSession = Effect.fnUntraced(function* (
+     selectPage: (id: string) => nativeOperation("select-page", async (driver, ticket) => {
+-      await driver.selectPage(id, ticket); owner.state.selection++;
++      await driver.selectPage(id, ticket); owner.state.selection++; return bind();
+     }, false, false),
+     selectFrame: (id: string) => nativeOperation("select-frame", async (driver, ticket) => {
+-      await driver.selectFrame(id, ticket); owner.state.selection++;
++      await driver.selectFrame(id, ticket); owner.state.selection++; return bind();
+     }, false, false),
+@@ -301,3 +307,3 @@ export const acquireSession = Effect.fnUntraced(function* (
+       owner.state.phase = "open"; handoffToken = undefined;
+-      return observation;
++      return { observation, bound: bind() };
+     }), { charge: false, phases: ["paused"], verifyAfter: false }),
+@@ -324,3 +330,3 @@ export const acquireSession = Effect.fnUntraced(function* (
+       owner.state.phase = "open";
+-      return observation;
++      return { observation, bound: bind() };
+     }), { charge: false, phases: ["detached", "acquiring"], verifyAfter: false }).pipe(
+@@ -331,3 +337,3 @@ export const acquireSession = Effect.fnUntraced(function* (
+   const remaining = Math.max(0, owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000);
+-  yield* Effect.raceFirst(Effect.sleep(remaining).pipe(Effect.as(true)), Deferred.await(ended).pipe(Effect.as(false))).pipe(
++  yield* Effect.raceFirst(Effect.raceFirst(Effect.sleep(remaining), Deferred.await(fatal)).pipe(Effect.as(true)), Deferred.await(ended).pipe(Effect.as(false))).pipe(
+     Effect.flatMap((expired) => expired ? closeScope : Effect.void), Effect.forkIn(parentScope),
+diff --git a/packages/platform-browserbase/test/artifacts.test.ts b/packages/platform-browserbase/test/artifacts.test.ts
+index 91d6a134c40928eba1c5635b8be75d73b8203944..dace450a00b5120fdf5c21c5c8668cdb0739cecc 100644
+--- a/packages/platform-browserbase/test/artifacts.test.ts
++++ b/packages/platform-browserbase/test/artifacts.test.ts
+@@ -2,3 +2,4 @@ import { it } from "@effect/vitest";
+ import { artifactCases } from "./fixtures/ArtifactCases.ts";
++import { runWithTestTime } from "./fixtures/TestTime.ts";
+ 
+-for (const test of artifactCases) it.effect(test.name, () => test.run);
++for (const test of artifactCases) it.effect(test.name, () => runWithTestTime(test.run));
+diff --git a/packages/platform-browserbase/test/capture.test.ts b/packages/platform-browserbase/test/capture.test.ts
+index 11c983f5192c47b2f7847ae7cab713b6be60adad..eb25bace462590218ab30395675dc63bc3538b6a 100644
+--- a/packages/platform-browserbase/test/capture.test.ts
++++ b/packages/platform-browserbase/test/capture.test.ts
+@@ -2,3 +2,4 @@ import { it } from "@effect/vitest";
+ import { captureCases } from "./fixtures/CaptureCases.ts";
++import { runWithTestTime } from "./fixtures/TestTime.ts";
+ 
+-for (const test of captureCases) it.effect(test.name, () => test.run);
++for (const test of captureCases) it.effect(test.name, () => runWithTestTime(test.run));
+diff --git a/packages/platform-browserbase/test/fixtures/OwnershipCases.ts b/packages/platform-browserbase/test/fixtures/OwnershipCases.ts
+index 4aecc47853ee1b3629f78345a57ebff2138d63a4..d90e3dc6fa3a2d50cbbeced06869012c83832467 100644
+--- a/packages/platform-browserbase/test/fixtures/OwnershipCases.ts
++++ b/packages/platform-browserbase/test/fixtures/OwnershipCases.ts
+@@ -113,3 +113,3 @@ export const ownershipCases: ReadonlyArray<Case> = [
+     yield* expectReason(session.bind().click("#button"), "busy");
+-    observed.resolve(); assert.equal((yield* Fiber.join(resumed)).text, "human changed this");
++    observed.resolve(); assert.equal((yield* Fiber.join(resumed)).observation.text, "human changed this");
+     yield* expectReason(old.readText(), "stale"); assert.equal(f.state.clicks, 0);
+@@ -140,3 +140,3 @@ export const ownershipCases: ReadonlyArray<Case> = [
+     const fresh = yield* session.reconnect(true);
+-    assert.equal(fresh.text, "changed while detached"); assert.equal(f.state.connects, 2);
++    assert.equal(fresh.observation.text, "changed while detached"); assert.equal(f.state.connects, 2);
+     yield* expectReason(old.readText(), "stale");
+diff --git a/packages/platform-browserbase/test/fixtures/RecoveryCases.ts b/packages/platform-browserbase/test/fixtures/RecoveryCases.ts
+index 25ee0653c3fc7efb20582abae8f3c949f3013ee3..03bb905458a1ae2d18df167cb16a173f7ca89551 100644
+--- a/packages/platform-browserbase/test/fixtures/RecoveryCases.ts
++++ b/packages/platform-browserbase/test/fixtures/RecoveryCases.ts
+@@ -60,5 +60,5 @@ export const recoveryCases = [
+       connections[0]!.invalidate("target-changed");
+-      assert.equal((yield* session.observe()).revision, fresh.revision);
++      assert.equal((yield* session.observe()).revision, fresh.observation.revision);
+       connections[1]!.invalidate("observation");
+-      assert.equal((yield* session.observe()).revision, fresh.revision + 1);
++      assert.equal((yield* session.observe()).revision, fresh.observation.revision + 1);
+     })),
+diff --git a/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts b/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts
+index 0d33345e3a12054d506c5e7f6f5a4dc2c203104c..68d701bc2e305bd1bf81ebc6463a7e8f71b1f05e 100644
+--- a/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts
++++ b/packages/platform-browserbase/test/fixtures/ScriptedProvider.ts
+@@ -1,3 +1,3 @@
+ import { Effect, Redacted } from "effect";
+-import { FrameInfo, PageInfo, Viewport, type BrowserbaseError, type CleanupResult } from "../../src/Types.ts";
++import { FrameInfo, PageInfo, Viewport, type CleanupResult } from "../../src/Types.ts";
+ import { makeHttp } from "../../src/internal/Http.ts";
+diff --git a/packages/platform-browserbase/test/fixtures/TestTime.ts b/packages/platform-browserbase/test/fixtures/TestTime.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..9e348103244b209795112a799be8d7895b92dbd2
+--- /dev/null
++++ b/packages/platform-browserbase/test/fixtures/TestTime.ts
+@@ -0,0 +1,23 @@
++import { Effect, Fiber } from "effect";
++import { TestClock } from "effect/testing";
++
++/**
++ * These boundary scenarios deliberately mix native Promise callbacks and Effect
++ * deadlines. Flush the native event loop before advancing virtual time, so an
++ * immediately fulfilled SDK promise is not mistaken for a timed-out operation.
++ * No wall-clock sleeps, background fibers, or real-time test mode are needed.
++ * The 15-second virtual ceiling exceeds the 8-second provider cleanup budget.
++ * A nonsettling scenario fails instead of silently advancing forever.
++ */
++export const runWithTestTime = <A, E, R>(body: Effect.Effect<A, E, R>) =>
++  Effect.gen(function* () {
++    const fiber = yield* body.pipe(Effect.forkChild);
++
++    for (let elapsed = 0; elapsed <= 15_000; elapsed++) {
++      yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
++      if (fiber.pollUnsafe() !== undefined) return yield* Fiber.join(fiber);
++      yield* TestClock.adjust(1);
++    }
++
++    return yield* Effect.die(new Error("Boundary scenario exceeded its virtual-time budget"));
++  });
+diff --git a/packages/platform-browserbase/test/ownership.test.ts b/packages/platform-browserbase/test/ownership.test.ts
+index ba9b962b1220b2abb157c78f8997f788498848ea..334e0e90ceab6940b430c35727554071f4463d21 100644
+--- a/packages/platform-browserbase/test/ownership.test.ts
++++ b/packages/platform-browserbase/test/ownership.test.ts
+@@ -2,3 +2,4 @@ import { it } from "@effect/vitest";
+ import { ownershipCases } from "./fixtures/OwnershipCases.ts";
++import { runWithTestTime } from "./fixtures/TestTime.ts";
+ 
+-for (const test of ownershipCases) it.effect(test.name, () => test.run);
++for (const test of ownershipCases) it.effect(test.name, () => runWithTestTime(test.run));
+diff --git a/packages/platform-browserbase/test/recovery.test.ts b/packages/platform-browserbase/test/recovery.test.ts
+index d2f4fb48e146a9a2cf6cb4aab3720af8e1a458f4..68df82ab3897a197a232af4f659831886346c96c 100644
+--- a/packages/platform-browserbase/test/recovery.test.ts
++++ b/packages/platform-browserbase/test/recovery.test.ts
+@@ -2,3 +2,4 @@ import { it } from "@effect/vitest";
+ import { recoveryCases } from "./fixtures/RecoveryCases.ts";
++import { runWithTestTime } from "./fixtures/TestTime.ts";
+ 
+-for (const test of recoveryCases) it.effect(test.name, () => test.run);
++for (const test of recoveryCases) it.effect(test.name, () => runWithTestTime(test.run));
+diff --git a/packages/platform-browserbase/vite.config.ts b/packages/platform-browserbase/vite.config.ts
+index c3e17a071fab77349ee1a973f1587730a1155e03..17eb60a98b1beb0dd1c11e6c81bd65e30c59adc9 100644
+--- a/packages/platform-browserbase/vite.config.ts
++++ b/packages/platform-browserbase/vite.config.ts
+@@ -28,2 +28,3 @@ export default defineConfig({
+       "src/Capture.ts",
++      "src/Testing.ts",
+     ],
