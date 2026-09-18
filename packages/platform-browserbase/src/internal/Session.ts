@@ -336,9 +336,13 @@ export const acquireSession = Effect.fnUntraced(function* (
   };
   // One timer belongs to the enclosing execution, never to an individual Tool call.
   const remaining = Math.max(0, owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000);
-  yield* Deferred.await(ended).pipe(
-    Effect.as(false),
-    Effect.timeoutOrElse({ duration: remaining, onTimeout: () => Effect.succeed(true) }),
+  // The execution lifetime distinguishes expiry from natural completion before
+  // running the shared close path; this race has the required proven semantics.
+  // @effect-diagnostics-next-line raceFirstWithSleepToTimeout:off
+  yield* Effect.raceFirst(
+    Effect.sleep(remaining).pipe(Effect.as(true)),
+    Deferred.await(ended).pipe(Effect.as(false)),
+  ).pipe(
     Effect.flatMap((expired) => expired ? closeScope : Effect.void),
     Effect.forkIn(parentScope),
   );

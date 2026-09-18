@@ -160,7 +160,10 @@ export const artifactCases = [
     assert.equal(result._tag, "Failure");
     if (result._tag === "Failure") {
       assert.equal(result.failure.reason, "malformed");
-      assert.ok(!Schema.encodeSync(Schema.fromJsonString(BrowserbaseError))(result.failure).includes("PRIVATE"));
+      // Schema failure here is a fixture defect, not part of the runtime error channel.
+      // @effect-diagnostics-next-line schemaSyncInEffect:off
+      const encoded = Schema.encodeSync(Schema.fromJsonString(BrowserbaseError))(result.failure);
+      assert.ok(!encoded.includes("PRIVATE"));
     }
   }) },
   { name: "replay access serves existing VOD material without recording or browser allocation", run: Effect.gen(function* () {

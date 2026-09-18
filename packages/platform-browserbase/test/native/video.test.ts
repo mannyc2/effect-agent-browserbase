@@ -30,7 +30,9 @@ it.live("real CDP capture: caller encoder produces decodable moving video with s
       const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
       yield* session.handle.navigate(BrowserNavigateRequest.make({ url: fixture.url }));
       const result = yield* recordInterval(session, output, 2_000);
-      const probe = yield* Schema.decodeUnknownEffect(Probe)(result.decoded);
+      // Malformed ffprobe output should fail this fixture synchronously, not widen its Effect error type.
+      // @effect-diagnostics-next-line schemaSyncInEffect:off
+      const probe = Schema.decodeUnknownSync(Probe)(result.decoded);
       const video = probe.streams.find((stream) => stream.codec_type === "video");
       expect(video).toBeDefined();
       expect(video?.width).toBeGreaterThan(100);

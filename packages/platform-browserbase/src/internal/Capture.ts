@@ -158,9 +158,13 @@ export const startCapture = Effect.fnUntraced(function* (parent: CaptureParent, 
     Effect.onInterrupt(() => target === undefined ? Effect.void : stopNative.pipe(Effect.asVoid)),
   );
   // One monitor, not a fiber per frame. The finalizer also calls stop directly if this monitor is interrupted.
-  yield* Queue.take(finished).pipe(
-    Effect.as(false),
-    Effect.timeoutOrElse({ duration, onTimeout: () => Effect.succeed(true) }),
+  // The timeout and explicit-finish branches intentionally carry different
+  // values before shared cleanup; preserve the proven first-completion semantics.
+  // @effect-diagnostics-next-line raceFirstWithSleepToTimeout:off
+  yield* Effect.raceFirst(
+    Queue.take(finished).pipe(Effect.as(false)),
+    Effect.sleep(duration).pipe(Effect.as(true)),
+  ).pipe(
     Effect.tap((expired) => expired ? Effect.sync(() => finish("duration-limit")) : Effect.void),
     Effect.andThen(stopNative),
     Effect.forkScoped,
