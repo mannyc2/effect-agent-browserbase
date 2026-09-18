@@ -17,10 +17,6 @@ jobs:
     if: ${{ github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/browserbase-completion' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # Temporary transport bridge commits only reviewed deltas to this branch.
-    # Remove this write permission after the source continuation is complete.
-    permissions:
-      contents: write
     env:
       CI: 'true'
       VP_GIT_HOOKS: '0'
@@ -35,34 +31,6 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: '1.4.2'
-      - name: Persist reviewed source delta before executing checks
-        env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          test "$(bun --version)" = 1.4.2
-          test "$(node --version)" = v24.14.1
-          if [ -f tools/source-update.patch ]; then
-            python3 - <<'PY'
-          import subprocess
-          for line in subprocess.check_output(['git','apply','--numstat','tools/source-update.patch'],text=True).splitlines():
-              path=line.split('\t',2)[2]
-              if not (path.startswith('packages/platform-browserbase/') or path in ('tools/bootstrap.sh','upstream.patch','docs/STATUS.md')):
-                  raise SystemExit('Unexpected source-update path: '+path)
-          PY
-            sha256sum tools/source-update.patch
-            git apply --check tools/source-update.patch
-            git apply --index tools/source-update.patch
-            git rm tools/source-update.patch
-            git diff --cached --check
-            git fetch origin agent/browserbase-completion
-            test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD"
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'Apply reviewed Browserbase implementation continuation'
-            git push origin HEAD:agent/browserbase-completion
-          fi
-          git rev-parse HEAD
       - name: Execute all independent checks with retained exit statuses
         run: bash tools/run-acceptance.sh
       - name: Preserve exact source, lockfile, commands and results
