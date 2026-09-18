@@ -47,7 +47,8 @@ jobs:
           git apply --check tools/pending.patch
           git apply tools/pending.patch
           git rm tools/pending.patch
-          git add -A -- packages/platform-browserbase integration results docs/STATUS.md tools
+          # The only working-tree changes are the validated patch and its removal.
+          git add -A
           git diff --cached --stat
           git -c core.hooksPath=/dev/null -c user.name='Browserbase source checkpoint' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Apply authored Browserbase implementation checkpoint'
           git push origin HEAD:refs/heads/agent/browserbase-complete
