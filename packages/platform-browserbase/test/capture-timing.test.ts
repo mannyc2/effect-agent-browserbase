@@ -114,3 +114,31 @@ it("does not include bytes, URLs or arbitrary native fields in diagnostic eviden
   expect(encoded).not.toContain('"url"');
   expect(encoded).not.toContain('"token"');
 });
+
+it("preserves a rejected native Promise without handling or replacing it", async () => {
+  const failure = new Error("asynchronous native callback failure");
+  const promise = Promise.reject(failure);
+  const receive = observeCaptureFrames(
+    () => promise,
+    () => {},
+    () => 1n,
+  );
+  const result = receive(frame(1));
+
+  expect(result).toBe(promise);
+  await expect(result).rejects.toBe(failure);
+});
+
+it("still calls the native consumer when diagnostic clock sampling fails", () => {
+  let calls = 0;
+  const receive = observeCaptureFrames(
+    () => ++calls,
+    () => {},
+    () => {
+      throw new Error("diagnostic clock unavailable");
+    },
+  );
+
+  expect(receive(frame(1))).toBe(1);
+  expect(calls).toBe(1);
+});
