@@ -9,7 +9,10 @@ import { BrowserbaseError } from "./Types.ts";
 export { CaptureSummary } from "./internal/CaptureTypes.ts";
 export type { CaptureInterval, CaptureOptions, CapturedFrame } from "./internal/CaptureTypes.ts";
 
-/** Capture the same selected remote page. The package owns no encoder, filesystem, or audio source. */
+/**
+ * Capture an explicit session page, or the selected page when target is omitted.
+ * No encoder, filesystem, or audio source is owned.
+ */
 export const start = (
   session: BrowserbaseSession,
   options: CaptureOptions = {},
