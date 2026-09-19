@@ -174,6 +174,7 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           expect(download.state).toBe("completed");
           expect(download.filename).toBe("fixture.txt");
           expect(f.fileRequests()).toBe(1);
+
           const bytes = yield* Effect.promise(() =>
             readFile(join(f.directory, session.reference.sessionId, "downloads", "fixture.txt")),
           );

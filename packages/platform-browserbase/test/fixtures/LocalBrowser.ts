@@ -120,6 +120,7 @@ export const localBrowser = Effect.acquireRelease(
         const profile = join(directory, id);
 
         await mkdir(profile, { recursive: true });
+
         // Launch ONLY the process: a launchPersistentContext client would be a
         // second controller which can auto-dismiss dialogs behind the adapter.
         const process = spawn(

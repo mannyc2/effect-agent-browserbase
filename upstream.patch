@@ -129,6 +129,15 @@ diff --git a/package.json b/package.json
 index 183913dc..6990e019 100644
 --- a/package.json
 +++ b/package.json
+@@ -22,7 +22,7 @@
+     "docs:preview": "vitepress preview docs",
+     "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && vp run check:exports && vp run check:deploy && bun scripts/verify-package-purity.ts",
+     "check:exports": "bun scripts/verify-package-exports.ts",
+-    "test": "vp run -r --parallel --concurrency-limit 4 test",
++    "test": "vp run -r --parallel --concurrency-limit 1 test",
+     "build": "vp run -r build && vp run docs:build && vp run action:build",
+     "ready": "vp run check && vp run test && vp run build"
+   },
 @@ -30,6 +30,7 @@
      "@changesets/changelog-github": "0.7.0",
      "@changesets/cli": "2.31.0",
@@ -147,3 +156,84 @@ index 183913dc..6990e019 100644
    },
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
+diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/toolchain.test.ts
+--- a/packages/testing/test/toolchain.test.ts
++++ b/packages/testing/test/toolchain.test.ts
+@@ -98,6 +98,7 @@
+ const packageNames = [
+   "ai-typesafe",
+   "effect-agent",
++  "platform-browserbase",
+   "platform-cloudflare",
+   "platform-node",
+   "pr-review",
+@@ -128,6 +129,7 @@
+ const effectTestPackageNames = [
+   "ai-typesafe",
+   "effect-agent",
++  "platform-browserbase",
+   "platform-cloudflare",
+   "platform-node",
+   "pr-review",
+@@ -142,6 +144,7 @@
+ const productionPackageNames = [
+   "ai-typesafe",
+   "effect-agent",
++  "platform-browserbase",
+   "platform-cloudflare",
+   "platform-node",
+   "pr-review",
+@@ -209,6 +212,7 @@
+ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
+   "ai-typesafe": [],
+   "effect-agent": [],
++  "platform-browserbase": ["effect-agent", "testing"],
+   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
+   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
+   "pr-review": ["effect-agent"],
+@@ -1403,7 +1407,7 @@
+             edges.filter((edge) => !allowed.includes(edge)),
+             `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
+           ).toEqual([]);
+-          // The two permitted `-> testing` edges are dev-only: they must not
++          // The permitted `-> testing` edges are dev-only: they must not
+           // reappear in dependencies, peerDependencies, or optionalDependencies,
+           // where they would ship or leak into consumer resolution.
+           if (section !== "devDependencies") {
+@@ -1576,15 +1580,20 @@
+ 
+           // No production package ever SHIPS depending on the testing package.
+           expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
+-          // Exactly two packages may consume it as a devDependency: platform-cloudflare's
++          // Three adapters may consume it as a devDependency: Browserbase uses the public
++          // ScriptedModel/AgentRuntime fixtures; platform-cloudflare's
+           // DC Travel Planner equivalence suite must assemble the SAME fixtures the DN
+           // suite runs (P6 plan §6), and storage-cloudflare's in-workerd certification
+           // runner executes `certifyDurableAdapters` against the real Durable Object
+           // adapters (P7 WP2; the memory/SQLite runners live inside packages/testing
+           // because vp's task graph rejects the storage-* → testing dev-edge cycle).
+-          // Both edges are dev-only and test-only; every other production package stays
++          // These edges are dev-only and test-only; every other production package stays
+           // clean in every dependency section.
+-          if (packageName !== "platform-cloudflare" && packageName !== "storage-cloudflare") {
++          if (
++            packageName !== "platform-browserbase" &&
++            packageName !== "platform-cloudflare" &&
++            packageName !== "storage-cloudflare"
++          ) {
+             expect(manifestDependencies(manifest)).not.toContain("@effect-agent/testing");
+           }
+         }
+diff --git a/docs/TOOLCHAIN.md b/docs/TOOLCHAIN.md
+--- a/docs/TOOLCHAIN.md
++++ b/docs/TOOLCHAIN.md
+@@ -118,7 +118,8 @@
+ `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
+ Include `vp env doctor` output when asking for toolchain help.
+ 
+-Local tests run with at most four workspace tasks at once and without dependency ordering.
++Local tests run one workspace task at a time and without dependency ordering. This Browserbase
++integration uses that bound for its full single-runner `ready` gate without removing any suites.
+ CI gives the travel planner, context-continuity evaluation, runtime benchmark, Node platform,
+ testing package, and both Cloudflare packages separate runners. The remaining workspace suites
+ share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
