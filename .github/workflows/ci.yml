@@ -1,0 +1,81 @@
+name: Library CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Immutable source commit supplied by the release workflow
+        required: false
+        default: ''
+        type: string
+    outputs:
+      artifact_id:
+        description: Immutable acceptance artifact from this run
+        value: ${{ jobs.acceptance.outputs.artifact_id }}
+      package_sha256:
+        description: Hash of the exact externally tested npm tarball
+        value: ${{ jobs.acceptance.outputs.package_sha256 }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: library-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  acceptance:
+    name: Unpaid acceptance
+    # Fork PRs are welcome. No credentials, hosted sessions or write permissions.
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      package_sha256: ${{ steps.release.outputs.sha256 }}
+    env:
+      CI: 'true'
+      VP_GIT_HOOKS: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      BROWSERBASE_WORK_ROOT: ${{ runner.temp }}/browserbase-maintenance
+    steps:
+      - name: Check out immutable source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Execute complete unpaid acceptance
+        run: bash tools/run-acceptance.sh
+      - name: Record tested package digest
+        id: release
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const receipt = JSON.parse(readFileSync(`${process.env.BROWSERBASE_WORK_ROOT}/results/release.json`, 'utf8'));
+          if (!/^[a-f0-9]{64}$/.test(receipt.sha256)) throw new Error('Invalid package digest');
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${receipt.sha256}\n`);
+          JS
+      - name: Retain source, package, logs, video and checksums
+        id: artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: browserbase-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BROWSERBASE_WORK_ROOT }}/results
+          if-no-files-found: error
+          retention-days: 14

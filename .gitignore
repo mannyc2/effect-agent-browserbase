@@ -2,7 +2,15 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
-
-# bootstrap.sh default workdir, if run inside the repo
+.work/
+results/
+coverage/
+downloads/
+*.tgz
+*.tar.gz
+.env
+.env.*
+!.env.example
+*.log
 effect-agent-work/
 upstream.git/

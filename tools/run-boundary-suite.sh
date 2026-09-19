@@ -16,15 +16,15 @@ trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$OUTDIR" "$STAGE/overlay/packages" "$STAGE/probes"
 cp -r "$REPO_ROOT/packages/platform-browserbase" "$STAGE/overlay/packages/"
-cp "$REPO_ROOT/checkpoints/probes/run.mjs" "$STAGE/probes/run.mjs"
+cp "$REPO_ROOT/tools/boundary-runner.mjs" "$STAGE/probes/run.mjs"
 printf '{"name":"boundary-harness","private":true,"type":"module"}\n' > "$STAGE/package.json"
 
 echo "==> installing effect@4.0.0-rc.115"
-( cd "$STAGE" && npm install --no-audit --no-fund --silent effect@4.0.0-rc.115 )
+( cd "$STAGE" && npm install --ignore-scripts --no-audit --no-fund --silent effect@4.0.0-rc.115 )
 
 status=0
 for runtime in node bun; do
-  command -v "$runtime" >/dev/null || { echo "==> $runtime not installed, skipping"; continue; }
+  command -v "$runtime" >/dev/null || { echo "Required runtime missing: $runtime" >&2; exit 1; }
   echo "==> $runtime $("$runtime" --version 2>/dev/null || echo '?')"
   if ( cd "$STAGE" && "$runtime" probes/run.mjs all "$OUTDIR/$runtime.json" ) \
     > "$OUTDIR/$runtime.log" 2>&1; then

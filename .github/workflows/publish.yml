@@ -1,0 +1,114 @@
+name: npm release
+
+# Manual only. Select an existing v<package-version> tag that is already on main.
+# Selecting a tag also makes npm provenance identify the actual released commit.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified package (false performs acceptance and dry-run only)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Validate release identity
+    if: ${{ github.repository == 'mannyc2/effect-agent-browserbase' && github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.identity.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Verify tag, version, ancestry and explicit opt-in
+        id: identity
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          PUBLISH_REQUESTED: ${{ inputs.publish }}
+          PUBLISH_ENABLED: ${{ vars.NPM_PUBLISH_ENABLED }}
+        run: |
+          set -euo pipefail
+          test "$REF_TYPE" = tag || { echo 'Dispatch this workflow on a version tag, not a branch.' >&2; exit 1; }
+          if [ "$PUBLISH_REQUESTED" = true ] && [ "$PUBLISH_ENABLED" != true ]; then
+            echo 'Publishing is disabled. Configure npm OIDC and set NPM_PUBLISH_ENABLED=true first.' >&2
+            exit 1
+          fi
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { checkTag } from './tools/package-release.mjs';
+          const manifest = JSON.parse(readFileSync('packages/platform-browserbase/package.json', 'utf8'));
+          checkTag(process.env.RELEASE_TAG, manifest.version);
+          JS
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Verify exact release candidate
+    needs: resolve
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish verified tarball through npm OIDC
+    needs: [resolve, build]
+    if: ${{ inputs.publish && vars.NPM_PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Download this run's immutable tested artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/npm-release
+          merge-multiple: true
+      - name: Verify and publish without install, build, tokens or lifecycle scripts
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_DIGEST: ${{ needs.build.outputs.package_sha256 }}
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/npm-release
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-release.npmrc
+          NODE_AUTH_TOKEN: ''
+          NPM_TOKEN: ''
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = v24.14.1
+          test "$(npm --version)" = 11.11.0
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
+          node tools/verify-release.mjs "$ARTIFACT_DIRECTORY" "$SOURCE_SHA" "$RELEASE_TAG" "$EXPECTED_DIGEST"
+          FILE="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).filename)' "$ARTIFACT_DIRECTORY/release.json")"
+          TAG="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).distTag)' "$ARTIFACT_DIRECTORY/release.json")"
+          npm publish "$ARTIFACT_DIRECTORY/$FILE" --access public --tag "$TAG" --registry https://registry.npmjs.org/ --provenance --ignore-scripts

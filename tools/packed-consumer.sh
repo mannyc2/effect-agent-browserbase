@@ -4,41 +4,14 @@ set -euo pipefail
 TREE="${1:?effect-agent worktree required}"
 OUT="${2:?output directory required}"
 PKG="$TREE/packages/platform-browserbase"
-STAGE="$OUT/packed-stage"
+SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONSUMER="$OUT/packed-consumer"
-rm -rf "$STAGE" "$CONSUMER"
-mkdir -p "$STAGE/dist" "$CONSUMER"
-# Keep reproducible inputs and results, not a second copy of all tool binaries.
+test ! -e "$CONSUMER" || { echo "Refusing existing consumer" >&2; exit 1; }
+mkdir -p "$CONSUMER"
 trap 'rm -rf "$CONSUMER/node_modules"' EXIT
-cp -R "$PKG/dist/." "$STAGE/dist/"
-cp "$PKG/LICENSE" "$PKG/README.md" "$STAGE/"
-python3 - "$TREE/package.json" "$PKG/package.json" "$STAGE/package.json" <<'PY'
-import json,sys
-root=json.load(open(sys.argv[1]))
-src=json.load(open(sys.argv[2]))
-exports={}
-for key,value in src["exports"].items():
-    assert value.startswith("./src/") and value.endswith(".ts"), value
-    stem=value[len("./src/"):-3]
-    exports[key]={"types":f"./dist/{stem}.d.mts","default":f"./dist/{stem}.mjs"}
-out={k:v for k,v in src.items() if k not in ("devDependencies","scripts","exports")}
-out["exports"]=exports
-for section in ("dependencies","optionalDependencies","peerDependencies"):
-    deps=out.get(section,{})
-    for name,value in list(deps.items()):
-        if value=="workspace:*":
-            if name=="effect-agent": deps[name]="0.1.0-beta.102"
-            else: raise SystemExit(f"unresolved workspace dependency {name}")
-        elif value=="catalog:":
-            deps[name]=root["catalog"][name]
-json.dump(out,open(sys.argv[3],"w"),indent=2);open(sys.argv[3],"a").write("\n")
-PY
-(
-  cd "$STAGE"
-  npm pack --ignore-scripts --pack-destination "$OUT" >/dev/null
-)
-TARBALL="$(find "$OUT" -maxdepth 1 -name 'effect-agent-platform-browserbase-*.tgz' -print -quit)"
-test -n "$TARBALL"
+node "$SOURCE_ROOT/tools/package-release.mjs" "$TREE" "$OUT" "$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
+FILENAME="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).filename)' "$OUT/release.json")"
+TARBALL="$OUT/$FILENAME"
 cat > "$CONSUMER/package.json" <<JSON
 {"name":"browserbase-packed-consumer","private":true,"type":"module","scripts":{"check":"tsc --noEmit -p tsconfig.json"},"dependencies":{"@effect-agent/platform-browserbase":"file:$TARBALL","effect":"4.0.0-rc.115","effect-agent":"0.1.0-beta.102","playwright-core":"1.63.0"},"devDependencies":{"@effect-agent/testing":"0.1.0-beta.102","@effect/vitest":"4.0.0-rc.115","@types/node":"26.1.2","typescript":"7.0.2","vite-plus":"0.3.2","vitest":"4.1.11"},"overrides":{"effect":"4.0.0-rc.115","vitest":"4.1.11"}}
 JSON

@@ -2,9 +2,15 @@
 # Fixed unpaid verification program. Each command owns its log and exit record;
 # expected check failures do not prevent independent boundaries from executing.
 set -euo pipefail
-OUT="${RUNNER_TEMP:?}/browserbase-results"
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK_ROOT="${BROWSERBASE_WORK_ROOT:-$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/browserbase-acceptance.XXXXXX")}"
+OUT="$WORK_ROOT/results"
+test ! -e "$OUT" || { echo "Refusing existing results: $OUT" >&2; exit 1; }
 mkdir -p "$OUT"
+# Never label a dirty working copy with a clean commit's identity.
+test -z "$(git -C "$SOURCE_ROOT" status --porcelain)" || { echo 'Commit all candidate source before acceptance.' >&2; exit 1; }
+test "$(node --version)" = "v$(cat "$SOURCE_ROOT/.node-version")"
+test "$(bun --version)" = 1.4.2
 git -C "$SOURCE_ROOT" rev-parse HEAD > "$OUT/source-sha.txt"
 printf 'Node %s\nBun %s\n' "$(node --version)" "$(bun --version)" > "$OUT/runtimes.txt"
 FAILED=0
@@ -22,8 +28,11 @@ run() {
   return 0
 }
 cd "$SOURCE_ROOT"
-run bootstrap timeout 600s bash tools/bootstrap.sh "$RUNNER_TEMP/browserbase-work"
-TREE="$RUNNER_TEMP/browserbase-work/tree"
+run tooling timeout 120s env npm_config_offline=true node --test tools/test/*.test.mjs
+run checkpoint python3 tools/verify-checkpoint.py checkpoints/browserbase-continuation-04.zip
+run boundary timeout 300s bash tools/run-boundary-suite.sh "$OUT/boundary"
+run bootstrap timeout 600s bash tools/bootstrap.sh "$WORK_ROOT/upstream"
+TREE="$WORK_ROOT/upstream/tree"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
@@ -41,6 +50,14 @@ if [ "$LAST_CODE" = 0 ]; then
   run purity timeout 180s ./node_modules/.bin/vp run verify:package-purity
   cd "$SOURCE_ROOT"
   run packed-consumer timeout 300s bash tools/packed-consumer.sh "$TREE" "$OUT"
+  if [ "$LAST_CODE" = 0 ]; then
+    FILE="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).filename)' "$OUT/release.json")"
+    TAG="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).distTag)' "$OUT/release.json")"
+    DIGEST="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).sha256)' "$OUT/release.json")"
+    VERSION="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$OUT/release.json")"
+    run release-identity node tools/verify-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST"
+    run package-dry-run timeout 120s npm publish "$OUT/$FILE" --dry-run --ignore-scripts --provenance=false --access public --tag "$TAG" --registry https://registry.npmjs.org/ --json
+  fi
   cd "$TREE"
   # Run the entire upstream gate, without filtering suites or changing assertions.
   # Upstream docs/TOOLCHAIN.md and CI isolate heavy suites because concurrent
@@ -60,10 +77,12 @@ if [ "$LAST_CODE" = 0 ]; then
   tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
 fi
 cd "$SOURCE_ROOT"
+run source-cleanliness bash -c 'test -z "$(git status --porcelain)"'
 git archive --format=tar.gz HEAD > "$OUT/candidate.tar.gz"
 cat "$OUT/statuses.txt" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 (
   cd "$OUT"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
+printf '\nAcceptance evidence: %s\n' "$OUT"
 exit "$FAILED"
