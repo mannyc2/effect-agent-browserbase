@@ -39,7 +39,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           });
 
           // The selected page is the popup, but the original page keeps recording independently.
-          yield* session.handle.click(BrowserClickRequest.make({ selector: "#increment" }));
+          yield* popupHandle.click(BrowserClickRequest.make({ selector: "#increment" }));
           yield* Effect.sleep(250);
           const firstSummary = yield* originalCapture.stop;
 
@@ -47,7 +47,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           expect(firstSummary.received).toBeGreaterThan(0);
 
           // Stopping A must not stop B. B receives later frames while the agent remains on B.
-          yield* session.handle.click(BrowserClickRequest.make({ selector: "#increment" }));
+          yield* popupHandle.click(BrowserClickRequest.make({ selector: "#increment" }));
           yield* Effect.sleep(250);
           const popupAfterFirstStop = yield* popupCapture.stop;
 
@@ -69,7 +69,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           yield* session.closePage(original.pageId);
           expect((yield* closingCapture.completed).error?.reason).toBe("target-changed");
-          yield* session.handle.click(BrowserClickRequest.make({ selector: "#increment" }));
+          yield* popupHandle.click(BrowserClickRequest.make({ selector: "#increment" }));
           yield* Effect.sleep(250);
           const survivor = yield* survivingCapture.stop;
 
