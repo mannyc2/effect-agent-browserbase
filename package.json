@@ -1,0 +1,6 @@
+{
+  "name": "effect-agent-browserbase-repository",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2"
+}

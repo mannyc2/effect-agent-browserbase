@@ -1,66 +1,52 @@
-# effect-agent-browserbase
+# Effect Agent Browserbase
 
-Working repository for `@effect-agent/platform-browserbase` — an execution-scoped
-Browserbase browser-control and browser-artifact package intended for the
-[`danieljvdm/effect-agent`](https://github.com/danieljvdm/effect-agent) monorepo.
+Execution-scoped Browserbase integration for [Effect Agent](https://github.com/danieljvdm/effect-agent), built on Effect v4 and Playwright-over-CDP for trusted Node and Bun hosts.
 
-**This repository is the source of truth.** It replaces the ZIP-and-upload handoff
-chain that preceded it. No remote-desktop plugin, no file transfer, and no
-"prepared" dependency archive is needed to continue the work — clone this repo and
-run `tools/bootstrap.sh`.
+One scope owns the browser. Agent tools borrow that session across turns. Recording, replay and download access have independent lifetimes; live capture supplies bounded JPEG frames from the same page without owning an encoder or an audio source.
 
-## Start here
+**Release status:** this repository has not published the package. The npm name remains `@effect-agent/platform-browserbase`; publication requires control of that package/scope. Local native and framework acceptance is distinct from hosted Browserbase validation, which has not been performed.
 
-| If you are | Read |
+## API
+
+| Import | Purpose |
 | --- | --- |
-| An agent continuing the implementation | [`AGENTS.md`](AGENTS.md) |
-| Looking for current state and next action | [`docs/STATUS.md`](docs/STATUS.md) |
-| Looking for the full implementation brief | [`docs/handoff.md`](docs/handoff.md) |
+| `@effect-agent/platform-browserbase/interactive-browser` | Browser ownership, pages, frames, handoff and explicit reconnect |
+| `@effect-agent/platform-browserbase/tools` | Bounded navigation, observation and exact-node actions |
+| `@effect-agent/platform-browserbase/recordings` | Provider MP4 assembly, status and bounded retrieval |
+| `@effect-agent/platform-browserbase/replays` | Validated replay playlists and media access |
+| `@effect-agent/platform-browserbase/downloads` | Website download identity and bounded streams |
+| `@effect-agent/platform-browserbase/capture` | Same-page video frame stream with source timestamps |
+| `@effect-agent/platform-browserbase/types` | Credential-free schemas and typed errors |
+
+The root entry point is also public. Production distributions contain ESM JavaScript and `.d.mts` declarations, not test fixtures, recovery archives or development dependencies. Playwright is an optional peer and is loaded only when interactive control connects; install `playwright-core@1.63.0` when using that capability.
+
+Read the [package guide](packages/platform-browserbase/README.md) for ownership, outcomes, bounds and examples. The [agent example](packages/platform-browserbase/examples/agent.ts) uses the real `AgentRuntime` and scripted model; the [hosted examples](packages/platform-browserbase/examples/hosted.ts) show application composition but require separately authorized hosted access.
+
+### Important boundaries
+
+Only trusted-host `Unrestricted` network policy is supported. `ExactHosts` and `PublicWeb` fail before allocation rather than claiming containment the provider cannot prove. A timed-out mutation after dispatch has an unknown outcome and is not automatically retried. Credentials and Live View bearer URLs must stay outside model inputs and durable records. Live capture is video-only.
+
+## Development
 
 ```sh
-git clone https://github.com/mannyc2/effect-agent-browserbase
+git clone https://github.com/mannyc2/effect-agent-browserbase.git
 cd effect-agent-browserbase
-./tools/bootstrap.sh        # clones pinned upstream, applies patch, installs deps
+# Install Node 24.14.1 and Bun 1.4.2 first.
+bash tools/bootstrap.sh
+cd .work/upstream/tree
+./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
 ```
 
-## Layout
+This remains an integration package for the pinned upstream workspace, not a second copy of the framework. `bootstrap.sh` applies one current integration patch to clean upstream and copies only tracked package files. It does not execute or apply historical checkpoint code.
 
-```
-packages/platform-browserbase/  Current implementation, tests and public examples
-docs/handoff.md                 Full implementation brief (authoritative scope)
-docs/STATUS.md                  Restart note: objective, results, blockers, next action
-checkpoints/                    Preserved checkpoint-04 archive, patches, historical runs
-results/                        Execution evidence, one directory per session
-tools/bootstrap.sh              Reproduce the real build environment from canonical sources
-tools/verify-checkpoint.py      Verify the preserved archive (CRC + 43 manifest entries)
-tools/fetch-inputs.py           Standalone canonical-input fetcher (upstream, npm, runtimes)
-```
+[Contributing](CONTRIBUTING.md) covers local commands and the complete Ubuntu acceptance run. [Releasing](docs/RELEASING.md) describes the manual, default-off npm trusted-publishing workflow. [Security](SECURITY.md) documents the host trust boundary.
 
-## Implementation and acceptance
+## CI and maintenance
 
-The current source has evolved beyond checkpoint 04; the original archive and
-historical patches remain unchanged under `checkpoints/`. `tools/bootstrap.sh`
-applies the historical patch once, synchronizes this repository's current owned
-package, then applies `upstream.patch` for the catalog, lockfile, guide, changeset
-and workspace integration. Do not use the historical patch alone as the current
-implementation.
+`Library CI` runs on every pull request (including forks), pushes to `main`, merge groups and manual requests. It has read-only permissions and no hosted/model credentials. The gate retains unit and native tests, real AgentRuntime/CDP behavior, decoded moving video, NodeNext external-consumer checks, exports/purity, full upstream `vp run ready`, release dry-runs, exact source archives and checksums.
 
-Acceptance pins Node **24.14.1**, Bun **1.4.2**, Effect **4.0.0-rc.115**,
-effect-agent/testing **0.1.0-beta.102**, and Playwright **1.63.0** against upstream
-`ea53ea6671a94eb44b8019e942cc2c9468786723`. Both Actions workflows are read-only and
-check out the exact candidate SHA. The implementation workflow retains individual
-command exit statuses, unit/native/AgentRuntime tests, emitted external-consumer
-checks, decoded local capture videos, full `vp run ready`, release dry-run,
-`review.patch`, the candidate archive, and checksums.
+The npm job is separate: it receives OIDC permission only after fresh acceptance and an explicit maintainer opt-in. It verifies and publishes the same immutable tarball the external consumer tested, without installing dependencies or executing package lifecycle scripts in the publishing job.
 
-See [`docs/STATUS.md`](docs/STATUS.md) for the exact accepted source SHA, run links,
-results and hosted-only limitations. A local native browser pass does not establish
-Browserbase allocation, Live View authorization, persistent storage or provider
-recording behavior. This package is not published and this repository's merge is
-not a claim of upstream acceptance.
+Historical acceptance is linked from [status](docs/STATUS.md). Checkpoints are immutable provenance under `checkpoints/`, not build inputs. Obsolete recovery scripts and transient run logs remain accessible in Git history, not on the active maintenance path.
 
-## Authorization limits
-
-Hosted Browserbase sessions, paid model inference, package publication, deployment,
-service provisioning, and changes to surrounding or unrelated projects are **not**
-authorized. See the closing sections of [`docs/handoff.md`](docs/handoff.md).
+MIT licensed. No hosted sessions, paid inference, publication, deployment or provisioning are part of ordinary CI.

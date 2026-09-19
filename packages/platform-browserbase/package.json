@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
     "directory": "packages/platform-browserbase"
   },
   "files": [

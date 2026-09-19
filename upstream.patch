@@ -1,5 +1,6 @@
 diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
 new file mode 100644
+index 00000000..d6cead31
 --- /dev/null
 +++ b/.changeset/browserbase-interactive.md
 @@ -0,0 +1,5 @@
@@ -90,6 +91,20 @@ index 2a9fbf1c..882d2de9 100644
      "pngjs": ["pngjs@7.0.0", "", {}, "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="],
  
      "points-on-curve": ["points-on-curve@0.2.0", "", {}, "sha512-0mYKnYYe9ZcqMCWhUjItv/oHjvgEsfKvnUTg8sAtnHr3GVy7rGkXCb6d5cSyqrWqL4k81b9CPg3urd+T7aop3A=="],
+diff --git a/docs/TOOLCHAIN.md b/docs/TOOLCHAIN.md
+index bd0a4a63..42b02630 100644
+--- a/docs/TOOLCHAIN.md
++++ b/docs/TOOLCHAIN.md
+@@ -118,7 +118,8 @@ Use `vp run <task>` for other scripts. Do not use `bun run`, `npm run`, `pnpm ru
+ `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
+ Include `vp env doctor` output when asking for toolchain help.
+ 
+-Local tests run with at most four workspace tasks at once and without dependency ordering.
++Local tests run one workspace task at a time and without dependency ordering. This Browserbase
++integration uses that bound for its full single-runner `ready` gate without removing any suites.
+ CI gives the travel planner, context-continuity evaluation, runtime benchmark, Node platform,
+ testing package, and both Cloudflare packages separate runners. The remaining workspace suites
+ share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 diff --git a/docs/guide/browser.md b/docs/guide/browser.md
 index efaa1da4..fd9c5120 100644
 --- a/docs/guide/browser.md
@@ -126,7 +141,7 @@ index efaa1da4..fd9c5120 100644
  
  This complete composition captures rendered Markdown through the Node-safe REST adapter. The
 diff --git a/package.json b/package.json
-index 183913dc..6990e019 100644
+index 183913dc..4536aada 100644
 --- a/package.json
 +++ b/package.json
 @@ -22,7 +22,7 @@
@@ -157,9 +172,10 @@ index 183913dc..6990e019 100644
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
 diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/toolchain.test.ts
+index 0b337058..a5e0b7c5 100644
 --- a/packages/testing/test/toolchain.test.ts
 +++ b/packages/testing/test/toolchain.test.ts
-@@ -98,6 +98,7 @@
+@@ -98,6 +98,7 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
  const packageNames = [
    "ai-typesafe",
    "effect-agent",
@@ -167,7 +183,7 @@ diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/too
    "platform-cloudflare",
    "platform-node",
    "pr-review",
-@@ -128,6 +129,7 @@
+@@ -128,6 +129,7 @@ const toolingNames = [
  const effectTestPackageNames = [
    "ai-typesafe",
    "effect-agent",
@@ -175,7 +191,7 @@ diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/too
    "platform-cloudflare",
    "platform-node",
    "pr-review",
-@@ -142,6 +144,7 @@
+@@ -142,6 +144,7 @@ const effectTestPackageNames = [
  const productionPackageNames = [
    "ai-typesafe",
    "effect-agent",
@@ -183,7 +199,7 @@ diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/too
    "platform-cloudflare",
    "platform-node",
    "pr-review",
-@@ -209,6 +212,7 @@
+@@ -209,6 +212,7 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
  const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
    "ai-typesafe": [],
    "effect-agent": [],
@@ -191,7 +207,7 @@ diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/too
    "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
    "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
    "pr-review": ["effect-agent"],
-@@ -1403,7 +1407,7 @@
+@@ -1403,7 +1407,7 @@ esac
              edges.filter((edge) => !allowed.includes(edge)),
              `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
            ).toEqual([]);
@@ -200,7 +216,7 @@ diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/too
            // reappear in dependencies, peerDependencies, or optionalDependencies,
            // where they would ship or leak into consumer resolution.
            if (section !== "devDependencies") {
-@@ -1576,15 +1580,20 @@
+@@ -1576,15 +1580,20 @@ esac
  
            // No production package ever SHIPS depending on the testing package.
            expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
@@ -224,16 +240,3 @@ diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/too
              expect(manifestDependencies(manifest)).not.toContain("@effect-agent/testing");
            }
          }
-diff --git a/docs/TOOLCHAIN.md b/docs/TOOLCHAIN.md
---- a/docs/TOOLCHAIN.md
-+++ b/docs/TOOLCHAIN.md
-@@ -118,7 +118,8 @@
- `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
- Include `vp env doctor` output when asking for toolchain help.
- 
--Local tests run with at most four workspace tasks at once and without dependency ordering.
-+Local tests run one workspace task at a time and without dependency ordering. This Browserbase
-+integration uses that bound for its full single-runner `ready` gate without removing any suites.
- CI gives the travel planner, context-continuity evaluation, runtime benchmark, Node platform,
- testing package, and both Cloudflare packages separate runners. The remaining workspace suites
- share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
