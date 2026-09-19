@@ -60,6 +60,7 @@ export interface CaptureTarget {
 
 export interface CaptureBinding {
   readonly pageId: string;
+  readonly targetId: string;
   readonly frameId: string;
   readonly source: CaptureSource;
 }
