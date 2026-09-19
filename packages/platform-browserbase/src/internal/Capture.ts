@@ -274,16 +274,6 @@ export const startCapture = Effect.fnUntraced(function* (
       "capture-start",
       (ticket) =>
         Effect.gen(function* () {
-          if (
-            parent.captureLeases.size >= MaxParentCaptures ||
-            parent.captureReservedBytes + maxBytes > MaxParentBufferedBytes
-          ) {
-            return yield* BrowserbaseError.make({
-              operation: "capture",
-              reason: "limit",
-              outcome: "undispatched",
-            });
-          }
           const resolved = yield* parent.resolve(ticket, options.target);
 
           target = resolved.target;
@@ -293,6 +283,16 @@ export const startCapture = Effect.fnUntraced(function* (
             return yield* BrowserbaseError.make({
               operation: "capture",
               reason: "busy",
+              outcome: "undispatched",
+            });
+          }
+          if (
+            parent.captureLeases.size >= MaxParentCaptures ||
+            parent.captureReservedBytes + maxBytes > MaxParentBufferedBytes
+          ) {
+            return yield* BrowserbaseError.make({
+              operation: "capture",
+              reason: "limit",
               outcome: "undispatched",
             });
           }
@@ -352,9 +352,9 @@ export const startCapture = Effect.fnUntraced(function* (
       { charge: false },
     )
     .pipe(
-      Effect.onError(() => (target === undefined ? Effect.void : stopNative.pipe(Effect.asVoid))),
+      Effect.onError(() => (lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid))),
       Effect.onInterrupt(() =>
-        target === undefined ? Effect.void : stopNative.pipe(Effect.asVoid),
+        lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid),
       ),
     );
   // One monitor, not a fiber per frame. The finalizer also calls stop directly if this monitor is interrupted.
