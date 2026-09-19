@@ -1,7 +1,7 @@
 import { Cause, Clock, Deferred, Effect, Exit, Queue, Schema, Stream } from "effect";
 
 import type { Target } from "../Types.ts";
-import { BrowserbaseError } from "../Types.ts";
+import { BrowserbaseError, PageInfo } from "../Types.ts";
 import { type CaptureLease, type CaptureParent } from "./Association.ts";
 import {
   CaptureSummary,
@@ -22,6 +22,9 @@ const Metadata = Schema.Struct({
 
 const parseMetadata = Schema.decodeUnknownSync(Metadata);
 
+const MAX_CONCURRENT_INTERVALS = 8;
+const MAX_AGGREGATE_BUFFERED_BYTES = 64 * 1024 * 1024;
+
 /** Private seam for deterministic callback/lifetime tests. The public start accepts a real live session. */
 export const startCapture = Effect.fnUntraced(function* (
   parent: CaptureParent,
@@ -34,6 +37,7 @@ export const startCapture = Effect.fnUntraced(function* (
   const quality = options.quality ?? 80;
 
   if (
+    (options.target !== undefined && !Schema.is(PageInfo)(options.target)) ||
     !Number.isSafeInteger(maxFrames) ||
     maxFrames < 1 ||
     maxFrames > 64 ||
@@ -146,9 +150,13 @@ export const startCapture = Effect.fnUntraced(function* (
 
           if (Exit.isSuccess(stopped) && startSettled) nativeStop = "confirmed";
         } else nativeStop = "confirmed";
-        // No older attachment may clear a new one. Unconfirmed native cleanup blocks another interval.
-        if (nativeStop === "confirmed" && parent.captureLease === lease)
-          parent.captureLease = undefined;
+        // No older attachment may clear a replacement. Unconfirmed native cleanup quarantines only this page.
+        if (
+          nativeStop === "confirmed" &&
+          lease !== undefined &&
+          parent.captureLeases.get(lease.pageId) === lease
+        )
+          parent.captureLeases.delete(lease.pageId);
         cleanupFinished = true;
 
         return snapshot();
@@ -260,18 +268,32 @@ export const startCapture = Effect.fnUntraced(function* (
       "capture-start",
       (ticket) =>
         Effect.gen(function* () {
-          if (parent.captureLease !== undefined)
+          const binding = yield* parent.source(ticket, options.target);
+          const pageId = binding.target.pageId;
+
+          if (parent.captureLeases.has(pageId))
             return yield* BrowserbaseError.make({
               operation: "capture",
               reason: "busy",
               outcome: "undispatched",
             });
-          target = yield* Effect.try({
-            try: parent.target,
-            catch: () => BrowserbaseError.make({ operation: "capture", reason: "closed" }),
-          });
-          source = yield* parent.source(ticket);
+          let reservedBytes = 0;
+
+          for (const active of parent.captureLeases.values()) reservedBytes += active.reservedBytes;
+          if (
+            parent.captureLeases.size >= MAX_CONCURRENT_INTERVALS ||
+            reservedBytes + maxBytes > MAX_AGGREGATE_BUFFERED_BYTES
+          )
+            return yield* BrowserbaseError.make({
+              operation: "capture",
+              reason: "limit",
+              outcome: "undispatched",
+            });
+          target = binding.target;
+          source = binding.source;
           lease = {
+            pageId,
+            reservedBytes: maxBytes,
             stop: stopNative.pipe(Effect.asVoid),
             invalidate: (why) =>
               finish(
@@ -282,7 +304,7 @@ export const startCapture = Effect.fnUntraced(function* (
                 }),
               ),
           };
-          parent.captureLease = lease;
+          parent.captureLeases.set(pageId, lease);
           // Installed before native acquisition. A cancelled capture cannot escape its caller's scope.
           yield* Effect.addFinalizer(() =>
             stopNative.pipe(
@@ -304,7 +326,8 @@ export const startCapture = Effect.fnUntraced(function* (
                   if (
                     cleanupFinished &&
                     nativeStop === "unconfirmed" &&
-                    parent.captureLease === lease
+                    lease !== undefined &&
+                    parent.captureLeases.get(lease.pageId) === lease
                   ) {
                     // One late acquisition cleanup, not a callback-side worker. Keep the lease quarantined.
                     void source!.stop().catch(() => {});
