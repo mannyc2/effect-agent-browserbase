@@ -13,10 +13,7 @@ import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/i
 import { BrowserbaseRecordings } from "@effect-agent/platform-browserbase/recordings";
 import { RecordingPageReference } from "@effect-agent/platform-browserbase/types";
 import { Effect, Layer, Redacted, Stream } from "effect";
-import {
-  BrowserNavigateRequest,
-  InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+import { BrowserNavigateRequest, InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const options = {
@@ -44,9 +41,7 @@ const program = Effect.gen(function* () {
   const reference = yield* Effect.scoped(
     Effect.gen(function* () {
       const session = yield* host.open(policy);
-      yield* session.handle.navigate(
-        BrowserNavigateRequest.make({ url: "https://example.com" }),
-      );
+      yield* session.handle.navigate(BrowserNavigateRequest.make({ url: "https://example.com" }));
 
       // An AgentRuntime can borrow this same session; see examples/agent.ts.
       return session.reference;
@@ -60,13 +55,10 @@ const program = Effect.gen(function* () {
   if (page === undefined) return batch;
 
   const bytes = yield* recordings
-    .download(
-      RecordingPageReference.make({ session: reference, pageId: page.pageId }),
-      {
-        maxBytes: 512 * 1024 * 1024,
-        timeoutMillis: 120_000,
-      },
-    )
+    .download(RecordingPageReference.make({ session: reference, pageId: page.pageId }), {
+      maxBytes: 512 * 1024 * 1024,
+      timeoutMillis: 120_000,
+    })
     .pipe(Stream.runCollect);
 
   return { batch, bytes };
