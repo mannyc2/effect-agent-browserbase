@@ -1,6 +1,10 @@
 import type { BrowserbaseSession } from "@effect-agent/platform-browserbase/interactive-browser";
 import { Effect, Fiber } from "effect";
-import { BrowserNavigateRequest, BrowserScrollRequest } from "effect-agent/interactive-browser";
+import {
+  BrowserNavigateRequest,
+  BrowserScrollRequest,
+  type InteractiveBrowserError,
+} from "effect-agent/interactive-browser";
 
 import { recordInterval } from "./record-video.ts";
 
@@ -9,6 +13,17 @@ export interface DemoOptions {
   readonly scrollSteps?: number;
   readonly scrollDelta?: number;
 }
+
+/** Named output keeps example declarations independent of inferred native symbols. */
+export interface DemoRecording {
+  readonly target: string;
+  readonly scrolled: { readonly dispatched: number; readonly deltaY: number };
+  readonly capture: Effect.Success<ReturnType<typeof recordInterval>>["summary"];
+  readonly decodedFrames: number;
+  readonly distinctFrames: number;
+}
+
+type DemoRecordingError = Effect.Error<ReturnType<typeof recordInterval>> | InteractiveBrowserError;
 
 /**
  * Record one bounded demo interval of a session driving itself.
@@ -29,7 +44,7 @@ export const recordDemo = (
   url: string,
   outputPath: string,
   options: DemoOptions = {},
-) =>
+): Effect.Effect<DemoRecording, DemoRecordingError> =>
   Effect.gen(function* () {
     const durationMillis = options.durationMillis ?? 6_000;
     const scrollSteps = options.scrollSteps ?? 4;
