@@ -24,9 +24,13 @@ Read the [package guide](packages/platform-browserbase/README.md) for ownership,
 
 ### Demo
 
-The demo recording published under [`docs/media/`](docs/media/README.md) is one real hosted session navigating and scrolling under Effect Agent control, encoded by the caller from the same live frame stream `examples/record-video.ts` demonstrates. It is produced only by the manual `Hosted Browserbase` workflow and committed exactly as recorded, never edited, re-timed or composited.
+The demo recording published under [`docs/media/`](docs/media/README.md) is one real hosted session navigating and scrolling under Effect Agent control, encoded by the caller from the same live frame stream `examples/record-video.ts` demonstrates. It is committed exactly as recorded, never edited, re-timed or composited.
 
-No recording is committed yet. Ordinary CI cannot allocate a session, so the first one has to come from a deliberate maintainer run; [docs/media/README.md](docs/media/README.md) covers producing it and the one line that embeds it here. A recording shows that a session ran. It is not a substitute for the hosted acceptance checks listed in [status](docs/STATUS.md).
+![A hosted Browserbase session navigating and scrolling under Effect Agent control](docs/media/hosted-demo.gif)
+
+[Higher-quality MP4](docs/media/hosted-demo.mp4)
+
+Ordinary CI cannot allocate a session, so a recording only ever comes from a deliberate maintainer run. The exact source commit, session id, runtime and capture summary behind the committed file are recorded in [docs/media/README.md](docs/media/README.md) and [status](docs/STATUS.md). A recording shows that a session ran. It is not a substitute for the hosted acceptance checks listed in [status](docs/STATUS.md).
 
 ### Important boundaries
 
