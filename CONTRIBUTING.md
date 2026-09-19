@@ -52,7 +52,7 @@ It creates a fresh temporary workspace and prints the results directory. On the 
 
 Every command retains its arguments, log and exit status. The gate includes the 66-case independent boundary runner on Node and Bun, package tests, native AgentRuntime/CDP/video suites, an emitted external consumer, declaration checks, real emitted-code programs on both runtimes, exports, purity, full `vp run ready` and release dry-runs. Later independent checks still execute after a failure, but any failure keeps the gate red. Old counts are never reused as current results.
 
-Results, downloaded videos, build directories and package archives are ignored; retain them in Actions artifacts, not commits. `checkpoints/` stays immutable. The historical checkpoint verifier remains a separate integrity check, never a bootstrap dependency.
+Results, downloaded videos, build directories and package archives are ignored; retain them in Actions artifacts, not commits. The single exception is `docs/media/`, which holds the published demo recording under a declared size budget enforced by `tools/test/hosted.test.mjs`; see [docs/media/README.md](docs/media/README.md). `checkpoints/` stays immutable. The historical checkpoint verifier remains a separate integrity check, never a bootstrap dependency.
 
 ## CI review and repository settings
 
@@ -60,4 +60,4 @@ The new workflow is not restricted to a particular agent branch. No path filter 
 
 Repository settings are separate from files in this PR. Require PRs and the acceptance check on `main`, prevent force pushes/deletion, and protect `v*` tags from unauthorized creation or updates. Set review requirements appropriate to your maintainer team; CODEOWNERS alone does not enforce reviews. Dependency-update PRs are review-only and not auto-merged.
 
-Publishing and hosted checks require separate authorization. See [releasing](docs/RELEASING.md) and [security](SECURITY.md).
+Publishing and hosted checks require separate authorization. Hosted runs have their own manual, default-off workflow and protected environment; see [hosted runs](docs/HOSTED.md), [releasing](docs/RELEASING.md) and [security](SECURITY.md). Do not add a hosted credential to `Library CI` or to any trigger a pull request can reach.

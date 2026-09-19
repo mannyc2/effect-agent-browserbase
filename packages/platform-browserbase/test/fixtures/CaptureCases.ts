@@ -335,6 +335,7 @@ export const captureCases: ReadonlyArray<Case> = [
         maxBufferedBytes: 32 * 1024 * 1024,
         maxFrameBytes: 1,
       });
+
       const largeB = yield* startCapture(f.parent, {
         target: f.page("page-b"),
         maxFrames: 1,

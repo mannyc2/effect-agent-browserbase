@@ -27,11 +27,13 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           const pages = yield* session.pages;
           const pinnedOriginal = pages.find((page) => page.pageId === original.pageId)!;
           const pinnedPopup = pages.find((page) => page.pageId === popup.pageId)!;
+
           const originalCapture = yield* Capture.start(session, {
             target: pinnedOriginal,
             maxFrames: 8,
             maxDurationMillis: 5000,
           });
+
           const popupCapture = yield* Capture.start(session, {
             target: pinnedPopup,
             maxFrames: 8,
@@ -62,6 +64,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
             target: pinnedOriginal,
             maxDurationMillis: 5000,
           });
+
           const survivingCapture = yield* Capture.start(session, {
             target: pinnedPopup,
             maxDurationMillis: 5000,

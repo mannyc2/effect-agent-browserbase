@@ -1,0 +1,114 @@
+name: Hosted Browserbase
+
+# Manual only. This is the repository's single paid path: it allocates real
+# Browserbase sessions with maintainer credentials. Ordinary `Library CI` stays
+# unpaid, credential-free and open to fork pull requests, and remains the only
+# required check. Never add `pull_request`, `pull_request_target` or `schedule`
+# triggers here. Main-ref guards supplement, but do not replace, the protected
+# environment's required reviewers and main-only deployment branch policy.
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Which guarded hosted command to execute
+        required: true
+        default: demo
+        type: choice
+        options: [demo, acceptance, both]
+      demo_url:
+        description: Exact HTTPS page the published demo recording should show
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # A paid session must never be cancelled mid-allocation; an interrupted run
+  # cannot report whether the provider released the browser.
+  group: browserbase-live
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Validate hosted opt-in
+    if: ${{ github.repository == 'mannyc2/effect-agent-browserbase' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require an explicit, separately enabled hosted opt-in
+        env:
+          LIVE_ENABLED: ${{ vars.BROWSERBASE_LIVE_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "$LIVE_ENABLED" != true ]; then
+            echo 'Hosted Browserbase runs are disabled. Configure the protected browserbase-live environment, then set BROWSERBASE_LIVE_ENABLED=true.' >&2
+            exit 1
+          fi
+
+  live:
+    name: Guarded hosted run
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    # Protect this environment with required reviewers. It holds the only
+    # credentials in this repository that can spend money.
+    environment: browserbase-live
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      VP_GIT_HOOKS: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - name: Set isolated hosted workspace
+        run: printf 'BROWSERBASE_WORK_ROOT=%s/browserbase-hosted\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Restore the pinned integration workspace
+        run: bash tools/bootstrap.sh "$BROWSERBASE_WORK_ROOT/upstream"
+      - name: Install the caller-owned media tools
+        if: ${{ inputs.run != 'acceptance' }}
+        run: sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg
+      - name: Record the published demo
+        if: ${{ inputs.run != 'acceptance' }}
+        env:
+          EFFECT_AGENT_BROWSERBASE_LIVE: '1'
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          BROWSERBASE_DEMO_URL: ${{ inputs.demo_url }}
+        run: |
+          set -euo pipefail
+          test -n "${BROWSERBASE_DEMO_URL}" || unset BROWSERBASE_DEMO_URL
+          bash tools/hosted-demo.sh "$BROWSERBASE_WORK_ROOT/upstream/tree" "$BROWSERBASE_WORK_ROOT/demo"
+      - name: Run the guarded hosted acceptance
+        if: ${{ inputs.run != 'demo' }}
+        env:
+          EFFECT_AGENT_BROWSERBASE_LIVE: '1'
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          BROWSERBASE_ARTIFACT_ORIGINS: ${{ secrets.BROWSERBASE_ARTIFACT_ORIGINS }}
+        run: |
+          set -euo pipefail
+          bash tools/hosted-acceptance.sh "$BROWSERBASE_WORK_ROOT/upstream/tree" \
+            | tee "$BROWSERBASE_WORK_ROOT/hosted-acceptance.jsonl"
+      - name: Retain the recording, records and checksums
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: browserbase-hosted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/browserbase-hosted/demo
+            ${{ runner.temp }}/browserbase-hosted/hosted-acceptance.jsonl
+          if-no-files-found: error
+          retention-days: 14

@@ -991,6 +991,7 @@ export const makePlaywrightDriver = async (
         if (page.screencast === undefined) throw failure("capture", "unsupported");
         let watcherSet: Set<CaptureWatcher> | undefined;
         let watcher: CaptureWatcher | undefined;
+
         const source: CaptureSource = {
           start: (callback, quality, invalidate) =>
             sanitize("capture-start", async () => {
