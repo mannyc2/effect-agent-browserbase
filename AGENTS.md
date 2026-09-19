@@ -1,7 +1,6 @@
 # Instructions for agents working in this repository
 
-You are continuing an in-progress implementation of
-`@effect-agent/platform-browserbase`. Read this file, then
+You are working on `@effect-agent/platform-browserbase`. Read this file, then
 [`docs/STATUS.md`](docs/STATUS.md), then [`docs/handoff.md`](docs/handoff.md).
 
 ## This repository replaces the transfer chain
@@ -44,7 +43,7 @@ Pinned inputs, from the upstream catalog and `docs/TOOLCHAIN.md`:
 | TypeScript | `7.0.2` |
 | Vite+ | `0.3.2` |
 | Bun | `1.4.2` |
-| Node | `^22.18.0 \|\| >=24.11.0` |
+| Node acceptance pin | `24.14.1` (upstream engine range remains `^22.18.0 \|\| >=24.11.0`) |
 
 Do not substitute versions. If a newer revision becomes materially necessary, say
 so explicitly and re-check the affected APIs.
@@ -84,9 +83,12 @@ and they are the point:
 
 ## Source handling
 
-`packages/platform-browserbase/` currently reproduces checkpoint 04 byte-for-byte,
-and `checkpoints/patches/review.patch` regenerates it from clean upstream. Once you
-start changing the source those two will diverge — that is expected and fine.
+`packages/platform-browserbase/` is the current implementation, not a byte-for-byte
+copy of checkpoint 04. The checkpoint archive and historical patches stay immutable.
+`tools/bootstrap.sh` applies the historical patch once, synchronizes the current
+owned package and applies the reviewable `upstream.patch` integration delta.
+The final Actions `review.patch` represents the complete candidate against pinned
+upstream; it is different from `checkpoints/patches/review.patch`.
 What must not happen:
 
 - Do not rewrite this source from conversation text, from the research prototype,

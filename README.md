@@ -26,7 +26,7 @@ cd effect-agent-browserbase
 ## Layout
 
 ```
-packages/platform-browserbase/  Live source — checkpoint 04, byte-exact (33 files)
+packages/platform-browserbase/  Current implementation, tests and public examples
 docs/handoff.md                 Full implementation brief (authoritative scope)
 docs/STATUS.md                  Restart note: objective, results, blockers, next action
 checkpoints/                    Preserved checkpoint-04 archive, patches, historical runs
@@ -36,16 +36,28 @@ tools/verify-checkpoint.py      Verify the preserved archive (CRC + 43 manifest 
 tools/fetch-inputs.py           Standalone canonical-input fetcher (upstream, npm, runtimes)
 ```
 
-## State in one paragraph
+## Implementation and acceptance
 
-Checkpoint 04 is preserved byte-exact and verified. Its `review.patch` applies
-cleanly to the pinned upstream revision `ea53ea66` and reproduces the package tree
-exactly. The monorepo installs, and TypeScript 7.0.2 compiles the package against
-the real framework with two unused-import errors and no contract errors. The
-66-case boundary suite passes on both Node and Bun against real `effect@4.0.0-rc.115`.
-Native browser control, provider recordings, live capture, public examples, and
-hosted acceptance remain unimplemented or unverified. See [`docs/STATUS.md`](docs/STATUS.md)
-for the exact evidence and the next concrete action.
+The current source has evolved beyond checkpoint 04; the original archive and
+historical patches remain unchanged under `checkpoints/`. `tools/bootstrap.sh`
+applies the historical patch once, synchronizes this repository's current owned
+package, then applies `upstream.patch` for the catalog, lockfile, guide, changeset
+and workspace integration. Do not use the historical patch alone as the current
+implementation.
+
+Acceptance pins Node **24.14.1**, Bun **1.4.2**, Effect **4.0.0-rc.115**,
+effect-agent/testing **0.1.0-beta.102**, and Playwright **1.63.0** against upstream
+`ea53ea6671a94eb44b8019e942cc2c9468786723`. Both Actions workflows are read-only and
+check out the exact candidate SHA. The implementation workflow retains individual
+command exit statuses, unit/native/AgentRuntime tests, emitted external-consumer
+checks, decoded local capture videos, full `vp run ready`, release dry-run,
+`review.patch`, the candidate archive, and checksums.
+
+See [`docs/STATUS.md`](docs/STATUS.md) for the exact accepted source SHA, run links,
+results and hosted-only limitations. A local native browser pass does not establish
+Browserbase allocation, Live View authorization, persistent storage or provider
+recording behavior. This package is not published and this repository's merge is
+not a claim of upstream acceptance.
 
 ## Authorization limits
 
