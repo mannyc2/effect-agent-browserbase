@@ -2,7 +2,7 @@
 
 `@effect-agent/platform-browserbase` gives an Effect application one owned Browserbase session that can be driven directly or borrowed by Effect AI Tools across agent turns. The same session can produce provider recordings after it ends, or bounded JPEG frames while it is live.
 
-The package targets trusted Node and Bun hosts and uses Playwright over CDP. It is an unpublished maintainer-review candidate. Hosted Browserbase acceptance is separately gated and has not been executed; ordinary tests never create a paid Browserbase session or invoke a paid model.
+The package targets trusted Node and Bun hosts and uses Playwright over CDP. It is an unpublished maintainer-review candidate. Hosted provider behavior requires separate validation; ordinary tests never create a paid Browserbase session or invoke a paid model. Consult the repository status for the scope of any separately recorded hosted evidence.
 
 ## Start with the result you need
 
@@ -55,20 +55,14 @@ const program = Effect.gen(function* () {
   if (page === undefined) return batch;
 
   const bytes = yield* recordings
-    .download(
-      RecordingPageReference.make({ session: reference, pageId: page.pageId }),
-      {
-        maxBytes: 512 * 1024 * 1024,
-        timeoutMillis: 120_000,
-      },
-    )
+    .download(RecordingPageReference.make({ session: reference, pageId: page.pageId }), {
+      maxBytes: 512 * 1024 * 1024,
+      timeoutMillis: 120_000,
+    })
     .pipe(Stream.runCollect);
 
   return { batch, bytes };
-}).pipe(
-  Effect.provide(layers),
-  Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
-);
+}).pipe(Effect.provide(layers), Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch));
 ```
 
 This adapter deliberately defaults `recordSession` to `false`, even though Browserbase itself currently records sessions by default. Set `recordSession: true` explicitly if you need `Recordings` or `Replays`; it cannot be enabled retroactively after allocation.
@@ -88,7 +82,7 @@ For model-driven control, `examples/agent.ts` shows an `AgentRuntime` whose `Nav
 
 Prefer provider recording when post-session MP4/HLS is enough. Use `Capture` when you need frames during the session, need to transform or encode them yourself, did not enable provider recording, are testing locally without a paid session, or need a live-frame path distinct from Browserbase's post-session artifact lifetime. BYOS recording completion is reported explicitly even when Browserbase does not return a download URL.
 
-`Capture` currently follows the selected page and allows one interval per session. Changing the selected target invalidates the interval. Recording one page while an agent drives another, or recording multiple pages concurrently, is not yet supported. The maintained Playwright screencast callback is JPEG-only here and the public API does not expose an FPS cap, lossless format, or source-size control.
+`Capture.start(session, { target: page })` accepts a `PageInfo` from `session.pages` and pins the interval to that page independently of the selected automation target. Omitting `target` binds to the page selected when capture starts; later selection changes do not move or stop it. An agent can drive a scout tab while the stage page keeps recording. Distinct pages may capture concurrently, with one interval per native target, at most four active or quarantined intervals, and 64 MiB of aggregate reserved buffering per session. The maintained Playwright screencast callback is JPEG-only here and the public API does not expose an FPS cap, lossless format, or source-size control.
 
 ## Session, reference, and ownership
 
@@ -115,7 +109,7 @@ Human handoff pauses automation before returning host-only Live View material. R
 - `recordings` — post-session Browserbase MP4 assembly, status, and bounded retrieval. Stable identity is session + recording page; signed URLs are refreshed and are not durable identity.
 - `replays` — host-authorized replay metadata and validated HLS media proxy material. It is playback access to a recording, not another recording.
 - `downloads` — ordinary website download metadata and bounded byte streams, separate from provider recordings.
-- `capture` — optional selected-live-page JPEG frame stream using Playwright 1.63's maintained screencast API. The caller owns encoding, storage, and presentation.
+- `capture` — optional target-pinned live-page JPEG frame streams using Playwright 1.63's maintained screencast API. The caller owns encoding, storage, and presentation.
 - `types` — credential-free schemas and typed expected errors.
 
 ## Artifact and capture guarantees
@@ -126,9 +120,9 @@ Website downloads retain their provider download ID, safe filename, MIME type, a
 
 Replay playlists reject arbitrary URI-bearing tags and proxy only indexed media from the validated playlist. API credentials are never returned to a browser client.
 
-Live `Capture` frames carry owned JPEG bytes, selected target identity, sequence number, source presentation time, host monotonic receipt time, geometry, and explicit drop accounting. Buffers are bounded by frame count and bytes; slow consumers drop old frames instead of creating an unbounded fiber/callback backlog. Buffer dropping is not page-clock backpressure and does not reduce what the browser produced upstream.
+Live `Capture` frames carry owned JPEG bytes, captured target identity, sequence number, source presentation time, host monotonic receipt time, geometry, and explicit drop accounting. Buffers are bounded by frame count and bytes; slow consumers drop old frames instead of creating an unbounded fiber/callback backlog. Buffer dropping is not page-clock backpressure and does not reduce what the browser produced upstream. Page suspension/resumption is not implemented; it is tracked separately in repository issue #17. Holding a capture callback is not a promise that page timers or animations stop.
 
-Viewport changes and parent target invalidation terminate an interval explicitly. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in `examples/record-video.ts`; the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence.
+Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner, and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined. A definitively closed page releases its capture reservation. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in `examples/record-video.ts`; the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence.
 
 ## Development and evidence
 
