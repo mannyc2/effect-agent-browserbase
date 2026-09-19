@@ -220,11 +220,7 @@ export const makePlaywrightDriver = async (
     return id;
   };
 
-  const invalidateCaptures = (
-    entry: Entry,
-    reason: CaptureInvalidation,
-    frame?: Frame,
-  ): void => {
+  const invalidateCaptures = (entry: Entry, reason: CaptureInvalidation, frame?: Frame): void => {
     const watchers = captureWatchers.get(entry.id);
 
     if (watchers === undefined) return;
@@ -1023,7 +1019,14 @@ export const makePlaywrightDriver = async (
                 watcher = undefined;
                 if (watcherSet.size === 0) captureWatchers.delete(entry.id);
               }
-              await page.screencast.stop();
+              // A closed target cannot produce more frames; its page channel rejects stop.
+              if (page.isClosed()) return;
+              try {
+                await page.screencast.stop();
+              } catch (error) {
+                // Closure can race the stop request. A live target still requires quarantine.
+                if (!page.isClosed()) throw error;
+              }
             }),
         };
 
