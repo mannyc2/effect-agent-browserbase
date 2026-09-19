@@ -8,8 +8,7 @@ import { type CaptureParent } from "../../src/internal/Association.ts";
 import { startCapture } from "../../src/internal/Capture.ts";
 import { type CaptureInvalidation, type NativeFrame } from "../../src/internal/Driver.ts";
 import { makeOwner } from "../../src/internal/Owner.ts";
-import type { BrowserbaseError } from "../../src/Types.ts";
-import { PageInfo, Target } from "../../src/Types.ts";
+import { BrowserbaseError, PageInfo, Target } from "../../src/Types.ts";
 import { jpeg, widerJpeg } from "./Jpeg.ts";
 import { fixture as sessionFixture, gate } from "./ScriptedProvider.ts";
 import { advance, timed } from "./Time.ts";
@@ -80,6 +79,7 @@ const makeFixture = Effect.fnUntraced(function* (
         );
 
       return Effect.succeed({
+        key: chosen.targetId,
         target: Target.make({
           generation: owner.state.generation,
           pageId: chosen.pageId,
