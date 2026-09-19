@@ -278,7 +278,7 @@ export const startCapture = Effect.fnUntraced(function* (
 
           target = resolved.target;
           source = resolved.source;
-          leaseKey = `${target.generation}:${target.pageId}`;
+          leaseKey = resolved.key;
           if (parent.captureLeases.has(leaseKey)) {
             return yield* BrowserbaseError.make({
               operation: "capture",
