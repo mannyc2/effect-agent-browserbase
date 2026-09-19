@@ -6,10 +6,10 @@ import { Effect, Exit, Fiber, Stream } from "effect";
 import { type CaptureOptions } from "../../src/Capture.ts";
 import { type CaptureParent } from "../../src/internal/Association.ts";
 import { startCapture } from "../../src/internal/Capture.ts";
-import { type NativeFrame } from "../../src/internal/Driver.ts";
+import { type CaptureInvalidation, type NativeFrame } from "../../src/internal/Driver.ts";
 import { makeOwner } from "../../src/internal/Owner.ts";
 import type { BrowserbaseError } from "../../src/Types.ts";
-import { Target } from "../../src/Types.ts";
+import { PageInfo, Target } from "../../src/Types.ts";
 import { jpeg, widerJpeg } from "./Jpeg.ts";
 import { fixture as sessionFixture, gate } from "./ScriptedProvider.ts";
 import { advance, timed } from "./Time.ts";
@@ -53,39 +53,95 @@ const makeFixture = Effect.fnUntraced(function* (
   });
 
   owner.state.phase = "open";
-  let callback: ((frame: NativeFrame) => void) | undefined;
+  const callbacks = new Map<string, (frame: NativeFrame) => void>();
+  const invalidators = new Map<string, (reason: CaptureInvalidation) => void>();
   let starts = 0;
   let stops = 0;
+
+  const page = (pageId = "page-1") =>
+    PageInfo.make({
+      pageId,
+      targetId: `target-${pageId}`,
+      title: pageId,
+      url: `https://${pageId}.example.test/`,
+      selected: pageId === "page-1",
+    });
 
   const parent: CaptureParent = {
     owner,
     target: () =>
       Target.make({ generation: owner.state.generation, pageId: "page-1", frameId: "frame-1" }),
-    source: () =>
-      Effect.succeed({
-        start: async (receive) => {
-          starts++;
-          callback = receive;
-          if (options.startFailure) throw new Error("PRIVATE-NATIVE-START");
-          await options.start?.();
+    resolve: (_ticket, requested) => {
+      const chosen = requested ?? page();
+
+      if (chosen.targetId !== `target-${chosen.pageId}`)
+        return Effect.fail(
+          BrowserbaseError.make({ operation: "capture", reason: "stale", outcome: "undispatched" }),
+        );
+
+      return Effect.succeed({
+        target: Target.make({
+          generation: owner.state.generation,
+          pageId: chosen.pageId,
+          frameId: "frame-1",
+        }),
+        source: {
+          start: async (receive, _quality, invalidate) => {
+            starts++;
+            callbacks.set(chosen.pageId, receive);
+            invalidators.set(chosen.pageId, invalidate);
+            if (options.startFailure) throw new Error("PRIVATE-NATIVE-START");
+            await options.start?.();
+          },
+          stop: async () => {
+            stops++;
+            callbacks.delete(chosen.pageId);
+            invalidators.delete(chosen.pageId);
+            await options.stop?.();
+          },
         },
-        stop: async () => {
-          stops++;
-          await options.stop?.();
-        },
-      }),
+      });
+    },
+    captureLeases: new Map(),
+    captureReservedBytes: 0,
   };
 
   owner.onInvalidate((reason) => {
-    if (reason !== "observation") parent.captureLease?.invalidate(reason);
+    if (["paused", "disconnected", "uncertain", "closed"].includes(reason))
+      for (const lease of parent.captureLeases.values()) lease.invalidate(reason);
   });
 
-  const emit = (timestamp: number, data = jpeg(), viewportWidth = 64, viewportHeight = 48) => {
-    assert.ok(callback, "capture must install its callback before the fixture can emit");
+  const emitPage = (
+    pageId: string,
+    timestamp: number,
+    data = jpeg(),
+    viewportWidth = 64,
+    viewportHeight = 48,
+  ) => {
+    const callback = callbacks.get(pageId);
+
+    assert.ok(callback, `capture for ${pageId} must install its callback before the fixture can emit`);
     callback({ data, timestamp, viewportWidth, viewportHeight });
   };
 
-  return { parent, emit, counts: () => ({ starts, stops }) };
+  const emit = (timestamp: number, data = jpeg(), viewportWidth = 64, viewportHeight = 48) =>
+    emitPage("page-1", timestamp, data, viewportWidth, viewportHeight);
+
+  const invalidate = (pageId: string, reason: CaptureInvalidation) => {
+    const invalidator = invalidators.get(pageId);
+
+    assert.ok(invalidator, `capture for ${pageId} must install invalidation before use`);
+    invalidator(reason);
+  };
+
+  return {
+    parent,
+    page,
+    emit,
+    emitPage,
+    invalidate,
+    counts: () => ({ starts, stops }),
+  };
 });
 
 const options: CaptureOptions = { maxFrames: 2, maxBufferedBytes: 16_384, maxFrameBytes: 8192 };
@@ -222,6 +278,80 @@ export const captureCases: ReadonlyArray<Case> = [
         assert.equal((yield* interval.completed).peakBufferedBytes, 0);
       }
     })),
+  test("distinct page targets capture concurrently and stopping one leaves the other active", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const first = yield* startCapture(f.parent, { ...options, target: f.page("page-1") });
+      const second = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+
+      assert.equal(f.parent.captureLeases.size, 2);
+      f.emitPage("page-1", 1000);
+      f.emitPage("page-2", 1000);
+      yield* first.stop;
+      assert.equal(f.parent.captureLeases.size, 1);
+      f.emitPage("page-2", 1010);
+      const secondSummary = yield* second.stop;
+
+      assert.equal(secondSummary.received, 2);
+      assert.equal(secondSummary.target.pageId, "page-2");
+      assert.equal(f.parent.captureLeases.size, 0);
+    })),
+  test("same-page capture stays exclusive while other pages remain available", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const target = f.page("page-1");
+      const first = yield* startCapture(f.parent, { ...options, target });
+
+      yield* expectReason(startCapture(f.parent, { ...options, target }), "busy");
+      const second = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+
+      yield* first.stop;
+      yield* second.stop;
+    })),
+  test("capture count and aggregate buffer reservations bound parent work", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const intervals = [];
+
+      for (let i = 1; i <= 4; i++)
+        intervals.push(
+          yield* startCapture(f.parent, {
+            ...options,
+            target: f.page(`page-${i}`),
+          }),
+        );
+      yield* expectReason(
+        startCapture(f.parent, { ...options, target: f.page("page-5") }),
+        "limit",
+      );
+      for (const interval of intervals) yield* interval.stop;
+
+      const largeA = yield* startCapture(f.parent, {
+        target: f.page("page-a"),
+        maxFrames: 1,
+        maxBufferedBytes: 32 * 1024 * 1024,
+        maxFrameBytes: 1,
+      });
+      const largeB = yield* startCapture(f.parent, {
+        target: f.page("page-b"),
+        maxFrames: 1,
+        maxBufferedBytes: 32 * 1024 * 1024,
+        maxFrameBytes: 1,
+      });
+
+      yield* expectReason(
+        startCapture(f.parent, {
+          target: f.page("page-c"),
+          maxFrames: 1,
+          maxBufferedBytes: 1,
+          maxFrameBytes: 1,
+        }),
+        "limit",
+      );
+      yield* largeA.stop;
+      yield* largeB.stop;
+      assert.equal(f.parent.captureReservedBytes, 0);
+    })),
   test("stopping one interval permits another and a stale stop cannot end the replacement", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();
@@ -232,7 +362,7 @@ export const captureCases: ReadonlyArray<Case> = [
 
       yield* first.stop;
       assert.equal(f.counts().stops, 1);
-      assert.notEqual(f.parent.captureLease, undefined);
+      assert.equal(f.parent.captureLeases.size, 1);
       f.emit(2000);
       yield* second.stop;
       assert.equal((yield* Stream.runCollect(second.frames)).length, 1);
@@ -264,7 +394,7 @@ export const captureCases: ReadonlyArray<Case> = [
       yield* Fiber.join(second);
       assert.equal(f.counts().stops, 1);
     })),
-  test("a slow native stop quarantines the lease until confirmation", () =>
+  test("a slow native stop quarantines only its page until confirmation", () =>
     Effect.gen(function* () {
       const release = gate<void>();
       const entered = gate<void>();
@@ -281,11 +411,14 @@ export const captureCases: ReadonlyArray<Case> = [
 
       yield* Effect.promise(() => entered.promise);
       yield* expectReason(startCapture(f.parent, options), "busy");
+      const other = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+
       release.resolve();
       yield* Fiber.join(stopping);
-      assert.equal(f.parent.captureLease, undefined);
+      yield* other.stop;
+      assert.equal(f.parent.captureLeases.size, 0);
     })),
-  test("native stop failure prevents a second competing screencast without closing the browser", () =>
+  test("native stop failure prevents a competing screencast only on that page", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture({
         stop: async () => {
@@ -297,8 +430,11 @@ export const captureCases: ReadonlyArray<Case> = [
 
       assert.equal((yield* interval.stop).nativeStop, "unconfirmed");
       yield* expectReason(startCapture(f.parent, options), "busy");
+      const other = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+
+      assert.equal((yield* other.stop).nativeStop, "unconfirmed");
       assert.equal(f.parent.owner.state.phase, "open");
-      assert.equal(f.counts().starts, 1);
+      assert.equal(f.counts().starts, 2);
     })),
   test("consumer cancellation ends capture but does not spend or close browser actions", () =>
     Effect.gen(function* () {
@@ -330,7 +466,7 @@ export const captureCases: ReadonlyArray<Case> = [
 
       yield* Effect.scoped(startCapture(f.parent, options));
       assert.equal(f.counts().stops, 1);
-      assert.equal(f.parent.captureLease, undefined);
+      assert.equal(f.parent.captureLeases.size, 0);
       assert.equal(f.parent.owner.state.phase, "open");
     })),
   test("duration expiration ends idle capture without waiting for another callback", () =>
@@ -371,15 +507,16 @@ export const captureCases: ReadonlyArray<Case> = [
       assert.equal((yield* interval.completed).received, 0);
       assert.equal(stops, 1);
     })),
-  test("ordinary page mutation leaves capture running but target changes segment it", () =>
+  test("selection changes leave pinned capture running while page-local invalidation segments it", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();
       const interval = yield* startCapture(f.parent, options);
 
       f.parent.owner.invalidate("observation");
+      f.parent.owner.invalidate("target-changed");
       f.emit(1000);
       assert.equal(f.counts().stops, 0);
-      f.parent.owner.invalidate("target-changed");
+      f.invalidate("page-1", "target-changed");
       yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
     })),
   test("failed native start runs cleanup and leaves no active capture lease", () =>
@@ -388,7 +525,7 @@ export const captureCases: ReadonlyArray<Case> = [
 
       yield* expectReason(startCapture(f.parent, options), "provider");
       assert.equal(f.counts().stops, 1);
-      assert.equal(f.parent.captureLease, undefined);
+      assert.equal(f.parent.captureLeases.size, 0);
       assert.equal(f.parent.owner.state.phase, "open");
     })),
   test("interruption during native start observes its late result and cleans the lease", () =>
@@ -413,6 +550,6 @@ export const captureCases: ReadonlyArray<Case> = [
       yield* Fiber.join(interrupt);
       assert.equal(Exit.hasInterrupts(yield* Fiber.await(fiber)), true);
       assert.equal(f.counts().stops, 1);
-      assert.equal(f.parent.captureLease, undefined);
+      assert.equal(f.parent.captureLeases.size, 0);
     })),
 ];
