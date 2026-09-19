@@ -13,7 +13,10 @@ import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/i
 import { BrowserbaseRecordings } from "@effect-agent/platform-browserbase/recordings";
 import { RecordingPageReference } from "@effect-agent/platform-browserbase/types";
 import { Effect, Layer, Redacted, Stream } from "effect";
-import { BrowserNavigateRequest, InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
+import {
+  BrowserNavigateRequest,
+  InteractiveBrowserPolicy,
+} from "effect-agent/interactive-browser";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const options = {
@@ -41,7 +44,9 @@ const program = Effect.gen(function* () {
   const reference = yield* Effect.scoped(
     Effect.gen(function* () {
       const session = yield* host.open(policy);
-      yield* session.handle.navigate(BrowserNavigateRequest.make({ url: "https://example.com" }));
+      yield* session.handle.navigate(
+        BrowserNavigateRequest.make({ url: "https://example.com" }),
+      );
 
       // An AgentRuntime can borrow this same session; see examples/agent.ts.
       return session.reference;
@@ -55,10 +60,13 @@ const program = Effect.gen(function* () {
   if (page === undefined) return batch;
 
   const bytes = yield* recordings
-    .download(RecordingPageReference.make({ session: reference, pageId: page.pageId }), {
-      maxBytes: 512 * 1024 * 1024,
-      timeoutMillis: 120_000,
-    })
+    .download(
+      RecordingPageReference.make({ session: reference, pageId: page.pageId }),
+      {
+        maxBytes: 512 * 1024 * 1024,
+        timeoutMillis: 120_000,
+      },
+    )
     .pipe(Stream.runCollect);
 
   return { batch, bytes };
@@ -74,14 +82,14 @@ For model-driven control, `examples/agent.ts` shows an `AgentRuntime` whose `Nav
 
 ## Choose a video path
 
-| | Provider recording (`Recordings` / `Replays`) | Live `Capture` |
-| --- | --- | --- |
-| Encoding | Browserbase | caller-owned |
-| Available | after the session ends | while the session is live |
-| Enablement | `recordSession: true` at allocation | independent of provider recording |
-| Output | per-page MP4 download or validated HLS replay | bounded JPEG frames |
-| Control | provider-owned encoding | JPEG quality plus caller-side encoding/storage |
-| Audio | not claimed until provider evidence proves a track exists | none; the screencast frame seam has no audio source |
+|            | Provider recording (`Recordings` / `Replays`)             | Live `Capture`                                      |
+| ---------- | --------------------------------------------------------- | --------------------------------------------------- |
+| Encoding   | Browserbase                                               | caller-owned                                        |
+| Available  | after the session ends                                    | while the session is live                           |
+| Enablement | `recordSession: true` at allocation                       | independent of provider recording                   |
+| Output     | per-page MP4 download or validated HLS replay             | bounded JPEG frames                                 |
+| Control    | provider-owned encoding                                   | JPEG quality plus caller-side encoding/storage      |
+| Audio      | not claimed until provider evidence proves a track exists | none; the screencast frame seam has no audio source |
 
 Prefer provider recording when post-session MP4/HLS is enough. Use `Capture` when you need frames during the session, need to transform or encode them yourself, did not enable provider recording, are testing locally without a paid session, or need a live-frame path distinct from Browserbase's post-session artifact lifetime. BYOS recording completion is reported explicitly even when Browserbase does not return a download URL.
 
