@@ -26,6 +26,8 @@ test("bootstrap uses a single current patch and frozen installs, not historical 
 
 test("ordinary acceptance has no live publisher, hosted opt-in or write-enabled workflow", () => {
   const ci = read(".github/workflows/ci.yml");
+  const jobEnvironment = ci.slice(ci.indexOf("\n    env:\n"), ci.indexOf("\n    steps:\n"));
+  assert.doesNotMatch(jobEnvironment, /runner\./, "Runner context is available in steps, not job env");
   assert.ok(ci.includes("pull_request:") && ci.includes("push:") && ci.includes("merge_group:"));
   assert.doesNotMatch(ci, /pull_request_target|id-token: write|contents: write|secrets\.|git push|agent\/browserbase-completion/);
   const acceptance = read("tools/run-acceptance.sh");

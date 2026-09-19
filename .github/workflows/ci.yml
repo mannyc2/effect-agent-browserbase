@@ -44,8 +44,9 @@ jobs:
       CI: 'true'
       VP_GIT_HOOKS: '0'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
-      BROWSERBASE_WORK_ROOT: ${{ runner.temp }}/browserbase-maintenance
     steps:
+      - name: Set isolated acceptance workspace
+        run: printf 'BROWSERBASE_WORK_ROOT=%s/browserbase-maintenance\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Check out immutable source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -76,6 +77,6 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: browserbase-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.BROWSERBASE_WORK_ROOT }}/results
+          path: ${{ runner.temp }}/browserbase-maintenance/results
           if-no-files-found: error
           retention-days: 14
