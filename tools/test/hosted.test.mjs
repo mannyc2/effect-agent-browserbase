@@ -92,3 +92,18 @@ test("media referenced by a README is actually committed", () => {
     assert.ok(existsSync(join(root, "docs/media", name)), `README references missing media: ${name}`);
   }
 });
+
+
+test("hosted execution pins reviewed main and still requires external environment protection", () => {
+  const workflow = read(".github/workflows/hosted.yml");
+  const resolve = workflow.slice(workflow.indexOf("\n  resolve:\n"), workflow.indexOf("\n  live:\n"));
+  const live = workflow.slice(workflow.indexOf("\n  live:\n"));
+
+  for (const job of [resolve, live]) {
+    assert.ok(job.includes("github.ref == 'refs/heads/main'"));
+    assert.ok(job.includes("github.event_name == 'workflow_dispatch'"));
+  }
+  assert.ok(live.includes("ref: ${{ github.sha }}"));
+  assert.ok(live.includes("persist-credentials: false"));
+  assert.ok(read("docs/HOSTED.md").includes("branch-restricted protected environment"));
+});

@@ -20,34 +20,37 @@ expiry. Those remain the separately authorized hosted checks tracked in
 
 ## Why this shape
 
-Running paid provider tests from CI is ordinary practice, but it is only safe
-under conditions this repository enforces in workflow source:
+The optional paid path requires both workflow-source guards and separately
+configured environment controls:
 
 - **The required check stays unpaid.** Contributors and fork pull requests are
   never blocked on a credential they cannot have, and a lapsed subscription
   cannot make `main` unmergeable.
-- **No trigger that unreviewed code can influence.** `hosted.yml` uses
-  `workflow_dispatch` only. `pull_request`, `pull_request_target` and `schedule`
-  are deliberately absent; `tools/test/hosted.test.mjs` fails if one is added.
-  A `pull_request_target` job would hand the key to any fork's diff.
-- **The credential lives in a protected environment**, not in repository
-  secrets available to every workflow, so a run has an approver and an audit
-  record.
+- **Manual, main-only execution.** `hosted.yml` uses `workflow_dispatch` only;
+  both jobs require `refs/heads/main`, and checkout pins the dispatch commit.
+  `pull_request`, `pull_request_target` and `schedule` are deliberately absent.
+  Tests enforce these guards. A branch-restricted protected environment is
+  still required: code on another branch can edit its own workflow guards,
+  so source checks alone are not a credential authorization boundary.
+- **Store the credential in a protected environment**, not repository
+  secrets available to every workflow. Configure required reviewers and retain
+  the run audit record before enabling this path.
 - **Default off.** The workflow refuses to start until `BROWSERBASE_LIVE_ENABLED`
   is set, which makes accidental enablement a two-step mistake rather than one.
-- **Runs are never cancelled mid-flight.** An interrupted allocation cannot
-  report whether the provider released the browser, so the concurrency group
-  uses `cancel-in-progress: false`.
+- **New runs do not automatically cancel an older run.** The concurrency group
+  uses `cancel-in-progress: false`. Manual cancellation, a job timeout, or runner
+  loss can still interrupt cleanup; none proves provider termination.
 
-The per-run cost is one short session. The real exposure is an unattended
-trigger loop or a leaked key, which the rules above are aimed at, not the price
-of any single run.
+Each guarded command allocates at most one session; `run: both` runs two
+commands and can allocate two. No particular monetary cost is guaranteed.
+Keep the provider-side budgets and credential scope appropriate to that bound.
 
 ## One-time setup
 
-1. Create a **dedicated Browserbase project** for CI. Scope the key to it so a
-   leak cannot reach anything else, and so the usage in your dashboard is
-   attributable to CI rather than to your own work.
+1. Use a **dedicated Browserbase project** for CI attribution. Verify the
+   provider's actual credential permissions and use the narrowest supported
+   authority; a project ID alone does not prove that an API key is restricted
+   to that project.
 2. Create a GitHub environment named **`browserbase-live`** with required
    reviewers. Restrict its deployment branches to `main`.
 3. Add these **environment** secrets (not repository secrets) with exactly these
@@ -55,7 +58,7 @@ of any single run.
 
    | Secret | Required for | Value |
    | --- | --- | --- |
-   | `BROWSERBASE_API_KEY` | both commands | the dedicated project's API key |
+   | `BROWSERBASE_API_KEY` | both commands | an API key with verified minimum provider permissions |
    | `BROWSERBASE_PROJECT_ID` | both commands | that project's id |
    | `BROWSERBASE_ARTIFACT_ORIGINS` | `acceptance` only | comma-separated exact HTTPS origins approved for provider recording delivery |
 
@@ -77,8 +80,9 @@ Dispatch **Hosted Browserbase** from the Actions tab:
 - `run: acceptance` — the guarded correctness run.
 - `run: both` — two sessions.
 
-Each run retains its line-delimited JSON records, the encoded video, the source
-commit and SHA-256 checksums as an Actions artifact for 14 days. To publish the
+Successful demo runs retain JSON records, encoded video, source commit and
+checksums; acceptance runs retain their JSON records. Requested outputs that
+were actually produced are retained as an Actions artifact for 14 days. To publish the
 recording, follow [docs/media/README.md](media/README.md).
 
 ## Running locally instead

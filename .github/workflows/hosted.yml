@@ -4,7 +4,8 @@ name: Hosted Browserbase
 # Browserbase sessions with maintainer credentials. Ordinary `Library CI` stays
 # unpaid, credential-free and open to fork pull requests, and remains the only
 # required check. Never add `pull_request`, `pull_request_target` or `schedule`
-# triggers here: that would expose these secrets to unreviewed code.
+# triggers here. Main-ref guards supplement, but do not replace, the protected
+# environment's required reviewers and main-only deployment branch policy.
 on:
   workflow_dispatch:
     inputs:
@@ -32,7 +33,7 @@ concurrency:
 jobs:
   resolve:
     name: Validate hosted opt-in
-    if: ${{ github.repository == 'mannyc2/effect-agent-browserbase' }}
+    if: ${{ github.repository == 'mannyc2/effect-agent-browserbase' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -49,6 +50,7 @@ jobs:
   live:
     name: Guarded hosted run
     needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     # Protect this environment with required reviewers. It holds the only
     # credentials in this repository that can spend money.
@@ -63,6 +65,7 @@ jobs:
         run: printf 'BROWSERBASE_WORK_ROOT=%s/browserbase-hosted\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:

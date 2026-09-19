@@ -12,9 +12,10 @@ products.
 - Only the extensions and sizes declared in [`budget.json`](budget.json).
   `tools/test/hosted.test.mjs` enforces that budget and fails ordinary unpaid CI
   if documentation references media that is not committed.
-- Never a hand-edited, re-timed, sped-up or composited recording. The file must
-  be exactly what the run produced, so the video is evidence rather than
-  marketing.
+- Preserve the caller-encoded MP4 without manual edits or compositing. The
+  script-derived GIF is an explicitly rescaled, frame-rate-reduced preview,
+  not a lossless frame or timing record. Retain the producing commands and
+  distinguish capture accounting from decoded output accounting.
 - Never a recording of a page showing credentials, a Live View URL, a signed
   artifact URL or private content. `BROWSERBASE_DEMO_URL` must be a public page.
 
@@ -40,15 +41,17 @@ are not configured yet, and the wrapper additionally requires a bootstrapped
 upstream worktree. The GIF was encoded with the exact ladder from that script
 and was accepted on its first rung, 960px at 10fps.
 
-Everything the rule exists to protect holds: the recording is byte-for-byte what
-the run produced, the destination was a host-configured public page, and the
-source commit, session and capture summary are all recorded above. Re-recording
-through the workflow once its environment exists is the clean follow-up, and it
-should replace this file rather than sit beside it.
+The table is maintainer-reported run provenance; the committed bytes and their
+hashes are independently inspectable. It does not replace retained provider
+responses, nor establish that every original capture callback became a decoded
+frame: the reported counts are 31 delivered callbacks versus 27 decoded frames.
+Re-recording through the workflow once its environment exists should replace
+this file rather than sit beside it; it requires separate hosted authorization.
 
-The 800×450 frame size is Playwright's `Screencast.start` default, which fits
-the capture within 800×800 rather than matching the live viewport. It is not a
-cropped or rescaled recording.
+The committed MP4 is 800×450. Playwright's default screencast sizing fits within
+800×800; this is consistent with the observed geometry, not evidence that the
+public adapter exposes size controls. The GIF is separately scaled by its
+preview-encoding command.
 
 ## Producing the recording
 
