@@ -14,6 +14,10 @@ export interface DriverOptions {
 
 export interface DriverEvents {
   readonly invalidate: (reason: Invalidation) => void;
+  readonly captureInvalidated: (
+    pageId: string,
+    reason: Extract<Invalidation, "target-changed" | "resized">,
+  ) => void;
   readonly disconnected: () => void;
   readonly pause: () => void;
   readonly fault: () => void;
@@ -89,7 +93,14 @@ export interface Driver {
     readonly state: "completed" | "failed";
   }>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
-  readonly capture: () => CaptureSource;
+  readonly capture: (
+    target: PageInfo | undefined,
+    ticket: Ticket,
+  ) => Promise<{
+    readonly source: CaptureSource;
+    readonly pageId: string;
+    readonly frameId: string;
+  }>;
   readonly invalidateObservation: () => void;
   /** Closes this client connection, not an assertion about remote provider termination. */
   readonly disconnect: () => Promise<void>;
