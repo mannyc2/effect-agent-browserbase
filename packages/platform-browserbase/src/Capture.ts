@@ -21,7 +21,7 @@ export const start = (
       return Effect.fail(BrowserbaseError.make({ operation: "capture", reason: "closed" }));
     if (options.target === undefined) return startCapture(parent, options);
 
-    return Schema.decodeUnknownEffect(PageInfo)(options.target, { onExcessProperty: "error" }).pipe(
+    return Schema.decodeEffect(PageInfo)(options.target, { onExcessProperty: "error" }).pipe(
       Effect.mapError(() =>
         BrowserbaseError.make({
           operation: "capture",
