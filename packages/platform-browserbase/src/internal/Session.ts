@@ -95,6 +95,7 @@ export const acquireSession = Effect.fnUntraced(function* (
         const binding = await driver.capture(requested);
 
         return {
+          key: binding.targetId,
           target: Target.make({
             generation: owner.state.generation,
             pageId: binding.pageId,
