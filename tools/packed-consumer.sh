@@ -50,6 +50,8 @@ JS
   # Copy unchanged real suites/fixture, never production source or workspace aliases.
   cp "$PKG"/test/native/*.test.ts test/native/
   cp "$PKG/test/fixtures/LocalBrowser.ts" test/fixtures/
+  cp "$PKG/test/fixtures/NativeCaptureDiagnostics.ts" test/fixtures/
+  cp "$PKG/test/fixtures/CaptureTiming.ts" test/fixtures/
   cp "$PKG/examples/record-video.ts" examples/
   cp "$PKG/vite.native.config.ts" .
   cat > tsconfig.json <<'JSON'
