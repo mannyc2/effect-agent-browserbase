@@ -1,19 +1,29 @@
 import type { Effect } from "effect";
 
-import type { BrowserbaseError, Target } from "../Types.ts";
+import type { BrowserbaseError, PageInfo, Target } from "../Types.ts";
 import type { CaptureSource } from "./Driver.ts";
 import type { Owner, Ticket } from "./Owner.ts";
 
 export interface CaptureLease {
   readonly stop: Effect.Effect<void>;
   readonly invalidate: (reason: string) => void;
+  readonly reservedBytes: number;
+}
+
+export interface CaptureResolution {
+  readonly target: Target;
+  readonly source: CaptureSource;
 }
 
 export interface CaptureParent {
   readonly owner: Owner;
-  readonly source: (ticket: Ticket) => Effect.Effect<CaptureSource, BrowserbaseError>;
+  readonly resolve: (
+    ticket: Ticket,
+    target?: PageInfo,
+  ) => Effect.Effect<CaptureResolution, BrowserbaseError>;
   readonly target: () => Target;
-  captureLease?: CaptureLease;
+  readonly captureLeases: Map<string, CaptureLease>;
+  captureReservedBytes: number;
 }
 
 // Live identity association only; typed outcomes are Schemas, never hidden in this WeakMap.
