@@ -10,8 +10,14 @@ export class FrameBuffer<A extends { readonly bytes: Uint8Array }> {
   highWaterFrames = 0;
 
   constructor(maximumFrames: number, maximumBytes: number) {
-    if (!Number.isSafeInteger(maximumFrames) || maximumFrames < 1 || maximumFrames > 64 ||
-        !Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 64 * 1024 * 1024) {
+    if (
+      !Number.isSafeInteger(maximumFrames) ||
+      maximumFrames < 1 ||
+      maximumFrames > 64 ||
+      !Number.isSafeInteger(maximumBytes) ||
+      maximumBytes < 1 ||
+      maximumBytes > 64 * 1024 * 1024
+    ) {
       throw new RangeError("Invalid capture retention limits");
     }
     this.maximumFrames = maximumFrames;
@@ -22,10 +28,15 @@ export class FrameBuffer<A extends { readonly bytes: Uint8Array }> {
     this.received++;
     if (frame.bytes.byteLength > this.maximumBytes) {
       this.dropped++;
+
       return false;
     }
-    while (this.items.length >= this.maximumFrames || this.retained + frame.bytes.byteLength > this.maximumBytes) {
+    while (
+      this.items.length >= this.maximumFrames ||
+      this.retained + frame.bytes.byteLength > this.maximumBytes
+    ) {
       const removed = this.items.shift();
+
       if (removed === undefined) break;
       this.retained -= removed.bytes.byteLength;
       this.dropped++;
@@ -34,12 +45,15 @@ export class FrameBuffer<A extends { readonly bytes: Uint8Array }> {
     this.retained += frame.bytes.byteLength;
     this.highWaterBytes = Math.max(this.highWaterBytes, this.retained);
     this.highWaterFrames = Math.max(this.highWaterFrames, this.items.length);
+
     return true;
   }
 
   take(): A | undefined {
     const frame = this.items.shift();
+
     if (frame !== undefined) this.retained -= frame.bytes.byteLength;
+
     return frame;
   }
 
@@ -48,6 +62,10 @@ export class FrameBuffer<A extends { readonly bytes: Uint8Array }> {
     this.retained = 0;
   }
 
-  get size(): number { return this.items.length; }
-  get bytes(): number { return this.retained; }
+  get size(): number {
+    return this.items.length;
+  }
+  get bytes(): number {
+    return this.retained;
+  }
 }

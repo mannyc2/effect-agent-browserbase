@@ -1,0 +1,43 @@
+name: Browserbase implementation acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['packages/platform-browserbase/**', 'tools/**', 'upstream.patch', '.github/workflows/browserbase-completion.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browserbase-completion-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    if: ${{ github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/browserbase-completion' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: 'true'
+      VP_GIT_HOOKS: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.14.1'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.2'
+      - name: Execute all independent checks with retained exit statuses
+        run: bash tools/run-acceptance.sh
+      - name: Preserve exact source, lockfile, commands and results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browserbase-implementation-${{ github.run_id }}
+          path: ${{ runner.temp }}/browserbase-results
+          retention-days: 7

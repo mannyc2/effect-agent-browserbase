@@ -4,7 +4,7 @@ export default defineConfig({
   run: {
     tasks: {
       test: {
-        command: "vp test",
+        command: "vp test --run && vp run test:native",
         input: [
           { auto: true },
           { pattern: "bun.lock", base: "workspace" },
@@ -30,5 +30,5 @@ export default defineConfig({
     dts: true,
     sourcemap: true,
   },
-  test: { cache: false, silent: "passed-only" },
+  test: { include: ["test/*.test.ts"], cache: false, silent: "passed-only" },
 });

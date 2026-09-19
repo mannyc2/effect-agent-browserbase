@@ -5,21 +5,32 @@ export const Identifier = Schema.NonEmptyString.check(
   Schema.isMaxLength(256),
   Schema.isPattern(/^[A-Za-z0-9_-]+$/),
 );
+
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+
 export const SessionStatus = Schema.Literals([
-  "PENDING", "RUNNING", "COMPLETED", "ERROR", "TIMED_OUT",
+  "PENDING",
+  "RUNNING",
+  "COMPLETED",
+  "ERROR",
+  "TIMED_OUT",
 ]);
+
 export type SessionStatus = typeof SessionStatus.Type;
 
 /** A durable association, never a connection URL or proof that a browser is still alive. */
-export class SessionReference extends Schema.Class<SessionReference>("BrowserbaseSessionReference")({
-  provider: Schema.Literal("browserbase"),
-  projectId: Identifier,
-  sessionId: Identifier,
-}) {}
+export class SessionReference extends Schema.Class<SessionReference>("BrowserbaseSessionReference")(
+  {
+    provider: Schema.Literal("browserbase"),
+    projectId: Identifier,
+    sessionId: Identifier,
+  },
+) {}
 
 /** The nonce is reconciliation metadata, not provider idempotency. */
-export class AllocationAttempt extends Schema.Class<AllocationAttempt>("BrowserbaseAllocationAttempt")({
+export class AllocationAttempt extends Schema.Class<AllocationAttempt>(
+  "BrowserbaseAllocationAttempt",
+)({
   projectId: Identifier,
   attemptId: Identifier,
   requestedAtMillis: Schema.Finite,
@@ -30,12 +41,36 @@ export class AllocationAttempt extends Schema.Class<AllocationAttempt>("Browserb
 export class BrowserbaseError extends Schema.TaggedError<BrowserbaseError>()("BrowserbaseError", {
   operation: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
   reason: Schema.Literals([
-    "configuration", "unsupported", "busy", "closed", "stale", "not-found",
-    "ambiguous", "malformed", "limit", "timeout", "transport", "provider",
-    "authorization", "rate-limited", "disconnected", "allocation-unknown",
-    "assembly-unknown", "active", "disabled", "expired", "failed", "byos",
-    "unsafe-url", "unsafe-filename", "content-type", "timestamp", "resized",
-    "target-changed", "interrupted", "context-lease",
+    "configuration",
+    "unsupported",
+    "busy",
+    "closed",
+    "stale",
+    "not-found",
+    "ambiguous",
+    "malformed",
+    "limit",
+    "timeout",
+    "transport",
+    "provider",
+    "authorization",
+    "rate-limited",
+    "disconnected",
+    "allocation-unknown",
+    "assembly-unknown",
+    "active",
+    "disabled",
+    "expired",
+    "failed",
+    "byos",
+    "unsafe-url",
+    "unsafe-filename",
+    "content-type",
+    "timestamp",
+    "resized",
+    "target-changed",
+    "interrupted",
+    "context-lease",
   ]),
   outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
   status: Schema.optionalKey(Schema.Int),
@@ -56,9 +91,11 @@ export class Viewport extends Schema.Class<Viewport>("BrowserbaseViewport")(
   Schema.Struct({
     width: PositiveInt.check(Schema.isLessThanOrEqualTo(4096)),
     height: PositiveInt.check(Schema.isLessThanOrEqualTo(4096)),
-  }).check(Schema.makeFilter((v) => v.width * v.height <= 8_388_608, {
-    title: "at most 8,388,608 viewport pixels",
-  })),
+  }).check(
+    Schema.makeFilter((v) => v.width * v.height <= 8_388_608, {
+      title: "at most 8,388,608 viewport pixels",
+    }),
+  ),
 ) {}
 
 /** Page/frame IDs are connection-local; targetId is a separate Chromium identity. */
@@ -109,33 +146,43 @@ export class ObservedElement extends Schema.Class<ObservedElement>("BrowserbaseO
 
 export const SafeFilename = Schema.NonEmptyString.check(
   Schema.isMaxLength(240),
-  Schema.makeFilter((value) =>
-    value !== "." && value !== ".." &&
-    !/[\x00-\x1f\x7f/\\:]/.test(value) &&
-    !/[. ]$/.test(value) && !/^\s/.test(value) &&
-    !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value),
-  { title: "a portable, non-path download filename" }),
+  Schema.makeFilter(
+    (value) =>
+      value !== "." &&
+      value !== ".." &&
+      !/[\x00-\x1f\x7f/\\:]/.test(value) &&
+      !/[. ]$/.test(value) &&
+      !/^\s/.test(value) &&
+      !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value),
+    { title: "a portable, non-path download filename" },
+  ),
 );
 
-export class DownloadMetadata extends Schema.Class<DownloadMetadata>("BrowserbaseDownloadMetadata")({
-  id: Identifier,
-  sessionId: Identifier,
-  filename: SafeFilename,
-  mimeType: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
-  size: Schema.Natural,
-  checksum: Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{64}$/)),
-  createdAt: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
-}) {}
+export class DownloadMetadata extends Schema.Class<DownloadMetadata>("BrowserbaseDownloadMetadata")(
+  {
+    id: Identifier,
+    sessionId: Identifier,
+    filename: SafeFilename,
+    mimeType: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+    size: Schema.Natural,
+    checksum: Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{64}$/)),
+    createdAt: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+  },
+) {}
 
 /** A native event identity is not a provider download ID. Associate provider metadata explicitly. */
-export class DownloadObservation extends Schema.Class<DownloadObservation>("BrowserbaseDownloadObservation")({
+export class DownloadObservation extends Schema.Class<DownloadObservation>(
+  "BrowserbaseDownloadObservation",
+)({
   reference: SessionReference,
   downloadId: Identifier,
   filename: SafeFilename,
   state: Schema.Literals(["started", "completed", "failed", "unknown"]),
 }) {}
 
-export class RecordingPageReference extends Schema.Class<RecordingPageReference>("BrowserbaseRecordingPageReference")({
+export class RecordingPageReference extends Schema.Class<RecordingPageReference>(
+  "BrowserbaseRecordingPageReference",
+)({
   session: SessionReference,
   pageId: Identifier,
 }) {}
