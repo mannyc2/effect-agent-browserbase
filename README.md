@@ -22,6 +22,12 @@ The root entry point is also public. Production distributions contain ESM JavaSc
 
 Read the [package guide](packages/platform-browserbase/README.md) for ownership, outcomes, bounds and examples. The [agent example](packages/platform-browserbase/examples/agent.ts) uses the real `AgentRuntime` and scripted model; the [hosted examples](packages/platform-browserbase/examples/hosted.ts) show application composition but require separately authorized hosted access.
 
+### Demo
+
+The demo recording published under [`docs/media/`](docs/media/README.md) is one real hosted session navigating and scrolling under Effect Agent control, encoded by the caller from the same live frame stream `examples/record-video.ts` demonstrates. It is produced only by the manual `Hosted Browserbase` workflow and committed exactly as recorded, never edited, re-timed or composited.
+
+No recording is committed yet. Ordinary CI cannot allocate a session, so the first one has to come from a deliberate maintainer run; [docs/media/README.md](docs/media/README.md) covers producing it and the one line that embeds it here. A recording shows that a session ran. It is not a substitute for the hosted acceptance checks listed in [status](docs/STATUS.md).
+
 ### Important boundaries
 
 Only trusted-host `Unrestricted` network policy is supported. `ExactHosts` and `PublicWeb` fail before allocation rather than claiming containment the provider cannot prove. A timed-out mutation after dispatch has an unknown outcome and is not automatically retried. Credentials and Live View bearer URLs must stay outside model inputs and durable records. Live capture is video-only.
@@ -44,6 +50,8 @@ This remains an integration package for the pinned upstream workspace, not a sec
 ## CI and maintenance
 
 `Library CI` runs on every pull request (including forks), pushes to `main`, merge groups and manual requests. It has read-only permissions and no hosted/model credentials. The gate retains unit and native tests, real AgentRuntime/CDP behavior, decoded moving video, NodeNext external-consumer checks, exports/purity, full upstream `vp run ready`, release dry-runs, exact source archives and checksums.
+
+`Hosted Browserbase` is the only workflow that spends money, and it is manual, default-off and gated on a protected environment. It never runs on a pull request, so fork contributors are never blocked on a credential they cannot have. See [hosted runs](docs/HOSTED.md).
 
 The npm job is separate: it receives OIDC permission only after fresh acceptance and an explicit maintainer opt-in. It verifies and publishes the same immutable tarball the external consumer tested, without installing dependencies or executing package lifecycle scripts in the publishing job.
 

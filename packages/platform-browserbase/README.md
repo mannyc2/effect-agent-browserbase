@@ -144,3 +144,12 @@ so a later recording failure does not erase the known cleanup identity.
 That command does not pretend to perform a human takeover: Live View issuance is
 automated, while an actual operator takeover/release and provider-side coexistence
 of Live View, native recording and capture remain explicit hosted/manual checks.
+
+`tools/hosted-demo.sh <patched-effect-agent-worktree> <output>` is a second,
+separate guarded command under the same opt-in. It records the repository's
+published demo video from one bounded session and requests no provider recording,
+so it approves no artifact delivery origin. It is documentation evidence, not an
+acceptance result: a recording shows a session ran, not that Live View
+authorization, handoff, reconnection or artifact retrieval behaved correctly.
+Both commands run only from the manual, default-off `Hosted Browserbase`
+workflow or a maintainer's own machine.

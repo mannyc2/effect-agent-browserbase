@@ -6,6 +6,8 @@ Current maintenance uses `Library CI` and a separate, manual, default-off npm OI
 
 No npm version has been published from this repository. Hosted Browserbase allocation/cleanup, Live View authorization and actual operator handoff, persistent-context behavior, provider keep-alive reconnection, real provider files/recordings/replays and signed-URL expiry remain separately authorized hosted checks. Local CDP/video and scripted-provider results are not substituted for those guarantees.
 
+[HOSTED.md](HOSTED.md) describes the manual, default-off workflow those checks run under and the separate demo recording that documentation publishes. No hosted run has been executed from this repository, and a demo recording is documentation rather than evidence for any check above.
+
 ## Historical material
 
 `checkpoints/` is preserved byte-for-byte as provenance and is not needed to bootstrap current source. The old transfer handoff, canonical-input fetcher and transient development logs were retired from active paths. Their original bytes remain available at merge commit `e61e3d75c15cbd467e196170fce5c064c13d4bb0` in Git history:

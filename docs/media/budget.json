@@ -1,0 +1,7 @@
+{
+  "comment": "Bounds for media committed under docs/media. tools/hosted-demo.sh encodes to fit these and tools/test/media.test.mjs enforces them in ordinary unpaid CI.",
+  "maxGifBytes": 4194304,
+  "maxMp4Bytes": 8388608,
+  "maxFiles": 8,
+  "allowedExtensions": [".gif", ".mp4", ".md", ".json"]
+}
