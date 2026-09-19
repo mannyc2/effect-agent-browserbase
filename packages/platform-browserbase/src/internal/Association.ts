@@ -11,6 +11,8 @@ export interface CaptureLease {
 }
 
 export interface CaptureResolution {
+  /** Stable native page identity used to quarantine an unconfirmed screencast across reconnects. */
+  readonly key: string;
   readonly target: Target;
   readonly source: CaptureSource;
 }
