@@ -14,6 +14,8 @@ import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { FetchHttpClient } from "effect/unstable/http";
 import { chromium, type Page, type ConnectOverCDPOptions } from "playwright-core";
 
+import { installCaptureDiagnostics } from "./NativeCaptureDiagnostics.ts";
+
 export class NativeFixtureError extends Schema.TaggedError<NativeFixtureError>()(
   "NativeFixtureError",
   {
@@ -105,7 +107,11 @@ export const localBrowser = Effect.acquireRelease(
       if (!session) throw new Error("Unknown scripted provider session");
       connections.push(id!);
 
-      return originalConnect(session.endpoint, options);
+      const browser = await originalConnect(session.endpoint, options);
+
+      installCaptureDiagnostics(browser, id!, connections.length);
+
+      return browser;
     };
 
     const fetch: typeof globalThis.fetch = async (input, init) => {
