@@ -132,10 +132,14 @@ recording coexistence or Browserbase network behavior.
 Ordinary CI never allocates Browserbase. After separate approval, maintainers can
 run `tools/hosted-acceptance.sh <patched-effect-agent-worktree>` with
 `EFFECT_AGENT_BROWSERBASE_LIVE=1`, `BROWSERBASE_API_KEY` and
-`BROWSERBASE_PROJECT_ID`. The command is bounded to one session, 180 seconds,
+`BROWSERBASE_PROJECT_ID` plus `BROWSERBASE_ARTIFACT_ORIGINS` (comma-separated exact
+HTTPS delivery origins approved by the trusted operator). Missing or malformed
+origins fail before allocation. The command is bounded to one session, 180 seconds,
 10 actions, a three-second live capture, at most 512 MiB of provider-recording
 download, and zero model calls. It records allocation/control/capture/cleanup and
-post-close recording results separately.
+post-close recording results separately. Line-delimited JSON records allocation,
+cleanup and interactive results before attempting post-close recording retrieval,
+so a later recording failure does not erase the known cleanup identity.
 
 That command does not pretend to perform a human takeover: Live View issuance is
 automated, while an actual operator takeover/release and provider-side coexistence

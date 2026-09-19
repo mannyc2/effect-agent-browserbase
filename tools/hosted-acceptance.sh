@@ -9,6 +9,7 @@ test "${EFFECT_AGENT_BROWSERBASE_LIVE:-}" = 1 || {
 }
 : "${BROWSERBASE_API_KEY:?BROWSERBASE_API_KEY is required}"
 : "${BROWSERBASE_PROJECT_ID:?BROWSERBASE_PROJECT_ID is required}"
+: "${BROWSERBASE_ARTIFACT_ORIGINS:?comma-separated approved HTTPS recording origins are required}"
 TREE="${1:?pass the patched effect-agent worktree}"
 cd "$TREE/packages/platform-browserbase"
 ../../node_modules/.bin/vp exec bun examples/hosted-acceptance.ts

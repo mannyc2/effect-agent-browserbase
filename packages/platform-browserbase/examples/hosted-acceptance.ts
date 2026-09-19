@@ -8,16 +8,50 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 const apiKey = process.env.BROWSERBASE_API_KEY;
 const projectId = process.env.BROWSERBASE_PROJECT_ID;
+const configuredOrigins = process.env.BROWSERBASE_ARTIFACT_ORIGINS;
 
-if (process.env.EFFECT_AGENT_BROWSERBASE_LIVE !== "1" || !apiKey || !projectId) {
+if (
+  process.env.EFFECT_AGENT_BROWSERBASE_LIVE !== "1" ||
+  !apiKey ||
+  !projectId ||
+  !configuredOrigins
+) {
   throw new Error(
-    "Set EFFECT_AGENT_BROWSERBASE_LIVE=1, BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID",
+    "Set EFFECT_AGENT_BROWSERBASE_LIVE=1, BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID and BROWSERBASE_ARTIFACT_ORIGINS",
   );
 }
+
+// A trusted operator supplies exact approved delivery origins before allocation.
+// Never derive this allowlist from untrusted page data or a newly returned URL.
+const artifactOrigins = configuredOrigins.split(",").map((origin) => origin.trim());
+
+if (
+  artifactOrigins.length > 32 ||
+  artifactOrigins.some((origin) => {
+    try {
+      const url = new URL(origin);
+
+      return url.protocol !== "https:" || url.origin !== origin || !!url.username || !!url.password;
+    } catch {
+      return true;
+    }
+  })
+) {
+  throw new Error("BROWSERBASE_ARTIFACT_ORIGINS must contain exact approved HTTPS origins");
+}
+
+const report = (phase: string, result: unknown) => {
+  console.log(
+    JSON.stringify({ phase, result }, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value,
+    ),
+  );
+};
 
 const common = {
   projectId,
   apiKey: Redacted.make(apiKey),
+  artifactOrigins,
   recordSession: true,
   actionTimeoutMillis: 15_000,
   requestTimeoutMillis: 15_000,
@@ -34,12 +68,13 @@ const interactive = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
 
+    yield* Effect.sync(() => report("allocated", session.reference));
     yield* session.handle.navigate(BrowserNavigateRequest.make({ url: "https://example.com/" }));
     const observation = yield* session.observe({ maxTextBytes: 16 * 1024, maxControls: 16 });
     const screenshot = yield* session.handle.screenshot({ fullPage: true });
 
     const capture = yield* Capture.start(session, {
-      maxFrames: 120,
+      maxFrames: 64,
       maxBufferedBytes: 16 * 1024 * 1024,
       maxFrameBytes: 4 * 1024 * 1024,
       maxDurationMillis: 3_000,
@@ -65,13 +100,22 @@ const interactive = Effect.scoped(
       cleanup,
     };
   }).pipe(
-    Effect.provide(BrowserbaseInteractiveHost.layer(common)),
+    Effect.provide(
+      BrowserbaseInteractiveHost.layer({
+        ...common,
+        onCleanup: (cleanup) => Effect.sync(() => report("cleanup", cleanup)),
+        onAllocationUncertain: (attempt) =>
+          Effect.sync(() => report("allocation-unknown", attempt)),
+      }),
+    ),
     Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
   ),
 );
 
 const program = Effect.gen(function* () {
   const browser = yield* interactive;
+
+  yield* Effect.sync(() => report("interactive", browser));
   const recordings = yield* BrowserbaseRecordings;
   const requested = yield* recordings.request(browser.reference);
 
@@ -110,14 +154,9 @@ const program = Effect.gen(function* () {
 }).pipe(
   Effect.provide(BrowserbaseRecordings.layer(common)),
   Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
+  Effect.tapError((error) => Effect.sync(() => report("failure", error))),
 );
 
 const result = await Effect.runPromise(program);
 
-console.log(
-  JSON.stringify(
-    result,
-    (_key, value) => (typeof value === "bigint" ? value.toString() : value),
-    2,
-  ),
-);
+report("complete", result);

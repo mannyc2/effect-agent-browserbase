@@ -21,11 +21,16 @@ import { FetchHttpClient } from "effect/unstable/http";
 export interface Credentials {
   readonly projectId: string;
   readonly apiKey: string;
+  /** Exact trusted HTTPS origins required for provider recording downloads. */
+  readonly artifactOrigins?: ReadonlyArray<string>;
 }
 
 const options = (credentials: Credentials): InteractiveOptions => ({
   projectId: credentials.projectId,
   apiKey: Redacted.make(credentials.apiKey),
+  ...(credentials.artifactOrigins === undefined
+    ? {}
+    : { artifactOrigins: credentials.artifactOrigins }),
   recordSession: true,
 });
 
