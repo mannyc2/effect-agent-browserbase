@@ -55,10 +55,13 @@ const program = Effect.gen(function* () {
   if (page === undefined) return batch;
 
   const bytes = yield* recordings
-    .download(RecordingPageReference.make({ session: reference, pageId: page.pageId }), {
-      maxBytes: 512 * 1024 * 1024,
-      timeoutMillis: 120_000,
-    })
+    .download(
+      RecordingPageReference.make({ session: reference, pageId: page.pageId }),
+      {
+        maxBytes: 512 * 1024 * 1024,
+        timeoutMillis: 120_000,
+      },
+    )
     .pipe(Stream.runCollect);
 
   return { batch, bytes };
