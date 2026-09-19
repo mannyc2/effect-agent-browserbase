@@ -219,6 +219,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
       dismissDialogs: async () => {},
       capture: async (target) => ({
         pageId: target?.pageId ?? pageId,
+        targetId: target?.targetId ?? "target-1",
         frameId,
         source: options.captureSource ?? { start: async () => {}, stop: async () => {} },
       }),
