@@ -6,19 +6,19 @@
 // invoked and no provider recording is requested or downloaded here; the video
 // is encoded by the caller from the same live-page frame stream that
 // `record-video.ts` demonstrates.
+//
+// The recording itself lives in `demo-recording.ts` so that `test/native/demo.test.ts`
+// can prove the pacing and encoding against a local Chromium over real CDP. A
+// hosted session is spent publishing the result, not discovering those.
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/interactive-browser";
-import { Effect, Fiber, Redacted } from "effect";
-import {
-  BrowserNavigateRequest,
-  BrowserScrollRequest,
-  InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+import { Effect, Redacted } from "effect";
+import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { recordInterval } from "./record-video.ts";
+import { recordDemo } from "./demo-recording.ts";
 
 const apiKey = process.env.BROWSERBASE_API_KEY;
 const projectId = process.env.BROWSERBASE_PROJECT_ID;
@@ -70,11 +70,9 @@ const report = (phase: string, result: unknown) => {
   );
 };
 
-// Four scrolls, one navigation and one observation stay well inside the
-// policy's action bound, with time left for the capture to settle between them.
-const scrollSteps = 4;
-const scrollDelta = 320;
-
+// Four scrolls, one navigation and one observation stay well inside this action
+// bound. The elapsed bound is a ceiling on a stuck run, not the expected cost:
+// a successful demo ends as soon as the capture and cleanup finish.
 const policy = InteractiveBrowserPolicy.make({
   network: { _tag: "Unrestricted" },
   maxActions: 10,
@@ -87,47 +85,10 @@ const program = Effect.scoped(
     const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
 
     yield* Effect.sync(() => report("allocated", session.reference));
-    yield* session.handle.navigate(BrowserNavigateRequest.make({ url: targetUrl }));
-
-    // Scroll the same live page while it is being captured. Same-page scrolling
-    // keeps the capture's parent target valid, so the recording shows real
-    // bounded actions instead of one still frame. A viewport change would
-    // deliberately terminate the interval instead.
-    const driver = Effect.gen(function* () {
-      let dispatched = 0;
-
-      for (let step = 0; step < scrollSteps; step++) {
-        yield* Effect.sleep(Math.floor(durationMillis / (scrollSteps + 2)));
-        // Re-verify the selected target between actions, the way the
-        // model-facing scroll Tool does, rather than reusing a handle taken
-        // before the navigation.
-        const handle = yield* session.currentHandle;
-
-        yield* handle.scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: scrollDelta }));
-        dispatched++;
-      }
-
-      return { dispatched, deltaY: dispatched * scrollDelta };
-    });
-
-    const driving = yield* driver.pipe(Effect.forkChild);
-    const recording = yield* recordInterval(session, output, durationMillis);
-    const scrolled = yield* Fiber.join(driving);
-    const observation = yield* session.observe({ maxTextBytes: 8 * 1024, maxControls: 8 });
+    const demo = yield* recordDemo(session, targetUrl, output, { durationMillis });
     const cleanup = yield* session.close;
 
-    return {
-      reference: session.reference,
-      target: observation.url,
-      scrolled,
-      output,
-      capture: recording.summary,
-      // Distinct pixel checksums are what separate a recorded page from a still
-      // image encoded repeatedly; publish the count alongside the video.
-      decodedFrames: recording.decodedFrames.length,
-      distinctFrames: new Set(recording.decodedFrames.map((frame) => frame.checksum)).size,
-      cleanup,
-    };
+    return { reference: session.reference, output, ...demo, cleanup };
   }).pipe(
     Effect.provide(
       BrowserbaseInteractiveHost.layer({
