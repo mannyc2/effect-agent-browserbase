@@ -88,18 +88,30 @@ export const acquireSession = Effect.fnUntraced(function* (
 
       return Target.make({ generation: owner.state.generation, ...driver.selected() });
     },
-    source: (ticket) =>
+    resolve: (ticket, requested) =>
       native("capture-source", ticket, async () => {
         if (driver === undefined)
           throw BrowserbaseError.make({ operation: "capture", reason: "closed" });
+        const binding = await driver.capture(requested);
 
-        return driver.capture();
+        return {
+          key: binding.targetId,
+          target: Target.make({
+            generation: owner.state.generation,
+            pageId: binding.pageId,
+            frameId: binding.frameId,
+          }),
+          source: binding.source,
+        };
       }),
+    captureLeases: new Map(),
+    captureReservedBytes: 0,
   };
 
   owner.onInvalidate((reason) => {
     driver?.invalidateObservation();
-    if (reason !== "observation") capture.captureLease?.invalidate(reason);
+    if (["paused", "disconnected", "uncertain", "closed"].includes(reason))
+      for (const lease of capture.captureLeases.values()) lease.invalidate(reason);
   });
 
   const boundedCleanup = (effect: Effect.Effect<void>, operation: string) =>
@@ -118,9 +130,9 @@ export const acquireSession = Effect.fnUntraced(function* (
         owner.fence("closing", "closed");
         handoffToken = undefined;
         activeConnection = undefined;
-        const lease = capture.captureLease;
+        const leases = [...capture.captureLeases.values()];
 
-        if (lease !== undefined) yield* boundedCleanup(lease.stop, "capture-cleanup");
+        for (const lease of leases) yield* boundedCleanup(lease.stop, "capture-cleanup");
         let local: CleanupResult["local"] = connectPending ? "pending" : "not-connected";
         let remote: CleanupResult | undefined;
 

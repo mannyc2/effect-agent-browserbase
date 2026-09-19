@@ -36,9 +36,27 @@ export interface NativeFrame {
   readonly viewportHeight: number;
 }
 
+export type CaptureInvalidation = "target-changed" | "resized";
+
 export interface CaptureSource {
-  readonly start: (callback: (frame: NativeFrame) => void, quality: number) => Promise<void>;
+  readonly start: (
+    callback: (frame: NativeFrame) => void,
+    quality: number,
+    invalidate: (reason: CaptureInvalidation) => void,
+  ) => Promise<void>;
   readonly stop: () => Promise<void>;
+}
+
+export interface CaptureTarget {
+  readonly pageId: string;
+  readonly targetId: string;
+}
+
+export interface CaptureBinding {
+  readonly pageId: string;
+  readonly targetId: string;
+  readonly frameId: string;
+  readonly source: CaptureSource;
 }
 
 export interface Driver {
@@ -89,7 +107,7 @@ export interface Driver {
     readonly state: "completed" | "failed";
   }>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
-  readonly capture: () => CaptureSource;
+  readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
   readonly invalidateObservation: () => void;
   /** Closes this client connection, not an assertion about remote provider termination. */
   readonly disconnect: () => Promise<void>;

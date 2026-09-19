@@ -22,7 +22,10 @@ import {
 } from "../Types.ts";
 import { CallbackTasks } from "./CallbackTasks.ts";
 import type {
+  CaptureBinding,
+  CaptureInvalidation,
   CaptureSource,
+  CaptureTarget,
   Driver,
   DriverEvents,
   DriverOptions,
@@ -88,6 +91,10 @@ interface Snapshot {
   readonly id: string;
   valid: boolean;
   readonly nodes: Map<string, ElementHandle<Element>>;
+}
+interface CaptureWatcher {
+  readonly frameId: string;
+  readonly invalidate: (reason: CaptureInvalidation) => void;
 }
 
 /** No raw exception from Playwright is allowed to cross this private boundary. */
@@ -178,6 +185,7 @@ export const makePlaywrightDriver = async (
   const frameIds = new WeakMap<Frame, string>();
   const dialogs = new Set<Dialog>();
   const callbacks = new CallbackTasks(32, () => events.fault());
+  const captureWatchers = new Map<string, Set<CaptureWatcher>>();
 
   let serial = 0,
     frameSerial = 0,
@@ -212,6 +220,23 @@ export const makePlaywrightDriver = async (
     return id;
   };
 
+  const invalidateCaptures = (entry: Entry, reason: CaptureInvalidation, frame?: Frame): void => {
+    const watchers = captureWatchers.get(entry.id);
+
+    if (watchers === undefined) return;
+    const changedFrameId = frame === undefined ? undefined : frameId(frame);
+    const mainFrameId = frameId(entry.page.mainFrame());
+
+    for (const watcher of [...watchers]) {
+      if (
+        frame === undefined ||
+        changedFrameId === mainFrameId ||
+        changedFrameId === watcher.frameId
+      )
+        watcher.invalidate(reason);
+    }
+  };
+
   const disposeObservation = async () => {
     const old = observation;
 
@@ -241,6 +266,8 @@ export const makePlaywrightDriver = async (
     for (const frame of page.frames()) frameId(frame);
 
     const onClose = () => {
+      invalidateCaptures(entry, "target-changed");
+      captureWatchers.delete(entry.id);
       entries.delete(entry.id);
       for (const off of entry.off.splice(0)) off();
       if (selected === entry) {
@@ -252,11 +279,13 @@ export const makePlaywrightDriver = async (
 
     const onNavigation = (frame: Frame) => {
       frameId(frame);
+      invalidateCaptures(entry, "target-changed", frame);
       if (selected === entry && (selectedFrame === frame || frame === page.mainFrame()))
         changed("target-changed");
     };
 
     const onDetached = (frame: Frame) => {
+      invalidateCaptures(entry, "target-changed", frame);
       if (selectedFrame === frame) {
         selectedFrame = undefined;
         changed("target-changed");
@@ -852,8 +881,10 @@ export const makePlaywrightDriver = async (
     resize: (viewport, ticket) =>
       sanitize("resize", async () => {
         const page = current().entry.page;
+        const entry = current().entry;
 
         ticket.dispatch();
+        invalidateCaptures(entry, "resized");
         changed("resized");
         await page.setViewportSize(viewport);
         ticket.check();
@@ -932,25 +963,76 @@ export const makePlaywrightDriver = async (
           dialogs.delete(dialog);
         }
       }),
-    capture: (): CaptureSource => {
-      const page = current().entry.page;
+    capture: (target?: CaptureTarget): Promise<CaptureBinding> =>
+      sanitize("capture", async () => {
+        let entry: Entry;
+        let captureFrame: Frame;
 
-      // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
-      if (page.screencast === undefined) throw failure("capture", "unsupported");
+        if (target === undefined) {
+          const selectedTarget = current();
 
-      return {
-        start: (callback, quality) =>
-          sanitize("capture-start", async () => {
-            await page.screencast.start({
-              quality,
-              onFrame: (frame: NativeFrame) => {
-                callback(frame);
-              },
-            });
-          }),
-        stop: () => sanitize("capture-stop", () => page.screencast.stop()),
-      };
-    },
+          entry = selectedTarget.entry;
+          captureFrame = selectedTarget.frame;
+        } else {
+          const requested = entries.get(target.pageId);
+
+          if (requested === undefined || requested.page.isClosed())
+            throw failure("capture", "not-found", "undispatched");
+          if ((await getTargetId(requested)) !== target.targetId)
+            throw failure("capture", "stale", "undispatched");
+          entry = requested;
+          captureFrame = entry.page.mainFrame();
+        }
+        const page = entry.page;
+        const targetId = await getTargetId(entry);
+        const watchedFrameId = frameId(captureFrame);
+
+        // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
+        if (page.screencast === undefined) throw failure("capture", "unsupported");
+        let watcherSet: Set<CaptureWatcher> | undefined;
+        let watcher: CaptureWatcher | undefined;
+
+        const source: CaptureSource = {
+          start: (callback, quality, invalidate) =>
+            sanitize("capture-start", async () => {
+              watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
+              captureWatchers.set(entry.id, watcherSet);
+              watcher = { frameId: watchedFrameId, invalidate };
+              watcherSet.add(watcher);
+              try {
+                await page.screencast.start({
+                  quality,
+                  onFrame: (frame: NativeFrame) => {
+                    callback(frame);
+                  },
+                });
+              } catch (error) {
+                watcherSet.delete(watcher);
+                watcher = undefined;
+                if (watcherSet.size === 0) captureWatchers.delete(entry.id);
+                throw error;
+              }
+            }),
+          stop: () =>
+            sanitize("capture-stop", async () => {
+              if (watcher !== undefined && watcherSet !== undefined) {
+                watcherSet.delete(watcher);
+                watcher = undefined;
+                if (watcherSet.size === 0) captureWatchers.delete(entry.id);
+              }
+              // A closed target cannot produce more frames; its page channel rejects stop.
+              if (page.isClosed()) return;
+              try {
+                await page.screencast.stop();
+              } catch (error) {
+                // Closure can race the stop request. A live target still requires quarantine.
+                if (!page.isClosed()) throw error;
+              }
+            }),
+        };
+
+        return { pageId: entry.id, targetId, frameId: watchedFrameId, source };
+      }),
     invalidateObservation,
     disconnect: () =>
       sanitize("disconnect", async () => {
@@ -960,6 +1042,7 @@ export const makePlaywrightDriver = async (
         context.off("page", onPage);
         browser.off("disconnected", onDisconnected);
         for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
+        captureWatchers.clear();
         await disposeObservation().catch(() => {});
         await closeWithin(() =>
           Promise.allSettled([...dialogs].map((dialog) => dialog.dismiss())),

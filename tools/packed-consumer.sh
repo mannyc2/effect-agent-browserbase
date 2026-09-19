@@ -53,6 +53,7 @@ JS
   cp "$PKG/test/fixtures/NativeCaptureDiagnostics.ts" test/fixtures/
   cp "$PKG/test/fixtures/CaptureTiming.ts" test/fixtures/
   cp "$PKG/examples/record-video.ts" examples/
+  cp "$PKG/examples/demo-recording.ts" examples/
   cp "$PKG/vite.native.config.ts" .
   cat > tsconfig.json <<'JSON'
 {"compilerOptions":{"target":"ES2023","lib":["ES2023","DOM","DOM.Iterable"],"module":"NodeNext","moduleResolution":"NodeNext","allowImportingTsExtensions":true,"noEmit":true,"strict":true,"noUnusedLocals":true,"noUnusedParameters":true,"skipLibCheck":true,"types":["node"]},"include":["test","examples","vite.native.config.ts"]}

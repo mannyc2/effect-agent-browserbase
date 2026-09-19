@@ -217,7 +217,12 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         return { downloadId: "native-1", filename: "fixture.txt", state: "completed" };
       },
       dismissDialogs: async () => {},
-      capture: () => options.captureSource ?? { start: async () => {}, stop: async () => {} },
+      capture: async (target) => ({
+        pageId: target?.pageId ?? pageId,
+        targetId: target?.targetId ?? "target-1",
+        frameId,
+        source: options.captureSource ?? { start: async () => {}, stop: async () => {} },
+      }),
       invalidateObservation() {},
       disconnect: async () => {
         state.localCloses++;
