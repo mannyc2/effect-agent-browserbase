@@ -1,6 +1,6 @@
 import { Schema, type Effect, type Stream } from "effect";
 
-import { BrowserbaseError, Target } from "../Types.ts";
+import { BrowserbaseError, Target, type PageInfo } from "../Types.ts";
 
 /** Bytes are owned by the consumer. This is not a canonical thread or model Tool value. */
 export interface CapturedFrame {
@@ -18,6 +18,8 @@ export interface CapturedFrame {
 }
 
 export interface CaptureOptions {
+  /** Explicit page identity returned by `session.pages`; omitted means the selected page. */
+  readonly target?: PageInfo;
   readonly maxFrames?: number;
   readonly maxBufferedBytes?: number;
   readonly maxFrameBytes?: number;
