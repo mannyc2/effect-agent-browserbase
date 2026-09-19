@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import * as Capture from "@effect-agent/platform-browserbase/capture";
 import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/interactive-browser";
 import { ObservedElement, Viewport } from "@effect-agent/platform-browserbase/types";
@@ -171,6 +174,11 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           expect(download.state).toBe("completed");
           expect(download.filename).toBe("fixture.txt");
           expect(f.fileRequests()).toBe(1);
+          const bytes = yield* Effect.promise(() =>
+            readFile(join(f.directory, session.reference.sessionId, "downloads", "fixture.txt")),
+          );
+
+          expect(bytes.toString("utf8")).toBe("real browser download\n");
           // Native event IDs are not asserted equal to Browserbase's separate file IDs.
           yield* h.click(BrowserClickRequest.make({ selector: "#dialog" }));
           expect((yield* h.readText(BrowserReadTextRequest.make({ selector: "#echo" }))).text).toBe(

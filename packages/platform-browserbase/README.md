@@ -100,7 +100,10 @@ Stopping a child capture does not close its browser. The frame seam has **no
 website-audio source**, so this package does not claim audio capture, synthesize
 silent samples, or infer audio support from a video container. Caller encoding is
 demonstrated in `examples/record-video.ts` and intentionally remains outside the
-runtime package.
+runtime package. The example probes every stream, then decodes every video frame
+with the caller's FFmpeg to obtain presentation timestamps and pixel checksums.
+Native acceptance checks changing pixels and timing against the capture source;
+reading container headers alone is not accepted as video verification.
 
 ## Development and evidence
 
@@ -110,6 +113,15 @@ Vite+: `vp run check`, `vp test`, `vp run install:test-browser`,
 Chromium against loopback HTTP fixtures over the real CDP boundary. Unit tests use
 Effect TestClock and scripted provider edges. Agent tests use the actual public
 `AgentRuntime`, Effect AI Toolkit and `@effect-agent/testing/ScriptedModel`.
+
+`tools/packed-consumer.sh` installs the emitted npm tarball into a separate
+consumer with exact public dependency versions, checks NodeNext declarations,
+and runs the unchanged native/AgentRuntime suites without workspace aliases.
+It also runs a real navigation/action/capture/cleanup program directly on both
+Node and Bun. Unpaid Actions retain the decoded-frame verification and local
+capture video alongside the command logs, review patch, candidate archive and
+checksums. These tests script only provider allocation/status and address lookup;
+they do not allocate Browserbase or invoke a paid model.
 
 Those boundaries remain distinct from hosted Browserbase evidence. A local CDP
 pass proves native integration, not provider allocation, Live View authorization,

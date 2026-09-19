@@ -12,11 +12,23 @@ class RecordVideoError extends Schema.TaggedError<RecordVideoError>()("RecordVid
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
+const DecodedFrame = Schema.Struct({
+  stream: Schema.Literal(0),
+  presentation: Schema.Int,
+  checksum: Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/)),
+});
+
+const DecodedFrames = Schema.Struct({
+  numerator: Schema.Int.check(Schema.isGreaterThan(0)),
+  denominator: Schema.Int.check(Schema.isGreaterThan(0)),
+  frames: Schema.Array(DecodedFrame).check(Schema.isMinLength(2)),
+});
+
 const processResult = (command: string, args: ReadonlyArray<string>, cwd?: string) =>
   Effect.tryPromise({
-    try: () =>
+    try: (signal) =>
       new Promise<{ readonly stdout: string; readonly stderr: string }>((resolve, reject) => {
-        const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+        const child = spawn(command, args, { cwd, signal, stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "";
         let stderr = "";
 
@@ -27,7 +39,7 @@ const processResult = (command: string, args: ReadonlyArray<string>, cwd?: strin
           stderr += chunk.toString();
         });
         child.once("error", reject);
-        child.once("exit", (code) =>
+        child.once("close", (code) =>
           code === 0
             ? resolve({ stdout, stderr })
             : reject(
@@ -128,8 +140,6 @@ export const recordInterval = (
       const probe = yield* processResult("ffprobe", [
         "-v",
         "error",
-        "-select_streams",
-        "v:0",
         "-show_entries",
         "stream=codec_type,width,height,duration:format=duration",
         "-of",
@@ -139,6 +149,53 @@ export const recordInterval = (
 
       const decoded: unknown = JSON.parse(probe.stdout);
 
-      return { summary, decoded };
+      // ffprobe can read container headers without decoding pixels. Decode every
+      // video frame independently and retain presentation times and pixel hashes.
+      const verified = yield* processResult("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-xerror",
+        "-i",
+        outputPath,
+        "-map",
+        "0:v:0",
+        "-vsync",
+        "0",
+        "-f",
+        "framemd5",
+        "-",
+      ]);
+
+      const timebase = /^#tb 0:\s*(\d+)\/(\d+)$/m.exec(verified.stdout);
+
+      const verificationInput: unknown = {
+        numerator: Number(timebase?.[1]),
+        denominator: Number(timebase?.[2]),
+        frames: verified.stdout
+          .split("\n")
+          .filter((line) => line.trim() !== "" && !line.startsWith("#"))
+          .map((line) => {
+            const columns = line.split(",").map((column) => column.trim());
+
+            return {
+              stream: Number(columns[0]),
+              presentation: Number(columns[2]),
+              checksum: columns[5],
+            };
+          }),
+      };
+
+      const verification = yield* Schema.decodeUnknownEffect(DecodedFrames)(verificationInput).pipe(
+        Effect.mapError(() => RecordVideoError.make({ operation: "decode-verification" })),
+      );
+
+      const decodedFrames = verification.frames.map((frame) => ({
+        presentationTimeMillis:
+          (frame.presentation * verification.numerator * 1000) / verification.denominator,
+        checksum: frame.checksum,
+      }));
+
+      return { summary, decoded, decodedFrames };
     }),
   );

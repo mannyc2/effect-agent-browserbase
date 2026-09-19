@@ -1,3 +1,13 @@
+diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
+new file mode 100644
+--- /dev/null
++++ b/.changeset/browserbase-interactive.md
+@@ -0,0 +1,5 @@
++---
++"@effect-agent/platform-browserbase": minor
++---
++
++Add scoped Browserbase interactive control, independent recording/replay/download access, and bounded same-page live capture for trusted Node and Bun hosts.
 diff --git a/.changeset/config.json b/.changeset/config.json
 index 7db06dca..ed0bf019 100644
 --- a/.changeset/config.json

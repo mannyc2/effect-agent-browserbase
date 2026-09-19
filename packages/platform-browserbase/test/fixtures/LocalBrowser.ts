@@ -119,6 +119,7 @@ export const localBrowser = Effect.acquireRelease(
         const id = `session-${createBodies.length}`;
         const profile = join(directory, id);
 
+        await mkdir(profile, { recursive: true });
         // Launch ONLY the process: a launchPersistentContext client would be a
         // second controller which can auto-dismiss dialogs behind the adapter.
         const process = spawn(
@@ -133,7 +134,7 @@ export const localBrowser = Effect.acquireRelease(
             `--user-data-dir=${profile}`,
             "about:blank",
           ],
-          { stdio: ["ignore", "pipe", "pipe"] },
+          { cwd: profile, stdio: ["ignore", "pipe", "pipe"] },
         );
 
         let diagnostic = "";
@@ -160,27 +161,9 @@ export const localBrowser = Effect.acquireRelease(
           const endpoint = `http://127.0.0.1:${port}`;
 
           sessions.set(id, { process, endpoint, status: "RUNNING" });
-          // Provider-side fixture policy: production never chooses a host download path.
-          const downloadPath = join(directory, "downloads", id);
-
-          await mkdir(downloadPath, { recursive: true });
-          const setup = await originalConnect(endpoint);
-
-          try {
-            const cdp = await setup.newBrowserCDPSession();
-
-            try {
-              await cdp.send("Browser.setDownloadBehavior", {
-                behavior: "allow",
-                downloadPath,
-                eventsEnabled: true,
-              });
-            } finally {
-              await cdp.detach();
-            }
-          } finally {
-            await setup.close();
-          }
+          // Production configures Browserbase's required relative "downloads"
+          // directory through real CDP. cwd keeps those files execution-owned;
+          // no fixture-side CDP client overrides the adapter's download policy.
         } catch (error) {
           console.error("Local process fixture allocation failed", error);
           process.kill("SIGKILL");

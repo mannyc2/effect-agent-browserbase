@@ -34,7 +34,7 @@ if [ "$LAST_CODE" = 0 ]; then
   run install-media-tools timeout 300s bash -lc 'sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg && ffmpeg -version && ffprobe -version'
   cd packages/platform-browserbase
   run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
-  run native timeout 240s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+  run native timeout 240s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-workspace" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   run build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE"
   run exports timeout 180s ./node_modules/.bin/vp run check:exports
@@ -49,7 +49,12 @@ if [ "$LAST_CODE" = 0 ]; then
   run ready timeout 1800s ./node_modules/.bin/vp run -v --concurrency-limit 1 ready
   # Upstream's own release adapter builds and inspects npm-ready manifests without publishing.
   run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
-  git add -N packages/platform-browserbase .changeset docs/guide/browser.md package.json
+  # Only candidate source files belong in the review patch. Native CDP can leave
+  # generated downloads below the package; a directory-wide add would include them.
+  git -C "$SOURCE_ROOT" ls-files -z -- packages/platform-browserbase | \
+    git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
+  git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
+  run review-check git diff --check
 
   git diff --binary > "$OUT/review.patch"
   tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
@@ -57,4 +62,8 @@ fi
 cd "$SOURCE_ROOT"
 git archive --format=tar.gz HEAD > "$OUT/candidate.tar.gz"
 cat "$OUT/statuses.txt" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+(
+  cd "$OUT"
+  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+)
 exit "$FAILED"
