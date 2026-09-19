@@ -1,10 +1,4 @@
-import type {
-  FrameInfo,
-  ObservedControl,
-  ObservedElement,
-  PageInfo,
-  Viewport,
-} from "../Types.ts";
+import type { FrameInfo, ObservedControl, ObservedElement, PageInfo, Viewport } from "../Types.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
