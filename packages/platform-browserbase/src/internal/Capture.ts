@@ -13,6 +13,9 @@ import type { CaptureSource, NativeFrame } from "./Driver.ts";
 import { FrameBuffer } from "./FrameBuffer.ts";
 import { jpegGeometry } from "./Images.ts";
 
+const MaxParentCaptures = 4;
+const MaxParentBufferedBytes = 64 * 1024 * 1024;
+
 // Synchronous Schema decoding at the callback boundary; no Effect/Fiber is allocated for each frame.
 const Metadata = Schema.Struct({
   timestamp: Schema.Finite.check(Schema.isGreaterThan(0)),
@@ -69,6 +72,7 @@ export const startCapture = Effect.fnUntraced(function* (
   let startPromise: Promise<void> | undefined;
   let startSettled = true;
   let target: Target | undefined;
+  let leaseKey: string | undefined;
 
   let ended = false,
     subscribed = false,
@@ -126,7 +130,7 @@ export const startCapture = Effect.fnUntraced(function* (
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         finish("stopped");
-        // Wait for an in-flight start before stop. If it will not settle, quarantine this lease.
+        // Wait for an in-flight start before stop. If it will not settle, quarantine this page lease.
         if (startPromise !== undefined && !startSettled) {
           yield* restore(
             Effect.tryPromise({
@@ -146,9 +150,19 @@ export const startCapture = Effect.fnUntraced(function* (
 
           if (Exit.isSuccess(stopped) && startSettled) nativeStop = "confirmed";
         } else nativeStop = "confirmed";
-        // No older attachment may clear a new one. Unconfirmed native cleanup blocks another interval.
-        if (nativeStop === "confirmed" && parent.captureLease === lease)
-          parent.captureLease = undefined;
+        // No older attachment may clear a replacement. Unconfirmed native cleanup quarantines only this page.
+        if (
+          nativeStop === "confirmed" &&
+          leaseKey !== undefined &&
+          lease !== undefined &&
+          parent.captureLeases.get(leaseKey) === lease
+        ) {
+          parent.captureLeases.delete(leaseKey);
+          parent.captureReservedBytes = Math.max(
+            0,
+            parent.captureReservedBytes - lease.reservedBytes,
+          );
+        }
         cleanupFinished = true;
 
         return snapshot();
@@ -260,18 +274,30 @@ export const startCapture = Effect.fnUntraced(function* (
       "capture-start",
       (ticket) =>
         Effect.gen(function* () {
-          if (parent.captureLease !== undefined)
+          if (
+            parent.captureLeases.size >= MaxParentCaptures ||
+            parent.captureReservedBytes + maxBytes > MaxParentBufferedBytes
+          ) {
+            return yield* BrowserbaseError.make({
+              operation: "capture",
+              reason: "limit",
+              outcome: "undispatched",
+            });
+          }
+          const resolved = yield* parent.resolve(ticket, options.target);
+
+          target = resolved.target;
+          source = resolved.source;
+          leaseKey = `${target.generation}:${target.pageId}`;
+          if (parent.captureLeases.has(leaseKey)) {
             return yield* BrowserbaseError.make({
               operation: "capture",
               reason: "busy",
               outcome: "undispatched",
             });
-          target = yield* Effect.try({
-            try: parent.target,
-            catch: () => BrowserbaseError.make({ operation: "capture", reason: "closed" }),
-          });
-          source = yield* parent.source(ticket);
+          }
           lease = {
+            reservedBytes: maxBytes,
             stop: stopNative.pipe(Effect.asVoid),
             invalidate: (why) =>
               finish(
@@ -282,7 +308,8 @@ export const startCapture = Effect.fnUntraced(function* (
                 }),
               ),
           };
-          parent.captureLease = lease;
+          parent.captureLeases.set(leaseKey, lease);
+          parent.captureReservedBytes += maxBytes;
           // Installed before native acquisition. A cancelled capture cannot escape its caller's scope.
           yield* Effect.addFinalizer(() =>
             stopNative.pipe(
@@ -297,16 +324,17 @@ export const startCapture = Effect.fnUntraced(function* (
           startSettled = false;
           yield* Effect.tryPromise({
             try: () => {
-              startPromise = source!.start(receive, quality);
+              startPromise = source!.start(receive, quality, (why) => lease?.invalidate(why));
               void startPromise.then(
                 () => {
                   startSettled = true;
                   if (
                     cleanupFinished &&
                     nativeStop === "unconfirmed" &&
-                    parent.captureLease === lease
+                    leaseKey !== undefined &&
+                    parent.captureLeases.get(leaseKey) === lease
                   ) {
-                    // One late acquisition cleanup, not a callback-side worker. Keep the lease quarantined.
+                    // One late acquisition cleanup, not a callback-side worker. Keep the page quarantined.
                     void source!.stop().catch(() => {});
                   }
                 },
