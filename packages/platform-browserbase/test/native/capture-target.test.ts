@@ -68,7 +68,26 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           });
 
           yield* session.closePage(original.pageId);
-          expect((yield* closingCapture.completed).error?.reason).toBe("target-changed");
+          const closed = yield* closingCapture.completed;
+
+          expect(closed.error?.reason).toBe("target-changed");
+          expect(closed.nativeStop).toBe("confirmed");
+
+          // B plus three replacements fills both the four-interval and 64 MiB budgets.
+          // A dead-page quarantine would reject the last admission even though A is gone.
+          const replacements: Array<Capture.CaptureInterval> = [];
+
+          for (let index = 0; index < 3; index++) {
+            const pageId = yield* session.createPage;
+            const replacementPage = (yield* session.pages).find((page) => page.pageId === pageId)!;
+
+            replacements.push(
+              yield* Capture.start(session, { target: replacementPage, maxDurationMillis: 5000 }),
+            );
+          }
+          for (const replacement of replacements) {
+            expect((yield* replacement.stop).nativeStop).toBe("confirmed");
+          }
           yield* popupHandle.click(BrowserClickRequest.make({ selector: "#increment" }));
           yield* Effect.sleep(250);
           const survivor = yield* survivingCapture.stop;
