@@ -988,17 +988,18 @@ export const makePlaywrightDriver = async (
           captureFrame = entry.page.mainFrame();
         }
         const page = entry.page;
+        const targetId = await getTargetId(entry);
         const watchedFrameId = frameId(captureFrame);
 
         // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
         if (page.screencast === undefined) throw failure("capture", "unsupported");
-        const watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
-
-        captureWatchers.set(entry.id, watcherSet);
+        let watcherSet: Set<CaptureWatcher> | undefined;
         let watcher: CaptureWatcher | undefined;
         const source: CaptureSource = {
           start: (callback, quality, invalidate) =>
             sanitize("capture-start", async () => {
+              watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
+              captureWatchers.set(entry.id, watcherSet);
               watcher = { frameId: watchedFrameId, invalidate };
               watcherSet.add(watcher);
               try {
@@ -1017,7 +1018,7 @@ export const makePlaywrightDriver = async (
             }),
           stop: () =>
             sanitize("capture-stop", async () => {
-              if (watcher !== undefined) {
+              if (watcher !== undefined && watcherSet !== undefined) {
                 watcherSet.delete(watcher);
                 watcher = undefined;
                 if (watcherSet.size === 0) captureWatchers.delete(entry.id);
@@ -1026,7 +1027,7 @@ export const makePlaywrightDriver = async (
             }),
         };
 
-        return { pageId: entry.id, frameId: watchedFrameId, source };
+        return { pageId: entry.id, targetId, frameId: watchedFrameId, source };
       }),
     invalidateObservation,
     disconnect: () =>
