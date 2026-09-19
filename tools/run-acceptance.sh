@@ -42,8 +42,11 @@ if [ "$LAST_CODE" = 0 ]; then
   cd "$SOURCE_ROOT"
   run packed-consumer timeout 300s bash tools/packed-consumer.sh "$TREE" "$OUT"
   cd "$TREE"
-  # Full repository acceptance is deliberately separate from the targeted package gates.
-  run ready timeout 1800s ./node_modules/.bin/vp run ready
+  # Run the entire upstream gate, without filtering suites or changing assertions.
+  # Upstream docs/TOOLCHAIN.md and CI isolate heavy suites because concurrent
+  # worker pools can starve ownership-lease renewals. Bound this single runner's
+  # task graph too; retain verbose task/cache decisions for the acceptance record.
+  run ready timeout 1800s ./node_modules/.bin/vp run -v --concurrency-limit 1 ready
   # Upstream's own release adapter builds and inspects npm-ready manifests without publishing.
   run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
   git add -N packages/platform-browserbase .changeset docs/guide/browser.md package.json
