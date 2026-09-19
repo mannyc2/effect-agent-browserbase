@@ -36,6 +36,7 @@ it("keeps bounded recent history and the original failure after continued delive
 it("observes equal source timestamps without calling them backward or removing callbacks", () => {
   const seen: number[] = [];
   const reports: unknown[] = [];
+
   const receive = observeCaptureFrames(
     (value: ReturnType<typeof frame>) => seen.push(value.timestamp),
     (event) => reports.push(event),
@@ -53,6 +54,7 @@ it("forwards the original frame exactly once and returns the original Promise", 
   const value = { ...frame(1), data: new Uint8Array([1, 2]), privateUrl: "PRIVATE-FIXTURE" };
   const promise = Promise.resolve();
   let calls = 0;
+
   const receive = observeCaptureFrames(
     (input: typeof value) => {
       calls++;
@@ -70,6 +72,7 @@ it("forwards the original frame exactly once and returns the original Promise", 
 
 it("does not swallow or replace a native callback failure", () => {
   const failure = new Error("native callback failure");
+
   const receive = observeCaptureFrames(
     () => {
       throw failure;
@@ -83,6 +86,7 @@ it("does not swallow or replace a native callback failure", () => {
 
 it("does not interrupt native delivery when the diagnostic sink fails", () => {
   const seen: number[] = [];
+
   const receive = observeCaptureFrames(
     (value: ReturnType<typeof frame>) => seen.push(value.timestamp),
     () => {
@@ -98,6 +102,7 @@ it("does not interrupt native delivery when the diagnostic sink fails", () => {
 
 it("does not include bytes, URLs or arbitrary native fields in diagnostic evidence", () => {
   const trace = new CaptureTimingTrace();
+
   const value = {
     ...frame(2),
     data: new Uint8Array([1]),
@@ -118,11 +123,13 @@ it("does not include bytes, URLs or arbitrary native fields in diagnostic eviden
 it("preserves a rejected native Promise without handling or replacing it", async () => {
   const failure = new Error("asynchronous native callback failure");
   const promise = Promise.reject(failure);
+
   const receive = observeCaptureFrames(
     () => promise,
     () => {},
     () => 1n,
   );
+
   const result = receive(frame(1));
 
   expect(result).toBe(promise);
@@ -131,6 +138,7 @@ it("preserves a rejected native Promise without handling or replacing it", async
 
 it("still calls the native consumer when diagnostic clock sampling fails", () => {
   let calls = 0;
+
   const receive = observeCaptureFrames(
     () => ++calls,
     () => {},

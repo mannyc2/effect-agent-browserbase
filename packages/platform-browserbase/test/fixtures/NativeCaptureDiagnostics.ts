@@ -11,6 +11,7 @@ export const installCaptureDiagnostics = (
   const seen = new WeakSet<Page>();
   let pageSerial = 0;
   let intervalSerial = 0;
+
   const observePage = (page: Page) => {
     if (seen.has(page)) return;
     seen.add(page);
@@ -47,6 +48,7 @@ export const installCaptureDiagnostics = (
       });
     };
   };
+
   const contexts = browser.contexts();
 
   for (const context of contexts) {
