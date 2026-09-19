@@ -120,7 +120,10 @@ const makeFixture = Effect.fnUntraced(function* (
   ) => {
     const callback = callbacks.get(pageId);
 
-    assert.ok(callback, `capture for ${pageId} must install its callback before the fixture can emit`);
+    assert.ok(
+      callback,
+      `capture for ${pageId} must install its callback before the fixture can emit`,
+    );
     callback({ data, timestamp, viewportWidth, viewportHeight });
   };
 
