@@ -37,7 +37,8 @@ test("distribution strips source, tests, development dependencies and lifecycle 
   assert.equal(result.peerDependencies["playwright-core"], "1.63.0");
   assert.deepEqual(result.peerDependenciesMeta["playwright-core"], { optional: true });
   assert.deepEqual(result.exports["."], { types: "./dist/index.d.mts", default: "./dist/index.mjs" });
-  assert.equal(Object.keys(result.exports).length, 8);
+  assert.equal(Object.keys(result.exports).length, 9);
+  assert.deepEqual(result.exports["./page-control"], { types: "./dist/PageControl.d.mts", default: "./dist/PageControl.mjs" });
 });
 
 test("normalization never mutates the source manifest", () => {

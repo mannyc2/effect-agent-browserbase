@@ -42,6 +42,7 @@ export const localBrowser = Effect.acquireRelease(
     const releaseIds: string[] = [];
     const createBodies: unknown[] = [];
     const connections: string[] = [];
+    const nativePages = new Map<string, () => ReadonlyArray<Page>>();
     const requests: string[] = [];
     let fileRequests = 0;
 
@@ -60,6 +61,17 @@ export const localBrowser = Effect.acquireRelease(
         return;
       }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      if (path === "/clocks") {
+        res.end(`<!doctype html><style>@keyframes clockMotion{to{transform:translateX(100px)}}.clock{width:40px;height:40px;animation:clockMotion 10s linear infinite}#moving{background:red}#paused{background:green;animation-play-state:paused}</style>
+          <div id=moving class=clock></div><div id=paused class=clock></div><button id=click onclick="clicks++">Action</button><script>
+          window.ticks=0;window.rafs=0;window.clicks=0;window.freezes=[];window.resumes=[];
+          setInterval(()=>ticks++,20);function frame(){rafs++;requestAnimationFrame(frame)}requestAnimationFrame(frame);
+          window.counters=()=>({ticks,rafs,animation:document.querySelector('#moving').getAnimations()[0].currentTime,paused:document.querySelector('#paused').getAnimations()[0].currentTime});
+          document.addEventListener('freeze',()=>freezes.push(counters()));document.addEventListener('resume',()=>resumes.push(counters()));
+          window.read=()=>({...counters(),clicks,freezes,resumes});</script>`);
+
+        return;
+      }
       if (path === "/frame") {
         res.end(
           '<p>frame text</p><button id="inner" onclick="this.textContent=\'frame clicked\'">Frame action</button>',
@@ -110,6 +122,7 @@ export const localBrowser = Effect.acquireRelease(
       const browser = await originalConnect(session.endpoint, options);
 
       installCaptureDiagnostics(browser, id!, connections.length);
+      nativePages.set(id!, () => browser.contexts().flatMap((context) => context.pages()));
 
       return browser;
     };
@@ -221,6 +234,7 @@ export const localBrowser = Effect.acquireRelease(
       releaseIds,
       createBodies,
       connections,
+      nativePages: (id: string) => nativePages.get(id)?.() ?? [],
       requests,
       fileRequests: () => fileRequests,
       layer: (overrides: Partial<InteractiveOptions> = {}) =>

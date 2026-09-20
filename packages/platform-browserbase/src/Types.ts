@@ -18,6 +18,22 @@ export const ArtifactTransferPolicy = Schema.Struct({
 
 export type ArtifactTransferPolicy = typeof ArtifactTransferPolicy.Type;
 
+/** Live, connection-owned receipt. It is not a durable promise that remote clocks remain held. */
+export class PageSuspension extends Schema.Class<PageSuspension>("BrowserbasePageSuspension")({
+  pageId: Identifier,
+  targetId: Identifier,
+  suspensionId: Identifier,
+}) {}
+
+export class PageExecutionState extends Schema.Class<PageExecutionState>(
+  "BrowserbasePageExecutionState",
+)({
+  pageId: Identifier,
+  targetId: Identifier,
+  state: Schema.Literals(["running", "suspended", "unknown"]),
+  suspensionId: Schema.optionalKey(Identifier),
+}) {}
+
 export const SessionStatus = Schema.Literals([
   "PENDING",
   "RUNNING",

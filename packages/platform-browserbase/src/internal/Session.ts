@@ -7,6 +7,8 @@ import {
   Observation,
   Target,
   type ObservedElement,
+  type PageInfo,
+  type PageSuspension,
   type SessionReference,
   type Viewport,
 } from "../Types.ts";
@@ -347,9 +349,11 @@ export const acquireSession = Effect.fnUntraced(function* (
     Effect.suspend(() => {
       const revision = owner.state.revision;
 
-      return native("observe", ticket, () =>
-        getDriver().observe(maximumBytes, controls, ticket),
-      ).pipe(
+      return native("observe", ticket, async () => {
+        await getDriver().pageControl?.checkSelected(ticket);
+
+        return getDriver().observe(maximumBytes, controls, ticket);
+      }).pipe(
         Effect.flatMap((raw) =>
           Effect.gen(function* () {
             if (owner.state.revision !== revision)
@@ -403,7 +407,13 @@ export const acquireSession = Effect.fnUntraced(function* (
   ) =>
     owner.guard(
       operation,
-      (ticket) => native(operation, ticket, () => action(getDriver(), ticket)),
+      (ticket) =>
+        native(operation, ticket, async () => {
+          if (["resize", "wait", "click-and-wait", "download-action"].includes(operation))
+            await getDriver().pageControl?.checkSelected(ticket);
+
+          return action(getDriver(), ticket);
+        }),
       { mutation, charge },
     );
 
@@ -429,7 +439,12 @@ export const acquireSession = Effect.fnUntraced(function* (
     ) =>
       owner.guard(
         operation,
-        (ticket) => native(operation, ticket, () => action(getDriver(), ticket)),
+        (ticket) =>
+          native(operation, ticket, async () => {
+            await getDriver().pageControl?.checkSelected(ticket);
+
+            return action(getDriver(), ticket);
+          }),
         { mutation, preflight: Effect.suspend(check) },
       );
 
@@ -478,7 +493,43 @@ export const acquireSession = Effect.fnUntraced(function* (
       ),
   );
 
+  const execution = () => {
+    const port = getDriver().pageControl;
+
+    if (port === undefined)
+      throw BrowserbaseError.make({
+        operation: "page-control",
+        reason: "unsupported",
+        outcome: "undispatched",
+      });
+
+    return port;
+  };
+
   const controls = {
+    pageControl: {
+      state: (page: PageInfo) =>
+        nativeOperation(
+          "page-state",
+          (_driver, ticket) => execution().state(page, ticket),
+          false,
+          false,
+        ),
+      suspend: (page: PageInfo) =>
+        nativeOperation(
+          "page-suspend",
+          (_driver, ticket) => execution().suspend(page, ticket),
+          true,
+          false,
+        ),
+      resume: (receipt: PageSuspension) =>
+        nativeOperation(
+          "page-resume",
+          (_driver, ticket) => execution().resume(receipt, ticket),
+          true,
+          false,
+        ),
+    },
     reference: ref,
     attempt,
     capture,
@@ -578,6 +629,12 @@ export const acquireSession = Effect.fnUntraced(function* (
         "handoff",
         () =>
           Effect.gen(function* () {
+            if (options.driver.pageControl)
+              return yield* BrowserbaseError.make({
+                operation: "handoff",
+                reason: "unsupported",
+                outcome: "undispatched",
+              });
             if (owner.state.phase === "open") owner.fence("paused", "paused");
             handoffToken ??= globalThis.crypto.randomUUID();
             // Failure to mint a view leaves automation paused; there is no finally/resume pair.

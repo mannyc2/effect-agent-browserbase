@@ -22,7 +22,8 @@
     "./recordings": "./src/Recordings.ts",
     "./replays": "./src/Replays.ts",
     "./downloads": "./src/Downloads.ts",
-    "./capture": "./src/Capture.ts"
+    "./capture": "./src/Capture.ts",
+    "./page-control": "./src/PageControl.ts"
   },
   "publishConfig": {
     "access": "public"

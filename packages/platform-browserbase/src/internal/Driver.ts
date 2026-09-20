@@ -1,4 +1,12 @@
-import type { FrameInfo, ObservedControl, ObservedElement, PageInfo, Viewport } from "../Types.ts";
+import type {
+  FrameInfo,
+  ObservedControl,
+  ObservedElement,
+  PageInfo,
+  PageSuspension,
+  PageExecutionState,
+  Viewport,
+} from "../Types.ts";
 import type { CaptureSize } from "./CaptureTypes.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
 
@@ -11,6 +19,7 @@ export interface DriverOptions {
   readonly dialogPolicy: "dismiss" | "pause";
   readonly maxPages: number;
   readonly preserveViewport?: boolean;
+  readonly pageControl?: boolean;
 }
 
 export interface DriverEvents {
@@ -62,6 +71,12 @@ export interface CaptureBinding {
 }
 
 export interface Driver {
+  readonly pageControl?: {
+    readonly state: (page: PageInfo, ticket: Ticket) => Promise<PageExecutionState>;
+    readonly suspend: (page: PageInfo, ticket: Ticket) => Promise<PageSuspension>;
+    readonly resume: (receipt: PageSuspension, ticket: Ticket) => Promise<void>;
+    readonly checkSelected: (ticket: Ticket) => Promise<void>;
+  };
   readonly selected: () => { readonly pageId: string; readonly frameId: string };
   readonly selectedTargetId: () => Promise<string>;
   readonly listPages: (ticket: Ticket) => Promise<ReadonlyArray<PageInfo>>;

@@ -1,5 +1,4 @@
-import type { Option, Redacted } from "effect";
-import { Context, Effect, Layer, Schema, type Scope } from "effect";
+import { type Option, type Redacted, Context, Effect, Layer, Schema, type Scope } from "effect";
 import {
   BrowserActionResult,
   BrowserClickRequest,
@@ -26,6 +25,7 @@ import { SandboxImplementation } from "effect-agent/sandbox";
 
 import { associate } from "./internal/Association.ts";
 import { decode, httpOptions, makeHttp, type BrowserbaseOptions } from "./internal/Http.ts";
+import { associatePageControl } from "./internal/PageControlAssociation.ts";
 import { makeProvider } from "./internal/Provider.ts";
 import {
   acquireSession,
@@ -58,6 +58,8 @@ export const browserbaseInteractiveImplementation = SandboxImplementation.make({
 });
 
 export interface InteractiveOptions extends BrowserbaseOptions {
+  /** Opt-in native lifecycle/focus ownership; incompatible with keepAlive and handoff-dependent pause policies. */
+  readonly pageControl?: boolean;
   readonly actionTimeoutMillis?: number;
   readonly viewport?: Viewport;
   readonly initialPage?: { readonly targetId: string } | { readonly newPage: true };
@@ -356,6 +358,7 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
   };
 
   associate(session, controls.capture);
+  associatePageControl(session, controls.pageControl);
 
   return session;
 };
@@ -442,7 +445,14 @@ export class BrowserbaseInteractiveHost extends Context.Service<
                 "configure",
               );
 
+        const pageControl = yield* checked(
+          Schema.Boolean,
+          options.pageControl ?? false,
+          "configure",
+        );
+
         const driver = {
+          pageControl,
           viewport,
           maxPages,
           popupPolicy,
@@ -461,6 +471,13 @@ export class BrowserbaseInteractiveHost extends Context.Service<
         );
 
         const keepAlive = yield* checked(Schema.Boolean, options.keepAlive ?? false, "configure");
+
+        if (pageControl && (keepAlive || popupPolicy === "pause" || dialogPolicy === "pause"))
+          return yield* BrowserbaseError.make({
+            operation: "configure",
+            reason: "unsupported",
+            outcome: "undispatched",
+          });
 
         const settings = {
           viewport,

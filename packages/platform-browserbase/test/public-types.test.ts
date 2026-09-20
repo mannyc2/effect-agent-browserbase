@@ -3,6 +3,7 @@ import {
   type BrowserbaseInteractiveHost,
   type BrowserbaseSession,
 } from "@effect-agent/platform-browserbase/interactive-browser";
+import type * as PageControl from "@effect-agent/platform-browserbase/page-control";
 import {
   type handlers,
   type BrowserbaseToolFailure,
@@ -31,6 +32,12 @@ const captureErrors: Same<Effect.Error<ReturnType<typeof Capture.start>>, Browse
 const captureScope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const sourceSize: Capture.CaptureSize = { width: 640, height: 360 };
 
+const controlErrors: Same<
+  Effect.Error<ReturnType<typeof PageControl.suspend>>,
+  BrowserbaseError
+> = true;
+
+const controlScope: Same<Requirements<ReturnType<typeof PageControl.suspend>>, never> = true;
 const originalContract: Same<BrowserbaseSession["handle"], BrowserHandle> = true;
 const borrowed: Same<LayerRequirements<ReturnType<typeof handlers>>, never> = true;
 
@@ -47,7 +54,9 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       borrowed &&
       explicitOutcome &&
       captureErrors &&
-      captureScope,
+      captureScope &&
+      controlErrors &&
+      controlScope,
   ).toBe(true);
   expect(sourceSize.width).toBe(640);
 });

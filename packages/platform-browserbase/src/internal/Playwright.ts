@@ -11,7 +11,7 @@ import type {
   Page,
 } from "playwright-core";
 
-import type { ObservedElement } from "../Types.ts";
+import type { ObservedElement, PageSuspension } from "../Types.ts";
 import {
   BrowserbaseError,
   FrameInfo,
@@ -34,6 +34,7 @@ import type {
 } from "./Driver.ts";
 import { pngGeometry } from "./Images.ts";
 import type { Ticket } from "./Owner.ts";
+import { PageExecution } from "./PageExecution.ts";
 
 const failure = (
   operation: string,
@@ -86,6 +87,8 @@ interface Entry {
   readonly page: Page;
   targetId?: string;
   readonly off: Array<() => void>;
+  execution?: Promise<PageExecution>;
+  executionValue?: PageExecution;
 }
 interface Snapshot {
   readonly id: string;
@@ -148,7 +151,10 @@ export const connectPlaywright = async (
   const { chromium } = await import("playwright-core");
 
   const browser = await sanitize("connect", () =>
-    chromium.connectOverCDP(connection, { timeout: 15000 }),
+    chromium.connectOverCDP(connection, {
+      timeout: 15000,
+      ...(options.pageControl ? { noDefaults: true } : {}),
+    }),
   );
 
   if (signal.aborted) {
@@ -266,6 +272,11 @@ export const makePlaywrightDriver = async (
     for (const frame of page.frames()) frameId(frame);
 
     const onClose = () => {
+      entry.executionValue?.invalidate();
+      if (entry.execution !== undefined)
+        callbacks.submit(async () => {
+          await (await entry.execution)?.dispose();
+        });
       invalidateCaptures(entry, "target-changed");
       captureWatchers.delete(entry.id);
       entries.delete(entry.id);
@@ -278,6 +289,7 @@ export const makePlaywrightDriver = async (
     };
 
     const onNavigation = (frame: Frame) => {
+      if (frame === page.mainFrame() && entry.executionValue?.invalidate()) events.fault();
       frameId(frame);
       invalidateCaptures(entry, "target-changed", frame);
       if (selected === entry && (selectedFrame === frame || frame === page.mainFrame()))
@@ -315,6 +327,10 @@ export const makePlaywrightDriver = async (
       () => page.off("framedetached", onDetached),
       () => page.off("dialog", onDialog),
     );
+    if (initialized && options.pageControl)
+      callbacks.submit(async () => {
+        await executionFor(entry);
+      });
     if (initialized && !creatingPage) {
       if (options.popupPolicy === "close") callbacks.submit(() => closeWithin(() => page.close()));
       else if (options.popupPolicy === "pause") events.pause();
@@ -542,7 +558,141 @@ export const makePlaywrightDriver = async (
     return { promise, cancel: abort };
   };
 
+  const executionFor = (entry: Entry): Promise<PageExecution> => {
+    if (!options.pageControl)
+      return Promise.reject(failure("page-control", "unsupported", "undispatched"));
+    entry.execution ??= sanitize("page-control", async () => {
+      const cdp = await context.newCDPSession(entry.page);
+
+      try {
+        const targetId = await getTargetId(entry);
+
+        if (closing || entry.page.isClosed()) throw failure("page-control", "closed");
+        await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+        if (closing || entry.page.isClosed()) throw failure("page-control", "closed");
+
+        const control = new PageExecution(entry.id, targetId, {
+          readRate: async () =>
+            safeDecode(
+              Schema.Struct({ playbackRate: Schema.Finite }),
+              await cdp.send("Animation.getPlaybackRate"),
+              "page-rate",
+            ).playbackRate,
+          rate: async (playbackRate) => {
+            await cdp.send("Animation.setPlaybackRate", { playbackRate });
+          },
+          focus: async (enabled) => {
+            await cdp.send("Emulation.setFocusEmulationEnabled", { enabled });
+          },
+          lifecycle: async (state) => {
+            await cdp.send("Page.setWebLifecycleState", { state });
+          },
+          activate: async () => {
+            await cdp.send("Page.bringToFront");
+          },
+          closed: () => closing || !browser.isConnected() || entry.page.isClosed(),
+          detach: async () => {
+            if (entry.page.isClosed() || !browser.isConnected()) return;
+            try {
+              await closeWithin(() => cdp.detach());
+            } catch (error) {
+              if (!entry.page.isClosed() && browser.isConnected()) throw error;
+            }
+          },
+          frameBarrier: async (ticket) => {
+            ticket.check();
+
+            const tree = safeDecode(
+              Schema.Struct({
+                frameTree: Schema.Struct({ frame: Schema.Struct({ id: Identifier }) }),
+              }),
+              await cdp.send("Page.getFrameTree"),
+              "page-frame",
+            );
+
+            ticket.check();
+
+            const world = await cdp.send("Page.createIsolatedWorld", {
+              frameId: tree.frameTree.frame.id,
+              worldName: "effect-agent-browserbase-page-control",
+            });
+
+            ticket.check();
+
+            const result = await cdp.send("Runtime.evaluate", {
+              expression: "new Promise(resolve => requestAnimationFrame(() => resolve(true)))",
+              contextId: safeDecode(
+                Schema.Int.check(Schema.isGreaterThan(0)),
+                world.executionContextId,
+                "page-world",
+              ),
+              awaitPromise: true,
+              returnByValue: true,
+              userGesture: false,
+              timeout: Math.min(2000, ticket.remainingMillis()),
+            });
+
+            ticket.check();
+            if (result.exceptionDetails !== undefined || result.result.value !== true)
+              throw failure("page-resume", "malformed");
+          },
+        });
+
+        entry.executionValue = control;
+
+        return control;
+      } catch (error) {
+        await closeWithin(() => cdp.detach()).catch(() => {});
+        throw error;
+      }
+    });
+
+    return entry.execution;
+  };
+
+  const explicitExecution = async (
+    target: { readonly pageId: string; readonly targetId: string },
+    ticket: Ticket,
+  ) => {
+    ticket.check();
+    const entry = entries.get(target.pageId);
+
+    if (entry === undefined || entry.page.isClosed())
+      throw failure("page-control", "closed", "undispatched");
+    const control = await executionFor(entry);
+
+    ticket.check();
+    if (control.targetId !== target.targetId)
+      throw failure("page-control", "stale", "undispatched");
+
+    return control;
+  };
+
   const driver: Driver = {
+    ...(options.pageControl
+      ? {
+          pageControl: {
+            state: (page: PageInfo, ticket: Ticket) =>
+              sanitize("page-state", async () => (await explicitExecution(page, ticket)).state()),
+            suspend: (page: PageInfo, ticket: Ticket) =>
+              sanitize("page-suspend", async () =>
+                (await explicitExecution(page, ticket)).suspend(ticket),
+              ),
+            resume: (receipt: PageSuspension, ticket: Ticket) =>
+              sanitize("page-resume", async () =>
+                (await explicitExecution(receipt, ticket)).resume(receipt, ticket),
+              ),
+            checkSelected: (ticket: Ticket) =>
+              sanitize("page-control", async () => {
+                ticket.check();
+                const control = await executionFor(current().entry);
+
+                ticket.check();
+                control.assertRunning();
+              }),
+          },
+        }
+      : {}),
     selected: () => {
       const { entry, frame } = current();
 
@@ -1050,6 +1200,13 @@ export const makePlaywrightDriver = async (
         ).catch(() => {});
         dialogs.clear();
         await closeWithin(() => callbacks.settle()).catch(() => {});
+        await closeWithin(() =>
+          Promise.allSettled(
+            [...entries.values()].map(async (entry) => {
+              if (entry.execution !== undefined) await (await entry.execution).dispose();
+            }),
+          ),
+        ).catch(() => {});
         await closeWithin(() => browserCdp?.detach() ?? Promise.resolve()).catch(() => {});
         await closeWithin(() => browser.close());
         entries.clear();
@@ -1085,6 +1242,7 @@ export const makePlaywrightDriver = async (
     selectedFrame = selected.page.mainFrame();
     if (!options.preserveViewport) await selected.page.setViewportSize(options.viewport);
     await getTargetId(selected);
+    if (options.pageControl) for (const entry of entries.values()) await executionFor(entry);
     initialized = true;
 
     return driver;
