@@ -20,6 +20,16 @@ Commit the candidate before `bash tools/run-acceptance.sh`; that Ubuntu acceptan
 
 `checkpoints/` is immutable provenance. Do not edit it or use it to reconstruct current source. Old transfer instructions and session logs are historical, not active operating instructions. Keep rationale and current results in PRs rather than adding planning documents or committed transient logs.
 
+## Maintenance sessions
+
+A session often starts on a host whose Node and Bun differ from the pins, where `tools/bootstrap.sh` and `tools/run-acceptance.sh` refuse to run at all. Install the pinned runtimes first with `eval "$(bash tools/pinned-toolchain.sh)"`. Never relax a version assertion or accept the host's versions instead.
+
+Formatting is decided by the Oxfmt that Vite+ already carries; nothing needs to be fetched separately. Bootstrap, run `vp fmt` in that workspace, and bring the result back. Do not hand-write formatting to satisfy `vp run ready`. Hand-formatting and separate formatter downloads have each cost whole review cycles here and neither has ever produced the canonical output.
+
+Run experiments in the bootstrapped workspace. Ordinary CI is the fixed acceptance program, not a scratchpad: do not add a disposable workflow to run an experiment or to back up, restore or delete a branch. Push with `git`; the GitHub contents API cannot safely replace a large source file, and an attempt that fails halfway loses uncommitted work.
+
+Keep the branch list short. Delete a branch once its work is merged or abandoned, and do not leave a pull request in draft over a formatting-only failure that one `vp fmt` resolves.
+
 ## Safety and release
 
 Ordinary CI remains read-only, without `pull_request_target`, auto-writing formatters, hosted browser/model credentials or publication. No hosted Browserbase session, paid inference, deployment, service provisioning or npm publication is authorized merely by a maintenance request.

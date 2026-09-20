@@ -20,6 +20,14 @@ These are the verified acceptance targets, not a promise that every version allo
 
 The root `package.json` is private and prevents accidental root publication. It is not a standalone replacement for upstream's development workspace.
 
+Every command below asserts the pinned Node and Bun. On a host that ships different versions, install them first:
+
+```sh
+eval "$(bash tools/pinned-toolchain.sh)"
+```
+
+It verifies each published release against a pinned digest, installs into the ignored `.work/toolchain`, and reuses an existing install that already reports the pinned version.
+
 ```sh
 # Fast repository-tooling checks; no third-party installs or network required.
 npm_config_offline=true node --test tools/test/*.test.mjs
@@ -30,6 +38,9 @@ bash tools/bootstrap.sh
 cd .work/upstream/tree
 ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
 cd packages/platform-browserbase
+# Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
+# hand-formatting to satisfy that gate does not reproduce this output.
+../../node_modules/.bin/vp fmt
 ../../node_modules/.bin/vp test --run
 ../../node_modules/.bin/vp run install:test-browser
 ../../node_modules/.bin/vp run test:native
