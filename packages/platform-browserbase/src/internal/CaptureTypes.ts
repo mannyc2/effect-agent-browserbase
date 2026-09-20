@@ -3,9 +3,7 @@ import { Schema, type Effect, type Stream } from "effect";
 import { BrowserbaseError, PageInfo, Target } from "../Types.ts";
 
 const Dimension = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 }));
-const BufferedBytes = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 }),
-);
+const BufferedBytes = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 }));
 
 /** Defaults shared by admission and the optional public data schema. */
 export const CaptureDefaults = Object.freeze({

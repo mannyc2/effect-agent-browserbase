@@ -1,5 +1,9 @@
 import * as Capture from "@effect-agent/platform-browserbase/capture";
-import { Target, type BrowserbaseError, type PageInfo } from "@effect-agent/platform-browserbase/types";
+import {
+  Target,
+  type BrowserbaseError,
+  type PageInfo,
+} from "@effect-agent/platform-browserbase/types";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, type Scope } from "effect";
 
@@ -111,7 +115,13 @@ it("validates optional limits against resolved defaults without materializing de
 
 it("rejects invalid numeric controls and keeps the documented upper bounds", () => {
   for (const value of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-    for (const key of ["maxFrames", "maxBufferedBytes", "maxFrameBytes", "maxDurationMillis", "quality"]) {
+    for (const key of [
+      "maxFrames",
+      "maxBufferedBytes",
+      "maxFrameBytes",
+      "maxDurationMillis",
+      "quality",
+    ]) {
       expect(Schema.is(Capture.CaptureOptions)({ [key]: value })).toBe(false);
     }
   }
@@ -122,50 +132,57 @@ it("rejects invalid numeric controls and keeps the documented upper bounds", () 
     { maxDurationMillis: 600001 },
     { quality: 101 },
     { size: { width: 16385, height: 1 } },
-  ]) expect(Schema.is(Capture.CaptureOptions)(value)).toBe(false);
+  ])
+    expect(Schema.is(Capture.CaptureOptions)(value)).toBe(false);
 });
 
 it.effect("rejects invalid admission before resolving a native target or reserving capacity", () =>
-  Effect.scoped(Effect.gen(function* () {
-    const owner = yield* makeOwner({ maxActions: 1, maxElapsedMillis: 1000, actionTimeoutMillis: 500 });
+  Effect.scoped(
+    Effect.gen(function* () {
+      const owner = yield* makeOwner({
+        maxActions: 1,
+        maxElapsedMillis: 1000,
+        actionTimeoutMillis: 500,
+      });
 
-    owner.state.phase = "open";
-    let resolutions = 0;
+      owner.state.phase = "open";
+      let resolutions = 0;
 
-    const parent: CaptureParent = {
-      owner,
-      target: () => frame.target,
-      resolve: () => {
-        resolutions++;
+      const parent: CaptureParent = {
+        owner,
+        target: () => frame.target,
+        resolve: () => {
+          resolutions++;
 
-        return Effect.die("invalid limits must not resolve a target");
-      },
-      captureLeases: new Map(),
-      captureReservedBytes: 0,
-    };
+          return Effect.die("invalid limits must not resolve a target");
+        },
+        captureLeases: new Map(),
+        captureReservedBytes: 0,
+      };
 
-    for (const options of [
-      { maxFrames: 0 },
-      { maxFrames: 65 },
-      { maxBufferedBytes: 1 },
-      { maxBufferedBytes: 64 * 1024 * 1024 + 1 },
-      { maxFrameBytes: Number.NaN },
-      { maxFrameBytes: 32 * 1024 * 1024 },
-      { maxDurationMillis: 600001 },
-      { quality: 101 },
-    ]) {
-      const result = yield* startCapture(parent, options).pipe(Effect.result);
+      for (const options of [
+        { maxFrames: 0 },
+        { maxFrames: 65 },
+        { maxBufferedBytes: 1 },
+        { maxBufferedBytes: 64 * 1024 * 1024 + 1 },
+        { maxFrameBytes: Number.NaN },
+        { maxFrameBytes: 32 * 1024 * 1024 },
+        { maxDurationMillis: 600001 },
+        { quality: 101 },
+      ]) {
+        const result = yield* startCapture(parent, options).pipe(Effect.result);
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure.reason).toBe("configuration");
-        expect(result.failure.outcome).toBe("undispatched");
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure.reason).toBe("configuration");
+          expect(result.failure.outcome).toBe("undispatched");
+        }
       }
-    }
-    expect(resolutions).toBe(0);
-    expect(parent.captureLeases.size).toBe(0);
-    expect(parent.captureReservedBytes).toBe(0);
-    expect(owner.state.phase).toBe("open");
-    expect(owner.state.actions).toBe(0);
-  })),
+      expect(resolutions).toBe(0);
+      expect(parent.captureLeases.size).toBe(0);
+      expect(parent.captureReservedBytes).toBe(0);
+      expect(owner.state.phase).toBe("open");
+      expect(owner.state.actions).toBe(0);
+    }),
+  ),
 );

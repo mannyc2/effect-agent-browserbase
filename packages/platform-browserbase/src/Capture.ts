@@ -6,7 +6,13 @@ import { startCapture } from "./internal/Capture.ts";
 import type { CaptureInterval, CaptureOptions } from "./internal/CaptureTypes.ts";
 import { BrowserbaseError, PageInfo } from "./Types.ts";
 
-export { CapturedFrame, CaptureOptions, CaptureSize, CaptureSummary } from "./internal/CaptureTypes.ts";
+export {
+  CapturedFrame,
+  CaptureOptions,
+  CaptureSize,
+  CaptureSummary,
+} from "./internal/CaptureTypes.ts";
+
 export type { CaptureInterval } from "./internal/CaptureTypes.ts";
 
 /**

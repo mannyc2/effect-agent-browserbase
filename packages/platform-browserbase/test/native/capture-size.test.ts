@@ -33,7 +33,10 @@ it.live(
             const scoutPage = pages.find((page) => page.pageId === popup.pageId)!;
 
             const copiedSession = { ...session };
-            const denied = yield* Capture.start(copiedSession, { target: stagePage }).pipe(Effect.result);
+
+            const denied = yield* Capture.start(copiedSession, { target: stagePage }).pipe(
+              Effect.result,
+            );
 
             expect(denied._tag).toBe("Failure");
             if (denied._tag === "Failure") expect(denied.failure.reason).toBe("closed");
