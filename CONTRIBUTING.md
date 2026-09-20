@@ -20,6 +20,16 @@ These are the verified acceptance targets, not a promise that every version allo
 
 The root `package.json` is private and prevents accidental root publication. It is not a standalone replacement for upstream's development workspace.
 
+Bootstrap and full acceptance assert the pinned Node and Bun. On a host that ships different versions, install them first:
+
+```sh
+toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"
+```
+
+The assignment preserves installer failure; do not wrap the command substitution directly in `eval`, which would hide a failed download. Publisher access is required for a first install.
+
+It verifies each published release against a pinned digest, installs into the ignored `.work/toolchain`, and reuses an existing install that already reports the pinned version.
+
 ```sh
 # Fast repository-tooling checks; no third-party installs or network required.
 npm_config_offline=true node --test tools/test/*.test.mjs
@@ -30,6 +40,9 @@ bash tools/bootstrap.sh
 cd .work/upstream/tree
 ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
 cd packages/platform-browserbase
+# Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
+# hand-formatting to satisfy that gate does not reproduce this output.
+../../node_modules/.bin/vp fmt
 ../../node_modules/.bin/vp test --run
 ../../node_modules/.bin/vp run install:test-browser
 ../../node_modules/.bin/vp run test:native
@@ -50,7 +63,7 @@ bash tools/run-acceptance.sh
 
 It creates a fresh temporary workspace and prints the results directory. On the CI runner it installs local Chromium dependencies and FFmpeg with `sudo`; the full script is not advertised as a portable macOS/Windows setup command.
 
-Every command retains its arguments, log and exit status. The gate includes the 66-case independent boundary runner on Node and Bun, package tests, native AgentRuntime/CDP/video suites, an emitted external consumer, declaration checks, real emitted-code programs on both runtimes, exports, purity, full `vp run ready` and release dry-runs. Later independent checks still execute after a failure, but any failure keeps the gate red. Old counts are never reused as current results.
+Every command retains its arguments, log and exit status. The gate includes the independent boundary runner on Node and Bun, package tests, native AgentRuntime/CDP/video suites, an emitted external consumer, declaration checks, real emitted-code programs on both runtimes, exports, purity, full `vp run ready` and release dry-runs. Later independent checks still execute after a failure, but any failure keeps the gate red. Old counts are never reused as current results.
 
 Results, downloaded videos, build directories and package archives are ignored; retain them in Actions artifacts, not commits. The single exception is `docs/media/`, which holds the published demo recording under a declared size budget enforced by `tools/test/hosted.test.mjs`; see [docs/media/README.md](docs/media/README.md). `checkpoints/` stays immutable. The historical checkpoint verifier remains a separate integrity check, never a bootstrap dependency.
 
