@@ -49,12 +49,28 @@ test("the task-cache transfer speeds the gate up without shrinking or faking it"
   // The whole point is that nothing was removed to buy the time back.
   assert.ok(acceptance.includes("--concurrency-limit 1 ready"));
   assert.doesNotMatch(acceptance, /ready\s+--exclude|-t\s|--testNamePattern|--bail/);
-  // bun install owns node_modules, so a cache placed there before bootstrap is
-  // simply deleted. Seeding must come after the bootstrap stage.
-  assert.ok(
-    acceptance.indexOf("run bootstrap") < acceptance.indexOf('cp -a "$SEED/." "$TASK_CACHE/"'),
-    "the cache must be seeded after bootstrap, not before",
-  );
+  // A replayed task restores workspace files, not effects outside the workspace.
+  // install:test-browser puts Chromium in ~/.cache/ms-playwright, so seeding
+  // before it let that task report success from cache without installing the
+  // browser, and native plus packed-consumer then failed against a missing
+  // Chromium. Everything that depends on a real install must precede the seed.
+  const seedAt = acceptance.indexOf('cp -a "$SEED/." "$TASK_CACHE/"');
+  assert.ok(seedAt > 0);
+  for (const stage of [
+    "run bootstrap",
+    "install-browser",
+    "install-media-tools",
+    "run unit",
+    "run native",
+    "packed-consumer",
+  ]) {
+    assert.ok(
+      acceptance.indexOf(stage) < seedAt,
+      `${stage} must run for real, before the task cache is seeded`,
+    );
+  }
+  // The stages the cache exists for must still come after it.
+  assert.ok(seedAt < acceptance.indexOf("run ready"), "ready must be able to use the seed");
   // A lock file belongs to the run that created it, never to a restored copy.
   assert.equal((acceptance.match(/-name '\*\.lock' -delete/g) ?? []).length, 2);
   // The record must distinguish a replayed result from a fresh execution.

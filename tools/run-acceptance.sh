@@ -70,26 +70,8 @@ TREE="$WORK_ROOT/upstream/tree"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
-  # Upstream CI transfers node_modules/.vite/task-cache between runs; do the same
-  # instead of paying for every upstream task on every candidate. Vite Task keys
-  # each result by that task's own inputs, so a restored entry is replayed only
-  # when those inputs match, and ready.log keeps the per-task hit/miss decision.
-  # Seed after bootstrap: bun install owns node_modules and would drop a copy
-  # placed there earlier. A lock file belongs to the run that made it.
   TASK_CACHE="$TREE/node_modules/.vite/task-cache"
   SEED="${BROWSERBASE_TASK_CACHE:-}"
-  if [ -n "$SEED" ] && [ -d "$SEED" ]; then
-    mkdir -p "$TASK_CACHE"
-    cp -a "$SEED/." "$TASK_CACHE/"
-    find "$TASK_CACHE" -name '*.lock' -delete
-    # Task results live in cache.db; only tasks with output files add a blob.
-    printf 'seeded from %s: %s files, %s\n' \
-      "$SEED" "$(find "$TASK_CACHE" -type f | wc -l)" \
-      "$(du -sh "$TASK_CACHE" | cut -f1)" > "$OUT/task-cache.txt"
-  else
-    printf 'no seed (%s)\n' \
-      "${SEED:-BROWSERBASE_TASK_CACHE unset}" > "$OUT/task-cache.txt"
-  fi
   run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
   # These two stages exist to make the native boundary runnable, not to prove
   # anything. Installing over a host that already has them needs root and a
@@ -130,6 +112,30 @@ if [ "$LAST_CODE" = 0 ]; then
     note package-dry-run skipped 'no release.json: packed-consumer did not pass'
   fi
   cd "$TREE"
+  # Upstream CI transfers node_modules/.vite/task-cache between runs; do the same
+  # instead of paying for every upstream task on every candidate. Vite Task keys
+  # each result by that task's own inputs, so a restored entry is replayed only
+  # when those inputs match, and ready.log keeps the per-task hit/miss decision.
+  #
+  # Seed HERE, not earlier. A replayed task result restores workspace files, not
+  # effects outside the workspace, and `install:test-browser` puts Chromium in
+  # ~/.cache/ms-playwright. Seeding before it let that task report success from
+  # cache without installing the browser, so `native` and `packed-consumer` then
+  # failed against a missing Chromium. Every stage above this line therefore runs
+  # for real on every candidate, which is also what keeps their evidence fresh.
+  # A lock file belongs to the run that made it.
+  if [ -n "$SEED" ] && [ -d "$SEED" ]; then
+    mkdir -p "$TASK_CACHE"
+    cp -a "$SEED/." "$TASK_CACHE/"
+    find "$TASK_CACHE" -name '*.lock' -delete
+    # Task results live in cache.db; only tasks with output files add a blob.
+    printf 'seeded from %s: %s files, %s\n' \
+      "$SEED" "$(find "$TASK_CACHE" -type f | wc -l)" \
+      "$(du -sh "$TASK_CACHE" | cut -f1)" > "$OUT/task-cache.txt"
+  else
+    printf 'no seed (%s)\n' \
+      "${SEED:-BROWSERBASE_TASK_CACHE unset}" > "$OUT/task-cache.txt"
+  fi
   # Run the entire upstream gate, without filtering suites or changing assertions.
   # Upstream docs/TOOLCHAIN.md and CI isolate heavy suites because concurrent
   # worker pools can starve ownership-lease renewals. Bound this single runner's
