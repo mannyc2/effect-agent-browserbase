@@ -30,6 +30,18 @@ The assignment preserves installer failure; do not wrap the command substitution
 
 It verifies each published release against a pinned digest, installs into the ignored `.work/toolchain`, and reuses an existing install that already reports the pinned version.
 
+For the ordinary edit-and-check loop, one command does all of the below:
+
+```sh
+bash tools/verify.sh           # add --fresh to rebuild the workspace from clean upstream
+```
+
+It installs the pinned runtimes if the host lacks them, bootstraps or reuses `.work/upstream`, copies your tracked package files in, then runs formatting, typecheck, unit and native suites and the pack. It needs no root: it fetches the browser without the system-dependency step and only warns if FFmpeg is absent. Formatting the workspace produces canonical output, so any change it makes is copied back for you to review and stage.
+
+It is a fast loop, not acceptance. It stops at the first failure and mints no evidence bundle; `tools/run-acceptance.sh` remains the program whose record CI and the release workflow consume.
+
+The individual commands, if you want them separately:
+
 ```sh
 # Fast repository-tooling checks; no third-party installs or network required.
 npm_config_offline=true node --test tools/test/*.test.mjs

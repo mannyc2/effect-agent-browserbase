@@ -24,6 +24,39 @@ test("bootstrap uses a single current patch and frozen installs, not historical 
   assert.equal(JSON.parse(read("package.json")).private, true);
 });
 
+test("acceptance records every stage it did not execute, and why", () => {
+  const acceptance = read("tools/run-acceptance.sh");
+
+  // A stage that was skipped or already satisfied still owes statuses.txt an
+  // entry. Silence there would read as a pass in the retained record.
+  assert.ok(acceptance.includes('printf \'%s %s\\n\' "$name" "$state" | tee -a "$OUT/statuses.txt"'));
+  assert.ok(acceptance.includes("note install-browser satisfied"));
+  assert.ok(acceptance.includes("note install-media-tools satisfied"));
+  // A prerequisite that did not pass must stop dependent stages rather than let
+  // them fail against a missing artifact and read as separate defects.
+  assert.ok(acceptance.includes("run_after build packed-consumer"));
+  assert.ok(acceptance.includes("note release-identity skipped"));
+  assert.ok(acceptance.includes("note package-dry-run skipped"));
+  // A satisfied prerequisite is not a failure, but it is also not a pass.
+  assert.match(acceptance, /case "\$\{CODE\[\$dep\]:-missing\}" in\s*\n\s*0 \| satisfied\) ;;/);
+  assert.ok(acceptance.includes("FAILED=1"), "a skipped stage must not silently succeed");
+});
+
+test("the local gate is a fast loop, not a second acceptance program", () => {
+  const verify = read("tools/verify.sh");
+
+  // It must not install system packages or claim any release authority.
+  assert.doesNotMatch(verify, /sudo|apt-get|--with-deps|npm publish|BROWSERBASE_API_KEY/);
+  // It must not mint an evidence bundle that could be mistaken for acceptance.
+  assert.doesNotMatch(verify, /SHA256SUMS|release\.json|candidate\.tar\.gz|review\.patch/);
+  // It must say what it does not cover, and point at the real program.
+  assert.ok(verify.includes("run-acceptance.sh is the fixed evidence program"));
+  assert.ok(verify.includes("Not covered here"));
+  // It reads the same pins as everything else rather than restating them.
+  assert.ok(verify.includes('"v$(cat "$ROOT/.node-version")"'));
+  assert.ok(verify.includes('"$(cat "$ROOT/.bun-version")"'));
+});
+
 test("ordinary acceptance has no live publisher, hosted opt-in or write-enabled workflow", () => {
   const ci = read(".github/workflows/ci.yml");
   const jobEnvironment = ci.slice(ci.indexOf("\n    env:\n"), ci.indexOf("\n    steps:\n"));

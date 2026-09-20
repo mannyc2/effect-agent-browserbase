@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${1:-$ROOT/.work/toolchain}"
 NODE_VERSION="$(cat "$ROOT/.node-version")"
-BUN_VERSION=1.4.2
+BUN_VERSION="$(cat "$ROOT/.bun-version")"
 # Digests of the published release assets, verified against the publishers' own
 # manifests. A pin change needs a fresh digest from the publisher, never a
 # relaxed or skipped check.
