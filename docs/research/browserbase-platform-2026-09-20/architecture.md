@@ -1,80 +1,137 @@
 # Target architecture and public API proposal
 
-**Status: proposed, not implemented.** The sketches in this chapter use the repository's Effect 4 / TypeScript vocabulary but are not compiled production declarations. Existing behavior is documented in the [capability map](capability-map.md); provider facts and limits are in [platform.md](platform.md). This design does not require a dependency upgrade, upstream core-port proposal, general raw-CDP export or new encoder.
+**Proposed, not implemented.** This chapter now incorporates the code-organization follow-up. The concrete [directory tree, module ownership and package decision](organization.md) and [pinned Effect conventions](effect-conventions.md) are part of the design, not optional appendices. [Capability map](capability-map.md) describes inspected implementation; [platform research](platform.md) describes provider behavior; [workflows](workflows.md) and [implementation plan](implementation-plan.md) use the target names below. No sketch was typechecked in this sandbox. No runtime/dependency change is made by this documentation PR.
 
-## 1. Decision
+## Decision and dependency direction
 
-Build a **Browserbase resource layer plus an owned browser-operation layer**. Preserve the existing mutation owner and bounded capture rather than replacing them. Make provider resources explicit, let consumers configure actual provider capabilities, and introduce one scoped bootstrap mechanism around maintained native APIs.
+Build Browserbase resources and owned browser operations in proposed **`@effect-agent/browserbase`**; retain **`@effect-agent/platform-browserbase`** for Effect Agent integration and legacy exports. Both use Effect. Only the adapter imports the framework. Keep resources/native operations/capture as subpaths of the generic package initially: Playwright is already an optional lazily loaded peer, so another package split needs evidence beyond distinct lifetimes.
 
 ```text
-consumer account credentials / policy / durable application database
-                            │
-                   BrowserbaseClient
-                (one Effect HTTP boundary)
-                  ╱        │          ╲
-       Contexts/Extensions Sessions    Recordings/Replays/Downloads/Logs
-                            │
-                BrowserbaseInteractiveHost
-                remote resource ownership
-                            │
-               BrowserbaseBrowserBinding
-                  one local connection
-                            │
-         Bootstrap → document readiness → existing mutation owner
-                  ╲ pages / frames / capture / page control
+                     host application / account store / supervisor
+                                       │
+                @effect-agent/browserbase (generic Effect integration)
+                       Client: one strict HTTP configuration
+                    ╱          │             ╲
+             Contexts       Sessions       artifacts / files / logs
+                               │
+                  BrowserbaseBrowser service
+                 ╱             │              ╲
+       remote acquisition   one Owner      trusted BrowserBinding
+            journal         and tickets     lazy Playwright driver
+                               │
+                 targets / documents / initialization
+                      observations / actions
+                       capture / page control
+                               ▲
+            @effect-agent/platform-browserbase (adapter only)
+          framework policy + BrowserHandle + Tool/error projections
 ```
 
-`BrowserbaseClient` is a proposed dependency service, not a browser session. Resource services can operate without importing Playwright. `BrowserbaseBrowserBinding` is a trusted composition seam; its default implementation still validates provider-issued endpoints and lazily loads the pinned automation package. It is not an agent-supplied connection URL.
+A generic consumer should not install `effect-agent` or manufacture its `InteractiveBrowserPolicy` merely to retrieve a recording or operate an owned browser. Conversely, a framework consumer should not need to understand a new lifecycle just to keep using the existing adapter. That is the purpose of the compatibility facade, not justification for two owners. [Current dependency manifest][manifest], [current public handle contract][interactive], [type assertions][type-tests].
 
-The default host workflow remains `acquire → connect → use → close`, with scope exit releasing its owned remote browser. New lower-level operations make supervision and adoption explicit rather than changing that default under existing users.
+## Resources and identities
 
-## 2. Resources and identities
+Keep provider resources and live capabilities distinct:
 
-Use project-qualified, serializable references for provider resources. Keep live handles non-serializable and non-forgeable by structural copying, following the existing [SessionReference/Capture design](../../../packages/platform-browserbase/src/Types.ts).
-
-```ts
-// Proposed additions. Existing SessionReference remains the session identifier.
-interface ContextReference {
-  readonly provider: "browserbase";
-  readonly projectId: string;
-  readonly contextId: string;
-}
-interface ExtensionReference {
-  readonly provider: "browserbase";
-  readonly projectId: string;
-  readonly extensionId: string;
-}
-interface ContextUse {
-  readonly reference: ContextReference;
-  readonly persist: boolean;
-}
-```
-
-Production versions should use the existing bounded `Identifier` and `Schema.Class` pattern. Context names are human labels, not substitutes for IDs or an undocumented lookup operation. Store application-user/account→Context relationships in the consumer's database. Do not store API keys, connect URLs, signed artifact URLs, native Page objects, retained DOM nodes, handoff tokens or page suspension receipts as durable configuration.
-
-A versioned **environment recipe** is useful consumer data, not another provider resource: Context reference, extension artifact reference/digest, provider launch settings, viewport mode, bootstrap identifier/version and business readiness policy. Resolve secret references and executable bootstrap registrations at runtime. Never serialize closures or secrets into `userMetadata`.
-
-Keep four identifier namespaces explicit: provider session, native CDP target, connection-local page/frame/document, provider recording/replay page. A native target can survive reconnect while connection-local IDs do not. Recording IDs cannot be inferred from `page-N`, discovery order or URL alone. [Current identity comments](../../../packages/platform-browserbase/src/Types.ts), [recording API](https://docs.browserbase.com/platform/browser/observability/recording-downloads).
-
-## 3. Configuration: upstream names, one source of truth
-
-Separate account configuration from launch intent and connected-browser setup:
-
-| Configuration | Lifetime / owner | Examples |
+| Concept | Durable data | Live authority / deletion |
 | --- | --- | --- |
-| Account | Client service / host deployment | API credential, project, request deadline, artifact origins |
-| Remote launch | One Browserbase session | Region, proxy rules, extension, Context, Verified, recording/logging, provider lifetime |
-| Automation | One owned connection | Action deadline, page admission, popup/dialog policy, retained observations |
-| Bootstrap | Connection registrations plus individual documents | Initialization scripts, bindings, permission grants, readiness |
-| Business operation | Consumer workflow | Login completion, account identity, upload success, request idempotency |
+| Browserbase Context | project-qualified Context reference and optional name | Explicit create/retrieve/delete; never deleted by a session finalizer |
+| Uploaded extension | qualified resource reference, consumer-controlled artifact digest/version | Provision separately; reference at launch; explicit deletion |
+| Remote session | `SessionReference`, allocation attempt, provider metadata, recipe version | Owned acquisition or consumer supervisor requests release and observes terminal status |
+| Local browser controller | no native handles persisted | Scoped connection, one mutation owner, page/observation/capture authority |
+| Document/observation | bounded returned evidence; document epoch is connection-local | Native retained nodes and readiness belong to the current connection/document |
+| Recording/replay/download | provider-qualified artifact identity | Independent retrieval; signed access URLs are temporary authority, not identity |
 
-Proposed launch shape:
+`References.ts` defines shared qualified IDs and allocation attempt data. Feature modules own their result schemas. The adapter's `Types.ts` reexports canonical constructors instead of creating an alternate schema universe. Native SDK objects, callback closures, writer/control leases, handoff tokens and page suspension receipts are not durable environment data.
+
+An **environment recipe** is application configuration, not a Browserbase resource: Context reference, extension reference/digest, provider settings, viewport policy, bootstrap version and business readiness rules. The application stores account→Context and recipe→code-artifact mappings. Secret references are resolved only on the trusted host. Do not put secrets or serialized closures into provider userMetadata.
+
+There are separate provider-session, Chromium-target, connection-local page/frame/document and provider-artifact-page namespaces. Never join them by discovery order, `page-N` or URL alone. A target may survive reconnection; a connection-local handle does not. Existing source already distinguishes these identities. [Current schemas][types].
+
+## Generic consumer and adapter contracts
+
+The following is a **selected target contract**, not an exhaustive declaration file. All asynchronous public operations are Effect/Stream. `BrowserPolicy`, action requests/results and page/observation data are generic package Schemas, not framework imports. The initial generic network assertion remains trusted `Unrestricted`; provider `allowedDomains` is a separate, weaker navigation filter.
 
 ```ts
+// PROPOSED generic contracts; each named data type has one feature-owned Schema.
+interface BrowserPage {
+  readonly target: Target; // connection + selection generation bound at acquisition
+  readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserbaseError>;
+  readonly readText: (request: ReadTextRequest) => Effect.Effect<TextResult, BrowserbaseError>;
+  readonly click: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserbaseError>;
+  readonly fill: (request: FillRequest) => Effect.Effect<ActionResult, BrowserbaseError>;
+  readonly scroll: (request: ScrollRequest) => Effect.Effect<ActionResult, BrowserbaseError>;
+  readonly screenshot: (request: ScreenshotRequest) => Effect.Effect<ScreenshotResult, BrowserbaseError>;
+}
+
+interface BrowserSession<InitE = never> {
+  readonly reference: SessionReference;
+  readonly currentPage: Effect.Effect<BrowserPage, BrowserbaseError>;
+  readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserbaseError>;
+  readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserbaseError>;
+  readonly selectPage: (pageId: string) => Effect.Effect<BrowserPage, BrowserbaseError>;
+  readonly selectFrame: (frameId: string) => Effect.Effect<BrowserPage, BrowserbaseError>;
+  readonly createPage: Effect.Effect<PageInfo, BrowserbaseError>;
+  readonly closePage: (page: PageInfo) => Effect.Effect<void, BrowserbaseError>;
+  readonly observe: (options?: ObserveOptions) => Effect.Effect<Observation, BrowserbaseError>;
+  readonly clickElement: (element: ObservedElement) => Effect.Effect<ActionResult, BrowserbaseError>;
+  readonly fillElement: (element: ObservedElement, value: string) => Effect.Effect<ActionResult, BrowserbaseError>;
+  readonly failure: Effect.Effect<never, InitE | BrowserbaseError>;
+  readonly disconnect: Effect.Effect<LocalCleanupResult, BrowserbaseError>;
+}
+
+interface OwnedBrowserAcquisition<InitE = never> {
+  readonly reference: SessionReference;
+  readonly attempt: AllocationAttempt;
+  readonly connect: Effect.Effect<BrowserSession<InitE>, InitE | BrowserbaseError>;
+  readonly release: Effect.Effect<CleanupResult, BrowserbaseError>;
+}
+```
+
+The acquisition itself requires Scope. `connect` borrows that existing acquisition lifetime; its returned session cannot escape it. Repeated initial `connect` calls share the one live controller, as today. The complete API also carries the existing compound waits, downloads, viewport/handoff controls and same-owner keep-alive `detach/reconnect` operations; they are omitted from this sketch only for readability, not removed by the split. `disconnect` ends local attachment; explicit keep-alive `detach` retains reconnectability inside the original controller scope. Neither transfers remote ownership. Borrowed attachments use local-only cleanup and cannot expose remote release authority accidentally.
+
+`BrowserPage` is a binding to a selected target/generation, not a raw Playwright Page. It becomes stale after a selection/generation change, preserving the current handle contract. A selected-page convenience method must resolve/check its target under the same owner admission; reading a current page and later mutating an unrelated new selection is not acceptable. Document readiness failures fence admission and are reported through the configured supervision contract, without claiming that a completed installation Effect can fail retroactively.
+
+Adapter composition is deliberately thin:
+
+```ts
+// PROPOSED adapter entry, implemented only in platform-browserbase.
+interface HandleAuthority {
+  readonly close: Effect.Effect<CleanupResult, BrowserbaseError>;
+}
+declare const toBrowserHandle: (
+  page: BrowserPage,
+  authority: HandleAuthority,
+) => BrowserHandle; // imported from the installed effect-agent only HERE
+
+declare const fromOwned: <InitE>(
+  acquisition: OwnedBrowserAcquisition<InitE>,
+  session: BrowserSession<InitE>,
+) => BrowserbaseSession; // legacy facade; no allocation or additional semaphore
+```
+
+`toBrowserHandle` translates request/result/error values exactly once. Its close authority is explicit because a page controller is not inherently allowed to release a remote session. `fromOwned` preserves the existing `.handle`, `.currentHandle`, two-phase host acquisition and cleanup behavior. Legacy `Capture.start`/PageControl wrappers delegate using the facade's canonical generic session, not an independent WeakMap of cloned authority. Generic users call generic Capture directly. Reexports preserve resource service tag identity across both packages.
+
+The adapter owns `InteractiveBrowserPolicy` validation and rejection of `ExactHosts`/`PublicWeb`, framework errors, current implementation identity, and actual Effect AI Tool/Toolkit composition. It must not add its own browser-operation counter or mutation permit. Host/direct and agent actions debit the same generic owner. Keep current legacy signatures during the compatibility window; do not silently add arbitrary callback errors to the installed framework's closed error algebra. Opt-in generic helpers retain consumer E/R; framework projection reports sanitized framework errors while detailed host supervision stays on the generic session.
+
+## Shared configuration and provider evolution
+
+Separate immutable account configuration, per-session launch intent, connection policy, bootstrap and business logic:
+
+```ts
+// PROPOSED request shared by generic acquire/withBrowser.
+interface OpenRequest<InitE = never, InitR = never> {
+  readonly policy: BrowserPolicy;
+  readonly launch: LaunchRecipe;
+  readonly automation?: AutomationOptions;
+  readonly bootstrap?: Bootstrap.Plan<InitE, InitR>;
+  // Writer/control coordination is host-owned and generically typed;
+  // exact generic port contracts are described in the Effect chapter.
+}
 interface LaunchRecipe {
   readonly remoteTimeoutSeconds: number;
   readonly keepAlive?: boolean;
-  readonly context?: ContextUse;
+  readonly context?: { readonly reference: ContextReference; readonly persist: boolean };
   readonly viewport:
     | { readonly _tag: "ProviderManaged" }
     | { readonly _tag: "Fixed"; readonly width: number; readonly height: number };
@@ -82,143 +139,103 @@ interface LaunchRecipe {
 }
 ```
 
-`ProviderLaunchOptions` should preserve the names and structure of the current provider request: region, ordered proxies, proxySettings, extensionId, browserSettings and userMetadata. Exclude ownership-managed duplicates: projectId, SDK `api_timeout`/REST timeout, keepAlive, nested Context and viewport. Reject collisions instead of applying an undocumented precedence order. For extensionId's top-level/nested aliases, expose one canonical top-level field. The compiler materializes these values exactly once into the REST body.
+Context writer coordination should be supplied as a typed capability acquired by the caller and associated with the attempt, not as an untyped callback field on the account singleton. Read-only Context use needs no writer receipt, but still follows the application's overlap/reuse policy. Extension reference validation belongs to launch compilation, not native connection setup.
 
-Keep existing privacy defaults (`recordSession`, `logSession`, `solveCaptchas` off) in the legacy path; allow explicit opt-in in the new recipe. Do not silently change defaults merely because Browserbase defaults differ. Record effective non-secret settings and the recipe version for diagnosis. Copy nested arrays/objects before allocation so caller mutation cannot change admitted policy.
+`ProviderLaunchOptions` follows provider names for region, ordered proxies, proxySettings, extensionId, browserSettings and userMetadata. Exclude duplicates managed by ownership: project ID, REST timeout/SDK api_timeout, keepAlive, nested Context and viewport. Canonicalize extension selection to its top-level field; reject duplicate conflicting aliases rather than choosing an undocumented precedence. Protect the allocation metadata namespace and copy nested mutable input once before POST.
 
-Before allocation, validate cross-field rules: persistent writer has a lease; Verified uses provider-managed viewport and does not accept later resize; OS customization requires Verified; current page-control incompatibilities remain enforced; target and metadata bounds are valid. Feature entitlement remains a provider decision—do not infer availability from a stale plan-name table. Errors should identify unsupported combinations without leaking proxy credentials.
+Retain legacy recording/logging/CAPTCHA-off defaults. Make new opt-ins explicit rather than silently inheriting provider defaults. Cross-field admission includes a persistent writer capability, Verified/provider-managed viewport, supported OS configuration, page-control incompatible modes, identifier/metadata bounds and region/configuration shape. Entitlement is a provider result, not a hard-coded plan-name decision. [Current launch body][provider], [SDK request and timeout translation][sdk-sessions].
 
-### Avoid a handwritten second SDK
+Keep official Effect HTTP transport initially. It already owns credential isolation, manual redirects, bounded streams and deadlines; an SDK replacement must pass those tests and disable uncertain-mutation retries. Add no-content DELETE and bounded multipart as required by actual resources. The Client may expose a host-only control-plane request port, but resource services remain the documented workflow API and model-facing tools never receive that port. Raw browser/CDP access is not implied.
 
-**Recommended initial transport:** retain the official Effect HTTP implementation already used by this repository. Its manual redirect policy, redaction, bounded streams and dispatch-aware failure handling are valuable. Add DELETE/no-content and bounded multipart support needed by real resource workflows rather than coercing every endpoint through JSON GET/POST.
+Select a reproducible pinned SDK/OpenAPI contract input and an offline field-diff/generation procedure in Stage 1. Emit self-contained DTOs; no `.d.mts` may import an undeclared development-only SDK. Until reproducible generation exists, use a small explicit browser-subset snapshot with provenance and drift tests. Do not claim automatic coverage or blindly pass unknown ownership-sensitive fields. The current repository has no installed Browserbase SDK dependency to upgrade. [Manifest][manifest].
 
-**Recommended contract maintenance:** use the official SDK/OpenAPI as a development-time contract input, with generated, self-contained request DTOs and contract tests for the exposed browser subset. Export no declarations that depend on an undeclared development-only SDK. The first implementation stage must select a reproducible contract source/generator and retain its version; until that is available, a small explicit snapshot with a checked field-diff is safer than pretending generated coverage exists. Review new ownership-sensitive fields; permit new ordinary provider settings only after the generated contract and cross-field tests update.
+## Lifetimes and cleanup ownership
 
-An optional SDK-backed transport is defensible if it measurably removes code and passes the same boundary tests. It must not add automatic retries of uncertain resource creation, double timeouts, unsafe credential propagation, eager browser loading or unbounded media buffering. Do not install the runtime SDK merely for fashion, and do not reject it because Effect forbids maintained dependencies—it does not. The architectural seam matters more than the initial transport implementation.
-
-Sources: [current Effect HTTP boundary](../../../packages/platform-browserbase/src/internal/Http.ts), [current SDK request mapping](https://github.com/browserbase/sdk-node/blob/v2.20.0/src/resources/sessions/sessions.ts), [installed dependency policy](../../../CONTRIBUTING.md).
-
-## 4. Ownership and lifecycle
-
-Three lifetimes must remain separate:
-
-1. **Persistent Context lifetime:** explicit creation to explicit deletion; not ended by closing a session.
-2. **Remote session lifetime:** provider allocation to observed terminal state; finite even with keep-alive.
-3. **Local connection lifetime:** scoped attachment, registrations, handles, streams and eventual disconnect.
-
-The proposed ownership contracts are:
-
-| Operation / handle | Default finalizer | What it does not imply |
+| Operation | Required owner | Cleanup consequence |
 | --- | --- | --- |
-| `host.acquire(policy, options)` → owned remote acquisition | Request release and reconcile exact session | Does not delete its Context or extension |
-| `acquisition.connect` → owned connection | Dispose local registrations and disconnect; enclosing remote owner still releases | Does not prove a failed business mutation was undone |
-| `host.attach(reference, options)` → borrowed connection | Dispose/disconnect only | Does not grant authority to end someone else's remote session |
-| `sessions.requestRelease(reference)` / `waitForTerminal` | Explicit administrative operations | Release request is not terminal observation or Context flush |
-| `contexts.delete(reference)` | Explicit destructive operation | Never a hidden finalizer of ordinary browsing |
+| `Contexts.create/retrieve/delete` | application account authority | Persistent resource; no session-scope deletion |
+| `BrowserbaseBrowser.acquire(request)` | enclosing execution Scope + writer capability where needed | Register cleanup journal before POST; finalizer releases owned remote session |
+| `acquisition.connect` | existing acquisition/controller lifetime | Connection, targets, registrations and intervals attach to the one owner |
+| `BrowserbaseBrowser.attach(reference, options)` | caller Scope + supervisor-issued control claim | Borrowed local connection; disconnect-only finalizer |
+| `Sessions.retrieve/list/waitForTerminal` | account service | Passive inspection; never releases by surprise |
+| `Sessions.requestRelease` | explicit administrative authority | Request accepted is not terminal or Context-flush evidence |
+| Legacy host `reconcile` | legacy adapter | Retains release-oriented semantics; deprecated in favor of explicit names |
 
-`host.attach` must validate project, current provider status, supplied host control lease, policy and target identity. Wait boundedly for `PENDING`, accept `RUNNING`, and return a typed terminal/expired result otherwise. Retrieve connection credentials on the server for the exact reference; never accept a serialized stale websocket URL. New connection generation invalidates every old handle and observation. Initialization must complete before admitting dependent actions.
+[Current Session][session] already registers teardown before create, remembers identity before validating the connect URL and distinguishes local and remote cleanup. Extract these guarantees intact. Narrow factory/port boundaries should make them easier to locate, not replace them with a single optimistic SDK call.
 
-**Do not expose a casual `releaseOnClose:false` switch.** It would make remote leaks easy and blur billing ownership. Durable operation requires a consumer-owned supervisor that stores session identity, expiry, recipe and owner lease, then arranges eventual release. A future transfer operation must be two-phase: persist and acknowledge the new owner before disarming the old finalizer. Failure before acknowledgement retains original cleanup; failure with ambiguous acknowledgement quarantines the transfer. Existing `detach` remains a local disconnect inside its original owner scope unless an explicit transfer succeeds.
+The [Effect chapter's ordered cleanup contract](effect-conventions.md#6-cleanup-one-ordered-program-and-honest-receipts) is authoritative. Mechanical extraction preserves current remote-first ordering. A later separately tested lifecycle change uses quiesce children → disconnect local → independently release/reconcile remote → settle/quarantine writer. Both paths preserve actual failures; neither can infer provider termination from a broken socket. Cached close execution coalesces explicit close, timeout and finalizer callers.
 
-A process crash can lose an unknown business operation even when a browser remains running. Reconnection provides current evidence, not transaction recovery. Ask the application to reconcile its own operation ID/postcondition before another mutation. Provider `userMetadata` plus allocation nonce supports locating candidates after an uncertain create, but no exactly-once or idempotent create guarantee is invented.
+Do not add a casual `releaseOnClose:false` option to the owned default. A durable supervisor stores reference/expiry/recipe/lease and arranges eventual release. Cross-process attachment retrieves fresh connection credentials after checking project/status/target; it cannot recover lost business transaction outcomes. Any future transfer of remote ownership is a separate two-phase acknowledgement protocol, not serializing a session handle. No default exactly-once or automatic mutation replay guarantee is added.
 
-Sources: [existing cleanup/reconnect implementation](../../../packages/platform-browserbase/src/internal/Session.ts), [keep-alive](https://docs.browserbase.com/platform/browser/long-sessions/keep-alive), [provider session operations](https://github.com/browserbase/sdk-node/blob/v2.20.0/src/resources/sessions/sessions.ts).
+## Context persistence coordination
 
-## 5. Context write semantics
+The existing `{context:{id,persist}, contextLease}` is a valid partial foundation. New Context operations use qualified references; generic coordination preserves consumer error/service types. The consumer supplies actual distributed exclusion, not a library-local semaphore advertised as a multi-process lock. Browserbase does not thereby enforce the consumer's fencing token.
 
-Keep Context coordination pluggable and consumer-owned: database transaction/advisory lock, durable lease service or another real distributed mechanism. A local semaphore alone cannot coordinate multiple application processes. The package must not imply that a consumer fencing token is enforced by Browserbase itself.
-
-Require an exclusive writer lease before a `persist:true` allocation. Retain ownership through disconnect/reconnect and terminal reconciliation. Expose a structured result separating remote termination, context persistence evidence and application validation:
+A writer lease must precede allocation and survive disconnect/reconnect and uncertain cleanup. Associate settlement with the exact attempt/reference. Separate provider terminal status, Context metadata change and consumer readback:
 
 ```ts
-// Proposed result vocabulary, not new provider states.
+// Evidence vocabulary, not new Browserbase states.
 type PersistenceEvidence =
   | { readonly _tag: "NotRequested" }
-  | { readonly _tag: "Unconfirmed"; readonly reason: "writer-active" | "writer-unknown" | "flush-unacknowledged" }
-  | { readonly _tag: "Observed"; readonly method: "consumer-readback"; readonly observedAtMillis: number };
+  | { readonly _tag: "Unconfirmed"; readonly reason:
+      "writer-active" | "writer-unknown" | "flush-unacknowledged" }
+  | { readonly _tag: "Observed"; readonly method: "consumer-readback";
+      readonly observedAtMillis: number };
 ```
 
-`Observed` means the consumer's selected marker/postcondition was read back; it is not proof that all Chromium storage was durably and atomically saved. A changed Context `updatedAt` is metadata evidence only. Do not define a `Persisted` state backed solely by a sleep or session `COMPLETED`.
+`Observed` proves only the selected marker/postcondition, not an atomic snapshot of every storage system. Do not release a quarantined writer merely because the scope ended, `updatedAt` changed or a fixed sleep elapsed. Read-only hydration during a writer needs an explicit policy; unexpected termination and lease-settlement failure remain uncertain. Deletion while active/uncertain is rejected by the cooperating application coordinator, while provider overlap/deletion semantics remain hosted questions H1/H2.
 
-The consumer chooses a reuse policy: serialize conservatively, perform bounded readback of a known version marker, or quarantine until operator review. An unexpectedly ended writer produces uncertainty, not silent lease release followed by another write. Read-only hydration (`persist:false`) still needs an overlap policy with an active writer; it must not be assumed to see in-flight changes. Context deletion during an active/uncertain writer is rejected by the local coordinator. Provider behavior for concurrent reuse/deletion remains a hosted question.
+A coordinator can provide `withWriter(reference, use)` or explicit scoped acquisition. The former removes Scope from consumer requirements; the latter retains it. Explicit settlement returns typed errors and receipts; fallback finalization records/quarantines without overwriting the primary workflow cause. No deprecated Context upload/import API is added. [Current Context SDK deprecations][sdk-contexts].
 
-Preserve generic Effect error/environment types in coordination hooks. Current hooks erase application requirements by demanding `Effect<..., BrowserbaseError>`; do not force consumers to run their own detached runtime or flatten database failures merely to acquire a lease.
+## Bootstrap, document readiness and consumer services
 
-```ts
-// Signature sketch: E and R survive composition.
-interface ContextCoordinator<E, R> {
-  readonly acquireWriter: (
-    reference: ContextReference,
-  ) => Effect.Effect<ContextWriterLease<E, R>, E, R | Scope.Scope>;
-}
-```
-
-A production lease should offer an explicit success/failure/quarantine settlement operation, with a bounded finalizer as a fallback. Finalizers cannot silently swallow settlement failures or claim a safe Context when the database did not record the outcome. The original workflow failure stays primary; cleanup/settlement failures are additional sanitized evidence.
-
-## 6. Bootstrap and readiness
-
-Model **what must exist before browser actions**, not a collection of unrelated hooks. Provide a trusted `Bootstrap` description with ordered script bundle, origin-scoped bindings, permission operations and readiness criteria. The implementation uses pinned Playwright primitives behind the binding.
-
-[Playwright 1.63 `BrowserContext.addInitScript`](https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-browsercontext.md) returns a **Disposable** and covers new documents and frames. Multiple script registrations have unspecified order. Therefore install a single ordered bundle for dependent steps, retain native disposables, and use the native context registration rather than racing page-created callbacks to inject code. Bindings/function exposure should likewise use native facilities, not repeated polling through a second websocket.
-
-Bootstrap execution sequence:
+`Bootstrap.Plan<E,R>` describes trusted registrations and readiness requirements. It is a typed value, not another provider resource or ambient service. Native registration implementation lives behind the trusted Effect binding; no raw Playwright object escapes into a consumer callback.
 
 ```text
-connect with an environment-preserving configuration
- → resolve default native context and target registry
- → install host binding registrations / permissions
- → install the ordered context init bundle
- → register existing-document readiness policy
- → expose connection in Initializing state
- → navigate/create target as requested
- → identify new document epoch and await its declared readiness
- → publish Ready and admit dependent observations/actions
+validated launch → retained allocation identity → connect under current epoch
+ → default native context/target discovery
+ → install host bindings and permissions
+ → install one ordered init bundle using native context registration
+ → choose explicit policy for documents already running
+ → fresh navigation/document epoch → await configured readiness
+ → admit dependent observations/actions under the same owner
 ```
 
-Initialization registration and asynchronous document readiness are different. An init script can start a promise before application scripts, but that does not pause the website's own scripts. The library's barrier gates its own dependent operations. A consumer-controlled page can additionally await that promise itself. A late attachment cannot retroactively run before scripts already executed; require one of `RequireFreshNavigation`, `AcceptAlreadyRunning` with explicit verification, or a consumer-approved reload. Never auto-reload a page containing an uncertain transaction.
+Registration and asynchronous readiness are different. Playwright can run an init script before fresh document scripts, but an async promise started there does not freeze website execution. The library gates its own operations; a consumer-controlled page may also await that promise. Existing documents cannot be made pre-script retroactively: choose `RequireFreshNavigation` or verified `AcceptAlreadyRunning`; an explicit consumer-approved reload is a business decision and never a response to uncertain input.
 
-Track readiness per **connection generation + target + frame + document epoch**, not only URL. Cancel old readiness on navigation/detachment and fence late callbacks. Newly created pages and popups are not operationally ready merely because a `page` event fired. Keep queue length, pending documents, per-binding calls, payload bytes and bootstrap deadlines bounded. Publish useful failure phase/step identifiers without logging script contents or private return values.
+Use the pinned native `addInitScript` registration and Disposable. Bundle dependent initialization steps rather than assuming order across multiple context/page registrations. Track readiness by connection generation + target + frame + document epoch, not URL. Navigation/detachment cancels old readiness; late callbacks cannot satisfy new documents. New tabs/popups receive context-level registration, not a late event-handler injection advertised as early execution. [Pinned Playwright documentation][pw-context].
 
-### Consumer services are a trust boundary
+Bindings validate input/output schemas, source origin and live epoch, byte limits, admission count and deadline. They capture consumer services in the connection scope, supervise callback errors separately from completed installation Effects and cancel on disposal. Page-side errors are sanitized. Allowed-origin XSS can still call an exposed binding; only least-privilege operations belong there. A callback waiting behind the same mutation permit as its triggering action deadlocks; host-service calls are separate from explicit queued browser follow-up. [Effect callback design](effect-conventions.md#5-consumer-callback-er-including-failures-after-installation).
 
-A binding call is untrusted browser input, even from an otherwise authenticated page. Validate argument and return schemas; verify current frame origin and document generation; restrict allowed origins; cap concurrency/bytes/time; reject after detach, handoff or closure as appropriate. Origin checks prevent unrelated sites from invoking it, but do not defeat XSS on an allowed site—return only least-privilege data. Proxy/API/database credentials remain in the host.
+Extensions may need Chrome isolated-world and service-worker messaging; they cannot assume shared globals with page-world bindings. Their durable storage/identity across Context reuse remains H3, and reconnect registration retention/removal remains H4. No extension bundler, generic reverse tunnel, raw CDP mode, or new audio transport is a prerequisite for scoped customization.
 
-Execute callback Effects in the owning scope with captured dependencies; cancel them on disposal. A binding invoked by a page action must not synchronously request another mutation behind the same held permit: that deadlocks. Permit read-only host-service callbacks during a pending native action, and queue any requested browser mutation until the original action has settled. The host decides authority; a callback cannot expand the agent's browser policy.
+## Maintainability: remove layers of work, not guarantees
 
-### Deliberate lower-level access
+| Before | Target | Preserved invariant |
+| --- | --- | --- |
+| Four `makeHttp` and `makeProvider` paths, differing strict-option behavior | One Client dependency; feature services own routes; no forwarding-only Provider layer | One account validation and transport policy; resource-only calls remain browser-free |
+| Provider launch fields hidden inside Session/InteractiveBrowser construction | One validated recipe→wire compiler | Attempt identity, reserved fields, exact body defaults and no uncertain retries |
+| Framework `BrowserHandle` is the only general action surface | Generic BrowserPage/session operations; one adapter mapping | One owner/mutation budget and installed framework compatibility |
+| Session closure mixes provider, connection, callbacks, capture and lease settlement | Explicit acquisition journal, connection epoch, cleanup coordinator | Known identity survives failure; independent remote/local facts and quarantine |
+| One Playwright closure mixes discovery, observation, action and screencast state | Injected target/document/observation controllers plus native primitives | Exact-node validation, no selection race, child capture invalidation and source clocks |
+| Mixed global Types file | Shared References/Errors and feature-owned Schemas; legacy reexports | Existing encoded IDs/shapes and constructor identity |
 
-Expose an injectable Browserbase-named binding interface with capability negotiation, not Cloudflare's types and not a general `CDPSession.send`. First-class bootstrap operations should cover scripts, bindings, cookies and permissions. Add targeted native capabilities only for concrete workflows, including file attachment and necessary inspection.
+A setting change should touch Contract/Launch and wire tests, not Owner or Tools. A Context route should touch Contexts/transport tests, not Playwright. A new permission/bootstrap capability should touch Bootstrap, native registration, document readiness and callback tests, not rewrite remote allocation. File-by-file steps and change recipes are in [the plan](implementation-plan.md).
 
-For consumers whose needs cannot fit those operations, a separate explicitly native-authority integration mode may be considered later. It must relinquish the package's managed-operation guarantees for that period and invalidate affected observations before re-entry. Do not advertise an arbitrary callback receiving a raw Browser as safely scoped: the callback can retain that object, initiate background work and bypass all future guards. A branded type alone cannot prevent that. This review recommends **not shipping that raw-object mode in the initial stages**.
+## Effect conventions and compatibility
 
-## 7. Effect implementation conventions
+Follow the exact rc.115 [conventions and code examples](effect-conventions.md): `Context.Service`/Layer dependencies, Schema boundaries, typed error families, inline `Effect.gen`, useful traced `Effect.fn`, internal `fnUntraced`, scoped native callbacks and bounded concurrency. Per-session mutable controllers are not singleton service tags. `Owner` alone mutates lifecycle/generation/admission state; named transitions replace external writable state.
 
-Use the installed `Context.Service`, `Layer.effect`, `Effect.scoped`, `Effect.acquireRelease`, `Schema`, `Redacted`, `Stream` and bounded owned fibers/queues. The current source and [public type tests](../../../packages/platform-browserbase/test/public-types.test.ts) are the version-specific patterns, not Effect 3 tutorials. Avoid new detached runtimes, global mutable Playwright monkeypatches, unbounded callback promises and parallel finalizers whose ordering is essential.
+Scope-providing helpers return `BrowserbaseBrowser | Exclude<R | InitR, Scope.Scope>`, not an unchanged R union. Initialization can fail after installation, so explicit sessions expose supervised failure; structured helpers monitor it. Native interruption is not undo, and late results still require ticket checks and disposal. Finalizers record sanitized cleanup outcomes; arbitrary blocking/uninterruptible consumer code is outside a hard timing guarantee.
 
-A public connection method that runs consumer code must retain its `E` and `R`:
+Preserve all existing adapter subpaths and signatures during an explicit prerelease compatibility window, including legacy Types/service identities and capture authority. Add a separate generic no-framework consumer test rather than declaring success after reorganizing imports. The root wrapper's one-package bootstrap/one-tarball release assumptions must change as part of the package stage; no package is considered split until emitted Node/Bun consumers install the candidate tarballs successfully. The proposal is independent of npm publication authorization or an upstream merge.
 
-```ts
-// Proposed signature, not an implementation or currently exported API.
-declare const withBrowser: <A, E, R, InitE, InitR>(
-  options: OpenOptions<InitE, InitR>,
-  use: (session: BrowserbaseSession) => Effect.Effect<A, E, R>,
-) => Effect.Effect<
-  A,
-  E | InitE | BrowserbaseError,
-  R | InitR | BrowserbaseClient | BrowserbaseBrowserBinding
->;
-```
-
-Internally, this helper provides the scope; explicit acquisition returns `Scope.Scope` in `R`. Schema-validated persistent data must not erase the live owner associated with handles. Account services should not require a browser scope until they actually create resources. Public callback types need declaration/type tests in the packed package, including application-specific errors and services.
-
-Retain a sanitized public failure algebra and separate private diagnostic evidence, in line with [#6](https://github.com/mannyc2/effect-agent-browserbase/issues/6). Prefer phase-specific errors for configuration/rejected allocation/uncertain allocation/bootstrap/terminal session while keeping a compatible projection to existing `BrowserbaseError` during migration. Preserve dispatch classification across core/Tools mapping; do not infer it from native message strings. Expected absence such as BYOS delivery or disabled recording is not a generic transport failure.
-
-Cancellation of a Promise-backed native command cannot undo dispatch. Retain ticket checks, late-result disposal and owner fencing. GET inspection can use bounded backoff; automatic mutation replay is forbidden when outcome is unknown. Finalizers stop streams and callbacks, dispose registrations, disconnect, request release when owned, observe terminal status and settle Context coordination in a specified order. Cleanup evidence remains inspectable even when cleanup cannot be confirmed.
-
-## 8. Customization, observation and capture coexistence
-
-An init script can change page state without a host action. Observations are admission evidence, not immutable DOM snapshots; retain exact-node and generation checks. A binding returning data need not stop unrelated capture. Navigation or geometry changes of a captured target still invalidate the corresponding interval; selection changes on a scout page do not.
-
-Complete bootstrap before suspending a page whose timers/readiness promises must run. Handoff pauses automation, not page JavaScript, extensions or network. Detach leaves the remote browser running only under its keep-alive/lifetime contract; host-service bindings cannot be assumed usable while the host connection is gone. Extension background workers have their own lifecycles, not the Effect connection scope.
-
-Keep recording/replay/live capture separate. Add a bounded event journal connecting allocation attempt, environment version, session, connection generation, target/document, operation phase and artifact reference. Do not record raw URLs, content, screenshots, script arguments or credentials by default. This produces useful operator diagnostics without weakening the current private transport boundary.
+[manifest]: https://github.com/mannyc2/effect-agent-browserbase/blob/1b3e9b1916621d036f2568c821e83bed72400f9c/packages/platform-browserbase/package.json
+[interactive]: https://github.com/mannyc2/effect-agent-browserbase/blob/1b3e9b1916621d036f2568c821e83bed72400f9c/packages/platform-browserbase/src/InteractiveBrowser.ts
+[type-tests]: https://github.com/mannyc2/effect-agent-browserbase/blob/1b3e9b1916621d036f2568c821e83bed72400f9c/packages/platform-browserbase/test/public-types.test.ts
+[types]: https://github.com/mannyc2/effect-agent-browserbase/blob/1b3e9b1916621d036f2568c821e83bed72400f9c/packages/platform-browserbase/src/Types.ts
+[provider]: https://github.com/mannyc2/effect-agent-browserbase/blob/1b3e9b1916621d036f2568c821e83bed72400f9c/packages/platform-browserbase/src/internal/Provider.ts
+[session]: https://github.com/mannyc2/effect-agent-browserbase/blob/1b3e9b1916621d036f2568c821e83bed72400f9c/packages/platform-browserbase/src/internal/Session.ts
+[sdk-sessions]: https://github.com/browserbase/sdk-node/blob/v2.20.0/src/resources/sessions/sessions.ts
+[sdk-contexts]: https://github.com/browserbase/sdk-node/blob/v2.20.0/src/resources/contexts.ts
+[pw-context]: https://github.com/microsoft/playwright/blob/v1.63.0/docs/src/api/class-browsercontext.md
