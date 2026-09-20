@@ -205,14 +205,19 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
       const parent: CaptureParent = {
         owner,
         target: () => target,
-        resolve: () => Effect.succeed({
-          key: "native-page-1",
-          target,
-          source: {
-            start: async (callback) => { receive = callback; },
-            stop: async () => { stops++; },
-          },
-        }),
+        resolve: () =>
+          Effect.succeed({
+            key: "native-page-1",
+            target,
+            source: {
+              start: async (callback) => {
+                receive = callback;
+              },
+              stop: async () => {
+                stops++;
+              },
+            },
+          }),
         captureLeases: new Map(),
         captureReservedBytes: 0,
       };
@@ -226,15 +231,17 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
       };
 
       emit(1000);
-      yield* Stream.runForEach(interval.frames, (value) => Effect.gen(function* () {
-        seen.push(value.sequence);
-        expect(Object.isFrozen(value.target)).toBe(true);
-        if (value.sequence === 0) {
-          expect(Reflect.set(value.target, "generation", 1)).toBe(false);
-          expect(Reflect.set(value.target, "pageId", "other-page")).toBe(false);
-          emit(1001);
-        } else yield* interval.stop;
-      }));
+      yield* Stream.runForEach(interval.frames, (value) =>
+        Effect.gen(function* () {
+          seen.push(value.sequence);
+          expect(Object.isFrozen(value.target)).toBe(true);
+          if (value.sequence === 0) {
+            expect(Reflect.set(value.target, "generation", 1)).toBe(false);
+            expect(Reflect.set(value.target, "pageId", "other-page")).toBe(false);
+            emit(1001);
+          } else yield* interval.stop;
+        }),
+      );
       const summary = yield* interval.completed;
 
       expect(seen).toEqual([0, 1]);
