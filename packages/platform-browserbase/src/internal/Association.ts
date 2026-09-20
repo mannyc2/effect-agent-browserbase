@@ -28,7 +28,10 @@ export interface CaptureParent {
   captureReservedBytes: number;
 }
 
-// Live identity association only; typed outcomes are Schemas, never hidden in this WeakMap.
+// This is a private capability registry, not stored domain data. Exact live session identity is
+// required: spreading/cloning a session must not copy authority to mutate its capture owner,
+// leases or reservations. A public/enumerable parent field would weaken that boundary.
+// Keep this access centralized here; schemas describe data, never this mutable ownership state.
 const parents = new WeakMap<object, CaptureParent>();
 
 export const associate = (session: object, parent: CaptureParent): void => {
