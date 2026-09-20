@@ -63,7 +63,7 @@ bash tools/run-acceptance.sh
 
 It creates a fresh temporary workspace and prints the results directory. On the CI runner it installs local Chromium dependencies and FFmpeg with `sudo`; the full script is not advertised as a portable macOS/Windows setup command.
 
-Every command retains its arguments, log and exit status. The gate includes the 66-case independent boundary runner on Node and Bun, package tests, native AgentRuntime/CDP/video suites, an emitted external consumer, declaration checks, real emitted-code programs on both runtimes, exports, purity, full `vp run ready` and release dry-runs. Later independent checks still execute after a failure, but any failure keeps the gate red. Old counts are never reused as current results.
+Every command retains its arguments, log and exit status. The gate includes the independent boundary runner on Node and Bun, package tests, native AgentRuntime/CDP/video suites, an emitted external consumer, declaration checks, real emitted-code programs on both runtimes, exports, purity, full `vp run ready` and release dry-runs. Later independent checks still execute after a failure, but any failure keeps the gate red. Old counts are never reused as current results.
 
 Results, downloaded videos, build directories and package archives are ignored; retain them in Actions artifacts, not commits. The single exception is `docs/media/`, which holds the published demo recording under a declared size budget enforced by `tools/test/hosted.test.mjs`; see [docs/media/README.md](docs/media/README.md). `checkpoints/` stays immutable. The historical checkpoint verifier remains a separate integrity check, never a bootstrap dependency.
 

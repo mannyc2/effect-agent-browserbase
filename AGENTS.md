@@ -24,7 +24,7 @@ Commit the candidate before `bash tools/run-acceptance.sh`; that Ubuntu acceptan
 
 A session often starts on a host whose Node and Bun differ from the pins, where `tools/bootstrap.sh` and `tools/run-acceptance.sh` refuse to run at all. Install the pinned runtimes first with `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions instead.
 
-Formatting is decided by the Oxfmt that Vite+ already carries; nothing needs to be fetched separately. Bootstrap, run `vp fmt` in that workspace, and bring the result back. Do not hand-write formatting to satisfy `vp run ready`. Hand-formatting and separate formatter downloads have each cost whole review cycles here and neither has ever produced the canonical output.
+Formatting is decided by the Oxfmt that Vite+ already carries; nothing needs to be fetched separately. Bootstrap, run `vp fmt` in that workspace, and bring the result back. Do not hand-write formatting to satisfy `vp run ready`. Use the frozen workspace as the formatter source of truth rather than guessing whitespace or selecting a separate formatter build.
 
 Run experiments in the bootstrapped workspace. Ordinary CI is the fixed acceptance program, not a scratchpad: do not add a disposable workflow to run an experiment or to back up, restore or delete a branch. Use `git` for normal repository changes rather than full-file contents replacements. When the host cannot reach publishers or GitHub, report the concrete prerequisite failure; do not generalize another host's connectivity or silently change the workflow.
 
