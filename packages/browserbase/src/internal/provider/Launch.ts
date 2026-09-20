@@ -3,9 +3,10 @@ import { Effect, Redacted, Schema } from "effect";
 import { Viewport } from "../../BrowserData.ts";
 import { BrowserError } from "../../Errors.ts";
 import { LaunchRecipe, type ProxyRule } from "../../Launch.ts";
-import type { AllocationAttempt } from "../../References.ts";
+import { AllocationAttempt } from "../../References.ts";
 
 export interface CompiledLaunch {
+  readonly attempt: AllocationAttempt;
   readonly body: Schema.Json;
   readonly viewport: Viewport | undefined;
   readonly keepAlive: boolean;
@@ -26,14 +27,14 @@ const proxy = (rule: ProxyRule): Schema.Json => rule.type === "external" ? {
 };
 
 /** One validation/copy/compiler path. No legacy constructor or second default body exists. */
-export const compileLaunch = Effect.fnUntraced(function* (input: unknown, attempt: AllocationAttempt): Effect.fn.Return<CompiledLaunch, BrowserError> {
+export const compileLaunch = Effect.fnUntraced(function* (input: unknown, identity: Pick<AllocationAttempt, "projectId" | "attemptId" | "requestedAtMillis">): Effect.fn.Return<CompiledLaunch, BrowserError> {
   const recipe = yield* Schema.decodeUnknownEffect(LaunchRecipe)(input, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() => BrowserError.make({ operation: "launch", reason: "configuration", outcome: "undispatched" })),
   );
+  const attempt = Object.freeze(AllocationAttempt.make({ ...identity, timeoutSeconds: recipe.remoteTimeoutSeconds }));
   const settings = recipe.provider.browserSettings ?? {};
   const fail = () => BrowserError.make({ operation: "launch", reason: "configuration", outcome: "undispatched" });
-  if (recipe.remoteTimeoutSeconds !== attempt.timeoutSeconds ||
-      (recipe.context !== undefined && recipe.context.reference.projectId !== attempt.projectId) ||
+  if ((recipe.context !== undefined && recipe.context.reference.projectId !== attempt.projectId) ||
       (settings.verified === true && recipe.viewport._tag !== "ProviderManaged") ||
       (settings.os !== undefined && settings.verified !== true)) return yield* fail();
   const viewport = recipe.viewport._tag === "Fixed"
@@ -80,5 +81,5 @@ export const compileLaunch = Effect.fnUntraced(function* (input: unknown, attemp
   const encoded = yield* Effect.try({ try: () => JSON.stringify(body), catch: fail });
   if (new TextEncoder().encode(encoded).length > 64 * 1024) return yield* fail();
   const owned = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(encoded).pipe(Effect.mapError(fail));
-  return { body: owned, viewport, keepAlive, context, recordSession };
+  return { attempt, body: owned, viewport, keepAlive, context, recordSession };
 });

@@ -3,7 +3,7 @@ import { SessionReference } from "./References.ts";
 import { SessionStatus } from "./SessionData.ts";
 
 export class CleanupIssue extends Schema.Class<CleanupIssue>("BrowserbaseCleanupIssue")({
-  step: Schema.Literals(["capture", "initialization", "disconnect", "release", "status"]),
+  step: Schema.Literals(["fence", "capture", "initialization", "disconnect", "release", "status"]),
   reason: Schema.Literals(["timeout", "failed", "interrupted"]),
 }) {}
 

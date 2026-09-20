@@ -15,6 +15,7 @@ export interface ContextWriterPermitInternal extends ContextWriterPermit {
   readonly recordAttempt: (attempt: AllocationAttempt) => Effect.Effect<void, ContextError>;
   readonly recordSession: (attempt: AllocationAttempt, reference: SessionReference) => void;
   readonly rejected: (attempt: AllocationAttempt) => void;
+  readonly uncertain: (attempt: AllocationAttempt) => void;
   readonly completed: (attempt: AllocationAttempt, cleanup: CleanupResult) => void;
   readonly confirmReadback: (atMillis: number) => Effect.Effect<void, ContextError>;
   readonly quarantine: Effect.Effect<void>;
@@ -55,13 +56,18 @@ export const makeContextWriterPermit = (reference: ContextReference): Effect.Eff
     },
     rejected: (attempt) => {
       const record = attempts.get(attempt.attemptId);
-      if (record === undefined || record.session !== undefined) { unknown(); return; }
+      if (record === undefined || record.attempt !== attempt || record.session !== undefined) { unknown(); return; }
       record.state = "rejected";
       if ([...attempts.values()].every((item) => item.state === "rejected")) persistence = { _tag: "NotRequested" };
     },
+    uncertain: (attempt) => {
+      const record = attempts.get(attempt.attemptId);
+      if (record !== undefined && record.attempt === attempt) record.state = "unknown";
+      unknown();
+    },
     completed: (attempt, cleanup) => {
       const record = attempts.get(attempt.attemptId);
-      if (record === undefined || record.attempt !== attempt || record.session === undefined ||
+      if (record === undefined || record.attempt !== attempt || cleanup.ownership !== "owned" || record.session === undefined ||
         record.session.sessionId !== cleanup.reference.sessionId || cleanup.reference.projectId !== owned.projectId) { unknown(); return; }
       record.cleanup = cleanup;
       if (cleanup.remote !== "confirmed") { record.state = "unknown"; unknown(); return; }

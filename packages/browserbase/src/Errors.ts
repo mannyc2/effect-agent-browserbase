@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { AllocationAttempt } from "./References.ts";
+import { AllocationAttempt, SessionReference } from "./References.ts";
 
 export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserError", {
   operation: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
@@ -80,6 +80,7 @@ export class InitializationError extends Schema.TaggedError<InitializationError>
 /** Creation has a known rejection or an uncertain effect; absence of a reply is not a rejection. */
 export class AllocationError extends Schema.TaggedError<AllocationError>()("AllocationError", {
   attempt: AllocationAttempt,
+  reference: Schema.optionalKey(SessionReference),
   outcome: Schema.Literals(["rejected", "unknown"]),
   reason: Schema.Literals(["authorization", "rate-limited", "configuration", "provider", "transport", "timeout", "malformed"]),
   status: Schema.optionalKey(Schema.Int),
