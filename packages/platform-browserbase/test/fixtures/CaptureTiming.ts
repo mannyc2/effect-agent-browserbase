@@ -17,6 +17,7 @@ export interface CaptureDiscontinuity {
 export class CaptureTimingTrace {
   static readonly capacity = 32;
   private readonly history: CaptureTimingPoint[] = [];
+  private firstReceived: CaptureTimingPoint | undefined;
   private previous: CaptureTimingPoint | undefined;
   private first: CaptureDiscontinuity | undefined;
   private sequence = 0;
@@ -37,6 +38,7 @@ export class CaptureTimingTrace {
       viewportHeight: frame.viewportHeight,
     };
 
+    this.firstReceived ??= current;
     this.history.push(current);
     if (this.history.length > CaptureTimingTrace.capacity) this.history.shift();
     const previous = this.previous;
@@ -55,7 +57,13 @@ export class CaptureTimingTrace {
   }
 
   snapshot() {
-    return { received: this.sequence, recent: this.history.slice(), first: this.first };
+    return {
+      received: this.sequence,
+      recent: this.history.slice(),
+      first: this.first,
+      firstReceived: this.firstReceived ?? null,
+      lastReceived: this.previous ?? null,
+    };
   }
 }
 
@@ -71,9 +79,8 @@ export const observeCaptureFrames = <
   callback: (frame: A) => B,
   report: (event: CaptureDiscontinuity) => void,
   now: () => bigint,
+  trace = new CaptureTimingTrace(),
 ) => {
-  const trace = new CaptureTimingTrace();
-
   return (frame: A): B => {
     try {
       const event = trace.record(frame, now());

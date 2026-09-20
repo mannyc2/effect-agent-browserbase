@@ -7,8 +7,11 @@ import * as Capture from "@effect-agent/platform-browserbase/capture";
 import type { BrowserbaseSession } from "@effect-agent/platform-browserbase/interactive-browser";
 import { Effect, Schema, Stream } from "effect";
 
+import { CaptureEvidence, captureEvidence } from "./capture-evidence.ts";
+
 class RecordVideoError extends Schema.TaggedError<RecordVideoError>()("RecordVideoError", {
   operation: Schema.String,
+  evidence: Schema.optionalKey(CaptureEvidence),
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
@@ -74,6 +77,8 @@ export const recordInterval = (
         (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
       );
 
+      const captureStarted = yield* Effect.sync(() => process.hrtime.bigint());
+
       const interval = yield* Capture.start(session, {
         maxFrames: 64,
         maxBufferedBytes: 32 * 1024 * 1024,
@@ -85,7 +90,20 @@ export const recordInterval = (
       const frames = Array.from(yield* interval.frames.pipe(Stream.runCollect));
       const summary = yield* interval.completed;
 
-      if (frames.length < 2) return yield* Effect.die("capture produced fewer than two frames");
+      if (frames.length < 2) {
+        const captureCompleted = yield* Effect.sync(() => process.hrtime.bigint());
+
+        return yield* RecordVideoError.make({
+          operation: "insufficient-frames",
+          evidence: captureEvidence(
+            frames,
+            summary,
+            durationMillis,
+            captureStarted,
+            captureCompleted,
+          ),
+        });
+      }
 
       const lines: string[] = [];
 

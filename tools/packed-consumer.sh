@@ -52,7 +52,9 @@ JS
   cp "$PKG/test/fixtures/LocalBrowser.ts" test/fixtures/
   cp "$PKG/test/fixtures/NativeCaptureDiagnostics.ts" test/fixtures/
   cp "$PKG/test/fixtures/CaptureTiming.ts" test/fixtures/
+  cp "$PKG/test/fixtures/CaptureLifecycle.ts" test/fixtures/
   cp "$PKG/examples/record-video.ts" examples/
+  cp "$PKG/examples/capture-evidence.ts" examples/
   cp "$PKG/examples/demo-recording.ts" examples/
   cp "$PKG/vite.native.config.ts" .
   cat > tsconfig.json <<'JSON'
