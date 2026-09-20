@@ -7,7 +7,7 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 | Input | Pin |
 | --- | --- |
 | Node | 24.14.1 (`.node-version`) |
-| Bun | 1.4.2 |
+| Bun | 1.4.2 (`.bun-version`) |
 | Upstream | `danieljvdm/effect-agent@ea53ea6671a94eb44b8019e942cc2c9468786723` |
 | Effect family | 4.0.0-rc.115 |
 | effect-agent / testing | 0.1.0-beta.102 |
@@ -36,7 +36,7 @@ For the ordinary edit-and-check loop, one command does all of the below:
 bash tools/verify.sh           # add --fresh to rebuild the workspace from clean upstream
 ```
 
-It installs the pinned runtimes if the host lacks them, bootstraps or reuses `.work/upstream`, copies your tracked package files in, then runs formatting, typecheck, unit and native suites and the pack. It needs no root: it fetches the browser without the system-dependency step and only warns if FFmpeg is absent. Formatting the workspace produces canonical output, so any change it makes is copied back for you to review and stage.
+It installs the pinned runtimes if the host lacks them, bootstraps or reuses `.work/upstream`, copies your tracked package files in, then runs formatting, lint, typecheck, unit and native suites and the pack. It needs no root: it fetches the browser without the system-dependency step and only warns if FFmpeg is absent. Formatting the workspace produces canonical output, so any change it makes is copied back for you to review and stage.
 
 It is a fast loop, not acceptance. It stops at the first failure and mints no evidence bundle; `tools/run-acceptance.sh` remains the program whose record CI and the release workflow consume.
 

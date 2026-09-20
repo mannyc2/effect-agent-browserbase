@@ -55,6 +55,10 @@ command -v ffmpeg > /dev/null && command -v ffprobe > /dev/null ||
   printf 'ffmpeg/ffprobe not on PATH: the caller-encoded video tests will fail.\n' >&2
 
 step format ./node_modules/.bin/vp fmt
+# Lint is separate from formatting and from typecheck, and it is the one that
+# keeps costing a CI round trip: vp fmt does not insert the blank lines
+# padding-line-between-statements requires, and tsc never sees the rule. ~15s.
+step lint ./node_modules/.bin/vp check
 step typecheck ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
 cd "$TREE/$PACKAGE"
 step unit ../../node_modules/.bin/vp test --run --maxWorkers=1

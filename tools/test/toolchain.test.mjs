@@ -34,7 +34,7 @@ test("the Bun pin comes from the same file every other command asserts", () => {
   assert.ok(
     read("tools/bootstrap.sh").includes('test "$(bun --version)" = "$(cat "$ROOT/.bun-version")"'),
   );
-  assert.ok(read("CONTRIBUTING.md").includes(`| Bun | ${bunPin} |`));
+  assert.ok(read("CONTRIBUTING.md").includes(`| Bun | ${bunPin} (\`.bun-version\`) |`));
   // CI must read the pin too rather than restating it next to the checkout.
   for (const workflow of [".github/workflows/ci.yml", ".github/workflows/hosted.yml"]) {
     assert.ok(read(workflow).includes("bun-version-file: .bun-version"));
