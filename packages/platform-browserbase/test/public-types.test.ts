@@ -1,9 +1,12 @@
+import type * as Capture from "@effect-agent/platform-browserbase/capture";
 import {
   type BrowserbaseInteractiveHost,
   type BrowserbaseSession,
 } from "@effect-agent/platform-browserbase/interactive-browser";
-import type { handlers } from "@effect-agent/platform-browserbase/tools";
-import { type BrowserbaseToolFailure } from "@effect-agent/platform-browserbase/tools";
+import {
+  type handlers,
+  type BrowserbaseToolFailure,
+} from "@effect-agent/platform-browserbase/tools";
 import { type BrowserbaseError } from "@effect-agent/platform-browserbase/types";
 import { expect, it } from "@effect/vitest";
 import { type Effect, type Layer, type Scope } from "effect";
@@ -24,6 +27,10 @@ const hostErrors: Same<
   BrowserbaseError | InteractiveBrowserError
 > = true;
 
+const captureErrors: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserbaseError> = true;
+const captureScope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
+const sourceSize: Capture.CaptureSize = { width: 640, height: 360 };
+
 const originalContract: Same<BrowserbaseSession["handle"], BrowserHandle> = true;
 const borrowed: Same<LayerRequirements<ReturnType<typeof handlers>>, never> = true;
 
@@ -33,5 +40,14 @@ const explicitOutcome: Same<
 > = true;
 
 it("retains scoped ownership, original handle identity and typed native Tool failures", () => {
-  expect(scoped && hostErrors && originalContract && borrowed && explicitOutcome).toBe(true);
+  expect(
+    scoped &&
+      hostErrors &&
+      originalContract &&
+      borrowed &&
+      explicitOutcome &&
+      captureErrors &&
+      captureScope,
+  ).toBe(true);
+  expect(sourceSize.width).toBe(640);
 });

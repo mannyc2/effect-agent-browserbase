@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Scope } from "effect";
 import { Effect, Exit, Fiber, Stream } from "effect";
 
-import { type CaptureOptions } from "../../src/Capture.ts";
+import { type CaptureOptions, type CaptureSize } from "../../src/Capture.ts";
 import { type CaptureParent } from "../../src/internal/Association.ts";
 import { startCapture } from "../../src/internal/Capture.ts";
 import { type CaptureInvalidation, type NativeFrame } from "../../src/internal/Driver.ts";
@@ -43,6 +43,7 @@ const makeFixture = Effect.fnUntraced(function* (
     readonly start?: () => Promise<void>;
     readonly stop?: () => Promise<void>;
     readonly startFailure?: boolean;
+    readonly onRequest?: (quality: number, size: CaptureSize | undefined) => void;
   } = {},
 ) {
   const owner = yield* makeOwner({
@@ -86,8 +87,9 @@ const makeFixture = Effect.fnUntraced(function* (
           frameId: "frame-1",
         }),
         source: {
-          start: async (receive, _quality, invalidate) => {
+          start: async (receive, quality, invalidate, size) => {
             starts++;
+            options.onRequest?.(quality, size);
             callbacks.set(chosen.pageId, receive);
             invalidators.set(chosen.pageId, invalidate);
             if (options.startFailure) throw new Error("PRIVATE-NATIVE-START");
@@ -555,5 +557,112 @@ export const captureCases: ReadonlyArray<Case> = [
       assert.equal(Exit.hasInterrupts(yield* Fiber.await(fiber)), true);
       assert.equal(f.counts().stops, 1);
       assert.equal(f.parent.captureLeases.size, 0);
+    })),
+  test("capture rejects invalid source-size requests before native work or reservation", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+
+      for (const invalid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 16385]) {
+        for (const size of [
+          { width: invalid, height: 48 },
+          { width: 64, height: invalid },
+        ]) {
+          yield* expectReason(startCapture(f.parent, { ...options, size }), "configuration");
+        }
+      }
+      assert.deepEqual(f.counts(), { starts: 0, stops: 0 });
+      assert.equal(f.parent.captureLeases.size, 0);
+      assert.equal(f.parent.captureReservedBytes, 0);
+      assert.equal(f.parent.owner.state.phase, "open");
+    })),
+  test("capture snapshots the size request and forwards quality without changing geometry or clocks", () =>
+    Effect.gen(function* () {
+      const size = { width: 64, height: 48 };
+      let requested: CaptureSize | undefined;
+
+      const f = yield* makeFixture({
+        onRequest: (quality, forwarded) => {
+          assert.equal(quality, 71);
+          requested = forwarded;
+        },
+      });
+
+      const interval = yield* startCapture(f.parent, { ...options, size, quality: 71 });
+
+      size.width = 1;
+      size.height = 1;
+      assert.deepEqual(requested, { width: 64, height: 48 });
+      assert.notEqual(requested, size);
+      f.emit(1234.5, jpeg(), 1024, 768);
+      yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+      const frame = frames[0];
+
+      assert.equal(frames.length, 1);
+      assert.ok(frame);
+      assert.equal(frame.width, 64);
+      assert.equal(frame.height, 48);
+      assert.equal(frame.viewportWidth, 1024);
+      assert.equal(frame.viewportHeight, 768);
+      assert.equal(frame.sourceTimeMillis, 1234.5);
+    })),
+  test("capture rejects oversized actual JPEGs on the first frame and releases only their page", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+
+      const oversized = yield* startCapture(f.parent, {
+        ...options,
+        size: { width: 64, height: 48 },
+      });
+
+      const sibling = yield* startCapture(f.parent, {
+        ...options,
+        target: f.page("page-2"),
+        size: { width: 80, height: 48 },
+      });
+
+      f.emit(1000, widerJpeg(), 64, 48);
+      yield* expectReason(Stream.runDrain(oversized.frames), "limit");
+      const summary = yield* oversized.completed;
+
+      assert.equal(summary.received, 1);
+      assert.equal(summary.delivered, 0);
+      assert.equal(summary.dropped, 1);
+      assert.equal(summary.nativeStop, "confirmed");
+      assert.equal(f.parent.captureLeases.size, 1);
+      f.emitPage("page-2", 1001, widerJpeg());
+      yield* sibling.stop;
+      assert.equal((yield* Stream.runCollect(sibling.frames)).length, 1);
+      assert.equal(f.parent.captureReservedBytes, 0);
+    })),
+  test("source-size height violations are not hidden by matching metadata", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+
+      const interval = yield* startCapture(f.parent, {
+        ...options,
+        size: { width: 64, height: 47 },
+      });
+
+      f.emit(1000, jpeg(), 64, 47);
+      yield* expectReason(Stream.runDrain(interval.frames), "limit");
+      assert.equal((yield* interval.completed).delivered, 0);
+    })),
+  test("omitting source size preserves native defaults and accepts the existing bounded geometry", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture({
+        onRequest: (_quality, size) => assert.equal(size, undefined),
+      });
+
+      const interval = yield* startCapture(f.parent, options);
+
+      f.emit(1000, widerJpeg());
+      yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+      const frame = frames[0];
+
+      assert.ok(frame);
+      assert.equal(frame.width, 80);
+      assert.equal(frame.height, 48);
     })),
 ];

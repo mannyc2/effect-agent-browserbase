@@ -17,6 +17,14 @@ export interface CapturedFrame {
   readonly viewportHeight: number;
 }
 
+/** Source-fit request in pixels. Actual JPEG bounds are checked before any frame is delivered. */
+export const CaptureSize = Schema.Struct({
+  width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
+  height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
+});
+
+export type CaptureSize = typeof CaptureSize.Type;
+
 export interface CaptureOptions {
   /** Pin capture to a page returned by `session.pages`. Omit to preserve selected-page behavior. */
   readonly target?: PageInfo;
@@ -25,6 +33,8 @@ export interface CaptureOptions {
   readonly maxFrameBytes?: number;
   readonly maxDurationMillis?: number;
   readonly quality?: number;
+  /** Fit the source within these bounds without resizing the live viewport. JPEG only; not an FPS cap. */
+  readonly size?: CaptureSize;
 }
 
 export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserbaseCaptureSummary")({
