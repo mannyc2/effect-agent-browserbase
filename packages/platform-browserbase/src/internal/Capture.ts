@@ -4,6 +4,8 @@ import type { Target } from "../Types.ts";
 import { BrowserbaseError } from "../Types.ts";
 import { type CaptureLease, type CaptureParent } from "./Association.ts";
 import {
+  CaptureDefaults,
+  CaptureLimits,
   CaptureSize,
   CaptureSummary,
   type CaptureInterval,
@@ -31,11 +33,11 @@ export const startCapture = Effect.fnUntraced(function* (
   parent: CaptureParent,
   options: CaptureOptions = {},
 ) {
-  const maxFrames = options.maxFrames ?? 4;
-  const maxBytes = options.maxBufferedBytes ?? 16 * 1024 * 1024;
-  const maxFrameBytes = options.maxFrameBytes ?? 4 * 1024 * 1024;
-  const duration = options.maxDurationMillis ?? 60000;
-  const quality = options.quality ?? 80;
+  const maxFrames = options.maxFrames ?? CaptureDefaults.maxFrames;
+  const maxBytes = options.maxBufferedBytes ?? CaptureDefaults.maxBufferedBytes;
+  const maxFrameBytes = options.maxFrameBytes ?? CaptureDefaults.maxFrameBytes;
+  const duration = options.maxDurationMillis ?? CaptureDefaults.maxDurationMillis;
+  const quality = options.quality ?? CaptureDefaults.quality;
 
   const size =
     options.size === undefined
@@ -51,29 +53,21 @@ export const startCapture = Effect.fnUntraced(function* (
           ),
         );
 
-  if (
-    !Number.isSafeInteger(maxFrames) ||
-    maxFrames < 1 ||
-    maxFrames > 64 ||
-    !Number.isSafeInteger(maxBytes) ||
-    maxBytes < 1 ||
-    maxBytes > 64 * 1024 * 1024 ||
-    !Number.isSafeInteger(maxFrameBytes) ||
-    maxFrameBytes < 1 ||
-    maxFrameBytes > maxBytes ||
-    !Number.isSafeInteger(duration) ||
-    duration < 1 ||
-    duration > 600000 ||
-    !Number.isSafeInteger(quality) ||
-    quality < 1 ||
-    quality > 100
-  ) {
-    return yield* BrowserbaseError.make({
-      operation: "capture",
-      reason: "configuration",
-      outcome: "undispatched",
-    });
-  }
+  yield* Schema.decodeEffect(CaptureLimits)({
+    maxFrames,
+    maxBufferedBytes: maxBytes,
+    maxFrameBytes,
+    maxDurationMillis: duration,
+    quality,
+  }).pipe(
+    Effect.mapError(() =>
+      BrowserbaseError.make({
+        operation: "capture",
+        reason: "configuration",
+        outcome: "undispatched",
+      }),
+    ),
+  );
   const clock = yield* Clock.Clock;
   const wake = yield* Queue.dropping<void>(1);
   const finished = yield* Queue.dropping<void>(1);
@@ -293,7 +287,9 @@ export const startCapture = Effect.fnUntraced(function* (
         Effect.gen(function* () {
           const resolved = yield* parent.resolve(ticket, options.target);
 
-          target = resolved.target;
+          // Frames and summaries share this identity with the generation guard. It must not
+          // become writable through consumer-owned frame data.
+          target = Object.freeze(resolved.target);
           source = resolved.source;
           leaseKey = resolved.key;
           if (parent.captureLeases.has(leaseKey)) {
