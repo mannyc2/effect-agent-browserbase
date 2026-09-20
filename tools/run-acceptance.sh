@@ -70,6 +70,26 @@ TREE="$WORK_ROOT/upstream/tree"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
+  # Upstream CI transfers node_modules/.vite/task-cache between runs; do the same
+  # instead of paying for every upstream task on every candidate. Vite Task keys
+  # each result by that task's own inputs, so a restored entry is replayed only
+  # when those inputs match, and ready.log keeps the per-task hit/miss decision.
+  # Seed after bootstrap: bun install owns node_modules and would drop a copy
+  # placed there earlier. A lock file belongs to the run that made it.
+  TASK_CACHE="$TREE/node_modules/.vite/task-cache"
+  SEED="${BROWSERBASE_TASK_CACHE:-}"
+  if [ -n "$SEED" ] && [ -d "$SEED" ]; then
+    mkdir -p "$TASK_CACHE"
+    cp -a "$SEED/." "$TASK_CACHE/"
+    find "$TASK_CACHE" -name '*.lock' -delete
+    # Task results live in cache.db; only tasks with output files add a blob.
+    printf 'seeded from %s: %s files, %s\n' \
+      "$SEED" "$(find "$TASK_CACHE" -type f | wc -l)" \
+      "$(du -sh "$TASK_CACHE" | cut -f1)" > "$OUT/task-cache.txt"
+  else
+    printf 'no seed (%s)\n' \
+      "${SEED:-BROWSERBASE_TASK_CACHE unset}" > "$OUT/task-cache.txt"
+  fi
   run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
   # These two stages exist to make the native boundary runnable, not to prove
   # anything. Installing over a host that already has them needs root and a
@@ -126,6 +146,19 @@ if [ "$LAST_CODE" = 0 ]; then
 
   git diff --binary > "$OUT/review.patch"
   tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
+  # Hand the cache back even when a stage above failed: a task that did pass
+  # produced a legitimate result, and discarding it would make the next run pay
+  # for it again. Only whole successful task results are stored by Vite Task.
+  # Copy over the seed rather than replacing it: everything in it came from there
+  # in the first place, so no recursive delete of a caller-supplied path is needed.
+  if [ -n "$SEED" ] && [ -d "$TASK_CACHE" ]; then
+    mkdir -p "$SEED"
+    cp -a "$TASK_CACHE/." "$SEED/"
+    find "$SEED" -name '*.lock' -delete
+    printf 'exported to %s: %s files, %s\n' \
+      "$SEED" "$(find "$SEED" -type f | wc -l)" \
+      "$(du -sh "$SEED" | cut -f1)" >> "$OUT/task-cache.txt"
+  fi
 fi
 cd "$SOURCE_ROOT"
 run source-cleanliness bash -c 'test -z "$(git status --porcelain)"'

@@ -42,6 +42,39 @@ test("acceptance records every stage it did not execute, and why", () => {
   assert.ok(acceptance.includes("FAILED=1"), "a skipped stage must not silently succeed");
 });
 
+test("the task-cache transfer speeds the gate up without shrinking or faking it", () => {
+  const acceptance = read("tools/run-acceptance.sh");
+  const ci = read(".github/workflows/ci.yml");
+
+  // The whole point is that nothing was removed to buy the time back.
+  assert.ok(acceptance.includes("--concurrency-limit 1 ready"));
+  assert.doesNotMatch(acceptance, /ready\s+--exclude|-t\s|--testNamePattern|--bail/);
+  // bun install owns node_modules, so a cache placed there before bootstrap is
+  // simply deleted. Seeding must come after the bootstrap stage.
+  assert.ok(
+    acceptance.indexOf("run bootstrap") < acceptance.indexOf('cp -a "$SEED/." "$TASK_CACHE/"'),
+    "the cache must be seeded after bootstrap, not before",
+  );
+  // A lock file belongs to the run that created it, never to a restored copy.
+  assert.equal((acceptance.match(/-name '\*\.lock' -delete/g) ?? []).length, 2);
+  // The record must distinguish a replayed result from a fresh execution.
+  assert.ok(acceptance.includes('"$OUT/task-cache.txt"'));
+  assert.ok(acceptance.includes("no seed"));
+  // An unset variable must leave a completely cold, self-contained run.
+  assert.ok(acceptance.includes('SEED="${BROWSERBASE_TASK_CACHE:-}"'));
+
+  // runner.temp does not resolve in job env; it is exported by the first step.
+  assert.ok(ci.includes("printf 'BROWSERBASE_TASK_CACHE=%s/browserbase-task-cache\\n' \"$RUNNER_TEMP\""));
+  // Saving an empty export would shadow a usable older entry under the same prefix.
+  assert.ok(ci.includes("steps.exported.outputs.present == 'true'"));
+  // The restore key must change when the workspace identity does.
+  for (const input of ["tools/bootstrap.sh", "upstream.patch", ".node-version", ".bun-version"]) {
+    assert.ok(ci.includes(input), `restore key must cover ${input}`);
+  }
+  // A cache is not a credential and grants no new write scope.
+  assert.doesNotMatch(ci, /permissions:\s*\n\s*contents: write/);
+});
+
 test("the local gate is a fast loop, not a second acceptance program", () => {
   const verify = read("tools/verify.sh");
 
