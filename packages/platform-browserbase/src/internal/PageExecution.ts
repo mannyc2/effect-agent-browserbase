@@ -12,8 +12,10 @@ export interface PageExecutionNative {
   readonly detach: () => Promise<void>;
 }
 
-const fail = (reason: BrowserbaseError["reason"]) =>
-  BrowserbaseError.make({ operation: "page-control", reason, outcome: "undispatched" });
+const fail = (
+  reason: BrowserbaseError["reason"],
+  outcome: "undispatched" | "unknown" = "undispatched",
+) => BrowserbaseError.make({ operation: "page-control", reason, outcome });
 
 /** Owned by one native page/connection. Cleanup never resumes or rolls back a hold. */
 export class PageExecution {
@@ -53,8 +55,10 @@ export class PageExecution {
   }
   private check(ticket: Ticket, revision: number): void {
     ticket.check();
-    if (this.disposed || this.port.closed()) throw fail("closed");
-    if (this.revision !== revision) throw fail("stale");
+    const outcome = ticket.dispatched ? "unknown" : "undispatched";
+
+    if (this.disposed || this.port.closed()) throw fail("closed", outcome);
+    if (this.revision !== revision) throw fail("stale", outcome);
   }
   private async write(
     ticket: Ticket,
