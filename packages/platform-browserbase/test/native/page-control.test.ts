@@ -67,6 +67,7 @@ for (const capture of [false, true])
             );
             const first = yield* read(stageNative);
             let count = 0;
+            let scoutCount = 0;
 
             const interval = capture
               ? yield* Capture.start(session, { target: stage, maxDurationMillis: 5000 })
@@ -81,12 +82,30 @@ for (const capture of [false, true])
                     }),
                   ).pipe(Effect.forkScoped);
 
+            const scout = (yield* session.pages).find((page) => page.pageId === secondId);
+
+            assert.ok(scout);
+
+            const scoutInterval = capture
+              ? yield* Capture.start(session, { target: scout, maxDurationMillis: 5000 })
+              : undefined;
+
+            const scoutConsumer =
+              scoutInterval === undefined
+                ? undefined
+                : yield* Stream.runForEach(scoutInterval.frames, () =>
+                    Effect.sync(() => {
+                      scoutCount++;
+                    }),
+                  ).pipe(Effect.forkScoped);
+
             yield* Effect.sleep(250);
 
             const before = yield* read(stageNative),
               scoutBefore = yield* read(scoutNative);
 
             const framesBefore = count;
+            const scoutFramesBefore = scoutCount;
             const receipt = yield* PageControl.suspend(session, stage);
 
             expect((yield* PageControl.state(session, stage)).state).toBe("suspended");
@@ -106,6 +125,10 @@ for (const capture of [false, true])
             expect(scoutDuring.ticks).toBeGreaterThan(scoutBefore.ticks);
             expect(scoutDuring.rafs).toBeGreaterThan(scoutBefore.rafs);
             expect(scoutDuring.clicks).toBe(1);
+            if (capture) {
+              expect(scoutFramesBefore).toBeGreaterThan(0);
+              expect(scoutCount).toBeGreaterThan(scoutFramesBefore);
+            }
             const stale = PageSuspension.make({ ...receipt, suspensionId: "foreign" });
             const refused = yield* PageControl.resume(session, stale).pipe(Effect.result);
 
@@ -147,6 +170,11 @@ for (const capture of [false, true])
               yield* interval.stop;
               yield* Fiber.join(consumer);
               expect((yield* interval.completed).nativeStop).toBe("confirmed");
+            }
+            if (scoutInterval !== undefined && scoutConsumer !== undefined) {
+              yield* scoutInterval.stop;
+              yield* Fiber.join(scoutConsumer);
+              expect((yield* scoutInterval.completed).nativeStop).toBe("confirmed");
             }
             yield* PageControl.suspend(session, stage);
             yield* session.closePage(stage.pageId);
