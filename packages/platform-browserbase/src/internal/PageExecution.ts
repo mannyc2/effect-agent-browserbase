@@ -24,12 +24,21 @@ export class PageExecution {
   private receipt: PageSuspension | undefined;
   private priorRate: number | undefined;
   private disposed = false;
+  readonly pageId: string;
+  readonly targetId: string;
+  private readonly port: PageExecutionNative;
+  private readonly freshId: () => string;
   constructor(
-    readonly pageId: string,
-    readonly targetId: string,
-    private readonly port: PageExecutionNative,
-    private readonly freshId: () => string = () => globalThis.crypto.randomUUID(),
-  ) {}
+    pageId: string,
+    targetId: string,
+    port: PageExecutionNative,
+    freshId: () => string = () => globalThis.crypto.randomUUID(),
+  ) {
+    this.pageId = pageId;
+    this.targetId = targetId;
+    this.port = port;
+    this.freshId = freshId;
+  }
   state(): PageExecutionState {
     if (this.disposed || this.port.closed()) throw fail("closed");
 
