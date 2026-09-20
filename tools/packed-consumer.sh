@@ -29,8 +29,9 @@ import { BrowserbaseRecordings } from "@effect-agent/platform-browserbase/record
 import { BrowserbaseReplays } from "@effect-agent/platform-browserbase/replays";
 import { BrowserbaseDownloads } from "@effect-agent/platform-browserbase/downloads";
 import * as Capture from "@effect-agent/platform-browserbase/capture";
+import * as PageControl from "@effect-agent/platform-browserbase/page-control";
 import * as Tools from "@effect-agent/platform-browserbase/tools";
-for (const subpath of ["", "/interactive-browser", "/types", "/tools", "/recordings", "/replays", "/downloads", "/capture"]) {
+for (const subpath of ["", "/interactive-browser", "/types", "/tools", "/recordings", "/replays", "/downloads", "/capture", "/page-control"]) {
   const resolved = realpathSync(fileURLToPath(import.meta.resolve(`@effect-agent/platform-browserbase${subpath}`)));
   assert.ok(resolved.startsWith(realpathSync(process.cwd()) + "/"));
   assert.ok(resolved.includes("/dist/") && resolved.endsWith(".mjs"), resolved);
@@ -41,6 +42,8 @@ assert.equal(typeof BrowserbaseRecordings.layer, "function");
 assert.equal(typeof BrowserbaseReplays.layer, "function");
 assert.equal(typeof BrowserbaseDownloads.layer, "function");
 assert.equal(typeof Capture.start, "function");
+assert.equal(typeof PageControl.suspend, "function");
+assert.equal(typeof PageControl.resume, "function");
 assert.ok(Tools.toolkit);
 console.log(JSON.stringify({runtime:process.version,bun:process.versions.bun??null,result:"packed imports passed"}));
 JS

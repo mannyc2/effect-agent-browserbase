@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 export const packageName = "@effect-agent/platform-browserbase";
 export const repositoryUrl = "git+https://github.com/mannyc2/effect-agent-browserbase.git";
 export const packageDirectory = "packages/platform-browserbase";
-export const publicSubpaths = [".", "./interactive-browser", "./types", "./tools", "./recordings", "./replays", "./downloads", "./capture"];
+export const publicSubpaths = [".", "./interactive-browser", "./types", "./tools", "./recordings", "./replays", "./downloads", "./capture", "./page-control"];
 const number = "(?:0|[1-9][0-9]*)";
 const versionPattern = new RegExp(`^${number}\\.${number}\\.${number}(?:-(alpha|beta|rc)\\.${number})?$`);
 

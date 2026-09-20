@@ -5,3 +5,5 @@ export * as Recordings from "./Recordings.ts";
 export * as Replays from "./Replays.ts";
 export * as Downloads from "./Downloads.ts";
 export * as Capture from "./Capture.ts";
+
+export * as PageControl from "./PageControl.ts";

@@ -26,6 +26,7 @@ export default defineConfig({
       "src/Replays.ts",
       "src/Downloads.ts",
       "src/Capture.ts",
+      "src/PageControl.ts",
     ],
     dts: true,
     sourcemap: true,
