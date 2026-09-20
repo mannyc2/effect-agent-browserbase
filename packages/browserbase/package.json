@@ -1,0 +1,61 @@
+{
+  "name": "@effect-agent/browserbase",
+  "version": "0.1.0-beta.102",
+  "description": "Effect-based Browserbase resources and scoped browser operations.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+    "directory": "packages/browserbase"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/Client.ts",
+    "./references": "./src/References.ts",
+    "./errors": "./src/Errors.ts",
+    "./transfers": "./src/Transfers.ts",
+    "./browser-data": "./src/BrowserData.ts",
+    "./cleanup": "./src/Cleanup.ts",
+    "./launch": "./src/Launch.ts",
+    "./session-data": "./src/SessionData.ts",
+    "./sessions": "./src/Sessions.ts",
+    "./contexts": "./src/Contexts.ts",
+    "./context-coordination": "./src/ContextCoordination.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --run"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "playwright-core": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0-rc.115",
+    "playwright-core": "1.63.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

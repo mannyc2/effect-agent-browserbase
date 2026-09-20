@@ -36,6 +36,11 @@ TREE="$WORK_ROOT/upstream/tree"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
+  run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/browserbase check
+  cd packages/browserbase
+  run generic-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
+  run generic-build timeout 180s ../../node_modules/.bin/vp pack
+  cd "$TREE"
   run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
   run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase install:test-browser
   # record-video intentionally keeps ffmpeg/ffprobe caller-owned; install them only
@@ -68,13 +73,13 @@ if [ "$LAST_CODE" = 0 ]; then
   run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
   # Only candidate source files belong in the review patch. Native CDP can leave
   # generated downloads below the package; a directory-wide add would include them.
-  git -C "$SOURCE_ROOT" ls-files -z -- packages/platform-browserbase | \
+  git -C "$SOURCE_ROOT" ls-files -z -- packages/browserbase packages/platform-browserbase | \
     git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
   git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
   run review-check git diff --check
 
   git diff --binary > "$OUT/review.patch"
-  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
+  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browserbase packages/platform-browserbase
 fi
 cd "$SOURCE_ROOT"
 run source-cleanliness bash -c 'test -z "$(git status --porcelain)"'
