@@ -58,6 +58,7 @@ for (const capture of [false, true])
             const nativePages = f.nativePages(session.reference.sessionId);
 
             expect(nativePages.map((page) => page.url())).toHaveLength(2);
+
             const stageNative = nativePages.find((page) => !page.url().endsWith("#scout")),
               scoutNative = nativePages.find((page) => page.url().endsWith("#scout"));
 
