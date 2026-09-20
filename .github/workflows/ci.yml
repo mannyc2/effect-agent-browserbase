@@ -19,9 +19,9 @@ on:
       artifact_id:
         description: Immutable acceptance artifact from this run
         value: ${{ jobs.acceptance.outputs.artifact_id }}
-      package_sha256:
-        description: Hash of the exact externally tested npm tarball
-        value: ${{ jobs.acceptance.outputs.package_sha256 }}
+      release_set_sha256:
+        description: Hash of the source-bound two-package release-set receipt
+        value: ${{ jobs.acceptance.outputs.release_set_sha256 }}
 
 permissions:
   contents: read
@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 60
     outputs:
       artifact_id: ${{ steps.artifact.outputs.artifact-id }}
-      package_sha256: ${{ steps.release.outputs.sha256 }}
+      release_set_sha256: ${{ steps.release.outputs.sha256 }}
     env:
       CI: 'true'
       VP_GIT_HOOKS: '0'
@@ -62,14 +62,19 @@ jobs:
           no-cache: true
       - name: Execute complete unpaid acceptance
         run: bash tools/run-acceptance.sh
-      - name: Record tested package digest
+      - name: Record tested release-set digest
         id: release
         run: |
           node --input-type=module <<'JS'
           import { readFileSync, appendFileSync } from 'node:fs';
-          const receipt = JSON.parse(readFileSync(`${process.env.BROWSERBASE_WORK_ROOT}/results/release.json`, 'utf8'));
-          if (!/^[a-f0-9]{64}$/.test(receipt.sha256)) throw new Error('Invalid package digest');
-          appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${receipt.sha256}\n`);
+          import { releaseSetDigest } from './tools/package-release.mjs';
+          import { verifyReleaseSet } from './tools/verify-release.mjs';
+          const directory = `${process.env.BROWSERBASE_WORK_ROOT}/results`;
+          const receipt = JSON.parse(readFileSync(`${directory}/release-set.json`, 'utf8'));
+          const source = readFileSync(`${directory}/source-sha.txt`, 'utf8').trim();
+          const digest = releaseSetDigest(directory);
+          verifyReleaseSet(directory, source, `v${receipt.version}`, digest);
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${digest}\n`);
           JS
       - name: Retain source, package, logs, video and checksums
         id: artifact

@@ -54,14 +54,12 @@ if [ "$LAST_CODE" = 0 ]; then
   run exports timeout 180s ./node_modules/.bin/vp run check:exports
   run purity timeout 180s ./node_modules/.bin/vp run verify:package-purity
   cd "$SOURCE_ROOT"
-  run packed-consumer timeout 300s bash tools/packed-consumer.sh "$TREE" "$OUT"
+  run packed-consumer timeout 900s bash tools/packed-consumer.sh "$TREE" "$OUT"
   if [ "$LAST_CODE" = 0 ]; then
-    FILE="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).filename)' "$OUT/release.json")"
-    TAG="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).distTag)' "$OUT/release.json")"
-    DIGEST="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).sha256)' "$OUT/release.json")"
-    VERSION="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$OUT/release.json")"
+    VERSION="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$OUT/release-set.json")"
+    DIGEST="$(node --input-type=module -e 'import { releaseSetDigest } from "./tools/package-release.mjs"; console.log(releaseSetDigest(process.argv[1]));' "$OUT")"
     run release-identity node tools/verify-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST"
-    run package-dry-run timeout 120s npm publish "$OUT/$FILE" --dry-run --ignore-scripts --provenance=false --access public --tag "$TAG" --registry https://registry.npmjs.org/ --json
+    run package-dry-run timeout 300s node tools/publish-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST" --dry-run
   fi
   cd "$TREE"
   # Run the entire upstream gate, without filtering suites or changing assertions.
