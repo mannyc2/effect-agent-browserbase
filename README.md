@@ -34,7 +34,7 @@ Ordinary CI cannot allocate a session, so a recording only ever comes from a del
 
 ### Important boundaries
 
-Only trusted-host `Unrestricted` network policy is supported. `ExactHosts` and `PublicWeb` fail before allocation rather than claiming containment the provider cannot prove. A timed-out mutation after dispatch has an unknown outcome and is not automatically retried. Credentials and Live View bearer URLs must stay outside model inputs and durable records. Live capture is video-only.
+Only trusted-host `Unrestricted` network policy is supported. `ExactHosts` and `PublicWeb` fail before allocation rather than claiming containment the provider cannot prove. A timed-out mutation after dispatch has an unknown outcome and is not automatically retried. Credentials and Live View bearer URLs must stay outside model inputs and durable records. Live capture is video-only. `src/internal/` is private: there is no consumer CDP seam and no lower-level binding Layer, and host controls above core's provider-neutral handle are deliberately per-adapter rather than portable across adapters.
 
 ## Development
 
