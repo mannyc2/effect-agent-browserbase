@@ -48,13 +48,22 @@ const report = (phase: string, result: unknown) => {
   );
 };
 
-const common = {
+// The artifact layers take exactly `BrowserbaseOptions` and reject excess keys at
+// runtime; only the interactive host also accepts session settings. Keep the two
+// shapes apart: a shared object is a variable rather than a literal, so
+// TypeScript's excess-property check does not catch the difference and the
+// mistake surfaces as `configure`/`configuration` before any allocation.
+const http = {
   projectId,
   apiKey: Redacted.make(apiKey),
   artifactOrigins,
+  requestTimeoutMillis: 15_000,
+} as const;
+
+const common = {
+  ...http,
   recordSession: true,
   actionTimeoutMillis: 15_000,
-  requestTimeoutMillis: 15_000,
 } as const;
 
 const policy = InteractiveBrowserPolicy.make({
@@ -152,7 +161,7 @@ const program = Effect.gen(function* () {
     },
   };
 }).pipe(
-  Effect.provide(BrowserbaseRecordings.layer(common)),
+  Effect.provide(BrowserbaseRecordings.layer(http)),
   Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
   Effect.tapError((error) => Effect.sync(() => report("failure", error))),
 );
