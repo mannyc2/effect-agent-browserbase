@@ -993,7 +993,7 @@ export const makePlaywrightDriver = async (
         let watcher: CaptureWatcher | undefined;
 
         const source: CaptureSource = {
-          start: (callback, quality, invalidate) =>
+          start: (callback, quality, invalidate, size) =>
             sanitize("capture-start", async () => {
               watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
               captureWatchers.set(entry.id, watcherSet);
@@ -1002,6 +1002,7 @@ export const makePlaywrightDriver = async (
               try {
                 await page.screencast.start({
                   quality,
+                  ...(size === undefined ? {} : { size }),
                   onFrame: (frame: NativeFrame) => {
                     callback(frame);
                   },

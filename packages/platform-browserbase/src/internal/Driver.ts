@@ -1,4 +1,5 @@
 import type { FrameInfo, ObservedControl, ObservedElement, PageInfo, Viewport } from "../Types.ts";
+import type { CaptureSize } from "./CaptureTypes.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
@@ -43,6 +44,7 @@ export interface CaptureSource {
     callback: (frame: NativeFrame) => void,
     quality: number,
     invalidate: (reason: CaptureInvalidation) => void,
+    size?: CaptureSize,
   ) => Promise<void>;
   readonly stop: () => Promise<void>;
 }

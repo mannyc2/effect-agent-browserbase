@@ -4,6 +4,7 @@ import type { Target } from "../Types.ts";
 import { BrowserbaseError } from "../Types.ts";
 import { type CaptureLease, type CaptureParent } from "./Association.ts";
 import {
+  CaptureSize,
   CaptureSummary,
   type CaptureInterval,
   type CaptureOptions,
@@ -35,6 +36,20 @@ export const startCapture = Effect.fnUntraced(function* (
   const maxFrameBytes = options.maxFrameBytes ?? 4 * 1024 * 1024;
   const duration = options.maxDurationMillis ?? 60000;
   const quality = options.quality ?? 80;
+
+  const size =
+    options.size === undefined
+      ? undefined
+      : yield* Schema.decodeEffect(CaptureSize)(options.size, { onExcessProperty: "error" }).pipe(
+          Effect.map(({ width, height }) => Object.freeze({ width, height })),
+          Effect.mapError(() =>
+            BrowserbaseError.make({
+              operation: "capture",
+              reason: "configuration",
+              outcome: "undispatched",
+            }),
+          ),
+        );
 
   if (
     !Number.isSafeInteger(maxFrames) ||
@@ -219,6 +234,8 @@ export const startCapture = Effect.fnUntraced(function* (
       if (
         dimensions.width > 16384 ||
         dimensions.height > 16384 ||
+        (size !== undefined &&
+          (dimensions.width > size.width || dimensions.height > size.height)) ||
         dimensions.width * dimensions.height > 33_554_432 ||
         frame.data[frame.data.length - 2] !== 255 ||
         frame.data[frame.data.length - 1] !== 217
@@ -324,7 +341,7 @@ export const startCapture = Effect.fnUntraced(function* (
           startSettled = false;
           yield* Effect.tryPromise({
             try: () => {
-              startPromise = source!.start(receive, quality, (why) => lease?.invalidate(why));
+              startPromise = source!.start(receive, quality, (why) => lease?.invalidate(why), size);
               void startPromise.then(
                 () => {
                   startSettled = true;

@@ -6,7 +6,7 @@ import { startCapture } from "./internal/Capture.ts";
 import type { CaptureInterval, CaptureOptions } from "./internal/CaptureTypes.ts";
 import { BrowserbaseError, PageInfo } from "./Types.ts";
 
-export { CaptureSummary } from "./internal/CaptureTypes.ts";
+export { CaptureSize, CaptureSummary } from "./internal/CaptureTypes.ts";
 export type { CaptureInterval, CaptureOptions, CapturedFrame } from "./internal/CaptureTypes.ts";
 
 /** Capture one remote page independently of the session's selected page. */
