@@ -115,6 +115,10 @@ Human handoff pauses automation before returning host-only Live View material. R
 - `page-control` — opt-in host-owned stage holds and explicit receipt-based resume, independent of scout selection.
 - `types` — credential-free schemas and typed expected errors.
 
+Everything under `src/internal/` is private, and no consumer CDP seam or lower-level binding/lifecycle Layer is exported. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
+
+Host controls above core's provider-neutral handle are deliberately per-adapter and are not portable. Two-phase allocation, detach, reconnect, Live View, handoff, viewport, and cleanup outcomes are named and typed for Browserbase here; the sibling Cloudflare adapter names and types its own. Shapes converged, types did not, and a shared vocabulary would have to be promoted into core first. No upstream proposal is filed, so an application that must move between adapters owns that translation itself.
+
 ## Artifact and capture guarantees
 
 Provider recordings have an independent post-session lifetime. Assembly POST is a mutation; an uncertain POST is reconciled with status before any deliberate retry. Polling is bounded and preserves per-page partial success/failure. BYOS completion without a Browserbase download URL is reported explicitly.
