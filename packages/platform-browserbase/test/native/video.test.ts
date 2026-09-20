@@ -2,9 +2,10 @@ import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import * as Capture from "@effect-agent/platform-browserbase/capture";
 import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/interactive-browser";
 import { expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import { BrowserNavigateRequest } from "effect-agent/interactive-browser";
 
 import { recordInterval } from "../../examples/record-video.ts";
@@ -42,6 +43,33 @@ it.live(
             const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
 
             yield* session.handle.navigate(BrowserNavigateRequest.make({ url: fixture.url }));
+
+            // Spend Chromium's screencast startup outside the measured interval.
+            // Pinned Playwright's Screencast.addClient calls _startScreencast
+            // without awaiting it, which calls delegate.startScreencast without
+            // awaiting it either, so a resolved Capture.start means the client is
+            // registered — not that Page.startScreencast was acknowledged, and not
+            // that a frame exists. Measured at that exact boundary on two loaded
+            // cores: the first frame arrives after 34ms at the median and 41ms at
+            // p90, but with a 1,939ms tail, and 4 of 16 2,000ms windows produced
+            // no frame at all. Charged against a 2,000ms budget that is what left
+            // the interval below the two frames an encoder needs (#19).
+            //
+            // Taking one frame proves the pipeline is delivering; ending the stream
+            // stops this throwaway interval and releases its lease, so the measured
+            // interval below starts on an already-warm page. The duration bounds
+            // the wait, so a page that never produces a frame still reaches the
+            // assertions below with the same values as before.
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const warm = yield* Capture.start(session, {
+                  maxFrames: 2,
+                  maxDurationMillis: 4_000,
+                });
+
+                yield* warm.frames.pipe(Stream.take(1), Stream.runDrain);
+              }),
+            );
             const result = yield* recordInterval(session, output, 2_000);
             // Malformed ffprobe output should fail this fixture synchronously, not widen its Effect error type.
             // @effect-diagnostics-next-line schemaSyncInEffect:off
