@@ -488,7 +488,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         }
         const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
         const response = yield* within(
-          Effect.scoped(execute(apiRequest("GET", path, types[0] ?? "application/octet-stream"), operation)),
+          execute(apiRequest("GET", path, types[0] ?? "application/octet-stream"), operation),
           deadline,
           operation,
         );
@@ -557,7 +557,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         }
         const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
         const response = yield* within(
-          Effect.scoped(execute(HttpClientRequest.get(value), "media-download")),
+          execute(HttpClientRequest.get(value), "media-download"),
           deadline,
           "media-download",
         );

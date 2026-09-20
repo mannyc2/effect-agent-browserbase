@@ -1,5 +1,4 @@
 import { Context, Effect, Layer, type Redacted, type Schema, type Stream } from "effect";
-import type { FetchHttpClient } from "effect/unstable/http";
 
 import { ClientError } from "./Errors.ts";
 import { makeTransport } from "./internal/http/Transport.ts";
@@ -61,7 +60,7 @@ export class BrowserbaseClient extends Context.Service<
 >()("@effect-agent/browserbase/Client") {
   static layer(
     options: ClientOptions,
-  ): Layer.Layer<BrowserbaseClient, ClientError, FetchHttpClient.Fetch> {
+  ): Layer.Layer<BrowserbaseClient, ClientError> {
     return Layer.effect(
       BrowserbaseClient,
       makeTransport(options).pipe(
