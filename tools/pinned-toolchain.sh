@@ -3,7 +3,7 @@
 # bootstrap.sh and run-acceptance.sh both assert these exact versions before doing
 # anything, so a session without them cannot bootstrap, format or run acceptance.
 # Print a PATH prefix on stdout; everything else goes to stderr so callers can use
-# eval "$(bash tools/pinned-toolchain.sh)".
+# toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env".
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${1:-$ROOT/.work/toolchain}"
@@ -23,6 +23,10 @@ test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64 || {
 }
 for tool in curl tar unzip sha256sum; do command -v "$tool" >/dev/null; done
 
+# PATH must remain usable after entering the bootstrapped workspace.
+mkdir -p "$DEST"
+DEST="$(cd "$DEST" && pwd)"
+
 NODE_DIR="$DEST/node-v$NODE_VERSION-linux-x64"
 BUN_DIR="$DEST/bun-$BUN_VERSION-linux-x64"
 
@@ -37,7 +41,7 @@ if ! { test -x "$NODE_DIR/bin/node" && test "$("$NODE_DIR/bin/node" --version)" 
   echo "Fetching Node $NODE_VERSION" >&2
   rm -rf "$NODE_DIR"
   mkdir -p "$DEST"
-  curl -fsSL -o "$DEST/node.tar.xz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz"
+  curl -fsSL --connect-timeout 15 --max-time 300 -o "$DEST/node.tar.xz" "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz"
   verify "$DEST/node.tar.xz" "$NODE_SHA256"
   tar -xf "$DEST/node.tar.xz" -C "$DEST"
   rm -f "$DEST/node.tar.xz"
@@ -48,7 +52,7 @@ if ! { test -x "$BUN_DIR/bun" && test "$("$BUN_DIR/bun" --version)" = "$BUN_VERS
   echo "Fetching Bun $BUN_VERSION" >&2
   rm -rf "$BUN_DIR" "$DEST/bun-linux-x64"
   mkdir -p "$DEST"
-  curl -fsSL -o "$DEST/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+  curl -fsSL --connect-timeout 15 --max-time 300 -o "$DEST/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
   verify "$DEST/bun.zip" "$BUN_SHA256"
   unzip -oq "$DEST/bun.zip" -d "$DEST"
   mv "$DEST/bun-linux-x64" "$BUN_DIR"

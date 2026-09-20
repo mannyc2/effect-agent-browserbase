@@ -22,11 +22,11 @@ Commit the candidate before `bash tools/run-acceptance.sh`; that Ubuntu acceptan
 
 ## Maintenance sessions
 
-A session often starts on a host whose Node and Bun differ from the pins, where `tools/bootstrap.sh` and `tools/run-acceptance.sh` refuse to run at all. Install the pinned runtimes first with `eval "$(bash tools/pinned-toolchain.sh)"`. Never relax a version assertion or accept the host's versions instead.
+A session often starts on a host whose Node and Bun differ from the pins, where `tools/bootstrap.sh` and `tools/run-acceptance.sh` refuse to run at all. Install the pinned runtimes first with `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions instead.
 
 Formatting is decided by the Oxfmt that Vite+ already carries; nothing needs to be fetched separately. Bootstrap, run `vp fmt` in that workspace, and bring the result back. Do not hand-write formatting to satisfy `vp run ready`. Hand-formatting and separate formatter downloads have each cost whole review cycles here and neither has ever produced the canonical output.
 
-Run experiments in the bootstrapped workspace. Ordinary CI is the fixed acceptance program, not a scratchpad: do not add a disposable workflow to run an experiment or to back up, restore or delete a branch. Push with `git`; the GitHub contents API cannot safely replace a large source file, and an attempt that fails halfway loses uncommitted work.
+Run experiments in the bootstrapped workspace. Ordinary CI is the fixed acceptance program, not a scratchpad: do not add a disposable workflow to run an experiment or to back up, restore or delete a branch. Use `git` for normal repository changes rather than full-file contents replacements. When the host cannot reach publishers or GitHub, report the concrete prerequisite failure; do not generalize another host's connectivity or silently change the workflow.
 
 Keep the branch list short. Delete a branch once its work is merged or abandoned, and do not leave a pull request in draft over a formatting-only failure that one `vp fmt` resolves.
 

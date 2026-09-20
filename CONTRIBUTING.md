@@ -20,11 +20,13 @@ These are the verified acceptance targets, not a promise that every version allo
 
 The root `package.json` is private and prevents accidental root publication. It is not a standalone replacement for upstream's development workspace.
 
-Every command below asserts the pinned Node and Bun. On a host that ships different versions, install them first:
+Bootstrap and full acceptance assert the pinned Node and Bun. On a host that ships different versions, install them first:
 
 ```sh
-eval "$(bash tools/pinned-toolchain.sh)"
+toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"
 ```
+
+The assignment preserves installer failure; do not wrap the command substitution directly in `eval`, which would hide a failed download. Publisher access is required for a first install.
 
 It verifies each published release against a pinned digest, installs into the ignored `.work/toolchain`, and reuses an existing install that already reports the pinned version.
 

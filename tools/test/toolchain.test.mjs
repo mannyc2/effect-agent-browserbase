@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, existsSync,
+} from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -41,3 +45,80 @@ test("the fetcher stays a host-only helper with no credentials or publication", 
   assert.ok(toolchain.includes('DEST="${1:-$ROOT/.work/toolchain}"'));
   assert.ok(read(".gitignore").includes(".work/"));
 });
+
+// Offline shell boundary tests. Executables below are explicit fixtures, not
+// evidence that the real publisher assets were downloaded or executed.
+
+const fixture = (t, downloadBody = "exit 6") => {
+  const directory = mkdtempSync(join(tmpdir(), "browserbase-toolchain-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const bin = join(directory, "fixtures-bin");
+  mkdirSync(bin);
+  mkdirSync(join(directory, "tools"));
+  writeFileSync(join(directory, ".node-version"), read(".node-version"));
+  writeFileSync(join(directory, "tools/pinned-toolchain.sh"), toolchain);
+  const executable = (path, body) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `#!/bin/bash\nset -eu\n${body}\n`);
+    chmodSync(path, 0o755);
+  };
+  executable(join(bin, "curl"), downloadBody);
+  for (const name of ["tar", "unzip"])
+    executable(join(bin, name), 'touch "$TEST_ROOT/extraction-attempted"; exit 97');
+  const nodeVersion = read(".node-version").trim();
+  const bunVersion = toolchain.match(/^BUN_VERSION=(\S+)$/m)[1];
+  const seed = (dest, { bun = true } = {}) => {
+    executable(join(dest, `node-v${nodeVersion}-linux-x64/bin/node`), `echo v${nodeVersion}`);
+    if (bun) executable(join(dest, `bun-${bunVersion}-linux-x64/bun`), `echo ${bunVersion}`);
+  };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_ROOT: directory };
+  const run = (args, options = {}) => spawnSync("/bin/bash", args, {
+    cwd: directory, env, encoding: "utf8", timeout: 10000, ...options,
+  });
+  return { directory, nodeVersion, bunVersion, seed, run };
+};
+
+const platform = process.platform === "linux" && process.arch === "x64";
+
+test("cached pinned-version fixtures are reused without a download", { skip: !platform }, (t) => {
+  const f = fixture(t, 'touch "$TEST_ROOT/download-attempted"; exit 96');
+  const dest = join(f.directory, ".work/toolchain");
+  f.seed(dest);
+  const result = f.run(["tools/pinned-toolchain.sh"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^export PATH=/);
+  assert.equal(existsSync(join(f.directory, "download-attempted")), false);
+});
+
+test("a relative destination emits a stable escaped PATH after changing directories", { skip: !platform }, (t) => {
+  const f = fixture(t);
+  const relative = "cache with spaces and 'quote'";
+  f.seed(join(f.directory, relative));
+  const prepared = f.run(["tools/pinned-toolchain.sh", relative]);
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const activated = f.run(["-c", 'eval "$1"; cd /; node --version; bun --version', "activate", prepared.stdout]);
+  assert.equal(activated.status, 0, activated.stderr);
+  assert.equal(activated.stdout, `v${f.nodeVersion}\n${f.bunVersion}\n`);
+});
+
+test("the documented activation propagates a failed download instead of eval-empty success", { skip: !platform }, (t) => {
+  const f = fixture(t);
+  const command = read("CONTRIBUTING.md").match(/```sh\n([^\n]*pinned-toolchain\.sh[^\n]*)\n```/)?.[1];
+  assert.ok(command, "The activation example must remain directly executable");
+  const result = f.run(["-c", command]);
+  assert.equal(result.status, 6, result.stderr);
+  assert.equal(result.stdout, "");
+  assert.equal(existsSync(join(f.directory, "extraction-attempted")), false);
+});
+
+for (const target of ["Node", "Bun"]) {
+  test(`${target} digest rejection occurs before extraction or PATH output`, { skip: !platform }, (t) => {
+    const f = fixture(t, 'while test "$#" -gt 0; do if test "$1" = -o; then printf untrusted > "$2"; exit 0; fi; shift; done; exit 98');
+    if (target === "Bun") f.seed(join(f.directory, ".work/toolchain"), { bun: false });
+    const result = f.run(["tools/pinned-toolchain.sh"]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /Digest mismatch/);
+    assert.equal(result.stdout, "");
+    assert.equal(existsSync(join(f.directory, "extraction-attempted")), false);
+  });
+}
