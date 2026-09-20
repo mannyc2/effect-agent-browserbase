@@ -586,4 +586,194 @@ export const artifactCases = [
       assert.equal(contentRequests, 0);
     }),
   },
+  {
+    name: "recording byte limits are owned before provider authorization yields",
+    run: Effect.gen(function* () {
+      const limits = { maxBytes: 1 };
+
+      yield* withRecordings(
+        async (input, init) => {
+          const request = new Request(input, init);
+
+          if (request.url.startsWith("https://media.example.test"))
+            return new Response(new Uint8Array([1, 2, 3]), {
+              headers: { "content-type": "video/mp4" },
+            });
+          if (request.url.includes("/recording/")) return Response.json(completed);
+          limits.maxBytes = 100;
+
+          return metadata();
+        },
+        (api) => expectReason(Stream.runDrain(api.download(page, limits)), "limit"),
+      );
+      assert.equal(limits.maxBytes, 100);
+    }),
+  },
+  {
+    name: "website download byte limits do not change when a caller mutates them during metadata",
+    run: Effect.gen(function* () {
+      const policy = { maxBytes: 1, mimeTypes: ["text/plain"] };
+      let contentRequests = 0;
+
+      yield* withDownloads(
+        async (input, init) => {
+          const request = new Request(input, init);
+
+          if (request.url.includes("/v1/downloads/")) {
+            if (request.headers.get("accept") === "application/json")
+              return Response.json({
+                id: "download-1",
+                sessionId: "session-1",
+                filename: "fixture.txt",
+                mimeType: "text/plain",
+                size: 3,
+                checksum: "0".repeat(64),
+                createdAt: "2026-09-17T00:00:00Z",
+              });
+            contentRequests++;
+
+            return new Response(new Uint8Array([1, 2, 3]), {
+              headers: { "content-type": "application/octet-stream" },
+            });
+          }
+          policy.maxBytes = 100;
+
+          return metadata();
+        },
+        (api) => expectReason(Stream.runDrain(api.stream(ref, "download-1", policy)), "limit"),
+      );
+      assert.equal(contentRequests, 0);
+    }),
+  },
+  {
+    name: "website MIME authority is a snapshot rather than a mutable caller array",
+    run: Effect.gen(function* () {
+      const policy = { maxBytes: 100, mimeTypes: ["text/plain"] };
+      let contentRequests = 0;
+
+      yield* withDownloads(
+        async (input, init) => {
+          const request = new Request(input, init);
+
+          if (request.url.includes("/v1/downloads/")) {
+            if (request.headers.get("accept") === "application/json")
+              return Response.json({
+                id: "download-1",
+                sessionId: "session-1",
+                filename: "fixture.bin",
+                mimeType: "application/octet-stream",
+                size: 3,
+                checksum: "0".repeat(64),
+                createdAt: "2026-09-17T00:00:00Z",
+              });
+            contentRequests++;
+
+            return new Response(new Uint8Array([1, 2, 3]), {
+              headers: { "content-type": "application/octet-stream" },
+            });
+          }
+          policy.mimeTypes.push("application/octet-stream");
+
+          return metadata();
+        },
+        (api) =>
+          expectReason(Stream.runDrain(api.stream(ref, "download-1", policy)), "content-type"),
+      );
+      assert.equal(contentRequests, 0);
+      assert.deepEqual(policy.mimeTypes, ["text/plain", "application/octet-stream"]);
+    }),
+  },
+  {
+    name: "recording and website transfer configuration fails before a provider request",
+    run: Effect.gen(function* () {
+      let calls = 0;
+
+      const fetch: typeof globalThis.fetch = async () => {
+        calls++;
+
+        return metadata();
+      };
+
+      for (const invalid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
+        yield* withRecordings(fetch, (api) =>
+          expectReason(Stream.runDrain(api.download(page, { maxBytes: invalid })), "configuration"),
+        );
+        yield* withDownloads(fetch, (api) =>
+          expectReason(
+            Stream.runDrain(
+              api.stream(ref, "download-1", { maxBytes: invalid, mimeTypes: ["text/plain"] }),
+            ),
+            "configuration",
+          ),
+        );
+      }
+      for (const timeoutMillis of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 600001]) {
+        yield* withRecordings(fetch, (api) =>
+          expectReason(
+            Stream.runDrain(api.download(page, { maxBytes: 1, timeoutMillis })),
+            "configuration",
+          ),
+        );
+        yield* withDownloads(fetch, (api) =>
+          expectReason(
+            Stream.runDrain(
+              api.stream(ref, "download-1", {
+                maxBytes: 1,
+                timeoutMillis,
+                mimeTypes: ["text/plain"],
+              }),
+            ),
+            "configuration",
+          ),
+        );
+      }
+      assert.equal(calls, 0);
+    }),
+  },
+  {
+    name: "replay indexed transfers retain call-time bounds and reject invalid configuration before media access",
+    run: Effect.gen(function* () {
+      let mediaRequests = 0;
+
+      yield* withReplays(
+        async (input, init) => {
+          const request = new Request(input, init);
+
+          if (request.url.endsWith("/replays"))
+            return Response.json({
+              pageCount: 1,
+              pages: [{ pageId: "0", startTimeMs: 0, endTimeMs: 1000, url: "ignored" }],
+            });
+          if (request.url.endsWith("/replays/0"))
+            return new Response(
+              "#EXTM3U\n#EXTINF:1,\nhttps://media.example.test/segment\n#EXT-X-ENDLIST\n",
+              { headers: { "content-type": "application/vnd.apple.mpegurl" } },
+            );
+          if (request.url.startsWith("https://media.example.test")) {
+            mediaRequests++;
+
+            return new Response(new Uint8Array([1, 2, 3]), {
+              headers: { "content-type": "video/mp4" },
+            });
+          }
+
+          return metadata();
+        },
+        (api) =>
+          Effect.gen(function* () {
+            const access = yield* api.openPage(page);
+
+            for (const maxBytes of [0, -1, Number.NaN, 2 ** 31])
+              yield* expectReason(Stream.runDrain(access.media(0, { maxBytes })), "configuration");
+            assert.equal(mediaRequests, 0);
+            const limits = { maxBytes: 1 };
+            const media = access.media(0, limits);
+
+            limits.maxBytes = 100;
+            yield* expectReason(Stream.runDrain(media), "limit");
+          }),
+      );
+      assert.equal(mediaRequests, 1);
+    }),
+  },
 ].map((test) => ({ ...test, run: timed(test.run) }));
