@@ -287,7 +287,9 @@ export const startCapture = Effect.fnUntraced(function* (
         Effect.gen(function* () {
           const resolved = yield* parent.resolve(ticket, options.target);
 
-          target = resolved.target;
+          // Frames and summaries share this identity with the generation guard. It must not
+          // become writable through consumer-owned frame data.
+          target = Object.freeze(resolved.target);
           source = resolved.source;
           leaseKey = resolved.key;
           if (parent.captureLeases.has(leaseKey)) {

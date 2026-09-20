@@ -35,7 +35,7 @@ export const CaptureLimits = Schema.Struct(LimitFields).check(FrameBudget);
 /**
  * Binary frame data, not a live capability or a JSON/thread/Tool value. Decoding validates
  * fields; it does not copy bytes, decode JPEG pixels, prove target authority, or repair clocks.
- * Capture itself owns the byte copy and verifies JPEG framing before delivery.
+ * Capture itself owns the byte copy, freezes its shared target identity, and verifies JPEG framing.
  */
 export const CapturedFrame = Schema.Struct({
   bytes: Schema.Uint8Array.check(Schema.isMinLength(4), Schema.isMaxLength(64 * 1024 * 1024)),

@@ -5,10 +5,11 @@ import {
   type PageInfo,
 } from "@effect-agent/platform-browserbase/types";
 import { expect, it } from "@effect/vitest";
-import { Effect, Schema, type Scope } from "effect";
+import { Effect, Schema, type Scope, Stream } from "effect";
 
 import type { CaptureParent } from "../src/internal/Association.ts";
 import { startCapture } from "../src/internal/Capture.ts";
+import type { NativeFrame } from "../src/internal/Driver.ts";
 import { makeOwner } from "../src/internal/Owner.ts";
 import { jpeg } from "./fixtures/Jpeg.ts";
 
@@ -183,6 +184,67 @@ it.effect("rejects invalid admission before resolving a native target or reservi
       expect(parent.captureReservedBytes).toBe(0);
       expect(owner.state.phase).toBe("open");
       expect(owner.state.actions).toBe(0);
+    }),
+  ),
+);
+
+it.effect("returned target metadata cannot mutate the capture generation guard", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const owner = yield* makeOwner({
+        maxActions: 3,
+        maxElapsedMillis: 1000,
+        actionTimeoutMillis: 500,
+      });
+
+      owner.state.phase = "open";
+      let receive: ((frame: NativeFrame) => void) | undefined;
+      let stops = 0;
+      const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
+
+      const parent: CaptureParent = {
+        owner,
+        target: () => target,
+        resolve: () => Effect.succeed({
+          key: "native-page-1",
+          target,
+          source: {
+            start: async (callback) => { receive = callback; },
+            stop: async () => { stops++; },
+          },
+        }),
+        captureLeases: new Map(),
+        captureReservedBytes: 0,
+      };
+
+      const interval = yield* startCapture(parent);
+      const seen: number[] = [];
+
+      const emit = (timestamp: number) => {
+        if (receive === undefined) throw new Error("capture callback was not installed");
+        receive({ data: jpeg(), timestamp, viewportWidth: 64, viewportHeight: 48 });
+      };
+
+      emit(1000);
+      yield* Stream.runForEach(interval.frames, (value) => Effect.gen(function* () {
+        seen.push(value.sequence);
+        expect(Object.isFrozen(value.target)).toBe(true);
+        if (value.sequence === 0) {
+          expect(Reflect.set(value.target, "generation", 1)).toBe(false);
+          expect(Reflect.set(value.target, "pageId", "other-page")).toBe(false);
+          emit(1001);
+        } else yield* interval.stop;
+      }));
+      const summary = yield* interval.completed;
+
+      expect(seen).toEqual([0, 1]);
+      expect(summary.target).toEqual(target);
+      expect(summary.target.generation).toBe(owner.state.generation);
+      expect(summary.reason).toBe("stopped");
+      expect(summary.nativeStop).toBe("confirmed");
+      expect(stops).toBe(1);
+      expect(parent.captureReservedBytes).toBe(0);
+      expect(owner.state.phase).toBe("open");
     }),
   ),
 );
