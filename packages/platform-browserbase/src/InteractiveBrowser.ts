@@ -58,7 +58,7 @@ export const browserbaseInteractiveImplementation = SandboxImplementation.make({
 });
 
 export interface InteractiveOptions extends BrowserbaseOptions {
-  /** Opt-in native lifecycle/focus ownership; incompatible with keepAlive and host handoff. */
+  /** Opt-in native lifecycle/focus ownership; incompatible with keepAlive and handoff-dependent pause policies. */
   readonly pageControl?: boolean;
   readonly actionTimeoutMillis?: number;
   readonly viewport?: Viewport;
@@ -472,7 +472,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<
 
         const keepAlive = yield* checked(Schema.Boolean, options.keepAlive ?? false, "configure");
 
-        if (pageControl && keepAlive)
+        if (pageControl && (keepAlive || popupPolicy === "pause" || dialogPolicy === "pause"))
           return yield* BrowserbaseError.make({
             operation: "configure",
             reason: "unsupported",
