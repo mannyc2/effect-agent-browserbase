@@ -3,7 +3,8 @@ import { Context, Effect, Layer, Redacted, Schema, Semaphore, Stream } from "eff
 import { deadlineAfter, nowMillis, within } from "./internal/Deadline.ts";
 import { decode, makeHttp, type BrowserbaseOptions, type Http } from "./internal/Http.ts";
 import { makeProvider, terminal } from "./internal/Provider.ts";
-import type { SessionReference } from "./Types.ts";
+import { transferPolicy } from "./internal/TransferPolicy.ts";
+import type { ArtifactTransferPolicy, SessionReference } from "./Types.ts";
 import {
   BrowserbaseError,
   Identifier,
@@ -27,10 +28,8 @@ export interface PollOptions {
   readonly intervalMillis?: number;
 }
 
-export interface DownloadLimits {
-  readonly maxBytes: number;
-  readonly timeoutMillis?: number;
-}
+/** Compatibility alias; common transfer data is defined by Types.ArtifactTransferPolicy. */
+export type DownloadLimits = ArtifactTransferPolicy;
 
 /** Independent of a live browser. Merely building this Layer performs no provider calls. */
 export class BrowserbaseRecordings extends Context.Service<
@@ -199,21 +198,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
     Stream.unwrap(
       Effect.gen(function* () {
         yield* decode(RecordingPageReference, ref, "recording-download");
-        const timeoutMillis = limits.timeoutMillis ?? 60_000;
-
-        if (
-          !Number.isSafeInteger(limits.maxBytes) ||
-          limits.maxBytes < 1 ||
-          limits.maxBytes > 2 ** 31 - 1 ||
-          !Number.isSafeInteger(timeoutMillis) ||
-          timeoutMillis < 1 ||
-          timeoutMillis > 600_000
-        ) {
-          return yield* BrowserbaseError.make({
-            operation: "recording-download",
-            reason: "configuration",
-          });
-        }
+        const { maxBytes, timeoutMillis } = yield* transferPolicy(limits, "recording-download");
         const deadline = yield* deadlineAfter(timeoutMillis);
 
         yield* within(authorize(ref.session, deadline), deadline, "recording-download");
@@ -241,7 +226,7 @@ const makeRecordings = Effect.fnUntraced(function* (http: Http, projectId: strin
         // A fresh GET mints access for this subscription. No URL is persisted in the artifact reference.
         return http.media(
           Redacted.make(page.downloadUrl),
-          limits.maxBytes,
+          maxBytes,
           ["video/mp4", "application/octet-stream"],
           timeoutMillis,
           deadline,

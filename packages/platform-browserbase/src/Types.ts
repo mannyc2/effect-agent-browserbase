@@ -8,6 +8,16 @@ export const Identifier = Schema.NonEmptyString.check(
 
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 
+/** Shared caller-owned transfer bounds. Omitted timeout retains the 60-second default. */
+export const ArtifactTransferPolicy = Schema.Struct({
+  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2 ** 31 - 1 })),
+  timeoutMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600_000 })),
+  ),
+});
+
+export type ArtifactTransferPolicy = typeof ArtifactTransferPolicy.Type;
+
 export const SessionStatus = Schema.Literals([
   "PENDING",
   "RUNNING",

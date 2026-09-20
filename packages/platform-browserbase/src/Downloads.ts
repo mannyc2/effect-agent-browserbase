@@ -3,12 +3,11 @@ import { Context, Effect, Layer, Schema, Stream } from "effect";
 import { deadlineAfter, nowMillis, within } from "./internal/Deadline.ts";
 import { decode, makeHttp, type BrowserbaseOptions, type Http } from "./internal/Http.ts";
 import { makeProvider } from "./internal/Provider.ts";
-import type { SessionReference } from "./Types.ts";
+import { downloadTransferPolicy } from "./internal/TransferPolicy.ts";
+import type { ArtifactTransferPolicy, SessionReference } from "./Types.ts";
 import { BrowserbaseError, DownloadMetadata, Identifier } from "./Types.ts";
 
-export interface DownloadPolicy {
-  readonly maxBytes: number;
-  readonly timeoutMillis?: number;
+export interface DownloadPolicy extends ArtifactTransferPolicy {
   readonly mimeTypes: ReadonlyArray<string>;
 }
 
@@ -98,33 +97,20 @@ const makeDownloads = (http: Http, projectId: string): BrowserbaseDownloads["Ser
   const stream = (ref: SessionReference, id: string, policy: DownloadPolicy) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        if (
-          !Number.isSafeInteger(policy.maxBytes) ||
-          policy.maxBytes < 1 ||
-          policy.maxBytes > 2 ** 31 - 1 ||
-          policy.mimeTypes.length === 0 ||
-          policy.mimeTypes.length > 32
-        ) {
-          return yield* BrowserbaseError.make({ operation: "download", reason: "configuration" });
-        }
-        const timeoutMillis = policy.timeoutMillis ?? 60_000;
-
-        if (!Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
-          return yield* BrowserbaseError.make({ operation: "download", reason: "configuration" });
-        }
+        const { maxBytes, timeoutMillis, mimeTypes } = yield* downloadTransferPolicy(policy);
         const deadline = yield* deadlineAfter(timeoutMillis);
         const file = yield* within(metadata(ref, id), deadline, "download");
 
-        if (!policy.mimeTypes.includes(file.mimeType.toLowerCase()))
+        if (!mimeTypes.includes(file.mimeType.toLowerCase()))
           return yield* BrowserbaseError.make({ operation: "download", reason: "content-type" });
-        if (file.size > policy.maxBytes)
+        if (file.size > maxBytes)
           return yield* BrowserbaseError.make({ operation: "download", reason: "limit" });
         let received = 0;
 
         return http
           .bytes(
             `/v1/downloads/${encodeURIComponent(id)}`,
-            policy.maxBytes,
+            maxBytes,
             ["application/octet-stream", file.mimeType.toLowerCase()],
             "download",
             timeoutMillis,

@@ -2,8 +2,8 @@ import { Clock, Context, Effect, Layer, Redacted, Schema, Stream } from "effect"
 
 import { decode, makeHttp, type BrowserbaseOptions, type Http } from "./internal/Http.ts";
 import { makeProvider, terminal } from "./internal/Provider.ts";
-import type { DownloadLimits } from "./Recordings.ts";
-import type { SessionReference } from "./Types.ts";
+import { transferPolicy } from "./internal/TransferPolicy.ts";
+import type { ArtifactTransferPolicy as DownloadLimits, SessionReference } from "./Types.ts";
 import { BrowserbaseError, Identifier, RecordingPageReference, ReplayPage } from "./Types.ts";
 
 const Metadata = Schema.Struct({
@@ -149,11 +149,25 @@ const makeReplays = (http: Http, projectId: string): BrowserbaseReplays["Service
 
         return url === undefined
           ? Stream.fail(BrowserbaseError.make({ operation: "replay-media", reason: "not-found" }))
-          : http.media(
-              Redacted.make(url),
-              limits.maxBytes,
-              ["video/mp4", "video/iso.segment", "application/octet-stream"],
-              limits.timeoutMillis,
+          : Stream.unwrap(
+              transferPolicy(
+                {
+                  maxBytes: limits.maxBytes,
+                  ...(limits.timeoutMillis === undefined
+                    ? {}
+                    : { timeoutMillis: limits.timeoutMillis }),
+                },
+                "replay-media",
+              ).pipe(
+                Effect.map(({ maxBytes, timeoutMillis }) =>
+                  http.media(
+                    Redacted.make(url),
+                    maxBytes,
+                    ["video/mp4", "video/iso.segment", "application/octet-stream"],
+                    timeoutMillis,
+                  ),
+                ),
+              ),
             );
       },
     };
