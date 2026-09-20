@@ -15,7 +15,7 @@ import {
   BrowserScrollRequest,
 } from "effect-agent/interactive-browser";
 
-import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 
 it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation observers", () =>
   Effect.scoped(
@@ -186,7 +186,9 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
             "dialog completed",
           );
           yield* h.click(BrowserClickRequest.make({ selector: "#popup" }));
-          const pages = yield* session.pages;
+          // A dispatched click is not a registered target: the popup reaches the
+          // session only once Chromium reports it and the adapter registers it.
+          const pages = yield* settle(session.pages, (open) => open.length === 2);
 
           expect(pages).toHaveLength(2);
           expect((yield* session.target).pageId).toBe(target.pageId);

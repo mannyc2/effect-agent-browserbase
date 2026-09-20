@@ -297,6 +297,40 @@ export const localBrowser = Effect.acquireRelease(
   (fixture) => attempt("close local fixture", fixture.close).pipe(Effect.orDie),
 );
 
+/**
+ * Wait for asynchronous native progress rather than sampling a fixed window.
+ *
+ * Frame production, animation clocks and target registration all land on
+ * Chromium's own schedule, which neither the browser nor this package promises
+ * inside any wall-clock window. Measured on the pinned build: after
+ * `Page.setWebLifecycleState: "active"` on a page that is not foreground,
+ * timers restart in ~12ms but the next animation frame can take ~830ms; and
+ * pinned Playwright's `Screencast.addClient` does not await `_startScreencast`,
+ * so a resolved capture start means the client is registered, not that a frame
+ * exists. A fixed sleep therefore asserts scheduling rather than the property
+ * under test, and fails intermittently under load.
+ *
+ * The budget still bounds the wait, so a page that never resumes a clock, or a
+ * target that is never registered, fails on the same assertion with the same
+ * actual value as before.
+ */
+export const settle = <A, E, R>(
+  source: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean,
+  budgetMillis = 1500,
+) =>
+  Effect.gen(function* () {
+    const deadline = performance.now() + budgetMillis;
+    let latest = yield* source;
+
+    while (!done(latest) && performance.now() < deadline) {
+      yield* Effect.sleep(25);
+      latest = yield* source;
+    }
+
+    return latest;
+  });
+
 export const policy = InteractiveBrowserPolicy.make({
   network: { _tag: "Unrestricted" },
   maxActions: 100,
