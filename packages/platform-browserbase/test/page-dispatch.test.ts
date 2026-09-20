@@ -8,6 +8,7 @@ const fixture = () => {
   let closed = false;
   let afterRate: () => void = () => {};
   const calls: string[] = [];
+
   const ticket: Ticket = {
     signal: new AbortController().signal,
     deadline: 10000,
@@ -21,6 +22,7 @@ const fixture = () => {
       dispatched = true;
     },
   };
+
   const control = new PageExecution("page-a", "target-a", {
     readRate: async () => 1,
     rate: async () => {
