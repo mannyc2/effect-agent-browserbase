@@ -61,7 +61,7 @@ These remain integration packages for the pinned upstream workspace, not a secon
 
 ## CI and maintenance
 
-`Library CI` runs on every pull request (including forks), pushes to `main`, merge groups and manual requests. It has read-only permissions and no hosted/model credentials. The gate retains unit and native tests, real AgentRuntime/CDP behavior, decoded moving video, NodeNext external-consumer checks, exports/purity, full upstream `vp run ready`, release dry-runs, exact source archives and checksums.
+`Library CI` reports **Unpaid acceptance** on every pull request, including forks and stacked PRs, and on `main` and merge groups. Routine library feedback checks both packages, all three strict Node/Bun consumers and the complete native suites against the real candidate tarballs. Documentation-only changes receive explicitly labelled documentation/tooling checks. Full pinned-upstream `vp run ready` and upstream release dry-runs run for integration changes, daily integration, deliberate full requests and reusable release validation; a focused pass is not a full pass. Every profile retains source identity, raw exits, stage timings and failure evidence. See [acceptance profiles](CONTRIBUTING.md#acceptance-profiles). CI remains read-only, without hosted/model credentials.
 
 `Hosted Browserbase` is the only workflow intended to allocate provider sessions. It is manual and default-off; configure its branch-restricted protected environment before enabling it. It never runs on a pull request, so fork contributors are never blocked on a credential they cannot have. See [hosted runs](docs/HOSTED.md).
 
