@@ -109,7 +109,7 @@ export const writerCases: ReadonlyArray<Case> = [
     const ref = reference(), facts: WriterSettlementFacts[] = [], entered = yield* Deferred.make<void>(), order: string[] = [];
     const fiber = yield* withWriter({ acquire: () => Effect.succeed({ settle: (value: WriterSettlementFacts) => Effect.sync(() => { order.push("settle"); facts.push(value); }) }) }, ref, () => Effect.gen(function* () {
       yield* Effect.addFinalizer(() => Effect.sync(() => { order.push("child-finalizer"); }));
-      yield* Deferred.succeed(entered, undefined); yield* Effect.never;
+      yield* Deferred.succeed(entered, undefined); return yield* Effect.never;
     })).pipe(Effect.forkChild);
     yield* Deferred.await(entered); yield* Fiber.interrupt(fiber);
     assert.deepEqual(order, ["child-finalizer", "settle"]); assert.equal(facts[0].disposition, "quarantine");

@@ -173,8 +173,8 @@ export const controlPlaneCases = [
       yield* Effect.gen(function* () {
         const sessions = yield* BrowserbaseSessions;
         const contexts = yield* BrowserbaseContexts;
-        for (const effect of [sessions.retrieve(foreignSession), contexts.retrieve(foreignContext)]) {
-          const result = yield* effect.pipe(Effect.result);
+        for (const effect of [sessions.retrieve(foreignSession).pipe(Effect.result), contexts.retrieve(foreignContext).pipe(Effect.result)]) {
+          const result = yield* effect;
           assert.equal(result._tag, "Failure");
           if (result._tag === "Failure") {
             assert.equal(result.failure.reason, "authorization");
