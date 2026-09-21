@@ -37,18 +37,19 @@ if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
   run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/browserbase check
-  cd packages/browserbase
-  run generic-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
-  run generic-build timeout 180s ../../node_modules/.bin/vp pack
-  cd "$TREE"
   run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
-  run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase install:test-browser
+  run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/browserbase install:test-browser
   # record-video intentionally keeps ffmpeg/ffprobe caller-owned; install them only
   # in this unpaid native acceptance environment rather than as package dependencies.
   run install-media-tools timeout 300s bash -lc 'sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg && ffmpeg -version && ffprobe -version'
-  cd packages/platform-browserbase
-  run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
-  run native timeout 240s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-workspace" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+  cd packages/browserbase
+  run generic-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
+  # The browser owner, live capture and provider artifacts all belong to this package now.
+  run generic-native timeout 600s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-generic" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+  run generic-build timeout 180s ../../node_modules/.bin/vp pack
+  cd "$TREE/packages/platform-browserbase"
+  run unit timeout 180s ../../node_modules/.bin/vp test --run --passWithNoTests --maxWorkers=1
+  run native timeout 300s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   run build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE"
   run exports timeout 180s ./node_modules/.bin/vp run check:exports

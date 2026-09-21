@@ -33,7 +33,7 @@ MAX_MP4="$(read_budget maxMp4Bytes)"
 git -C "$SOURCE_ROOT" rev-parse HEAD > "$OUT/source-sha.txt"
 
 (
-  cd "$TREE/packages/platform-browserbase"
+  cd "$TREE/packages/browserbase"
   BROWSERBASE_DEMO_OUTPUT="$OUT/hosted-demo.mp4" \
     ../../node_modules/.bin/vp exec bun examples/hosted-demo.ts
 ) | tee "$OUT/hosted-demo.jsonl"
