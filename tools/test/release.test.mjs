@@ -172,7 +172,8 @@ for (const declarationExit of [0, 1]) {
     const { tree, out } = workspace(t, (tree) => {
       writeFileSync(join(tree, "package.json"), JSON.stringify({ catalog: {
         effect: "4.0.0-rc.115", "@types/node": "26.1.2", typescript: "7.0.2",
-        "vite-plus": "0.3.2", "playwright-core": "1.63.0", "@effect/vitest": "4.0.0-rc.115", vitest: "4.1.11",
+        "vite-plus": "0.3.2", "playwright-core": "1.63.0", "@effect/vitest": "4.0.0-rc.115",
+        "@effect/platform-node": "4.0.0-rc.115", vitest: "4.1.11",
       } }));
       for (const item of packages) {
         const pkg = join(tree, item.directory);

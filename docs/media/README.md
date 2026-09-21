@@ -8,7 +8,8 @@ products.
 
 ## Rules
 
-- Only files produced by the `demo` check (`tools/hosted-run.sh`) from a commit on `main`.
+- Only files produced by the `demo` check (`tools/hosted-run.sh`) from a commit on `main`,
+  and the one local film named under [The local film](#the-local-film) below.
 - Only the extensions and sizes declared in [`budget.json`](budget.json).
   `tools/test/hosted.test.mjs` enforces that budget and fails ordinary unpaid CI
   if documentation references media that is not committed.
@@ -52,6 +53,40 @@ The committed MP4 is 800×450. Playwright's default screencast sizing fits withi
 800×800; this is consistent with the observed geometry, not evidence that the
 public adapter exposes size controls. The GIF is separately scaled by its
 preview-encoding command.
+
+## The local film
+
+`realistic-footage.mp4` and its GIF preview are the output of
+[`examples/realistic-footage`](../../packages/browserbase/examples/realistic-footage/README.md):
+a storyboard performed with a drawn pointer, real keys at a typist's cadence and
+eased scrolling, filmed across one navigation in a single capture interval.
+
+It is **not hosted evidence** and supports no claim in [STATUS.md](../STATUS.md).
+It was filmed by `test/native/realistic-footage.test.ts` against a local Chromium
+over real CDP, with provider allocation scripted as in every native test, from
+the source in the commit that added the file. The page it shows is the example's
+own fictional `StageSite.ts`, served from loopback. No Browserbase session,
+credential or model was involved.
+
+| | |
+| --- | --- |
+| Runtime | Node 24.14.1, Playwright 1.63.0, Chromium 153.0.8010.12, Effect 4.0.0-rc.115 |
+| Seed | `night-rail-atlas` |
+| Actions | one navigation, four native pointer moves, six real keys, three clicks, one click-and-wait |
+| Capture | one page-lifetime interval over two documents, 365 received, 0 dropped, `nativeStop: "confirmed"`; the picture held 17 ms across the navigation |
+| Measured | capture latency p50 5.6 ms against a clock offset of 0.1 ± 1.0 ms; 7 ms per key and 14 ms per pointer move by receipt; loopback, one machine |
+| Encoded | 552 decoded frames, 18.4s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream |
+| `realistic-footage.mp4` | `726e00db42a73f8049881935407581f21917ed171ed72dbb0e6dca0d8c82f1a3` |
+| `realistic-footage.gif` | `0056d6cb21929246694b1d47e62bde25475696af33c9506f27127dfed2783354` |
+
+The seed fixes every path and pause, but not the bytes: frame delivery follows
+Chromium's own repaint schedule, so a retake is the same performance with a
+different checksum. To retake it, set `REALISTIC_FOOTAGE_DIR` and run that test
+(see the example's README), then derive the preview:
+
+```sh
+ffmpeg -i realistic-footage.mp4 -vf "fps=12,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" realistic-footage.gif
+```
 
 ## Producing the recording
 

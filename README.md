@@ -37,6 +37,12 @@ The demo recording published under [`docs/media/`](docs/media/README.md) is one 
 
 [Higher-quality MP4](docs/media/hosted-demo.mp4)
 
+For footage meant to be watched rather than audited, [`examples/realistic-footage`](packages/browserbase/examples/realistic-footage/README.md) films a storyboard with a drawn pointer, paced typing, eased scrolling and a constant-frame-rate encode, using only the session's ordinary bounded actions. This one was filmed against a local Chromium, not a hosted session:
+
+![A drawn pointer types a destination, follows a route, scrolls its stops and holds a berth on a fictional sleeper-train site](docs/media/realistic-footage.gif)
+
+[Higher-quality MP4](docs/media/realistic-footage.mp4)
+
 Ordinary CI cannot allocate a session, so a recording only ever comes from a deliberate maintainer run. The exact source commit, session id, runtime and capture summary behind the committed file are recorded in [docs/media/README.md](docs/media/README.md) and [status](docs/STATUS.md). A recording shows that a session ran. It is not a substitute for the hosted acceptance checks listed in [status](docs/STATUS.md).
 
 ### Important boundaries
