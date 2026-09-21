@@ -9,7 +9,9 @@ import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
-import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as InMemory from "effect-agent/in-memory";
 import {
   BrowserClickRequest,
   BrowserNavigateRequest,

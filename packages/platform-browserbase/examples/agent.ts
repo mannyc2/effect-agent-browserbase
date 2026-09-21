@@ -1,7 +1,9 @@
 import type { BrowserbaseAgentSession } from "@effect-agent/platform-browserbase/adapter";
 import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
 import { Effect, Layer, Schema } from "effect";
-import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as InMemory from "effect-agent/in-memory";
 
 export const browserAgent = Agent.make("browser-example", {
   input: Schema.String,
