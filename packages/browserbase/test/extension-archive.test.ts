@@ -28,6 +28,9 @@ it("rejects archives that are not a usable extension before any upload", () => {
     ["signature", new TextEncoder().encode("not a zip at all, but long enough to inspect")],
     ["malformed", extensionArchive().subarray(0, 20)],
     ["malformed", extensionArchive().subarray(0, 60)],
+    ["unsupported", buildZip([{ name: "manifest.json", content: "{}" }], { encrypted: true })],
+    ["unsupported", buildZip([{ name: "manifest.json", content: "{}" }], { method: 99 })],
+    ["malformed", buildZip([{ name: "manifest.json", content: "{}" }], { localNameSuffix: "x" })],
   ];
 
   for (const [reason, archive] of cases)

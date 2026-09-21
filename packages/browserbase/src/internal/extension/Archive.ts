@@ -25,6 +25,9 @@ const MAX_ENTRIES = 4096;
 const MAX_NAME_BYTES = 512;
 const MAX_DECLARED_BYTES = 512 * 1024 * 1024;
 const EOCD_SIZE = 22;
+const LOCAL_HEADER_SIZE = 30;
+const STORED = 0;
+const DEFLATED = 8;
 
 const LOCAL_HEADER = 0x04034b50;
 const CENTRAL_HEADER = 0x02014b50;
@@ -86,13 +89,20 @@ export const inspectExtensionArchive = (archive: Uint8Array): ArchiveResult => {
 
   for (let index = 0; index < entries; index++) {
     if (offset + 46 > limit || u32(offset) !== CENTRAL_HEADER) return rejected("malformed");
+    const flags = u16(offset + 8);
+    const method = u16(offset + 10);
+    const compressed = u32(offset + 20);
     const declared = u32(offset + 24);
     const nameLength = u16(offset + 28);
     const extraLength = u16(offset + 30);
     const entryCommentLength = u16(offset + 32);
     const localOffset = u32(offset + 42);
 
-    if (declared === 0xffffffff || localOffset === 0xffffffff) return rejected("unsupported");
+    if (declared === 0xffffffff || compressed === 0xffffffff || localOffset === 0xffffffff)
+      return rejected("unsupported");
+    // An encrypted or unusually compressed member is not something a browser will load.
+    if ((flags & 1) !== 0 || (method !== STORED && method !== DEFLATED))
+      return rejected("unsupported");
     if (nameLength === 0 || nameLength > MAX_NAME_BYTES) return rejected("name");
     if (offset + 46 + nameLength + extraLength + entryCommentLength > limit)
       return rejected("malformed");
@@ -106,6 +116,28 @@ export const inspectExtensionArchive = (archive: Uint8Array): ArchiveResult => {
       return rejected("name");
     }
     if (unsafeName(name)) return rejected("name");
+
+    // The directory must agree with the local header it points at: a member that describes
+    // itself differently in two places has no single meaning worth uploading.
+    if (localOffset + LOCAL_HEADER_SIZE > directoryOffset || u32(localOffset) !== LOCAL_HEADER)
+      return rejected("malformed");
+    const localNameLength = u16(localOffset + 26);
+    const localStart = localOffset + LOCAL_HEADER_SIZE;
+
+    if (
+      (u16(localOffset + 6) & 1) !== 0 ||
+      u16(localOffset + 8) !== method ||
+      localNameLength !== nameLength ||
+      localStart + localNameLength + u16(localOffset + 28) + compressed > directoryOffset
+    )
+      return rejected("malformed");
+
+    try {
+      if (names.decode(archive.subarray(localStart, localStart + localNameLength)) !== name)
+        return rejected("malformed");
+    } catch {
+      return rejected("name");
+    }
     if (name === "manifest.json") manifest = true;
     declaredBytes += declared;
     if (declaredBytes > MAX_DECLARED_BYTES) return rejected("limit");

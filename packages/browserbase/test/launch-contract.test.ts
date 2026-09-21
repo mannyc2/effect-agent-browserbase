@@ -8,12 +8,11 @@ import {
   sessionCreateFields,
 } from "../src/internal/provider/Contract.ts";
 import { compileLaunch } from "../src/internal/provider/Launch.ts";
-import type { LaunchRecipe } from "../src/Launch.ts";
-import { ProviderLaunchOptions } from "../src/Launch.ts";
+import { LaunchRecipe, ProviderLaunchOptions } from "../src/Launch.ts";
 import { ExtensionReference } from "../src/References.ts";
 
 /** Fields the recipe owns itself rather than passing through as provider options. */
-const recipeOwned = ["projectId", "timeout", "keepAlive"];
+const recipeOwned = ["projectId", "timeout", "keepAlive", "extensionId"];
 const settingsOwned = ["context", "viewport"];
 
 const settings = Object.keys(ProviderLaunchOptions.fields.browserSettings.schema.fields);
@@ -27,15 +26,17 @@ it("the launch compiler accepts exactly the reviewed provider request subset", (
   expect([...settings, ...settingsOwned].sort()).toEqual([...browserSettingsFields].sort());
 });
 
-it("deliberately excluded provider fields stay unreachable from a launch recipe", () => {
+it("durable extensions have one qualified spelling and aliases stay unreachable", () => {
   for (const excluded of deliberatelyExcluded) {
     const [group, field] = excluded.split(".");
 
     expect(group).toBe("browserSettings");
     expect(settings).not.toContain(field);
   }
-  // `extensionId` has exactly one top-level spelling, never a nested duplicate.
-  expect(Object.keys(ProviderLaunchOptions.fields)).toContain("extensionId");
+  // The recipe owns extension selection outright: neither provider spelling is reachable,
+  // so an unqualified identifier cannot be passed through unchecked.
+  expect(Object.keys(LaunchRecipe.fields)).toContain("extension");
+  expect(Object.keys(ProviderLaunchOptions.fields)).not.toContain("extensionId");
 });
 
 const identity = {
@@ -57,39 +58,21 @@ const recipe = (extra: Partial<LaunchRecipe> = {}): LaunchRecipe => ({
   ...extra,
 });
 
-it.effect("a provisioned extension reference compiles to the one top-level selection", () =>
+it.effect("only a same-project reference becomes the provider's extensionId", () =>
   Effect.gen(function* () {
     const compiled = yield* compileLaunch(recipe({ extension }), identity);
 
     expect(compiled.body).toMatchObject({ extensionId: "extension-1" });
 
-    // The same identifier through both spellings is agreement, not a conflict.
-    const agreed = yield* compileLaunch(
-      recipe({ extension, provider: { extensionId: "extension-1" } }),
+    const foreign = yield* compileLaunch(
+      recipe({ extension: ExtensionReference.make({ ...extension, projectId: "other-project" }) }),
       identity,
-    );
+    ).pipe(Effect.result);
 
-    expect(agreed.body).toMatchObject({ extensionId: "extension-1" });
-  }),
-);
-
-it.effect("a foreign or conflicting extension selection is refused before allocation", () =>
-  Effect.gen(function* () {
-    const rejected = [
-      recipe({ extension, provider: { extensionId: "extension-2" } }),
-      recipe({
-        extension: ExtensionReference.make({ ...extension, projectId: "other-project" }),
-      }),
-    ];
-
-    for (const candidate of rejected) {
-      const result = yield* compileLaunch(candidate, identity).pipe(Effect.result);
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure.reason).toBe("configuration");
-        expect(result.failure.outcome).toBe("undispatched");
-      }
+    expect(foreign._tag).toBe("Failure");
+    if (foreign._tag === "Failure") {
+      expect(foreign.failure.reason).toBe("configuration");
+      expect(foreign.failure.outcome).toBe("undispatched");
     }
   }),
 );

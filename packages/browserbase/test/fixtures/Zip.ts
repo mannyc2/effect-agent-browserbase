@@ -26,31 +26,45 @@ const crc32 = (bytes: Uint8Array): number => {
   return (value ^ 0xffffffff) >>> 0;
 };
 
+export interface ZipOptions {
+  readonly comment?: string;
+  /** Set the encryption flag the inspector must refuse. */
+  readonly encrypted?: boolean;
+  /** Declare a compression method other than stored or deflated. */
+  readonly method?: number;
+  /** Make the local header disagree with the directory about the member's name. */
+  readonly localNameSuffix?: string;
+}
+
 export const buildZip = (
   entries: ReadonlyArray<ZipEntry>,
-  options: { readonly comment?: string } = {},
+  options: ZipOptions = {},
 ): Uint8Array => {
   const encoder = new TextEncoder();
   const locals: Uint8Array[] = [];
   const centrals: Uint8Array[] = [];
+  const flags = 0x0800 | (options.encrypted === true ? 1 : 0);
+  const method = options.method ?? 0;
   let offset = 0;
 
   for (const entry of entries) {
     const name = encoder.encode(entry.name);
+    const localName = encoder.encode(`${entry.name}${options.localNameSuffix ?? ""}`);
     const content = encoder.encode(entry.content ?? "");
     const checksum = crc32(content);
-    const local = new Uint8Array(30 + name.byteLength + content.byteLength);
+    const local = new Uint8Array(30 + localName.byteLength + content.byteLength);
     const localView = new DataView(local.buffer);
 
     localView.setUint32(0, 0x04034b50, true);
     localView.setUint16(4, 20, true);
-    localView.setUint16(6, 0x0800, true);
+    localView.setUint16(6, flags, true);
+    localView.setUint16(8, method, true);
     localView.setUint32(14, checksum, true);
     localView.setUint32(18, content.byteLength, true);
     localView.setUint32(22, content.byteLength, true);
-    localView.setUint16(26, name.byteLength, true);
-    local.set(name, 30);
-    local.set(content, 30 + name.byteLength);
+    localView.setUint16(26, localName.byteLength, true);
+    local.set(localName, 30);
+    local.set(content, 30 + localName.byteLength);
     locals.push(local);
 
     const central = new Uint8Array(46 + name.byteLength);
@@ -59,7 +73,8 @@ export const buildZip = (
     centralView.setUint32(0, 0x02014b50, true);
     centralView.setUint16(4, 20, true);
     centralView.setUint16(6, 20, true);
-    centralView.setUint16(8, 0x0800, true);
+    centralView.setUint16(8, flags, true);
+    centralView.setUint16(10, method, true);
     centralView.setUint32(16, checksum, true);
     centralView.setUint32(20, content.byteLength, true);
     centralView.setUint32(24, content.byteLength, true);

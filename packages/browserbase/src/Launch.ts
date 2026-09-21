@@ -45,7 +45,6 @@ export const ProviderLaunchOptions = Schema.Struct({
       ),
     }),
   ),
-  extensionId: Schema.optionalKey(Identifier),
   browserSettings: Schema.optionalKey(
     Schema.Struct({
       verified: Schema.optionalKey(Schema.Boolean),
@@ -76,7 +75,11 @@ export const LaunchRecipe = Schema.Struct({
   context: Schema.optionalKey(
     Schema.Struct({ reference: ContextReference, persist: Schema.Boolean }),
   ),
-  /** Project-qualified selection of an already provisioned extension; never an upload. */
+  /**
+   * Project-qualified selection of an already provisioned extension, never an upload. It is
+   * the only spelling: the compiler alone projects it to the provider's `extensionId`, so an
+   * unqualified identifier cannot reach the provider unchecked.
+   */
   extension: Schema.optionalKey(ExtensionReference),
   viewport: Schema.Union([
     Schema.Struct({ _tag: Schema.Literal("ProviderManaged") }),
