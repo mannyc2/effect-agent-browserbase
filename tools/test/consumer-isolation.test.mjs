@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { verifyConsumer } from "../verify-consumer.mjs";
@@ -46,6 +46,19 @@ function install(directory, name, { exports = { ".": "./index.mjs" }, source = "
   write(join(directory, "index.mjs"), source);
 }
 
+// Resolution from the consumer root also walks the temporary directory's ancestors, so an
+// unrelated host `node_modules` can answer a specifier the consumer does not provide. Such
+// an answer lies outside the consumer and still proves the nested copy was never found.
+function resolvesInsideConsumer(root, specifier) {
+  const real = realpathSync(root);
+  try {
+    return realpathSync(createRequire(join(real, "package.json")).resolve(specifier)).startsWith(real + sep);
+  } catch (error) {
+    assert.equal(error.code, "MODULE_NOT_FOUND", `Unexpected resolution failure for ${specifier}`);
+    return false;
+  }
+}
+
 test("accepts a resources-only candidate without framework or native dependencies", async (t) => {
   const f = fixture(t);
   install(join(f.root, "node_modules", "effect"), "effect");
@@ -56,8 +69,7 @@ for (const name of ["playwright-core", "effect-agent", "@effect-agent/testing", 
   test(`rejects nested ${name} invisible to root resolution`, async (t) => {
     const f = fixture(t);
     install(join(f.generic, "node_modules", name), name);
-    const require = createRequire(join(f.root, "package.json"));
-    assert.throws(() => require.resolve(name), { code: "MODULE_NOT_FOUND" });
+    assert.equal(resolvesInsideConsumer(f.root, name), false, `Nested ${name} is visible to root resolution`);
     await assert.rejects(f.verify(), /Forbidden installed dependency/);
   });
 }
@@ -97,6 +109,20 @@ test("rejects dependency links outside the clean consumer", async (t) => {
   install(outside, "effect");
   symlinkSync(outside, join(f.root, "node_modules", "effect"), "dir");
   await assert.rejects(f.verify(), /outside this clean consumer/);
+});
+
+test("credits an ancestor dependency to the host rather than to the consumer", async (t) => {
+  const f = fixture(t);
+  const above = join(f.directory, "node_modules", "playwright-core");
+  install(above, "playwright-core");
+  const receipt = await f.verify();
+  assert.equal(receipt.profile, "resources");
+  const entry = receipt.ambient.find((item) => item.specifier === "playwright-core");
+  assert.ok(entry, "An ancestor answer was not recorded as ambient");
+  assert.equal(realpathSync(entry.resolved), realpathSync(join(above, "index.mjs")));
+  // The same name inside the consumer remains the candidate's own installed dependency.
+  install(join(f.root, "node_modules", "playwright-core"), "playwright-core");
+  await assert.rejects(f.verify(), /Forbidden installed dependency/);
 });
 
 test("terminates on in-consumer dependency cycles", async (t) => {

@@ -65,10 +65,24 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
   assert.ok(["resources", "generic", "agent"].includes(profile));
   const root = realpathSync(directory), require = createRequire(join(root, "package.json"));
   checkInstalledDependencies(root, profile);
-  for (const forbidden of profile === "agent" ? [] : ["effect-agent", "@effect-agent/platform-browserbase", "@effect-agent/testing", "@browserbasehq/sdk"]) {
-    assert.throws(() => require.resolve(forbidden), (error) => error.code === "MODULE_NOT_FOUND", `Forbidden dependency is installed: ${forbidden}`);
-  }
-  if (profile === "resources") assert.throws(() => require.resolve("playwright-core"), (error) => error.code === "MODULE_NOT_FOUND", "Resources-only installed Playwright");
+  // Resolution walks the consumer's ancestors, so an unrelated `node_modules` above a
+  // temporary root can answer for a forbidden specifier. That is host state rather than
+  // something this candidate installed, and the audit above is the authority on what is
+  // installed. Reaching into the consumer stays a failure, and an ambient answer is kept
+  // in the receipt so a neutralized probe is never read as a clean one.
+  const ambient = [];
+  const refuse = (specifier, message) => {
+    let resolved;
+    try { resolved = require.resolve(specifier); } catch (error) {
+      assert.equal(error.code, "MODULE_NOT_FOUND", `Unexpected resolution failure for ${specifier}`);
+      return;
+    }
+    assert.ok(!realpathSync(resolved).startsWith(root + sep), message);
+    ambient.push({ specifier, resolved });
+  };
+  for (const forbidden of profile === "agent" ? [] : ["effect-agent", "@effect-agent/platform-browserbase", "@effect-agent/testing", "@browserbasehq/sdk"])
+    refuse(forbidden, `Forbidden dependency is installed: ${forbidden}`);
+  if (profile === "resources") refuse("playwright-core", "Resources-only installed Playwright");
   const receipt = JSON.parse(readFileSync(join(artifactDirectory, "release-set.json"), "utf8"));
   const expected = profile === "agent" ? packages : [packages[0]];
   const installed = new Map();
@@ -107,7 +121,7 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
       assert.throws(() => require.resolve(specifier), (error) => error.code === "ERR_PACKAGE_PATH_NOT_EXPORTED" || ((error.code === "MODULE_NOT_FOUND" || error.code === "ERR_MODULE_NOT_FOUND") && String(error.message).includes(specifier)), `Superseded export still resolves: ${old}`);
     }
   }
-  return { profile, runtime: process.versions.bun ? `bun ${process.versions.bun}` : `node ${process.versions.node}`, sourceSha: receipt.sourceSha, packages: [...installed.keys()], result: "candidate identity and canonical exports verified" };
+  return { profile, runtime: process.versions.bun ? `bun ${process.versions.bun}` : `node ${process.versions.node}`, sourceSha: receipt.sourceSha, packages: [...installed.keys()], ...(ambient.length === 0 ? {} : { ambient }), result: "candidate identity and canonical exports verified" };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
