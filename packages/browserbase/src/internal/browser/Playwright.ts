@@ -85,6 +85,7 @@ const Geometry = Schema.Struct({ width: Schema.Natural, height: Schema.Natural }
 const TargetInfo = Schema.Struct({
   targetInfo: Schema.Struct({ targetId: Identifier, type: Schema.Literal("page") }),
 });
+
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
