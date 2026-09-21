@@ -24,6 +24,7 @@ it.effect("reject-call preserves a typed host failure and admits later work", ()
   Effect.scoped(
     Effect.gen(function* () {
       let faults = 0;
+
       const runner = yield* makeBindingRunner(
         1,
         (input: number) =>
@@ -62,9 +63,11 @@ it.effect("reject-call capacity is finite before spawning and recovers after set
     Effect.gen(function* () {
       let faults = 0;
       let release!: () => void;
+
       const blocked = new Promise<void>((resolve) => {
         release = resolve;
       });
+
       const runner = yield* makeBindingRunner(
         1,
         (input: "blocked" | "fast") =>
@@ -99,6 +102,7 @@ it.effect("fail-session failure fences admission exactly once", () =>
   Effect.scoped(
     Effect.gen(function* () {
       let faults = 0;
+
       const runner = yield* makeBindingRunner(
         2,
         (_input: number) => Effect.fail("failed" as const),
@@ -132,9 +136,11 @@ it.effect("fail-session capacity pressure fences without starting rejected work"
       let calls = 0,
         faults = 0;
       let release!: () => void;
+
       const blocked = new Promise<void>((resolve) => {
         release = resolve;
       });
+
       const runner = yield* makeBindingRunner(
         1,
         () =>
@@ -162,6 +168,46 @@ it.effect("fail-session capacity pressure fences without starting rejected work"
   ),
 );
 
+it.effect("explicit close fences admission without fabricating a fault", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let faults = 0;
+      let release!: () => void;
+
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const runner = yield* makeBindingRunner(
+        1,
+        () => Effect.promise(() => blocked),
+        () => {
+          faults++;
+        },
+      );
+
+      const accepted = runner.submit(undefined, "reject-call");
+
+      assert.equal(accepted._tag, "Accepted");
+      runner.close();
+      runner.close();
+      assert.deepEqual(runner.submit(undefined, "reject-call"), {
+        _tag: "Rejected",
+        reason: "closed",
+      });
+      assert.equal(faults, 0);
+
+      release();
+      if (accepted._tag === "Accepted") {
+        const exit = yield* Effect.promise(() => accepted.result);
+
+        assert.equal(Exit.isSuccess(exit), true);
+      }
+      assert.equal(faults, 0);
+    }),
+  ),
+);
+
 it.effect("parallel parent teardown still fences admission before callback interruption", () =>
   Effect.gen(function* () {
     let faults = 0;
@@ -178,6 +224,7 @@ it.effect("parallel parent teardown still fences admission before callback inter
             faults++;
           },
         );
+
         const admitted = runner.submit(undefined, "fail-session");
 
         assert.equal(admitted._tag, "Accepted");
