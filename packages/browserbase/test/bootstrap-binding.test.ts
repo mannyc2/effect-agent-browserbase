@@ -53,10 +53,12 @@ const combined = Bootstrap.combine(
 
 const settingsError: Same<Bootstrap.PlanError<typeof settings>, "settings-unavailable"> = true;
 const settingsRequirements: Same<Bootstrap.PlanRequirements<typeof settings>, ShowSettings> = true;
+
 const combinedError: Same<
   Bootstrap.PlanError<typeof combined>,
   "settings-unavailable" | "secondary-failure"
 > = true;
+
 const combinedRequirements: Same<Bootstrap.PlanRequirements<typeof combined>, ShowSettings> = true;
 
 it("keeps binding metadata bounded and preserves callback E/R through composition", () => {
