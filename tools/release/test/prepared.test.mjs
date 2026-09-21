@@ -18,11 +18,16 @@ import { Effect, Layer } from "effect";
 import { Host, ReleaseError, runRelease } from "@mannyc1/ts-release";
 import { openGitJournal } from "@mannyc1/ts-release/node";
 import { ProvenanceSource } from "@mannyc1/ts-release-npm";
-import { packageReleaseSet, publicationManifest, releaseSetDigest } from "../package-release.mjs";
-import { packages } from "../packages.mjs";
-import { loadPrepared, prepare } from "./application.ts";
+import {
+  packageReleaseSet,
+  publicationManifest,
+  releaseSetDigest,
+} from "../../package-release.mjs";
+import { packages } from "../../packages.mjs";
+import { loadPrepared, prepare, restorePrepared, snapshotPrepared } from "../src/prepared.ts";
+import { persistState, restoreState } from "../src/state.ts";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
+const root = fileURLToPath(new URL("../../../", import.meta.url));
 const sourceSha = "1234567890abcdef1234567890abcdef12345678";
 const temporaryDirectories = [];
 afterEach(() => {
@@ -187,15 +192,25 @@ test("reloading refuses altered source, receipt, bundle content, plan edges and 
   await assert.rejects(
     Effect.runPromise(loadPrepared(f.out, "f".repeat(40), f.tag, f.dependencies)),
   );
+  let checkedSignatures = 0;
   await assert.rejects(
     load({
       ...f.dependencies,
-      verifyProvenance: () =>
-        Effect.fail(
-          new ReleaseError({ code: "fixture-untrusted", message: "Signature trust rejected" }),
-        ),
+      verifyProvenance: () => {
+        checkedSignatures++;
+        return checkedSignatures === 2
+          ? Effect.fail(
+              new ReleaseError({ code: "fixture-untrusted", message: "Signature trust rejected" }),
+            )
+          : Effect.void;
+      },
     }),
     /Signature trust rejected/,
+  );
+  assert.equal(
+    checkedSignatures,
+    2,
+    "the second signature must be admitted before a host can dispatch the first package",
   );
   const receiptPath = join(f.out, "release-set.json");
   const originalReceipt = readFileSync(receiptPath);
@@ -221,9 +236,16 @@ test("reloading refuses altered source, receipt, bundle content, plan edges and 
 
 test("an uncertain native npm PUT stays fenced after reopening the Git journal; exact observation releases its dependent", async () => {
   const f = fixture();
-  await Effect.runPromise(prepare(f.options));
+  const prepared = await Effect.runPromise(prepare(f.options));
   const remote = join(f.directory, "journal.git");
   execFileSync("git", ["init", "--bare", remote], { stdio: "ignore" });
+  const state = {
+    remote,
+    ref: `refs/heads/ts-release-prepared/${sourceSha}`,
+  };
+  const snapshot = await Effect.runPromise(snapshotPrepared(prepared));
+  await Effect.runPromise(Effect.scoped(persistState(state, snapshot)));
+  rmSync(f.out, { recursive: true, force: true });
   const observed = new Map();
   const sends = [];
   let attempt = 0;
@@ -232,7 +254,14 @@ test("an uncertain native npm PUT stays fenced after reopening the Git journal; 
     return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const loaded = yield* loadPrepared(f.out, sourceSha, f.tag, {
+          const restored = yield* restoreState(state);
+          assert.ok(
+            restored,
+            "the complete native preparation must survive the original directory",
+          );
+          const preparedDirectory = join(cacheDirectory, "prepared");
+          yield* restorePrepared(preparedDirectory, restored);
+          const loaded = yield* loadPrepared(preparedDirectory, sourceSha, f.tag, {
             ...f.dependencies,
             read: ({ url }) => {
               const name = decodeURIComponent(new URL(url).pathname.slice(1));
@@ -336,3 +365,23 @@ test("an uncertain native npm PUT stays fenced after reopening the Git journal; 
   );
   assert.ok(!JSON.stringify(complete.journal).includes("do-not-retain"));
 }, 30_000);
+
+test("restoration rejects extra content, mismatched digests and noncanonical Bundle filenames", async () => {
+  const f = fixture();
+  const prepared = await Effect.runPromise(prepare(f.options));
+  const snapshot = await Effect.runPromise(snapshotPrepared(prepared));
+  const restore = (input, name) =>
+    Effect.runPromise(restorePrepared(join(f.directory, name), input));
+  const extra = new Map(snapshot);
+  extra.set("unexpected.json", json({}));
+  await assert.rejects(restore(extra, "extra"));
+  const corrupt = new Map(snapshot);
+  const digest = prepared.bundle.artifacts[0].content.sha256;
+  corrupt.set(digest, json({ changed: true }));
+  await assert.rejects(restore(corrupt, "corrupt"), /digest differs/);
+  const unsafe = new Map(snapshot);
+  const bundle = JSON.parse(new TextDecoder().decode(snapshot.get("bundle.json")));
+  bundle.artifacts[1].logicalName = ".git/config";
+  unsafe.set("bundle.json", json(bundle));
+  await assert.rejects(restore(unsafe, "unsafe"));
+});

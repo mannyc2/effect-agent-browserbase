@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { verifyReleaseSet } from "./verify-release.mjs";
 
 const execute = (args) => execFileSync("npm", args, { encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
-const nativePublication = "Live publication requires the compiled tools/release/main.js host and its retained ts-release journal; this helper only performs --dry-run";
+const nativePublication = "Live publication requires the native ts-release CLI and compiled tools/release/src/application.js host and its retained ts-release journal; this helper only performs --dry-run";
 
 /** Acceptance checks only: live publication belongs to the native ts-release application. */
 export function publishReleaseSet(directory, sha, tag, expectedDigest, { publish = false, run = execute } = {}) {

@@ -67,11 +67,10 @@ jobs:
           bun run check
           bun test
           bun run build
-      - name: Check production Node imports and package the tested host
+      - name: Package and smoke-test the relocated host with production Node
         id: pack
         run: |
-          node --input-type=module -e 'await import("./tools/release/dist/tools/release/main.js")'
-          digest="$(bun tools/release/pack.mjs "$RUNNER_TEMP/release-tooling")"
+          digest="$(bun tools/release/scripts/pack.mjs "$RUNNER_TEMP/release-tooling")"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         id: artifact

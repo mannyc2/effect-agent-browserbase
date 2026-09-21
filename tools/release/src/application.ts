@@ -1,10 +1,7 @@
-import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Config, Effect, Schema, type Redacted } from "effect";
 import { ReleaseError } from "@mannyc1/ts-release";
 import type { CredentialBinding } from "@mannyc1/ts-release/http";
@@ -13,11 +10,15 @@ import {
   makeHttpRead,
   makeHttpTransport,
   openGitJournal,
-  runApplication,
-  runInterruptibleProcess,
 } from "@mannyc1/ts-release/node";
 import * as Npm from "@mannyc1/ts-release-npm";
-import { loadPrepared, prepare, verifyCandidate } from "./application.js";
+import {
+  loadPrepared,
+  prepare,
+  restorePrepared,
+  snapshotPrepared,
+  verifyCandidate,
+} from "./prepared.js";
 import {
   hostIdentity,
   httpBounds,
@@ -27,8 +28,6 @@ import {
   ReleaseInput,
 } from "./config.js";
 import { persistState, restoreState } from "./state.js";
-
-export { checkHost } from "./config.js";
 
 const require = createRequire(import.meta.url);
 
@@ -61,13 +60,31 @@ const retainPrepared = Effect.fn("release.retainPrepared")(function* (
   source: Npm.ProvenanceSource,
   trust: Npm.SigstoreTrustOptions,
 ) {
+  const receipt = yield* verifyCandidate(
+    input.artifacts,
+    input.sourceSha,
+    input.tag,
+    input.expectedDigest,
+  );
+  const directory = yield* Effect.acquireRelease(
+    fileOperation("create the release directory", () =>
+      mkdtemp(join(input.cacheDirectory, "prepared-")),
+    ),
+    (path) =>
+      fileOperation("remove the release directory", () =>
+        rm(path, { recursive: true, force: true }),
+      ).pipe(Effect.orDie),
+  );
   const state = {
     remote,
     ref: `refs/heads/ts-release-prepared/${input.sourceSha}`,
-    directory: input.directory,
     token,
   };
-  if (yield* restoreState(state)) return;
+  const snapshot = yield* restoreState(state);
+  if (snapshot) {
+    yield* restorePrepared(directory, snapshot);
+    return directory;
+  }
   if (!input.authorize) {
     return yield* new ReleaseError({
       code: "release-unprepared",
@@ -75,16 +92,10 @@ const retainPrepared = Effect.fn("release.retainPrepared")(function* (
     });
   }
 
-  const receipt = yield* verifyCandidate(
-    input.artifacts,
-    input.sourceSha,
-    input.tag,
-    input.expectedDigest,
-  );
   yield* fileOperation("stage the tested release set", async () => {
     const filenames = ["release-set.json", ...receipt.packages.map((entry) => entry.filename)];
     for (const filename of filenames) {
-      await cp(join(input.artifacts, filename), join(input.directory, filename), {
+      await cp(join(input.artifacts, filename), join(directory, filename), {
         errorOnExist: true,
         force: false,
       });
@@ -99,8 +110,8 @@ const retainPrepared = Effect.fn("release.retainPrepared")(function* (
     fulcioUrl: "https://fulcio.sigstore.dev",
     rekorUrl: "https://rekor.sigstore.dev",
   });
-  yield* prepare({
-    directory: input.directory,
+  const prepared = yield* prepare({
+    directory,
     sourceSha: input.sourceSha,
     tag: input.tag,
     expectedDigest: input.expectedDigest,
@@ -108,7 +119,8 @@ const retainPrepared = Effect.fn("release.retainPrepared")(function* (
     attest,
   });
   // Publication cannot begin until the complete original preparation is durable.
-  yield* persistState(state);
+  yield* persistState(state, yield* snapshotPrepared(prepared));
+  return directory;
 });
 
 /** The runtime boundary: admit identity, restore content, then compose the native host. */
@@ -118,10 +130,16 @@ export const createApplication = Effect.fn("release.createApplication")(function
   const identity = yield* hostIdentity(raw.sourceSha, raw.tag);
   const token = yield* Config.Redacted("GITHUB_TOKEN");
   const input = yield* Schema.decodeUnknownEffect(ReleaseInput)(raw);
+  if (process.versions.node !== releaseNodeVersion) {
+    return yield* new ReleaseError({
+      code: "release-runtime",
+      message: `Use release runtime Node ${releaseNodeVersion}`,
+    });
+  }
   const trust = yield* prepareTrust(input.cacheDirectory);
-  yield* retainPrepared(input, token, provenanceSource(identity, input), trust);
+  const directory = yield* retainPrepared(input, token, provenanceSource(identity, input), trust);
 
-  const prepared = yield* loadPrepared(input.directory, input.sourceSha, input.tag, {
+  const prepared = yield* loadPrepared(directory, input.sourceSha, input.tag, {
     read: makeHttpRead({ ...httpBounds, credentials: () => Effect.succeed({}) }),
     verifyProvenance: Npm.makeSigstoreVerifier(trust),
   });
@@ -161,61 +179,3 @@ export const createApplication = Effect.fn("release.createApplication")(function
     },
   };
 });
-
-async function main() {
-  const [artifacts, sourceSha, tag, expectedDigest, mode] = process.argv.slice(2);
-  assert.ok(
-    artifacts &&
-      sourceSha &&
-      tag &&
-      expectedDigest &&
-      mode &&
-      ["--check", "--publish", "--observe"].includes(mode),
-    "Usage: node main.js ARTIFACTS SOURCE_SHA TAG RELEASE_SET_SHA256 --check|--publish|--observe",
-  );
-  assert.equal(
-    process.versions.node,
-    releaseNodeVersion,
-    `Use release runtime Node ${releaseNodeVersion}`,
-  );
-  await Effect.runPromise(verifyCandidate(resolve(artifacts), sourceSha, tag, expectedDigest));
-  if (mode === "--check") return;
-
-  const cacheDirectory = await mkdtemp(join(tmpdir(), "browserbase-publisher-"));
-  const input = new ReleaseInput({
-    artifacts: resolve(artifacts),
-    sourceSha,
-    tag,
-    expectedDigest,
-    cacheDirectory,
-    directory: join(cacheDirectory, "prepared"),
-    authorize: mode === "--publish",
-  });
-  await runInterruptibleProcess(async (signal, interruptionCode) => {
-    try {
-      const report = await runApplication(
-        fileURLToPath(import.meta.url),
-        input,
-        signal,
-        mode === "--observe" ? "observe" : "run",
-      );
-      const json = JSON.stringify(report, null, 2) + "\n";
-      await writeFile(join(input.artifacts, "publication-report.json"), json);
-      process.stdout.write(json);
-      if (report.operations.some((operation) => operation.status !== "Satisfied"))
-        process.exitCode = 2;
-    } finally {
-      if (interruptionCode()) process.exitCode = interruptionCode();
-    }
-  });
-}
-
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error: unknown) => {
-    process.stderr.write(
-      `${error instanceof Error ? error.message : "Release application failed"}\n`,
-    );
-    process.stderr.write("Retain the prepared ref and journal; inspect them before continuing.\n");
-    process.exitCode ||= 1;
-  });
-}

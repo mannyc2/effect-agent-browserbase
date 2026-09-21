@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { ConfigProvider, Effect } from "effect";
-import { checkHost, createApplication } from "./main.ts";
+import { createApplication } from "../src/application.ts";
+import { checkHost } from "../src/config.ts";
 
 const sourceSha = "1234567890abcdef1234567890abcdef12345678";
 const tag = "v0.1.0-beta.102";
@@ -43,14 +44,11 @@ const mismatches = [
 
 function trackedConfiguration(environment) {
   const reads = [];
-  const provider = ConfigProvider.make((path) =>
-    Effect.sync(() => {
-      const key = path.join(".");
-      reads.push(key);
-      const value = environment[key];
-      return value === undefined ? undefined : ConfigProvider.makeValue(value);
-    }),
-  );
+  const source = ConfigProvider.fromUnknown(environment);
+  const provider = ConfigProvider.make((path) => {
+    reads.push(path.join("."));
+    return source.load(path);
+  });
   return { reads, layer: ConfigProvider.layer(provider) };
 }
 
@@ -103,7 +101,7 @@ test("missing workload configuration fails before credential lookup", async () =
   );
   assert.deepEqual(input.stateReads, []);
   assert.ok(config.reads.includes("GITHUB_ACTIONS"));
-  assert.ok(config.reads.every((name) => Object.hasOwn(identity, name)));
+  assert.ok(config.reads.every((name) => name === "" || Object.hasOwn(identity, name)));
 });
 
 test("an admitted host without its Git credential fails before loading state or requesting OIDC", async () => {

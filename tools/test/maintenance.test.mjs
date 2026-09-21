@@ -51,7 +51,7 @@ test("OIDC is isolated to the opt-in publisher, which installs no dependencies",
   assert.ok(publisher.includes("contents: write"));
   assert.ok(publisher.includes("release_tooling_sha256"));
   assert.ok(publisher.includes("sha256sum --check --strict"));
-  assert.ok(publisher.includes("tools/release/main.js"));
+  assert.ok(publisher.includes("node node_modules/.bin/ts-release src/application.js release-input.json"));
   assert.ok(publisher.includes("publication-report.json"));
   assert.ok(workflow.includes("default: false"));
 });

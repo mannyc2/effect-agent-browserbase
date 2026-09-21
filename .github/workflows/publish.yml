@@ -117,7 +117,21 @@ jobs:
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           # No installs, builds, npm subprocesses or package lifecycle scripts.
           # Installs used --ignore-scripts in the read-only build job.
-          node "$RUNNER_TEMP/release-tooling/tools/release/main.js" "$ARTIFACT_DIRECTORY" "$SOURCE_SHA" "$RELEASE_TAG" "$EXPECTED_DIGEST" --publish
+          cd "$RUNNER_TEMP/release-tooling/tools/release"
+          node --input-type=module <<'JS'
+          import { writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const cacheDirectory = join(process.env.RUNNER_TEMP, 'release-state');
+          await writeFile('release-input.json', JSON.stringify({
+            sourceSha: process.env.SOURCE_SHA,
+            tag: process.env.RELEASE_TAG,
+            expectedDigest: process.env.EXPECTED_DIGEST,
+            artifacts: process.env.ARTIFACT_DIRECTORY,
+            cacheDirectory,
+            authorize: true,
+          }));
+          JS
+          node node_modules/.bin/ts-release src/application.js release-input.json > "$ARTIFACT_DIRECTORY/publication-report.json"
       - name: Retain the derived publication report
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

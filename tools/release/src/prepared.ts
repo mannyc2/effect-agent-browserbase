@@ -18,8 +18,8 @@ import {
 import { sameData, type HttpProviderDefinition, type HttpRead } from "@mannyc1/ts-release/http";
 import { fileContentOwner } from "@mannyc1/ts-release/node";
 import * as Npm from "@mannyc1/ts-release-npm";
-import { regularFile } from "../packages.mjs";
-import { verifyReleaseSet } from "../verify-release.mjs";
+import { distTag, packages, regularFile } from "../../packages.mjs";
+import { verifyReleaseSet } from "../../verify-release.mjs";
 import { repository, workflow } from "./config.js";
 
 export { repository, workflow } from "./config.js";
@@ -67,7 +67,6 @@ export interface PackageAuthorization {
 export interface PreparedRelease {
   readonly bundle: Bundle;
   readonly plan: Plan;
-  readonly metadata: Metadata;
   readonly access: ArtifactAccess;
   readonly authorizations: readonly PackageAuthorization[];
 }
@@ -79,18 +78,6 @@ export interface LoadedRelease extends PreparedRelease {
 type PreparationError = ReleaseError | AdoptionError;
 
 const hash = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
-const sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u));
-const gitSha = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/u));
-
-export class Metadata extends Schema.Class<Metadata>("BrowserbaseRelease.Metadata")({
-  format: Schema.Literal("browserbase-ts-release/1"),
-  sourceSha: gitSha,
-  tag: Schema.String,
-  receiptDigest: sha256,
-  bundleSha256: sha256,
-  planId: sha256,
-  source: Npm.ProvenanceSource,
-}) {}
 
 const failure = (message: string): ReleaseError =>
   new ReleaseError({ code: "browserbase-release", message });
@@ -153,6 +140,21 @@ const requireFile = (bundle: Bundle, logicalName: string): File => {
   const artifact = bundle.artifacts.find((candidate) => candidate.logicalName === logicalName);
   assert.ok(artifact?._tag === "OwnedFile", `Expected retained file ${logicalName}`);
   return artifact;
+};
+
+/** Only the receipt, two canonical tarballs and their provenance enter this Bundle. */
+const checkBundle = (bundle: Bundle, version: string): readonly string[] => {
+  distTag(version);
+  const filenames = packages.map(({ stem }) => `${stem}-${version}.tgz`);
+  assert.deepEqual(
+    bundle.artifacts.map((file) => file.logicalName),
+    ["release-set.json", ...filenames, ...filenames.map((name) => `${name}.provenance.json`)],
+  );
+  for (const file of bundle.artifacts) {
+    assert.ok(file._tag === "OwnedFile");
+    assert.ok(sameData(file, ownedFile(file.logicalName, file.content)));
+  }
+  return filenames;
 };
 
 const checkSource = (raw: unknown, sourceSha: string, tag: string): Npm.ProvenanceSource => {
@@ -274,20 +276,72 @@ export const prepare = Effect.fn("browserbaseRelease.prepare")(function* ({
     owner,
   );
   const plan = yield* createPlan(hash(bundleBytes), operations, `browserbase:${sourceSha}`);
-  const metadata = new Metadata({
-    format: "browserbase-ts-release/1",
-    sourceSha,
-    tag,
-    receiptDigest: expectedDigest,
-    bundleSha256: hash(bundleBytes),
-    planId: plan.planId,
-    source,
-  });
-  // Metadata is the completion marker. Existing preparation is never overwritten.
+  // The native Plan is written last. Existing preparation is never overwritten.
   yield* writeRetainedFile(join(directory, "bundle.json"), bundleBytes);
   yield* writeRetainedFile(join(directory, "plan.json"), JSON.stringify(plan));
-  yield* writeRetainedFile(join(directory, "metadata.json"), JSON.stringify(metadata));
-  return { bundle, plan, metadata, access, authorizations };
+  return { bundle, plan, access, authorizations };
+});
+
+/** Persist native identities and their owned bytes, without another manifest. */
+export const snapshotPrepared = Effect.fn("release.snapshotPrepared")(function* (
+  prepared: PreparedRelease,
+): Effect.fn.Return<ReadonlyMap<string, Uint8Array>, PreparationError> {
+  const snapshot = new Map<string, Uint8Array>([
+    ["bundle.json", encodeBundle(prepared.bundle)],
+    ["plan.json", new TextEncoder().encode(JSON.stringify(prepared.plan))],
+  ]);
+  for (const artifact of prepared.bundle.artifacts) {
+    const file = yield* admit(() => requireFile(prepared.bundle, artifact.logicalName));
+    snapshot.set(file.content.sha256, yield* prepared.access.readContent(file.content));
+  }
+  return snapshot;
+});
+
+/** Restore bounded native content, then materialize only the verifier's fixed filenames. */
+export const restorePrepared = Effect.fn("release.restorePrepared")(function* (
+  directory: string,
+  snapshot: ReadonlyMap<string, Uint8Array>,
+): Effect.fn.Return<void, PreparationError> {
+  const { bundleBytes, planBytes } = yield* admit(() => {
+    const bundleBytes = snapshot.get("bundle.json");
+    const planBytes = snapshot.get("plan.json");
+    assert.ok(bundleBytes && planBytes, "Prepared state must contain a Bundle and Plan");
+    assert.ok(snapshot.size <= 7, "Prepared state has unexpected files");
+    return { bundleBytes, planBytes };
+  });
+  const owner = fileContentOwner(join(directory, "content"));
+  for (const [name, bytes] of snapshot) {
+    if (name === "bundle.json" || name === "plan.json") continue;
+    yield* admit(() => assert.match(name, /^[a-f0-9]{64}$/u));
+    const content = yield* owner.putOwned(bytes);
+    yield* admit(() => assert.equal(content.sha256, name, "Prepared content digest differs"));
+  }
+  const bundle = yield* loadBundle(owner, bundleBytes);
+  const receiptFile = yield* admit(() => requireFile(bundle, "release-set.json"));
+  const receiptBytes = yield* owner.read(receiptFile.content);
+  const filenames = yield* admit(() => {
+    const { version } = Schema.decodeUnknownSync(Schema.Struct({ version: Schema.String }))(
+      JSON.parse(new TextDecoder().decode(receiptBytes)),
+    );
+    const filenames = checkBundle(bundle, version);
+    const contentNames = bundle.artifacts.map(
+      (file) => requireFile(bundle, file.logicalName).content.sha256,
+    );
+    assert.deepEqual(
+      [...snapshot.keys()].sort(),
+      [...new Set(["bundle.json", "plan.json", ...contentNames])].sort(),
+      "Prepared state must contain exactly the Bundle's owned content",
+    );
+    return filenames;
+  });
+  // Names come from this repository's package inventory and an admitted version.
+  // Receipt metadata cannot supply an extraction path.
+  for (const filename of ["release-set.json", ...filenames]) {
+    const file = yield* admit(() => requireFile(bundle, filename));
+    yield* writeRetainedFile(join(directory, filename), yield* owner.read(file.content));
+  }
+  yield* writeRetainedFile(join(directory, "bundle.json"), bundleBytes);
+  yield* writeRetainedFile(join(directory, "plan.json"), planBytes);
 });
 
 /** Admit the original retained Plan and every byte before constructing a live host. */
@@ -297,56 +351,33 @@ export const loadPrepared = Effect.fn("browserbaseRelease.loadPrepared")(functio
   tag: string,
   { read: readHttp, verifyProvenance }: PublicationDependencies,
 ): Effect.fn.Return<LoadedRelease, PreparationError> {
-  const metadataBytes = yield* readRetainedFile(join(directory, "metadata.json"));
-  const metadata = yield* admit(() =>
-    Schema.decodeUnknownSync(Metadata, { onExcessProperty: "error" })(
-      JSON.parse(metadataBytes.toString("utf8")),
-    ),
-  );
-  const receipt = yield* admit(() => {
-    assert.equal(metadata.sourceSha, sourceSha);
-    assert.equal(metadata.tag, tag);
-    checkSource(metadata.source, sourceSha, tag);
-    return verifyReceipt(directory, sourceSha, tag, metadata.receiptDigest);
-  });
   const owner = fileContentOwner(join(directory, "content"));
   const bundleBytes = yield* readRetainedFile(join(directory, "bundle.json"));
-  yield* admit(() => assert.equal(hash(bundleBytes), metadata.bundleSha256));
   const bundle = yield* loadBundle(owner, bundleBytes);
-  yield* admit(() => {
-    assert.deepEqual(
-      bundle.artifacts.map((file) => file.logicalName),
-      [
-        "release-set.json",
-        ...receipt.packages.map((entry) => entry.filename),
-        ...receipt.packages.map(provenanceName),
-      ],
-    );
-    for (const file of bundle.artifacts) {
-      assert.ok(file._tag === "OwnedFile");
-      assert.ok(sameData(file, ownedFile(file.logicalName, file.content)));
-    }
-    assert.equal(requireFile(bundle, "release-set.json").content.sha256, metadata.receiptDigest);
+  const receipt = yield* admit(() => {
+    const receiptFile = requireFile(bundle, "release-set.json");
+    const receipt = verifyReceipt(directory, sourceSha, tag, receiptFile.content.sha256);
+    checkBundle(bundle, receipt.version);
+    return receipt;
   });
-  const { operations, authorizations, access } = yield* authorOperations(
-    receipt,
-    metadata.source,
-    bundle,
-    owner,
-  );
+  const access = accessFor(bundle, owner);
   const providers = Npm.definitions({ ...access, read: readHttp, verifyProvenance });
   const planBytes = yield* readRetainedFile(join(directory, "plan.json"));
   const plan = yield* loadPlan(
     yield* admit(() => JSON.parse(planBytes.toString("utf8"))),
     providers,
   );
-  const expectedPlan = yield* createPlan(
-    metadata.bundleSha256,
-    operations,
-    `browserbase:${sourceSha}`,
-  );
+  const source = yield* admit(() => {
+    const generic = plan.operations
+      .filter((operation) => operation.definitionId === "npm.publish")
+      .map((operation) => Schema.decodeUnknownSync(Npm.PublishIntent)(operation.intent))
+      .find((intent) => intent.name === receipt.packages[0].name);
+    assert.ok(generic?.provenance._tag === "GitHubActionsProvenance");
+    return checkSource(generic.provenance.source, sourceSha, tag);
+  });
+  const { operations, authorizations } = yield* authorOperations(receipt, source, bundle, owner);
+  const expectedPlan = yield* createPlan(hash(bundleBytes), operations, `browserbase:${sourceSha}`);
   yield* admit(() => {
-    assert.equal(plan.planId, metadata.planId);
     assert.ok(sameData(plan, expectedPlan), "Retained Plan differs from the exact release set");
   });
   // Native provider preparation checks statement/tarball correspondence and
@@ -366,5 +397,5 @@ export const loadPrepared = Effect.fn("browserbaseRelease.loadPrepared")(functio
         .map((dependency) => ({ operation: dependency, receipts: [], observations: [] })),
     });
   }
-  return { bundle, plan, metadata, access, providers, authorizations };
+  return { bundle, plan, access, providers, authorizations };
 });

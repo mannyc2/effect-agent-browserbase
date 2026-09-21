@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "test": "bun test",
-    "release": "node dist/tools/release/main.js"
+    "release": "node node_modules/.bin/ts-release"
   },
   "dependencies": {
     "@mannyc1/ts-release": "0.4.0",
