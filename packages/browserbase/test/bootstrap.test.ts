@@ -92,7 +92,7 @@ it("refuses ambiguous step identity and values a document cannot honour", () => 
   for (const candidate of invalid)
     expect(Schema.decodeUnknownExit(Bootstrap.Plan)(candidate)._tag).toBe("Failure");
   expect(
-    Schema.decodeUnknownExit(Bootstrap.Plan)(
+    Schema.decodeExit(Bootstrap.Plan)(
       Bootstrap.combine(
         script("a", "1;", { origins: ["http://127.0.0.1:8080"] }),
         Bootstrap.permissions({ origin: "https://a.example", permissions: ["clipboard-read"] }),
