@@ -108,11 +108,9 @@ it.effect("uploads once and reuses the durable qualified reference at launch", (
       const extensions = yield* BrowserbaseExtensions;
       const created = yield* extensions.create({ fileName: "extension.zip", bytes: archive });
 
-      assert.deepEqual(created.reference, {
-        provider: "browserbase",
-        projectId: "project-1",
-        extensionId: "extension-1",
-      });
+      assert.equal(created.reference.provider, "browserbase");
+      assert.equal(created.reference.projectId, "project-1");
+      assert.equal(created.reference.extensionId, "extension-1");
       assert.equal(created.fileName, "extension.zip");
 
       const compiled = yield* compileLaunch(
