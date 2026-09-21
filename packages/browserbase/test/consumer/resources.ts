@@ -5,13 +5,17 @@
 // framework, no test runner. The provider is scripted through `fetch`, so the
 // real Client, Sessions and artifact resources do their own parsing and bounds.
 import { BrowserbaseClient } from "@effect-agent/browserbase/client";
+import { BrowserbaseExtensions } from "@effect-agent/browserbase/extensions";
 import { BrowserbaseRecordings } from "@effect-agent/browserbase/recordings";
 import { SessionReference } from "@effect-agent/browserbase/references";
 import { BrowserbaseReplays } from "@effect-agent/browserbase/replays";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { RecordingPageReference } from "@effect-agent/browserbase/transfers";
+import { BrowserbaseUploads } from "@effect-agent/browserbase/uploads";
 import { Effect, Layer, Redacted, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+
+import { extensionArchive } from "../fixtures/Zip.ts";
 
 const reference = SessionReference.make({
   provider: "browserbase",
@@ -64,6 +68,34 @@ const fetch: typeof globalThis.fetch = async (input, init) => {
       headers: { "content-type": "video/mp4" },
     });
   }
+  // Both multipart resources are parsed as an ordinary standards-conformant body.
+  if (url.pathname === "/v1/extensions" && request.method === "POST") {
+    const file = (await request.formData()).get("file");
+
+    if (!(file instanceof File) || file.type !== "application/zip")
+      throw new Error("Unexpected extension part");
+
+    return Response.json({ id: "extension-1", projectId: "project-1", fileName: file.name });
+  }
+  if (url.pathname.startsWith("/v1/extensions/")) {
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+
+    return Response.json({
+      id: "extension-1",
+      projectId: "project-1",
+      fileName: "extension.zip",
+    });
+  }
+  if (url.pathname.endsWith("/uploads") && request.method === "POST") {
+    const file = (await request.formData()).get("file");
+
+    if (!(file instanceof File)) throw new Error("Unexpected upload part");
+
+    return Response.json({
+      message: "File uploaded successfully",
+      path: `/browserbase/uploads/${file.name}`,
+    });
+  }
   if (request.method === "POST") released = true;
 
   return Response.json(session(released ? "COMPLETED" : "RUNNING"));
@@ -109,6 +141,42 @@ const program = Effect.gen(function* () {
   if (active._tag === "Failure")
     expect(active.failure.reason === "active", "the refusal names the live session");
 
+  // A provisioned extension is a durable project resource, inspected before it is sent.
+  const extensions = yield* BrowserbaseExtensions;
+  const registered = yield* extensions.register(extensionArchive());
+
+  expect(registered.reference.extensionId === "extension-1", "registration is project-qualified");
+  expect(registered.entries === 1, "the archive was inspected, not merely forwarded");
+  expect(
+    (yield* extensions.retrieve(registered.reference)).fileName === "extension.zip",
+    "a registered extension is retrievable by reference",
+  );
+  yield* extensions.delete(registered.reference);
+
+  const notAnExtension = yield* extensions
+    .register(new TextEncoder().encode("not a zip archive at all"))
+    .pipe(Effect.result);
+
+  expect(notAnExtension._tag === "Failure", "an archive that is not an extension is refused");
+  if (notAnExtension._tag === "Failure")
+    expect(
+      notAnExtension.failure.outcome === "undispatched",
+      "the refusal happens before any transport",
+    );
+
+  // Uploading places bytes for the exact running session and issues one receipt.
+  const receipt = yield* (yield* BrowserbaseUploads).create(reference, {
+    filename: "report.csv",
+    mediaType: "text/csv",
+    bytes: new TextEncoder().encode("quarter,amount\nQ1,42\n"),
+  });
+
+  expect(receipt.reference.sessionId === "session-1", "the receipt names its own session");
+  expect(
+    receipt.remotePath === "/browserbase/uploads/report.csv",
+    "the provider's own remote path is carried forward",
+  );
+
   const terminal = yield* sessions.requestRelease(reference);
 
   expect(terminal.status === "COMPLETED", "release is an explicit mutation");
@@ -139,9 +207,12 @@ const program = Effect.gen(function* () {
   return { calls, bytes, pages: pages.length };
 }).pipe(
   Effect.provide(
-    Layer.mergeAll(BrowserbaseRecordings.layer, BrowserbaseReplays.layer).pipe(
-      Layer.provideMerge(account),
-    ),
+    Layer.mergeAll(
+      BrowserbaseRecordings.layer,
+      BrowserbaseReplays.layer,
+      BrowserbaseExtensions.layer,
+      BrowserbaseUploads.layer,
+    ).pipe(Layer.provideMerge(account)),
   ),
   Effect.provideService(FetchHttpClient.Fetch, fetch),
 );

@@ -1,6 +1,6 @@
 # Browserbase for Effect
 
-`@effect-agent/browserbase` owns the whole Browserbase surface for an Effect application: account identity and transport, session and context resources, one owned browser over Playwright/CDP, bounded live capture, explicit page holds, and the provider's recordings, replays and website downloads.
+`@effect-agent/browserbase` owns the whole Browserbase surface for an Effect application: account identity and transport, session, context and extension resources, one owned browser over Playwright/CDP — allocated or borrowed — with trusted registrations, modeled file selection, bounded live capture, explicit page holds, and the provider's recordings, replays, uploads and website downloads.
 
 It has no Effect Agent dependency. Playwright is an optional peer, loaded lazily and only when a browser actually connects; a consumer that just reads artifacts never imports it. The package targets trusted Node and Bun hosts. It is an unpublished maintainer-review candidate: hosted provider behavior requires separate validation, and ordinary tests never create a paid Browserbase session or invoke a paid model.
 
@@ -25,6 +25,8 @@ const account = BrowserbaseSessions.layer.pipe(
 ```
 
 `sessions.retrieve`, `list`, `waitUntilRunning` and `waitForTerminal` are passive. `sessions.requestRelease` is an explicit remote mutation and is never issued as a side effect of reading. Context create/retrieve/delete are separate resource operations; deleting a Context is never a browser finalizer. Mutating control-plane requests are never retried automatically, and a rejected request stays distinguishable from one whose effect is unknown.
+
+`extensions.register` is the same kind of explicit resource operation. The archive is inspected before it is sent — a root `manifest.json`, no rooted or `..` members, bounded entries, names and declared size — and nothing is decompressed or written; the provider remains the loader of record. A launch recipe then selects the provisioned `extension` by reference, so a foreign project or a conflicting `provider.extensionId` alias is refused before allocation instead of resolved by an undocumented precedence.
 
 `ContextCoordination.withWriter` accepts a consumer-owned distributed lease backend and preserves the consumer's Effect error and environment types. A persisting allocation authenticates that live permit and reports its exact attempt, session and cleanup receipt before settlement. Unknown writers and unconfirmed persistence are quarantined. A terminal session does not establish that Context data finished synchronizing.
 
@@ -126,6 +128,46 @@ Persistent Browserbase contexts require a live writer permit from `ContextCoordi
 
 Human handoff pauses automation before returning host-only Live View material. Resume requires an explicit operator-release signal and obtains a fresh observation while holding the same mutation permit. A failed handoff does not silently resume automation. Live View URLs are temporary bearer material; iframe styling is not an authorization boundary.
 
+## Registrations, capabilities and document readiness
+
+`BrowserbaseBrowser.layer({ launch, bootstrap })` installs trusted host configuration on every connection this owner makes. A plan is built from `Bootstrap.init`, `Bootstrap.permissions` and `Bootstrap.combine`; combination is ordered, and dependent steps share one native registration because order across separate registrations is not something to assume. Script content is host configuration, never model output or page input.
+
+```ts
+import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
+
+const bootstrap = Bootstrap.combine(
+  Bootstrap.permissions({ origin: "https://portal.example.com", permissions: ["clipboard-read"] }),
+  Bootstrap.init({
+    id: "show-settings-v3",
+    origins: ["https://portal.example.com"],
+    content: "globalThis.__ready = globalThis.getShowSettings({ version: 3 }).then(() => true);",
+    readiness: {
+      expression: "globalThis.__ready",
+      timeoutMillis: 5_000,
+      existingDocuments: "RequireFreshNavigation",
+    },
+  }),
+);
+```
+
+Registration is installed before this connection creates any document, and permissions precede the bundle. It is still not readiness: an asynchronous step cannot pause a website's own scripts, so a document is ready only when its expression resolves to exactly `true`. Readiness is keyed by frame and document epoch and evaluated once per document, so a completed wait can never ready the document that replaced the one it observed.
+
+Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.ready` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
+
+The reviewed permission subset is granted against a real browser in native acceptance rather than copied from a list. Extension identity and storage across Context reuse, and registration retention across provider reconnects, remain hosted questions and are not claimed here.
+
+## Files in and out
+
+Small selection needs no provisioning: `session.selectFiles` attaches in-memory bytes the caller already holds, and `session.clickForFileSelection` registers the chooser observation before the single click that opens it and attaches exactly once.
+
+Larger files use `BrowserbaseUploads.create`, which places bytes for the exact running session and returns a receipt. A stored file is named to the browser process, which opens the path itself; only in-memory bytes are streamed from this client, and the two mechanisms are never mixed. Attachment authority is the identity of a receipt this package issued for that session, so a value that merely has the right shape carries none: no caller, and no model, turns a server pathname into an attached file. The receipt reports the provider's remote path only when the provider returned one; when it does not, attachment by path is refused rather than guessed. Hosted H6 remains the check for real provider upload identity and routing.
+
+## Borrowed attachment
+
+`BrowserbaseBrowser.attach(reference, { policy, target })` takes control of a session this process did not allocate. It reads status first, so project authority is checked before anything is borrowed; a terminal session is refused because that needs a fresh allocation rather than a reattachment, and a starting session is admitted only within a bounded `pendingWaitMillis`. The requested target is resolved explicitly — there is no positional first-tab fallback — and connection credentials are fetched fresh, because expiry races the caller's own status read.
+
+A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `remote: "not-owned"`. It never requests release and never claims Context-writer authority: whoever allocated the session keeps both. It also does not detach and reattach inside itself; attaching again is the cross-process path, and it revalidates the session instead of assuming it is still there. A prior uncertain business mutation is still yours to reconcile before the next one; nothing is replayed automatically.
+
 ## Network policy
 
 `Unrestricted` is the only supported `BrowserPolicy.network`, and only when selected by trusted host policy. The adapter package refuses Effect Agent's `ExactHosts` before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers, and refuses `PublicWeb` because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
@@ -134,8 +176,11 @@ Human handoff pauses automation before returning host-only Live View material. R
 
 - `client` — one immutable account, transport and approved artifact origins.
 - `sessions`, `contexts`, `context-coordination` — passive inspection, explicit release, context resources and writer settlement.
+- `extensions` — provisioning a Chrome extension archive once as a durable project resource, and selecting it by reference at launch.
+- `uploads` — placing a file where the running session can already reach it, and the receipt that authorizes attaching it.
+- `bootstrap` — the typed registration plan: one ordered init bundle, reviewed permission grants and per-document readiness.
 - `launch`, `references`, `browser-data`, `session-data`, `cleanup`, `transfers`, `errors` — credential-free schemas and typed expected errors.
-- `browser` — scoped allocation, deterministic page control, host-only tabs/frames/viewport, Live View handoff, keep-alive detach and explicit reconnect.
+- `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
 - `capture` — optional target-pinned live-page JPEG frame streams using Playwright 1.63's maintained screencast API. The caller owns encoding, storage and presentation.
 - `page-control` — opt-in host-owned stage holds and explicit receipt-based resume, independent of scout selection.
 - `recordings` — post-session Browserbase MP4 assembly, status and bounded retrieval. Stable identity is session + recording page; signed URLs are refreshed and are not durable identity.
