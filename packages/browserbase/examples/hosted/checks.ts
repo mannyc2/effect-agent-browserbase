@@ -91,7 +91,7 @@ export const checks = {
     question: "H1",
     claim:
       "A cookie and a localStorage marker written by a persisting session are readable by a later non-persisting session on the same context. Other stores and flush timing stay open.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: { sessions: 2, browserSeconds: 120, actions: 10, captureSeconds: 0, transferBytes: 0 },
     env: [],
     optionalEnv: [],
@@ -102,7 +102,7 @@ export const checks = {
     question: "H4",
     claim:
       "A keep-alive session survives detach, reconnect observes the same page, and an init script registered before detach is ready on a fresh document after reconnect.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: { sessions: 1, browserSeconds: 120, actions: 10, captureSeconds: 0, transferBytes: 0 },
     env: [],
     optionalEnv: [],
@@ -113,7 +113,7 @@ export const checks = {
     question: "H3",
     claim:
       "A registered MV3 extension keeps its project-qualified identity on retrieve, and when selected at launch its content script runs in the page.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: {
       sessions: 1,
       browserSeconds: 120,
@@ -130,7 +130,7 @@ export const checks = {
     question: "H6",
     claim:
       "Bytes sent through the session upload API reach the remote file chooser at the receipt's path, with the same name, size and content.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: {
       sessions: 1,
       browserSeconds: 120,
@@ -147,7 +147,7 @@ export const checks = {
     question: "H7",
     claim:
       "A recorded session's replay playlist validates and its first media segment downloads through the artifactOrigins check. The recording's delivery kind is reported as observed, so a BYOS project shows up as such rather than as a failure.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: {
       sessions: 1,
       browserSeconds: 120,
