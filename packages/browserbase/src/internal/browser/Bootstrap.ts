@@ -1,4 +1,4 @@
-import type { Plan } from "../../Bootstrap.ts";
+import type { BindingRegistration, Plan } from "../../Bootstrap.ts";
 
 export interface ReadinessRequirement {
   readonly step: string;
@@ -10,6 +10,7 @@ export interface ReadinessRequirement {
 /** What the native driver installs: one ordered bundle, its capabilities and its gates. */
 export interface CompiledBootstrap {
   readonly bundle?: string;
+  readonly bindings: ReadonlyArray<BindingRegistration>;
   readonly permissions: ReadonlyArray<{
     readonly origin: string;
     readonly permissions: ReadonlyArray<string>;
@@ -29,7 +30,12 @@ const guarded = (content: string, origins: ReadonlyArray<string> | undefined): s
  * skipped inside the document that reports the origin, never by guessing from a navigation URL.
  */
 export const compileBootstrap = (plan: Plan): CompiledBootstrap | undefined => {
-  if (plan.scripts.length === 0 && plan.permissions.length === 0) return undefined;
+  if (
+    plan.scripts.length === 0 &&
+    plan.permissions.length === 0 &&
+    (plan.bindings?.length ?? 0) === 0
+  )
+    return undefined;
 
   const bundle =
     plan.scripts.length === 0
@@ -59,6 +65,7 @@ export const compileBootstrap = (plan: Plan): CompiledBootstrap | undefined => {
 
   return {
     ...(bundle === undefined ? {} : { bundle }),
+    bindings: plan.bindings === undefined ? [] : [...plan.bindings],
     permissions: plan.permissions.map((grant) => ({
       origin: grant.origin,
       permissions: [...grant.permissions],
@@ -71,4 +78,6 @@ export const compileBootstrap = (plan: Plan): CompiledBootstrap | undefined => {
 /** Duplicate step identity would make registration order and readiness reports ambiguous. */
 export const duplicateStep = (plan: Plan): boolean =>
   new Set(plan.scripts.map((script) => script.id)).size !== plan.scripts.length ||
-  new Set(plan.permissions.map((grant) => grant.origin)).size !== plan.permissions.length;
+  new Set(plan.permissions.map((grant) => grant.origin)).size !== plan.permissions.length ||
+  new Set((plan.bindings ?? []).map((registration) => registration.name)).size !==
+    (plan.bindings?.length ?? 0);

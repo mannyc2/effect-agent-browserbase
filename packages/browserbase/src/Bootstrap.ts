@@ -1,4 +1,4 @@
-import { type Effect, Schema } from "effect";
+import { type Effect, Predicate, Schema } from "effect";
 
 import { Identifier } from "./References.ts";
 
@@ -105,23 +105,25 @@ const BindingMetadata = Schema.Struct({
   failureMode: BindingFailureMode,
 });
 
+const BoundaryCodec = Schema.Unknown.check(
+  Schema.makeFilter(Schema.isSchema, { title: "an Effect Schema boundary codec" }),
+);
+const BindingHandler = Schema.Unknown.check(
+  Schema.makeFilter(Predicate.isFunction, { title: "a trusted binding handler" }),
+);
+
 /**
- * Trusted callback registration retained by a Plan. The codecs and handler deliberately stay
- * opaque at this level: the native registration boundary is responsible for decoding, running,
- * rechecking document authority and projecting only page-safe replies.
+ * Trusted callback registration retained by a Plan. Codecs and handler are host-only live values:
+ * decoding a Plan validates their runtime identity but never serializes or executes them.
  */
-export interface BindingRegistration {
-  readonly name: string;
-  readonly origins: ReadonlyArray<Origin>;
-  readonly maxConcurrent: number;
-  readonly maxInputBytes: number;
-  readonly maxOutputBytes: number;
-  readonly timeoutMillis: number;
-  readonly failureMode: BindingFailureMode;
-  readonly input: unknown;
-  readonly output: unknown;
-  readonly handle: unknown;
-}
+const BindingRegistrationSchema = Schema.Struct({
+  ...BindingMetadata.fields,
+  input: BoundaryCodec,
+  output: BoundaryCodec,
+  handle: BindingHandler,
+});
+
+export type BindingRegistration = typeof BindingRegistrationSchema.Type;
 
 /**
  * Environment-free boundary codecs keep page data validation separate from consumer services.
@@ -154,12 +156,15 @@ export interface Plan<E = unknown, R = unknown> {
 }
 
 /**
- * Serializable portion of a plan. Bindings retain trusted host codecs and closures and therefore
- * are validated by their builder/native boundary rather than encoded as configuration data.
+ * Static plans remain serializable. Binding plans retain host codecs/closures by reference while
+ * validating their metadata and runtime shape so Browser configuration cannot silently erase them.
  */
 export const Plan = Schema.Struct({
   scripts: Schema.Array(InitScript).check(Schema.isMaxLength(16)),
   permissions: Schema.Array(PermissionGrant).check(Schema.isMaxLength(16)),
+  bindings: Schema.optionalKey(
+    Schema.Array(BindingRegistrationSchema).check(Schema.isMaxLength(64)),
+  ),
 });
 
 type AnyPlan = Plan<unknown, unknown>;

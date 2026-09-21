@@ -2,6 +2,8 @@ import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
 import { expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 
+import { compileBootstrap, duplicateStep } from "../src/internal/browser/Bootstrap.ts";
+
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
@@ -103,4 +105,35 @@ it("keeps static-only plans serializable and refuses invalid binding admission b
       handle: () => Effect.succeed("ok"),
     }),
   ).toThrow();
+});
+
+it("preserves trusted binding registrations through configuration decode and compilation", () => {
+  const decoded = Schema.decodeSync(Bootstrap.Plan)(settings);
+  const registration = decoded.bindings?.[0];
+
+  expect(registration).toBeDefined();
+  expect(registration?.input).toBe(settings.bindings?.[0]?.input);
+  expect(registration?.output).toBe(settings.bindings?.[0]?.output);
+  expect(registration?.handle).toBe(settings.bindings?.[0]?.handle);
+
+  const compiled = compileBootstrap(decoded);
+
+  expect(compiled?.bindings).toHaveLength(1);
+  expect(compiled?.bindings[0]?.handle).toBe(settings.bindings?.[0]?.handle);
+});
+
+it("rejects forged live registrations and duplicate binding names before native work", () => {
+  const forged = {
+    scripts: [],
+    permissions: [],
+    bindings: [
+      {
+        ...settings.bindings?.[0],
+        input: "not-a-codec",
+      },
+    ],
+  };
+
+  expect(Schema.decodeUnknownExit(Bootstrap.Plan)(forged)._tag).toBe("Failure");
+  expect(duplicateStep(Bootstrap.combine(settings, settings))).toBe(true);
 });
