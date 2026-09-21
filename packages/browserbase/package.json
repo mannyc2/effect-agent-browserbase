@@ -33,7 +33,8 @@
     "./replays": "./src/Replays.ts",
     "./session-data": "./src/SessionData.ts",
     "./sessions": "./src/Sessions.ts",
-    "./transfers": "./src/Transfers.ts"
+    "./transfers": "./src/Transfers.ts",
+    "./uploads": "./src/Uploads.ts"
   },
   "publishConfig": {
     "access": "public"

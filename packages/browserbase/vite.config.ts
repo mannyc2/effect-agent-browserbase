@@ -37,6 +37,7 @@ export default defineConfig({
       "src/SessionData.ts",
       "src/Sessions.ts",
       "src/Transfers.ts",
+      "src/Uploads.ts",
     ],
     dts: true,
     sourcemap: true,

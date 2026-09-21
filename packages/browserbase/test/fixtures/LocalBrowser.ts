@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +76,7 @@ export const localBrowser = Effect.acquireRelease(
     const connections: string[] = [];
     const nativePages = new Map<string, () => ReadonlyArray<Page>>();
     const requests: string[] = [];
+    const uploadedPaths: string[] = [];
     let fileRequests = 0;
 
     const server = createServer((req, res) => {
@@ -125,6 +126,9 @@ export const localBrowser = Effect.acquireRelease(
       <a id="next" href="/next">Next page</a><a id="download" href="/file" download>Download</a>
       <button id="popup" onclick="window.open('/next')">Popup</button>
       <button id="dialog" onclick="alert('private dialog');echo.textContent='dialog completed'">Dialog</button>
+      <input id="file" type="file" multiple onchange="chosen.textContent=[...this.files].map(f=>f.name+':'+f.size).join(',')"><span id="chosen"></span>
+      <button id="choose" onclick="document.querySelector('#file').click()">Choose files</button>
+      <button id="readFile" onclick="(async()=>{const f=document.querySelector('#file').files[0];content.textContent=f?await f.text():''})()">Read file</button><span id="content"></span>
       <div id="motion"></div><iframe name="child" src="/frame"></iframe><div class="spacer"></div><p>bottom marker</p>`);
     });
 
@@ -228,6 +232,22 @@ export const localBrowser = Effect.acquireRelease(
       const session = sessions.get(id);
 
       if (!session) return Response.json({}, { status: 404 });
+      if (parsed.pathname.endsWith("/uploads") && request.method === "POST") {
+        // The fixture stands in for provider-side storage: it keeps the bytes where the
+        // browser process can open them, exactly as a remote upload location would.
+        const file = (await request.formData()).get("file");
+
+        if (!(file instanceof File)) return Response.json({}, { status: 400 });
+        const directoryPath = join(directory, id, "uploads");
+
+        await mkdir(directoryPath, { recursive: true });
+        const stored = join(directoryPath, file.name);
+
+        await writeFile(stored, new Uint8Array(await file.arrayBuffer()));
+        uploadedPaths.push(stored);
+
+        return Response.json({ message: "File uploaded successfully", path: stored });
+      }
       if (parsed.pathname.endsWith("/debug")) {
         return Response.json({
           debuggerFullscreenUrl: "https://www.browserbase.com/view?token=fixture",
@@ -253,6 +273,7 @@ export const localBrowser = Effect.acquireRelease(
       connections,
       nativePages: (id: string) => nativePages.get(id)?.() ?? [],
       requests,
+      uploadedPaths,
       fileRequests: () => fileRequests,
       options,
       account,

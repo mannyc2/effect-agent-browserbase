@@ -70,6 +70,16 @@ export interface CaptureBinding {
   readonly source: CaptureSource;
 }
 
+/** Either bytes the caller holds or a path the provider itself reported; never both. */
+export type NativeFileSelection =
+  | {
+      readonly _tag: "Inline";
+      readonly name: string;
+      readonly mediaType: string;
+      readonly bytes: Uint8Array;
+    }
+  | { readonly _tag: "Remote"; readonly path: string };
+
 export interface Driver {
   readonly pageControl?: {
     readonly state: (page: PageInfo, ticket: Ticket) => Promise<PageExecutionState>;
@@ -123,6 +133,17 @@ export interface Driver {
     readonly filename: string;
     readonly state: "completed" | "failed";
   }>;
+  readonly selectFiles: (
+    target: string | ObservedElement,
+    files: ReadonlyArray<NativeFileSelection>,
+    ticket: Ticket,
+  ) => Promise<string>;
+  /** The chooser observer is registered before the single click dispatch that opens it. */
+  readonly clickForFileSelection: (
+    target: string | ObservedElement,
+    files: ReadonlyArray<NativeFileSelection>,
+    ticket: Ticket,
+  ) => Promise<string>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
   readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
   readonly invalidateObservation: () => void;

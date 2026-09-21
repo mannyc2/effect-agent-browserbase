@@ -18,7 +18,7 @@ import { acquireRemote } from "../session/Acquisition.ts";
 import type { LocalCleanup } from "../session/Cleanup.ts";
 import type { ContextWriterPermit } from "../session/WriterFacts.ts";
 import { type CaptureParent } from "./Association.ts";
-import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
+import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
 import { issueLiveView } from "./LiveView.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
 import { connectPlaywright } from "./Playwright.ts";
@@ -320,7 +320,16 @@ export const acquireSession = Effect.fnUntraced(function* (
       operation,
       (ticket) =>
         native(operation, ticket, async () => {
-          if (["resize", "wait", "click-and-wait", "download-action"].includes(operation))
+          if (
+            [
+              "resize",
+              "wait",
+              "click-and-wait",
+              "download-action",
+              "select-files",
+              "file-chooser",
+            ].includes(operation)
+          )
             await getDriver().pageControl?.checkSelected(ticket);
 
           return action(getDriver(), ticket);
@@ -540,6 +549,21 @@ export const acquireSession = Effect.fnUntraced(function* (
       nativeOperation(
         "download-action",
         (driver, ticket) => driver.clickForDownload(target, ticket),
+        true,
+      ),
+    selectFiles: (target: string | ObservedElement, files: ReadonlyArray<NativeFileSelection>) =>
+      nativeOperation(
+        "select-files",
+        (driver, ticket) => driver.selectFiles(target, files, ticket),
+        true,
+      ),
+    clickForFileSelection: (
+      target: string | ObservedElement,
+      files: ReadonlyArray<NativeFileSelection>,
+    ) =>
+      nativeOperation(
+        "file-chooser",
+        (driver, ticket) => driver.clickForFileSelection(target, files, ticket),
         true,
       ),
     liveView: (ttl: number) =>

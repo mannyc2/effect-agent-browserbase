@@ -5,16 +5,26 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { BrowserbaseContexts } from "../../src/Contexts.ts";
-import type { ClientError, ContextError, ExtensionError, SessionError } from "../../src/Errors.ts";
+import type {
+  ClientError,
+  ContextError,
+  ExtensionError,
+  FileError,
+  SessionError,
+} from "../../src/Errors.ts";
 import { BrowserbaseExtensions } from "../../src/Extensions.ts";
 import { ContextReference, ExtensionReference, SessionReference } from "../../src/References.ts";
 import { BrowserbaseSessions } from "../../src/Sessions.ts";
+import { BrowserbaseUploads } from "../../src/Uploads.ts";
 import { buildZip, extensionArchive } from "./Zip.ts";
 
 /** One declared control-plane failure channel; each case keeps its own typed subset. */
 interface Case {
   readonly name: string;
-  readonly run: Effect.Effect<void, ClientError | SessionError | ContextError | ExtensionError>;
+  readonly run: Effect.Effect<
+    void,
+    ClientError | SessionError | ContextError | ExtensionError | FileError
+  >;
 }
 
 const account = {
@@ -57,6 +67,7 @@ const resourceLayer = Layer.mergeAll(
   BrowserbaseSessions.layer,
   BrowserbaseContexts.layer,
   BrowserbaseExtensions.layer,
+  BrowserbaseUploads.layer.pipe(Layer.provide(BrowserbaseSessions.layer)),
 ).pipe(Layer.provide(BrowserbaseClient.layer(account)));
 
 export const controlPlaneCases: ReadonlyArray<Case> = [
@@ -309,6 +320,77 @@ export const controlPlaneCases: ReadonlyArray<Case> = [
           return Response.json({});
         }),
       );
+    }),
+  },
+  {
+    name: "Uploads place bytes for the exact running session and report only what came back",
+    run: Effect.gen(function* () {
+      const bytes = new TextEncoder().encode("quarter,amount\nQ1,42\n");
+      const calls: string[] = [];
+      let part: { name: string; type: string; size: number } | undefined;
+      let status: "RUNNING" | "COMPLETED" = "RUNNING";
+      let path = "/browserbase/uploads/report.csv";
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+
+        calls.push(`${request.method} ${url.pathname}`);
+        if (url.pathname.endsWith("/uploads")) {
+          const file = (await request.formData()).get("file");
+
+          assert.ok(file instanceof File);
+          part = { name: file.name, type: file.type, size: file.size };
+          assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes);
+
+          return Response.json({ message: "File uploaded successfully", path });
+        }
+
+        return Response.json(providerSession(status));
+      };
+
+      yield* Effect.gen(function* () {
+        const uploads = yield* BrowserbaseUploads;
+
+        const file = {
+          filename: "report.csv",
+          mediaType: "text/csv",
+          bytes,
+        };
+
+        const receipt = yield* uploads.create(sessionReference, file);
+
+        assert.deepEqual(receipt.reference, sessionReference);
+        assert.equal(receipt.remotePath, path);
+        assert.equal(receipt.acknowledgement, "File uploaded successfully");
+        assert.equal(receipt.bytes, bytes.byteLength);
+        assert.deepEqual(part, { name: "report.csv", type: "text/csv", size: bytes.byteLength });
+        assert.deepEqual(calls, [
+          "GET /v1/sessions/session-1",
+          "POST /v1/sessions/session-1/uploads",
+        ]);
+
+        // A traversing path is never carried forward as an attachable location.
+        path = "/browserbase/../etc/passwd";
+        const unsafe = yield* uploads.create(sessionReference, file).pipe(Effect.result);
+
+        assert.equal(unsafe._tag, "Failure");
+        if (unsafe._tag === "Failure") {
+          assert.equal(unsafe.failure.reason, "malformed");
+          assert.equal(unsafe.failure.outcome, "unknown");
+        }
+
+        // A terminal session cannot receive files, and nothing is sent to find out.
+        status = "COMPLETED";
+        const terminal = yield* uploads.create(sessionReference, file).pipe(Effect.result);
+
+        assert.equal(terminal._tag, "Failure");
+        if (terminal._tag === "Failure") {
+          assert.equal(terminal.failure.reason, "expired");
+          assert.equal(terminal.failure.outcome, "undispatched");
+        }
+        assert.equal(calls.filter((call) => call.endsWith("/uploads")).length, 2);
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
     }),
   },
   {

@@ -7,6 +7,7 @@ import {
   ClickRequest,
   FillRequest,
   type FrameInfo,
+  InlineFiles,
   NavigateRequest,
   NavigationResult,
   type Observation,
@@ -16,6 +17,8 @@ import {
   ScreenshotRequest,
   ScreenshotResult,
   ScrollRequest,
+  type SelectFilesRequest,
+  Selector,
   type Target,
   TextResult,
   Viewport,
@@ -24,6 +27,7 @@ import type { CleanupResult } from "./Cleanup.ts";
 import { BrowserbaseClient } from "./Client.ts";
 import { type AllocationError, BrowserError, type ContextError } from "./Errors.ts";
 import { associate } from "./internal/browser/Association.ts";
+import type { NativeFileSelection } from "./internal/browser/Driver.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
 import { associatePageControl } from "./internal/browser/PageControlAssociation.ts";
 import {
@@ -32,6 +36,7 @@ import {
   type SessionControls,
 } from "./internal/browser/Session.ts";
 import type { ContextWriterPermit } from "./internal/session/WriterFacts.ts";
+import { issuedUpload } from "./internal/upload/Issued.ts";
 import type { LaunchRecipe } from "./Launch.ts";
 import { Identifier, type AllocationAttempt, type SessionReference } from "./References.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
@@ -101,6 +106,12 @@ export interface BrowserbaseSession {
   readonly clickForDownload: (
     request: ClickRequest,
   ) => Effect.Effect<DownloadObservation, BrowserError>;
+  /** Attaches to an existing file input; an uploaded branch needs a receipt for this session. */
+  readonly selectFiles: (request: SelectFilesRequest) => Effect.Effect<ActionResult, BrowserError>;
+  /** Registers the chooser observation before the single click that opens it. */
+  readonly clickForFileSelection: (
+    request: SelectFilesRequest,
+  ) => Effect.Effect<ActionResult, BrowserError>;
   readonly liveView: (expiresInSeconds?: number) => Effect.Effect<LiveView, BrowserError>;
   readonly beginHandoff: (expiresInSeconds?: number) => Effect.Effect<Handoff, BrowserError>;
   readonly resume: (
@@ -183,6 +194,63 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
     ),
 });
 
+/**
+ * Uploaded selection is admitted by the identity of a receipt this package issued for this
+ * exact session, never by a path read off the caller's value. A fabricated receipt has no
+ * issuance record, so an arbitrary server pathname can never become an attached file.
+ */
+const selection = (
+  request: SelectFilesRequest,
+  reference: SessionReference,
+  operation: string,
+): Effect.Effect<ReadonlyArray<NativeFileSelection>, BrowserError> =>
+  Effect.suspend(() => {
+    const invalid = BrowserError.make({
+      operation,
+      reason: "configuration",
+      outcome: "undispatched",
+    });
+
+    if (request.selection._tag === "Inline") {
+      return checked(InlineFiles, request.selection.files, operation).pipe(
+        Effect.map((files) =>
+          files.map((file) => ({
+            _tag: "Inline" as const,
+            name: file.name,
+            mediaType: file.mediaType,
+            // The dispatched bytes cannot change after they were validated.
+            bytes: new Uint8Array(file.bytes),
+          })),
+        ),
+      );
+    }
+
+    const uploads = request.selection.uploads;
+
+    if (!Array.isArray(uploads) || uploads.length < 1 || uploads.length > 8)
+      return Effect.fail(invalid);
+    const files: NativeFileSelection[] = [];
+
+    for (const receipt of uploads) {
+      const issued = issuedUpload(receipt);
+
+      if (issued === undefined)
+        return Effect.fail(
+          BrowserError.make({ operation, reason: "authorization", outcome: "undispatched" }),
+        );
+      if (
+        issued.reference.projectId !== reference.projectId ||
+        issued.reference.sessionId !== reference.sessionId
+      )
+        return Effect.fail(
+          BrowserError.make({ operation, reason: "authorization", outcome: "undispatched" }),
+        );
+      files.push({ _tag: "Remote", path: issued.remotePath });
+    }
+
+    return Effect.succeed(files);
+  });
+
 const makeSession = (controls: SessionControls): BrowserbaseSession => {
   const currentTarget = controls.currentTarget.pipe(Effect.map(() => makeTarget(controls.bind())));
 
@@ -248,6 +316,24 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
             "download-action",
           )({ ...raw, reference: controls.reference }),
         ),
+      ),
+    selectFiles: (request) =>
+      checked(Selector, request.selector, "select-files").pipe(
+        Effect.flatMap((selector) =>
+          selection(request, controls.reference, "select-files").pipe(
+            Effect.flatMap((files) => controls.selectFiles(selector, files)),
+          ),
+        ),
+        Effect.flatMap(navigate),
+      ),
+    clickForFileSelection: (request) =>
+      checked(Selector, request.selector, "file-chooser").pipe(
+        Effect.flatMap((selector) =>
+          selection(request, controls.reference, "file-chooser").pipe(
+            Effect.flatMap((files) => controls.clickForFileSelection(selector, files)),
+          ),
+        ),
+        Effect.flatMap(navigate),
       ),
     liveView: (ttl = 60) => controls.liveView(ttl),
     beginHandoff: (ttl = 60) => controls.beginHandoff(ttl),

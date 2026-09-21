@@ -29,6 +29,35 @@ export const SafeFilename = Schema.NonEmptyString.check(
   ),
 );
 
+/**
+ * A path the provider reported for a file it already holds. It is only ever decoded from a
+ * provider response: no caller, and certainly no model, names a remote filesystem path.
+ */
+export const RemoteFilePath = Schema.NonEmptyString.check(
+  Schema.isMaxLength(4096),
+  Schema.makeFilter(
+    (value) =>
+      value.startsWith("/") &&
+      !value.includes("\\") &&
+      !value.includes("//") &&
+      ![...value].some((character) => character < " " || character === "\x7f") &&
+      value.split("/").every((segment) => segment !== "." && segment !== ".."),
+    { title: "an absolute, traversal-free remote path" },
+  ),
+);
+
+/**
+ * Evidence of one accepted upload. `remotePath` exists only when the provider returned one;
+ * its absence is reported rather than guessed, and attachment is refused without it.
+ */
+export class UploadReceipt extends Schema.Class<UploadReceipt>("BrowserbaseUploadReceipt")({
+  reference: SessionReference,
+  filename: SafeFilename,
+  bytes: Schema.Natural,
+  remotePath: Schema.optionalKey(RemoteFilePath),
+  acknowledgement: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1024))),
+}) {}
+
 export class DownloadMetadata extends Schema.Class<DownloadMetadata>("BrowserbaseDownloadMetadata")(
   {
     id: Identifier,

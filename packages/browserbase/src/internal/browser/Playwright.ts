@@ -6,6 +6,7 @@ import type {
   Dialog,
   Download,
   ElementHandle,
+  FileChooser,
   Frame,
   JSHandle,
   Page,
@@ -31,6 +32,7 @@ import type {
   Driver,
   DriverEvents,
   DriverOptions,
+  NativeFileSelection,
   NativeFrame,
   NativeObservation,
 } from "./Driver.ts";
@@ -557,6 +559,88 @@ export const makePlaywrightDriver = async (
     if (ticket.signal.aborted) abort();
 
     return { promise, cancel: abort };
+  };
+
+  /**
+   * In-memory bytes and provider-stored paths reach the page by different mechanisms and are
+   * never mixed: the first is streamed from this client, the second is opened by the browser
+   * process itself. A mixed request is a configuration error, not a native surprise later.
+   */
+  const nativeSelection = (
+    files: ReadonlyArray<NativeFileSelection>,
+  ):
+    | {
+        readonly _tag: "Inline";
+        readonly payload: Array<{ name: string; mimeType: string; buffer: Buffer }>;
+      }
+    | { readonly _tag: "Remote"; readonly paths: Array<string> } => {
+    if (files.length === 0) throw failure("select-files", "configuration", "undispatched");
+    const inline = files.filter((file) => file._tag === "Inline");
+    const remote = files.filter((file) => file._tag === "Remote");
+
+    // The maintained native API encodes a Node Buffer; this lazily loaded driver already
+    // requires the Node-only Playwright peer, so the conversion belongs here and nowhere else.
+    if (inline.length === files.length) {
+      return {
+        _tag: "Inline",
+        payload: inline.map((file) => ({
+          name: file.name,
+          mimeType: file.mediaType,
+          buffer: Buffer.from(file.bytes),
+        })),
+      };
+    }
+    if (remote.length === files.length)
+      return { _tag: "Remote", paths: remote.map((file) => file.path) };
+    throw failure("select-files", "configuration", "undispatched");
+  };
+
+  /**
+   * A file the provider already stores is named to the browser process, which opens it; this
+   * client never reads that path. Exactly one main-frame node may match, and exactly one
+   * command dispatches. A retained node or child frame is refused rather than approximated.
+   */
+  const attachStoredFiles = async (
+    target: string | ObservedElement,
+    paths: ReadonlyArray<string>,
+    ticket: Ticket,
+  ) => {
+    if (typeof target !== "string") throw failure("select-files", "unsupported", "undispatched");
+    const { entry, frame } = current();
+
+    if (frame !== entry.page.mainFrame())
+      throw failure("select-files", "unsupported", "undispatched");
+    const cdp = await context.newCDPSession(entry.page);
+
+    try {
+      ticket.check();
+
+      const root = safeDecode(
+        Schema.Struct({ root: Schema.Struct({ nodeId: Schema.Int }) }),
+        await cdp.send("DOM.getDocument", { depth: 0 }),
+        "select-files",
+      );
+
+      const matched = safeDecode(
+        Schema.Struct({ nodeIds: Schema.Array(Schema.Int).check(Schema.isMaxLength(64)) }),
+        await cdp.send("DOM.querySelectorAll", { nodeId: root.root.nodeId, selector: target }),
+        "select-files",
+      );
+
+      ticket.check();
+      const nodeId = matched.nodeIds[0];
+
+      if (matched.nodeIds.length !== 1 || nodeId === undefined)
+        throw failure(
+          "select-files",
+          matched.nodeIds.length === 0 ? "not-found" : "ambiguous",
+          "undispatched",
+        );
+      ticket.dispatch();
+      await cdp.send("DOM.setFileInputFiles", { files: [...paths], nodeId });
+    } finally {
+      await closeWithin(() => cdp.detach()).catch(() => {});
+    }
   };
 
   const executionFor = (entry: Entry): Promise<PageExecution> => {
@@ -1102,6 +1186,51 @@ export const makePlaywrightDriver = async (
             filename,
             state: error === null ? "completed" : "failed",
           };
+        } finally {
+          observer.cancel();
+        }
+      }),
+    selectFiles: (target, files, ticket) =>
+      sanitize("select-files", async () => {
+        const selection = nativeSelection(files);
+
+        if (selection._tag === "Remote") await attachStoredFiles(target, selection.paths, ticket);
+        else
+          await withElement(target, ticket, (element) =>
+            element.setInputFiles(selection.payload, { timeout: timeout(ticket) }),
+          );
+        ticket.check();
+
+        return postUrl();
+      }),
+    clickForFileSelection: (target, files, ticket) =>
+      sanitize("file-chooser", async () => {
+        const selection = nativeSelection(files);
+
+        // A chooser is satisfied with bytes this client holds. A provider-stored file is
+        // attached to an exact input node instead, where the browser can open the path.
+        if (selection._tag === "Remote")
+          throw failure("file-chooser", "unsupported", "undispatched");
+        const page = current().entry.page;
+
+        const observer = waitEvent<FileChooser>(
+          (on) => page.on("filechooser", on),
+          (off) => page.off("filechooser", off),
+          ticket,
+        );
+
+        try {
+          await click(target, ticket);
+          const chooser = await observer.promise;
+
+          ticket.check();
+          if (!chooser.isMultiple() && selection.payload.length > 1)
+            throw failure("file-chooser", "unsupported");
+          // Exactly one attachment for this chooser; a second would open another dispatch.
+          await chooser.setFiles(selection.payload, { timeout: timeout(ticket) });
+          ticket.check();
+
+          return postUrl();
         } finally {
           observer.cancel();
         }

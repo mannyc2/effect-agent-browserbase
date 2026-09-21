@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 import { Identifier } from "./References.ts";
-import { PositiveInt } from "./Transfers.ts";
+import { PositiveInt, SafeFilename, type UploadReceipt } from "./Transfers.ts";
 
 export class Viewport extends Schema.Class<Viewport>("BrowserbaseViewport")(
   Schema.Struct({
@@ -149,6 +149,46 @@ export class ScreenshotResult extends Schema.Class<ScreenshotResult>("Browserbas
     bytes: Schema.Uint8Array,
   },
 ) {}
+
+const FileMediaType = Schema.NonEmptyString.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[a-z0-9][a-z0-9!#$&^_+.-]*\/[a-z0-9][a-z0-9!#$&^_+.-]*$/),
+);
+
+/** Small selection is in-memory by design: bytes the caller already holds, never a path. */
+export class InlineFile extends Schema.Class<InlineFile>("BrowserbaseInlineFile")({
+  name: SafeFilename,
+  mediaType: FileMediaType,
+  bytes: Schema.Uint8Array.check(
+    Schema.makeFilter((value) => value.byteLength >= 1 && value.byteLength <= 1024 * 1024, {
+      title: "between one byte and one mebibyte",
+    }),
+  ),
+}) {}
+
+export const InlineFiles = Schema.Array(InlineFile).check(
+  Schema.isMaxLength(8),
+  Schema.makeFilter(
+    (files) =>
+      files.length > 0 &&
+      files.reduce((total, file) => total + file.bytes.byteLength, 0) <= 4 * 1024 * 1024,
+    { title: "at most four mebibytes of in-memory selection" },
+  ),
+);
+
+/**
+ * The uploaded branch carries receipts, not paths. Attachment authority is the identity of a
+ * receipt this package issued for this exact session, so decoding one back into a new value
+ * would discard the very evidence being checked.
+ */
+export type FileSelection =
+  | { readonly _tag: "Inline"; readonly files: ReadonlyArray<InlineFile> }
+  | { readonly _tag: "Uploaded"; readonly uploads: ReadonlyArray<UploadReceipt> };
+
+export interface SelectFilesRequest {
+  readonly selector: string;
+  readonly selection: FileSelection;
+}
 
 export const AutomationOptions = Schema.Struct({
   actionTimeoutMillis: Schema.optionalKey(

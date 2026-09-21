@@ -16,3 +16,4 @@ export * as Replays from "./Replays.ts";
 export * as SessionData from "./SessionData.ts";
 export * as Sessions from "./Sessions.ts";
 export * as Transfers from "./Transfers.ts";
+export * as Uploads from "./Uploads.ts";

@@ -73,6 +73,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
     text: "initial",
     url: "https://example.test/",
     observations: 0,
+    selected: [] as string[],
   };
 
   const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -221,6 +222,22 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         ticket.dispatch();
 
         return { downloadId: "native-1", filename: "fixture.txt", state: "completed" };
+      },
+      selectFiles: async (_target, files, ticket) => {
+        ticket.dispatch();
+        state.selected.push(
+          ...files.map((file) => (file._tag === "Inline" ? file.name : file.path)),
+        );
+
+        return state.url;
+      },
+      clickForFileSelection: async (_target, files, ticket) => {
+        ticket.dispatch();
+        state.selected.push(
+          ...files.map((file) => (file._tag === "Inline" ? file.name : file.path)),
+        );
+
+        return state.url;
       },
       dismissDialogs: async () => {},
       capture: async (target) => ({
