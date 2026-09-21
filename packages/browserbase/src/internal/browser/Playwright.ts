@@ -7,6 +7,7 @@ import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { makeInitialization } from "./Initialization.ts";
+import { makeKeyboard } from "./Keyboard.ts";
 import { closeWithin, failure, NativeFailure, safeDecode, sanitize } from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
@@ -159,6 +160,7 @@ export const makePlaywrightDriver = async (
   const observation = makeObservation(targets, events);
   const actions = makeActions(context, targets, observation);
   const pointer = makePointer(targets, actions);
+  const keyboard = makeKeyboard(targets, actions, pointer.receipt);
   const captures = makeCaptureSources(targets);
 
   const pageControl = makePageControl(
@@ -225,6 +227,8 @@ export const makePlaywrightDriver = async (
     pointerMove: pointer.pointerMove,
     hover: pointer.hover,
     wheel: pointer.wheel,
+    press: keyboard.press,
+    type: keyboard.type,
     screenshot: observation.screenshot,
     resize: (viewport, ticket) =>
       sanitize(async () => {

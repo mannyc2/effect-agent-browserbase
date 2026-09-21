@@ -372,6 +372,8 @@ export const ownershipCases: ReadonlyArray<Case> = [
       yield* expectReason(old.pointerMove({ x: 1, y: 2 }), "stale");
       yield* expectReason(old.hover("#target"), "stale");
       yield* expectReason(old.wheel(0, 120), "stale");
+      yield* expectReason(old.press("Enter", []), "stale");
+      yield* expectReason(old.type("typed"), "stale");
       // Refused before dispatch: the page now selected received nothing meant for the old one.
       assert.deepEqual(f.state.input, []);
       yield* session.bind().pointerMove({ x: 1, y: 2 });
@@ -398,6 +400,28 @@ export const ownershipCases: ReadonlyArray<Case> = [
         assert.equal(refused.failure.outcome, "undispatched");
       }
       assert.deepEqual(f.state.input, ["move page-1 12.5,40", "wheel page-1 0,120"]);
+    })),
+  test("key input is one charged action per call, however many characters it carries", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ maxActions: 2 });
+      const session = yield* (yield* f.acquisition).connect;
+      const handle = session.bind();
+      const typed = yield* handle.type("six ch");
+
+      assert.equal(typed.target.pageId, "page-1");
+      assert.ok(typed.completedMonotonicNanos >= typed.startedMonotonicNanos);
+      // Keys move no pointer: the position is still whatever this owner last commanded.
+      assert.equal(typed.position, null);
+      yield* handle.press("a", ["Control", "Shift"]);
+      const refused = yield* handle.press("Enter", []).pipe(Effect.result);
+
+      assert.equal(refused._tag, "Failure");
+      if (refused._tag === "Failure") {
+        assert.equal(refused.failure.operation, "press");
+        assert.equal(refused.failure.reason, "limit");
+        assert.equal(refused.failure.outcome, "undispatched");
+      }
+      assert.deepEqual(f.state.input, ["type page-1 6", "press page-1 Control+Shift+a"]);
     })),
   test("a checkpoint is a charged read that leaves the observation and its revision alone", () =>
     Effect.gen(function* () {
@@ -449,6 +473,8 @@ export const ownershipCases: ReadonlyArray<Case> = [
       yield* expectReason(handle.click("#act"), "busy");
       yield* expectReason(handle.navigate("https://example.test/other"), "busy");
       yield* expectReason(handle.pointerMove({ x: 1, y: 1 }), "busy");
+      yield* expectReason(handle.press("Enter", []), "busy");
+      yield* expectReason(handle.type("typed"), "busy");
       assert.equal(f.state.clicks, 0);
       assert.deepEqual(f.state.input, []);
       // Reads and passive evidence are admitted while it loads.

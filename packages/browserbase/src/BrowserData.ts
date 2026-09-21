@@ -300,15 +300,98 @@ export class WheelRequest extends Schema.Class<WheelRequest>("BrowserbaseWheelRe
 }) {}
 
 /**
+ * The keys a `press` may name, spelled as the `KeyboardEvent.key` the page will see. The set is
+ * closed on purpose: a key name is parsed by the native engine, so none reaches it unreviewed.
+ */
+export const NamedKey = Schema.Literals([
+  "Enter",
+  "Tab",
+  "Backspace",
+  "Delete",
+  "Escape",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
+
+export type NamedKey = typeof NamedKey.Type;
+
+/** One printable ASCII character, space included: every one is a key on the US layout. */
+const PrintableKey = Schema.String.check(Schema.isPattern(/^[\x20-\x7e]$/));
+
+export const KeyModifier = Schema.Literals(["Shift", "Control", "Alt", "Meta"]);
+
+export type KeyModifier = typeof KeyModifier.Type;
+
+/** One key, down then up, with any modifiers held around it. */
+export const KeyStroke = Schema.Struct({
+  key: Schema.Union([NamedKey, PrintableKey]),
+  modifiers: Schema.optionalKey(
+    Schema.Array(KeyModifier).check(
+      Schema.makeFilter((held) => new Set(held).size === held.length, {
+        title: "each modifier at most once",
+      }),
+    ),
+  ),
+});
+
+export type KeyStroke = typeof KeyStroke.Type;
+
+/**
+ * One real key stroke. It goes to whatever has focus in the page, exactly as it would for a
+ * person, unless `into` names the one element that must already have it. It never focuses that
+ * element, because that would hide a scripted focus inside a native-input operation: click it
+ * first.
+ */
+export class PressRequest extends Schema.Class<PressRequest>("BrowserbasePressRequest")({
+  ...KeyStroke.fields,
+  into: Schema.optionalKey(Selector),
+}) {}
+
+/** Counted in characters, not UTF-16 units, because that is how many strokes it costs. */
+const TypedText = Schema.NonEmptyString.check(
+  Schema.makeFilter((text) => [...text].length <= 256, { title: "at most 256 characters" }),
+  Schema.makeFilter(
+    (text) =>
+      [...text].every((character) => {
+        const point = character.codePointAt(0) ?? 0;
+
+        // An unpaired surrogate is not a character, and would not survive the wire as one.
+        return point > 0x1f && point !== 0x7f && (point < 0xd800 || point > 0xdfff);
+      }),
+    { title: "no control characters or unpaired surrogates" },
+  ),
+);
+
+/**
+ * Text as the real key strokes that produce it, two native commands for each character, one
+ * after another under a single action timeout: send a long passage as several shorter runs.
+ * A character the US layout cannot produce is inserted as text, as an input method commits it,
+ * and raises no key events. Control characters are refused, so a line break can never press
+ * Enter from inside a run of text: a named key is always its own `press`. `into` works as it
+ * does for `PressRequest`: a guard on where the text lands, never a focus.
+ */
+export class TypeRequest extends Schema.Class<TypeRequest>("BrowserbaseTypeRequest")({
+  text: TypedText,
+  into: Schema.optionalKey(Selector),
+}) {}
+
+/**
  * What native input was dispatched, where and when. `position` is the point this owner
  * commanded, or null when it has not yet placed the pointer on this page. The interval is on
  * the host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`, so input and
  * pixels share one timeline. A wheel event is dispatched, not awaited: the receipt does not
- * claim the page finished scrolling, or that any frame shows it.
+ * claim the page finished scrolling, or that any frame shows it. A receipt never says which
+ * key was pressed or what was typed.
  */
 export class InputReceipt extends Schema.Class<InputReceipt>("BrowserbaseInputReceipt")({
   target: Target,
-  kind: Schema.Literals(["pointer-move", "hover", "wheel"]),
+  kind: Schema.Literals(["pointer-move", "hover", "wheel", "press", "type"]),
   position: Schema.NullOr(ViewportPoint),
   delta: Schema.optionalKey(Schema.Struct({ x: WheelDelta, y: WheelDelta })),
   startedMonotonicNanos: Schema.BigInt,
