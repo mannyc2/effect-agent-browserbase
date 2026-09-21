@@ -1,6 +1,7 @@
 import type {
   ControlFacts,
   FrameInfo,
+  KeyModifier,
   ObservedControl,
   ObservedElement,
   PageExecutionState,
@@ -211,6 +212,20 @@ export interface Driver {
     deltaY: number,
     at: NativePoint | undefined,
     ticket: Ticket,
+  ) => Promise<NativeInput>;
+  /** One key stroke to whatever has focus, or only to `into` if it already has it. */
+  readonly press: (
+    key: string,
+    modifiers: ReadonlyArray<KeyModifier>,
+    into: string | ObservedElement | undefined,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
+  ) => Promise<NativeInput>;
+  readonly type: (
+    text: string,
+    into: string | ObservedElement | undefined,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
   ) => Promise<NativeInput>;
   readonly screenshot: (
     fullPage: boolean,

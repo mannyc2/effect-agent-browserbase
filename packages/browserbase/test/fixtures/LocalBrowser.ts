@@ -220,6 +220,31 @@ export const localBrowser = Effect.acquireRelease(
 
         return;
       }
+      if (path === "/keyboard") {
+        // Everything a key can do is logged by the page itself, with whether the browser made
+        // the event. Submitting is counted rather than performed, so Enter never navigates. The
+        // form has a submit button because Enter submits no two-field form that lacks one.
+        res.end(`<!doctype html><meta charset=utf-8><title>Keyboard fixture</title>
+          <style>body{margin:0;font:14px sans-serif}input,textarea,#host{display:block;margin:8px;width:200px;height:24px}</style>
+          <form id=form><input id=first aria-label="First"><input id=second aria-label="Second"><button id=send>Send</button></form>
+          <textarea id=area aria-label="Area"></textarea><div id=host></div>
+          <iframe name=child src="/keyframe" style="display:block;border:0;width:240px;height:48px"></iframe><script>
+          const log={keys:[],inputs:[],submits:0};
+          for(const type of['keydown','keyup'])addEventListener(type,e=>log.keys.push({type,key:e.key,trusted:e.isTrusted,shift:e.shiftKey,ctrl:e.ctrlKey,at:e.target.id||e.target.tagName}),true);
+          addEventListener('input',e=>log.inputs.push({data:e.data,at:e.target.id}),true);
+          form.addEventListener('submit',e=>{e.preventDefault();log.submits++});
+          const root=host.attachShadow({mode:'open'});
+          root.innerHTML='<input id=inner style="width:200px;height:24px;box-sizing:border-box">';
+          window.read=()=>({...log,first:first.value,second:second.value,area:area.value,inner:root.getElementById('inner').value,focused:document.activeElement?.id??''});</script>`);
+
+        return;
+      }
+      if (path === "/keyframe") {
+        res.end(`<!doctype html><meta charset=utf-8><input id=inside aria-label="Inside"><script>
+          window.read=()=>({inside:inside.value,active:document.activeElement?.id??'',focused:document.hasFocus()});</script>`);
+
+        return;
+      }
       if (path === "/frame") {
         res.end(
           '<p>frame text</p><button id="inner" onclick="this.textContent=\'frame clicked\'">Frame action</button>',

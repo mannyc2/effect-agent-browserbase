@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 
 import { nativeSelection, waitEvent } from "../src/internal/browser/Actions.ts";
+import { makeKeyboard } from "../src/internal/browser/Keyboard.ts";
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 
 const ticketFor = (signal: AbortSignal, remaining = 1000): Ticket => ({
@@ -100,4 +101,44 @@ it("an event wait is bounded by the ticket's remaining time", async () => {
 
   await expect(wait.promise).rejects.toMatchObject({ _tag: "NativeFailure", reason: "timeout" });
   expect(source.listeners.size).toBe(0);
+});
+
+it("a fence between characters stops the rest of a run of text", async () => {
+  const sent: Array<string> = [];
+  let fenceAfter = 2;
+  let fenced = false;
+
+  const page = {
+    keyboard: {
+      press: async () => {},
+      type: async (character: string) => {
+        sent.push(character);
+        // The owner is fenced while this character is on its way.
+        if (sent.length === fenceAfter) fenced = true;
+      },
+    },
+  };
+
+  const ticket: Ticket = {
+    ...ticketFor(new AbortController().signal),
+    check: () => {
+      if (fenced) throw new Error("fenced");
+    },
+  };
+
+  const keyboard = makeKeyboard(
+    { current: () => ({ entry: { page } }) } as never,
+    {} as never,
+    () => ({ position: null }),
+  );
+
+  await expect(keyboard.type("abcd", undefined, ticket)).rejects.toBeDefined();
+  // Characters are whole code points, and none follows the fence.
+  expect(sent).toEqual(["a", "b"]);
+
+  fenced = false;
+  fenceAfter = Number.POSITIVE_INFINITY;
+  sent.length = 0;
+  await keyboard.type("a🚆", undefined, ticket);
+  expect(sent).toEqual(["a", "🚆"]);
 });

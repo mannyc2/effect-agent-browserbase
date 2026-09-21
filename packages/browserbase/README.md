@@ -212,6 +212,30 @@ Coordinates are CSS pixels in the main frame's viewport. Each call is one native
 
 An `InputReceipt` carries the target it was sent to, the position this owner commanded (null until it has placed the pointer on that page), and an interval on the same host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`. Input and pixels share one timeline, so a compositor can place the pointer on the frame that shows it. A wheel event is dispatched, not awaited: the receipt does not claim the page finished scrolling or that any frame shows it.
 
+### Real key input
+
+`fill` sets a field's value in one step: the page gets an `input` event and no `keydown`, `keypress` or `keyup`, so anything that reacts to keys behaves differently under a recorder than it does for a person. `press` and `type` send the strokes a keyboard would. Handlers see trusted key events, and the browser does what it does for a person: Tab moves focus and selects the field it lands in, Enter submits a form that has a submit button, and Backspace edits.
+
+```ts
+const handle = session.bind();
+
+// Focus is the page's business. A real click gives it, and keys then follow it.
+yield * handle.click(ClickRequest.make({ selector: "#from" }));
+yield * handle.type(TypeRequest.make({ text: "Vienna" }));
+yield * handle.press(PressRequest.make({ key: "Backspace" }));
+yield * handle.press(PressRequest.make({ key: "k", modifiers: ["Control"] }));
+// Sent only if `#from` still has focus; otherwise nothing is sent at all.
+yield * handle.press(PressRequest.make({ key: "Enter", into: "#from" }));
+```
+
+Keys go to whatever has focus in the selected page, in whichever frame that is, because that is where the browser sends them. `into` narrows that to one exact element, which must already have focus or hold the element that does, through any open shadow root. If it does not, the call fails `not-focused` and `undispatched`. It never focuses the element for you, for the reason `hover` never scrolls: that would hide a scripted focus inside a native-input operation. `session.pressElement` and `session.typeElement` apply the same rule to the node an observation named and take the same host admission as `fillElement`, so switching from `fill` to real typing gives up neither exactness nor the check on fresh control facts.
+
+A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabulary is closed: `Enter`, `Tab`, `Backspace`, `Delete`, `Escape`, the four arrows, `Home`, `End`, `PageUp`, `PageDown`, or one printable ASCII character (a space is `" "`), with `Shift`, `Control`, `Alt` and `Meta` as modifiers. The native engine parses a key string, chords included, and begins holding the modifiers before it has validated the key, so nothing reaches it that was not reviewed here. A modifier other than Shift makes a chord rather than a character, and nothing is typed.
+
+`type` sends up to 256 characters as one charged action, two native commands for each, one after another under a single action timeout. On a slow link a long passage can outlast that timeout, which leaves an unknown outcome and fences the session like any interrupted mutation, so send it as several shorter runs. The owner is checked between characters, which means a fence stops the rest instead of typing into a session that is closing. Two limits come from the pinned engine. A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. And a shifted character arrives as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Pacing is yours, as easing is for the pointer: for a typist's cadence, send one character per call and sleep between them, at one action each.
+
+A press is dispatched, not awaited. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Neither operation is part of the model-facing toolkit in `effect-agent-browserbase`.
+
 The connection endpoint is read through the exact allocated session, so a provider reply that names a different session is refused before any CDP attachment.
 
 Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`; reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
@@ -361,7 +385,7 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `bootstrap` — E/R-preserving bounded typed bindings, one ordered init bundle, reviewed permission grants, per-document readiness and bounded host-only callback diagnostics.
 - `launch`, `references`, `browser-data`, `session-data`, `cleanup`, `transfers`, `errors` — credential-free schemas and typed expected errors.
 - `browser-binding` — the trusted, opaque native engine a browser connects through: Playwright by default, or Playwright routed to a host-resolved endpoint.
-- `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, real pointer and wheel input, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
+- `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, real pointer, wheel and key input, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
 - `capture` — optional target-pinned live-page JPEG frame streams using Playwright 1.63's maintained screencast API. The caller owns encoding, storage and presentation.
 - `page-control` — opt-in host-owned stage holds and explicit receipt-based resume, independent of scout selection.
 - `recordings` — post-session Browserbase MP4 assembly, status and bounded retrieval. Stable identity is session + recording page; signed URLs are refreshed and are not durable identity.

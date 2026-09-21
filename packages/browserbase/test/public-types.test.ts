@@ -57,6 +57,17 @@ const hoverElementEffect: Same<
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
+/** Key input is the same kind of owned operation, by selector or by the node an observation named. */
+const keyEffect: Same<
+  ReturnType<BoundTarget["press"]>,
+  Effect.Effect<InputReceipt, BrowserError>
+> = true;
+
+const keyElementEffect: Same<
+  ReturnType<BrowserbaseSession["pressElement"]>,
+  Effect.Effect<InputReceipt, BrowserError>
+> = true;
+
 /** Host-only reads and the hold check are owned operations with no environment of their own. */
 const checkpointEffect: Same<
   ReturnType<BrowserbaseSession["checkpoint"]>,
@@ -100,6 +111,8 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
       boundTarget &&
       inputEffect &&
       hoverElementEffect &&
+      keyEffect &&
+      keyElementEffect &&
       navigationEffect &&
       navigationStop &&
       checkpointEffect &&

@@ -53,6 +53,9 @@ export const BrowserOperation = Schema.Literals([
   "pointer-move",
   "hover",
   "wheel",
+  // native key input
+  "press",
+  "type",
   // page control
   "page-control",
   "page-state",
@@ -100,6 +103,8 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
     "not-visible",
     // The host's own admission policy refused it, on facts read just before any input.
     "denied",
+    // Keys would not reach it: neither it nor anything inside it has focus.
+    "not-focused",
   ]),
   outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
   status: Schema.optionalKey(Schema.Int),
