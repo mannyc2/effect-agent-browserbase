@@ -44,16 +44,45 @@ export class ObservedControl extends Schema.Class<ObservedControl>("BrowserbaseO
   disabled: Schema.Boolean,
 }) {}
 
-/** Revision is admission fencing, not a claim of a complete DOM version or atomic snapshot. */
+/**
+ * How a viewport reading was bounded and what it left out. These are counts, so they are safe
+ * to show a model. Visibility is geometry and hit-testing, never a pixel comparison: text is
+ * kept when its line boxes intersect the viewport and the browser finds its own element at a
+ * sampled point. `uncertainText` lay under something that takes no pointer events, which
+ * hit-testing cannot see through, so it is left out rather than called visible.
+ */
+export class ViewportEvidence extends Schema.Class<ViewportEvidence>("BrowserbaseViewportEvidence")(
+  {
+    width: Schema.Finite,
+    height: Schema.Finite,
+    /** Text that crossed a viewport edge; only its lines on screen were kept. */
+    clippedText: Schema.Natural,
+    /** Left out: the browser found another element at the sampled point. */
+    coveredText: Schema.Natural,
+    uncertainText: Schema.Natural,
+    /** Controls that intersect the viewport but cannot be reached there. */
+    unreachableControls: Schema.Natural,
+    /** The traversal budget ran out first, so this reading is known to be incomplete. */
+    exhausted: Schema.Boolean,
+  },
+) {}
+
+/**
+ * Revision is admission fencing, not a claim of a complete DOM version or atomic snapshot. A
+ * `viewport` reading holds only what is on screen and reachable; a `document` reading is the
+ * whole body, wherever it is. Nothing here carries a destination, a form or a field value.
+ */
 export class Observation extends Schema.Class<Observation>("BrowserbaseObservation")({
   target: Target,
   observationId: Identifier,
   revision: Schema.Natural,
+  scope: Schema.Literals(["document", "viewport"]),
   url: Schema.String.check(Schema.isMaxLength(8192)),
   text: Schema.String.check(Schema.isMaxLength(131072)),
   controls: Schema.Array(ObservedControl).check(Schema.isMaxLength(64)),
   controlsTruncated: Schema.Boolean,
   textTruncated: Schema.Boolean,
+  viewport: ViewportEvidence,
 }) {}
 
 export class ObservedElement extends Schema.Class<ObservedElement>("BrowserbaseObservedElement")({
@@ -153,6 +182,86 @@ export class ViewportPoint extends Schema.Class<ViewportPoint>("BrowserbaseViewp
   x: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 16384 })),
   y: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 16384 })),
 }) {}
+
+/** A box in the viewport of the frame it was read from, in CSS pixels. */
+export class ViewportRect extends Schema.Class<ViewportRect>("BrowserbaseViewportRect")({
+  x: Schema.Finite,
+  y: Schema.Finite,
+  width: Schema.Finite,
+  height: Schema.Finite,
+}) {}
+
+/**
+ * What a host needs to decide whether a control may be acted on. Host-only: a destination can
+ * carry a token, so none of this is part of the model-facing `Observation`. It never includes a
+ * field's value or any markup.
+ */
+export class ControlFacts extends Schema.Class<ControlFacts>("BrowserbaseControlFacts")({
+  kind: ObservedControl.fields.kind,
+  label: ObservedControl.fields.label,
+  disabled: Schema.Boolean,
+  editable: Schema.Boolean,
+  inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(32))),
+  autocomplete: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
+  /** A resolved link target, or where this control submits its form. Absent when over-long. */
+  destination: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2048))),
+  formMethod: Schema.optionalKey(Schema.Literals(["get", "post", "dialog"])),
+  box: ViewportRect,
+  placement: Schema.Literals(["inside", "partial", "outside"]),
+  /** `self`: the browser finds this control at its visible centre. Not a pixel comparison. */
+  hitTest: Schema.Literals(["self", "covered", "uncertain", "unsampled"]),
+  /** Only then is `box` in the main frame's viewport, the space pointer input uses. */
+  mainFrame: Schema.Boolean,
+}) {}
+
+/**
+ * Passive evidence for a recorder: what was on screen, and optionally a picture of it. It issues
+ * no element references and never replaces the observation an agent's tools act on, so
+ * inspecting, checkpointing and then acting on the inspected node all compose.
+ *
+ * It is host-only, because it carries control facts. Text and picture are read one after the
+ * other, never atomically: the interval says when, and `documentChanged` says the document was
+ * replaced in between, so the two may describe different documents.
+ */
+export class Checkpoint extends Schema.Class<Checkpoint>("BrowserbaseCheckpoint")({
+  target: Target,
+  revision: Schema.Natural,
+  url: Schema.String.check(Schema.isMaxLength(8192)),
+  text: Schema.String.check(Schema.isMaxLength(131072)),
+  textTruncated: Schema.Boolean,
+  controls: Schema.Array(ControlFacts).check(Schema.isMaxLength(64)),
+  controlsTruncated: Schema.Boolean,
+  viewport: ViewportEvidence,
+  picture: Schema.optionalKey(
+    Schema.Struct({ mediaType: Schema.Literal("image/png"), bytes: Schema.Uint8Array }),
+  ),
+  documentChanged: Schema.Boolean,
+  startedMonotonicNanos: Schema.BigInt,
+  completedMonotonicNanos: Schema.BigInt,
+}) {}
+
+const ReadingBounds = {
+  maxTextBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 131072 })),
+  ),
+  maxControls: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 64 }))),
+};
+
+/** Omitted bounds default at admission; `scope` defaults to the whole document. */
+export const ObservationOptions = Schema.Struct({
+  scope: Schema.optionalKey(Schema.Literals(["document", "viewport"])),
+  ...ReadingBounds,
+});
+
+export type ObservationOptions = typeof ObservationOptions.Type;
+
+/** A checkpoint always reads the viewport. `picture` adds a PNG of it, within the byte policy. */
+export const CheckpointOptions = Schema.Struct({
+  ...ReadingBounds,
+  picture: Schema.optionalKey(Schema.Boolean),
+});
+
+export type CheckpointOptions = typeof CheckpointOptions.Type;
 
 /** One native pointer move. Easing and pacing are the caller's: send the points you want. */
 export class PointerMoveRequest extends Schema.Class<PointerMoveRequest>(

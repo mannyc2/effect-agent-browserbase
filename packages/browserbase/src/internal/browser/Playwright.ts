@@ -169,6 +169,7 @@ export const makePlaywrightDriver = async (
     callbacks,
     events,
     () => closing,
+    (pageId) => observation.held(pageId),
   );
 
   const onPage = (page: Page) => {
@@ -215,6 +216,9 @@ export const makePlaywrightDriver = async (
     navigate: actions.navigate,
     readText: observation.readText,
     observe: observation.observe,
+    checkpoint: observation.checkpoint,
+    controlFacts: observation.controlFacts,
+    revalidate: observation.revalidate,
     click: actions.click,
     fill: actions.fill,
     scroll: actions.scroll,

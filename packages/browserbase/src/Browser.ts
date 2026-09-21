@@ -2,10 +2,13 @@ import { Context, Effect, Layer, type Option, type Redacted, Schema, Scope } fro
 
 import * as Bootstrap from "./Bootstrap.ts";
 import { BrowserbaseBrowserBinding } from "./BrowserBinding.ts";
+import type { ControlFacts } from "./BrowserData.ts";
 import {
   ActionResult,
   AutomationOptions,
   BrowserPolicy,
+  Checkpoint,
+  CheckpointOptions,
   ClickRequest,
   FillRequest,
   type FrameInfo,
@@ -15,6 +18,7 @@ import {
   NavigateRequest,
   NavigationResult,
   type Observation,
+  ObservationOptions,
   ObservedElement,
   type PageInfo,
   PointerMoveRequest,
@@ -75,6 +79,17 @@ export interface Handoff {
   readonly view: LiveView;
 }
 
+/**
+ * A host's decision about one control, made on facts read from the exact node immediately
+ * before input. Returning anything but `true`, or throwing, sends nothing and fails `denied`.
+ * It is a plain synchronous function on purpose: it runs while the owner's permit is held, where
+ * waiting on a model or a network call would stall every other operation. It is not an atomic
+ * check-and-input transaction, because page script can still run before the native input lands.
+ */
+export interface ElementAdmission {
+  readonly admit: (facts: ControlFacts) => boolean;
+}
+
 /** One selected page and frame at one connection generation, never the current DOM. */
 export interface BoundTarget {
   readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserError>;
@@ -108,16 +123,40 @@ export interface BrowserbaseSession<E = never> {
   /** Re-reads the live selection first, so a stale generation fails before any dispatch. */
   readonly currentTarget: Effect.Effect<BoundTarget, BrowserError>;
   readonly target: Effect.Effect<Target, BrowserError>;
-  readonly observe: (options?: {
-    readonly maxTextBytes?: number;
-    readonly maxControls?: number;
-  }) => Effect.Effect<Observation, BrowserError>;
-  readonly clickElement: (reference: ObservedElement) => Effect.Effect<ActionResult, BrowserError>;
+  /**
+   * The one observation whose nodes later actions may name. `scope: "viewport"` keeps only text
+   * and controls that are on screen and reachable; the default reads the whole document. It is
+   * safe to show a model: it carries no destination, form or field value.
+   */
+  readonly observe: (options?: ObservationOptions) => Effect.Effect<Observation, BrowserError>;
+  /**
+   * Passive evidence for a recorder, with a picture when asked. It issues no references and
+   * leaves the observation above exactly as it was. Host-only: it carries control facts.
+   */
+  readonly checkpoint: (options?: CheckpointOptions) => Effect.Effect<Checkpoint, BrowserError>;
+  /** Host-only facts about one observed control, read from that exact node just now. */
+  readonly controlFacts: (reference: ObservedElement) => Effect.Effect<ControlFacts, BrowserError>;
+  /**
+   * After a page hold, nothing observed on that page may be acted on unchecked. This checks one
+   * reference: still attached, and still the control that was inspected. It never searches by
+   * selector or label for a substitute, and it sends nothing.
+   */
+  readonly revalidateElement: (
+    reference: ObservedElement,
+  ) => Effect.Effect<ObservedElement, BrowserError>;
+  readonly clickElement: (
+    reference: ObservedElement,
+    admission?: ElementAdmission,
+  ) => Effect.Effect<ActionResult, BrowserError>;
   readonly fillElement: (
     reference: ObservedElement,
     value: string,
+    admission?: ElementAdmission,
   ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly hoverElement: (reference: ObservedElement) => Effect.Effect<InputReceipt, BrowserError>;
+  readonly hoverElement: (
+    reference: ObservedElement,
+    admission?: ElementAdmission,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
   readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
   readonly selectPage: (pageId: string) => Effect.Effect<BoundTarget, BrowserError>;
@@ -361,24 +400,52 @@ const makeSession = <E>(
     bind: () => makeTarget(controls.bind()),
     currentTarget,
     target: controls.currentTarget,
-    observe: (options = {}) => controls.observe(options.maxTextBytes, options.maxControls),
-    clickElement: (reference) =>
+    observe: (options = {}) =>
+      checked(ObservationOptions, options, "observe").pipe(
+        Effect.flatMap((value) => controls.observe({ ...value, scope: value.scope ?? "document" })),
+      ),
+    checkpoint: (options = {}) =>
+      checked(CheckpointOptions, options, "checkpoint").pipe(
+        Effect.flatMap((value) =>
+          controls.checkpoint({ ...value, picture: value.picture ?? false }),
+        ),
+        Effect.flatMap(({ picture, ...sampled }) =>
+          decoded(
+            Checkpoint,
+            "checkpoint",
+          )({
+            ...sampled,
+            ...(picture === undefined
+              ? {}
+              : { picture: { mediaType: "image/png", bytes: new Uint8Array(picture) } }),
+          }),
+        ),
+      ),
+    controlFacts: (reference) =>
+      checked(ObservedElement, reference, "control-facts").pipe(
+        Effect.flatMap(controls.controlFacts),
+      ),
+    revalidateElement: (reference) =>
+      checked(ObservedElement, reference, "revalidate").pipe(
+        Effect.flatMap((value) => controls.revalidate(value).pipe(Effect.as(value))),
+      ),
+    clickElement: (reference, admission) =>
       checked(ObservedElement, reference, "click").pipe(
-        Effect.flatMap((value) => controls.bind().click(value)),
+        Effect.flatMap((value) => controls.bind().click(value, admission?.admit)),
         Effect.flatMap(navigate),
       ),
-    fillElement: (reference, value) =>
+    fillElement: (reference, value, admission) =>
       checked(ObservedElement, reference, "fill").pipe(
         Effect.flatMap((element) =>
           checked(FillRequest.fields.value, value, "fill").pipe(
-            Effect.flatMap((text) => controls.bind().fill(element, text)),
+            Effect.flatMap((text) => controls.bind().fill(element, text, admission?.admit)),
           ),
         ),
         Effect.flatMap(navigate),
       ),
-    hoverElement: (reference) =>
+    hoverElement: (reference, admission) =>
       checked(ObservedElement, reference, "hover").pipe(
-        Effect.flatMap((value) => controls.bind().hover(value)),
+        Effect.flatMap((value) => controls.bind().hover(value, admission?.admit)),
         Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
       ),
     pages: controls.pages,

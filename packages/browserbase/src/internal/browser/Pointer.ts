@@ -4,6 +4,7 @@ import type { ElementHandle, Page } from "playwright-core";
 import type { ObservedElement } from "../../BrowserData.ts";
 import type { makeActions } from "./Actions.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
+import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import type { Targets } from "./Targets.ts";
 
@@ -111,7 +112,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     return point;
   };
 
-  const hover = (target: string | ObservedElement, ticket: Ticket) =>
+  const hover = (target: string | ObservedElement, ticket: Ticket, policy?: AdmissionPolicy) =>
     sanitize(async () => {
       const { page } = current().entry;
 
@@ -120,6 +121,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
         ticket,
         (element) => reachablePoint(page, element),
         (_element, point) => moveTo(page, point),
+        policy,
       );
       ticket.check();
 

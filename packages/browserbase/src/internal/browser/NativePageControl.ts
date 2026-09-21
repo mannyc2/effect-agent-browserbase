@@ -23,6 +23,8 @@ export const makePageControl = (
   callbacks: CallbackTasks,
   events: DriverEvents,
   closing: () => boolean,
+  /** A hold or a resume is about to be dispatched to this page. */
+  held: (pageId: string) => void,
 ) => {
   const { current, entries } = targets;
 
@@ -147,10 +149,23 @@ export const makePageControl = (
   const operations: NonNullable<Driver["pageControl"]> = {
     state: (page: PageInfo, ticket: Ticket) =>
       sanitize(async () => (await explicit(page, ticket)).state()),
+    // Announced before the dispatch, so an unknown outcome still leaves nothing unchecked.
     suspend: (page: PageInfo, ticket: Ticket) =>
-      sanitize(async () => (await explicit(page, ticket)).suspend(ticket)),
+      sanitize(async () => {
+        const control = await explicit(page, ticket);
+
+        held(control.pageId);
+
+        return control.suspend(ticket);
+      }),
     resume: (receipt: PageSuspension, ticket: Ticket) =>
-      sanitize(async () => (await explicit(receipt, ticket)).resume(receipt, ticket)),
+      sanitize(async () => {
+        const control = await explicit(receipt, ticket);
+
+        held(control.pageId);
+
+        return control.resume(receipt, ticket);
+      }),
     checkSelected: (ticket: Ticket) =>
       sanitize(async () => {
         ticket.check();
