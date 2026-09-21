@@ -64,11 +64,13 @@ For typed bootstrap callbacks, acquire through `BrowserbaseBrowser` and pass the
 
 ## Know what authority this grants
 
-`browser_click` and `browser_fill` accept only an exact node from the most recent observation, so a model cannot name a target of its own, and a replaced or detached reference fails rather than resolving to something else. `browser_navigate` is different: the URL comes from the model, bounded only by the session's network policy, and the only policy this adapter accepts is `Unrestricted` (see [Network policy](#network-policy)). There is deliberately no per-tool host allowlist, because none is enforceable on this provider. A host that needs navigation confined to known hosts must impose that above this package.
+`browser_click` and `browser_fill` accept only an exact node from the most recent observation, so a model cannot name a target of its own, and a replaced or detached reference fails rather than resolving to something else. `browser_navigate` is different: the URL comes from the model, bounded only by the session's network policy, and the only policy this adapter accepts is `Unrestricted` (see [Network policy](#network-policy)). There is deliberately no per-tool host allowlist, because none is enforceable on this provider: a URL check on the first request says nothing about where it redirects or what the page then loads. A host that needs navigation confined to known hosts must enforce that beneath the browser, at an egress proxy it operates.
 
 ## Network policy
 
 `Unrestricted` is supported only when selected by trusted host policy. `ExactHosts` fails before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers. `PublicWeb` also fails before allocation because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
+
+The generic guide's [Network policy](../browserbase/README.md#network-policy) section says why this package has no request-admission hook, and which boundary can enforce containment instead: a proxy the host operates, selected for the whole session at launch. A host that uses one still selects `Unrestricted` here, and the containment claim stays the host's own. The model-facing Tools take no admission policy. `controlFacts` and `admit` belong to a host that drives the generic session itself.
 
 ## Error translation
 

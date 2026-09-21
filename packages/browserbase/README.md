@@ -310,6 +310,34 @@ A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `r
 
 `Unrestricted` is the only supported `BrowserPolicy.network`, and only when selected by trusted host policy. The adapter package refuses Effect Agent's `ExactHosts` before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers, and refuses `PublicWeb` because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
 
+### Why there is no request-admission hook
+
+A hook that lets a host allow or deny each request is worth having only if it sees every request it claims to cover. The owner drives the browser through the engine's one connection, where the available interception is Playwright routing, and in the pinned Playwright 1.63.0 that does not see them all:
+
+- A redirected request is continued by the engine itself and is never offered to a route handler. A hook would decide the first hop of a chain and none of the rest.
+- A paused request the engine cannot match to a network request, or to a frame or service worker it knows, is continued without being offered.
+- Turning routing on disables the HTTP cache for the session, so the policy would change what a page loads, and what a recording of it shows.
+
+A second interception client on the same targets would compete with the engine for the same paused requests, and is the raw-protocol side channel the single owner exists to rule out. So this package offers no hook, rather than one that covers less than it appears to.
+
+Complete URL-level admission would still not be `PublicWeb`. A URL names a host. The address is chosen afterwards, by whichever resolver the connecting browser or proxy uses, so a lookup the host makes beforehand says nothing about the connection that follows.
+
+### The boundary that can enforce it
+
+Containment has to be enforced where the session's connections are made: an egress point beneath every page, frame, worker and socket, which sees each connection's real target and resolves names itself. On this provider that is a proxy the host operates, selected for the whole session at launch:
+
+```ts
+const launch = recipe({
+  provider: { proxies: [{ type: "external", server, username, password }] },
+});
+```
+
+`username` and `password` are `Redacted`, and a `server` URL that carries credentials is refused before allocation. The rule is listed alone and has no `domainPattern`, because the provider applies the first rule that matches, and a second rule would be a way round the first. Exact hosts, public addresses, redirects and child pages are then the proxy's decisions, made per connection.
+
+A host that does this still selects `Unrestricted` here, and the containment claim is the host's own, made at its proxy. This package keeps refusing `ExactHosts` and `PublicWeb`, because it has no evidence that every connection of a hosted session takes that proxy. The provider documents how rules are ordered, not whether WebRTC, QUIC or name resolution go through one, and no hosted run in this repository has tested it. Accepting either policy needs that evidence first: a hosted session behind one catch-all proxy, exercised through navigation, redirects, frames, subresources, popups, workers, service workers, WebSockets and non-HTTP transports, with nothing arriving anywhere but the proxy.
+
+What this package does check is input, not requests. `controlFacts` and an `admit` policy ([above](#what-is-on-screen-and-what-a-host-may-know-about-it)) let a host that drives the session refuse a link or a form by its resolved destination before anything is sent. That limits what the host's own automation acts on. It does not limit what a page loads, or where it redirects.
+
 ## Beyond the browser session
 
 These services share the Client and its rules: strict input decoding, identity-checked replies, 1 MiB reply bounds, mutations that are never retried, and typed failures whose `outcome` says whether a request was sent. They are host APIs; none of them is exposed to a model by the adapter package.
