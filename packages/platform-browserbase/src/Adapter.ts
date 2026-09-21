@@ -57,8 +57,15 @@ export interface BrowserbaseAgentAcquisition {
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
 }
 
-/** All the framework's error needs from a failure here: why it failed and whether it was sent. */
-type Failure = Pick<BrowserError, "reason" | "outcome">;
+/**
+ * All the framework's error needs from a failure here: why it failed and whether it was sent.
+ * An allocation whose reply was lost is not a browser operation's reason, so it is named here
+ * instead of widening `BrowserError` with a value no browser operation can produce.
+ */
+interface Failure {
+  readonly reason: BrowserError["reason"] | "allocation-unknown";
+  readonly outcome?: BrowserError["outcome"];
+}
 
 const operationError = (
   operation: InteractiveBrowserActionError["operation"],
