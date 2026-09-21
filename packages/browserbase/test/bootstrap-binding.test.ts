@@ -91,7 +91,7 @@ it("keeps static-only plans serializable and refuses invalid binding admission b
   );
 
   expect(staticPlan.bindings).toBeUndefined();
-  expect(Schema.decodeUnknownExit(Bootstrap.Plan)(staticPlan)._tag).toBe("Success");
+  expect(Schema.decodeExit(Bootstrap.Plan)(staticPlan)._tag).toBe("Success");
 
   expect(() =>
     Bootstrap.binding({

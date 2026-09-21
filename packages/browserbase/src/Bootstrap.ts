@@ -186,7 +186,7 @@ export const permissions = (grant: PermissionGrant): Plan<never, never> => ({
 export const binding = <I, IEncoded, O, OEncoded, E, R>(
   options: BindingOptions<I, IEncoded, O, OEncoded, E, R>,
 ): Plan<E, R> => {
-  const metadata = Schema.decodeUnknownSync(BindingMetadata)({
+  const metadata = Schema.decodeSync(BindingMetadata)({
     name: options.name,
     origins: options.origins,
     maxConcurrent: options.maxConcurrent,
