@@ -11,6 +11,7 @@ import type {
   CaptureSource,
   Driver,
   DriverEvents,
+  NativeNavigation,
   ReadinessState,
 } from "../../src/internal/browser/Driver.ts";
 import type { Ticket } from "../../src/internal/browser/Owner.ts";
@@ -48,6 +49,8 @@ export interface ScriptOptions {
   readonly maxActions?: number;
   readonly onDisconnect?: () => void;
   readonly onClick?: (ticket: Ticket) => Promise<string>;
+  /** Script a navigation that stays in flight: the test settles or stops it. */
+  readonly onNavigate?: (url: string, pageId: string) => NativeNavigation;
   readonly onObserve?: (events: DriverEvents) => Promise<void>;
   readonly onConnect?: (driver: Driver, events: DriverEvents) => Promise<Driver>;
   /** Script the document-readiness state the owner must respect before dependent work. */
@@ -192,12 +195,18 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         frameId = id;
         events.invalidate("target-changed");
       },
-      navigate: async (url, ticket) => {
+      beginNavigation: async (url, _timeoutMillis, ticket) => {
         ticket.dispatch();
         state.url = url;
         events.invalidate("target-changed");
 
-        return url;
+        return (
+          options.onNavigate?.(url, pageId) ?? {
+            pageId,
+            settled: Promise.resolve(url),
+            stop: async () => {},
+          }
+        );
       },
       readText: async () => state.text,
       observe: async (scope) => {

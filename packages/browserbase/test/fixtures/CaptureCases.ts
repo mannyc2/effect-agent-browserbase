@@ -66,6 +66,7 @@ const makeFixture = Effect.fnUntraced(function* (
   owner.state.phase = "open";
   const callbacks = new Map<string, (frame: NativeFrame) => void>();
   const invalidators = new Map<string, (reason: CaptureInvalidation) => void>();
+  const documents = new Map<string, () => void>();
   let starts = 0;
   let stops = 0;
 
@@ -98,11 +99,12 @@ const makeFixture = Effect.fnUntraced(function* (
           frameId: "frame-1",
         }),
         source: {
-          start: async (receive, quality, invalidate, size) => {
+          start: async ({ receive, quality, invalidate, size, document }) => {
             starts++;
             options.onRequest?.(quality, size);
             callbacks.set(chosen.pageId, receive);
             invalidators.set(chosen.pageId, invalidate);
+            if (document !== undefined) documents.set(chosen.pageId, document);
             if (options.startFailure) throw new Error("PRIVATE-NATIVE-START");
             await options.start?.();
           },
@@ -150,12 +152,22 @@ const makeFixture = Effect.fnUntraced(function* (
     invalidator(reason);
   };
 
+  /** What the driver does when a followed page's main frame navigates. */
+  const navigate = (pageId = "page-1") => {
+    const document = documents.get(pageId);
+
+    // An interval that lasts one document registers no hook, and ends instead.
+    if (document === undefined) invalidate(pageId, "target-changed");
+    else document();
+  };
+
   return {
     parent,
     page,
     emit,
     emitPage,
     invalidate,
+    navigate,
     counts: () => ({ starts, stops }),
   };
 });
@@ -330,6 +342,77 @@ export const captureCases: ReadonlyArray<Case> = [
       assert.equal(summary.late, 3);
       assert.equal(summary.received, 4);
       assert.equal(summary.nativeStop, "confirmed");
+    })),
+  test("an interval that follows its page spans a navigation and marks where the document changed", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+
+      const interval = yield* startCapture(f.parent, {
+        ...options,
+        maxFrames: 8,
+        lifetime: "page",
+      });
+
+      f.emit(1000);
+      f.emit(1010);
+      f.navigate();
+      f.emit(1020);
+      f.navigate();
+      f.emit(1030);
+      const summary = yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+
+      // One interval, never restarted: no frame is lost to the navigation itself.
+      assert.equal(f.counts().starts, 1);
+      assert.equal(summary.error, undefined);
+      assert.deepEqual(
+        frames.map((frame) => [frame.sequence, frame.document]),
+        [
+          [0, 0],
+          [1, 0],
+          [2, 1],
+          [3, 2],
+        ],
+      );
+      // Enough to segment by sequence without guessing which document a frame belongs to.
+      assert.deepEqual(
+        summary.documentBoundaries.map((boundary) => [boundary.document, boundary.afterSequence]),
+        [
+          [1, 1],
+          [2, 2],
+        ],
+      );
+      assert.equal(summary.documentBoundariesTruncated, false);
+    })),
+  test("an interval that lasts one document still ends when its page navigates", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, options);
+
+      f.emit(1000);
+      f.navigate();
+      f.emit(1010);
+      yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
+      const summary = yield* interval.completed;
+
+      assert.equal(summary.received, 1);
+      assert.deepEqual(summary.documentBoundaries, []);
+    })),
+  test("boundary records are bounded, and frames keep counting documents past the bound", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, { ...options, lifetime: "page" });
+
+      for (let i = 0; i < 70; i++) f.navigate();
+      f.emit(1000);
+      const summary = yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+
+      assert.equal(summary.documentBoundaries.length, 64);
+      assert.equal(summary.documentBoundariesTruncated, true);
+      assert.equal(frames[0]?.document, 70);
+      // Before any frame arrived there is no sequence to point at.
+      assert.equal(summary.documentBoundaries[0]?.afterSequence, null);
     })),
   test("actual JPEG geometry changes terminate an interval even at unchanged CSS dimensions", () =>
     Effect.gen(function* () {
@@ -575,7 +658,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const f = yield* sessionFixture({
         disconnectFails: true,
         captureSource: {
-          start: async (callback) => {
+          start: async ({ receive: callback }) => {
             receive = callback;
           },
           stop: async () => {

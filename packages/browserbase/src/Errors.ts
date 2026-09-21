@@ -40,6 +40,7 @@ export const BrowserOperation = Schema.Literals([
   "wait",
   // input
   "navigate",
+  "navigate-stop",
   "click",
   "fill",
   "scroll",

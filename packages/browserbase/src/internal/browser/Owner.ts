@@ -46,6 +46,18 @@ export interface Ticket {
   dispatch(): void;
 }
 
+/**
+ * A dispatched mutation the browser is still performing after its permit was released: an
+ * in-flight navigation. It keeps other mutations off that page while reads, holds and other
+ * pages proceed. Like a permit it cannot be dropped silently: only a known outcome releases it.
+ */
+export interface Reservation {
+  /** Aborted by any fence, so work that outlives its connection is never treated as current. */
+  readonly signal: AbortSignal;
+  /** `unknown` fences the owner, exactly as a mutation interrupted after dispatch does. */
+  readonly settle: (outcome: "known" | "unknown") => void;
+}
+
 export interface Limits {
   readonly maxActions: number;
   readonly maxElapsedMillis: number;
@@ -67,6 +79,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   };
 
   let active: AbortController | undefined;
+  const reservations = new Map<string, AbortController>();
 
   const invalidate = (reason: Invalidation) => {
     state.revision++;
@@ -82,7 +95,27 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     state.phase = phase;
     state.generation++;
     active?.abort();
+    for (const reservation of reservations.values()) reservation.abort();
+    reservations.clear();
     invalidate(reason);
+  };
+
+  /** Taken under the permit that dispatched the work, so nothing can interleave before it. */
+  const reserve = (key: string): Reservation => {
+    // Outlives the fiber that dispatched it, and must be abortable by a fence from outside it.
+    const controller = new AbortController();
+
+    reservations.set(key, controller);
+
+    return {
+      signal: controller.signal,
+      settle: (outcome) => {
+        // A fence already cleared it, and decided the outcome for everything it aborted.
+        if (reservations.get(key) !== controller) return;
+        reservations.delete(key);
+        if (outcome === "unknown") fence("uncertain", "uncertain");
+      },
+    };
   };
 
   const guard = <A, E, R>(
@@ -232,6 +265,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     state,
     lifetimeDeadline,
     guard,
+    reserve,
+    reserved: (key: string): boolean => reservations.has(key),
     invalidate,
     fence,
     onInvalidate(hook: (reason: Invalidation) => void): () => void {

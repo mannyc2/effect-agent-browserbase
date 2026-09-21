@@ -19,6 +19,7 @@ interface PreviousFrame {
   readonly mediaType: "image/jpeg";
   readonly target: Target;
   readonly sequence: number;
+  readonly document: number;
   readonly sourceTimeMillis: number;
   readonly sourceClock: "presentation-unix-millis";
   readonly receivedMonotonicNanos: bigint;
@@ -36,6 +37,7 @@ interface PreviousOptions {
   readonly maxDurationMillis?: number;
   readonly quality?: number;
   readonly size?: { readonly width: number; readonly height: number };
+  readonly lifetime?: "document" | "page";
 }
 
 const frameShape: Same<Capture.CapturedFrame, PreviousFrame> = true;
@@ -49,6 +51,7 @@ const frame: Capture.CapturedFrame = {
   mediaType: "image/jpeg",
   target: Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" }),
   sequence: 0,
+  document: 0,
   sourceTimeMillis: 1700000000123.25,
   sourceClock: "presentation-unix-millis",
   receivedMonotonicNanos: 123456789n,
@@ -207,7 +210,7 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
             key: "native-page-1",
             target,
             source: {
-              start: async (callback) => {
+              start: async ({ receive: callback }) => {
                 receive = callback;
               },
               stop: async () => {

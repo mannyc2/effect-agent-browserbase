@@ -2,9 +2,17 @@ import { Schema } from "effect";
 import type { ElementHandle, JSHandle } from "playwright-core";
 
 import { ControlFacts, type ObservedElement } from "../../BrowserData.ts";
+import { BrowserError } from "../../Errors.ts";
 import { pngGeometry } from "../capture/Images.ts";
 import type { DriverEvents, NativeCheckpoint, NativeObservation } from "./Driver.ts";
-import { closeWithin, failure, safeDecode, sanitize, timeout } from "./NativeCalls.ts";
+import {
+  closeWithin,
+  failure,
+  NativeFailure,
+  safeDecode,
+  sanitize,
+  timeout,
+} from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
 import { identityOf, observedControl, PageReadResult, readPage } from "./PageRead.ts";
 import type { Targets } from "./Targets.ts";
@@ -56,6 +64,31 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
   const invalidate = () => {
     if (observation !== undefined) observation.validity = "invalid";
+  };
+
+  /**
+   * A read is ordered against document replacement by failing: if the document it was reading
+   * was replaced underneath it, or a navigation is still in flight on its page, the native error
+   * is `target-changed` and `undispatched`, so a caller knows to read again. A read is never a
+   * mutation, so reading again is always safe.
+   */
+  const reading = async <A>(body: () => Promise<A>): Promise<A> => {
+    const { entry, frame } = current();
+    const epoch = targets.epochOf(frame);
+
+    try {
+      return await body();
+    } catch (error) {
+      // A fenced ticket and a failure with its own reason already say what happened. Only an
+      // unexplained native error is explained by the document having gone.
+      const unexplained =
+        !Schema.is(BrowserError)(error) &&
+        (!Schema.is(NativeFailure)(error) || error.reason === "provider");
+
+      if (unexplained && (targets.epochOf(frame) !== epoch || targets.navigating.has(entry.id)))
+        throw failure("target-changed", "undispatched");
+      throw error;
+    }
   };
 
   const changed = (reason: Parameters<DriverEvents["invalidate"]>[0]) => {
@@ -251,21 +284,24 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     sanitize(async () => {
       ticket.check();
 
-      const raw: unknown = await current().frame.evaluate(
-        ({ selector, maximumBytes }) => {
-          const element = selector === undefined ? document.body : document.querySelector(selector);
+      const raw: unknown = await reading(() =>
+        current().frame.evaluate(
+          ({ selector, maximumBytes }) => {
+            const element =
+              selector === undefined ? document.body : document.querySelector(selector);
 
-          if (element === null) return { text: "", missing: true, overLimit: false };
+            if (element === null) return { text: "", missing: true, overLimit: false };
 
-          const text =
-            element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
+            const text =
+              element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
 
-          if (new TextEncoder().encode(text).length > maximumBytes)
-            return { text: "", missing: false, overLimit: true };
+            if (new TextEncoder().encode(text).length > maximumBytes)
+              return { text: "", missing: false, overLimit: true };
 
-          return { text, missing: false, overLimit: false };
-        },
-        { selector, maximumBytes },
+            return { text, missing: false, overLimit: false };
+          },
+          { selector, maximumBytes },
+        ),
       );
 
       ticket.check();
@@ -345,7 +381,11 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       await dispose();
       ticket.check();
       const pageId = current().entry.id;
-      const { data, handles } = await read(scope, maximumBytes, controlLimit, ticket, true);
+
+      const { data, handles } = await reading(() =>
+        read(scope, maximumBytes, controlLimit, ticket, true),
+      );
+
       const id = `observation-${++observationSerial}`;
       const nodes = new Map<string, Retained>();
 
@@ -376,56 +416,58 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     });
 
   const screenshot = (fullPage: boolean, maximumBytes: number, ticket: Ticket) =>
-    sanitize(async () => {
-      const page = current().entry.page;
+    sanitize(() =>
+      reading(async () => {
+        const page = current().entry.page;
 
-      ticket.check();
+        ticket.check();
 
-      const raw: unknown = await page.evaluate(
-        (full) => ({
-          width: full
-            ? Math.max(document.documentElement.scrollWidth, window.innerWidth)
-            : window.innerWidth,
-          height: full
-            ? Math.max(document.documentElement.scrollHeight, window.innerHeight)
-            : window.innerHeight,
-        }),
-        fullPage,
-      );
+        const raw: unknown = await page.evaluate(
+          (full) => ({
+            width: full
+              ? Math.max(document.documentElement.scrollWidth, window.innerWidth)
+              : window.innerWidth,
+            height: full
+              ? Math.max(document.documentElement.scrollHeight, window.innerHeight)
+              : window.innerHeight,
+          }),
+          fullPage,
+        );
 
-      const geometry = safeDecode(Geometry, raw);
+        const geometry = safeDecode(Geometry, raw);
 
-      if (
-        geometry.width < 1 ||
-        geometry.height < 1 ||
-        geometry.width > 16384 ||
-        geometry.height > 16384 ||
-        geometry.width * geometry.height > 33_554_432
-      )
-        throw failure("limit");
-      ticket.check();
+        if (
+          geometry.width < 1 ||
+          geometry.height < 1 ||
+          geometry.width > 16384 ||
+          geometry.height > 16384 ||
+          geometry.width * geometry.height > 33_554_432
+        )
+          throw failure("limit");
+        ticket.check();
 
-      const bytes: unknown = await page.screenshot({
-        type: "png",
-        fullPage,
-        scale: "css",
-        timeout: timeout(ticket),
-      });
+        const bytes: unknown = await page.screenshot({
+          type: "png",
+          fullPage,
+          scale: "css",
+          timeout: timeout(ticket),
+        });
 
-      if (!(bytes instanceof Uint8Array)) throw failure("malformed");
-      if (bytes.length > maximumBytes) throw failure("limit");
-      const actual = pngGeometry(bytes);
+        if (!(bytes instanceof Uint8Array)) throw failure("malformed");
+        if (bytes.length > maximumBytes) throw failure("limit");
+        const actual = pngGeometry(bytes);
 
-      if (
-        actual.width > 16384 ||
-        actual.height > 16384 ||
-        actual.width * actual.height > 33_554_432
-      )
-        throw failure("limit");
-      ticket.check();
+        if (
+          actual.width > 16384 ||
+          actual.height > 16384 ||
+          actual.width * actual.height > 33_554_432
+        )
+          throw failure("limit");
+        ticket.check();
 
-      return new Uint8Array(bytes);
-    });
+        return new Uint8Array(bytes);
+      }),
+    );
 
   /**
    * Passive: it reads what is on screen and takes a picture, keeps no node, and leaves the
@@ -442,7 +484,10 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       ticket.check();
       const { frame } = current();
       const epoch = targets.epochOf(frame);
-      const { data } = await read("viewport", maximumBytes, controlLimit, ticket, false);
+
+      const { data } = await reading(() =>
+        read("viewport", maximumBytes, controlLimit, ticket, false),
+      );
 
       const picture =
         pictureBytes === undefined ? undefined : await screenshot(false, pictureBytes, ticket);

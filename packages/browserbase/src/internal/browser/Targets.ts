@@ -70,6 +70,8 @@ export const makeTargets = (
   // A frame object outlives its documents, so readiness is keyed by frame *and* epoch.
   const documentEpochs = new WeakMap<Frame, number>();
   const selection: Selection = {};
+  // Pages whose navigation this driver began and has not seen settle.
+  const navigating = new Set<string>();
 
   let serial = 0,
     frameSerial = 0;
@@ -182,7 +184,9 @@ export const makeTargets = (
     }
   };
 
-  const selectedUrl = () => safeDecode(URLText, current().frame.url());
+  const urlOf = (frame: Frame) => safeDecode(URLText, frame.url());
+
+  const selectedUrl = () => urlOf(current().frame);
 
   /**
    * Chooses the connection's first target: a page it opens itself, the one the caller named, or
@@ -327,6 +331,13 @@ export const makeTargets = (
     register,
     current,
     targetId,
+    urlOf,
+    /** A navigation this driver began on the page is still in flight. */
+    navigating: {
+      begin: (pageId: string) => void navigating.add(pageId),
+      end: (pageId: string) => void navigating.delete(pageId),
+      has: (pageId: string) => navigating.has(pageId),
+    },
     selectedUrl,
     selectInitial,
     clear,

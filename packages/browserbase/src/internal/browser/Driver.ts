@@ -86,15 +86,34 @@ export interface NativeFrame {
   readonly viewportHeight: number;
 }
 
+/**
+ * A navigation the browser is still performing. `settled` belongs to that one navigation: it
+ * resolves when its document reaches DOMContentLoaded and rejects if it fails, times out or is
+ * superseded, so a successor reaching the same URL can never complete it.
+ */
+export interface NativeNavigation {
+  readonly pageId: string;
+  readonly settled: Promise<string>;
+  /** Asks the browser to stop loading this page. It does not wait for `settled`. */
+  readonly stop: () => Promise<void>;
+}
+
 export type CaptureInvalidation = "target-changed" | "resized";
 
+export interface CaptureStart {
+  readonly receive: (frame: NativeFrame) => void;
+  readonly quality: number;
+  readonly size?: CaptureSize;
+  readonly invalidate: (reason: CaptureInvalidation) => void;
+  /**
+   * Present when the interval follows its page across documents. A main-frame navigation then
+   * reports a new document here instead of ending the interval.
+   */
+  readonly document?: () => void;
+}
+
 export interface CaptureSource {
-  readonly start: (
-    callback: (frame: NativeFrame) => void,
-    quality: number,
-    invalidate: (reason: CaptureInvalidation) => void,
-    size?: CaptureSize,
-  ) => Promise<void>;
+  readonly start: (options: CaptureStart) => Promise<void>;
   readonly stop: () => Promise<void>;
 }
 
@@ -135,7 +154,12 @@ export interface Driver {
   readonly closePage: (id: string, ticket: Ticket) => Promise<void>;
   readonly listFrames: (ticket: Ticket) => Promise<ReadonlyArray<FrameInfo>>;
   readonly selectFrame: (id: string, ticket: Ticket) => Promise<void>;
-  readonly navigate: (url: string, ticket: Ticket) => Promise<string>;
+  /** Issued exactly once; returns while the browser is still loading. The only navigator. */
+  readonly beginNavigation: (
+    url: string,
+    timeoutMillis: number,
+    ticket: Ticket,
+  ) => Promise<NativeNavigation>;
   readonly readText: (
     selector: string | undefined,
     maximumBytes: number,
