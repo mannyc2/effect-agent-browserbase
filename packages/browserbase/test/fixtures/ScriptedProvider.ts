@@ -1,9 +1,11 @@
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { BrowserbaseBrowserBinding } from "../../src/BrowserBinding.ts";
 import { FrameInfo, PageInfo, Viewport } from "../../src/BrowserData.ts";
 import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
+import { fromNativeAttempt, issueBinding } from "../../src/internal/browser/Binding.ts";
 import type { Bindings } from "../../src/internal/browser/Bindings.ts";
 import type {
   CaptureSource,
@@ -320,8 +322,17 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         ? {}
         : { connectBindings: options.connectBindings }),
     },
-    connector,
   ).pipe(
+    // The scripted engine is supplied the way any trusted binding is, not as a private argument.
+    Effect.provideService(
+      BrowserbaseBrowserBinding,
+      issueBinding(
+        { _tag: "BrowserbaseBrowserBinding" },
+        fromNativeAttempt((request, signal) =>
+          connector(request.connection, signal, request.options, request.events),
+        ),
+      ),
+    ),
     Effect.provide(
       BrowserbaseSessions.layer.pipe(
         Layer.provideMerge(

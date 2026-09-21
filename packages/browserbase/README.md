@@ -208,6 +208,14 @@ Larger files use `BrowserbaseUploads.create`, which places bytes for the exact r
 
 A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `remote: "not-owned"`. It never requests release and never claims Context-writer authority: whoever allocated the session keeps both. It also does not detach and reattach inside itself; attaching again is the cross-process path, and it revalidates the session instead of assuming it is still there. A prior uncertain business mutation is still yours to reconcile before the next one; nothing is replayed automatically.
 
+`test/native/handoff-process.test.ts` exercises that path with a real second process: it starts a fresh runtime that receives only the reference, a target id and fixture addresses, attaches, changes the page and closes as a borrower, and the allocating process then drives the same page and releases it. That is local CDP evidence, not a hosted handoff.
+
+## The native engine
+
+`browser-binding` names the engine an owned or borrowed browser connects through. The default is Playwright over CDP with the provider's own address, so nothing has to be provided; `BrowserBinding.layer(binding)` supplies another to every browser Layer built beneath it. A binding is opaque and only this module issues one, so a value that merely has its shape is refused before anything is allocated.
+
+`BrowserBinding.playwright({ resolveEndpoint, onConnected })` is trusted host configuration for running the unmodified Playwright engine somewhere else, such as a local Chromium. `resolveEndpoint` runs only after the provider-issued address passed the default checks, and chooses the CDP endpoint actually connected to; `onConnected` sees the engine's own browser object before the owner drives it. Neither is model-facing, and a local engine reached this way says nothing about how a hosted connection behaves. This package's own native fixtures use exactly this, rather than replacing `chromium.connectOverCDP` globally.
+
 ## Network policy
 
 `Unrestricted` is the only supported `BrowserPolicy.network`, and only when selected by trusted host policy. The adapter package refuses Effect Agent's `ExactHosts` before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers, and refuses `PublicWeb` because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
@@ -234,6 +242,7 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `uploads` — placing a file where the running session can already reach it, and the receipt that authorizes attaching it.
 - `bootstrap` — E/R-preserving bounded typed bindings, one ordered init bundle, reviewed permission grants, per-document readiness and bounded host-only callback diagnostics.
 - `launch`, `references`, `browser-data`, `session-data`, `cleanup`, `transfers`, `errors` — credential-free schemas and typed expected errors.
+- `browser-binding` — the trusted, opaque native engine a browser connects through: Playwright by default, or Playwright routed to a host-resolved endpoint.
 - `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
 - `capture` — optional target-pinned live-page JPEG frame streams using Playwright 1.63's maintained screencast API. The caller owns encoding, storage and presentation.
 - `page-control` — opt-in host-owned stage holds and explicit receipt-based resume, independent of scout selection.
@@ -243,7 +252,7 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `projects`, `certificates` — project inspection and usage; proxy CA certificate administration.
 - `search`, `page-fetch`, `agents`, `functions`, `webhooks` — the Browserbase platform APIs outside a browser session.
 
-Everything under `src/internal/` is private, and no consumer CDP seam or lower-level binding/lifecycle Layer is exported. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
+Everything under `src/internal/` is private, and no consumer CDP seam or lower-level lifecycle Layer is exported; `browser-binding` chooses the engine and where it connects, never what runs over the connection. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
 
 ## Artifact and capture guarantees
 

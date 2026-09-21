@@ -6,13 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BrowserbaseBrowser, type BrowserOptions } from "@effect-agent/browserbase/browser";
+import * as BrowserBinding from "@effect-agent/browserbase/browser-binding";
 import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
 import { BrowserbaseClient, type ClientOptions } from "@effect-agent/browserbase/client";
+import { BrowserError } from "@effect-agent/browserbase/errors";
 import type { LaunchRecipe } from "@effect-agent/browserbase/launch";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
-import { chromium, type Page, type ConnectOverCDPOptions } from "playwright-core";
+import { type Browser, chromium, type Page } from "playwright-core";
 
 import { installCaptureDiagnostics } from "./NativeCaptureDiagnostics.ts";
 
@@ -65,7 +67,9 @@ const attempt = <A>(operation: string, body: () => Promise<A>) =>
 /** Only provider allocation, control-address lookup and status are scripted.
  * Every allocated session has a DIFFERENT real Chromium process and persistent
  * default context. The production adapter still crosses connectOverCDP and runs
- * its actual HTTP/session/page/capture code. This is NOT hosted provider evidence.
+ * its actual HTTP/session/page/capture code, through a trusted binding that resolves
+ * the provider address locally; nothing global is replaced. This is NOT hosted
+ * provider evidence.
  * No production option allows substituting provider origins or CDP addresses. */
 export const localBrowser = Effect.acquireRelease(
   attempt("start local fixture", async () => {
@@ -80,7 +84,45 @@ export const localBrowser = Effect.acquireRelease(
     let fileRequests = 0;
 
     const server = createServer((req, res) => {
-      const path = new URL(req.url ?? "/", "http://fixture.test").pathname;
+      const requested = new URL(req.url ?? "/", "http://fixture.test");
+      const path = requested.pathname;
+
+      // A separately started consumer reaches this same scripted control plane over HTTP; the
+      // bridge forwards to the in-process provider unchanged, credential check included.
+      if (path.startsWith("/provider/")) {
+        const chunks: Array<Buffer> = [];
+
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          const headers = new Headers();
+
+          for (const [name, value] of Object.entries(req.headers))
+            if (typeof value === "string") headers.set(name, value);
+          const method = req.method ?? "GET";
+
+          void fetch(
+            new Request(
+              `https://api.browserbase.com${path.slice("/provider".length)}${requested.search}`,
+              {
+                method,
+                headers,
+                ...(method === "GET" || method === "HEAD" ? {} : { body: Buffer.concat(chunks) }),
+              },
+            ),
+          ).then(
+            async (response) => {
+              res.writeHead(response.status, { "content-type": "application/json" });
+              res.end(Buffer.from(await response.arrayBuffer()));
+            },
+            () => {
+              res.writeHead(500);
+              res.end();
+            },
+          );
+        });
+
+        return;
+      }
 
       requests.push(path);
       if (path === "/file") {
@@ -140,28 +182,36 @@ export const localBrowser = Effect.acquireRelease(
 
     if (address === null || typeof address === "string") throw new Error("No fixture port");
     const url = `http://127.0.0.1:${address.port}/`;
-    const originalConnect = chromium.connectOverCDP.bind(chromium);
+    const endpointSessions = new Map<string, string>();
 
-    // Test-only replacement of the provider address resolution, NOT the native engine.
-    // The adapter's configured WSS origin still passes its unmodified validation.
-    chromium.connectOverCDP = async (endpoint: unknown, options?: ConnectOverCDPOptions) => {
-      if (typeof endpoint !== "string") throw new Error("Expected provider URL");
-      const requested = new URL(endpoint);
+    // Only the provider address resolution is the fixture's. The binding still applies the
+    // production address checks first and runs the unmodified Playwright connection and
+    // driver; nothing global is replaced.
+    const binding = BrowserBinding.playwright({
+      resolveEndpoint: ({ url }) =>
+        Effect.suspend(() => {
+          const requested = new URL(Redacted.value(url));
 
-      assert.equal(requested.origin, "wss://connect.browserbase.com");
-      const id = requested.searchParams.get("session");
-      const session = id === null ? undefined : sessions.get(id);
+          assert.equal(requested.origin, "wss://connect.browserbase.com");
+          const id = requested.searchParams.get("session");
+          const session = id === null ? undefined : sessions.get(id);
 
-      if (!session) throw new Error("Unknown scripted provider session");
-      connections.push(id!);
+          if (id === null || session === undefined)
+            return Effect.fail(BrowserError.make({ operation: "connect", reason: "provider" }));
+          connections.push(id);
+          endpointSessions.set(session.endpoint, id);
 
-      const browser = await originalConnect(session.endpoint, options);
+          return Effect.succeed(session.endpoint);
+        }),
+      onConnected: ({ native, endpoint }) => {
+        const browser = native as Browser;
+        const id = endpointSessions.get(endpoint);
 
-      installCaptureDiagnostics(browser, id!, connections.length);
-      nativePages.set(id!, () => browser.contexts().flatMap((context) => context.pages()));
-
-      return browser;
-    };
+        assert.ok(id !== undefined, "A connection reached an endpoint no session resolved");
+        installCaptureDiagnostics(browser, id, connections.length);
+        nativePages.set(id, () => browser.contexts().flatMap((context) => context.pages()));
+      },
+    });
 
     const fetch: typeof globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
@@ -277,14 +327,18 @@ export const localBrowser = Effect.acquireRelease(
       fileRequests: () => fileRequests,
       options,
       account,
+      binding,
       layer: (overrides: Partial<BrowserOptions> = {}) =>
-        BrowserbaseBrowser.layer({ ...options, ...overrides }).pipe(Layer.provide(account)),
+        BrowserbaseBrowser.layer({ ...options, ...overrides }).pipe(
+          Layer.provide(account),
+          Layer.provide(BrowserBinding.layer(binding)),
+        ),
       fetch,
       human: async <A>(id: string, action: (page: Page) => Promise<A>): Promise<A> => {
         const session = sessions.get(id);
 
         if (!session) throw new Error("No native fixture session");
-        const browser = await originalConnect(session.endpoint);
+        const browser = await chromium.connectOverCDP(session.endpoint);
 
         try {
           const page = browser.contexts()[0]?.pages()[0];
@@ -297,7 +351,6 @@ export const localBrowser = Effect.acquireRelease(
         }
       },
       close: async () => {
-        chromium.connectOverCDP = originalConnect;
         await Promise.all(
           [...sessions.values()].map(
             (s) =>

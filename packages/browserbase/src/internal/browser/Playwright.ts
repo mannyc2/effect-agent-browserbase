@@ -132,13 +132,12 @@ const closeWithin = async (action: () => Promise<unknown>, milliseconds = 2000):
   }
 };
 
-/** Production import is lazy: constructing any Layer cannot load Playwright or allocate a browser. */
-export const connectPlaywright = async (
-  connection: unknown,
-  signal: AbortSignal,
-  options: DriverOptions,
-  events: DriverEvents,
-): Promise<Driver> => {
+/**
+ * The provider-issued address is accepted only as a credential-free Browserbase WSS URL. Every
+ * binding applies this first, including one a host routes elsewhere, so routing can never be
+ * reached with an address the provider did not plausibly issue.
+ */
+export const validateConnection = (connection: unknown): string => {
   if (typeof connection !== "string" || connection.length > 16384)
     throw failure("connect", "malformed");
   let url: URL;
@@ -156,11 +155,27 @@ export const connectPlaywright = async (
     !url.hostname.endsWith(".browserbase.com")
   )
     throw failure("connect", "unsafe-url");
+
+  return connection;
+};
+
+/**
+ * Connects to an already validated or host-resolved CDP endpoint and builds the one driver. The
+ * import is lazy, so constructing any Layer cannot load Playwright or allocate a browser. A
+ * trusted observer sees the engine's browser before the driver exists and never replaces it.
+ */
+export const connectPlaywrightEndpoint = async (
+  endpoint: string,
+  signal: AbortSignal,
+  options: DriverOptions,
+  events: DriverEvents,
+  observe?: (browser: Browser) => void,
+): Promise<Driver> => {
   if (signal.aborted) throw failure("connect", "interrupted");
   const { chromium } = await import("playwright-core");
 
   const browser = await sanitize("connect", () =>
-    chromium.connectOverCDP(connection, {
+    chromium.connectOverCDP(endpoint, {
       timeout: 15000,
       ...(options.pageControl ? { noDefaults: true } : {}),
     }),
@@ -171,6 +186,7 @@ export const connectPlaywright = async (
     throw failure("connect", "interrupted");
   }
   try {
+    observe?.(browser);
     const driver = await makePlaywrightDriver(browser, options, events);
 
     if (signal.aborted) {
