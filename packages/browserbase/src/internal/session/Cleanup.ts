@@ -21,6 +21,14 @@ export const noLocalConnection: LocalCleanup = {
   disconnect: Effect.succeed("not-connected"),
 };
 
+/** Bounded host notification of canonical facts. Reporting never changes them. */
+export const reported = <A, E>(effect: Effect.Effect<A, E>) =>
+  effect.pipe(
+    Effect.interruptible,
+    Effect.timeoutOrElse({ duration: 2000, orElse: () => Effect.void }),
+    Effect.ignore,
+  );
+
 /** Internal limits, also injectable by deterministic failure tests. */
 export interface CleanupLimits {
   readonly localStepMillis: number;

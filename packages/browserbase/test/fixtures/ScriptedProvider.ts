@@ -11,7 +11,7 @@ import type {
   ReadinessState,
 } from "../../src/internal/browser/Driver.ts";
 import type { Ticket } from "../../src/internal/browser/Owner.ts";
-import { acquireSession } from "../../src/internal/browser/Session.ts";
+import { acquireSession, ownedRemote } from "../../src/internal/browser/Session.ts";
 import type { ContextWriterPermit } from "../../src/internal/session/WriterFacts.ts";
 import type { LaunchRecipe } from "../../src/Launch.ts";
 import { ContextReference } from "../../src/References.ts";
@@ -299,18 +299,21 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
       actionTimeoutMillis: options.actionMillis ?? 1000,
     },
     {
-      launch,
+      remote: ownedRemote({
+        launch,
+        ...(options.contextWriter === undefined ? {} : { contextWriter: options.contextWriter }),
+        onCleanup: (report) =>
+          Effect.sync(() => {
+            reports.push(report);
+          }),
+        onAllocationUncertain: (attempt) =>
+          Effect.sync(() => {
+            uncertain.push(attempt.attemptId);
+          }),
+      }),
+      keepAlive: options.keepAlive ?? false,
       maxReturnedBytes: 65536,
       driver: { viewport, popupPolicy: "retain", dialogPolicy: "dismiss", maxPages: 10 },
-      ...(options.contextWriter === undefined ? {} : { contextWriter: options.contextWriter }),
-      onCleanup: (report) =>
-        Effect.sync(() => {
-          reports.push(report);
-        }),
-      onAllocationUncertain: (attempt) =>
-        Effect.sync(() => {
-          uncertain.push(attempt.attemptId);
-        }),
     },
     connector,
   ).pipe(

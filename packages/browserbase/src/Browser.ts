@@ -31,6 +31,7 @@ import {
   BrowserError,
   type ContextError,
   InitializationError,
+  type SessionError,
 } from "./Errors.ts";
 import { associate } from "./internal/browser/Association.ts";
 import { compileBootstrap, duplicateStep } from "./internal/browser/Bootstrap.ts";
@@ -39,6 +40,8 @@ import type { LiveView } from "./internal/browser/LiveView.ts";
 import { associatePageControl } from "./internal/browser/PageControlAssociation.ts";
 import {
   acquireSession,
+  borrowedRemote,
+  ownedRemote,
   type BoundControls,
   type SessionControls,
 } from "./internal/browser/Session.ts";
@@ -142,6 +145,14 @@ export interface BrowserbaseSession {
   ) => Effect.Effect<Observation, BrowserError>;
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
+}
+
+export interface AttachRequest {
+  readonly policy: BrowserPolicy;
+  /** The exact page to resume; without it the session must have exactly one page. */
+  readonly target?: { readonly targetId: string };
+  /** Bounded admission of a session the provider has not finished starting. */
+  readonly pendingWaitMillis?: number;
 }
 
 export interface BrowserAcquisition {
@@ -415,6 +426,11 @@ export class BrowserbaseBrowser extends Context.Service<
       AllocationError | BrowserError | ContextError,
       Scope.Scope
     >;
+    /** Borrowed control of a session this process did not allocate and will not release. */
+    readonly attach: (
+      reference: SessionReference,
+      request: AttachRequest,
+    ) => Effect.Effect<BrowserbaseSession, BrowserError | SessionError, Scope.Scope>;
     readonly open: (
       policy: BrowserPolicy,
     ) => Effect.Effect<
@@ -499,16 +515,19 @@ export class BrowserbaseBrowser extends Context.Service<
               actionTimeoutMillis,
             },
             {
-              launch: options.launch,
+              remote: ownedRemote({
+                launch: options.launch,
+                ...(options.contextWriter === undefined
+                  ? {}
+                  : { contextWriter: options.contextWriter }),
+                ...(options.onCleanup === undefined ? {} : { onCleanup: options.onCleanup }),
+                ...(options.onAllocationUncertain === undefined
+                  ? {}
+                  : { onAllocationUncertain: options.onAllocationUncertain }),
+              }),
+              keepAlive: options.launch.keepAlive === true,
               driver,
               maxReturnedBytes: fixed.maxReturnedBytes,
-              ...(options.contextWriter === undefined
-                ? {}
-                : { contextWriter: options.contextWriter }),
-              ...(options.onCleanup === undefined ? {} : { onCleanup: options.onCleanup }),
-              ...(options.onAllocationUncertain === undefined
-                ? {}
-                : { onAllocationUncertain: options.onAllocationUncertain }),
             },
           ).pipe(
             // The Layer owns the one account and resource service; acquisition never re-resolves them.
@@ -521,14 +540,65 @@ export class BrowserbaseBrowser extends Context.Service<
 
           return {
             reference: acquired.reference,
-            attempt: acquired.attempt,
+            attempt: acquired.lease.attempt,
             close: acquired.close,
             connect: acquired.connect.pipe(Effect.andThen(connected)),
           } satisfies BrowserAcquisition;
         });
 
+        /**
+         * Borrowing a session another process allocated. The launch recipe is not replayed and
+         * no allocation is attempted: the requested target is resolved explicitly, credentials
+         * are fetched fresh because expiry races the caller's own status read, and this scope
+         * disconnects locally without ever requesting release. Detaching and reattaching inside
+         * a borrowed scope is deliberately absent; attaching again is the cross-process path,
+         * and it revalidates the session instead of assuming it is still there.
+         */
+        const attach = Effect.fnUntraced(function* (
+          reference: SessionReference,
+          request: AttachRequest,
+        ) {
+          const fixed = yield* checked(BrowserPolicy, request.policy, "configure");
+
+          const targetId =
+            request.target === undefined
+              ? undefined
+              : yield* checked(Identifier, request.target.targetId, "configure");
+
+          const acquired = yield* acquireSession(
+            {
+              maxActions: fixed.maxActions,
+              maxElapsedMillis: fixed.maxElapsedMillis,
+              actionTimeoutMillis,
+            },
+            {
+              remote: borrowedRemote({
+                reference,
+                ...(request.pendingWaitMillis === undefined
+                  ? {}
+                  : { pendingWaitMillis: request.pendingWaitMillis }),
+                ...(options.onCleanup === undefined ? {} : { onCleanup: options.onCleanup }),
+              }),
+              keepAlive: false,
+              driver: {
+                ...driver,
+                newPage: false,
+                preserveViewport: true,
+                ...(targetId === undefined ? {} : { initialTargetId: targetId }),
+              },
+              maxReturnedBytes: fixed.maxReturnedBytes,
+            },
+          ).pipe(
+            Effect.provideService(BrowserbaseClient, client),
+            Effect.provideService(BrowserbaseSessions, sessions),
+          );
+
+          return yield* acquired.connect.pipe(Effect.map(makeSession));
+        });
+
         return BrowserbaseBrowser.of({
           acquire,
+          attach,
           open: (policy) => acquire(policy).pipe(Effect.flatMap((acquired) => acquired.connect)),
         });
       }),

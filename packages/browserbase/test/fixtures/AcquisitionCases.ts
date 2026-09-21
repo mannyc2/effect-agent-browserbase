@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import { Deferred, Effect, Fiber, Layer, Redacted } from "effect";
 import { TestClock } from "effect/testing";
 
+import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { withWriter, type WriterSettlementFacts } from "../../src/ContextCoordination.ts";
+import type { ClientError, ContextError, SessionError } from "../../src/Errors.ts";
 import { AllocationError, BrowserError } from "../../src/Errors.ts";
 import { acquireRemote } from "../../src/internal/session/Acquisition.ts";
+import { attachRemote } from "../../src/internal/session/Attachment.ts";
 import { makeCleanup, type LocalCleanup } from "../../src/internal/session/Cleanup.ts";
 import type { LaunchRecipe } from "../../src/Launch.ts";
 import { ContextReference, SessionReference } from "../../src/References.ts";
@@ -140,7 +143,16 @@ const testTime = <A, E, R>(program: Effect.Effect<A, E, R>) =>
     }),
   ).pipe(Effect.provide(TestClock.layer()));
 
-export const acquisitionCases = [
+/** One declared channel for every allocation and attachment case in this suite. */
+interface Case {
+  readonly name: string;
+  readonly run: Effect.Effect<
+    void,
+    AllocationError | BrowserError | ClientError | ContextError | SessionError
+  >;
+}
+
+export const acquisitionCases: ReadonlyArray<Case> = [
   {
     name: "allocation compiler and Context permit use the same exact attempt before POST",
     run: Effect.gen(function* () {
@@ -632,6 +644,90 @@ export const acquisitionCases = [
           }),
         );
         assert.equal(f.order.filter((item) => item === "release").length, 1);
+      }),
+    ),
+  },
+  {
+    name: "a borrowed attachment tears down locally and never requests release",
+    run: Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture();
+        const reports: CleanupResult[] = [];
+
+        const result = yield* f.run(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const borrowed = yield* attachRemote(
+                {
+                  reference: ref,
+                  onCleanup: (report) =>
+                    Effect.sync(() => {
+                      reports.push(report);
+                    }),
+                },
+                f.local,
+                limits,
+              );
+
+              assert.deepEqual(borrowed.reference, ref);
+              assert.equal(borrowed.status.status, "RUNNING");
+
+              return yield* borrowed.release;
+            }),
+          ),
+        );
+
+        // The local half runs in order; no release POST and no terminal read follow it.
+        assert.deepEqual(f.order, ["status", "fence", "capture", "initialization", "disconnect"]);
+        assert.equal(result.ownership, "borrowed");
+        assert.equal(result.remote, "not-owned");
+        assert.equal(result.releaseRequested, false);
+        assert.equal(result.local, "closed");
+        assert.deepEqual(reports, [result]);
+      }),
+    ),
+  },
+  {
+    name: "attachment refuses a terminal, unstarted or foreign session before borrowing it",
+    run: Effect.scoped(
+      Effect.gen(function* () {
+        const terminal = fixture({ retrieve: async () => Response.json(metadata("COMPLETED")) });
+
+        const expired = yield* terminal.run(
+          Effect.scoped(expectFailure(attachRemote({ reference: ref }, terminal.local, limits))),
+        );
+
+        assert.equal(expired.reason, "expired");
+        assert.equal(expired.outcome, "undispatched");
+        assert.deepEqual(terminal.order, ["status"]);
+
+        const pending = fixture({ retrieve: async () => Response.json(metadata("PENDING")) });
+
+        const waiting = yield* pending.run(
+          Effect.scoped(expectFailure(attachRemote({ reference: ref }, pending.local, limits))),
+        );
+
+        assert.equal(waiting.reason, "active");
+        assert.equal(waiting.outcome, "undispatched");
+
+        const foreign = fixture();
+
+        const rejected = yield* foreign.run(
+          Effect.scoped(
+            expectFailure(
+              attachRemote(
+                { reference: SessionReference.make({ ...ref, projectId: "other-project" }) },
+                foreign.local,
+                limits,
+              ),
+            ),
+          ),
+        );
+
+        assert.equal(rejected.reason, "authorization");
+        assert.equal(rejected.outcome, "undispatched");
+        // A foreign project is refused before any request, so nothing was borrowed.
+        assert.deepEqual(foreign.order, []);
       }),
     ),
   },

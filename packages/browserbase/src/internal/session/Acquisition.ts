@@ -11,6 +11,7 @@ import { compileLaunch } from "../provider/Launch.ts";
 import {
   makeCleanup,
   noLocalConnection,
+  reported,
   type CleanupLimits,
   type LocalCleanup,
 } from "./Cleanup.ts";
@@ -28,13 +29,6 @@ export interface AcquisitionOptions {
   /** Exactly one notification when a creation attempt's effect on the provider is unknown. */
   readonly onAllocationUncertain?: (attempt: AllocationAttempt) => Effect.Effect<void>;
 }
-
-const reported = <A, E>(effect: Effect.Effect<A, E>) =>
-  effect.pipe(
-    Effect.interruptible,
-    Effect.timeoutOrElse({ duration: 2000, orElse: () => Effect.void }),
-    Effect.ignore,
-  );
 
 /**
  * The remote lease is registered before POST. Local connection work is supplied by
