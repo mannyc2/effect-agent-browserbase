@@ -1,7 +1,11 @@
+export type CallbackFailureMode = "reject-call" | "fail-session";
+
 /** Native callbacks cannot await a Semaphore. Reserve a bounded slot synchronously
  * before starting native work; never construct an already-running Promise first.
- * Overflow fails the connection closed once. Accepted rejections remain observed
- * after close, and no callback-side Fiber or unbounded producer queue is created. */
+ * Fail-session pressure/failure fences the connection once. Reject-call pressure or
+ * failure remains local to that invocation and reopens admission when accepted work
+ * settles. Accepted rejections remain observed after close, and no callback-side Fiber
+ * or unbounded producer queue is created. */
 export class CallbackTasks {
   private readonly pending = new Set<Promise<void>>();
   private stopped = false;
@@ -23,10 +27,13 @@ export class CallbackTasks {
     this.onFault();
   }
 
-  submit(action: () => Promise<unknown>): boolean {
+  submit(
+    action: () => Promise<unknown>,
+    failureMode: CallbackFailureMode = "fail-session",
+  ): boolean {
     if (this.stopped || this.faulted) return false;
     if (this.pending.size >= this.capacity) {
-      this.fault();
+      if (failureMode === "fail-session") this.fault();
 
       return false;
     }
@@ -35,7 +42,9 @@ export class CallbackTasks {
       .then(action)
       .then(
         () => {},
-        () => this.fault(),
+        () => {
+          if (failureMode === "fail-session") this.fault();
+        },
       )
       .finally(() => this.pending.delete(task));
 
@@ -47,6 +56,7 @@ export class CallbackTasks {
   stop(): void {
     this.stopped = true;
   }
+
   async settle(): Promise<void> {
     await Promise.all(this.pending);
   }
