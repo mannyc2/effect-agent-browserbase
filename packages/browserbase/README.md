@@ -316,7 +316,7 @@ A hook that lets a host allow or deny each request is worth having only if it se
 
 - A redirected request is continued by the engine itself and is never offered to a route handler. A hook would decide the first hop of a chain and none of the rest.
 - A paused request the engine cannot match to a network request, or to a frame or service worker it knows, is continued without being offered.
-- Turning routing on disables the HTTP cache for the session, so the policy would change what a page loads, and what a recording of it shows.
+- Turning routing on disables the HTTP cache for every page it covers, so the policy would change what a page loads, and what a recording of it shows.
 
 A second interception client on the same targets would compete with the engine for the same paused requests, and is the raw-protocol side channel the single owner exists to rule out. So this package offers no hook, rather than one that covers less than it appears to.
 
@@ -332,7 +332,7 @@ const launch = recipe({
 });
 ```
 
-`username` and `password` are `Redacted`, and a `server` URL that carries credentials is refused before allocation. The rule is listed alone and has no `domainPattern`, because the provider applies the first rule that matches, and a second rule would be a way round the first. Exact hosts, public addresses, redirects and child pages are then the proxy's decisions, made per connection.
+`username` and `password` are `Redacted`, and a `server` URL that carries credentials is refused before allocation. The rule is listed alone and has no `domainPattern`: the provider applies the first rule that matches, so a rule ahead of it, or a pattern on it, is a way round the proxy. Exact hosts, public addresses, redirects and child pages are then the proxy's decisions, made per connection.
 
 A host that does this still selects `Unrestricted` here, and the containment claim is the host's own, made at its proxy. This package keeps refusing `ExactHosts` and `PublicWeb`, because it has no evidence that every connection of a hosted session takes that proxy. The provider documents how rules are ordered, not whether WebRTC, QUIC or name resolution go through one, and no hosted run in this repository has tested it. Accepting either policy needs that evidence first: a hosted session behind one catch-all proxy, exercised through navigation, redirects, frames, subresources, popups, workers, service workers, WebSockets and non-HTTP transports, with nothing arriving anywhere but the proxy.
 
