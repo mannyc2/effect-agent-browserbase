@@ -28,7 +28,7 @@ Borrowed attachment is proved from a separately started process: `test/native/ha
 
 The earlier unexplained native failure was the owned Fixed viewport test, and it was deterministic rather than intermittent: the stage page's `window.outerHeight` reads the native window's outer height (623) and later the emulated height (480) once Chromium applies the device-metrics override, with emulated viewport, inner size, layout, device pixel ratio and native window bounds unchanged throughout. The package sets neither outer value; the test now compares the geometry the owner controls, native bounds included.
 
-The hosted checks for H1, H3, H4, H6 and H7, narrowed, and for operator handoff are registered, and their runs recorded, in PR #33. Exact-commit acceptance remains the authority for which candidate artifacts and checks passed.
+The hosted checks for H1, H3, H4, H6 and H7, narrowed, and for operator handoff are registered in `packages/browserbase/examples/hosted/checks.ts`, and their runs are recorded below. Exact-commit acceptance remains the authority for which candidate artifacts and checks passed.
 
 ## Maintainer-reported hosted execution
 
