@@ -19,6 +19,11 @@ import { jpegGeometry } from "./Images.ts";
 const MaxParentCaptures = 4;
 const MaxParentBufferedBytes = 64 * 1024 * 1024;
 const MaxDocumentBoundaries = 64;
+const MaxDocumentUrlLength = 8192;
+
+/** An over-long address is recorded as null rather than cut into one that was never shown. */
+const documentUrl = (url: unknown): string | null =>
+  typeof url === "string" && url.length <= MaxDocumentUrlLength ? url : null;
 
 /**
  * Chromium stamps a screencast frame on its UI thread, encodes it on an unsequenced thread
@@ -110,11 +115,12 @@ export const startCapture = Effect.fnUntraced(function* (
 
   let first: number | undefined, last: number | undefined;
   let document = 0;
+  let initialUrl: string | null = null;
   let documentBoundariesTruncated = false;
   const documentBoundaries: Array<CaptureSummary["documentBoundaries"][number]> = [];
 
   /** The page navigated and its screencast kept running: later frames belong to a new document. */
-  const nextDocument = (): void => {
+  const nextDocument = (url: string): void => {
     if (ended) return;
     document++;
     if (documentBoundaries.length >= MaxDocumentBoundaries) documentBoundariesTruncated = true;
@@ -123,6 +129,7 @@ export const startCapture = Effect.fnUntraced(function* (
         document,
         observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
         afterSequence: received === 0 ? null : received - 1,
+        url: documentUrl(url),
       });
   };
 
@@ -159,6 +166,7 @@ export const startCapture = Effect.fnUntraced(function* (
       bufferedBytes: buffer.bytes,
       sourceFirstMillis: first ?? null,
       sourceLastMillis: last ?? null,
+      initialUrl,
       documentBoundaries: [...documentBoundaries],
       documentBoundariesTruncated,
       nativeStop,
@@ -373,6 +381,9 @@ export const startCapture = Effect.fnUntraced(function* (
                 receive,
                 quality,
                 invalidate: (why) => lease?.invalidate(why),
+                opened: (url) => {
+                  initialUrl = documentUrl(url);
+                },
                 ...(size === undefined ? {} : { size }),
                 ...(options.lifetime === "page" ? { document: nextDocument } : {}),
               });

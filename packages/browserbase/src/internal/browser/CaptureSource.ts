@@ -13,7 +13,7 @@ import type { Entry, Targets } from "./Targets.ts";
 interface CaptureWatcher {
   readonly frameId: string;
   readonly invalidate: (reason: CaptureInvalidation) => void;
-  readonly document?: () => void;
+  readonly document?: (url: string) => void;
 }
 
 /**
@@ -41,12 +41,14 @@ export const makeCaptureSources = (targets: Targets) => {
       // The page's screencast keeps running across a main-frame navigation. An interval that
       // follows its page is told a new document began; one bound to a document ends, as before.
       if (
+        frame !== undefined &&
         watcher.document !== undefined &&
         reason === "target-changed" &&
         changedFrameId === mainFrameId &&
         watcher.frameId === mainFrameId
       )
-        watcher.document();
+        // Read inside the navigation event itself: this is the address that just committed.
+        watcher.document(frame.url());
       else watcher.invalidate(reason);
     }
   };
@@ -89,7 +91,7 @@ export const makeCaptureSources = (targets: Targets) => {
       let watcher: CaptureWatcher | undefined;
 
       const source: CaptureSource = {
-        start: ({ receive, quality, size, invalidate, document }) =>
+        start: ({ receive, quality, size, invalidate, opened, document }) =>
           sanitize(async () => {
             watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
             captureWatchers.set(entry.id, watcherSet);
@@ -99,6 +101,8 @@ export const makeCaptureSources = (targets: Targets) => {
               ...(document === undefined ? {} : { document }),
             };
             watcherSet.add(watcher);
+            // No await separates these two lines, so no navigation event can run between them.
+            opened?.(captureFrame.url());
             try {
               await page.screencast.start({
                 quality,
