@@ -32,7 +32,7 @@ type DemoRecordingError = Effect.Error<ReturnType<typeof recordInterval>> | Brow
  * would segment the interval instead. `test/native/demo.test.ts` is what
  * actually holds that to account over real CDP.
  *
- * This is separate from `hosted-demo.ts` so the same code can run against a
+ * This is separate from `hosted/demo.ts` so the same code can run against a
  * local Chromium over real CDP. Proving the pacing and encoding locally means a
  * hosted run is not spent discovering them.
  */

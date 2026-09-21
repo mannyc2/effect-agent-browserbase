@@ -14,6 +14,7 @@ import {
   type CleanupLimits,
   type LocalCleanup,
 } from "./Cleanup.ts";
+import { reportCleanup } from "./Diagnostics.ts";
 
 export interface AttachmentOptions {
   readonly reference: SessionReference;
@@ -81,6 +82,7 @@ export const attachRemote = Effect.fnUntraced(function* (
             );
 
             yield* coordinator.close;
+            if (cleanup !== undefined) yield* reportCleanup(cleanup);
             if (cleanup !== undefined && options.onCleanup !== undefined)
               yield* reported(options.onCleanup(cleanup));
           }),

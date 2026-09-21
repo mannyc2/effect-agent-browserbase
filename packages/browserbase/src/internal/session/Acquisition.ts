@@ -16,6 +16,7 @@ import {
   type LocalCleanup,
 } from "./Cleanup.ts";
 import { requireContextWriterPermit, type ContextWriterPermitInternal } from "./ContextWriter.ts";
+import { reportAllocationUncertain, reportCleanup } from "./Diagnostics.ts";
 import type { ContextWriterPermit } from "./WriterFacts.ts";
 
 const AllocatedIdentity = Schema.Struct({ id: Identifier, projectId: Identifier });
@@ -85,10 +86,16 @@ export const acquireRemote = Effect.fnUntraced(function* (
       let uncertainReported = false;
 
       const allocationUncertain = Effect.suspend(() => {
-        if (uncertainReported || options.onAllocationUncertain === undefined) return Effect.void;
+        if (uncertainReported) return Effect.void;
         uncertainReported = true;
 
-        return reported(options.onAllocationUncertain(attempt));
+        return reportAllocationUncertain(attempt).pipe(
+          Effect.andThen(
+            options.onAllocationUncertain === undefined
+              ? Effect.void
+              : reported(options.onAllocationUncertain(attempt)),
+          ),
+        );
       });
 
       const terminate = yield* Effect.cached(
@@ -117,6 +124,7 @@ export const acquireRemote = Effect.fnUntraced(function* (
             );
 
             yield* coordinator.close;
+            if (cleanup !== undefined) yield* reportCleanup(cleanup);
             if (cleanup !== undefined && options.onCleanup !== undefined)
               yield* reported(options.onCleanup(cleanup));
           }),
