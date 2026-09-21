@@ -6,6 +6,8 @@ Current maintenance uses `Library CI` and a separate, manual, default-off npm OI
 
 No npm version has been published from this repository. Live View authorization and actual operator handoff, persistent-context behavior, provider keep-alive reconnection, real provider files/recordings/replays and signed-URL expiry remain separately authorized hosted checks. Local CDP/video and scripted-provider results are not substituted for those guarantees.
 
+The capabilities added after that merge — extension provisioning and launch selection, session uploads with modeled file selection, the bootstrap plan with per-document readiness, and borrowed attachment — are covered by unpaid acceptance only. Extension load and storage identity, provider upload identity and routing, and registration retention across a provider reconnect are hosted questions that no local run answers.
+
 [HOSTED.md](HOSTED.md) describes the manual, default-off workflow those checks run under and the separate demo recording that documentation publishes. A demo recording is documentation rather than evidence for any check above; the run records below are the evidence for the two checks they cover.
 
 ## Maintainer-reported hosted execution
