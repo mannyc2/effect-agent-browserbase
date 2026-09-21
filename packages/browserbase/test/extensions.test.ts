@@ -6,6 +6,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseClient } from "../src/Client.ts";
 import { BrowserbaseExtensions } from "../src/Extensions.ts";
+import { compileLaunch } from "../src/internal/provider/Launch.ts";
 import { ExtensionReference } from "../src/References.ts";
 
 const account = { projectId: "project-1", apiKey: Redacted.make("extension-test-key") };
@@ -81,7 +82,7 @@ const providerExtension = {
 const run = <A, E, R>(effect: Effect.Effect<A, E, R>, fetch: typeof globalThis.fetch) =>
   effect.pipe(Effect.provide(layer), Effect.provideService(FetchHttpClient.Fetch, fetch));
 
-it.effect("uploads one bounded ZIP as multipart and returns durable qualified identity", () => {
+it.effect("uploads once and reuses the durable qualified reference at launch", () => {
   let requests = 0;
   const fetch: typeof globalThis.fetch = async (input, init) => {
     requests++;
@@ -107,13 +108,25 @@ it.effect("uploads one bounded ZIP as multipart and returns durable qualified id
       const extensions = yield* BrowserbaseExtensions;
       const created = yield* extensions.create({ fileName: "extension.zip", bytes: archive });
 
-      assert.equal(requests, 1);
       assert.deepEqual(created.reference, {
         provider: "browserbase",
         projectId: "project-1",
         extensionId: "extension-1",
       });
       assert.equal(created.fileName, "extension.zip");
+
+      const compiled = yield* compileLaunch(
+        {
+          remoteTimeoutSeconds: 60,
+          extension: created.reference,
+          viewport: { _tag: "ProviderManaged" },
+          provider: {},
+        },
+        { projectId: "project-1", attemptId: "attempt-extension", requestedAtMillis: 1 },
+      );
+
+      assert.match(JSON.stringify(compiled.body), /"extensionId":"extension-1"/);
+      assert.equal(requests, 1, "launch reuses the durable reference without another upload");
     }),
     fetch,
   );
@@ -160,7 +173,10 @@ it.effect("foreign extension references fail before transport", () => {
   return run(
     Effect.gen(function* () {
       const extensions = yield* BrowserbaseExtensions;
-      for (const action of [extensions.retrieve(reference), extensions.delete(reference)]) {
+      for (const action of [
+        extensions.retrieve(reference).pipe(Effect.asVoid),
+        extensions.delete(reference),
+      ]) {
         const result = yield* action.pipe(Effect.result);
         assert.equal(result._tag, "Failure");
         if (result._tag === "Failure") {
