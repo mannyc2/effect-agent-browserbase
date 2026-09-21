@@ -1,8 +1,8 @@
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { Viewport, ClickRequest, NavigateRequest } from "@effect-agent/browserbase/browser-data";
-import * as Capture from "@effect-agent/browserbase/capture";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { Viewport, ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
+import * as Capture from "effect-browserbase/capture";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 

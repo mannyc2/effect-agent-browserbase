@@ -1,14 +1,14 @@
-import type { BrowserbaseSession } from "@effect-agent/browserbase/browser";
-import type { InitializationError } from "@effect-agent/browserbase/errors";
+import { expect, it } from "@effect/vitest";
+import { type Effect, type Layer, type Scope } from "effect";
 import type {
   BrowserbaseAgentSession,
   BrowserbaseInteractiveHost,
   fromSession,
-} from "@effect-agent/platform-browserbase/adapter";
-import type { BrowserbaseToolFailure, handlers } from "@effect-agent/platform-browserbase/tools";
-import { expect, it } from "@effect/vitest";
-import { type Effect, type Layer, type Scope } from "effect";
+} from "effect-agent-browserbase/adapter";
+import type { BrowserbaseToolFailure, handlers } from "effect-agent-browserbase/tools";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
+import type { BrowserbaseSession } from "effect-browserbase/browser";
+import type { InitializationError } from "effect-browserbase/errors";
 
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

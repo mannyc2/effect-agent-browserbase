@@ -12,7 +12,7 @@ import { packages, readJson } from "./packages.mjs";
 function checkInstalledDependencies(root, profile) {
   const forbidden = (name) =>
     (profile !== "agent" && (name === "@browserbasehq/sdk" || name === "effect-agent" ||
-      (name.startsWith("@effect-agent/") && name !== packages[0].name))) ||
+      name.startsWith("@effect-agent/") || name === packages[1].name)) ||
     (profile === "resources" && ["playwright", "playwright-core", "@playwright/test"].includes(name));
   const pending = [], seen = new Set();
   let admitted = 0;
@@ -80,7 +80,7 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
     assert.ok(!realpathSync(resolved).startsWith(root + sep), message);
     ambient.push({ specifier, resolved });
   };
-  for (const forbidden of profile === "agent" ? [] : ["effect-agent", "@effect-agent/platform-browserbase", "@effect-agent/testing", "@browserbasehq/sdk"])
+  for (const forbidden of profile === "agent" ? [] : ["effect-agent", "effect-agent-browserbase", "@effect-agent/testing", "@browserbasehq/sdk"])
     refuse(forbidden, `Forbidden dependency is installed: ${forbidden}`);
   if (profile === "resources") refuse("playwright-core", "Resources-only installed Playwright");
   const receipt = JSON.parse(readFileSync(join(artifactDirectory, "release-set.json"), "utf8"));

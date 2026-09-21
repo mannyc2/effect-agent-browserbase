@@ -58,7 +58,7 @@ export class BrowserbaseCertificates extends Context.Service<
     ) => Effect.Effect<CertificateMetadata, CertificateError>;
     readonly delete: (certificateId: string) => Effect.Effect<void, CertificateError>;
   }
->()("@effect-agent/browserbase/Certificates") {
+>()("effect-browserbase/Certificates") {
   static readonly layer: Layer.Layer<BrowserbaseCertificates, never, BrowserbaseClient> =
     Layer.effect(
       BrowserbaseCertificates,

@@ -2,11 +2,11 @@ import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { NavigateRequest } from "@effect-agent/browserbase/browser-data";
-import * as Capture from "@effect-agent/browserbase/capture";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { NavigateRequest } from "effect-browserbase/browser-data";
+import * as Capture from "effect-browserbase/capture";
 
 import { recordInterval } from "../../examples/record-video.ts";
 import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";

@@ -2,7 +2,7 @@
 
 Execution-scoped Browserbase integration built on Effect v4 and Playwright-over-CDP for trusted Node and Bun hosts, in two packages.
 
-`@effect-agent/browserbase` owns Browserbase: account identity, session and context resources, one owned browser, live capture, page holds, recordings, replays and downloads. It does not depend on [Effect Agent](https://github.com/danieljvdm/effect-agent). `@effect-agent/platform-browserbase` is the adapter: it presents that browser to an `AgentRuntime` and supplies the fixed Tool set, and it has no Playwright peer.
+`effect-browserbase` owns Browserbase: account identity, session and context resources, one owned browser, live capture, page holds, recordings, replays and downloads. It does not depend on [Effect Agent](https://github.com/danieljvdm/effect-agent). `effect-agent-browserbase` is the adapter: it presents that browser to an `AgentRuntime` and supplies the fixed Tool set, and it has no Playwright peer.
 
 One scope owns the browser. Agent tools borrow that session across turns. Recording, replay and download access have independent lifetimes; live capture supplies bounded JPEG frames from selected or explicitly pinned pages without owning an encoder or an audio source.
 
@@ -12,18 +12,18 @@ One scope owns the browser. Agent tools borrow that session across turns. Record
 
 | Import | Purpose |
 | --- | --- |
-| `@effect-agent/browserbase/client` | One immutable account, transport and approved artifact origins |
-| `@effect-agent/browserbase/sessions` | Passive inspection and explicit release |
-| `@effect-agent/browserbase/contexts` | Context resources, with writer settlement in `context-coordination` |
-| `@effect-agent/browserbase/browser` | Browser ownership, pages, frames, handoff and explicit reconnect |
-| `@effect-agent/browserbase/capture` | Target-pinned video frame streams with source timestamps |
-| `@effect-agent/browserbase/page-control` | Opt-in host-owned stage holds and receipt-based resume |
-| `@effect-agent/browserbase/recordings` | Provider MP4 assembly, status and bounded retrieval |
-| `@effect-agent/browserbase/replays` | Validated replay playlists and media access |
-| `@effect-agent/browserbase/downloads` | Website download identity and bounded streams |
-| `@effect-agent/browserbase/launch` and the data modules | Credential-free schemas and typed errors |
-| `@effect-agent/platform-browserbase/adapter` | The Effect Agent `InteractiveBrowser` implementation |
-| `@effect-agent/platform-browserbase/tools` | Bounded navigation, observation and exact-node actions |
+| `effect-browserbase/client` | One immutable account, transport and approved artifact origins |
+| `effect-browserbase/sessions` | Passive inspection and explicit release |
+| `effect-browserbase/contexts` | Context resources, with writer settlement in `context-coordination` |
+| `effect-browserbase/browser` | Browser ownership, pages, frames, handoff and explicit reconnect |
+| `effect-browserbase/capture` | Target-pinned video frame streams with source timestamps |
+| `effect-browserbase/page-control` | Opt-in host-owned stage holds and receipt-based resume |
+| `effect-browserbase/recordings` | Provider MP4 assembly, status and bounded retrieval |
+| `effect-browserbase/replays` | Validated replay playlists and media access |
+| `effect-browserbase/downloads` | Website download identity and bounded streams |
+| `effect-browserbase/launch` and the data modules | Credential-free schemas and typed errors |
+| `effect-agent-browserbase/adapter` | The Effect Agent `InteractiveBrowser` implementation |
+| `effect-agent-browserbase/tools` | Bounded navigation, observation and exact-node actions |
 
 Both root entry points are also public. Production distributions contain ESM JavaScript and `.d.mts` declarations, not test fixtures, recovery archives or development dependencies. Playwright is an optional peer of the generic package only, loaded when a browser connects; install `playwright-core@1.63.0` when using that capability.
 
@@ -51,8 +51,8 @@ cd effect-agent-browserbase
 # Install Node 24.14.1 and Bun 1.4.2 first.
 bash tools/bootstrap.sh
 cd .work/upstream/tree
-./node_modules/.bin/vp run -F @effect-agent/browserbase check
-./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
+./node_modules/.bin/vp run -F effect-browserbase check
+./node_modules/.bin/vp run -F effect-agent-browserbase check
 ```
 
 These remain integration packages for the pinned upstream workspace, not a second copy of the framework. `bootstrap.sh` applies one current integration patch to clean upstream and copies only tracked package files. It does not execute or apply historical checkpoint code.

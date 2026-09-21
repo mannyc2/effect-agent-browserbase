@@ -4,10 +4,10 @@
 // extension is deleted afterwards whatever happens.
 import { randomUUID } from "node:crypto";
 
-import { NavigateRequest, ReadTextRequest } from "@effect-agent/browserbase/browser-data";
-import { BrowserbaseExtensions } from "@effect-agent/browserbase/extensions";
-import { recipe } from "@effect-agent/browserbase/launch";
 import { Effect } from "effect";
+import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import { BrowserbaseExtensions } from "effect-browserbase/extensions";
+import { recipe } from "effect-browserbase/launch";
 
 import { buildZip } from "../../test/fixtures/Zip.ts";
 import { hostedCase } from "./harness.ts";

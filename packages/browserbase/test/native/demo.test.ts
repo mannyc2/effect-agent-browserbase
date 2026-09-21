@@ -2,9 +2,9 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 
 import { recordDemo } from "../../examples/demo-recording.ts";
 import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";

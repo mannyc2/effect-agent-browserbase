@@ -1,6 +1,6 @@
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
 import { expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
 
 import { makeBindings, preparePlan } from "../src/internal/browser/Bindings.ts";
 import { compileBootstrap, duplicateStep } from "../src/internal/browser/Bootstrap.ts";

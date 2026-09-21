@@ -77,7 +77,7 @@ const defaultBinding = playwright();
 
 /** Defaults to Playwright with the provider's own address, so no consumer has to provide it. */
 export const BrowserbaseBrowserBinding = Context.Reference<BrowserBinding>(
-  "@effect-agent/browserbase/BrowserBinding",
+  "effect-browserbase/BrowserBinding",
   { defaultValue: () => defaultBinding },
 );
 

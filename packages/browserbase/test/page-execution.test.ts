@@ -1,6 +1,6 @@
-import { PageSuspension } from "@effect-agent/browserbase/browser-data";
-import { BrowserError } from "@effect-agent/browserbase/errors";
 import { expect, it } from "@effect/vitest";
+import { PageSuspension } from "effect-browserbase/browser-data";
+import { BrowserError } from "effect-browserbase/errors";
 
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 import { PageExecution, type PageExecutionNative } from "../src/internal/browser/PageExecution.ts";

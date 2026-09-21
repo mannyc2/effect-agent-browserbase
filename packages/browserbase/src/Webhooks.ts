@@ -114,7 +114,7 @@ export class BrowserbaseWebhooks extends Context.Service<
       options?: { readonly revokeImmediately?: boolean },
     ) => Effect.Effect<Redacted.Redacted<string>, PlatformError>;
   }
->()("@effect-agent/browserbase/Webhooks") {
+>()("effect-browserbase/Webhooks") {
   static readonly layer: Layer.Layer<BrowserbaseWebhooks, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseWebhooks,
     Effect.gen(function* () {

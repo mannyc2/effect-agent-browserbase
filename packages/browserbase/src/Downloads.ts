@@ -82,7 +82,7 @@ export class BrowserbaseDownloads extends Context.Service<
       timeoutMillis?: number,
     ) => Effect.Effect<ReadonlyArray<DownloadMetadata>, FileError>;
   }
->()("@effect-agent/browserbase/Downloads") {
+>()("effect-browserbase/Downloads") {
   static readonly layer: Layer.Layer<
     BrowserbaseDownloads,
     never,

@@ -243,7 +243,7 @@ export class BrowserbaseFunctions extends Context.Service<
       options: FunctionWaitOptions,
     ) => Effect.Effect<FunctionInvocation, PlatformError>;
   }
->()("@effect-agent/browserbase/Functions") {
+>()("effect-browserbase/Functions") {
   static readonly layer: Layer.Layer<BrowserbaseFunctions, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseFunctions,
     Effect.gen(function* () {

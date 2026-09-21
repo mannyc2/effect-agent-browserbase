@@ -63,7 +63,7 @@ export class BrowserbaseContexts extends Context.Service<
     ) => Effect.Effect<ContextMetadata, ContextError>;
     readonly delete: (reference: ContextReference) => Effect.Effect<void, ContextError>;
   }
->()("@effect-agent/browserbase/Contexts") {
+>()("effect-browserbase/Contexts") {
   static readonly layer: Layer.Layer<BrowserbaseContexts, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseContexts,
     Effect.gen(function* () {

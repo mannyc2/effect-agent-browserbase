@@ -3,9 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { BrowserbaseSession } from "@effect-agent/browserbase/browser";
-import * as Capture from "@effect-agent/browserbase/capture";
 import { Effect, Schema, Stream } from "effect";
+import type { BrowserbaseSession } from "effect-browserbase/browser";
+import * as Capture from "effect-browserbase/capture";
 
 import { CaptureEvidence, captureEvidence } from "./capture-evidence.ts";
 

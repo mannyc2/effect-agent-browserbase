@@ -4,11 +4,11 @@
 // downloads, certificates and proxies stay open.
 import { randomUUID } from "node:crypto";
 
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
-import { NavigateRequest, ReadTextRequest } from "@effect-agent/browserbase/browser-data";
-import { recipe } from "@effect-agent/browserbase/launch";
-import { BrowserbaseUploads } from "@effect-agent/browserbase/uploads";
 import { Clock, Effect } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
+import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import { recipe } from "effect-browserbase/launch";
+import { BrowserbaseUploads } from "effect-browserbase/uploads";
 
 import { hostedCase } from "./harness.ts";
 

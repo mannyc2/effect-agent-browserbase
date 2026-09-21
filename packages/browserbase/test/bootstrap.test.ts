@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
 
 import type { BrowserError } from "../src/Errors.ts";
 import { compileBootstrap, duplicateStep } from "../src/internal/browser/Bootstrap.ts";

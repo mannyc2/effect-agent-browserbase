@@ -1,38 +1,38 @@
 diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
 new file mode 100644
-index 00000000..ea899b79
+index 00000000..36bdc79c
 --- /dev/null
 +++ b/.changeset/browserbase-interactive.md
 @@ -0,0 +1,6 @@
 +---
-+"@effect-agent/browserbase": minor
-+"@effect-agent/platform-browserbase": minor
++"effect-browserbase": minor
++"effect-agent-browserbase": minor
 +---
 +
-+Add Browserbase in two packages: `@effect-agent/browserbase` owns one strict Client, session/context/extension resources, E/R-preserving typed bootstrap bindings, document readiness, scoped owned or borrowed browser operations, bounded capture, file selection and provider artifacts, with no Effect Agent dependency. `@effect-agent/platform-browserbase` adds the actual Effect Agent adapter and fixed Toolkit, including adaptation of the exact generic owner with shared connection, action and capture accounting, with no Playwright peer. Superseded constructors, subpaths, aliases and reexports are removed; maintained consumers use only the canonical packages.
++Add Browserbase in two packages: `effect-browserbase` owns one strict Client, session/context/extension resources, E/R-preserving typed bootstrap bindings, document readiness, scoped owned or borrowed browser operations, bounded capture, file selection and provider artifacts, with no Effect Agent dependency. `effect-agent-browserbase` adds the actual Effect Agent adapter and fixed Toolkit, including adaptation of the exact generic owner with shared connection, action and capture accounting, with no Playwright peer. Superseded constructors, subpaths, aliases and reexports are removed; maintained consumers use only the canonical packages.
 diff --git a/.changeset/config.json b/.changeset/config.json
-index 7db06dca..a331c2d6 100644
+index 7db06dca..4725e886 100644
 --- a/.changeset/config.json
 +++ b/.changeset/config.json
 @@ -10,6 +10,8 @@
    "fixed": [
      [
        "@effect-agent/ai-typesafe",
-+      "@effect-agent/browserbase",
-+      "@effect-agent/platform-browserbase",
++      "effect-browserbase",
++      "effect-agent-browserbase",
        "@effect-agent/platform-cloudflare",
        "@effect-agent/platform-node",
        "@effect-agent/pr-review",
 diff --git a/bun.lock b/bun.lock
-index 2a9fbf1c..d0069b25 100644
+index 2a9fbf1c..bfbb43aa 100644
 --- a/bun.lock
 +++ b/bun.lock
 @@ -8,6 +8,8 @@
          "@changesets/changelog-github": "0.7.0",
          "@changesets/cli": "2.31.0",
          "@effect-agent/ai-typesafe": "workspace:*",
-+        "@effect-agent/browserbase": "workspace:*",
-+        "@effect-agent/platform-browserbase": "workspace:*",
++        "effect-browserbase": "workspace:*",
++        "effect-agent-browserbase": "workspace:*",
          "@effect-agent/platform-cloudflare": "workspace:*",
          "@effect-agent/platform-node": "workspace:*",
          "@effect-agent/sandbox-local": "workspace:*",
@@ -41,7 +41,7 @@ index 2a9fbf1c..d0069b25 100644
        },
      },
 +    "packages/browserbase": {
-+      "name": "@effect-agent/browserbase",
++      "name": "effect-browserbase",
 +      "version": "0.1.0-beta.102",
 +      "devDependencies": {
 +        "@effect/platform-bun": "catalog:",
@@ -62,10 +62,10 @@ index 2a9fbf1c..d0069b25 100644
 +      ]
 +    },
 +    "packages/platform-browserbase": {
-+      "name": "@effect-agent/platform-browserbase",
++      "name": "effect-agent-browserbase",
 +      "version": "0.1.0-beta.102",
 +      "dependencies": {
-+        "@effect-agent/browserbase": "workspace:*",
++        "effect-browserbase": "workspace:*",
 +        "effect-agent": "workspace:*",
 +      },
 +      "devDependencies": {
@@ -98,9 +98,9 @@ index 2a9fbf1c..d0069b25 100644
  
      "@effect-agent/example-travel-planner": ["@effect-agent/example-travel-planner@workspace:examples/travel-planner"],
  
-+    "@effect-agent/browserbase": ["@effect-agent/browserbase@workspace:packages/browserbase"],
++    "effect-browserbase": ["effect-browserbase@workspace:packages/browserbase"],
 +
-+    "@effect-agent/platform-browserbase": ["@effect-agent/platform-browserbase@workspace:packages/platform-browserbase"],
++    "effect-agent-browserbase": ["effect-agent-browserbase@workspace:packages/platform-browserbase"],
 +
      "@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@workspace:packages/platform-cloudflare"],
  
@@ -129,7 +129,7 @@ index bd0a4a63..42b02630 100644
  testing package, and both Cloudflare packages separate runners. The remaining workspace suites
  share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 diff --git a/docs/guide/browser.md b/docs/guide/browser.md
-index efaa1da4..a47c828f 100644
+index efaa1da4..b420983d 100644
 --- a/docs/guide/browser.md
 +++ b/docs/guide/browser.md
 @@ -115,6 +115,39 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
@@ -138,7 +138,7 @@ index efaa1da4..a47c828f 100644
  
 +### Browserbase interactive sessions
 +
-+`@effect-agent/platform-browserbase` implements the same `InteractiveBrowser` contract on trusted
++`effect-agent-browserbase` implements the same `InteractiveBrowser` contract on trusted
 +Node and Bun hosts with Playwright 1.63 over Browserbase CDP. One enclosing Scope owns the remote
 +session; application code and model Tools borrow handles from that owner. Provider credentials,
 +CDP addresses, persistent-context choices and Live View controls remain host-only.
@@ -149,7 +149,7 @@ index efaa1da4..a47c828f 100644
 +before allocation because request interception cannot establish connection-time public-address
 +containment. Neither mode silently falls back to `Unrestricted`.
 +
-+The generic `@effect-agent/browserbase` package owns independent `recordings`, `replays`, and
++The generic `effect-browserbase` package owns independent `recordings`, `replays`, and
 +`downloads` entry points. Provider MP4 assembly and replay retrieval can outlive the interactive
 +Scope; signed media URLs are temporary access material rather than artifact identity. Its optional
 +`capture` borrows an owned page and streams bounded JPEG frames with source/receipt clocks and drop
@@ -173,7 +173,7 @@ index efaa1da4..a47c828f 100644
  
  This complete composition captures rendered Markdown through the Node-safe REST adapter. The
 diff --git a/package.json b/package.json
-index 183913dc..bd70f0a6 100644
+index 183913dc..16c6aad9 100644
 --- a/package.json
 +++ b/package.json
 @@ -22,7 +22,7 @@
@@ -189,8 +189,8 @@ index 183913dc..bd70f0a6 100644
      "@changesets/changelog-github": "0.7.0",
      "@changesets/cli": "2.31.0",
      "@effect-agent/ai-typesafe": "workspace:*",
-+    "@effect-agent/browserbase": "workspace:*",
-+    "@effect-agent/platform-browserbase": "workspace:*",
++    "effect-browserbase": "workspace:*",
++    "effect-agent-browserbase": "workspace:*",
      "@effect-agent/platform-cloudflare": "workspace:*",
      "@effect-agent/platform-node": "workspace:*",
      "@effect-agent/sandbox-local": "workspace:*",

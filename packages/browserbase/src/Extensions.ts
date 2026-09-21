@@ -94,7 +94,7 @@ export class BrowserbaseExtensions extends Context.Service<
     ) => Effect.Effect<ExtensionMetadata, ExtensionError>;
     readonly delete: (reference: ExtensionReference) => Effect.Effect<void, ExtensionError>;
   }
->()("@effect-agent/browserbase/Extensions") {
+>()("effect-browserbase/Extensions") {
   static readonly layer: Layer.Layer<BrowserbaseExtensions, never, BrowserbaseClient> =
     Layer.effect(
       BrowserbaseExtensions,

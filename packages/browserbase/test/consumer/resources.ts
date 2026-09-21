@@ -1,18 +1,18 @@
+import { Effect, Layer, Redacted, Stream } from "effect";
 // Installed-package workflow for a consumer that never opens a browser.
 //
 // It runs as an ordinary program on the pinned Node and Bun with only
-// `@effect-agent/browserbase` and `effect` installed: no Playwright, no
+// `effect-browserbase` and `effect` installed: no Playwright, no
 // framework, no test runner. The provider is scripted through `fetch`, so the
 // real Client, Sessions and artifact resources do their own parsing and bounds.
-import { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import { BrowserbaseExtensions } from "@effect-agent/browserbase/extensions";
-import { BrowserbaseRecordings } from "@effect-agent/browserbase/recordings";
-import { SessionReference } from "@effect-agent/browserbase/references";
-import { BrowserbaseReplays } from "@effect-agent/browserbase/replays";
-import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
-import { RecordingPageReference } from "@effect-agent/browserbase/transfers";
-import { BrowserbaseUploads } from "@effect-agent/browserbase/uploads";
-import { Effect, Layer, Redacted, Stream } from "effect";
+import { BrowserbaseClient } from "effect-browserbase/client";
+import { BrowserbaseExtensions } from "effect-browserbase/extensions";
+import { BrowserbaseRecordings } from "effect-browserbase/recordings";
+import { SessionReference } from "effect-browserbase/references";
+import { BrowserbaseReplays } from "effect-browserbase/replays";
+import { BrowserbaseSessions } from "effect-browserbase/sessions";
+import { RecordingPageReference } from "effect-browserbase/transfers";
+import { BrowserbaseUploads } from "effect-browserbase/uploads";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { extensionArchive } from "../fixtures/Zip.ts";

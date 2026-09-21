@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
 import { it } from "@effect/vitest";
 import {
   Cause,
@@ -14,6 +13,7 @@ import {
   SchemaGetter,
   Scope,
 } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
 import { TestClock } from "effect/testing";
 
 import type { BrowserError } from "../src/Errors.ts";

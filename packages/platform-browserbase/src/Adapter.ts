@@ -1,20 +1,3 @@
-import {
-  BrowserbaseBrowser,
-  type BoundTarget,
-  type BrowserAcquisition,
-  type BrowserbaseSession,
-  type BrowserOptions,
-} from "@effect-agent/browserbase/browser";
-import type { CleanupResult } from "@effect-agent/browserbase/cleanup";
-import type { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import type {
-  AllocationError,
-  ContextError,
-  InitializationError,
-} from "@effect-agent/browserbase/errors";
-import { BrowserError } from "@effect-agent/browserbase/errors";
-import type { AllocationAttempt, SessionReference } from "@effect-agent/browserbase/references";
-import type { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { Context, Effect, Layer, Schema, type Scope } from "effect";
 import {
   BrowserActionResult,
@@ -33,6 +16,19 @@ import {
 } from "effect-agent/interactive-browser";
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
+import {
+  BrowserbaseBrowser,
+  type BoundTarget,
+  type BrowserAcquisition,
+  type BrowserbaseSession,
+  type BrowserOptions,
+} from "effect-browserbase/browser";
+import type { CleanupResult } from "effect-browserbase/cleanup";
+import type { BrowserbaseClient } from "effect-browserbase/client";
+import type { AllocationError, ContextError, InitializationError } from "effect-browserbase/errors";
+import { BrowserError } from "effect-browserbase/errors";
+import type { AllocationAttempt, SessionReference } from "effect-browserbase/references";
+import type { BrowserbaseSessions } from "effect-browserbase/sessions";
 
 export const browserbaseInteractiveImplementation = SandboxImplementation.make({
   isolation: "isolated",
@@ -188,7 +184,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<
       Scope.Scope
     >;
   }
->()("@effect-agent/platform-browserbase/BrowserbaseInteractiveHost") {
+>()("effect-agent-browserbase/BrowserbaseInteractiveHost") {
   static layer(
     options: InteractiveOptions,
   ): Layer.Layer<

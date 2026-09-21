@@ -1,5 +1,5 @@
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
 import { Context, Effect, Schema } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
 
 export class SettingsUnavailable extends Schema.TaggedError<SettingsUnavailable>()(
   "SettingsUnavailable",

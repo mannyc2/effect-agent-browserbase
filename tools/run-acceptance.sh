@@ -74,7 +74,7 @@ fast_reject() { if [ "$PROFILE" != full ] && [ "$FAILED" != 0 ]; then exit 1; fi
 install_native() {
   cd "$TREE"
   # This external installation always executes, never replays a task-cache success.
-  run install-browser timeout 300s ./node_modules/.bin/vp run --no-cache -F @effect-agent/browserbase install:test-browser
+  run install-browser timeout 300s ./node_modules/.bin/vp run --no-cache -F effect-browserbase install:test-browser
   run install-media-tools timeout 300s bash -lc 'if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg; fi; ffmpeg -version && ffprobe -version'
 }
 cd "$SOURCE_ROOT"
@@ -98,8 +98,8 @@ if [ "$LAST_CODE" = 0 ]; then
   run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browserbase packages/platform-browserbase
   run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browserbase packages/platform-browserbase
   fast_reject
-  run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/browserbase check
-  run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
+  run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browserbase check
+  run typecheck timeout 180s ./node_modules/.bin/vp run -F effect-agent-browserbase check
   fast_reject
   if [ "$PROFILE" = full ]; then install_native; fi
   cd "$TREE/packages/browserbase"

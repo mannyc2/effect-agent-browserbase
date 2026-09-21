@@ -1,6 +1,6 @@
 # Browserbase for Effect
 
-`@effect-agent/browserbase` owns the whole Browserbase surface for an Effect application: account identity and transport, session, context and extension resources, one owned browser over Playwright/CDP — allocated or borrowed — with trusted registrations, modeled file selection, bounded live capture, explicit page holds, the provider's recordings, replays, uploads and website downloads, and the platform APIs outside a browser session (projects, certificates, Search, Fetch, Agents, Functions and webhooks).
+`effect-browserbase` owns the whole Browserbase surface for an Effect application: account identity and transport, session, context and extension resources, one owned browser over Playwright/CDP — allocated or borrowed — with trusted registrations, modeled file selection, bounded live capture, explicit page holds, the provider's recordings, replays, uploads and website downloads, and the platform APIs outside a browser session (projects, certificates, Search, Fetch, Agents, Functions and webhooks).
 
 It has no Effect Agent dependency. Playwright is an optional peer, loaded lazily and only when a browser actually connects; a consumer that just reads artifacts never imports it. The package targets trusted Node and Bun hosts. It is an unpublished maintainer-review candidate: hosted provider behavior requires separate validation, and ordinary tests never create a paid Browserbase session or invoke a paid model.
 
@@ -9,7 +9,7 @@ It has no Effect Agent dependency. Playwright is an optional peer, loaded lazily
 Construct one account Layer and provide it to everything else. Credentials, approved artifact origins and request bounds live there and nowhere else; a browser recipe cannot carry them.
 
 ```ts
-import * as Account from "@effect-agent/browserbase/account";
+import * as Account from "effect-browserbase/account";
 
 // Reads BROWSERBASE_PROJECT_ID and a redacted BROWSERBASE_API_KEY from the active
 // ConfigProvider (the environment by default) when the Layer is built.
@@ -34,11 +34,11 @@ const account = Account.layerConfig({
 For the simplest post-session video path, opt in to Browserbase recording in the launch recipe:
 
 ```ts
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { BrowserPolicy, NavigateRequest } from "@effect-agent/browserbase/browser-data";
-import { recipe } from "@effect-agent/browserbase/launch";
-import { BrowserbaseRecordings } from "@effect-agent/browserbase/recordings";
-import { RecordingPageReference } from "@effect-agent/browserbase/transfers";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { BrowserPolicy, NavigateRequest } from "effect-browserbase/browser-data";
+import { recipe } from "effect-browserbase/launch";
+import { BrowserbaseRecordings } from "effect-browserbase/recordings";
+import { RecordingPageReference } from "effect-browserbase/transfers";
 import { Effect, Layer, Stream } from "effect";
 
 // Five-minute provider lifetime and a provider-managed viewport unless overridden.
@@ -91,7 +91,7 @@ The launch recipe deliberately differs from three Browserbase defaults. Set a fi
 | `logSession`    | on                  | off          | CDP logs carry page content and typed input       |
 | `solveCaptchas` | on                  | off          | solving is an action the host should choose       |
 
-For model-driven control, use `@effect-agent/platform-browserbase`, whose tools borrow an already-owned session rather than allocating a browser per tool call. Provider credentials, CDP URLs, context choices, Live View controls and recording configuration are host decisions and are never Tool parameters.
+For model-driven control, use `effect-agent-browserbase`, whose tools borrow an already-owned session rather than allocating a browser per tool call. Provider credentials, CDP URLs, context choices, Live View controls and recording configuration are host decisions and are never Tool parameters.
 
 ## Choose a video path
 
@@ -135,9 +135,9 @@ Human handoff pauses automation before returning host-only Live View material. R
 `browser.open(policy, { bootstrap })`, `browser.acquire(policy, { bootstrap })` and `browser.attach(reference, { policy, bootstrap })` take a trusted registration plan at acquisition. The browser Layer fixes account and launch configuration, not consumer callback dependencies. A plan is built from `Bootstrap.binding`, `Bootstrap.init`, `Bootstrap.permissions` and `Bootstrap.combine`. Combination preserves the error and service unions of different handlers; the callable bridge precedes all dependent init steps in one native script registration. Script content, handler implementations and origin grants are host configuration, never model output or page input.
 
 ```ts
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
+import * as Bootstrap from "effect-browserbase/bootstrap";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { BrowserPolicy } from "effect-browserbase/browser-data";
 import { Context, Effect, Schema } from "effect";
 
 class ShowSettings extends Context.Service<ShowSettings, { readonly title: string }>()(

@@ -1,7 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
+import { expect, it } from "@effect/vitest";
+import { Effect, Fiber, Schema, Stream } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import {
   ObservedElement,
   Viewport,
@@ -11,10 +13,8 @@ import {
   ReadTextRequest,
   ScreenshotRequest,
   ScrollRequest,
-} from "@effect-agent/browserbase/browser-data";
-import * as Capture from "@effect-agent/browserbase/capture";
-import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, Schema, Stream } from "effect";
+} from "effect-browserbase/browser-data";
+import * as Capture from "effect-browserbase/capture";
 
 import {
   localBrowser,
@@ -345,7 +345,7 @@ type Same<A, B> =
 
 const expectedCaptureError: Same<
   Effect.Error<ReturnType<typeof Capture.start>>,
-  typeof import("@effect-agent/browserbase/errors").BrowserError.Type
+  typeof import("effect-browserbase/errors").BrowserError.Type
 > = true;
 
 const encodedObservation = Schema.toCodecJson(ObservedElement);
