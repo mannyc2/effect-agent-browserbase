@@ -135,6 +135,7 @@ it.effect("fail-session capacity pressure fences without starting rejected work"
     Effect.gen(function* () {
       let calls = 0,
         faults = 0;
+
       let release!: () => void;
 
       const blocked = new Promise<void>((resolve) => {
