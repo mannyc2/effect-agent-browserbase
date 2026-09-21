@@ -138,6 +138,7 @@ it.effect(
           () => {},
           () => true,
         );
+
         const binding = connection.bindings[0];
 
         expect(binding?.name).toBe("getShowSettings");

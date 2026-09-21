@@ -49,6 +49,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
                   Effect.gen(function* () {
                     order.push("callback-finalizer");
                     assert.ok(state.controls);
+
                     const result = yield* state.controls
                       .bind()
                       .click("#button")
