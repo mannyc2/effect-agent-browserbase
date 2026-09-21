@@ -69,8 +69,27 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           );
           expect(yield* session.ready).toEqual({ _tag: "Ready" });
 
+          // A frame is its own document: the context-level registration reached it, and
+          // readiness follows the selected frame rather than the page that contains it.
+          const frames = yield* session.frames;
+          const child = frames.find((frame) => frame.name === "child");
+          const main = frames.find((frame) => frame.parentFrameId === null);
+
+          if (child === undefined || main === undefined)
+            throw new Error("The fixture page has a main frame and a child frame");
+          yield* session.selectFrame(child.frameId);
+          expect(yield* session.ready).toEqual({ _tag: "Ready" });
+          expect((yield* session.observe()).text).toContain("frame text");
+          // Selecting a frame retires the earlier handle, so the main frame is re-bound.
+          yield* session.selectFrame(main.frameId);
+          expect((yield* h.readText(ReadTextRequest.make({})).pipe(Effect.result))._tag).toBe(
+            "Failure",
+          );
+
           // A different origin is outside the registration, and says so rather than waiting.
-          yield* h.navigate(NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }));
+          yield* session
+            .bind()
+            .navigate(NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }));
           expect(yield* session.ready).toEqual({ _tag: "NotApplicable" });
           expect((yield* session.observe()).url).toContain("localhost");
         }),

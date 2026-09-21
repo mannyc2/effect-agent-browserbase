@@ -86,6 +86,7 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
 
           reference = owner.reference;
           yield* owner.bind().navigate(NavigateRequest.make({ url: f.url }));
+          yield* owner.createPage;
 
           yield* withProvider(
             f,
@@ -97,6 +98,14 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
 
               expect(missing._tag).toBe("Failure");
               if (missing._tag === "Failure") expect(missing.failure.reason).toBe("not-found");
+
+              // Nor does an unnamed target quietly pick one of several open pages.
+              const ambiguous = yield* (yield* BrowserbaseBrowser)
+                .attach(owner.reference, { policy })
+                .pipe(Effect.result);
+
+              expect(ambiguous._tag).toBe("Failure");
+              if (ambiguous._tag === "Failure") expect(ambiguous.failure.reason).toBe("ambiguous");
             }),
           );
           yield* owner.close;
