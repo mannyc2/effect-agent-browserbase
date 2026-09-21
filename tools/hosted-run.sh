@@ -29,14 +29,15 @@ OUT="$(cd "$OUT" && pwd)"
 # from some other revision.
 git -C "$SOURCE_ROOT" rev-parse HEAD > "$OUT/source-sha.txt"
 
-while IFS=$'\t' read -r check media; do
+# The plan is read on its own descriptor so each check keeps the operator's terminal as stdin.
+while IFS=$'\t' read -r check media <&3; do
   (
     cd "$TREE/packages/browserbase"
     BROWSERBASE_HOSTED_OUTPUT="$OUT/$check" ../../node_modules/.bin/vp exec bun "examples/hosted/$check.ts"
   ) | tee "$OUT/$check.jsonl"
   node "$SOURCE_ROOT/tools/hosted-registry.mjs" verify "$REGISTRY" "$check" "$OUT/$check.jsonl"
   if [ "$media" = media ]; then bash "$SOURCE_ROOT/tools/hosted-media.sh" "$OUT/$check"; fi
-done <<< "$PLAN"
+done 3<<< "$PLAN"
 
 (
   cd "$OUT"

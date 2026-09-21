@@ -42,6 +42,8 @@ test("the hosted runner refuses to allocate without an explicit operator opt-in"
   assert.ok(script.includes(': "${BROWSERBASE_PROJECT_ID:?'));
   // Every name is validated against the registry before the first check runs.
   assert.ok(script.indexOf("hosted-registry.mjs\" select") < script.indexOf("vp exec bun"));
+  // A check that needs an operator reads the terminal, so the plan must not occupy stdin.
+  assert.ok(script.includes("read -r check media <&3") && script.includes('done 3<<< "$PLAN"'));
   // Nothing hosted may be reachable from the unpaid gate.
   assert.doesNotMatch(read("tools/run-acceptance.sh"), /hosted-run\.sh|hosted-registry|examples\/hosted/);
 });
