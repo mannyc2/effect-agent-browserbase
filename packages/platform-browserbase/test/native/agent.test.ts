@@ -16,7 +16,9 @@ import {
   BrowserReadTextRequest,
 } from "effect-agent/interactive-browser";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { ObservedElement } from "effect-browserbase/browser-data";
 import * as Capture from "effect-browserbase/capture";
+import * as PageControl from "effect-browserbase/page-control";
 import { Model } from "effect/unstable/ai";
 
 import {
@@ -418,3 +420,93 @@ it.live(
       }),
     ),
 );
+
+const call = (id: string, name: string, params: unknown): ScriptedTurnInput => ({
+  _tag: "Stream",
+  parts: [
+    { type: "tool-call", id, name, params },
+    { type: "finish", reason: "tool-calls", usage },
+  ],
+  termination: { _tag: "Complete" },
+});
+
+// The fixture's first control, in the session's first observation. A scripted model cannot
+// read a tool result, so it names the reference a real one would have been given.
+const increment = { observationId: "observation-1", elementId: "element-0" };
+
+for (const revalidates of [true, false])
+  it.live(
+    `real AgentRuntime: a recorder checkpoints and holds between a tool's inspect and its click (revalidates=${revalidates})`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = yield* localAgentBrowser;
+
+          yield* withGenericAgentBrowser(
+            f,
+            Effect.gen(function* () {
+              const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
+              const session = fromSession(generic);
+              let recorded: string | undefined;
+
+              // What a recorder does on the same owner while the agent is between tools: passive
+              // evidence, an explicit hold and resume, then a check of the exact inspected node.
+              const recorder = Effect.gen(function* () {
+                const [page] = yield* generic.pages;
+
+                if (page === undefined) return "no page";
+                const before = yield* generic.checkpoint({ picture: true });
+
+                yield* PageControl.resume(generic, yield* PageControl.suspend(generic, page));
+                if (revalidates) yield* generic.revalidateElement(ObservedElement.make(increment));
+
+                return `${before.text.includes("Local browser fixture")} ${before.picture !== undefined}`;
+              }).pipe(
+                Effect.match({
+                  onFailure: (error) => `failed ${error.reason}`,
+                  onSuccess: (ok) => ok,
+                }),
+                Effect.map((outcome) => {
+                  recorded = outcome;
+                }),
+              );
+
+              const result = yield* AgentRuntime.run(agent, "begin").pipe(
+                Effect.provide(
+                  Layer.mergeAll(
+                    BrowserTools.handlers(session),
+                    model([
+                      call("navigate", "browser_navigate", { url: f.url }),
+                      call("inspect", "browser_inspect", {}),
+                      // This stream ends after the inspect ran and before the click does.
+                      { ...call("click", "browser_click", increment), onStreamFinalize: recorder },
+                      {
+                        ...final,
+                        assertRequest: (request) => {
+                          const encoded = JSON.stringify(request.prompt);
+
+                          // Unchecked after a hold, the tool reports a stale reference to the
+                          // model instead of clicking. Nothing is retargeted or replayed.
+                          expect(encoded.includes("stale")).toBe(!revalidates);
+                        },
+                      },
+                    ]),
+                    InMemory.layer,
+                  ),
+                ),
+              );
+
+              expect(result.output.done).toBe(true);
+              expect(recorded).toBe("true true");
+              expect(
+                (yield* session.handle.readText(
+                  BrowserReadTextRequest.make({ selector: "#count" }),
+                )).text,
+              ).toBe(revalidates ? "1" : "0");
+              yield* generic.close;
+            }),
+            { pageControl: true },
+          );
+        }),
+      ),
+  );

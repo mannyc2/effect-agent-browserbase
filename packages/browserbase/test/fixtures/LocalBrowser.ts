@@ -157,6 +157,31 @@ export const localBrowser = Effect.acquireRelease(
 
         return;
       }
+      if (path === "/viewport") {
+        // What is on screen, what only looks like it, and what a host must know before acting.
+        // The link is relative to a <base> and carries a token; the form has a formaction override.
+        const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+
+        res.end(`<!doctype html><meta charset=utf-8><title>Viewport fixture</title><base href="/base/">
+          <style>body{margin:0;font:16px/20px monospace}.at{position:absolute;left:0;width:300px}
+          .slab{height:20px;background:#333}#ghost{pointer-events:none}#tall{white-space:pre}</style>
+          <p id=top class=at style="top:0">visible paragraph</p>
+          <a id=rel class=at style="top:30px" href="next?token=secret">Relative link</a>
+          <div class=at style="top:100px">covered words</div><div class="at slab" style="top:100px"></div>
+          <div class=at style="top:140px">ghosted words</div><div id=ghost class="at slab" style="top:140px"></div>
+          <form id=login class=at style="top:180px" action="/submit" method=post>
+          <input id=user name=user aria-label="User" autocomplete=username>
+          <input id=pass name=pass aria-label="Secret" type=password autocomplete=current-password>
+          <button id=go>Sign in</button><button id=alt formaction="/other" formmethod=get>Other</button></form>
+          <div id=tall class=at style="top:400px">${lines}</div>
+          <p class=at style="top:3000px">far below words</p><a class=at style="top:3100px" href="/far">Far link</a>
+          <script>window.clicks=0;window.fills=0;addEventListener('click',()=>clicks++,true);addEventListener('input',()=>fills++,true);
+          addEventListener('submit',e=>e.preventDefault());
+          document.addEventListener('resume',()=>{if(window.onResume)window.onResume()});
+          window.read=()=>({clicks,fills,focused:document.activeElement?.id??''});</script>`);
+
+        return;
+      }
       if (path === "/pointer") {
         // Static on purpose: nothing repaints unless input does it, so a frame that arrives after
         // a hover is that hover. `:hover` only ever matches for real pointer input.

@@ -31,6 +31,7 @@ import type { ConnectionBindings } from "./Bindings.ts";
 import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
 import { issueLiveView } from "./LiveView.ts";
 import { publicError } from "./NativeCalls.ts";
+import type { AdmissionPolicy } from "./Observation.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
@@ -53,6 +54,13 @@ export type RemoteSource<L extends RemoteLease, E> = (
   local: LocalCleanup,
   lifetimeDeadline: number,
 ) => Effect.Effect<L, E, BrowserbaseClient | BrowserbaseSessions | Scope.Scope>;
+
+/** Bounds a reading of the selected document. Already validated at the public boundary. */
+export interface Reading {
+  readonly scope: "document" | "viewport";
+  readonly maxTextBytes?: number;
+  readonly maxControls?: number;
+}
 
 export interface SessionOptions<L extends RemoteLease, E> {
   readonly remote: RemoteSource<L, E>;
@@ -368,6 +376,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
    */
   const dependent = [
     "read-text",
+    "checkpoint",
+    "control-facts",
+    "revalidate",
     "click",
     "fill",
     "scroll",
@@ -410,6 +421,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     maximumBytes = Math.min(options.maxReturnedBytes, 16384),
     controls = 32,
     dependent = true,
+    scope: "document" | "viewport" = "document",
   ) =>
     Effect.suspend(() => {
       const revision = owner.state.revision;
@@ -418,7 +430,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         await getDriver().pageControl?.checkSelected(ticket);
         if (dependent) await requireReady("observe", ticket);
 
-        return getDriver().observe(maximumBytes, controls, ticket);
+        return getDriver().observe(scope, maximumBytes, controls, ticket);
       }).pipe(
         Effect.flatMap((raw) =>
           Effect.gen(function* () {
@@ -448,6 +460,20 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       );
     });
 
+  /** A requested text bound may narrow the policy's bound, never widen it. */
+  const textBudget = (
+    operation: BrowserOperation,
+    requested: number | undefined,
+  ): Effect.Effect<number, BrowserError> => {
+    const bytes = requested ?? Math.min(options.maxReturnedBytes, 16384);
+
+    return bytes > options.maxReturnedBytes
+      ? Effect.fail(
+          BrowserError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+        )
+      : Effect.succeed(bytes);
+  };
+
   // Reading a target is an ownership operation too. A native mutation that times out
   // after dispatch fences the owner as uncertain; retaining the last native target
   // must not manufacture a fresh usable handle in that state.
@@ -465,13 +491,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
   const nativeOperation = <A>(
     operation: BrowserOperation,
     action: (driver: Driver, ticket: Ticket) => Promise<A>,
-    mutation = false,
-    charge = true,
+    options: { readonly mutation?: boolean; readonly charge?: boolean } = {},
   ) =>
     owner.guard(
       operation,
       (ticket) =>
         native(operation, ticket, async () => {
+          // A held page is refused, never woken: none of these may run against one.
           if (
             [
               "resize",
@@ -480,6 +506,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
               "download-action",
               "select-files",
               "file-chooser",
+              "checkpoint",
+              "control-facts",
+              "revalidate",
             ].includes(operation)
           )
             await getDriver().pageControl?.checkSelected(ticket);
@@ -487,7 +516,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
           return action(getDriver(), ticket);
         }),
-      { mutation, charge },
+      options,
     );
 
   /** A bound handle captures the page selection and connection generation, never the current DOM. */
@@ -555,16 +584,16 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         run("read-text", (driver, ticket) =>
           driver.readText(selector, options.maxReturnedBytes, ticket),
         ),
-      click: (target: string | ObservedElement) =>
-        run("click", (driver, ticket) => driver.click(target, ticket), true),
-      fill: (target: string | ObservedElement, value: string) =>
-        run("fill", (driver, ticket) => driver.fill(target, value, ticket), true),
+      click: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
+        run("click", (driver, ticket) => driver.click(target, ticket, policy), true),
+      fill: (target: string | ObservedElement, value: string, policy?: AdmissionPolicy) =>
+        run("fill", (driver, ticket) => driver.fill(target, value, ticket, policy), true),
       scroll: (x: number, y: number) =>
         run("scroll", (driver, ticket) => driver.scroll(x, y, ticket), true),
       pointerMove: (to: NativePoint) =>
         input("pointer-move", (driver, ticket) => driver.pointerMove(to, ticket)),
-      hover: (target: string | ObservedElement) =>
-        input("hover", (driver, ticket) => driver.hover(target, ticket)),
+      hover: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
+        input("hover", (driver, ticket) => driver.hover(target, ticket, policy)),
       wheel: (deltaX: number, deltaY: number, at?: NativePoint) =>
         input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket)),
       screenshot: (full: boolean) =>
@@ -635,26 +664,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
   const controls = {
     pageControl: {
       state: (page: PageInfo) =>
-        nativeOperation(
-          "page-state",
-          (_driver, ticket) => execution().state(page, ticket),
-          false,
-          false,
-        ),
+        nativeOperation("page-state", (_driver, ticket) => execution().state(page, ticket), {
+          charge: false,
+        }),
       suspend: (page: PageInfo) =>
-        nativeOperation(
-          "page-suspend",
-          (_driver, ticket) => execution().suspend(page, ticket),
-          true,
-          false,
-        ),
+        nativeOperation("page-suspend", (_driver, ticket) => execution().suspend(page, ticket), {
+          charge: false,
+        }),
       resume: (receipt: PageSuspension) =>
-        nativeOperation(
-          "page-resume",
-          (_driver, ticket) => execution().resume(receipt, ticket),
-          true,
-          false,
-        ),
+        nativeOperation("page-resume", (_driver, ticket) => execution().resume(receipt, ticket), {
+          charge: false,
+        }),
     },
     reference: ref,
     capture,
@@ -662,46 +682,62 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     currentTarget: readSelected,
     cleanupResult: acquired.cleanupResult,
     close: acquired.release.pipe(Effect.ensuring(Deferred.succeed(ended, undefined))),
-    observe: (maximumBytes?: number, controlLimit = 32) => {
-      const bytes = maximumBytes ?? Math.min(options.maxReturnedBytes, 16384);
+    observe: (reading: Reading = { scope: "document" }) =>
+      textBudget("observe", reading.maxTextBytes).pipe(
+        Effect.flatMap((bytes) =>
+          owner.guard("observe", (ticket) =>
+            observeInside(ticket, bytes, reading.maxControls ?? 32, true, reading.scope),
+          ),
+        ),
+      ),
+    /**
+     * Passive: not a mutation, so the action observation and the selection are left exactly as
+     * they were. A held page is refused rather than woken to be read.
+     */
+    checkpoint: (reading: Omit<Reading, "scope"> & { readonly picture: boolean }) =>
+      textBudget("checkpoint", reading.maxTextBytes).pipe(
+        Effect.flatMap((bytes) =>
+          nativeOperation("checkpoint", async (driver, ticket) => {
+            const target = capture.target();
+            const revision = owner.state.revision;
+            const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
 
-      if (
-        !Number.isSafeInteger(bytes) ||
-        bytes < 1 ||
-        bytes > Math.min(options.maxReturnedBytes, 131072) ||
-        !Number.isSafeInteger(controlLimit) ||
-        controlLimit < 0 ||
-        controlLimit > 64
-      ) {
-        return Effect.fail(
-          BrowserError.make({
-            operation: "observe",
-            reason: "configuration",
-            outcome: "undispatched",
+            const sampled = await driver.checkpoint(
+              bytes,
+              reading.maxControls ?? 32,
+              reading.picture ? options.maxReturnedBytes : undefined,
+              ticket,
+            );
+
+            return {
+              ...sampled,
+              target,
+              revision,
+              startedMonotonicNanos,
+              completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+            };
           }),
-        );
-      }
-
-      return owner.guard("observe", (ticket) => observeInside(ticket, bytes, controlLimit));
-    },
+        ),
+      ),
+    controlFacts: (reference: ObservedElement) =>
+      nativeOperation("control-facts", (driver, ticket) => driver.controlFacts(reference, ticket)),
+    /** Not charged: it sends no input and reads one node the caller was already given. */
+    revalidate: (reference: ObservedElement) =>
+      nativeOperation("revalidate", (driver, ticket) => driver.revalidate(reference, ticket), {
+        charge: false,
+      }),
     // Inspecting readiness is not an action: it charges nothing and mutates nothing.
     readiness: owner.guard(
       "ready",
       (ticket) => native("ready", ticket, () => getDriver().documentReadiness(ticket)),
       { charge: false },
     ),
-    pages: nativeOperation(
-      "list-pages",
-      (driver, ticket) => driver.listPages(ticket),
-      false,
-      false,
-    ),
-    frames: nativeOperation(
-      "list-frames",
-      (driver, ticket) => driver.listFrames(ticket),
-      false,
-      false,
-    ),
+    pages: nativeOperation("list-pages", (driver, ticket) => driver.listPages(ticket), {
+      charge: false,
+    }),
+    frames: nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket), {
+      charge: false,
+    }),
     selectPage: (id: string) =>
       nativeOperation(
         "select-page",
@@ -709,8 +745,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
           await driver.selectPage(id, ticket);
           owner.state.selection++;
         },
-        false,
-        false,
+        { charge: false },
       ),
     selectFrame: (id: string) =>
       nativeOperation(
@@ -719,34 +754,40 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
           await driver.selectFrame(id, ticket);
           owner.state.selection++;
         },
-        false,
-        false,
+        { charge: false },
       ),
     createPage: () =>
-      nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), true, false),
+      nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), {
+        mutation: true,
+        charge: false,
+      }),
     closePage: (id: string) =>
-      nativeOperation("close-page", (driver, ticket) => driver.closePage(id, ticket), true, false),
+      nativeOperation("close-page", (driver, ticket) => driver.closePage(id, ticket), {
+        mutation: true,
+        charge: false,
+      }),
     resize: (viewport: Viewport) =>
-      nativeOperation("resize", (driver, ticket) => driver.resize(viewport, ticket), true, false),
+      nativeOperation("resize", (driver, ticket) => driver.resize(viewport, ticket), {
+        mutation: true,
+        charge: false,
+      }),
     waitFor: (selector: string, state: "visible" | "hidden" | "attached" | "detached") =>
       nativeOperation("wait", (driver, ticket) => driver.waitFor(selector, state, ticket)),
     clickAndWait: (target: string | ObservedElement) =>
-      nativeOperation(
-        "click-and-wait",
-        (driver, ticket) => driver.clickAndWait(target, ticket),
-        true,
-      ),
+      nativeOperation("click-and-wait", (driver, ticket) => driver.clickAndWait(target, ticket), {
+        mutation: true,
+      }),
     clickForDownload: (target: string | ObservedElement) =>
       nativeOperation(
         "download-action",
         (driver, ticket) => driver.clickForDownload(target, ticket),
-        true,
+        { mutation: true },
       ),
     selectFiles: (target: string | ObservedElement, files: ReadonlyArray<NativeFileSelection>) =>
       nativeOperation(
         "select-files",
         (driver, ticket) => driver.selectFiles(target, files, ticket),
-        true,
+        { mutation: true },
       ),
     clickForFileSelection: (
       target: string | ObservedElement,
@@ -755,7 +796,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       nativeOperation(
         "file-chooser",
         (driver, ticket) => driver.clickForFileSelection(target, files, ticket),
-        true,
+        { mutation: true },
       ),
     liveView: (ttl: number) =>
       owner.guard("live-view", () => issueLiveView(client, ref, ttl), {

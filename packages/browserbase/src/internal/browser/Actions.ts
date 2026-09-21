@@ -12,7 +12,7 @@ import {
   sanitize,
   timeout,
 } from "./NativeCalls.ts";
-import type { Observation } from "./Observation.ts";
+import type { AdmissionPolicy, Observation } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import type { Targets } from "./Targets.ts";
 
@@ -133,34 +133,21 @@ export const makeActions = (
   };
 
   /**
-   * Acts on the exact attached node a target names. `admit` sees that node before anything is
-   * dispatched, so a refusal it raises is still undispatched, and what it learns reaches the
-   * action without the node being resolved a second time.
+   * Acts on the exact attached node a target names. The observation seam establishes that it is
+   * still the control that was inspected and that the host's policy, if any, admits it. `admit`
+   * then sees that node before anything is dispatched, so a refusal it raises is undispatched
+   * too, and what it learns reaches the action without the node being resolved a second time.
    */
   const withAdmittedElement = async <Admitted, A>(
     target: string | ObservedElement,
     ticket: Ticket,
     admit: (element: ElementHandle<Element>) => Promise<Admitted>,
     action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
+    policy?: AdmissionPolicy,
   ): Promise<A> => {
-    const retained = typeof target !== "string";
-    let element: ElementHandle<Element>;
+    const { element, kept } = await observation.resolve(target, ticket, policy);
 
-    if (typeof target === "string") element = await observation.exactElement(target, ticket);
-    else element = observation.retained(target);
     try {
-      const attached: unknown = await element.evaluate(
-        (node, selector) => {
-          if (!node.isConnected) return false;
-          if (selector === undefined) return true;
-          const matches = node.ownerDocument.querySelectorAll(selector);
-
-          return matches.length === 1 && matches[0] === node;
-        },
-        typeof target === "string" ? target : undefined,
-      );
-
-      if (attached !== true) throw failure("stale", "undispatched");
       const admitted = await admit(element);
 
       ticket.check();
@@ -169,7 +156,7 @@ export const makeActions = (
 
       return await action(element, admitted);
     } finally {
-      if (!retained) await closeWithin(() => element.dispose()).catch(() => {});
+      if (!kept) await closeWithin(() => element.dispose()).catch(() => {});
     }
   };
 
@@ -177,11 +164,17 @@ export const makeActions = (
     target: string | ObservedElement,
     ticket: Ticket,
     action: (element: ElementHandle<Element>) => Promise<A>,
-  ): Promise<A> => withAdmittedElement(target, ticket, async () => {}, action);
+    policy?: AdmissionPolicy,
+  ): Promise<A> => withAdmittedElement(target, ticket, async () => {}, action, policy);
 
-  const click = (target: string | ObservedElement, ticket: Ticket) =>
+  const click = (target: string | ObservedElement, ticket: Ticket, policy?: AdmissionPolicy) =>
     sanitize(async () => {
-      await withElement(target, ticket, (element) => element.click({ timeout: timeout(ticket) }));
+      await withElement(
+        target,
+        ticket,
+        (element) => element.click({ timeout: timeout(ticket) }),
+        policy,
+      );
       ticket.check();
 
       return postUrl();
@@ -239,10 +232,13 @@ export const makeActions = (
       return postUrl();
     });
 
-  const fill: Driver["fill"] = (target, value, ticket) =>
+  const fill: Driver["fill"] = (target, value, ticket, policy) =>
     sanitize(async () => {
-      await withElement(target, ticket, (element) =>
-        element.fill(value, { timeout: timeout(ticket) }),
+      await withElement(
+        target,
+        ticket,
+        (element) => element.fill(value, { timeout: timeout(ticket) }),
+        policy,
       );
       ticket.check();
 

@@ -269,10 +269,11 @@ export const withAgentBrowser = <A, E, R>(
 export const withGenericAgentBrowser = <A, E, R>(
   fixture: Effect.Success<typeof localAgentBrowser>,
   effect: Effect.Effect<A, E, R>,
+  options: { readonly pageControl?: boolean } = {},
 ) =>
   Effect.scoped(effect).pipe(
     Effect.provide(
-      BrowserbaseBrowser.layer({ launch, actionTimeoutMillis: 5000 }).pipe(
+      BrowserbaseBrowser.layer({ launch, actionTimeoutMillis: 5000, ...options }).pipe(
         Layer.provide(accounts),
         Layer.provide(fixture.binding),
       ),
