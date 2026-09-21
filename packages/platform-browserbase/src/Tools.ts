@@ -1,3 +1,5 @@
+import { Observation, ObservedElement } from "@effect-agent/browserbase/browser-data";
+import { BrowserError } from "@effect-agent/browserbase/errors";
 import { Effect, Schema } from "effect";
 import {
   BrowserActionResult,
@@ -8,20 +10,19 @@ import {
 } from "effect-agent/interactive-browser";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-import type { BrowserbaseSession } from "./InteractiveBrowser.ts";
-import { BrowserbaseError, Observation, ObservedElement } from "./Types.ts";
+import type { BrowserbaseAgentSession } from "./Adapter.ts";
 
 /** A declared Tool failure, not a successful payload with an embedded error. */
 export class BrowserbaseToolFailure extends Schema.TaggedError<BrowserbaseToolFailure>()(
   "BrowserbaseToolFailure",
   {
-    reason: BrowserbaseError.fields.reason,
+    reason: BrowserError.fields.reason,
     outcome: Schema.Literals(["undispatched", "rejected", "unknown"]),
   },
 ) {}
 
-const failed = (error: BrowserbaseError | InteractiveBrowserError): BrowserbaseToolFailure => {
-  if (Schema.is(BrowserbaseError)(error))
+const failed = (error: BrowserError | InteractiveBrowserError): BrowserbaseToolFailure => {
+  if (Schema.is(BrowserError)(error))
     return BrowserbaseToolFailure.make({
       reason: error.reason,
       outcome: error.outcome ?? "unknown",
@@ -40,6 +41,11 @@ const failed = (error: BrowserbaseError | InteractiveBrowserError): BrowserbaseT
     outcome: "unknown",
   });
 };
+
+const actionResult = (url: string) =>
+  Schema.decodeEffect(BrowserActionResult)({ url }).pipe(
+    Effect.mapError(() => BrowserbaseToolFailure.make({ reason: "malformed", outcome: "unknown" })),
+  );
 
 const Navigate = Tool.make("browser_navigate", {
   description:
@@ -93,7 +99,7 @@ export const toolkit = Toolkit.make(Navigate, Inspect, Click, Fill, Scroll);
 
 /** Borrow one execution-owned session. This Layer never opens or closes a browser per Tool/turn. */
 export const handlers = (
-  session: BrowserbaseSession,
+  session: BrowserbaseAgentSession,
   options: { readonly maxTextBytes?: number; readonly maxControls?: number } = {},
 ) => {
   const maxTextBytes = options.maxTextBytes ?? 8192;
@@ -102,18 +108,25 @@ export const handlers = (
   return toolkit.toLayer({
     browser_navigate: (request) =>
       session.currentHandle.pipe(
-        Effect.flatMap((handle) => handle.navigate(request)),
         Effect.mapError(failed),
+        Effect.flatMap((handle) => handle.navigate(request).pipe(Effect.mapError(failed))),
       ),
     browser_inspect: () =>
-      session.observe({ maxTextBytes, maxControls }).pipe(Effect.mapError(failed)),
-    browser_click: (reference) => session.clickElement(reference).pipe(Effect.mapError(failed)),
+      session.browser.observe({ maxTextBytes, maxControls }).pipe(Effect.mapError(failed)),
+    browser_click: (reference) =>
+      session.browser.clickElement(reference).pipe(
+        Effect.mapError(failed),
+        Effect.flatMap((result) => actionResult(result.url)),
+      ),
     browser_fill: ({ reference, value }) =>
-      session.fillElement(reference, value).pipe(Effect.mapError(failed)),
+      session.browser.fillElement(reference, value).pipe(
+        Effect.mapError(failed),
+        Effect.flatMap((result) => actionResult(result.url)),
+      ),
     browser_scroll: (request) =>
       session.currentHandle.pipe(
-        Effect.flatMap((handle) => handle.scroll(request)),
         Effect.mapError(failed),
+        Effect.flatMap((handle) => handle.scroll(request).pipe(Effect.mapError(failed))),
       ),
   });
 };

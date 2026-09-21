@@ -1,17 +1,11 @@
-import type * as Capture from "@effect-agent/platform-browserbase/capture";
-import {
-  type BrowserbaseInteractiveHost,
-  type BrowserbaseSession,
-} from "@effect-agent/platform-browserbase/interactive-browser";
-import type * as PageControl from "@effect-agent/platform-browserbase/page-control";
-import {
-  type handlers,
-  type BrowserbaseToolFailure,
-} from "@effect-agent/platform-browserbase/tools";
-import { type BrowserbaseError } from "@effect-agent/platform-browserbase/types";
+import type {
+  BrowserbaseAgentSession,
+  BrowserbaseInteractiveHost,
+} from "@effect-agent/platform-browserbase/adapter";
+import type { BrowserbaseToolFailure, handlers } from "@effect-agent/platform-browserbase/tools";
 import { expect, it } from "@effect/vitest";
 import { type Effect, type Layer, type Scope } from "effect";
-import { type InteractiveBrowserError, type BrowserHandle } from "effect-agent/interactive-browser";
+import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
 
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -23,22 +17,12 @@ const scoped: Same<
   Scope.Scope
 > = true;
 
-const hostErrors: Same<
-  Effect.Error<ReturnType<BrowserbaseInteractiveHost["Service"]["open"]>>,
-  BrowserbaseError | InteractiveBrowserError
-> = true;
+/** The framework contract is preserved exactly; the adapter adds no parallel handle type. */
+const originalContract: Same<BrowserbaseAgentSession["handle"], BrowserHandle> = true;
 
-const captureErrors: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserbaseError> = true;
-const captureScope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
-const sourceSize: Capture.CaptureSize = { width: 640, height: 360 };
+const declaredFrameworkFailure = (error: InteractiveBrowserError): string => error._tag;
 
-const controlErrors: Same<
-  Effect.Error<ReturnType<typeof PageControl.suspend>>,
-  BrowserbaseError
-> = true;
-
-const controlScope: Same<Requirements<ReturnType<typeof PageControl.suspend>>, never> = true;
-const originalContract: Same<BrowserbaseSession["handle"], BrowserHandle> = true;
+/** Tool handlers borrow one already-open session; they never require a browser service. */
 const borrowed: Same<LayerRequirements<ReturnType<typeof handlers>>, never> = true;
 
 const explicitOutcome: Same<
@@ -47,16 +31,6 @@ const explicitOutcome: Same<
 > = true;
 
 it("retains scoped ownership, original handle identity and typed native Tool failures", () => {
-  expect(
-    scoped &&
-      hostErrors &&
-      originalContract &&
-      borrowed &&
-      explicitOutcome &&
-      captureErrors &&
-      captureScope &&
-      controlErrors &&
-      controlScope,
-  ).toBe(true);
-  expect(sourceSize.width).toBe(640);
+  expect(scoped && originalContract && borrowed && explicitOutcome).toBe(true);
+  expect(typeof declaredFrameworkFailure).toBe("function");
 });

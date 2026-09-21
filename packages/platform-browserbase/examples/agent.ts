@@ -1,4 +1,4 @@
-import type { BrowserbaseSession } from "@effect-agent/platform-browserbase/interactive-browser";
+import type { BrowserbaseAgentSession } from "@effect-agent/platform-browserbase/adapter";
 import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
 import { Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory } from "effect-agent";
@@ -25,7 +25,7 @@ export const browserAgent = Agent.make("browser-example", {
  * function. The browser session is already owned by the enclosing execution
  * scope, so every interpreter turn borrows the same session.
  */
-export const runBrowserAgent = (session: BrowserbaseSession, request: string) =>
+export const runBrowserAgent = (session: BrowserbaseAgentSession, request: string) =>
   AgentRuntime.run(browserAgent, request).pipe(
     Effect.provide(Layer.merge(BrowserTools.handlers(session), InMemory.layer)),
   );

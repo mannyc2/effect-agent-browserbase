@@ -37,6 +37,46 @@ export class FrameInfo extends Schema.Class<FrameInfo>("BrowserbaseFrameInfo")({
   name: Schema.String.check(Schema.isMaxLength(256)),
 }) {}
 
+export class ObservedControl extends Schema.Class<ObservedControl>("BrowserbaseObservedControl")({
+  elementId: Identifier,
+  kind: Schema.Literals(["link", "button", "input", "select", "textarea", "other"]),
+  label: Schema.String.check(Schema.isMaxLength(256)),
+  disabled: Schema.Boolean,
+}) {}
+
+/** Revision is admission fencing, not a claim of a complete DOM version or atomic snapshot. */
+export class Observation extends Schema.Class<Observation>("BrowserbaseObservation")({
+  target: Target,
+  observationId: Identifier,
+  revision: Schema.Natural,
+  url: Schema.String.check(Schema.isMaxLength(8192)),
+  text: Schema.String.check(Schema.isMaxLength(131072)),
+  controls: Schema.Array(ObservedControl).check(Schema.isMaxLength(64)),
+  controlsTruncated: Schema.Boolean,
+  textTruncated: Schema.Boolean,
+}) {}
+
+export class ObservedElement extends Schema.Class<ObservedElement>("BrowserbaseObservedElement")({
+  observationId: Identifier,
+  elementId: Identifier,
+}) {}
+
+/** Live, connection-owned receipt. It is not a durable promise that remote clocks remain held. */
+export class PageSuspension extends Schema.Class<PageSuspension>("BrowserbasePageSuspension")({
+  pageId: Identifier,
+  targetId: Identifier,
+  suspensionId: Identifier,
+}) {}
+
+export class PageExecutionState extends Schema.Class<PageExecutionState>(
+  "BrowserbasePageExecutionState",
+)({
+  pageId: Identifier,
+  targetId: Identifier,
+  state: Schema.Literals(["running", "suspended", "unknown"]),
+  suspensionId: Schema.optionalKey(Identifier),
+}) {}
+
 /** Explicit opt-out: this integration does not claim whole-browser network containment. */
 export class BrowserPolicy extends Schema.Class<BrowserPolicy>("BrowserbaseBrowserPolicy")({
   network: Schema.Struct({ _tag: Schema.Literal("Unrestricted") }),

@@ -1,4 +1,4 @@
-import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/interactive-browser";
+import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/adapter";
 import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
@@ -7,7 +7,8 @@ import { Agent, AgentRuntime, InMemory } from "effect-agent";
 import { BrowserNavigateRequest, BrowserReadTextRequest } from "effect-agent/interactive-browser";
 import { Model } from "effect/unstable/ai";
 
-import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import { localBrowser } from "../../../browserbase/test/fixtures/LocalBrowser.ts";
+import { agentPolicy, withAgentBrowser } from "../fixtures/AgentBrowser.ts";
 
 const agent = Agent.make("browser-package-acceptance", {
   input: Schema.String,
@@ -47,11 +48,11 @@ it.live(
         let modelFinalizers = 0;
 
         for (let execution = 0; execution < 2; execution++) {
-          yield* withProvider(
+          yield* withAgentBrowser(
             f,
             Effect.scoped(
               Effect.gen(function* () {
-                const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
+                const session = yield* (yield* BrowserbaseInteractiveHost).open(agentPolicy);
 
                 references.push(session.reference.sessionId);
 
@@ -131,10 +132,10 @@ it.live(
       Effect.gen(function* () {
         const f = yield* localBrowser;
 
-        yield* withProvider(
+        yield* withAgentBrowser(
           f,
           Effect.gen(function* () {
-            const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
+            const session = yield* (yield* BrowserbaseInteractiveHost).open(agentPolicy);
 
             yield* session.handle.navigate(BrowserNavigateRequest.make({ url: f.url }));
 
@@ -200,15 +201,15 @@ it.live(
         const waiting = yield* Deferred.make<void>();
         let finalized = 0;
 
-        yield* withProvider(
+        yield* withAgentBrowser(
           f,
           Effect.gen(function* () {
             const host = yield* BrowserbaseInteractiveHost;
-            const survivor = yield* host.open(policy);
+            const survivor = yield* host.open(agentPolicy);
 
             const program = Effect.scoped(
               Effect.gen(function* () {
-                const session = yield* host.open(policy);
+                const session = yield* host.open(agentPolicy);
 
                 return yield* AgentRuntime.run(agent, "wait").pipe(
                   Effect.provide(
@@ -239,7 +240,7 @@ it.live(
             expect(finalized).toBe(1);
             expect(f.releaseIds).toEqual(["session-2"]);
             yield* survivor.handle.navigate(BrowserNavigateRequest.make({ url: f.url }));
-            expect((yield* survivor.observe()).text).toContain("Local browser fixture");
+            expect((yield* survivor.browser.observe()).text).toContain("Local browser fixture");
           }),
         );
         expect(f.releaseIds).toEqual(["session-2", "session-1"]);

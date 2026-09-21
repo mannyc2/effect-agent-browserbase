@@ -4,7 +4,7 @@ import type { CleanupResult } from "../../Cleanup.ts";
 import { BrowserbaseClient } from "../../Client.ts";
 import { AllocationError, ContextError, type ClientError, SessionError } from "../../Errors.ts";
 import type { LaunchRecipe } from "../../Launch.ts";
-import { Identifier, SessionReference } from "../../References.ts";
+import { type AllocationAttempt, Identifier, SessionReference } from "../../References.ts";
 import { BrowserbaseSessions } from "../../Sessions.ts";
 import { connectionAddress } from "../provider/Connection.ts";
 import { compileLaunch } from "../provider/Launch.ts";
@@ -23,7 +23,18 @@ export interface AcquisitionOptions {
   readonly launch: LaunchRecipe;
   readonly contextWriter?: ContextWriterPermit;
   readonly allocationDeadline?: number;
+  /** Bounded host notification of the canonical facts. Reporting never changes them. */
+  readonly onCleanup?: (result: CleanupResult) => Effect.Effect<void>;
+  /** Exactly one notification when a creation attempt's effect on the provider is unknown. */
+  readonly onAllocationUncertain?: (attempt: AllocationAttempt) => Effect.Effect<void>;
 }
+
+const reported = <A, E>(effect: Effect.Effect<A, E>) =>
+  effect.pipe(
+    Effect.interruptible,
+    Effect.timeoutOrElse({ duration: 2000, orElse: () => Effect.void }),
+    Effect.ignore,
+  );
 
 /**
  * The remote lease is registered before POST. Local connection work is supplied by
@@ -77,12 +88,24 @@ export const acquireRemote = Effect.fnUntraced(function* (
       let closing = false;
       let cleanup: CleanupResult | undefined;
 
+      let uncertainReported = false;
+
+      const allocationUncertain = Effect.suspend(() => {
+        if (uncertainReported || options.onAllocationUncertain === undefined) return Effect.void;
+        uncertainReported = true;
+
+        return reported(options.onAllocationUncertain(attempt));
+      });
+
       const terminate = yield* Effect.cached(
         Effect.uninterruptible(
           Effect.gen(function* () {
             closing = true;
             if (reference === undefined) {
-              if (admitted && !knownRejection) writer?.uncertain(attempt);
+              if (admitted && !knownRejection) {
+                writer?.uncertain(attempt);
+                yield* allocationUncertain;
+              }
 
               return;
             }
@@ -100,6 +123,8 @@ export const acquireRemote = Effect.fnUntraced(function* (
             );
 
             yield* coordinator.close;
+            if (cleanup !== undefined && options.onCleanup !== undefined)
+              yield* reported(options.onCleanup(cleanup));
           }),
         ),
       );

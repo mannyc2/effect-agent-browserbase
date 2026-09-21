@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/browserbase",
   "version": "0.1.0-beta.102",
-  "description": "Effect-based Browserbase resources and scoped browser operations.",
+  "description": "Effect-based Browserbase resources, owned browser control and independent browser artifacts.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,17 +16,23 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./client": "./src/Client.ts",
-    "./references": "./src/References.ts",
-    "./errors": "./src/Errors.ts",
-    "./transfers": "./src/Transfers.ts",
+    "./browser": "./src/Browser.ts",
     "./browser-data": "./src/BrowserData.ts",
+    "./capture": "./src/Capture.ts",
     "./cleanup": "./src/Cleanup.ts",
+    "./client": "./src/Client.ts",
+    "./context-coordination": "./src/ContextCoordination.ts",
+    "./contexts": "./src/Contexts.ts",
+    "./downloads": "./src/Downloads.ts",
+    "./errors": "./src/Errors.ts",
     "./launch": "./src/Launch.ts",
+    "./page-control": "./src/PageControl.ts",
+    "./recordings": "./src/Recordings.ts",
+    "./references": "./src/References.ts",
+    "./replays": "./src/Replays.ts",
     "./session-data": "./src/SessionData.ts",
     "./sessions": "./src/Sessions.ts",
-    "./contexts": "./src/Contexts.ts",
-    "./context-coordination": "./src/ContextCoordination.ts"
+    "./transfers": "./src/Transfers.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -34,7 +40,11 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --run"
+    "install:test-browser": "playwright-core install --with-deps chromium",
+    "test:native": "vp test --config vite.native.config.ts --run",
+    "example:capture-evidence": "bun examples/capture-evidence.ts",
+    "example:hosted": "bun examples/hosted.ts",
+    "example:record-video": "bun examples/record-video.ts"
   },
   "devDependencies": {
     "@effect/platform-bun": "catalog:",
