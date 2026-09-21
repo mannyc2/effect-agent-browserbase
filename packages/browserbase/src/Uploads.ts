@@ -52,10 +52,10 @@ export interface UploadFile {
   readonly timeoutMillis?: number;
 }
 
-const failure = (operation: string, reason: FileError["reason"]) =>
+const failure = (operation: FileError["operation"], reason: FileError["reason"]) =>
   FileError.make({ operation, reason, outcome: "undispatched" });
 
-const fromClient = (operation: string) => (error: ClientError) =>
+const fromClient = (operation: FileError["operation"]) => (error: ClientError) =>
   FileError.make({
     operation,
     reason: error.reason,

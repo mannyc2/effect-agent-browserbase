@@ -24,10 +24,10 @@ const Metadata = Schema.Struct({
   ).check(Schema.isMaxLength(256)),
 });
 
-const failure = (operation: string, reason: ArtifactError["reason"]) =>
+const failure = (operation: ArtifactError["operation"], reason: ArtifactError["reason"]) =>
   ArtifactError.make({ operation, reason });
 
-const fromClient = (operation: string) => (error: ClientError) =>
+const fromClient = (operation: ArtifactError["operation"]) => (error: ClientError) =>
   ArtifactError.make({
     operation,
     reason: error.reason,
@@ -161,7 +161,6 @@ export class BrowserbaseReplays extends Context.Service<
             `/v1/sessions/${encodeURIComponent(ref.session.sessionId)}/replays/${encodeURIComponent(ref.pageId)}`,
             1024 * 1024,
             ["application/vnd.apple.mpegurl", "application/x-mpegurl"],
-            "replay-playlist",
           )
           .pipe(Effect.mapError(fromClient("replay-playlist")));
 

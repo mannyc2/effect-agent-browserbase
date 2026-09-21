@@ -254,6 +254,8 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `projects`, `certificates` — project inspection and usage; proxy CA certificate administration.
 - `search`, `page-fetch`, `agents`, `functions`, `webhooks` — the Browserbase platform APIs outside a browser session.
 
+Every expected failure says three things. `operation` is what you asked for, from a closed vocabulary per error class: `BrowserError` names the browser operations, `SessionError` only session calls, and so on, so you can match on them exhaustively and a misspelling is a type error, not a string that happens to compile. `reason` is why it failed. `outcome`, when present, is whether the work was sent: `undispatched` is safe to retry, `rejected` was refused, and `unknown` means a mutation may have happened and is never replayed for you. Why an extension archive was refused is a `reason` (`limit`, `unsafe-filename`, `configuration`) of the one `extension-archive` operation. A native step's own name never appears: the driver raises a private failure, and the owner stamps the operation it admitted.
+
 Everything under `src/internal/` is private, and no consumer CDP seam or lower-level lifecycle Layer is exported; `browser-binding` chooses the engine and where it connects, never what runs over the connection. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
 
 ## Artifact and capture guarantees

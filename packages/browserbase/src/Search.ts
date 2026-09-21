@@ -40,7 +40,7 @@ export class BrowserbaseSearch extends Context.Service<
   static readonly layer: Layer.Layer<BrowserbaseSearch, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseSearch,
     Effect.gen(function* () {
-      const api = resource(yield* BrowserbaseClient, (failure) =>
+      const api = resource<PlatformError>(yield* BrowserbaseClient, (failure) =>
         PlatformError.make({ ...failure, service: "search" }),
       );
 

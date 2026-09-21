@@ -59,7 +59,7 @@ const transfer = (media: boolean) => ({
         ? client.media(Redacted.make("https://media.example.test/recording"), 3, [
             "application/octet-stream",
           ])
-        : client.bytes("/v1/downloads/file", 3, ["application/octet-stream"], "test-stream");
+        : client.bytes("/v1/downloads/file", 3, ["application/octet-stream"]);
 
       const chunks = yield* Stream.runCollect(source);
 
@@ -110,7 +110,7 @@ export const streamingCases = [
           const client = yield* BrowserbaseClient;
 
           const fiber = yield* client
-            .bytes("/v1/downloads/file", 10, ["application/octet-stream"], "interrupt-test")
+            .bytes("/v1/downloads/file", 10, ["application/octet-stream"])
             .pipe(
               Stream.runForEach(() => Deferred.succeed(entered, undefined)),
               Effect.forkChild,

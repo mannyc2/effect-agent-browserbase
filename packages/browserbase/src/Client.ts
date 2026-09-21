@@ -59,13 +59,11 @@ export class BrowserbaseClient extends Context.Service<
       path: string,
       maximum: number,
       types: ReadonlyArray<string>,
-      operation: string,
     ) => Effect.Effect<string, ClientError>;
     readonly bytes: (
       path: string,
       maximum: number,
       types: ReadonlyArray<string>,
-      operation: string,
       timeoutMillis?: number,
       outerDeadline?: number,
     ) => Stream.Stream<Uint8Array, ClientError>;

@@ -59,7 +59,7 @@ const Upload = Schema.Struct({
   ),
 });
 
-const fromClient = (operation: string, error: ClientError): ExtensionError =>
+const fromClient = (operation: ExtensionError["operation"], error: ClientError): ExtensionError =>
   ExtensionError.make({
     operation,
     reason: error.reason,
@@ -68,10 +68,10 @@ const fromClient = (operation: string, error: ClientError): ExtensionError =>
     ...(error.retryAfterMillis === undefined ? {} : { retryAfterMillis: error.retryAfterMillis }),
   });
 
-const configuration = (operation: string) =>
+const configuration = (operation: ExtensionError["operation"]) =>
   ExtensionError.make({ operation, reason: "configuration", outcome: "undispatched" });
 
-const malformed = (operation: string, mutation = false) =>
+const malformed = (operation: ExtensionError["operation"], mutation = false) =>
   ExtensionError.make({
     operation,
     reason: "malformed",
@@ -103,7 +103,7 @@ export class BrowserbaseExtensions extends Context.Service<
 
         const validate = Effect.fnUntraced(function* (
           reference: ExtensionReference,
-          operation: string,
+          operation: ExtensionError["operation"],
         ) {
           const ref = yield* Schema.decodeEffect(ExtensionReference)(reference, {
             onExcessProperty: "error",
@@ -132,7 +132,7 @@ export class BrowserbaseExtensions extends Context.Service<
 
           if (archive.byteLength < 1 || archive.byteLength > maxBytes)
             return yield* ExtensionError.make({
-              operation: "extension-archive-limit",
+              operation: "extension-archive",
               reason: "limit",
               outcome: "undispatched",
             });
@@ -144,13 +144,13 @@ export class BrowserbaseExtensions extends Context.Service<
 
           if (inspected._tag === "Rejected") {
             return yield* ExtensionError.make({
-              operation:
+              operation: "extension-archive",
+              reason:
                 inspected.reason === "limit"
-                  ? "extension-archive-limit"
+                  ? "limit"
                   : inspected.reason === "name"
-                    ? "extension-archive-name"
-                    : "extension-archive",
-              reason: inspected.reason === "limit" ? "limit" : "configuration",
+                    ? "unsafe-filename"
+                    : "configuration",
               outcome: "undispatched",
             });
           }

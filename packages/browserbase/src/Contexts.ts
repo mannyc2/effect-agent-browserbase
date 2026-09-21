@@ -32,7 +32,7 @@ export class ContextCreation extends Schema.Class<ContextCreation>("BrowserbaseC
   reference: ContextReference,
 }) {}
 
-const fromClient = (operation: string, error: ClientError): ContextError =>
+const fromClient = (operation: ContextError["operation"], error: ClientError): ContextError =>
   ContextError.make({
     operation,
     reason: error.reason,
@@ -41,10 +41,10 @@ const fromClient = (operation: string, error: ClientError): ContextError =>
     ...(error.retryAfterMillis === undefined ? {} : { retryAfterMillis: error.retryAfterMillis }),
   });
 
-const configuration = (operation: string) =>
+const configuration = (operation: ContextError["operation"]) =>
   ContextError.make({ operation, reason: "configuration", outcome: "undispatched" });
 
-const malformed = (operation: string, mutation = false) =>
+const malformed = (operation: ContextError["operation"], mutation = false) =>
   ContextError.make({
     operation,
     reason: "malformed",
@@ -71,7 +71,7 @@ export class BrowserbaseContexts extends Context.Service<
 
       const validate = Effect.fnUntraced(function* (
         reference: ContextReference,
-        operation: string,
+        operation: ContextError["operation"],
       ) {
         const ref = yield* Schema.decodeEffect(ContextReference)(reference, {
           onExcessProperty: "error",

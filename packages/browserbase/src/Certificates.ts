@@ -64,9 +64,9 @@ export class BrowserbaseCertificates extends Context.Service<
       BrowserbaseCertificates,
       Effect.gen(function* () {
         const client = yield* BrowserbaseClient;
-        const api = resource(client, (failure) => CertificateError.make(failure));
+        const api = resource<CertificateError>(client, (failure) => CertificateError.make(failure));
 
-        const own = (operation: string, mutation: boolean) =>
+        const own = (operation: CertificateError["operation"], mutation: boolean) =>
           Effect.fnUntraced(function* (value: typeof ProviderCertificate.Type) {
             if (value.projectId !== client.projectId)
               return yield* api.malformed(operation, mutation);

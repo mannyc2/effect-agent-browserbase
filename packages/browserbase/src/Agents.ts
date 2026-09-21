@@ -225,14 +225,14 @@ export class BrowserbaseAgents extends Context.Service<
     Effect.gen(function* () {
       const client = yield* BrowserbaseClient;
 
-      const api = resource(client, (failure) =>
+      const api = resource<PlatformError>(client, (failure) =>
         PlatformError.make({ ...failure, service: "agents" }),
       );
 
       const agentPath = (id: string) => `/v1/agents/${api.segment(id)}`;
       const runPath = (id: string) => `/v1/agents/runs/${api.segment(id)}`;
 
-      const agent = (operation: string, mutation: boolean, expected?: string) =>
+      const agent = (operation: PlatformError["operation"], mutation: boolean, expected?: string) =>
         Effect.fnUntraced(function* (value: typeof ProviderAgent.Type) {
           if (expected !== undefined && value.agentId !== expected)
             return yield* api.malformed(operation, mutation);
@@ -240,7 +240,7 @@ export class BrowserbaseAgents extends Context.Service<
           return AgentMetadata.make(value);
         });
 
-      const run = (operation: string, mutation: boolean, expected?: string) =>
+      const run = (operation: PlatformError["operation"], mutation: boolean, expected?: string) =>
         Effect.fnUntraced(function* (value: AgentRun) {
           if (expected !== undefined && value.runId !== expected)
             return yield* api.malformed(operation, mutation);

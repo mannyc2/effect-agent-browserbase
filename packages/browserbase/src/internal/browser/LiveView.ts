@@ -49,13 +49,13 @@ export const issueLiveUrls = Effect.fnUntraced(function* (
 ) {
   if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 21600)
     return yield* ClientError.make({
-      operation: "live-view",
+      operation: "provider-read",
       reason: "configuration",
       outcome: "undispatched",
     });
   if (reference.projectId !== client.projectId)
     return yield* ClientError.make({
-      operation: "live-view",
+      operation: "provider-read",
       reason: "authorization",
       outcome: "undispatched",
     });
@@ -66,7 +66,7 @@ export const issueLiveUrls = Effect.fnUntraced(function* (
   );
 
   const value = yield* Schema.decodeUnknownEffect(Live)(raw).pipe(
-    Effect.mapError(() => ClientError.make({ operation: "live-view", reason: "malformed" })),
+    Effect.mapError(() => ClientError.make({ operation: "provider-read", reason: "malformed" })),
   );
 
   return {

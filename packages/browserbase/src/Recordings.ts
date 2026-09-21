@@ -31,10 +31,10 @@ export interface PollOptions {
 /** Recording transfers share the canonical artifact bounds. */
 export type DownloadLimits = ArtifactTransferPolicy;
 
-const failure = (operation: string, reason: ArtifactError["reason"]) =>
+const failure = (operation: ArtifactError["operation"], reason: ArtifactError["reason"]) =>
   ArtifactError.make({ operation, reason });
 
-const fromClient = (operation: string) => (error: ClientError) =>
+const fromClient = (operation: ArtifactError["operation"]) => (error: ClientError) =>
   ArtifactError.make({
     operation,
     reason: error.reason,
@@ -43,8 +43,11 @@ const fromClient = (operation: string) => (error: ClientError) =>
     ...(error.retryAfterMillis === undefined ? {} : { retryAfterMillis: error.retryAfterMillis }),
   });
 
-const within = <A, E, R>(effect: Effect.Effect<A, E, R>, deadline: number, operation: string) =>
-  until(effect, deadline, () => failure(operation, "timeout"));
+const within = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  deadline: number,
+  operation: ArtifactError["operation"],
+) => until(effect, deadline, () => failure(operation, "timeout"));
 
 /** Independent of a live browser. Merely building this Layer performs no provider calls. */
 export class BrowserbaseRecordings extends Context.Service<

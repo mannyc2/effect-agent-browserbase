@@ -120,11 +120,15 @@ export class BrowserbaseWebhooks extends Context.Service<
     Effect.gen(function* () {
       const client = yield* BrowserbaseClient;
 
-      const api = resource(client, (failure) =>
+      const api = resource<PlatformError>(client, (failure) =>
         PlatformError.make({ ...failure, service: "webhooks" }),
       );
 
-      const decode = (operation: string, mutation: boolean, expected?: string) =>
+      const decode = (
+        operation: PlatformError["operation"],
+        mutation: boolean,
+        expected?: string,
+      ) =>
         Effect.fnUntraced(function* (value: typeof ProviderWebhook.Type) {
           if (
             value.projectId !== client.projectId ||

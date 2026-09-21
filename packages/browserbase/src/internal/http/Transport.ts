@@ -38,7 +38,7 @@ const deadlineAfter = (millis: number) => nowMillis.pipe(Effect.map((now) => now
 const within = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   deadline: number,
-  operation: string,
+  operation: ClientError["operation"],
   outcome?: "undispatched" | "unknown",
 ): Effect.Effect<A, E | ClientError, R> =>
   Effect.suspend(() =>
@@ -111,7 +111,12 @@ const mutationOutcome = (
   return "unknown";
 };
 
-const statusError = (method: ClientMethod, status: number, operation: string, after?: number) =>
+const statusError = (
+  method: ClientMethod,
+  status: number,
+  operation: ClientError["operation"],
+  after?: number,
+) =>
   ClientError.make({
     operation,
     reason:
@@ -138,7 +143,7 @@ const statusError = (method: ClientMethod, status: number, operation: string, af
 const collect = (
   stream: Stream.Stream<Uint8Array, ClientError>,
   maximum: number,
-  operation: string,
+  operation: ClientError["operation"],
 ) =>
   Effect.gen(function* () {
     const chunks: Uint8Array[] = [];
@@ -214,7 +219,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
 
   const execute = (
     request: HttpClientRequest.HttpClientRequest,
-    operation: string,
+    operation: ClientError["operation"],
     outcome?: "undispatched" | "unknown",
   ) =>
     scoped.execute(request).pipe(
@@ -238,7 +243,12 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     );
 
   /** A rejected path is a typed, undispatched configuration failure, never a defect. */
-  const apiRequest = (method: ClientMethod, path: string, accept: string, operation: string) =>
+  const apiRequest = (
+    method: ClientMethod,
+    path: string,
+    accept: string,
+    operation: ClientError["operation"],
+  ) =>
     validApiPath(path)
       ? Effect.succeed(
           HttpClientRequest.make(method)(`${API_ORIGIN}${path}`).pipe(
@@ -253,7 +263,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
   const inspectJson = Effect.fnUntraced(function* (
     method: ClientMethod,
     response: HttpClientResponse.HttpClientResponse,
-    operation: string,
+    operation: ClientError["operation"],
   ) {
     if (response.status !== 200 && response.status !== 201 && response.status !== 202) {
       return yield* statusError(
@@ -313,7 +323,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
   const readJson = Effect.fnUntraced(function* (
     method: ClientMethod,
     response: HttpClientResponse.HttpClientResponse,
-    operation: string,
+    operation: ClientError["operation"],
   ) {
     const stream = yield* inspectJson(method, response, operation);
     const bytes = yield* collect(stream, MAX_JSON_BYTES, operation);
@@ -437,7 +447,8 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       const result = yield* within(
         Effect.scoped(jsonOnce(method, path, body)),
         deadline,
-        "provider-request",
+        // A request that times out is labelled like the same request failing any other way.
+        method === "GET" ? "provider-read" : "provider-mutation",
         method === "GET" ? undefined : "unknown",
       ).pipe(Effect.result);
 
@@ -502,7 +513,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
 
   const inspectBytes = Effect.fnUntraced(function* (
     response: HttpClientResponse.HttpClientResponse,
-    operation: string,
+    operation: ClientError["operation"],
     types: ReadonlyArray<string>,
     maximum: number,
   ) {
@@ -543,12 +554,14 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     path: string,
     maximum: number,
     types: ReadonlyArray<string>,
-    operation: string,
     timeoutMillis = requestTimeoutMillis,
     outerDeadline?: number,
   ) =>
     Stream.unwrap(
       Effect.gen(function* () {
+        // A bounded authenticated read. Resource services relabel it with their own operation.
+        const operation = "provider-read";
+
         if (
           !Number.isSafeInteger(maximum) ||
           maximum < 1 ||
@@ -578,17 +591,18 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       }),
     ).pipe(Stream.scoped);
 
-  const text = (path: string, maximum: number, types: ReadonlyArray<string>, operation: string) =>
-    collect(bytes(path, maximum, types, operation), maximum, operation).pipe(
+  const text = (path: string, maximum: number, types: ReadonlyArray<string>) =>
+    collect(bytes(path, maximum, types), maximum, "provider-read").pipe(
       Effect.flatMap((body) =>
         Effect.try({
           try: () => new TextDecoder("utf-8", { fatal: true }).decode(body),
-          catch: () => ClientError.make({ operation, reason: "malformed" }),
+          catch: () => ClientError.make({ operation: "provider-read", reason: "malformed" }),
         }),
       ),
       Effect.timeoutOrElse({
         duration: Duration.millis(requestTimeoutMillis),
-        orElse: () => Effect.fail(ClientError.make({ operation, reason: "timeout" })),
+        orElse: () =>
+          Effect.fail(ClientError.make({ operation: "provider-read", reason: "timeout" })),
       }),
     );
 

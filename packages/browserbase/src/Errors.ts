@@ -115,42 +115,87 @@ const RequestReason = Schema.Literals([
   "content-type",
 ]);
 
-const RequestFields = {
-  operation: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+/**
+ * Every control-plane error shares these fields, but never a vocabulary: each names only the
+ * operations its own service performs, so a caller can match on them exhaustively.
+ */
+const requestFields = <const Operations extends ReadonlyArray<string>>(operations: Operations) => ({
+  operation: Schema.Literals(operations),
   reason: RequestReason,
   outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
   status: Schema.optionalKey(Schema.Int),
   retryAfterMillis: Schema.optionalKey(Schema.Natural),
-};
+});
 
 /** Credential-free control-plane failures; response bodies and native causes never escape. */
-export class ClientError extends Schema.TaggedError<ClientError>()("ClientError", RequestFields) {}
+export class ClientError extends Schema.TaggedError<ClientError>()(
+  "ClientError",
+  requestFields([
+    "configure",
+    "provider-read",
+    "provider-mutation",
+    "provider-upload",
+    "media-download",
+  ]),
+) {}
 
 export class SessionError extends Schema.TaggedError<SessionError>()(
   "SessionError",
-  RequestFields,
+  requestFields([
+    "session-retrieve",
+    "session-list",
+    "session-release",
+    "session-wait",
+    "session-logs",
+    "session-live-view",
+    "session-connect",
+    "session-attach",
+  ]),
 ) {}
 
 export class ContextError extends Schema.TaggedError<ContextError>()(
   "ContextError",
-  RequestFields,
+  requestFields([
+    "context-create",
+    "context-retrieve",
+    "context-delete",
+    "writer",
+    "writer-admit",
+    "writer-authority",
+    "writer-readback",
+    "writer-settle",
+  ]),
 ) {}
 
-export class ExtensionError extends Schema.TaggedError<ExtensionError>()(
-  "ExtensionError",
-  RequestFields,
-) {}
+/**
+ * `extension-archive` is the local inspection of the bytes a caller supplied, before any
+ * request. Why an archive was refused is its reason, never a second operation.
+ */
+export class ExtensionError extends Schema.TaggedError<ExtensionError>()("ExtensionError", {
+  ...requestFields([
+    "extension-archive",
+    "extension-register",
+    "extension-retrieve",
+    "extension-delete",
+  ]),
+  reason: Schema.Literals([...RequestReason.literals, "unsafe-filename"]),
+}) {}
 
 /** Project inspection and usage. */
 export class ProjectError extends Schema.TaggedError<ProjectError>()(
   "ProjectError",
-  RequestFields,
+  requestFields(["project-list", "project-retrieve", "project-usage"]),
 ) {}
 
 /** Proxy CA certificate administration. */
 export class CertificateError extends Schema.TaggedError<CertificateError>()(
   "CertificateError",
-  RequestFields,
+  requestFields([
+    "certificate-create",
+    "certificate-list",
+    "certificate-retrieve",
+    "certificate-delete",
+  ]),
 ) {}
 
 /**
@@ -158,12 +203,51 @@ export class CertificateError extends Schema.TaggedError<CertificateError>()(
  * and Webhooks. `service` names which one; these are host APIs, never model-facing tools.
  */
 export class PlatformError extends Schema.TaggedError<PlatformError>()("PlatformError", {
-  ...RequestFields,
+  ...requestFields([
+    "search-web",
+    "fetch",
+    "agent-create",
+    "agent-list",
+    "agent-retrieve",
+    "agent-update",
+    "agent-delete",
+    "agent-run",
+    "agent-run-list",
+    "agent-run-retrieve",
+    "agent-run-messages",
+    "agent-run-stop",
+    "agent-run-wait",
+    "function-list",
+    "function-retrieve",
+    "function-versions",
+    "function-version",
+    "function-builds",
+    "function-build",
+    "function-build-logs",
+    "function-invoke",
+    "function-invocations",
+    "function-invocation",
+    "function-invocation-logs",
+    "function-wait",
+    "webhook-create",
+    "webhook-list",
+    "webhook-retrieve",
+    "webhook-update",
+    "webhook-delete",
+    "webhook-rotate-secret",
+  ]),
   service: Schema.Literals(["search", "fetch", "agents", "functions", "webhooks"]),
 }) {}
 
 export class FileError extends Schema.TaggedError<FileError>()("FileError", {
-  ...RequestFields,
+  ...requestFields([
+    "upload",
+    "downloads-list",
+    "download-metadata",
+    "download",
+    "download-wait",
+    "download-delete",
+  ]),
   reason: Schema.Literals([
     ...RequestReason.literals,
     "unsafe-filename",
@@ -174,7 +258,17 @@ export class FileError extends Schema.TaggedError<FileError>()("FileError", {
 }) {}
 
 export class ArtifactError extends Schema.TaggedError<ArtifactError>()("ArtifactError", {
-  ...RequestFields,
+  ...requestFields([
+    "recording-request",
+    "recording-status",
+    "recording-wait",
+    "recording",
+    "recording-download",
+    "replay-metadata",
+    "replay",
+    "replay-playlist",
+    "replay-media",
+  ]),
   reason: Schema.Literals([
     ...RequestReason.literals,
     "failed",
