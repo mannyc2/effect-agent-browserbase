@@ -16,27 +16,6 @@ const modes = [
 ];
 const walk = (directory, prefix = "") => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? walk(join(directory, entry.name), `${prefix}${entry.name}/`) : [`${prefix}${entry.name}`]);
 
-const diagnostic = /(?:^|\n)(\S[^\n(]*)\(\d+,\d+\): error TS\d+/g;
-
-/** Published framework declarations this repository does not build or control. */
-const foreign = /^node_modules[\\/]effect-agent[\\/]/;
-
-export function declarationFiles(output) {
-  return [...String(output).matchAll(diagnostic)].map((match) => match[1].replaceAll("\\", "/"));
-}
-
-export function excusedDeclarations(output) {
-  return [...new Set(declarationFiles(output).filter((file) => foreign.test(file)))];
-}
-
-/** Pass only when every remaining declaration failure belongs to someone else's package. */
-export function ownDeclarations(output, status) {
-  if (status === 0) return true;
-  const files = declarationFiles(output);
-
-  return files.length > 0 && files.every((file) => foreign.test(file));
-}
-
 export function consumerManifest(mode, receipt, out, catalog) {
   const file = (index) => `file:${join(resolve(out), receipt.packages[index].filename)}`;
   const dependencies = { [packages[0].name]: file(0), effect: catalog.effect };
@@ -68,15 +47,13 @@ export function packedConsumers(tree, out, sha) {
   const root = join(out, "consumers");
   assert.ok(!existsSync(root), "Refusing existing consumers"); mkdirSync(root);
   const results = [];
-  const run = (mode, name, command, args, cwd, extraEnv = {}, accept) => {
+  const run = (mode, name, command, args, cwd, extraEnv = {}) => {
     const logBase = join(out, `consumer-${mode}-${name}`);
     writeFileSync(logBase + ".command.json", JSON.stringify({ cwd, command, args }, null, 2) + "\n");
     const result = spawnSync(command, args, { cwd, encoding: "utf8", env: { ...process.env, ...extraEnv }, timeout: 240_000, maxBuffer: 32 * 1024 * 1024 });
     const output = (result.stdout ?? "") + (result.stderr ?? "");
     writeFileSync(logBase + ".log", output + (result.error ? `\n${result.error.message}\n` : ""));
-    const judged = result.error ? undefined : accept?.(output, result.status);
-    const record = { profile: mode, step: name, exitCode: result.status, signal: result.signal, passed: judged ?? (result.status === 0 && !result.error) };
-    if (judged !== undefined) record.excused = excusedDeclarations(output).length;
+    const record = { profile: mode, step: name, exitCode: result.status, signal: result.signal, passed: result.status === 0 && !result.error };
     results.push(record); appendFileSync(join(out, "consumer-statuses.ndjson"), JSON.stringify(record) + "\n");
     console.log(JSON.stringify(record));
     if (!record.passed) console.error(output.split("\n").slice(-60).join("\n"));
@@ -108,11 +85,9 @@ export function packedConsumers(tree, out, sha) {
       if (!run(mode.name, "install", "bun", ["install", "--ignore-scripts"], directory)) continue;
       const vp = join(directory, "node_modules/.bin/vp");
       if (!run(mode.name, "frozen-install", vp, ["install", "--frozen-lockfile", "--ignore-scripts"], directory)) continue;
-      // Every declaration this repository ships is checked with skipLibCheck:false. The
-      // agent profile additionally compiles effect-agent's own published declarations,
-      // which do not currently compile at all; those exact files are excused and counted
-      // instead of relaxing the check for our packages.
-      run(mode.name, "declarations", vp, ["run", "check"], directory, {}, mode.name === "agent" ? ownDeclarations : undefined);
+      // All three consumers check reachable published declarations with skipLibCheck:false.
+      // A dependency diagnostic fails the gate just as a diagnostic in either candidate does.
+      run(mode.name, "declarations", vp, ["run", "check"], directory);
       for (const runtime of ["node", "bun"]) {
         if (!run(mode.name, `${runtime}-identity`, runtime, [join(tools, "verify-consumer.mjs"), directory, out, mode.name], directory)) continue;
         const evidence = join(out, `video-${mode.name}-${runtime}`); mkdirSync(evidence);

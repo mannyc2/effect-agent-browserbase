@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { checkTag, distTag, packages, readPackageSet, repositoryUrl } from "../packages.mjs";
 import { checkPackagePaths, distributionFiles, packageReleaseSet, publicationManifest, releaseSetDigest } from "../package-release.mjs";
-import { excusedDeclarations, ownDeclarations } from "../packed-consumers.mjs";
+import { packedConsumers } from "../packed-consumers.mjs";
 import { publishReleaseSet, registryIntegrity } from "../publish-release.mjs";
 import { verifyReleaseSet } from "../verify-release.mjs";
 
@@ -173,16 +175,49 @@ test("publication order and partial recovery never retry or replace an uncertain
   assert.equal(dry.length, 2); assert.ok(dry.every((a) => a[0] === "publish" && a.includes("--dry-run") && a.includes("--ignore-scripts")));
 });
 
-test("only a dependency's own published declarations may be excused from the consumer check", () => {
-  const foreign = "node_modules/effect-agent/dist/core/Memory.d.mts(337,189): error TS2304: Cannot find name 'S'.\n";
-  const ours = "exports.mts(1,14): error TS2305: Module has no exported member 'Missing'.\n";
+for (const declarationExit of [0, 1]) {
+  test(`packed consumer receipts retain the raw declaration exit ${declarationExit}`, (t) => {
+    const { tree, out } = workspace(t, (tree) => {
+      writeFileSync(join(tree, "package.json"), JSON.stringify({ catalog: {
+        effect: "4.0.0-rc.115", "@types/node": "26.1.2", typescript: "7.0.2",
+        "vite-plus": "0.3.2", "playwright-core": "1.63.0", "@effect/vitest": "4.0.0-rc.115", vitest: "4.1.11",
+      } }));
+      for (const item of packages) {
+        const pkg = join(tree, item.directory);
+        for (const file of ["test/consumer/resources.ts", "test/consumer/native.ts", "test/consumer/agent.ts", "test/native/fixture.test.ts", "examples/fixture.ts", "vite.native.config.ts"]) {
+          const target = join(pkg, file);
+          mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, "export {};\n");
+        }
+      }
+    });
+    const diagnostic = "node_modules/effect-agent/dist/capabilities/MemoryNotes.d.mts(330,108): error TS2304: Cannot find name 'S'.\n";
+    // Only the external command boundary is substituted. Real packing, fixture staging,
+    // strict configuration and receipt aggregation run; no installs or browsers run here.
+    const commands = t.mock.method(childProcess, "spawnSync", (_command, args, options) => {
+      const failing = options.cwd === join(out, "consumers/agent") && args[0] === "run" && args[1] === "check";
+      return { status: failing ? declarationExit : 0, signal: null, stdout: failing && declarationExit !== 0 ? diagnostic : "", stderr: "" };
+    });
+    syncBuiltinESMExports();
+    t.after(() => { commands.mock.restore(); syncBuiltinESMExports(); });
+    t.mock.method(console, "log", () => {});
+    t.mock.method(console, "error", () => {});
 
-  assert.equal(ownDeclarations("", 0), true);
-  assert.equal(ownDeclarations(foreign, 2), true);
-  assert.deepEqual(excusedDeclarations(foreign + foreign), ["node_modules/effect-agent/dist/core/Memory.d.mts"]);
-  // A failure in this repository's own declarations is never excused by a foreign one.
-  assert.equal(ownDeclarations(foreign + ours, 2), false);
-  assert.equal(ownDeclarations(ours, 2), false);
-  // A non-zero exit with no diagnostic at all stays a failure rather than an excuse.
-  assert.equal(ownDeclarations("tsc crashed\n", 2), false);
-});
+    if (declarationExit === 0) packedConsumers(tree, out, sha);
+    else assert.throws(() => packedConsumers(tree, out, sha), /One or more canonical consumer gates failed/);
+
+    const records = readFileSync(join(out, "consumer-statuses.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(records.filter((record) => record.step === "declarations"), [
+      { profile: "resources", step: "declarations", exitCode: 0, signal: null, passed: true },
+      { profile: "generic", step: "declarations", exitCode: 0, signal: null, passed: true },
+      { profile: "agent", step: "declarations", exitCode: declarationExit, signal: null, passed: declarationExit === 0 },
+    ]);
+    assert.equal(records.every((record) => record.passed), declarationExit === 0);
+    assert.equal(readFileSync(join(out, "consumer-agent-declarations.log"), "utf8"), declarationExit === 0 ? "" : diagnostic);
+    assert.equal(records.filter((record) => record.step.endsWith("-workflow")).length, 6);
+    for (const profile of ["resources", "generic", "agent"]) {
+      const config = JSON.parse(readFileSync(join(out, "consumers", profile, "tsconfig.json"), "utf8"));
+      assert.equal(config.compilerOptions.strict, true);
+      assert.equal(config.compilerOptions.skipLibCheck, false);
+    }
+  });
+}

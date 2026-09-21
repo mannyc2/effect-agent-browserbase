@@ -521,6 +521,7 @@ export class BrowserbaseBrowser extends Context.Service<
           maxPages,
           popupPolicy,
           dialogPolicy,
+          preserveViewport: options.launch.viewport._tag !== "Fixed",
           ...(automation.initialPage === undefined
             ? {}
             : "targetId" in automation.initialPage

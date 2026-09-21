@@ -85,6 +85,7 @@ const Geometry = Schema.Struct({ width: Schema.Natural, height: Schema.Natural }
 const TargetInfo = Schema.Struct({
   targetInfo: Schema.Struct({ targetId: Identifier, type: Schema.Literal("page") }),
 });
+const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
 const URLText = Schema.String.check(Schema.isMaxLength(8192));
@@ -466,6 +467,19 @@ export const makePlaywrightDriver = async (
     } finally {
       await closeWithin(() => cdp.detach()).catch(() => {});
     }
+  };
+
+  const sizeNativeContents = async (entry: Entry): Promise<void> => {
+    if (browserCdp === undefined) throw failure("viewport", "closed", "undispatched");
+    const targetId = await getTargetId(entry);
+    const current: unknown = await browserCdp.send("Browser.getWindowForTarget", { targetId });
+    const native = safeDecode(NativeWindow, current, "viewport");
+
+    await browserCdp.send("Browser.setContentsSize", {
+      windowId: native.windowId,
+      width: options.viewport.width,
+      height: options.viewport.height,
+    });
   };
 
   const observationUrl = () => safeDecode(URLText, current().frame.url(), "page-url");
@@ -1581,7 +1595,10 @@ export const makePlaywrightDriver = async (
     if (selected === undefined) throw failure("initial-page", "not-found");
     await attachBindings(selected.page);
     selectedFrame = selected.page.mainFrame();
-    if (!options.preserveViewport) await selected.page.setViewportSize(options.viewport);
+    if (!options.preserveViewport) {
+      await sizeNativeContents(selected);
+      await selected.page.setViewportSize(options.viewport);
+    }
     await getTargetId(selected);
     if (options.pageControl) for (const entry of entries.values()) await executionFor(entry);
     initialized = true;

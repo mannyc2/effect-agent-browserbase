@@ -11,7 +11,9 @@ import { fromSession } from "@effect-agent/platform-browserbase/adapter";
 import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as InMemory from "effect-agent/in-memory";
 import { Model } from "effect/unstable/ai";
 
 import {
