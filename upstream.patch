@@ -1,6 +1,6 @@
 diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
 new file mode 100644
-index 00000000..c007e2a1
+index 00000000..1730beba
 --- /dev/null
 +++ b/.changeset/browserbase-interactive.md
 @@ -0,0 +1,6 @@
@@ -9,7 +9,7 @@ index 00000000..c007e2a1
 +"@effect-agent/platform-browserbase": minor
 +---
 +
-+Add scoped Browserbase interactive control, independent recording/replay/download access, and bounded same-page live capture for trusted Node and Bun hosts.
++Add Browserbase in two packages: `@effect-agent/browserbase` owns account identity, session and context resources, one scoped browser over Playwright/CDP, bounded live capture, opt-in page holds, and provider recording, replay and download access, with no Effect Agent dependency; `@effect-agent/platform-browserbase` adds only the Effect Agent adapter and its fixed browser Toolkit, with no Playwright peer.
 diff --git a/.changeset/config.json b/.changeset/config.json
 index 7db06dca..a331c2d6 100644
 --- a/.changeset/config.json

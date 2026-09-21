@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { checkTag, distTag, packages, readPackageSet, repositoryUrl } from "../packages.mjs";
 import { checkPackagePaths, distributionFiles, packageReleaseSet, publicationManifest, releaseSetDigest } from "../package-release.mjs";
+import { excusedDeclarations, ownDeclarations } from "../packed-consumers.mjs";
 import { publishReleaseSet, registryIntegrity } from "../publish-release.mjs";
 import { verifyReleaseSet } from "../verify-release.mjs";
 
@@ -170,4 +171,18 @@ test("publication order and partial recovery never retry or replace an uncertain
   const dry = [];
   publishReleaseSet(out, sha, `v${version}`, digest, { run: (args) => { dry.push(args); return "{}"; } });
   assert.equal(dry.length, 2); assert.ok(dry.every((a) => a[0] === "publish" && a.includes("--dry-run") && a.includes("--ignore-scripts")));
+});
+
+test("only a dependency's own published declarations may be excused from the consumer check", () => {
+  const foreign = "node_modules/effect-agent/dist/core/Memory.d.mts(337,189): error TS2304: Cannot find name 'S'.\n";
+  const ours = "exports.mts(1,14): error TS2305: Module has no exported member 'Missing'.\n";
+
+  assert.equal(ownDeclarations("", 0), true);
+  assert.equal(ownDeclarations(foreign, 2), true);
+  assert.deepEqual(excusedDeclarations(foreign + foreign), ["node_modules/effect-agent/dist/core/Memory.d.mts"]);
+  // A failure in this repository's own declarations is never excused by a foreign one.
+  assert.equal(ownDeclarations(foreign + ours, 2), false);
+  assert.equal(ownDeclarations(ours, 2), false);
+  // A non-zero exit with no diagnostic at all stays a failure rather than an excuse.
+  assert.equal(ownDeclarations("tsc crashed\n", 2), false);
 });

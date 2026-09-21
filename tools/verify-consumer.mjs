@@ -99,8 +99,12 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
   if (profile === "agent") {
     const adapterRequire = createRequire(join(installed.get(packages[1].name), "dist/index.mjs"));
     assert.equal(realpathSync(adapterRequire.resolve(packages[0].name)), realpathSync(require.resolve(packages[0].name)), "Adapter and consumer do not share the same candidate generic package");
+    // Node reports a blocked subpath as ERR_PACKAGE_PATH_NOT_EXPORTED; Bun raises an
+    // ordinary resolution failure. Both mean the retired subpath is gone, and neither
+    // may be satisfied by an unrelated throw, so the specifier itself must be named.
     for (const old of ["interactive-browser", "types", "recordings", "replays", "downloads", "capture", "page-control"]) {
-      assert.throws(() => require.resolve(`${packages[1].name}/${old}`), (error) => error.code === "ERR_PACKAGE_PATH_NOT_EXPORTED", `Superseded export still resolves: ${old}`);
+      const specifier = `${packages[1].name}/${old}`;
+      assert.throws(() => require.resolve(specifier), (error) => error.code === "ERR_PACKAGE_PATH_NOT_EXPORTED" || ((error.code === "MODULE_NOT_FOUND" || error.code === "ERR_MODULE_NOT_FOUND") && String(error.message).includes(specifier)), `Superseded export still resolves: ${old}`);
     }
   }
   return { profile, runtime: process.versions.bun ? `bun ${process.versions.bun}` : `node ${process.versions.node}`, sourceSha: receipt.sourceSha, packages: [...installed.keys()], result: "candidate identity and canonical exports verified" };
