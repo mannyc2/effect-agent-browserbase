@@ -7,7 +7,7 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 | Input | Pin |
 | --- | --- |
 | Node | 24.14.1 (`.node-version`) |
-| Bun | 1.4.2 (`.bun-version`) |
+| Bun | 1.4.2 |
 | Upstream | `danieljvdm/effect-agent@ea53ea6671a94eb44b8019e942cc2c9468786723` |
 | Effect family | 4.0.0-rc.115 |
 | effect-agent / testing | 0.1.0-beta.102 |
@@ -29,18 +29,6 @@ toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"
 The assignment preserves installer failure; do not wrap the command substitution directly in `eval`, which would hide a failed download. Publisher access is required for a first install.
 
 It verifies each published release against a pinned digest, installs into the ignored `.work/toolchain`, and reuses an existing install that already reports the pinned version.
-
-For the ordinary edit-and-check loop, one command does all of the below:
-
-```sh
-bash tools/verify.sh           # add --fresh to rebuild the workspace from clean upstream
-```
-
-It installs the pinned runtimes if the host lacks them, bootstraps or reuses `.work/upstream`, copies your tracked package files in, then runs formatting, lint, typecheck, unit and native suites and the pack. It needs no root: it fetches the browser without the system-dependency step and only warns if FFmpeg is absent. Formatting the workspace produces canonical output, so any change it makes is copied back for you to review and stage.
-
-It is a fast loop, not acceptance. It stops at the first failure and mints no evidence bundle; `tools/run-acceptance.sh` remains the program whose record CI and the release workflow consume.
-
-The individual commands, if you want them separately:
 
 ```sh
 # Fast repository-tooling checks; no third-party installs or network required.
@@ -78,10 +66,6 @@ bash tools/run-acceptance.sh
 It creates a fresh temporary workspace and prints the results directory. On the CI runner it installs local Chromium dependencies and FFmpeg with `sudo`; the full script is not advertised as a portable macOS/Windows setup command.
 
 Every command retains its arguments, log and exit status. The gate includes the independent boundary runner on Node and Bun, package tests, native AgentRuntime/CDP/video suites, an emitted external consumer, declaration checks, real emitted-code programs on both runtimes, exports, purity, full `vp run ready` and release dry-runs. Later independent checks still execute after a failure, but any failure keeps the gate red. Old counts are never reused as current results.
-
-No suite is filtered and no assertion is relaxed to make that gate quicker. What CI does instead is what upstream CI already does: it transfers the workspace's `node_modules/.vite/task-cache` between runs, through `BROWSERBASE_TASK_CACHE`. Set that variable to reuse a cache locally; leave it unset and every task runs cold. Vite Task fingerprints each task against its own inputs, so a stored result is replayed only for a task whose inputs are unchanged: touching this package re-runs its tasks, while unrelated upstream packages stop paying for a fresh run per candidate. `ready.log` records the hit/miss/disabled decision for all 64 tasks and `task-cache.txt` records whether a cache was seeded, so a replayed result is never mistaken for a fresh execution.
-
-The seed is installed immediately before `ready`, not at the start. A replayed task restores workspace files, never effects outside the workspace, and `install:test-browser` installs Chromium under `~/.cache/ms-playwright`; seeding before it made that task report success from cache while the browser was absent, and `native` and `packed-consumer` then failed against a missing Chromium. So every stage up to and including `packed-consumer` runs for real on every candidate — which is also what keeps package tests, the retained capture video and the external consumer check fresh — and the cache covers `ready` and the release dry runs, which is where the time actually went. A cold cache is the honest full cost and stays roughly 25 minutes.
 
 Results, downloaded videos, build directories and package archives are ignored; retain them in Actions artifacts, not commits. The single exception is `docs/media/`, which holds the published demo recording under a declared size budget enforced by `tools/test/hosted.test.mjs`; see [docs/media/README.md](docs/media/README.md). `checkpoints/` stays immutable. The historical checkpoint verifier remains a separate integrity check, never a bootstrap dependency.
 

@@ -46,9 +46,7 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - name: Set isolated acceptance workspace
-        run: |
-          printf 'BROWSERBASE_WORK_ROOT=%s/browserbase-maintenance\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          printf 'BROWSERBASE_TASK_CACHE=%s/browserbase-task-cache\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        run: printf 'BROWSERBASE_WORK_ROOT=%s/browserbase-maintenance\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Check out immutable source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,44 +58,10 @@ jobs:
           package-manager-cache: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version-file: .bun-version
+          bun-version: '1.4.2'
           no-cache: true
-      # The workspace identity, not the candidate, decides whether a stored task
-      # result can apply at all: the pinned upstream revision lives in
-      # bootstrap.sh, the integration diff in upstream.patch, the runtimes in the
-      # two version files. Vite Task still re-checks every individual task's own
-      # inputs, so this key only narrows what is worth downloading.
-      - name: Restore upstream task cache
-        id: task-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/browserbase-task-cache
-          key: >-
-            browserbase-task-${{ runner.os }}-${{ hashFiles('tools/bootstrap.sh', 'upstream.patch',
-            '.node-version', '.bun-version') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            browserbase-task-${{ runner.os }}-${{ hashFiles('tools/bootstrap.sh', 'upstream.patch', '.node-version', '.bun-version') }}-
       - name: Execute complete unpaid acceptance
         run: bash tools/run-acceptance.sh
-      # A run that never reached the workspace exports nothing. Saving the empty
-      # directory anyway would store a newer entry that shadows a usable older one
-      # under the same prefix, so an early failure would slow every later run.
-      - name: Report exported task cache
-        id: exported
-        if: ${{ !cancelled() }}
-        run: |
-          # Most task results live in cache.db rather than a per-task blob, so
-          # this asks whether anything was exported at all, not what shape it has.
-          entry="$(find "$BROWSERBASE_TASK_CACHE" -type f -print -quit 2>/dev/null || true)"
-          printf 'present=%s\n' "$([ -n "$entry" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-      # A stage failing does not invalidate the tasks that passed before it, and
-      # re-earning them on the next run is the cost this transfer exists to avoid.
-      - name: Save upstream task cache
-        if: ${{ !cancelled() && steps.exported.outputs.present == 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/browserbase-task-cache
-          key: ${{ steps.task-cache.outputs.cache-primary-key }}
       - name: Record tested release-set digest
         id: release
         run: |

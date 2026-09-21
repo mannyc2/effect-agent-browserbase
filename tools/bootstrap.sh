@@ -7,7 +7,7 @@ WORK="${1:-$ROOT/.work/upstream}"
 TREE="$WORK/tree"
 for tool in git bun node python3; do command -v "$tool" >/dev/null; done
 test "$(node --version)" = "v$(cat "$ROOT/.node-version")"
-test "$(bun --version)" = "$(cat "$ROOT/.bun-version")"
+test "$(bun --version)" = 1.4.2
 # A fresh destination prevents stale build products or silently reused lockfiles.
 test ! -e "$WORK" || { echo "Refusing existing workspace: $WORK" >&2; exit 1; }
 mkdir -p "$WORK"
