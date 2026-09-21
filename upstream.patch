@@ -173,7 +173,7 @@ index efaa1da4..b420983d 100644
  
  This complete composition captures rendered Markdown through the Node-safe REST adapter. The
 diff --git a/package.json b/package.json
-index 183913dc..16c6aad9 100644
+index 183913dc..c841d111 100644
 --- a/package.json
 +++ b/package.json
 @@ -22,7 +22,7 @@
@@ -185,15 +185,15 @@ index 183913dc..16c6aad9 100644
      "build": "vp run -r build && vp run docs:build && vp run action:build",
      "ready": "vp run check && vp run test && vp run build"
    },
-@@ -30,6 +30,8 @@
-     "@changesets/changelog-github": "0.7.0",
-     "@changesets/cli": "2.31.0",
-     "@effect-agent/ai-typesafe": "workspace:*",
-+    "effect-browserbase": "workspace:*",
+@@ -53,6 +53,8 @@
+     "alchemy": "2.0.0-beta.77",
+     "effect": "catalog:",
+     "effect-agent": "workspace:*",
 +    "effect-agent-browserbase": "workspace:*",
-     "@effect-agent/platform-cloudflare": "workspace:*",
-     "@effect-agent/platform-node": "workspace:*",
-     "@effect-agent/sandbox-local": "workspace:*",
++    "effect-browserbase": "workspace:*",
+     "effect-cf": "catalog:",
+     "esbuild": "catalog:",
+     "mime": "4.1.0",
 @@ -137,7 +139,8 @@
      "isomorphic-git": "1.41.9",
      "memfs": "4.71.0",
