@@ -34,7 +34,7 @@ test("ordinary acceptance has no live publisher, hosted opt-in or write-enabled 
   for (const line of acceptance.split("\n").filter((line) => /npm publish|release:publish/.test(line))) {
     assert.ok(line.includes("--dry-run"), `Unsafe ordinary acceptance command: ${line}`);
   }
-  assert.doesNotMatch(acceptance, /EFFECT_AGENT_BROWSERBASE_LIVE=1|hosted-acceptance\.sh/);
+  assert.doesNotMatch(acceptance, /EFFECT_AGENT_BROWSERBASE_LIVE=1|hosted-run\.sh/);
 });
 
 test("OIDC is isolated to the opt-in publisher, which installs no dependencies", () => {
