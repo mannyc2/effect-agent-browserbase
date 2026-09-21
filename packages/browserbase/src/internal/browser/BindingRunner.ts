@@ -14,10 +14,7 @@ export type BindingAdmission<A, E> =
  * consumer failures remain in an Exit on the host and are never page reply material here.
  */
 export interface BindingRunner<I, A, E> {
-  readonly submit: (
-    input: I,
-    failureMode?: CallbackFailureMode,
-  ) => BindingAdmission<A, E>;
+  readonly submit: (input: I, failureMode?: CallbackFailureMode) => BindingAdmission<A, E>;
 }
 
 export const makeBindingRunner = <I, A, E, R>(

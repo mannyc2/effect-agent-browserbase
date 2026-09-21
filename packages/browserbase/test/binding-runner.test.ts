@@ -3,10 +3,7 @@ import assert from "node:assert/strict";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Scope } from "effect";
 
-import {
-  type BindingRunner,
-  makeBindingRunner,
-} from "../src/internal/browser/BindingRunner.ts";
+import { type BindingRunner, makeBindingRunner } from "../src/internal/browser/BindingRunner.ts";
 
 interface ConsumerService {
   readonly value: number;
@@ -115,6 +112,7 @@ it.effect("fail-session failure fences admission exactly once", () =>
       assert.equal(failed._tag, "Accepted");
       if (failed._tag === "Accepted") yield* Effect.promise(() => failed.result);
       assert.equal(faults, 1);
+
       assert.deepEqual(runner.submit(2, "fail-session"), {
         _tag: "Rejected",
         reason: "closed",
@@ -125,7 +123,7 @@ it.effect("fail-session failure fences admission exactly once", () =>
       });
       assert.equal(faults, 1);
     }),
-  ),
+   ),
 );
 
 it.effect("fail-session capacity pressure fences without starting rejected work", () =>
@@ -134,7 +132,7 @@ it.effect("fail-session capacity pressure fences without starting rejected work"
       let calls = 0,
         faults = 0;
       let release!: () => void;
-      const blocked = new Promise<void>((resolve) => {
+      const blocked = new Promise<void>(( resolve) => {
         release = resolve;
       });
       const runner = yield* makeBindingRunner(
@@ -161,7 +159,7 @@ it.effect("fail-session capacity pressure fences without starting rejected work"
       assert.equal(calls, 1);
       assert.equal(faults, 1);
     }),
-  ),
+   ),
 );
 
 it.effect("parallel parent teardown still fences admission before callback interruption", () =>
@@ -186,7 +184,7 @@ it.effect("parallel parent teardown still fences admission before callback inter
         escaped = runner;
         if (admitted._tag === "Accepted") pending = admitted.result;
       }),
-    );
+     );
     yield* Scope.close(parent, Exit.void);
 
     assert.ok(escaped);
@@ -195,10 +193,12 @@ it.effect("parallel parent teardown still fences admission before callback inter
       reason: "closed",
     });
     if (pending !== undefined)
-      yield* Effect.promise(() => pending!.then(
-        () => undefined,
-        () => undefined,
-      ));
+      yield* Effect.promise(() =>
+        pending!.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
     assert.equal(faults, 0);
   }),
 );
