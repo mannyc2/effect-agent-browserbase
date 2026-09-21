@@ -39,10 +39,10 @@ const Listing = Schema.Struct({
   total: Schema.Natural,
 });
 
-const failure = (operation: string, reason: FileError["reason"]) =>
+const failure = (operation: FileError["operation"], reason: FileError["reason"]) =>
   FileError.make({ operation, reason });
 
-const fromClient = (operation: string) => (error: ClientError) =>
+const fromClient = (operation: FileError["operation"]) => (error: ClientError) =>
   FileError.make({
     operation,
     reason: error.reason,
@@ -51,8 +51,11 @@ const fromClient = (operation: string) => (error: ClientError) =>
     ...(error.retryAfterMillis === undefined ? {} : { retryAfterMillis: error.retryAfterMillis }),
   });
 
-const within = <A, E, R>(effect: Effect.Effect<A, E, R>, deadline: number, operation: string) =>
-  until(effect, deadline, () => failure(operation, "timeout"));
+const within = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  deadline: number,
+  operation: FileError["operation"],
+) => until(effect, deadline, () => failure(operation, "timeout"));
 
 /** Website files are not session-recording MP4s. They retain their own provider download ID. */
 export class BrowserbaseDownloads extends Context.Service<
@@ -94,7 +97,7 @@ export class BrowserbaseDownloads extends Context.Service<
       const sessions = yield* BrowserbaseSessions;
 
       // Files are readable while the session runs; only the exact owning session is admitted.
-      const owned = (ref: SessionReference, operation: string) =>
+      const owned = (ref: SessionReference, operation: FileError["operation"]) =>
         sessions.retrieve(ref).pipe(
           Effect.mapError((error) => FileError.make({ operation, reason: error.reason })),
           Effect.asVoid,
@@ -190,7 +193,6 @@ export class BrowserbaseDownloads extends Context.Service<
                 `/v1/downloads/${encodeURIComponent(id)}`,
                 maxBytes,
                 ["application/octet-stream", file.mimeType.toLowerCase()],
-                "download",
                 timeoutMillis,
                 deadline,
               )
@@ -231,7 +233,7 @@ export class BrowserbaseDownloads extends Context.Service<
         const deadline = yield* deadlineAfter(timeoutMillis);
 
         do {
-          const result = yield* within(list(ref), deadline, "downloads-wait");
+          const result = yield* within(list(ref), deadline, "download-wait");
 
           // Never claim a complete candidate set from a partial listing.
           if (!result.complete) return yield* failure("download-wait", "limit");

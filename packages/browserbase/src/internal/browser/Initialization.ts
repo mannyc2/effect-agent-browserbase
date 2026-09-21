@@ -1,12 +1,12 @@
 import { Schema } from "effect";
 import type { BrowserContext, Disposable, Frame, Page } from "playwright-core";
 
-import { BrowserError, InitializationError } from "../../Errors.ts";
+import { InitializationError } from "../../Errors.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type { Driver, DriverEvents, DriverOptions, ReadinessState } from "./Driver.ts";
 import { makeNativeBindings } from "./NativeBindings.ts";
-import { failure, sanitize } from "./NativeCalls.ts";
+import { failure, NativeFailure, sanitize } from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
 import type { Targets } from "./Targets.ts";
 
@@ -87,8 +87,7 @@ export const makeInitialization = (
         ...(bindings === undefined ? [] : [bindings.dispose()]),
       ]);
 
-      if (outcomes.some((result) => result.status === "rejected"))
-        throw failure("dispose-initialization", "provider");
+      if (outcomes.some((result) => result.status === "rejected")) throw failure("provider");
     })();
 
     return disposal;
@@ -155,7 +154,7 @@ export const makeInitialization = (
       return await Promise.race([
         frame.evaluate(expression),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(failure("ready", "timeout")), milliseconds);
+          timer = setTimeout(() => reject(failure("timeout")), milliseconds);
         }),
       ]);
     } finally {
@@ -203,7 +202,7 @@ export const makeInitialization = (
           _tag: "NotReady",
           step: requirement.step,
           reason:
-            Schema.is(BrowserError)(error) && error.reason === "timeout" ? "timeout" : "failed",
+            Schema.is(NativeFailure)(error) && error.reason === "timeout" ? "timeout" : "failed",
         };
       }
       ticket.check();
@@ -218,7 +217,7 @@ export const makeInitialization = (
   };
 
   const documentReadiness: Driver["documentReadiness"] = (ticket) =>
-    sanitize("ready", async () => {
+    sanitize(async () => {
       const bootstrap = options.bootstrap;
 
       return bootstrap === undefined || bootstrap.readiness.length === 0

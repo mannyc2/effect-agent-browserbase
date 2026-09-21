@@ -90,17 +90,16 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       let count: number;
 
       try {
-        count = safeDecode(Count, await countHandle.jsonValue(), "target-count");
+        count = safeDecode(Count, await countHandle.jsonValue());
       } finally {
         await countHandle.dispose();
       }
       ticket.check();
-      if (count !== 1)
-        throw failure("target", count === 0 ? "not-found" : "ambiguous", "undispatched");
+      if (count !== 1) throw failure(count === 0 ? "not-found" : "ambiguous", "undispatched");
       node = await holder.getProperty("node");
       const element = node.asElement();
 
-      if (element === null) throw failure("target", "not-found", "undispatched");
+      if (element === null) throw failure("not-found", "undispatched");
       ticket.check();
 
       return element;
@@ -115,16 +114,16 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   /** A retained node is only as current as the observation that produced it. */
   const retained = (target: ObservedElement): ElementHandle<Element> => {
     if (observation === undefined || !observation.valid || observation.id !== target.observationId)
-      throw failure("target", "stale", "undispatched");
+      throw failure("stale", "undispatched");
     const node = observation.nodes.get(target.elementId);
 
-    if (node === undefined) throw failure("target", "stale", "undispatched");
+    if (node === undefined) throw failure("stale", "undispatched");
 
     return node;
   };
 
   const readText = (selector: string | undefined, maximumBytes: number, ticket: Ticket) =>
-    sanitize("read-text", async () => {
+    sanitize(async () => {
       ticket.check();
 
       const raw: unknown = await current().frame.evaluate(
@@ -145,17 +144,17 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       );
 
       ticket.check();
-      const value = safeDecode(TextResult, raw, "read-text");
+      const value = safeDecode(TextResult, raw);
 
-      if (value.missing) throw failure("read-text", "not-found");
+      if (value.missing) throw failure("not-found");
       if (value.overLimit || new TextEncoder().encode(value.text).length > maximumBytes)
-        throw failure("read-text", "limit");
+        throw failure("limit");
 
       return value.text;
     });
 
   const observe = (maximumBytes: number, controlLimit: number, ticket: Ticket) =>
-    sanitize("observe", async () => {
+    sanitize(async () => {
       await dispose();
       ticket.check();
 
@@ -222,7 +221,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         let data: typeof ObservationData.Type;
 
         try {
-          data = safeDecode(ObservationData, await dataHandle.jsonValue(), "observe");
+          data = safeDecode(ObservationData, await dataHandle.jsonValue());
         } finally {
           await dataHandle.dispose();
         }
@@ -230,7 +229,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
           new TextEncoder().encode(data.text).length > maximumBytes ||
           data.controls.length > controlLimit
         )
-          throw failure("observe", "limit");
+          throw failure("limit");
         nodesHandle = await holder.getProperty("nodes");
         for (let i = 0; i < data.controls.length; i++) {
           const node = await nodesHandle.getProperty(String(i));
@@ -238,7 +237,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
           if (element === null) {
             await node.dispose();
-            throw failure("observe", "malformed");
+            throw failure("malformed");
           }
           nodes.set(`element-${i}`, element);
         }
@@ -267,7 +266,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     });
 
   const screenshot = (fullPage: boolean, maximumBytes: number, ticket: Ticket) =>
-    sanitize("screenshot", async () => {
+    sanitize(async () => {
       const page = current().entry.page;
 
       ticket.check();
@@ -284,7 +283,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         fullPage,
       );
 
-      const geometry = safeDecode(Geometry, raw, "screenshot");
+      const geometry = safeDecode(Geometry, raw);
 
       if (
         geometry.width < 1 ||
@@ -293,7 +292,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         geometry.height > 16384 ||
         geometry.width * geometry.height > 33_554_432
       )
-        throw failure("screenshot", "limit");
+        throw failure("limit");
       ticket.check();
 
       const bytes: unknown = await page.screenshot({
@@ -303,8 +302,8 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         timeout: timeout(ticket),
       });
 
-      if (!(bytes instanceof Uint8Array)) throw failure("screenshot", "malformed");
-      if (bytes.length > maximumBytes) throw failure("screenshot", "limit");
+      if (!(bytes instanceof Uint8Array)) throw failure("malformed");
+      if (bytes.length > maximumBytes) throw failure("limit");
       const actual = pngGeometry(bytes);
 
       if (
@@ -312,7 +311,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         actual.height > 16384 ||
         actual.width * actual.height > 33_554_432
       )
-        throw failure("screenshot", "limit");
+        throw failure("limit");
       ticket.check();
 
       return new Uint8Array(bytes);

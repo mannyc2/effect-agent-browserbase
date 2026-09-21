@@ -1,13 +1,14 @@
 import { Clock, Effect, Schema, Semaphore } from "effect";
 
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, type BrowserOperation } from "../../Errors.ts";
 import { deadlineAfter, nowMillis, until } from "../Deadline.ts";
+import { publicError } from "./NativeCalls.ts";
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   deadline: number,
-  operation: string,
+  operation: BrowserOperation,
   onTimeout?: () => void,
 ): Effect.Effect<A, E | BrowserError, R> =>
   until(effect, deadline, () => {
@@ -85,7 +86,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   };
 
   const guard = <A, E, R>(
-    operation: string,
+    operation: BrowserOperation,
     body: (ticket: Ticket) => Effect.Effect<A, E, R>,
     options: {
       readonly charge?: boolean;
@@ -245,7 +246,17 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
 export type Owner = Effect.Success<ReturnType<typeof makeOwner>>;
 
-export const native = <A>(operation: string, ticket: Ticket, body: () => Promise<A>) =>
+/** Without a native answer, whether the step was sent is all the owner knows about it. */
+const unsettled = (ticket: Ticket): Pick<BrowserError, "reason" | "outcome"> => ({
+  reason: "provider",
+  outcome: ticket.dispatched ? "unknown" : "undispatched",
+});
+
+/**
+ * The one place a native step becomes a public error: whatever the driver raised, the caller
+ * sees the operation it asked for.
+ */
+export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () => Promise<A>) =>
   Effect.callback<A, BrowserError>((resume) => {
     let done = false;
 
@@ -282,27 +293,14 @@ export const native = <A>(operation: string, ticket: Ticket, body: () => Promise
         (error: unknown) => {
           if (!done) {
             cleanup();
-            resume(Effect.fail(sanitizeNativeError(error, operation, ticket.dispatched)));
+            resume(Effect.fail(publicError(error, operation, unsettled(ticket))));
           }
         },
       );
     } catch (error) {
       cleanup();
-      resume(Effect.fail(sanitizeNativeError(error, operation, ticket.dispatched)));
+      resume(Effect.fail(publicError(error, operation, unsettled(ticket))));
     }
 
     return Effect.sync(cleanup);
   });
-
-const sanitizeNativeError = (
-  error: unknown,
-  operation: string,
-  dispatched: boolean,
-): BrowserError =>
-  Schema.is(BrowserError)(error)
-    ? error
-    : BrowserError.make({
-        operation,
-        reason: "provider",
-        outcome: dispatched ? "unknown" : "undispatched",
-      });

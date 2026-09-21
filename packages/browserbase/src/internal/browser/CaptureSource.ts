@@ -49,7 +49,7 @@ export const makeCaptureSources = (targets: Targets) => {
   };
 
   const capture = (target?: CaptureTarget): Promise<CaptureBinding> =>
-    sanitize("capture", async () => {
+    sanitize(async () => {
       let entry: Entry;
       let captureFrame: Frame;
 
@@ -62,9 +62,9 @@ export const makeCaptureSources = (targets: Targets) => {
         const requested = entries.get(target.pageId);
 
         if (requested === undefined || requested.page.isClosed())
-          throw failure("capture", "not-found", "undispatched");
+          throw failure("not-found", "undispatched");
         if ((await targets.targetId(requested)) !== target.targetId)
-          throw failure("capture", "stale", "undispatched");
+          throw failure("stale", "undispatched");
         entry = requested;
         captureFrame = entry.page.mainFrame();
       }
@@ -73,13 +73,13 @@ export const makeCaptureSources = (targets: Targets) => {
       const watchedFrameId = frameId(captureFrame);
 
       // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
-      if (page.screencast === undefined) throw failure("capture", "unsupported");
+      if (page.screencast === undefined) throw failure("unsupported");
       let watcherSet: Set<CaptureWatcher> | undefined;
       let watcher: CaptureWatcher | undefined;
 
       const source: CaptureSource = {
         start: (callback, quality, invalidate, size) =>
-          sanitize("capture-start", async () => {
+          sanitize(async () => {
             watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
             captureWatchers.set(entry.id, watcherSet);
             watcher = { frameId: watchedFrameId, invalidate };
@@ -100,7 +100,7 @@ export const makeCaptureSources = (targets: Targets) => {
             }
           }),
         stop: () =>
-          sanitize("capture-stop", async () => {
+          sanitize(async () => {
             if (watcher !== undefined && watcherSet !== undefined) {
               watcherSet.delete(watcher);
               watcher = undefined;

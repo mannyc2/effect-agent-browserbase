@@ -55,7 +55,7 @@ export class BrowserbasePageFetch extends Context.Service<
   static readonly layer: Layer.Layer<BrowserbasePageFetch, never, BrowserbaseClient> = Layer.effect(
     BrowserbasePageFetch,
     Effect.gen(function* () {
-      const api = resource(yield* BrowserbaseClient, (failure) =>
+      const api = resource<PlatformError>(yield* BrowserbaseClient, (failure) =>
         PlatformError.make({ ...failure, service: "fetch" }),
       );
 
