@@ -10,6 +10,7 @@ import {
   type AllocationError,
   type ClientError,
   type ContextError,
+  type InitializationError,
 } from "../../src/Errors.ts";
 import { type CaptureParent } from "../../src/internal/browser/Association.ts";
 import { type CaptureInvalidation, type NativeFrame } from "../../src/internal/browser/Driver.ts";
@@ -19,7 +20,12 @@ import { jpeg, widerJpeg } from "./Jpeg.ts";
 import { fixture as sessionFixture, gate } from "./ScriptedProvider.ts";
 import { advance, timed } from "./Time.ts";
 
-type CaptureFailure = AllocationError | BrowserError | ClientError | ContextError;
+type CaptureFailure =
+  | AllocationError
+  | BrowserError
+  | ClientError
+  | ContextError
+  | InitializationError;
 
 interface Case {
   readonly name: string;

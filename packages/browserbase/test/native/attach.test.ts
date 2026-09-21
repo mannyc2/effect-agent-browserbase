@@ -122,8 +122,10 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
 
           expect(expired._tag).toBe("Failure");
           if (expired._tag === "Failure") {
+            expect(expired.failure._tag).toBe("SessionError");
             expect(expired.failure.reason).toBe("expired");
-            expect(expired.failure.outcome).toBe("undispatched");
+            if (expired.failure._tag === "SessionError")
+              expect(expired.failure.outcome).toBe("undispatched");
           }
         }),
       );

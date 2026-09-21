@@ -4,6 +4,7 @@ import type {
   BrowserContext,
   CDPSession,
   Dialog,
+  Disposable,
   Download,
   ElementHandle,
   FileChooser,
@@ -19,7 +20,7 @@ import {
   PageInfo,
   type PageSuspension,
 } from "../../BrowserData.ts";
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, InitializationError } from "../../Errors.ts";
 import { Identifier } from "../../References.ts";
 import { SafeFilename } from "../../Transfers.ts";
 import { pngGeometry } from "../capture/Images.ts";
@@ -38,6 +39,7 @@ import type {
   NativeObservation,
   ReadinessState,
 } from "./Driver.ts";
+import { makeNativeBindings } from "./NativeBindings.ts";
 import type { Ticket } from "./Owner.ts";
 import { PageExecution } from "./PageExecution.ts";
 
@@ -177,7 +179,9 @@ export const connectPlaywright = async (
     return driver;
   } catch (error) {
     await closeWithin(() => browser.close()).catch(() => {});
-    throw Schema.is(BrowserError)(error) ? error : failure("connect", "provider");
+    throw Schema.is(BrowserError)(error) || Schema.is(InitializationError)(error)
+      ? error
+      : failure("connect", "provider");
   }
 };
 
@@ -214,6 +218,74 @@ export const makePlaywrightDriver = async (
   let creatingPage = false;
   let initialized = false;
   let browserCdp: CDPSession | undefined;
+  const registrations: Disposable[] = [];
+  let initializationClosed = false;
+  let initializationDisposal: Promise<void> | undefined;
+
+  const initializationFault = (error: InitializationError) => {
+    if (closing || initializationClosed) return;
+    if (options.onBindingFault === undefined) events.fault();
+    else options.onBindingFault(error);
+  };
+
+  const bindingTask = (action: () => Promise<void>) => {
+    const admitted = callbacks.submit(async () => {
+      try {
+        await action();
+      } catch (cause) {
+        initializationFault(
+          Schema.is(InitializationError)(cause)
+            ? cause
+            : InitializationError.make({
+                operation: "register",
+                step: "bindings",
+                reason: "native",
+              }),
+        );
+      }
+    }, "reject-call");
+
+    if (!admitted)
+      initializationFault(
+        InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
+      );
+  };
+
+  const bindings =
+    options.bindings === undefined || options.bindings.length === 0
+      ? undefined
+      : makeNativeBindings(context, options.bindings, () =>
+          initializationFault(
+            InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
+          ),
+        );
+
+  const attachBindings = async (page: Page) => {
+    if (bindings === undefined) return;
+    await bindings.attach(page, page);
+    for (const frame of page.frames())
+      if (frame !== page.mainFrame()) await bindings.attach(frame, page);
+  };
+
+  const fenceInitialization = () => {
+    initializationClosed = true;
+    bindings?.close();
+  };
+
+  const disposeInitialization = (): Promise<void> => {
+    fenceInitialization();
+    initializationDisposal ??= (async () => {
+      const outcomes = await Promise.allSettled([
+        ...registrations.splice(0).map((registration) => registration.dispose()),
+        ...(bindings === undefined ? [] : [bindings.dispose()]),
+      ]);
+
+      if (outcomes.some((result) => result.status === "rejected"))
+        throw failure("dispose-initialization", "provider");
+    })();
+
+    return initializationDisposal;
+  };
 
   const invalidateObservation = () => {
     if (observation !== undefined) observation.valid = false;
@@ -302,6 +374,7 @@ export const makePlaywrightDriver = async (
     const onNavigation = (frame: Frame) => {
       if (frame === page.mainFrame() && entry.executionValue?.invalidate()) events.fault();
       documentEpochs.set(frame, epochOf(frame) + 1);
+      if (initialized && bindings !== undefined) bindingTask(() => bindings.attach(frame, page));
       frameId(frame);
       invalidateCaptures(entry, "target-changed", frame);
       if (selected === entry && (selectedFrame === frame || frame === page.mainFrame()))
@@ -343,6 +416,7 @@ export const makePlaywrightDriver = async (
       callbacks.submit(async () => {
         await executionFor(entry);
       });
+    if (initialized && bindings !== undefined) bindingTask(() => attachBindings(page));
     if (initialized && !creatingPage) {
       if (options.popupPolicy === "close") callbacks.submit(() => closeWithin(() => page.close()));
       else if (options.popupPolicy === "pause") events.pause();
@@ -575,13 +649,25 @@ export const makePlaywrightDriver = async (
    * document. Documents that were already running keep their recorded epoch, so the readiness
    * policy can tell them apart from documents that actually ran the bundle.
    */
-  const installBootstrap = async (bootstrap: CompiledBootstrap) => {
+  const installBootstrap = async (bootstrap: CompiledBootstrap | undefined) => {
     for (const entry of entries.values())
       for (const frame of entry.page.frames()) registeredEpochs.set(frame, epochOf(frame));
     // Host capabilities precede the bundle: a step may depend on a granted capability.
-    for (const grant of bootstrap.permissions)
+    for (const grant of bootstrap?.permissions ?? [])
       await context.grantPermissions([...grant.permissions], { origin: grant.origin });
-    if (bootstrap.bundle !== undefined) await context.addInitScript({ content: bootstrap.bundle });
+
+    // One bundle guarantees callable wrappers exist before dependent init steps. Ordering
+    // between two Playwright addInitScript registrations is intentionally not assumed.
+    const content = [bindings?.bundle, bootstrap?.bundle]
+      .filter((part) => part !== undefined)
+      .join("\n");
+
+    if (content.length > 0) {
+      const registration = await context.addInitScript({ content });
+
+      if (initializationClosed) await registration.dispose();
+      else registrations.push(registration);
+    }
   };
 
   const documentOrigin = (frame: Frame): string => {
@@ -1430,15 +1516,19 @@ export const makePlaywrightDriver = async (
         return { pageId: entry.id, targetId, frameId: watchedFrameId, source };
       }),
     invalidateObservation,
+    fenceInitialization,
+    disposeInitialization,
     disconnect: () =>
       sanitize("disconnect", async () => {
         closing = true;
+        fenceInitialization();
         callbacks.stop();
         invalidateObservation();
         context.off("page", onPage);
         browser.off("disconnected", onDisconnected);
         for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
         captureWatchers.clear();
+        await closeWithin(disposeInitialization).catch(() => {});
         await disposeObservation().catch(() => {});
         await closeWithin(() =>
           Promise.allSettled([...dialogs].map((dialog) => dialog.dismiss())),
@@ -1470,7 +1560,9 @@ export const makePlaywrightDriver = async (
     });
     // Registrations precede the first document this connection creates, and precede any
     // navigation the caller makes, without this setup navigating anything itself.
-    if (options.bootstrap !== undefined) await installBootstrap(options.bootstrap);
+    if (options.bootstrap !== undefined || bindings !== undefined)
+      await installBootstrap(options.bootstrap);
+    for (const entry of entries.values()) await attachBindings(entry.page);
     if (options.newPage || entries.size === 0) {
       creatingPage = true;
       try {
@@ -1487,6 +1579,7 @@ export const makePlaywrightDriver = async (
       selected = entries.values().next().value;
     }
     if (selected === undefined) throw failure("initial-page", "not-found");
+    await attachBindings(selected.page);
     selectedFrame = selected.page.mainFrame();
     if (!options.preserveViewport) await selected.page.setViewportSize(options.viewport);
     await getTargetId(selected);

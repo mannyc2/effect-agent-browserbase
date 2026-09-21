@@ -98,8 +98,8 @@ const Scroll = Tool.make("browser_scroll", {
 export const toolkit = Toolkit.make(Navigate, Inspect, Click, Fill, Scroll);
 
 /** Borrow one execution-owned session. This Layer never opens or closes a browser per Tool/turn. */
-export const handlers = (
-  session: BrowserbaseAgentSession,
+export const handlers = <E>(
+  session: BrowserbaseAgentSession<E>,
   options: { readonly maxTextBytes?: number; readonly maxControls?: number } = {},
 ) => {
   const maxTextBytes = options.maxTextBytes ?? 8192;

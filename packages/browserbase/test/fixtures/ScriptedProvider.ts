@@ -4,6 +4,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { FrameInfo, PageInfo, Viewport } from "../../src/BrowserData.ts";
 import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
+import type { Bindings } from "../../src/internal/browser/Bindings.ts";
 import type {
   CaptureSource,
   Driver,
@@ -51,6 +52,7 @@ export interface ScriptOptions {
   readonly readiness?: () => ReadinessState;
   /** Exercise the persistent-context path through the canonical writer permit. */
   readonly contextWriter?: ContextWriterPermit;
+  readonly connectBindings?: Bindings<never>["connect"];
 }
 
 const SESSION = {
@@ -314,6 +316,9 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
       keepAlive: options.keepAlive ?? false,
       maxReturnedBytes: 65536,
       driver: { viewport, popupPolicy: "retain", dialogPolicy: "dismiss", maxPages: 10 },
+      ...(options.connectBindings === undefined
+        ? {}
+        : { connectBindings: options.connectBindings }),
     },
     connector,
   ).pipe(

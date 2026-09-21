@@ -130,13 +130,32 @@ Human handoff pauses automation before returning host-only Live View material. R
 
 ## Registrations, capabilities and document readiness
 
-`BrowserbaseBrowser.layer({ launch, bootstrap })` installs trusted host configuration on every connection this owner makes. A plan is built from `Bootstrap.init`, `Bootstrap.permissions` and `Bootstrap.combine`; combination is ordered, and dependent steps share one native registration because order across separate registrations is not something to assume. Script content is host configuration, never model output or page input.
+`browser.open(policy, { bootstrap })`, `browser.acquire(policy, { bootstrap })` and `browser.attach(reference, { policy, bootstrap })` take a trusted registration plan at acquisition. The browser Layer fixes account and launch configuration, not consumer callback dependencies. A plan is built from `Bootstrap.binding`, `Bootstrap.init`, `Bootstrap.permissions` and `Bootstrap.combine`. Combination preserves the error and service unions of different handlers; the callable bridge precedes all dependent init steps in one native script registration. Script content, handler implementations and origin grants are host configuration, never model output or page input.
 
 ```ts
 import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
+import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
+import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
+import { Context, Effect, Schema } from "effect";
+
+class ShowSettings extends Context.Service<ShowSettings, { readonly title: string }>()(
+  "ShowSettings",
+) {}
 
 const bootstrap = Bootstrap.combine(
   Bootstrap.permissions({ origin: "https://portal.example.com", permissions: ["clipboard-read"] }),
+  Bootstrap.binding({
+    name: "getShowSettings",
+    origins: ["https://portal.example.com"],
+    input: Schema.Struct({ version: Schema.Literal(3) }),
+    output: Schema.Struct({ title: Schema.String }),
+    maxConcurrent: 2,
+    maxInputBytes: 256,
+    maxOutputBytes: 4096,
+    timeoutMillis: 2000,
+    failureMode: "fail-session",
+    handle: () => Effect.map(ShowSettings, (settings) => ({ title: settings.title })),
+  }),
   Bootstrap.init({
     id: "show-settings-v3",
     origins: ["https://portal.example.com"],
@@ -148,9 +167,30 @@ const bootstrap = Bootstrap.combine(
     },
   }),
 );
+
+const run = Effect.gen(function* () {
+  const browser = yield* BrowserbaseBrowser;
+  return yield* browser.withBrowser(BrowserPolicy.unrestricted(), { bootstrap }, (session) =>
+    Effect.gen(function* () {
+      yield* session.bind().navigate({ url: "https://portal.example.com" });
+      yield* session.ready;
+      return yield* session.observe();
+    }),
+  );
+});
+// run requires BrowserbaseBrowser and ShowSettings. withBrowser discharges both the
+// callback's and the use function's Scope, but neither one's other services or errors.
 ```
 
 Registration is installed before this connection creates any document, and permissions precede the bundle. It is still not readiness: an asynchronous step cannot pause a website's own scripts, so a document is ready only when its expression resolves to exactly `true`. Readiness is keyed by frame and document epoch and evaluated once per document, so a completed wait can never ready the document that replaced the one it observed.
+
+Each binding accepts exactly one JSON-compatible argument and returns the output codec's **encoded** JSON value. A transforming codec such as `Schema.FiniteFromString` therefore exposes a string to the page while its host handler works with a number. The native callback validates the actual caller's allowed origin and document before input decoding, immediately before invoking the handler, and before replying. This uses Chromium's execution-context identity and `uniqueContextId` on child CDP sessions belonging to the existing connection: a frame URL, a page-supplied origin, and a reused numeric context id are not authorization. The pinned Playwright `exposeBinding` callback supplies a frame but not the calling document's identity; it is deliberately not used as a weaker substitute. No raw protocol or second browser owner is exposed.
+
+Plans admit at most 16 uniquely named bindings. Each binding declares its concurrent-call, UTF-8 input/output byte and whole-invocation deadline limits. Admission reserves capacity before native validation, codec work or a callback fiber starts; a timed-out native operation retains that reservation until it actually settles, including across reconnect. The page wrapper additionally rejects cyclic, sparse, accessor-bearing, non-plain, non-finite and non-JSON input rather than silently changing it through `JSON.stringify`. Its traversal admits at most 64 levels and 65,536 nodes; the configured byte limit still applies. Native target and default-document registries are finite, and closed native targets retire their authority immediately.
+
+`reject-call` rejects only the affected invocation and permits subsequent healthy calls. `fail-session` completes `session.failure` with the original typed consumer cause and fences the owner. Pages receive only `BrowserbaseBindingError: Browser binding call rejected`, with no host stack, consumer error payload, credentials or SDK cause. `session.bindingDiagnostics` is a bounded **host-only** snapshot containing per-binding accounting and the latest 32 typed causes; do not serialize it into a Tool response. Callback service reads run independently of a browser mutation, but reentrant browser work never waits behind that mutation's permit: it fails `busy` with `undispatched` instead.
+
+`withBrowser` races the use function against fail-session errors, discharges the scope, and permits normal success only after confirmed owned-session termination and complete local cleanup. Explicit `acquire`/`open` retain the typed failure signal and detailed cleanup receipt for callers that need to manage that decision themselves. Teardown synchronously closes callback admission, interrupts managed callback fibers, removes this connection's registrations, disconnects locally, and still attempts remote release if a prior cleanup step fails. Reconnect installs fresh callable registrations, never replays an old invocation or a consumer init script into an already-running document, and cannot reuse quarantined callback capacity.
 
 Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.ready` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
 
@@ -192,7 +232,7 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `sessions`, `contexts`, `context-coordination` — passive inspection, explicit release, context resources and writer settlement.
 - `extensions` — provisioning a Chrome extension archive once as a durable project resource, and selecting it by reference at launch.
 - `uploads` — placing a file where the running session can already reach it, and the receipt that authorizes attaching it.
-- `bootstrap` — the typed registration plan: one ordered init bundle, reviewed permission grants and per-document readiness.
+- `bootstrap` — E/R-preserving bounded typed bindings, one ordered init bundle, reviewed permission grants, per-document readiness and bounded host-only callback diagnostics.
 - `launch`, `references`, `browser-data`, `session-data`, `cleanup`, `transfers`, `errors` — credential-free schemas and typed expected errors.
 - `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
 - `capture` — optional target-pinned live-page JPEG frame streams using Playwright 1.63's maintained screencast API. The caller owns encoding, storage and presentation.

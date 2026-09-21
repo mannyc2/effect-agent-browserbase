@@ -55,7 +55,10 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
       yield* withProvider(
         f,
         Effect.gen(function* () {
-          const session = yield* (yield* BrowserbaseBrowser).open(policy);
+          const session = yield* (yield* BrowserbaseBrowser).open(policy, {
+            bootstrap: ordered(origin),
+          });
+
           const h = session.bind();
 
           // The page this connection attached to was already open, so it never ran the
@@ -93,7 +96,6 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           expect(yield* session.ready).toEqual({ _tag: "NotApplicable" });
           expect((yield* session.observe()).url).toContain("localhost");
         }),
-        { bootstrap: ordered(origin) },
       );
     }),
   ),
@@ -109,7 +111,9 @@ it.live(
         yield* withProvider(
           f,
           Effect.gen(function* () {
-            const session = yield* (yield* BrowserbaseBrowser).open(policy);
+            const session = yield* (yield* BrowserbaseBrowser).open(policy, {
+              bootstrap: always,
+            });
 
             yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
             expect(yield* session.ready).toEqual({ _tag: "Ready" });
@@ -140,7 +144,7 @@ it.live(
               (yield* session.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
             ).toBe("Local browser fixture");
           }),
-          { launch: { ...localLaunch, keepAlive: true }, bootstrap: always },
+          { launch: { ...localLaunch, keepAlive: true } },
         );
         expect(f.connections).toEqual(["session-1", "session-1"]);
       }),
@@ -165,7 +169,9 @@ it.live("real CDP: an accepted running document admits dependent work after reat
       yield* withProvider(
         f,
         Effect.gen(function* () {
-          const session = yield* (yield* BrowserbaseBrowser).open(policy);
+          const session = yield* (yield* BrowserbaseBrowser).open(policy, {
+            bootstrap: accepting,
+          });
 
           yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
           yield* session.detach;
@@ -177,7 +183,7 @@ it.live("real CDP: an accepted running document admits dependent work after reat
             (yield* session.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
           ).toBe("Local browser fixture");
         }),
-        { launch: { ...localLaunch, keepAlive: true }, bootstrap: accepting },
+        { launch: { ...localLaunch, keepAlive: true } },
       );
     }),
   ),

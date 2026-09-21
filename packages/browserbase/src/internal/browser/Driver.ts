@@ -7,7 +7,9 @@ import type {
   PageSuspension,
   Viewport,
 } from "../../BrowserData.ts";
+import type { InitializationError } from "../../Errors.ts";
 import type { CaptureSize } from "../capture/CaptureTypes.ts";
+import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
 
@@ -23,6 +25,9 @@ export interface DriverOptions {
   readonly pageControl?: boolean;
   /** Installed once per connection, before any document this connection creates. */
   readonly bootstrap?: CompiledBootstrap;
+  /** Executable callbacks are connection-scoped; they are not serializable launch options. */
+  readonly bindings?: ReadonlyArray<NativeBinding>;
+  readonly onBindingFault?: (error: InitializationError) => void;
 }
 
 /**
@@ -166,6 +171,10 @@ export interface Driver {
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
   readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
   readonly invalidateObservation: () => void;
+  /** Synchronous retirement precedes canceling consumer callback fibers. */
+  readonly fenceInitialization?: () => void;
+  /** Remove this connection's registrations while its native connection is still usable. */
+  readonly disposeInitialization?: () => Promise<void>;
   /** Closes this client connection, not an assertion about remote provider termination. */
   readonly disconnect: () => Promise<void>;
 }

@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { Clock, Effect, Fiber, Redacted, Schema, type Scope } from "effect";
 
 import { withWriter, type WriterSettlementFacts } from "../../src/ContextCoordination.ts";
-import type { AllocationError, ClientError, ContextError } from "../../src/Errors.ts";
+import type {
+  AllocationError,
+  ClientError,
+  ContextError,
+  InitializationError,
+} from "../../src/Errors.ts";
 import { BrowserError } from "../../src/Errors.ts";
 import { makeOwner, native } from "../../src/internal/browser/Owner.ts";
 import { ContextReference } from "../../src/References.ts";
@@ -11,7 +16,12 @@ import { fixture, gate } from "./ScriptedProvider.ts";
 import { advance, elapse, timed } from "./Time.ts";
 
 /** Acquisition keeps its own declared channel; local browser operations stay BrowserError. */
-type OwnershipFailure = AllocationError | BrowserError | ClientError | ContextError;
+type OwnershipFailure =
+  | AllocationError
+  | BrowserError
+  | ClientError
+  | ContextError
+  | InitializationError;
 
 /** Allocation uncertainty is an outcome, not a reason conflated into the failure name. */
 const expectUncertainAllocation = <A, R>(

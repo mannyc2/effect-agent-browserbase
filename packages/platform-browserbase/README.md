@@ -6,7 +6,7 @@ Everything else — allocation, the Playwright/CDP connection, live capture, pag
 
 ## Public entry points
 
-- `adapter` — `BrowserbaseInteractiveHost`, which acquires one owned browser per execution scope and presents it as an Effect Agent `BrowserHandle`, plus `browserbaseInteractiveLayer` for providing `InteractiveBrowser` directly.
+- `adapter` — `BrowserbaseInteractiveHost`, which acquires one owned browser per execution scope and presents it as an Effect Agent `BrowserHandle`; `fromSession`, which adapts an already-owned generic session without allocating or connecting again; and `browserbaseInteractiveLayer` for providing `InteractiveBrowser` directly.
 - `tools` — bounded model-facing navigation, inspection, exact observed-node click/fill, and scroll.
 
 ## One session per execution, borrowed by every turn
@@ -59,6 +59,8 @@ const program = Effect.scoped(
 `examples/agent.ts` shows the complete `AgentRuntime` wiring. Provider credentials, CDP URLs, context choices, Live View controls and recording configuration are host decisions and are never Tool parameters.
 
 `BrowserbaseAgentSession` carries three things: the durable `reference`, the framework `handle`, and `browser`, which is the generic package's session. Capture and page control read authority from that exact object, so pass `session.browser` to `Capture.start` and `PageControl.suspend` rather than a copy.
+
+For typed bootstrap callbacks, acquire through `BrowserbaseBrowser` and pass the result to `fromSession`. The returned `BrowserbaseAgentSession<E>` retains that exact `BrowserbaseSession<E>`: its typed failure signal, callback diagnostics, connection, target selection, action budget and capture reservations are shared. `BrowserTools.handlers(fromSession(session))` installs the same fixed Toolkit; no Tool can select callback code or create another browser. Keep the actual `AgentRuntime.run` inside `browser.withBrowser(policy, { bootstrap }, use)` when fail-session callback errors should supervise the whole agent execution. The maintained packed Agent consumer exercises this composition rather than merely checking its exports.
 
 ## Network policy
 

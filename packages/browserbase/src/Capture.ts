@@ -26,8 +26,8 @@ export type { CaptureInterval } from "./internal/capture/CaptureTypes.ts";
  * and does not copy bytes. Options decoding preserves omissions; admission applies defaults.
  * `CaptureInterval` remains a live scoped capability, not a schema or JSON/Tool value.
  */
-export const start = (
-  session: BrowserbaseSession,
+export const start = <E>(
+  session: BrowserbaseSession<E>,
   options: CaptureOptions = {},
 ): Effect.Effect<CaptureInterval, BrowserError, Scope.Scope> =>
   Effect.suspend(() => {

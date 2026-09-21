@@ -1,6 +1,9 @@
+import type { BrowserbaseSession } from "@effect-agent/browserbase/browser";
+import type { InitializationError } from "@effect-agent/browserbase/errors";
 import type {
   BrowserbaseAgentSession,
   BrowserbaseInteractiveHost,
+  fromSession,
 } from "@effect-agent/platform-browserbase/adapter";
 import type { BrowserbaseToolFailure, handlers } from "@effect-agent/platform-browserbase/tools";
 import { expect, it } from "@effect/vitest";
@@ -30,7 +33,32 @@ const explicitOutcome: Same<
   "undispatched" | "rejected" | "unknown"
 > = true;
 
+type CallbackFailure = { readonly _tag: "SettingsUnavailable" };
+
+const retainedOwner: Same<
+  ReturnType<typeof fromSession<CallbackFailure>>["browser"],
+  BrowserbaseSession<CallbackFailure>
+> = true;
+
+const typedTools: Same<
+  Parameters<typeof handlers<CallbackFailure>>[0],
+  BrowserbaseAgentSession<CallbackFailure>
+> = true;
+
+const retainedFailure: Same<
+  Effect.Error<BrowserbaseAgentSession<CallbackFailure>["browser"]["failure"]>,
+  CallbackFailure | InitializationError
+> = true;
+
 it("retains scoped ownership, original handle identity and typed native Tool failures", () => {
-  expect(scoped && originalContract && borrowed && explicitOutcome).toBe(true);
+  expect(
+    scoped &&
+      originalContract &&
+      borrowed &&
+      explicitOutcome &&
+      retainedOwner &&
+      typedTools &&
+      retainedFailure,
+  ).toBe(true);
   expect(typeof declaredFrameworkFailure).toBe("function");
 });

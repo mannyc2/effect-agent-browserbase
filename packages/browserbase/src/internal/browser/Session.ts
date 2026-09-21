@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect, type Option, Redacted, Schema, Scope } from "effect";
+import { Clock, Deferred, Effect, Exit, type Option, Redacted, Schema, Scope } from "effect";
 
 import {
   Observation,
@@ -11,7 +11,7 @@ import {
 import type { CleanupResult } from "../../Cleanup.ts";
 import { BrowserbaseClient } from "../../Client.ts";
 import type { AllocationError, ContextError, SessionError } from "../../Errors.ts";
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, InitializationError } from "../../Errors.ts";
 import type { LaunchRecipe } from "../../Launch.ts";
 import type { AllocationAttempt, SessionReference } from "../../References.ts";
 import { BrowserbaseSessions } from "../../Sessions.ts";
@@ -20,6 +20,7 @@ import { attachRemote } from "../session/Attachment.ts";
 import type { LocalCleanup } from "../session/Cleanup.ts";
 import type { ContextWriterPermit } from "../session/WriterFacts.ts";
 import { type CaptureParent } from "./Association.ts";
+import type { ConnectionBindings } from "./Bindings.ts";
 import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
 import { issueLiveView } from "./LiveView.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
@@ -51,6 +52,12 @@ export interface SessionOptions<L extends RemoteLease, E> {
   readonly keepAlive: boolean;
   readonly driver: DriverOptions;
   readonly maxReturnedBytes: number;
+  /** Consumer E/R stays with the typed public supervisor; this installs its captured runtime. */
+  readonly connectBindings?: (
+    onFault: () => void,
+    isActive: () => boolean,
+    isCurrent: () => boolean,
+  ) => Effect.Effect<ConnectionBindings, never, Scope.Scope>;
 }
 
 export interface OwnedLease extends RemoteLease {
@@ -114,6 +121,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
   const client = yield* BrowserbaseClient;
   const sessions = yield* BrowserbaseSessions;
   const parentScope = yield* Scope.Scope;
+  // Register the binding lifetime BEFORE the remote cleanup finalizer. On natural Scope
+  // shutdown that finalizer must fence the owner before any callback finalizer can reenter it.
+  const bindingLifetime = yield* Scope.fork(parentScope, "sequential");
   const ended = yield* Deferred.make<void>();
   const owner = yield* makeOwner(limits);
   const clock = yield* Clock.Clock;
@@ -125,6 +135,27 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
   let activeConnection: object | undefined;
   let handoffToken: string | undefined;
   let reconnectTarget: string | undefined;
+  let activeBindings: ConnectionBindings | undefined;
+
+  const fenceBindings = () => {
+    activeBindings?.close();
+    driver?.fenceInitialization?.();
+  };
+
+  const disposeBindings = Effect.gen(function* () {
+    const connection = activeBindings;
+
+    activeBindings = undefined;
+    const callbacks = yield* Effect.exit(connection?.dispose ?? Effect.void);
+
+    const registrations = yield* Effect.tryPromise({
+      try: () => driver?.disposeInitialization?.() ?? Promise.resolve(),
+      catch: () => BrowserError.make({ operation: "dispose-initialization", reason: "provider" }),
+    }).pipe(Effect.exit);
+
+    if (Exit.isFailure(callbacks)) return yield* Effect.failCause(callbacks.cause);
+    if (Exit.isFailure(registrations)) return yield* Effect.failCause(registrations.cause);
+  });
 
   const capture: CaptureParent = {
     owner,
@@ -155,6 +186,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
   owner.onInvalidate((reason) => {
     driver?.invalidateObservation();
+    if (["disconnected", "uncertain", "closed"].includes(reason)) fenceBindings();
     if (["paused", "disconnected", "uncertain", "closed"].includes(reason))
       for (const lease of capture.captureLeases.values()) lease.invalidate(reason);
   });
@@ -174,7 +206,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         discard: true,
       }),
     ),
-    initialization: Effect.void,
+    initialization: disposeBindings,
     disconnect: Effect.suspend(() => {
       const acquired = driver;
 
@@ -241,19 +273,60 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         connectPending = true;
         const events = connectionEvents(connectionLease);
 
+        const bindings =
+          options.connectBindings === undefined
+            ? undefined
+            : yield* options
+                .connectBindings(
+                  events.fault,
+                  () =>
+                    activeConnection === connectionLease &&
+                    (owner.state.phase === "acquiring" || owner.state.phase === "open"),
+                  () =>
+                    activeConnection === connectionLease &&
+                    ["acquiring", "open", "paused"].includes(owner.state.phase),
+                )
+                .pipe(Scope.provide(bindingLifetime));
+
+        activeBindings = bindings;
+
+        const retired = () =>
+          activeConnection !== connectionLease ||
+          ["closing", "closed", "uncertain"].includes(owner.state.phase);
+
+        if (retired()) {
+          bindings?.close();
+          yield* bindings?.dispose ?? Effect.void;
+
+          return yield* BrowserError.make({ operation: "connect", reason: "closed" });
+        }
+
         const acquired = yield* restore(
           Effect.tryPromise({
             try: (signal) => {
-              const pending = connector(Redacted.value(url), signal, nativeOptions, events).then(
-                async (acquired) => {
-                  if (signal.aborted) {
-                    await acquired.disconnect().catch(() => {});
-                    throw BrowserError.make({ operation: "connect", reason: "interrupted" });
-                  }
-
-                  return acquired;
+              const pending = connector(
+                Redacted.value(url),
+                signal,
+                {
+                  ...nativeOptions,
+                  ...(bindings === undefined
+                    ? {}
+                    : {
+                        bindings: bindings.bindings,
+                        onBindingFault: bindings.reportFailure,
+                      }),
                 },
-              );
+                events,
+              ).then(async (acquired) => {
+                if (signal.aborted) {
+                  bindings?.close();
+                  acquired.fenceInitialization?.();
+                  await acquired.disconnect().catch(() => {});
+                  throw BrowserError.make({ operation: "connect", reason: "interrupted" });
+                }
+
+                return acquired;
+              });
 
               const settled = () => {
                 if (activeConnection === connectionLease) connectPending = false;
@@ -264,7 +337,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
               return pending;
             },
             catch: (error) =>
-              Schema.is(BrowserError)(error)
+              Schema.is(BrowserError)(error) || Schema.is(InitializationError)(error)
                 ? error
                 : BrowserError.make({ operation: "connect", reason: "provider" }),
           }),
@@ -733,11 +806,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
             activeConnection = undefined;
             owner.fence("detached", "disconnected");
-            yield* Effect.tryPromise({
+            const initialization = yield* Effect.exit(disposeBindings);
+
+            const disconnected = yield* Effect.tryPromise({
               try: () => attached.disconnect(),
               catch: () => BrowserError.make({ operation: "detach", reason: "disconnected" }),
-            });
+            }).pipe(Effect.exit);
+
             driver = undefined;
+            if (Exit.isFailure(initialization))
+              return yield* Effect.failCause(initialization.cause);
+            if (Exit.isFailure(disconnected)) return yield* Effect.failCause(disconnected.cause);
 
             return { reference: ref, targetId: reconnectTarget };
           }),

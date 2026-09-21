@@ -6,7 +6,7 @@ import { BrowserError } from "./Errors.ts";
 import { pageControl } from "./internal/browser/PageControlAssociation.ts";
 export { PageExecutionState, PageSuspension } from "./BrowserData.ts";
 
-const owner = (session: BrowserbaseSession) =>
+const owner = <E>(session: BrowserbaseSession<E>) =>
   Effect.suspend(() => {
     const port = pageControl(session);
 
@@ -29,8 +29,8 @@ const invalid = () =>
   });
 
 /** Last acknowledged state; no remote guarantee survives connection loss or external control. */
-export const state = (
-  session: BrowserbaseSession,
+export const state = <E>(
+  session: BrowserbaseSession<E>,
   page: PageInfo,
 ): Effect.Effect<PageExecutionState, BrowserError> =>
   Schema.decodeEffect(PageInfo)(page).pipe(
@@ -40,8 +40,8 @@ export const state = (
   );
 
 /** Explicit host-only hold requiring InteractiveOptions.pageControl; capture ACKs never invoke it. */
-export const suspend = (
-  session: BrowserbaseSession,
+export const suspend = <E>(
+  session: BrowserbaseSession<E>,
   page: PageInfo,
 ): Effect.Effect<PageSuspension, BrowserError> =>
   Schema.decodeEffect(PageInfo)(page).pipe(
@@ -51,8 +51,8 @@ export const suspend = (
   );
 
 /** Consumes the exact live receipt. Activation is intentional; stale receipts never replay commands. */
-export const resume = (
-  session: BrowserbaseSession,
+export const resume = <E>(
+  session: BrowserbaseSession<E>,
   receipt: PageSuspension,
 ): Effect.Effect<void, BrowserError> =>
   Schema.decodeEffect(PageSuspension)(receipt).pipe(

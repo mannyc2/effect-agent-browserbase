@@ -5,6 +5,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
+import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
 import { BrowserbaseClient } from "@effect-agent/browserbase/client";
 import type { LaunchRecipe } from "@effect-agent/browserbase/launch";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
@@ -59,11 +61,17 @@ export const agentPolicy = InteractiveBrowserPolicy.make({
   maxReturnedBytes: 2 * 1024 * 1024,
 });
 
+export const genericAgentPolicy = BrowserPolicy.make({
+  ...agentPolicy,
+  network: { _tag: "Unrestricted" },
+});
+
 export const localAgentBrowser = Effect.acquireRelease(
   attempt("start agent fixture", async () => {
     const directory = await mkdtemp(join(tmpdir(), "browserbase-agent-"));
     const sessions = new Map<string, { process: ChildProcess; endpoint: string; status: string }>();
     const releaseIds: string[] = [];
+    const connectionIds: string[] = [];
     const createBodies: unknown[] = [];
 
     const server = createServer((_request, response) => {
@@ -95,7 +103,9 @@ export const localAgentBrowser = Effect.acquireRelease(
       const id = requested.searchParams.get("session");
       const session = id === null ? undefined : sessions.get(id);
 
-      if (!session) throw new Error("Unknown scripted provider session");
+      if (id === null || !session) throw new Error("Unknown scripted provider session");
+
+      connectionIds.push(id);
 
       return originalConnect(session.endpoint, options);
     };
@@ -176,6 +186,7 @@ export const localAgentBrowser = Effect.acquireRelease(
     return {
       url,
       releaseIds,
+      connectionIds,
       createBodies,
       fetch,
       close: async () => {
@@ -212,6 +223,15 @@ export const localAgentBrowser = Effect.acquireRelease(
   (fixture) => attempt("close agent fixture", fixture.close).pipe(Effect.orDie),
 );
 
+const accounts = BrowserbaseSessions.layer.pipe(
+  Layer.provideMerge(
+    BrowserbaseClient.layer({
+      projectId: "project-1",
+      apiKey: Redacted.make("fixture-key-not-a-credential"),
+    }),
+  ),
+);
+
 /** One adapter host over this package's local-process fixture and scripted control plane. */
 export const withAgentBrowser = <A, E, R>(
   fixture: Effect.Success<typeof localAgentBrowser>,
@@ -220,17 +240,20 @@ export const withAgentBrowser = <A, E, R>(
   Effect.scoped(effect).pipe(
     Effect.provide(
       BrowserbaseInteractiveHost.layer({ launch, actionTimeoutMillis: 5000 }).pipe(
-        Layer.provide(
-          BrowserbaseSessions.layer.pipe(
-            Layer.provideMerge(
-              BrowserbaseClient.layer({
-                projectId: "project-1",
-                apiKey: Redacted.make("fixture-key-not-a-credential"),
-              }),
-            ),
-          ),
-        ),
+        Layer.provide(accounts),
       ),
+    ),
+    Effect.provideService(FetchHttpClient.Fetch, fixture.fetch),
+  );
+
+/** Typed bootstrap acquisition uses this one generic owner, then the adapter borrows it. */
+export const withGenericAgentBrowser = <A, E, R>(
+  fixture: Effect.Success<typeof localAgentBrowser>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.scoped(effect).pipe(
+    Effect.provide(
+      BrowserbaseBrowser.layer({ launch, actionTimeoutMillis: 5000 }).pipe(Layer.provide(accounts)),
     ),
     Effect.provideService(FetchHttpClient.Fetch, fixture.fetch),
   );

@@ -28,7 +28,9 @@ const guarded = (content: string, origins: ReadonlyArray<string> | undefined): s
  * rather than letting a later step observe half-initialized state. Origin-excluded steps are
  * skipped inside the document that reports the origin, never by guessing from a navigation URL.
  */
-export const compileBootstrap = (plan: Plan): CompiledBootstrap | undefined => {
+export const compileBootstrap = (
+  plan: Pick<Plan, "scripts" | "permissions">,
+): CompiledBootstrap | undefined => {
   if (plan.scripts.length === 0 && plan.permissions.length === 0) return undefined;
 
   const bundle =
@@ -69,6 +71,6 @@ export const compileBootstrap = (plan: Plan): CompiledBootstrap | undefined => {
 };
 
 /** Duplicate step identity would make registration order and readiness reports ambiguous. */
-export const duplicateStep = (plan: Plan): boolean =>
+export const duplicateStep = (plan: Pick<Plan, "scripts" | "permissions">): boolean =>
   new Set(plan.scripts.map((script) => script.id)).size !== plan.scripts.length ||
   new Set(plan.permissions.map((grant) => grant.origin)).size !== plan.permissions.length;

@@ -73,7 +73,7 @@ it("keeps binding metadata bounded and preserves callback E/R through compositio
     timeoutMillis: 3000,
     failureMode: "fail-session",
   });
-  expect(typeof settings.bindings?.[0]?.handle).toBe("function");
+  expect(Object.isFrozen(settings.bindings?.[0])).toBe(true);
   expect(combined.bindings?.map((registration) => registration.name)).toEqual([
     "getShowSettings",
     "secondary",

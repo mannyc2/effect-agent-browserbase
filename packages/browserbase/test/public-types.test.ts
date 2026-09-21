@@ -3,8 +3,14 @@ import {
   type BrowserbaseBrowser,
   type BrowserbaseSession,
 } from "@effect-agent/browserbase/browser";
+import type { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
 import type * as Capture from "@effect-agent/browserbase/capture";
-import type { AllocationError, BrowserError, ContextError } from "@effect-agent/browserbase/errors";
+import type {
+  AllocationError,
+  BrowserError,
+  ContextError,
+  InitializationError,
+} from "@effect-agent/browserbase/errors";
 import type * as PageControl from "@effect-agent/browserbase/page-control";
 import { expect, it } from "@effect/vitest";
 import { type Effect, type Scope } from "effect";
@@ -13,15 +19,17 @@ type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Requirements<T> = T extends Effect.Effect<infer _A, infer _E, infer R> ? R : never;
 
-const scoped: Same<
-  Requirements<ReturnType<BrowserbaseBrowser["Service"]["open"]>>,
-  Scope.Scope
-> = true;
+// Instantiate the default call: ReturnType of an uninstantiated generic method is unknown,
+// not evidence of whether this environment-free plan requires a consumer service.
+const plainOpen = (browser: BrowserbaseBrowser["Service"], policy: BrowserPolicy) =>
+  browser.open(policy);
+
+const scoped: Same<Requirements<ReturnType<typeof plainOpen>>, Scope.Scope> = true;
 
 /** Acquisition keeps allocation and context authority visible; operations do not. */
 const hostErrors: Same<
-  Effect.Error<ReturnType<BrowserbaseBrowser["Service"]["open"]>>,
-  AllocationError | BrowserError | ContextError
+  Effect.Error<ReturnType<typeof plainOpen>>,
+  AllocationError | BrowserError | ContextError | InitializationError
 > = true;
 
 const operationErrors: Same<

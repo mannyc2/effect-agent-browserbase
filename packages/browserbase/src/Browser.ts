@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, type Option, type Redacted, Schema, type Scope } from "effect";
+import { Context, Effect, Layer, type Option, type Redacted, Schema, Scope } from "effect";
 
 import * as Bootstrap from "./Bootstrap.ts";
 import {
@@ -34,7 +34,8 @@ import {
   type SessionError,
 } from "./Errors.ts";
 import { associate } from "./internal/browser/Association.ts";
-import { compileBootstrap, duplicateStep } from "./internal/browser/Bootstrap.ts";
+import { makeBindings, preparePlan, type Bindings } from "./internal/browser/Bindings.ts";
+import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
 import type { NativeFileSelection } from "./internal/browser/Driver.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
 import { associatePageControl } from "./internal/browser/PageControlAssociation.ts";
@@ -57,8 +58,6 @@ export type { LiveView } from "./internal/browser/LiveView.ts";
 /** Host configuration. Credentials live in the Client; a model never selects these values. */
 export interface BrowserOptions extends AutomationOptions {
   readonly launch: LaunchRecipe;
-  /** Trusted registrations installed on every connection this owner makes. */
-  readonly bootstrap?: Bootstrap.Plan;
   /** Required whenever the launch recipe persists a context. */
   readonly contextWriter?: ContextWriterPermit;
   readonly onCleanup?: (result: CleanupResult) => Effect.Effect<void>;
@@ -86,8 +85,12 @@ export interface BoundTarget {
  * Host control over one owned browser. This is not a serializable model value: copying a
  * session object cannot copy its capture, page-control or connection authority.
  */
-export interface BrowserbaseSession {
+export interface BrowserbaseSession<E = never> {
   readonly reference: SessionReference;
+  /** First fail-session callback cause, preserving the consumer's error type on the host. */
+  readonly failure: Effect.Effect<never, E | InitializationError>;
+  /** Bounded host-only evidence; consumer causes are never projected into a page reply. */
+  readonly bindingDiagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
   readonly bind: () => BoundTarget;
   /** Re-reads the live selection first, so a stale generation fails before any dispatch. */
   readonly currentTarget: Effect.Effect<BoundTarget, BrowserError>;
@@ -142,12 +145,17 @@ export interface BrowserbaseSession {
   >;
   readonly reconnect: (
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError>;
+  ) => Effect.Effect<Observation, BrowserError | InitializationError>;
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
 }
 
-export interface AttachRequest {
+/** Dependencies are captured at acquisition, not erased into an environment-free service Layer. */
+export interface OpenOptions<E = never, R = never> {
+  readonly bootstrap?: Bootstrap.Plan<E, R>;
+}
+
+export interface AttachRequest<E = never, R = never> extends OpenOptions<E, R> {
   readonly policy: BrowserPolicy;
   /** The exact page to resume; without it the session must have exactly one page. */
   readonly target?: { readonly targetId: string };
@@ -155,10 +163,11 @@ export interface AttachRequest {
   readonly pendingWaitMillis?: number;
 }
 
-export interface BrowserAcquisition {
+export interface BrowserAcquisition<E = never> {
   readonly reference: SessionReference;
   readonly attempt: AllocationAttempt;
-  readonly connect: Effect.Effect<BrowserbaseSession, BrowserError>;
+  readonly failure: Effect.Effect<never, E | InitializationError>;
+  readonly connect: Effect.Effect<BrowserbaseSession<E>, BrowserError | E | InitializationError>;
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
 }
 
@@ -293,7 +302,10 @@ const initialization = (reason: BrowserError["reason"]): InitializationError["re
               ? "configuration"
               : "native";
 
-const makeSession = (controls: SessionControls): BrowserbaseSession => {
+const makeSession = <E>(
+  controls: SessionControls,
+  bindings: Bindings<E>,
+): BrowserbaseSession<E> => {
   const currentTarget = controls.currentTarget.pipe(Effect.map(() => makeTarget(controls.bind())));
 
   const Wait = Schema.Struct({
@@ -303,8 +315,10 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
 
   const navigate = (url: string) => action({ url });
 
-  const session: BrowserbaseSession = {
+  const session: BrowserbaseSession<E> = {
     reference: controls.reference,
+    failure: bindings.failure,
+    bindingDiagnostics: bindings.diagnostics,
     bind: () => makeTarget(controls.bind()),
     currentTarget,
     target: controls.currentTarget,
@@ -419,24 +433,40 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
 export class BrowserbaseBrowser extends Context.Service<
   BrowserbaseBrowser,
   {
-    readonly acquire: (
+    readonly acquire: <E = never, R = never>(
       policy: BrowserPolicy,
+      request?: OpenOptions<E, R>,
     ) => Effect.Effect<
-      BrowserAcquisition,
+      BrowserAcquisition<E>,
       AllocationError | BrowserError | ContextError,
-      Scope.Scope
+      Scope.Scope | Exclude<R, Scope.Scope>
     >;
     /** Borrowed control of a session this process did not allocate and will not release. */
-    readonly attach: (
+    readonly attach: <E = never, R = never>(
       reference: SessionReference,
-      request: AttachRequest,
-    ) => Effect.Effect<BrowserbaseSession, BrowserError | SessionError, Scope.Scope>;
-    readonly open: (
-      policy: BrowserPolicy,
+      request: AttachRequest<E, R>,
     ) => Effect.Effect<
-      BrowserbaseSession,
-      AllocationError | BrowserError | ContextError,
-      Scope.Scope
+      BrowserbaseSession<E>,
+      BrowserError | SessionError | E | InitializationError,
+      Scope.Scope | Exclude<R, Scope.Scope>
+    >;
+    readonly open: <E = never, R = never>(
+      policy: BrowserPolicy,
+      request?: OpenOptions<E, R>,
+    ) => Effect.Effect<
+      BrowserbaseSession<E>,
+      AllocationError | BrowserError | ContextError | E | InitializationError,
+      Scope.Scope | Exclude<R, Scope.Scope>
+    >;
+    /** Race the consumer with typed callback failure and confirm cleanup before normal success. */
+    readonly withBrowser: <E, R, A, E2, R2>(
+      policy: BrowserPolicy,
+      request: OpenOptions<E, R>,
+      use: (session: BrowserbaseSession<E>) => Effect.Effect<A, E2, R2>,
+    ) => Effect.Effect<
+      A,
+      AllocationError | BrowserError | ContextError | InitializationError | E | E2,
+      Exclude<R | R2, Scope.Scope>
     >;
   }
 >()("@effect-agent/browserbase/Browser") {
@@ -477,19 +507,13 @@ export class BrowserbaseBrowser extends Context.Service<
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
           return yield* BrowserError.make({ operation: "configure", reason: "context-lease" });
 
-        const plan =
-          options.bootstrap === undefined
-            ? undefined
-            : yield* checked(Bootstrap.Plan, options.bootstrap, "configure");
-
-        // Ambiguous step identity would make registration order and reports meaningless.
-        if (plan !== undefined && duplicateStep(plan))
+        // A retired layer-level bootstrap must not be silently discarded for JavaScript callers.
+        if (Object.prototype.hasOwnProperty.call(options, "bootstrap"))
           return yield* BrowserError.make({
             operation: "configure",
             reason: "configuration",
             outcome: "undispatched",
           });
-        const bootstrap = plan === undefined ? undefined : compileBootstrap(plan);
 
         const driver = {
           pageControl,
@@ -497,7 +521,6 @@ export class BrowserbaseBrowser extends Context.Service<
           maxPages,
           popupPolicy,
           dialogPolicy,
-          ...(bootstrap === undefined ? {} : { bootstrap }),
           ...(automation.initialPage === undefined
             ? {}
             : "targetId" in automation.initialPage
@@ -505,8 +528,17 @@ export class BrowserbaseBrowser extends Context.Service<
               : { newPage: true }),
         };
 
-        const acquire = Effect.fnUntraced(function* (policy: BrowserPolicy) {
+        const acquire = Effect.fnUntraced(function* <E = never, R = never>(
+          policy: BrowserPolicy,
+          request: OpenOptions<E, R> = {},
+        ) {
           const fixed = yield* checked(BrowserPolicy, policy, "configure");
+          const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
+          // The sequential child keeps remote cleanup ahead of callback-scope finalization even
+          // when a consumer deliberately gives its outer Scope parallel finalizers.
+          const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+          const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
+          const bootstrap = compileBootstrap(plan);
 
           const acquired = yield* acquireSession(
             {
@@ -526,24 +558,32 @@ export class BrowserbaseBrowser extends Context.Service<
                   : { onAllocationUncertain: options.onAllocationUncertain }),
               }),
               keepAlive: options.launch.keepAlive === true,
-              driver,
+              driver: { ...driver, ...(bootstrap === undefined ? {} : { bootstrap }) },
+              connectBindings: bindings.connect,
               maxReturnedBytes: fixed.maxReturnedBytes,
             },
           ).pipe(
             // The Layer owns the one account and resource service; acquisition never re-resolves them.
             Effect.provideService(BrowserbaseClient, client),
             Effect.provideService(BrowserbaseSessions, sessions),
+            Scope.provide(scope),
           );
 
           // One public session object is shared by repeated connect calls in this scope.
-          const connected = yield* Effect.cached(acquired.connect.pipe(Effect.map(makeSession)));
+          const connected = yield* Effect.cached(
+            acquired.connect.pipe(Effect.map((controls) => makeSession(controls, bindings))),
+          );
 
           return {
             reference: acquired.reference,
             attempt: acquired.lease.attempt,
+            failure: bindings.failure,
             close: acquired.close,
-            connect: acquired.connect.pipe(Effect.andThen(connected)),
-          } satisfies BrowserAcquisition;
+            connect: Effect.raceFirst(
+              bindings.failure,
+              acquired.connect.pipe(Effect.andThen(connected)),
+            ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid))),
+          } satisfies BrowserAcquisition<E>;
         });
 
         /**
@@ -554,11 +594,15 @@ export class BrowserbaseBrowser extends Context.Service<
          * a borrowed scope is deliberately absent; attaching again is the cross-process path,
          * and it revalidates the session instead of assuming it is still there.
          */
-        const attach = Effect.fnUntraced(function* (
+        const attach = Effect.fnUntraced(function* <E = never, R = never>(
           reference: SessionReference,
-          request: AttachRequest,
+          request: AttachRequest<E, R>,
         ) {
           const fixed = yield* checked(BrowserPolicy, request.policy, "configure");
+          const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
+          const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+          const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
+          const bootstrap = compileBootstrap(plan);
 
           const targetId =
             request.target === undefined
@@ -582,24 +626,58 @@ export class BrowserbaseBrowser extends Context.Service<
               keepAlive: false,
               driver: {
                 ...driver,
+                ...(bootstrap === undefined ? {} : { bootstrap }),
                 newPage: false,
                 preserveViewport: true,
                 ...(targetId === undefined ? {} : { initialTargetId: targetId }),
               },
               maxReturnedBytes: fixed.maxReturnedBytes,
+              connectBindings: bindings.connect,
             },
           ).pipe(
             Effect.provideService(BrowserbaseClient, client),
             Effect.provideService(BrowserbaseSessions, sessions),
+            Scope.provide(scope),
           );
 
-          return yield* acquired.connect.pipe(Effect.map(makeSession));
+          return yield* Effect.raceFirst(
+            bindings.failure,
+            acquired.connect.pipe(Effect.map((controls) => makeSession(controls, bindings))),
+          ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid)));
         });
 
         return BrowserbaseBrowser.of({
           acquire,
           attach,
-          open: (policy) => acquire(policy).pipe(Effect.flatMap((acquired) => acquired.connect)),
+          open: (policy, request) =>
+            acquire(policy, request).pipe(Effect.flatMap((acquired) => acquired.connect)),
+          withBrowser: (policy, request, use) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const acquired = yield* acquire(policy, request);
+                const session = yield* acquired.connect;
+
+                const result = yield* Effect.raceFirst(
+                  session.failure,
+                  Effect.suspend(() => use(session)),
+                );
+
+                const cleanup = yield* session.close;
+
+                if (
+                  cleanup.remote !== "confirmed" ||
+                  cleanup.local !== "closed" ||
+                  cleanup.issues.length > 0
+                )
+                  return yield* BrowserError.make({
+                    operation: "close",
+                    reason: "provider",
+                    outcome: "unknown",
+                  });
+
+                return result;
+              }),
+            ),
         });
       }),
     );

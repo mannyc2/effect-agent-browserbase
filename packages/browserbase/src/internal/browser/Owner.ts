@@ -84,9 +84,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     invalidate(reason);
   };
 
-  const guard = <A, R>(
+  const guard = <A, E, R>(
     operation: string,
-    body: (ticket: Ticket) => Effect.Effect<A, BrowserError, R>,
+    body: (ticket: Ticket) => Effect.Effect<A, E, R>,
     options: {
       readonly charge?: boolean;
       readonly mutation?: boolean;
@@ -94,7 +94,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly verifyAfter?: boolean;
       readonly preflight?: Effect.Effect<void, BrowserError>;
     } = {},
-  ): Effect.Effect<A, BrowserError, R> =>
+  ): Effect.Effect<A, E | BrowserError, R> =>
     semaphore
       .withPermitsIfAvailable(1)(
         Effect.gen(function* () {
@@ -190,8 +190,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                       }),
                   }),
             ),
-            Effect.catch((error) => {
+            Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
               if (dispatched) uncertain();
+              // The permit adds dispatch evidence only to browser-operation errors. Typed
+              // initialization/consumer failures retain their identity and original family.
+              if (!Schema.is(BrowserError)(error)) return Effect.fail(error);
 
               return Effect.fail(
                 BrowserError.make({

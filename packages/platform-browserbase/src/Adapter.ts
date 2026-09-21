@@ -7,7 +7,11 @@ import {
 } from "@effect-agent/browserbase/browser";
 import type { CleanupResult } from "@effect-agent/browserbase/cleanup";
 import type { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import type { AllocationError, ContextError } from "@effect-agent/browserbase/errors";
+import type {
+  AllocationError,
+  ContextError,
+  InitializationError,
+} from "@effect-agent/browserbase/errors";
 import { BrowserError } from "@effect-agent/browserbase/errors";
 import type { AllocationAttempt, SessionReference } from "@effect-agent/browserbase/references";
 import type { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
@@ -43,9 +47,9 @@ export type InteractiveOptions = BrowserOptions;
  * package's session authority — capture and page control are read from that exact object,
  * never from a copy — while `handle` is the framework's bounded action surface.
  */
-export interface BrowserbaseAgentSession {
+export interface BrowserbaseAgentSession<E = never> {
   readonly reference: SessionReference;
-  readonly browser: BrowserbaseSession;
+  readonly browser: BrowserbaseSession<E>;
   readonly handle: BrowserHandle;
   readonly currentHandle: Effect.Effect<BrowserHandle, BrowserError>;
 }
@@ -53,7 +57,7 @@ export interface BrowserbaseAgentSession {
 export interface BrowserbaseAgentAcquisition {
   readonly reference: SessionReference;
   readonly attempt: AllocationAttempt;
-  readonly connect: Effect.Effect<BrowserbaseAgentSession, BrowserError>;
+  readonly connect: Effect.Effect<BrowserbaseAgentSession, BrowserError | InitializationError>;
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
 }
 
@@ -108,7 +112,7 @@ const decode = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknow
     ),
   );
 
-const makeHandle = (target: BoundTarget, session: BrowserbaseSession): BrowserHandle => ({
+const makeHandle = <E>(target: BoundTarget, session: BrowserbaseSession<E>): BrowserHandle => ({
   navigate: (request) =>
     target.navigate(request).pipe(
       Effect.flatMap((result) => decode(BrowserNavigationResult, { url: result.url })),
@@ -157,7 +161,8 @@ const makeHandle = (target: BoundTarget, session: BrowserbaseSession): BrowserHa
   ),
 });
 
-const agentSession = (browser: BrowserbaseSession): BrowserbaseAgentSession => ({
+/** Adapt this exact generic owner, preserving its callback diagnostics, action budget and capture authority. */
+export const fromSession = <E>(browser: BrowserbaseSession<E>): BrowserbaseAgentSession<E> => ({
   reference: browser.reference,
   browser,
   handle: makeHandle(browser.bind(), browser),
@@ -179,7 +184,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<
       policy: InteractiveBrowserPolicy,
     ) => Effect.Effect<
       BrowserbaseAgentSession,
-      AllocationError | BrowserError | ContextError | InteractiveBrowserError,
+      AllocationError | BrowserError | ContextError | InitializationError | InteractiveBrowserError,
       Scope.Scope
     >;
   }
@@ -223,7 +228,7 @@ export class BrowserbaseInteractiveHost extends Context.Service<
             maxReturnedBytes: fixed.maxReturnedBytes,
           });
 
-          const connected = yield* Effect.cached(acquired.connect.pipe(Effect.map(agentSession)));
+          const connected = yield* Effect.cached(acquired.connect.pipe(Effect.map(fromSession)));
 
           return {
             reference: acquired.reference,
@@ -276,7 +281,13 @@ export const browserbaseInteractiveLayer = (
                           outcome: error.outcome ?? "unknown",
                         }),
                   )
-                : error,
+                : error._tag === "InitializationError"
+                  ? InteractiveBrowserActionError.make({
+                      implementation: browserbaseInteractiveImplementation,
+                      operation: "navigate",
+                      message: "Browser initialization failed",
+                    })
+                  : error,
             ),
           ),
       });

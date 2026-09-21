@@ -4,13 +4,22 @@ import { Effect, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseClient } from "../../src/Client.ts";
-import type { AllocationError, BrowserError, ClientError, ContextError } from "../../src/Errors.ts";
+import type {
+  AllocationError,
+  BrowserError,
+  ClientError,
+  ContextError,
+  InitializationError,
+} from "../../src/Errors.ts";
 import type { DriverEvents } from "../../src/internal/browser/Driver.ts";
 import { fixture } from "./ScriptedProvider.ts";
 
 interface Case {
   readonly name: string;
-  readonly run: Effect.Effect<void, AllocationError | BrowserError | ClientError | ContextError>;
+  readonly run: Effect.Effect<
+    void,
+    AllocationError | BrowserError | ClientError | ContextError | InitializationError
+  >;
 }
 
 /** Regressions found by inspecting the preserved checkpoint, not inherited historical results. */

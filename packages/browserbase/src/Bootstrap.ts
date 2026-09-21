@@ -1,31 +1,14 @@
-import { type Effect, Schema } from "effect";
+import { type Cause, type Effect, Schema } from "effect";
 
+import type { InitializationError } from "./Errors.ts";
+import * as Registration from "./internal/browser/BindingRegistration.ts";
 import { Identifier } from "./References.ts";
 
 /**
  * Exact scheme-and-host origin, as a document reports it. Patterns are deliberately absent:
  * a registration that cannot say exactly where it applies does not belong in a plan.
  */
-export const Origin = Schema.NonEmptyString.check(
-  Schema.isMaxLength(2048),
-  Schema.makeFilter(
-    (value) => {
-      try {
-        const url = new URL(value);
-
-        return (
-          ["http:", "https:"].includes(url.protocol) &&
-          url.origin === value &&
-          !url.username &&
-          !url.password
-        );
-      } catch {
-        return false;
-      }
-    },
-    { title: "an exact http(s) origin" },
-  ),
-);
+export const Origin = Registration.Origin;
 
 export type Origin = typeof Origin.Type;
 
@@ -87,41 +70,15 @@ export const InitScript = Schema.Struct({
 export type InitScript = typeof InitScript.Type;
 
 /** A callback failure can reject one page invocation or permanently fence the session. */
-export const BindingFailureMode = Schema.Literals(["reject-call", "fail-session"]);
+export const BindingFailureMode = Registration.FailureMode;
 
 export type BindingFailureMode = typeof BindingFailureMode.Type;
 
-const BindingMetadata = Schema.Struct({
-  name: Identifier,
-  origins: Schema.Array(Origin).check(
-    Schema.isMaxLength(16),
-    Schema.isUnique(),
-    Schema.makeFilter((origins) => origins.length > 0, { title: "at least one allowed origin" }),
-  ),
-  maxConcurrent: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 })),
-  maxInputBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1024 * 1024 })),
-  maxOutputBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 * 1024 * 1024 })),
-  timeoutMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120_000 })),
-  failureMode: BindingFailureMode,
-});
-
 /**
- * Trusted callback registration retained by a Plan. The codecs and handler deliberately stay
- * opaque at this level: the native registration boundary is responsible for decoding, running,
- * rechecking document authority and projecting only page-safe replies.
+ * A registration issued by `binding`. Its private executable closure carries the real consumer
+ * E/R; copying the metadata or fabricating an object does not grant callback authority.
  */
-export interface BindingRegistration {
-  readonly name: string;
-  readonly origins: ReadonlyArray<Origin>;
-  readonly maxConcurrent: number;
-  readonly maxInputBytes: number;
-  readonly maxOutputBytes: number;
-  readonly timeoutMillis: number;
-  readonly failureMode: BindingFailureMode;
-  readonly input: unknown;
-  readonly output: unknown;
-  readonly handle: unknown;
-}
+export type BindingRegistration<E = never, R = never> = Registration.Registration<E, R>;
 
 /**
  * Environment-free boundary codecs keep page data validation separate from consumer services.
@@ -140,17 +97,40 @@ export interface BindingOptions<I, IEncoded, O, OEncoded, E, R> {
   readonly handle: (input: I) => Effect.Effect<O, E, R>;
 }
 
-declare const PlanType: unique symbol;
-
 /**
- * One ordered bundle plus its host capabilities. E/R are phantom host types carried by callback
- * registrations; static script/permission plans remain ordinary serializable values.
+ * One ordered bundle plus its host capabilities. Callback registrations preserve E/R through
+ * their executable closures; static script/permission plans remain serializable values.
  */
 export interface Plan<E = unknown, R = unknown> {
   readonly scripts: ReadonlyArray<InitScript>;
   readonly permissions: ReadonlyArray<PermissionGrant>;
-  readonly bindings?: ReadonlyArray<BindingRegistration>;
-  readonly [PlanType]?: { readonly error: E; readonly requirements: R };
+  readonly bindings?: ReadonlyArray<BindingRegistration<E, R>>;
+}
+
+/** Host-only typed evidence. Causes are never logged or returned to page callers. */
+export interface BindingFailure<E> {
+  readonly name: string;
+  readonly mode: BindingFailureMode;
+  readonly cause: Cause.Cause<E | InitializationError>;
+}
+
+export interface BindingStatistics {
+  readonly name: string;
+  readonly inFlight: number;
+  readonly pendingNative: number;
+  /** Finished/interrupted invocations whose native work or disposal has not settled. */
+  readonly retired: number;
+  readonly accepted: number;
+  readonly succeeded: number;
+  readonly rejected: number;
+}
+
+/** Copied snapshot: at most sixteen bindings and the latest thirty-two failure records. */
+export interface BindingDiagnostics<E> {
+  readonly faulted: boolean;
+  readonly bindings: ReadonlyArray<BindingStatistics>;
+  readonly failures: ReadonlyArray<BindingFailure<E>>;
+  readonly droppedFailures: number;
 }
 
 /**
@@ -185,36 +165,18 @@ export const permissions = (grant: PermissionGrant): Plan<never, never> => ({
  */
 export const binding = <I, IEncoded, O, OEncoded, E, R>(
   options: BindingOptions<I, IEncoded, O, OEncoded, E, R>,
-): Plan<E, R> => {
-  const metadata = Schema.decodeSync(BindingMetadata)({
-    name: options.name,
-    origins: options.origins,
-    maxConcurrent: options.maxConcurrent,
-    maxInputBytes: options.maxInputBytes,
-    maxOutputBytes: options.maxOutputBytes,
-    timeoutMillis: options.timeoutMillis,
-    failureMode: options.failureMode,
-  });
-
-  return {
-    scripts: [],
-    permissions: [],
-    bindings: [
-      {
-        ...metadata,
-        origins: [...metadata.origins],
-        input: options.input,
-        output: options.output,
-        handle: options.handle,
-      },
-    ],
-  };
-};
+): Plan<E, R> => ({
+  scripts: [],
+  permissions: [],
+  bindings: [Registration.make(options)],
+});
 
 /** Combination is ordered and preserves every callback's consumer E/R union. */
-export const combine = <const Plans extends ReadonlyArray<AnyPlan>>(
+export function combine<const Plans extends ReadonlyArray<AnyPlan>>(
   ...plans: Plans
-): Plan<PlanError<Plans[number]>, PlanRequirements<Plans[number]>> => {
+): Plan<PlanError<Plans[number]>, PlanRequirements<Plans[number]>>;
+
+export function combine(...plans: ReadonlyArray<AnyPlan>): AnyPlan {
   const bindings = plans.flatMap((plan) => (plan.bindings === undefined ? [] : [...plan.bindings]));
 
   return {
@@ -222,7 +184,7 @@ export const combine = <const Plans extends ReadonlyArray<AnyPlan>>(
     permissions: plans.flatMap((plan) => [...plan.permissions]),
     ...(bindings.length === 0 ? {} : { bindings }),
   };
-};
+}
 
 /** What the current document is, not a promise about any other document. */
 export type ReadinessOutcome =
