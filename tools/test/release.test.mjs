@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { checkTag, distTag, packages, readPackageSet, repositoryUrl } from "../packages.mjs";
 import { checkPackagePaths, distributionFiles, packageReleaseSet, publicationManifest, releaseSetDigest } from "../package-release.mjs";
 import { packedConsumers } from "../packed-consumers.mjs";
-import { publishReleaseSet, registryIntegrity } from "../publish-release.mjs";
+import { publishReleaseSet } from "../publish-release.mjs";
 import { verifyReleaseSet } from "../verify-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -148,31 +148,23 @@ test("transitive generic declarations may not import the optional native or fram
   assert.throws(() => verifyReleaseSet(out, sha, `v${version}`, releaseSetDigest(out)), /Generic declaration imports/);
 });
 
-test("registry recovery distinguishes explicit absence, identical bytes, drift and transport failure", () => {
-  assert.equal(registryIntegrity("fixture", version, () => { throw Object.assign(new Error("404"), { stdout: JSON.stringify({ error: { code: "E404" } }) }); }), undefined);
-  assert.throws(() => registryIntegrity("fixture", version, () => { throw new Error("network timeout"); }), /network timeout/);
-  assert.throws(() => registryIntegrity("fixture", version, () => "null"), /integrity/);
+test("the retired publisher refuses live execution before any artifact or command access", () => {
+  let called = false;
+  assert.throws(() => publishReleaseSet("/nonexistent-release", sha, `v${version}`, "0".repeat(64), {
+    publish: true,
+    run: () => { called = true; },
+  }), /Live publication requires.*journal/);
+  assert.equal(called, false);
 });
 
-test("publication order and partial recovery never retry or replace an uncertain/different version", (t) => {
+test("acceptance retains dependency-ordered lifecycle-free npm dry-runs", (t) => {
   const { tree, out } = workspace(t), receipt = packageReleaseSet(tree, out, sha), digest = releaseSetDigest(out);
   const calls = [];
-  const run = (args) => {
-    calls.push(args);
-    if (args[0] === "view") {
-      if (args[1].startsWith(packages[0].name + "@")) return JSON.stringify(receipt.packages[0].integrity);
-      throw Object.assign(new Error("absent"), { stdout: JSON.stringify({ error: { code: "E404" } }) });
-    }
-    return "{}";
-  };
-  const results = publishReleaseSet(out, sha, `v${version}`, digest, { publish: true, run });
-  assert.deepEqual(results.map((r) => r.state), ["already-identical", "published"]);
-  assert.equal(calls.filter((a) => a[0] === "publish").length, 1);
-  assert.ok(calls.at(-1)[1].endsWith(receipt.packages[1].filename));
-  assert.throws(() => publishReleaseSet(out, sha, `v${version}`, digest, { publish: true, run: () => JSON.stringify("sha512-" + "A".repeat(86) + "==") }), /differs/);
-  const dry = [];
-  publishReleaseSet(out, sha, `v${version}`, digest, { run: (args) => { dry.push(args); return "{}"; } });
-  assert.equal(dry.length, 2); assert.ok(dry.every((a) => a[0] === "publish" && a.includes("--dry-run") && a.includes("--ignore-scripts")));
+  const results = publishReleaseSet(out, sha, `v${version}`, digest, { run: (args) => { calls.push(args); return "{}"; } });
+  assert.deepEqual(results.map((result) => result.state), ["dry-run", "dry-run"]);
+  assert.deepEqual(calls.map((args) => args[1]), receipt.packages.map((entry) => join(out, entry.filename)));
+  assert.ok(calls.every((args) => args[0] === "publish" && args.includes("--dry-run") && args.includes("--ignore-scripts") && args.includes("--provenance=false")));
+  assert.deepEqual(readFileSync(join(out, "publication-dry-run.ndjson"), "utf8").trim().split("\n").map(JSON.parse), results);
 });
 
 for (const declarationExit of [0, 1]) {

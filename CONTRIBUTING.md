@@ -20,6 +20,8 @@ These are the verified acceptance targets, not a promise that every version allo
 
 The root `package.json` is private and prevents accidental root publication. It is not a standalone replacement for upstream's development workspace.
 
+Release tooling is separately pinned in `tools/release/package.json` and `bun.lock`: ts-release core/npm 0.4.0 and Effect 4.0.0-rc.115. From that directory run `bun install --frozen-lockfile --ignore-scripts`, `bun run check`, `bun test`, and `bun run build`. The package separates `src/`, `test/`, and build-only `scripts/`. Its TypeScript application uses Effect schemas for configuration, named operations, and scoped Git resources; the shipped ts-release CLI owns execution, interruption, reports, and exit codes. Native Bundle and Plan data are the retained authority, with no parallel metadata document. The tests use synthetic registry responses and local Git repositories; they need no credentials and do not publish. `Native release recovery` also extracts the packaged host and checks its imports and native CLI with Node 22.22.2, independently of the library's Node 24.14.1 pin. Keep release dependencies out of both public packages and the upstream compatibility patch.
+
 Bootstrap and every acceptance profile assert the pinned Node and Bun. On a host that ships different versions, install them first:
 
 ```sh

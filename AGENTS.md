@@ -14,7 +14,7 @@ Read `README.md`, `CONTRIBUTING.md`, the relevant package guide and neighboring 
 
 `bash tools/bootstrap.sh` creates `.work/upstream/tree` from clean pinned upstream, one integration patch and tracked current package files. Follow that workspace's `AGENTS.md` and `docs/TOOLCHAIN.md`; use Vite+ commands. Read `node_modules/effect/AGENTS.md` completely before writing Effect code.
 
-The repository wrapper uses dependency-free Node maintenance scripts so the OIDC-authorized publishing job installs no third-party code. Test them with `node --test tools/test/*.test.mjs`. They are not public runtime APIs. Do not move host-only packaging machinery into production modules.
+The repository wrapper uses dependency-free Node maintenance scripts. Test them with `node --test tools/test/*.test.mjs`. The isolated `tools/release` application pins ts-release and its native npm provider; install it with `bun install --frozen-lockfile --ignore-scripts` and test with `bun test` from that directory. The OIDC job consumes the tested, hashed tooling artifact and installs nothing. These are host-only tools, not public runtime APIs.
 
 Commit the candidate before `bash tools/run-acceptance.sh`; that Ubuntu acceptance command rejects dirty source and reusing an output directory. Read actual command exit records and current Actions results. A saved result is historical evidence, not a new execution. Preserve source-only review patches and keep generated artifacts ignored and in Actions artifacts.
 
@@ -37,3 +37,5 @@ Keep the branch list short. Delete a branch once its work is merged or abandoned
 Ordinary CI remains read-only, without `pull_request_target`, auto-writing formatters, hosted browser/model credentials or publication. No hosted Browserbase session, paid inference, deployment, service provisioning or npm publication is authorized merely by a maintenance request.
 
 `docs/RELEASING.md` describes a separately enabled, tag-scoped npm OIDC workflow. Preparing or testing it does not authorize running its publishing job, registering a package, changing account permissions, or creating release tags. Preserve commit/checkpoint history; use normal commits, never force-push or rewrite accepted history.
+
+Retain `ts-release-prepared/*` and `ts-release-journal/*` branches for release recovery. Prepared branches are immutable; journal branches append history. Never delete or replace them to retry an uncertain publication. Their guarded create/append operations are release storage, not permission to rewrite source branches.
