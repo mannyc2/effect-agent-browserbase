@@ -41,17 +41,20 @@ export function compactEvidence(directory) {
   assert.ok(lstatSync(consumers).isDirectory() && !lstatSync(consumers).isSymbolicLink(), "Expected real consumer workspaces");
   const destination = join(dirname(out), "completed-consumer-workspaces");
   const archive = join(out, "consumer-fixtures.tar.gz");
-  assert.ok(!existsSync(destination) && !existsSync(archive), "Refusing to replace evidence");
+  const policy = join(out, "evidence-policy.json");
+  assert.ok(!existsSync(destination) && !existsSync(archive) && !existsSync(policy), "Refusing to replace evidence");
   // Preserve fixtures, configs, lockfiles and their modes. Dependency installs are reproducible
   // inputs, not results; never follow symlinks. Tarballs/identity logs/video stay in OUT.
   execFileSync("tar", ["--exclude=node_modules", "--exclude=downloads", "-czf", archive, "-C", out, "consumers"], { timeout: 60_000 });
-  mkdirSync(destination);
-  renameSync(consumers, join(destination, "consumers"));
-  writeFileSync(join(out, "evidence-policy.json"), JSON.stringify({
+  writeFileSync(policy, JSON.stringify({
     schemaVersion: 1, profile, consumerFixtures: "consumer-fixtures.tar.gz",
     dependencyInstalls: "omitted after all checks passed; exact versions in retained locks",
     failurePolicy: "uncompacted consumer workspaces retained on failure or interruption",
   }, null, 2) + "\n", { flag: "wx" });
+  // Move only after every fallible archive/metadata write. A failed preparation
+  // must leave installed declarations in the uploaded diagnostic directory.
+  mkdirSync(destination);
+  renameSync(consumers, join(destination, "consumers"));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
