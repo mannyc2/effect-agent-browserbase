@@ -58,6 +58,7 @@ export const compileLaunch = Effect.fnUntraced(function* (
 
   if (
     (recipe.context !== undefined && recipe.context.reference.projectId !== attempt.projectId) ||
+    (recipe.extension !== undefined && recipe.extension.projectId !== attempt.projectId) ||
     (settings.verified === true && recipe.viewport._tag !== "ProviderManaged") ||
     (settings.os !== undefined && settings.verified !== true)
   )
@@ -145,9 +146,7 @@ export const compileLaunch = Effect.fnUntraced(function* (
     ...(recipe.provider.proxySettings === undefined
       ? {}
       : { proxySettings: recipe.provider.proxySettings }),
-    ...(recipe.provider.extensionId === undefined
-      ? {}
-      : { extensionId: recipe.provider.extensionId }),
+    ...(recipe.extension === undefined ? {} : { extensionId: recipe.extension.extensionId }),
     browserSettings: {
       ...settings,
       recordSession,

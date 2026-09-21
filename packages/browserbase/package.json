@@ -25,6 +25,7 @@
     "./contexts": "./src/Contexts.ts",
     "./downloads": "./src/Downloads.ts",
     "./errors": "./src/Errors.ts",
+    "./extensions": "./src/Extensions.ts",
     "./launch": "./src/Launch.ts",
     "./page-control": "./src/PageControl.ts",
     "./recordings": "./src/Recordings.ts",

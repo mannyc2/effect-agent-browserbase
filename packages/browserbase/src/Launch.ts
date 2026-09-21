@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 import { Viewport } from "./BrowserData.ts";
-import { ContextReference, Identifier } from "./References.ts";
+import { ContextReference, ExtensionReference, Identifier } from "./References.ts";
 
 const BoundedString = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
 const ProxySecret = Schema.Redacted(Schema.String.check(Schema.isMaxLength(8192)));
@@ -45,7 +45,6 @@ export const ProviderLaunchOptions = Schema.Struct({
       ),
     }),
   ),
-  extensionId: Schema.optionalKey(Identifier),
   browserSettings: Schema.optionalKey(
     Schema.Struct({
       verified: Schema.optionalKey(Schema.Boolean),
@@ -76,6 +75,8 @@ export const LaunchRecipe = Schema.Struct({
   context: Schema.optionalKey(
     Schema.Struct({ reference: ContextReference, persist: Schema.Boolean }),
   ),
+  /** Durable project-qualified resource. The compiler alone projects it to provider `extensionId`. */
+  extension: Schema.optionalKey(ExtensionReference),
   viewport: Schema.Union([
     Schema.Struct({ _tag: Schema.Literal("ProviderManaged") }),
     Schema.Struct({
