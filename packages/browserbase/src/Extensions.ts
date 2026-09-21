@@ -32,7 +32,9 @@ const ProviderExtension = Schema.Struct({
   updatedAt: Timestamp,
 });
 
-export class ExtensionMetadata extends Schema.Class<ExtensionMetadata>("BrowserbaseExtensionMetadata")({
+export class ExtensionMetadata extends Schema.Class<ExtensionMetadata>(
+  "BrowserbaseExtensionMetadata",
+)({
   reference: ExtensionReference,
   fileName: Schema.String.check(Schema.isMaxLength(1024)),
   createdAt: Timestamp,
@@ -238,97 +240,102 @@ const metadata = (
 export class BrowserbaseExtensions extends Context.Service<
   BrowserbaseExtensions,
   {
-    readonly create: (archive: ExtensionArchive) => Effect.Effect<ExtensionMetadata, ExtensionError>;
+    readonly create: (
+      archive: ExtensionArchive,
+    ) => Effect.Effect<ExtensionMetadata, ExtensionError>;
     readonly retrieve: (
       reference: ExtensionReference,
     ) => Effect.Effect<ExtensionMetadata, ExtensionError>;
     readonly delete: (reference: ExtensionReference) => Effect.Effect<void, ExtensionError>;
   }
 >()("@effect-agent/browserbase/Extensions") {
-  static readonly layer: Layer.Layer<BrowserbaseExtensions, never, BrowserbaseClient> = Layer.effect(
-    BrowserbaseExtensions,
-    Effect.gen(function* () {
-      const client = yield* BrowserbaseClient;
+  static readonly layer: Layer.Layer<BrowserbaseExtensions, never, BrowserbaseClient> =
+    Layer.effect(
+      BrowserbaseExtensions,
+      Effect.gen(function* () {
+        const client = yield* BrowserbaseClient;
 
-      const validateReference = Effect.fnUntraced(function* (
-        reference: ExtensionReference,
-        operation: string,
-      ) {
-        const ref = yield* Schema.decodeEffect(ExtensionReference)(reference, {
-          onExcessProperty: "error",
-        }).pipe(Effect.mapError(() => configuration(operation)));
+        const validateReference = Effect.fnUntraced(function* (
+          reference: ExtensionReference,
+          operation: string,
+        ) {
+          const ref = yield* Schema.decodeEffect(ExtensionReference)(reference, {
+            onExcessProperty: "error",
+          }).pipe(Effect.mapError(() => configuration(operation)));
 
-        if (ref.projectId !== client.projectId) {
-          return yield* ExtensionError.make({
-            operation,
-            reason: "authorization",
-            outcome: "undispatched",
-          });
-        }
+          if (ref.projectId !== client.projectId) {
+            return yield* ExtensionError.make({
+              operation,
+              reason: "authorization",
+              outcome: "undispatched",
+            });
+          }
 
-        return ref;
-      });
-
-      const create = Effect.fn("BrowserbaseExtensions.create")(function* (archive: ExtensionArchive) {
-        const input = yield* Schema.decodeEffect(
-          Schema.Struct({ fileName: FileName, bytes: Schema.Uint8Array }),
-        )(archive, { onExcessProperty: "error" }).pipe(
-          Effect.mapError(() => configuration("extension-create")),
-        );
-        const bytes = Uint8Array.from(input.bytes);
-
-        yield* Effect.try({
-          try: () => inspectZip(bytes),
-          catch: (cause) =>
-            cause instanceof ZipValidationError
-              ? configuration("extension-create", cause.reason)
-              : configuration("extension-create"),
+          return ref;
         });
 
-        const raw = yield* client
-          .multipartJson("/v1/extensions", {
-            field: "file",
-            fileName: input.fileName,
-            mediaType: "application/zip",
-            bytes,
-          })
-          .pipe(Effect.mapError((error) => fromClient("extension-create", error)));
-        const value = yield* Schema.decodeUnknownEffect(ProviderExtension)(raw).pipe(
-          Effect.mapError(() => malformed("extension-create", true)),
-        );
+        const create = Effect.fn("BrowserbaseExtensions.create")(function* (
+          archive: ExtensionArchive,
+        ) {
+          const input = yield* Schema.decodeEffect(
+            Schema.Struct({ fileName: FileName, bytes: Schema.Uint8Array }),
+          )(archive, { onExcessProperty: "error" }).pipe(
+            Effect.mapError(() => configuration("extension-create")),
+          );
+          const bytes = Uint8Array.from(input.bytes);
 
-        return yield* metadata(client.projectId, value, "extension-create", true);
-      });
+          yield* Effect.try({
+            try: () => inspectZip(bytes),
+            catch: (cause) =>
+              cause instanceof ZipValidationError
+                ? configuration("extension-create", cause.reason)
+                : configuration("extension-create"),
+          });
 
-      const retrieve = Effect.fn("BrowserbaseExtensions.retrieve")(function* (
-        reference: ExtensionReference,
-      ) {
-        const ref = yield* validateReference(reference, "extension-retrieve");
-        const raw = yield* client
-          .json("GET", `/v1/extensions/${encodeURIComponent(ref.extensionId)}`)
-          .pipe(Effect.mapError((error) => fromClient("extension-retrieve", error)));
-        const value = yield* Schema.decodeUnknownEffect(ProviderExtension)(raw).pipe(
-          Effect.mapError(() => malformed("extension-retrieve")),
-        );
+          const raw = yield* client
+            .multipartJson("/v1/extensions", {
+              field: "file",
+              fileName: input.fileName,
+              mediaType: "application/zip",
+              bytes,
+            })
+            .pipe(Effect.mapError((error) => fromClient("extension-create", error)));
+          const value = yield* Schema.decodeUnknownEffect(ProviderExtension)(raw).pipe(
+            Effect.mapError(() => malformed("extension-create", true)),
+          );
 
-        if (value.id !== ref.extensionId || value.projectId !== ref.projectId) {
-          return yield* malformed("extension-retrieve");
-        }
+          return yield* metadata(client.projectId, value, "extension-create", true);
+        });
 
-        return yield* metadata(client.projectId, value, "extension-retrieve");
-      });
+        const retrieve = Effect.fn("BrowserbaseExtensions.retrieve")(function* (
+          reference: ExtensionReference,
+        ) {
+          const ref = yield* validateReference(reference, "extension-retrieve");
+          const raw = yield* client
+            .json("GET", `/v1/extensions/${encodeURIComponent(ref.extensionId)}`)
+            .pipe(Effect.mapError((error) => fromClient("extension-retrieve", error)));
+          const value = yield* Schema.decodeUnknownEffect(ProviderExtension)(raw).pipe(
+            Effect.mapError(() => malformed("extension-retrieve")),
+          );
 
-      const remove = Effect.fn("BrowserbaseExtensions.delete")(function* (
-        reference: ExtensionReference,
-      ) {
-        const ref = yield* validateReference(reference, "extension-delete");
+          if (value.id !== ref.extensionId || value.projectId !== ref.projectId) {
+            return yield* malformed("extension-retrieve");
+          }
 
-        yield* client
-          .noContent("DELETE", `/v1/extensions/${encodeURIComponent(ref.extensionId)}`)
-          .pipe(Effect.mapError((error) => fromClient("extension-delete", error)));
-      });
+          return yield* metadata(client.projectId, value, "extension-retrieve");
+        });
 
-      return BrowserbaseExtensions.of({ create, retrieve, delete: remove });
-    }),
-  );
+        const remove = Effect.fn("BrowserbaseExtensions.delete")(function* (
+          reference: ExtensionReference,
+        ) {
+          const ref = yield* validateReference(reference, "extension-delete");
+
+          yield* client
+            .noContent("DELETE", `/v1/extensions/${encodeURIComponent(ref.extensionId)}`)
+            .pipe(Effect.mapError((error) => fromClient("extension-delete", error)));
+        });
+
+        return BrowserbaseExtensions.of({ create, retrieve, delete: remove });
+      }),
+    );
 }

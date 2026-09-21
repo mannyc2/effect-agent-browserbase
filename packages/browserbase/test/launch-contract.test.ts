@@ -37,39 +37,41 @@ it("durable extensions have one qualified recipe spelling and provider aliases s
   }
 });
 
-it.effect("the compiler projects only a same-project ExtensionReference to provider extensionId", () =>
-  Effect.gen(function* () {
-    const base = {
-      remoteTimeoutSeconds: 60,
-      viewport: { _tag: "ProviderManaged" as const },
-      provider: {},
-    };
-    const extension = ExtensionReference.make({
-      provider: "browserbase",
-      projectId: "project-1",
-      extensionId: "extension-1",
-    });
-    const identity = {
-      projectId: "project-1",
-      attemptId: "attempt-1",
-      requestedAtMillis: 1,
-    };
-    const compiled = yield* compileLaunch({ ...base, extension }, identity);
+it.effect(
+  "the compiler projects only a same-project ExtensionReference to provider extensionId",
+  () =>
+    Effect.gen(function* () {
+      const base = {
+        remoteTimeoutSeconds: 60,
+        viewport: { _tag: "ProviderManaged" as const },
+        provider: {},
+      };
+      const extension = ExtensionReference.make({
+        provider: "browserbase",
+        projectId: "project-1",
+        extensionId: "extension-1",
+      });
+      const identity = {
+        projectId: "project-1",
+        attemptId: "attempt-1",
+        requestedAtMillis: 1,
+      };
+      const compiled = yield* compileLaunch({ ...base, extension }, identity);
 
-    expect(compiled.body).toMatchObject({ extensionId: "extension-1" });
+      expect(compiled.body).toMatchObject({ extensionId: "extension-1" });
 
-    const foreign = yield* compileLaunch(
-      {
-        ...base,
-        extension: ExtensionReference.make({ ...extension, projectId: "project-2" }),
-      },
-      identity,
-    ).pipe(Effect.result);
+      const foreign = yield* compileLaunch(
+        {
+          ...base,
+          extension: ExtensionReference.make({ ...extension, projectId: "project-2" }),
+        },
+        identity,
+      ).pipe(Effect.result);
 
-    expect(foreign._tag).toBe("Failure");
-    if (foreign._tag === "Failure") {
-      expect(foreign.failure.reason).toBe("configuration");
-      expect(foreign.failure.outcome).toBe("undispatched");
-    }
-  }),
+      expect(foreign._tag).toBe("Failure");
+      if (foreign._tag === "Failure") {
+        expect(foreign.failure.reason).toBe("configuration");
+        expect(foreign.failure.outcome).toBe("undispatched");
+      }
+    }),
 );

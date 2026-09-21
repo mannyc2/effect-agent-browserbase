@@ -264,10 +264,7 @@ it.effect("known rate-limit rejection stays rejected and is not retried", () => 
     }),
     async () => {
       requests++;
-      return Response.json(
-        { error: "private" },
-        { status: 429, headers: { "retry-after": "2" } },
-      );
+      return Response.json({ error: "private" }, { status: 429, headers: { "retry-after": "2" } });
     },
   );
 });

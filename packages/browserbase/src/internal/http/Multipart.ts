@@ -79,9 +79,7 @@ const collect = (
     yield* Stream.runForEach(stream, (chunk) =>
       Effect.suspend(() => {
         if (chunk.byteLength > maximum - total) {
-          return Effect.fail(
-            ClientError.make({ operation, reason: "limit", outcome: "unknown" }),
-          );
+          return Effect.fail(ClientError.make({ operation, reason: "limit", outcome: "unknown" }));
         }
         total += chunk.byteLength;
         chunks.push(chunk);
@@ -127,15 +125,11 @@ const inspectJson = Effect.fnUntraced(function* (
 
   let received = 0;
   return response.stream.pipe(
-    Stream.mapError(() =>
-      ClientError.make({ operation, reason: "transport", outcome: "unknown" }),
-    ),
+    Stream.mapError(() => ClientError.make({ operation, reason: "transport", outcome: "unknown" })),
     Stream.mapEffect((chunk) =>
       Effect.suspend(() => {
         if (chunk.byteLength > MAX_JSON_BYTES - received) {
-          return Effect.fail(
-            ClientError.make({ operation, reason: "limit", outcome: "unknown" }),
-          );
+          return Effect.fail(ClientError.make({ operation, reason: "limit", outcome: "unknown" }));
         }
         received += chunk.byteLength;
         return Effect.succeed(new Uint8Array(chunk));
