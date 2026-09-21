@@ -124,6 +124,30 @@ The browser owner does not allocate or release anything itself. It supplies the 
 
 Mutations are serialized. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome: the owner is fenced and the package never automatically replays it. `undispatched` is used only when the package established that native mutation dispatch did not occur.
 
+### A navigation you can watch while it loads
+
+`navigate` holds nothing open that you can see into: it returns when the document reaches DOMContentLoaded. `startNavigation` is the same single dispatch, left in flight, so a recorder can look at a page while it is still arriving, hold it, and let it finish:
+
+```ts
+const operation =
+  yield * handle.startNavigation(StartNavigationRequest.make({ url, timeoutMillis: 30_000 }));
+
+const early = yield * session.checkpoint({ picture: true }); // what has loaded so far
+const receipt = yield * PageControl.suspend(session, page); // timers, CSS and parsing stop
+yield * PageControl.resume(session, receipt);
+const { url: loaded } = yield * operation.completed;
+```
+
+The owner's permit is released as soon as the navigation is dispatched. While it loads, reads, checkpoints, holds and every other page proceed, and anything that would change _this_ page fails `busy` and `undispatched`. `navigate` runs on the same machinery, so there is one navigator.
+
+- `completed` belongs to that one navigation: a successor reaching the same URL fails it instead of completing it, and its URL is the page that navigated, not whichever page is selected by then. **Interrupting a waiter stops nothing.** The browser keeps loading and nothing is dispatched again.
+- `stop` asks the browser to stop loading. Its acknowledgement is a known outcome: `completed` then fails `interrupted`, the page holds whatever had loaded, and the session stays usable. It does not undo anything the page already did.
+- Leaving the operation's scope unsettled, or a navigation that fails after dispatch, fences the session as uncertain, exactly as an interrupted mutation always has. Nothing knows what the browser did, so nothing more is sent, and it is never replayed.
+
+A read is ordered against the document being replaced by failing: if the document it was reading was replaced underneath it, or a navigation is still in flight on its page, the error is `target-changed` and `undispatched`, which means read again. A read is never a mutation, so that is always safe. A held page is not read at all; take the checkpoint before the hold and keep it.
+
+Locally, a hold during an incremental response stops parsing as well as timers: a chunk the server sends meanwhile is not parsed until resume. That is an observation of the pinned Chromium, not a guarantee about hosted sessions.
+
 ### What is on screen, and what a host may know about it
 
 `session.observe()` reads the whole document. `session.observe({ scope: "viewport" })` keeps only text and controls that are on screen and reachable, and says what it left out:
@@ -286,6 +310,34 @@ A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `r
 
 `Unrestricted` is the only supported `BrowserPolicy.network`, and only when selected by trusted host policy. The adapter package refuses Effect Agent's `ExactHosts` before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers, and refuses `PublicWeb` because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
 
+### Why there is no request-admission hook
+
+A hook that lets a host allow or deny each request is worth having only if it sees every request it claims to cover. The owner drives the browser through the engine's one connection, where the available interception is Playwright routing, and in the pinned Playwright 1.63.0 that does not see them all:
+
+- A redirected request is continued by the engine itself and is never offered to a route handler. A hook would decide the first hop of a chain and none of the rest.
+- A paused request the engine cannot match to a network request, or to a frame or service worker it knows, is continued without being offered.
+- Turning routing on disables the HTTP cache for every page it covers, so the policy would change what a page loads, and what a recording of it shows.
+
+A second interception client on the same targets would compete with the engine for the same paused requests, and is the raw-protocol side channel the single owner exists to rule out. So this package offers no hook, rather than one that covers less than it appears to.
+
+Complete URL-level admission would still not be `PublicWeb`. A URL names a host. The address is chosen afterwards, by whichever resolver the connecting browser or proxy uses, so a lookup the host makes beforehand says nothing about the connection that follows.
+
+### The boundary that can enforce it
+
+Containment has to be enforced where the session's connections are made: an egress point beneath every page, frame, worker and socket, which sees each connection's real target and resolves names itself. On this provider that is a proxy the host operates, selected for the whole session at launch:
+
+```ts
+const launch = recipe({
+  provider: { proxies: [{ type: "external", server, username, password }] },
+});
+```
+
+`username` and `password` are `Redacted`, and a `server` URL that carries credentials is refused before allocation. The rule is listed alone and has no `domainPattern`: the provider applies the first rule that matches, so a rule ahead of it, or a pattern on it, is a way round the proxy. Exact hosts, public addresses, redirects and child pages are then the proxy's decisions, made per connection.
+
+A host that does this still selects `Unrestricted` here, and the containment claim is the host's own, made at its proxy. This package keeps refusing `ExactHosts` and `PublicWeb`, because it has no evidence that every connection of a hosted session takes that proxy. The provider documents how rules are ordered, not whether WebRTC, QUIC or name resolution go through one, and no hosted run in this repository has tested it. Accepting either policy needs that evidence first: a hosted session behind one catch-all proxy, exercised through navigation, redirects, frames, subresources, popups, workers, service workers, WebSockets and non-HTTP transports, with nothing arriving anywhere but the proxy.
+
+What this package does check is input, not requests. `controlFacts` and an `admit` policy ([above](#what-is-on-screen-and-what-a-host-may-know-about-it)) let a host that drives the session refuse a link or a form by its resolved destination before anything is sent. That limits what the host's own automation acts on. It does not limit what a page loads, or where it redirects.
+
 ## Beyond the browser session
 
 These services share the Client and its rules: strict input decoding, identity-checked replies, 1 MiB reply bounds, mutations that are never retried, and typed failures whose `outcome` says whether a request was sent. They are host APIs; none of them is exposed to a model by the adapter package.
@@ -334,7 +386,7 @@ Live capture frames carry owned JPEG bytes, captured target identity, sequence n
 
 `sourceTimeMillis` is the browser's wall clock when it took the frame for the screencast, stamped before the frame is encoded. Chromium encodes up to three frames at once and emits each when its encode completes, so two frames stamped close together can arrive in either order. A frame that arrives behind a newer one can no longer be presented in order: it is discarded and counted in `late`, which is part of `dropped`. It is never sorted back in or given another time, so delivered source times strictly increase and a gap in `sequence` marks the omission. Concurrent encoding can put at most two late frames in a row. A longer run means source time itself went backwards, and the interval ends with reason `timestamp`.
 
-Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined. A definitively closed page releases its capture reservation. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Filming across a navigation, as successive intervals resampled onto one constant-rate reel, is demonstrated in `examples/realistic-footage`. Caller encoding is demonstrated in `examples/record-video.ts`; the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence.
+Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. `Capture.start(session, { lifetime: "page" })` instead follows a page's main frame across documents: start it before a navigation and it covers the loading in between. The native screencast is never restarted for a navigation, so a boundary is not a gap this package introduced. Each frame carries the `document` it was received during (0, then one more per navigation), and the summary's bounded `documentBoundaries` give the last sequence before each one. That is attribution by receipt order, not proof of whose pixels a frame shows: one received just after a navigation can still show the document before it. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined. A definitively closed page releases its capture reservation. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Filming across a navigation, as successive intervals resampled onto one constant-rate reel, is demonstrated in `examples/realistic-footage`. Caller encoding is demonstrated in `examples/record-video.ts`; the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence.
 
 ## Explicit stage-page holds (opt-in)
 

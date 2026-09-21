@@ -213,7 +213,7 @@ export const makePlaywrightDriver = async (
     closePage: targets.closePage,
     listFrames: targets.listFrames,
     selectFrame: targets.selectFrame,
-    navigate: actions.navigate,
+    beginNavigation: actions.beginNavigation,
     readText: observation.readText,
     observe: observation.observe,
     checkpoint: observation.checkpoint,

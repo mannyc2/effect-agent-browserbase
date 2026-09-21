@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -91,6 +91,8 @@ export const localBrowser = Effect.acquireRelease(
     const nativePages = new Map<string, () => ReadonlyArray<Page>>();
     const requests: string[] = [];
     const uploadedPaths: string[] = [];
+    // Responses the test is still writing: a navigation that has committed and not finished.
+    const slow: Array<ServerResponse> = [];
     let fileRequests = 0;
 
     const server = createServer((req, res) => {
@@ -154,6 +156,22 @@ export const localBrowser = Effect.acquireRelease(
           window.counters=()=>({ticks,rafs,animation:document.querySelector('#moving').getAnimations()[0].currentTime,paused:document.querySelector('#paused').getAnimations()[0].currentTime});
           document.addEventListener('freeze',()=>freezes.push(counters()));document.addEventListener('resume',()=>resumes.push(counters()));
           window.read=()=>({...counters(),clicks,freezes,resumes});</script>`);
+
+        return;
+      }
+      if (path === "/slow") {
+        // The document commits on these first bytes and then stays open. The padding gets the
+        // parser past its first buffer, so the opening chunk is really on screen before the
+        // test sends another. Counters let the page itself say what a hold froze.
+        res.write(`<!doctype html><meta charset=utf-8><title>Slow</title><!--${"-".repeat(4096)}-->
+          <style>body{margin:0}@keyframes slide{to{transform:translateX(200px)}}
+          #box{width:40px;height:40px;background:rgb(200,0,0);animation:slide 4s linear infinite}</style>
+          <div id=box></div><script>window.ticks=0;setInterval(()=>ticks++,20);window.freezes=[];window.resumes=[];
+          const snap=()=>({ticks,chunks:document.querySelectorAll('.chunk').length});
+          document.addEventListener('freeze',()=>freezes.push(snap()));document.addEventListener('resume',()=>resumes.push(snap()));
+          window.read=()=>({...snap(),freezes,resumes,state:document.readyState});</script>
+          <p class=chunk>chunk 1</p><button id=act>Act</button>`);
+        slow.push(res);
 
         return;
       }
@@ -380,6 +398,15 @@ export const localBrowser = Effect.acquireRelease(
       nativePages: (id: string) => nativePages.get(id)?.() ?? [],
       requests,
       uploadedPaths,
+      /** Drives every response `/slow` is still holding open. */
+      slow: {
+        send: (html: string) => {
+          for (const response of slow) response.write(html);
+        },
+        end: () => {
+          for (const response of slow.splice(0)) response.end();
+        },
+      },
       fileRequests: () => fileRequests,
       options,
       account,

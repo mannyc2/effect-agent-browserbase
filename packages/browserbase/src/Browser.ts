@@ -2,8 +2,8 @@ import { Context, Effect, Layer, type Option, type Redacted, Schema, Scope } fro
 
 import * as Bootstrap from "./Bootstrap.ts";
 import { BrowserbaseBrowserBinding } from "./BrowserBinding.ts";
-import type { ControlFacts } from "./BrowserData.ts";
 import {
+  type ControlFacts,
   ActionResult,
   AutomationOptions,
   BrowserPolicy,
@@ -27,6 +27,7 @@ import {
   ScreenshotResult,
   ScrollRequest,
   type SelectFilesRequest,
+  StartNavigationRequest,
   Selector,
   type Target,
   TextResult,
@@ -90,9 +91,37 @@ export interface ElementAdmission {
   readonly admit: (facts: ControlFacts) => boolean;
 }
 
+/**
+ * A navigation the browser is still performing. The owner's permit was released when it was
+ * dispatched, so while it loads a host may read, `checkpoint`, hold and resume this page, and
+ * use any other page. Anything that would change this page fails `busy` until it settles.
+ *
+ * Leaving its scope unsettled fences the session, exactly as an interrupted mutation does,
+ * because nothing then knows what the browser did. It is never replayed.
+ */
+export interface NavigationOperation {
+  /** What was navigated, read before dispatch. */
+  readonly target: Target;
+  /**
+   * The document reached DOMContentLoaded. It belongs to this one navigation: a successor that
+   * reaches the same URL fails it instead. Interrupting a waiter stops nothing in the browser.
+   */
+  readonly completed: Effect.Effect<NavigationResult, BrowserError>;
+  /**
+   * Asks the browser to stop loading and waits for this navigation to settle, after which
+   * `completed` fails `interrupted`. Success is a known outcome and the session stays usable:
+   * the page holds whatever had loaded. It does not undo anything the page already did.
+   */
+  readonly stop: Effect.Effect<void, BrowserError>;
+}
+
 /** One selected page and frame at one connection generation, never the current DOM. */
 export interface BoundTarget {
   readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserError>;
+  /** `navigate`, left in flight: the same single dispatch, completed by the caller. */
+  readonly startNavigation: (
+    request: StartNavigationRequest,
+  ) => Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>;
   readonly readText: (request: ReadTextRequest) => Effect.Effect<TextResult, BrowserError>;
   readonly click: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserError>;
   readonly fill: (request: FillRequest) => Effect.Effect<ActionResult, BrowserError>;
@@ -252,6 +281,17 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
     checked(NavigateRequest, request, "navigate").pipe(
       Effect.flatMap((value) => bound.navigate(value.url)),
       Effect.flatMap((url) => decoded(NavigationResult, "navigate")({ url })),
+    ),
+  startNavigation: (request) =>
+    checked(StartNavigationRequest, request, "navigate").pipe(
+      Effect.flatMap((value) => bound.startNavigation(value.url, value.timeoutMillis)),
+      Effect.map((operation) => ({
+        target: operation.target,
+        completed: operation.completed.pipe(
+          Effect.flatMap((url) => decoded(NavigationResult, "navigate")({ url })),
+        ),
+        stop: operation.stop,
+      })),
     ),
   readText: (request) =>
     checked(ReadTextRequest, request, "read-text").pipe(

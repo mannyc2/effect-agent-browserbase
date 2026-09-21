@@ -18,6 +18,7 @@ import { jpegGeometry } from "./Images.ts";
 
 const MaxParentCaptures = 4;
 const MaxParentBufferedBytes = 64 * 1024 * 1024;
+const MaxDocumentBoundaries = 64;
 
 /**
  * Chromium stamps a screencast frame on its UI thread, encodes it on an unsequenced thread
@@ -108,6 +109,22 @@ export const startCapture = Effect.fnUntraced(function* (
     lateRun = 0;
 
   let first: number | undefined, last: number | undefined;
+  let document = 0;
+  let documentBoundariesTruncated = false;
+  const documentBoundaries: Array<CaptureSummary["documentBoundaries"][number]> = [];
+
+  /** The page navigated and its screencast kept running: later frames belong to a new document. */
+  const nextDocument = (): void => {
+    if (ended) return;
+    document++;
+    if (documentBoundaries.length >= MaxDocumentBoundaries) documentBoundariesTruncated = true;
+    else
+      documentBoundaries.push({
+        document,
+        observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+        afterSequence: received === 0 ? null : received - 1,
+      });
+  };
 
   let geometry:
     | { width: number; height: number; viewportWidth: number; viewportHeight: number }
@@ -142,6 +159,8 @@ export const startCapture = Effect.fnUntraced(function* (
       bufferedBytes: buffer.bytes,
       sourceFirstMillis: first ?? null,
       sourceLastMillis: last ?? null,
+      documentBoundaries: [...documentBoundaries],
+      documentBoundariesTruncated,
       nativeStop,
       upstreamDrops: "unknown",
       ...(error === undefined ? {} : { error }),
@@ -278,6 +297,7 @@ export const startCapture = Effect.fnUntraced(function* (
         mediaType: "image/jpeg",
         target,
         sequence,
+        document,
         sourceTimeMillis: meta.timestamp,
         sourceClock: "presentation-unix-millis",
         receivedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
@@ -349,7 +369,13 @@ export const startCapture = Effect.fnUntraced(function* (
           startSettled = false;
           yield* Effect.tryPromise({
             try: () => {
-              startPromise = source!.start(receive, quality, (why) => lease?.invalidate(why), size);
+              startPromise = source!.start({
+                receive,
+                quality,
+                invalidate: (why) => lease?.invalidate(why),
+                ...(size === undefined ? {} : { size }),
+                ...(options.lifetime === "page" ? { document: nextDocument } : {}),
+              });
               void startPromise.then(
                 () => {
                   startSettled = true;

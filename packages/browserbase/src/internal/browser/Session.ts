@@ -488,10 +488,34 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     { charge: false },
   );
 
+  /**
+   * While a navigation is in flight on the selected page, nothing else may change that page.
+   * Reads, checkpoints, holds and every other page proceed.
+   */
+  const unreserved = (operation: BrowserOperation) =>
+    Effect.suspend(() => {
+      let pageId: string | undefined;
+
+      try {
+        pageId = driver?.selected().pageId;
+      } catch {
+        // No selected target: the operation itself reports that, with its own reason.
+      }
+
+      return pageId !== undefined && owner.reserved(pageId)
+        ? Effect.fail(BrowserError.make({ operation, reason: "busy", outcome: "undispatched" }))
+        : Effect.void;
+    });
+
   const nativeOperation = <A>(
     operation: BrowserOperation,
     action: (driver: Driver, ticket: Ticket) => Promise<A>,
-    options: { readonly mutation?: boolean; readonly charge?: boolean } = {},
+    options: {
+      readonly mutation?: boolean;
+      readonly charge?: boolean;
+      /** Opening or closing a tab is independent of the selected page's document. */
+      readonly anyPage?: boolean;
+    } = {},
   ) =>
     owner.guard(
       operation,
@@ -516,7 +540,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
           return action(getDriver(), ticket);
         }),
-      options,
+      {
+        ...options,
+        ...(options.mutation === true && options.anyPage !== true
+          ? { preflight: unreserved(operation) }
+          : {}),
+      },
     );
 
   /** A bound handle captures the page selection and connection generation, never the current DOM. */
@@ -548,7 +577,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
             return action(getDriver(), ticket);
           }),
-        { mutation, preflight: Effect.suspend(check) },
+        {
+          mutation,
+          preflight: mutation
+            ? Effect.suspend(check).pipe(Effect.andThen(unreserved(operation)))
+            : Effect.suspend(check),
+        },
       );
 
     /**
@@ -577,9 +611,96 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         true,
       );
 
+    /**
+     * Dispatches under a short permit and leaves the browser loading outside it. The reservation
+     * is taken under that same permit, so no other mutation can reach the page in between, and
+     * it is released only on a known outcome: an unsettled operation whose scope closes, or a
+     * navigation that fails after dispatch, fences the owner exactly as an interrupted mutation
+     * always has. Interrupting a waiter on `completed` stops nothing; `stop` is the one way to.
+     */
+    const startNavigation = Effect.fnUntraced(function* (
+      url: string,
+      timeoutMillis = limits.actionTimeoutMillis,
+    ) {
+      const begun = yield* run(
+        "navigate",
+        async (driver, ticket) => {
+          const target = capture.target();
+          const navigation = await driver.beginNavigation(url, timeoutMillis, ticket);
+
+          return { target, navigation, reservation: owner.reserve(navigation.pageId) };
+        },
+        true,
+      );
+
+      const { navigation, reservation } = begun;
+      const outcome = yield* Deferred.make<string, BrowserError>();
+
+      const failed = (reason: BrowserError["reason"]) =>
+        Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
+
+      /**
+       * A navigation has exactly one outcome, and whoever decides it first settles the
+       * reservation. It is released before anyone waiting is told, so the operation a waiter
+       * runs next is admitted rather than finding its own page still reserved.
+       */
+      const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
+        if (Deferred.isDoneUnsafe(outcome)) return;
+        reservation.settle(known ? "known" : "unknown");
+        Deferred.doneUnsafe(outcome, result);
+      };
+
+      navigation.settled.then(
+        (url) => decide(Effect.succeed(url), true),
+        // Failed after dispatch, and nothing says what the browser did: unknown, as it always was.
+        (error: unknown) =>
+          decide(
+            Effect.fail(publicError(error, "navigate", { reason: "provider", outcome: "unknown" })),
+            false,
+          ),
+      );
+      // A fence already cleared the reservation; this only releases anyone still waiting.
+      reservation.signal.addEventListener("abort", () => decide(failed("stale"), true), {
+        once: true,
+      });
+      // Left unsettled, nothing knows what the browser did with it.
+      yield* Effect.addFinalizer(() => Effect.sync(() => decide(failed("stale"), false)));
+
+      return {
+        target: begun.target,
+        completed: Deferred.await(outcome),
+        /**
+         * The browser's acknowledgement is the known outcome. Playwright's own promise is not
+         * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
+         */
+        stop: Effect.tryPromise({
+          try: () => navigation.stop(),
+          catch: (error) =>
+            publicError(error, "navigate-stop", { reason: "provider", outcome: "unknown" }),
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: 3000,
+            orElse: () =>
+              Effect.fail(
+                BrowserError.make({
+                  operation: "navigate-stop",
+                  reason: "timeout",
+                  outcome: "unknown",
+                }),
+              ),
+          }),
+          Effect.tap(() => Effect.sync(() => decide(failed("interrupted"), true))),
+        ),
+      };
+    });
+
     return {
+      startNavigation,
+      // The same machinery, scoped to the call: leaving it unsettled fences, as it always has.
       navigate: (url: string) =>
-        run("navigate", (driver, ticket) => driver.navigate(url, ticket), true),
+        Effect.scoped(
+          startNavigation(url).pipe(Effect.flatMap((operation) => operation.completed)),
+        ),
       readText: (selector?: string) =>
         run("read-text", (driver, ticket) =>
           driver.readText(selector, options.maxReturnedBytes, ticket),
@@ -760,11 +881,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), {
         mutation: true,
         charge: false,
+        anyPage: true,
       }),
     closePage: (id: string) =>
       nativeOperation("close-page", (driver, ticket) => driver.closePage(id, ticket), {
         mutation: true,
         charge: false,
+        anyPage: true,
       }),
     resize: (viewport: Viewport) =>
       nativeOperation("resize", (driver, ticket) => driver.resize(viewport, ticket), {

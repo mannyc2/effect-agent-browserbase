@@ -54,6 +54,41 @@ const expectReason = <A, E extends { readonly reason: string }, R>(
     }),
   );
 
+/** A navigation the scripted driver leaves in flight until the test decides how it ends. */
+const inFlight = () => {
+  const urls: Array<string> = [];
+  let stops = 0;
+  let resolve: (url: string) => void = () => {};
+  let reject: (error: Error) => void = () => {};
+
+  return {
+    urls,
+    get stops() {
+      return stops;
+    },
+    settle: () => resolve(urls.at(-1) ?? ""),
+    fail: () => reject(new Error("PRIVATE-NAVIGATION-FAILURE")),
+    script: (url: string, pageId: string) => {
+      urls.push(url);
+
+      const settled = new Promise<string>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+
+      void settled.catch(() => {});
+
+      return {
+        pageId,
+        settled,
+        stop: async () => {
+          stops++;
+        },
+      };
+    },
+  };
+};
+
 interface Case {
   readonly name: string;
   readonly run: Effect.Effect<void, OwnershipFailure>;
@@ -400,6 +435,92 @@ export const ownershipCases: ReadonlyArray<Case> = [
       );
       assert.equal(f.state.observations, 0);
       assert.equal((yield* session.observe({ scope: "viewport" })).scope, "viewport");
+    })),
+  test("an in-flight navigation keeps mutations off its page and lets everything else proceed", () =>
+    Effect.gen(function* () {
+      const flight = inFlight();
+      const f = yield* fixture({ onNavigate: flight.script });
+      const session = yield* (yield* f.acquisition).connect;
+      const handle = session.bind();
+      const operation = yield* handle.startNavigation("https://example.test/slow");
+
+      // Dispatched exactly once, and the permit is free again while the browser loads.
+      assert.deepEqual(flight.urls, ["https://example.test/slow"]);
+      yield* expectReason(handle.click("#act"), "busy");
+      yield* expectReason(handle.navigate("https://example.test/other"), "busy");
+      yield* expectReason(handle.pointerMove({ x: 1, y: 1 }), "busy");
+      assert.equal(f.state.clicks, 0);
+      assert.deepEqual(f.state.input, []);
+      // Reads and passive evidence are admitted while it loads.
+      assert.equal(yield* handle.readText(), "initial");
+      yield* session.checkpoint({ picture: false });
+
+      // Giving up on a wait stops nothing, and the navigation is not sent again.
+      const abandoned = yield* elapse(operation.completed.pipe(Effect.timeoutOption(100)), 200);
+
+      assert.equal(abandoned._tag, "None");
+      assert.deepEqual(flight.urls, ["https://example.test/slow"]);
+      assert.equal(flight.stops, 0);
+
+      // Another page is not this page.
+      yield* session.selectPage("page-2");
+      yield* session.bind().click("#act");
+      assert.equal(f.state.clicks, 1);
+
+      flight.settle();
+      assert.equal(yield* operation.completed, "https://example.test/slow");
+      // Settled is a known outcome: the page it loaded takes input again.
+      yield* session.selectPage("page-1");
+      yield* session.bind().click("#act");
+      assert.equal(f.state.clicks, 2);
+    })),
+  test("stopping a navigation is a known outcome and the session stays usable", () =>
+    Effect.gen(function* () {
+      const flight = inFlight();
+      const f = yield* fixture({ onNavigate: flight.script });
+      const session = yield* (yield* f.acquisition).connect;
+      const handle = session.bind();
+      const operation = yield* handle.startNavigation("https://example.test/slow");
+
+      yield* operation.stop;
+      assert.equal(flight.stops, 1);
+      // Decided by the browser's acknowledgement; the native promise never settled.
+      yield* expectReason(operation.completed, "interrupted");
+      yield* handle.click("#act");
+      assert.equal(f.state.clicks, 1);
+      // The native promise rejecting later, as Playwright's does at its timeout, changes nothing.
+      flight.fail();
+      yield* handle.click("#act");
+      assert.equal(f.state.clicks, 2);
+    })),
+  test("a navigation that fails after dispatch, or is left unsettled, fences the owner", () =>
+    Effect.gen(function* () {
+      for (const abandon of [false, true]) {
+        const flight = inFlight();
+        const f = yield* fixture({ onNavigate: flight.script });
+        const session = yield* (yield* f.acquisition).connect;
+        const handle = session.bind();
+
+        if (abandon) {
+          // Its scope closes while the browser is still loading.
+          yield* Effect.scoped(handle.startNavigation("https://example.test/slow"));
+        } else {
+          const operation = yield* handle.startNavigation("https://example.test/slow");
+
+          flight.fail();
+          const failed = yield* operation.completed.pipe(Effect.result);
+
+          assert.equal(failed._tag, "Failure");
+          if (failed._tag === "Failure") {
+            assert.equal(failed.failure.operation, "navigate");
+            assert.equal(failed.failure.outcome, "unknown");
+          }
+        }
+        // Nothing knows what the browser did, so nothing more is sent. It is never replayed.
+        assert.equal((yield* handle.click("#act").pipe(Effect.result))._tag, "Failure");
+        assert.equal(f.state.clicks, 0);
+        assert.deepEqual(flight.urls, ["https://example.test/slow"]);
+      }
     })),
   test("keep-alive reconnect establishes a new generation and observes actual state", () =>
     Effect.gen(function* () {
