@@ -2,6 +2,7 @@ import { Clock, Deferred, Effect, Exit, type Option, Redacted, Schema, Scope } f
 
 import { BrowserbaseBrowserBinding } from "../../BrowserBinding.ts";
 import {
+  type KeyModifier,
   Observation,
   type ObservedElement,
   type PageInfo,
@@ -385,6 +386,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     "pointer-move",
     "hover",
     "wheel",
+    "press",
+    "type",
     "screenshot",
     "observe",
     "wait",
@@ -717,6 +720,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         input("hover", (driver, ticket) => driver.hover(target, ticket, policy)),
       wheel: (deltaX: number, deltaY: number, at?: NativePoint) =>
         input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket)),
+      press: (
+        key: string,
+        modifiers: ReadonlyArray<KeyModifier>,
+        into?: string | ObservedElement,
+        policy?: AdmissionPolicy,
+      ) => input("press", (driver, ticket) => driver.press(key, modifiers, into, ticket, policy)),
+      type: (text: string, into?: string | ObservedElement, policy?: AdmissionPolicy) =>
+        input("type", (driver, ticket) => driver.type(text, into, ticket, policy)),
       screenshot: (full: boolean) =>
         run("screenshot", (driver, ticket) =>
           driver.screenshot(full, options.maxReturnedBytes, ticket),

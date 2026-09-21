@@ -15,6 +15,7 @@ import {
   HoverRequest,
   InlineFiles,
   InputReceipt,
+  KeyStroke,
   NavigateRequest,
   NavigationResult,
   type Observation,
@@ -22,6 +23,7 @@ import {
   ObservedElement,
   type PageInfo,
   PointerMoveRequest,
+  PressRequest,
   ReadTextRequest,
   ScreenshotRequest,
   ScreenshotResult,
@@ -31,6 +33,7 @@ import {
   Selector,
   type Target,
   TextResult,
+  TypeRequest,
   Viewport,
   WheelRequest,
 } from "./BrowserData.ts";
@@ -133,6 +136,10 @@ export interface BoundTarget {
   readonly hover: (request: HoverRequest) => Effect.Effect<InputReceipt, BrowserError>;
   /** One real wheel event; the browser decides what under the pointer scrolls. */
   readonly wheel: (request: WheelRequest) => Effect.Effect<InputReceipt, BrowserError>;
+  /** One real key stroke to whatever has focus, or fails `not-focused` unsent if `into` lacks it. */
+  readonly press: (request: PressRequest) => Effect.Effect<InputReceipt, BrowserError>;
+  /** Text as the real key strokes that produce it, under the same focus rule as `press`. */
+  readonly type: (request: TypeRequest) => Effect.Effect<InputReceipt, BrowserError>;
   readonly screenshot: (
     request: ScreenshotRequest,
   ) => Effect.Effect<ScreenshotResult, BrowserError>;
@@ -184,6 +191,18 @@ export interface BrowserbaseSession<E = never> {
   ) => Effect.Effect<ActionResult, BrowserError>;
   readonly hoverElement: (
     reference: ObservedElement,
+    admission?: ElementAdmission,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** A key stroke sent only if the exact node an observation named already has focus. */
+  readonly pressElement: (
+    reference: ObservedElement,
+    stroke: KeyStroke,
+    admission?: ElementAdmission,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** Real typing with `fillElement`'s exactness: that node must already have focus. */
+  readonly typeElement: (
+    reference: ObservedElement,
+    text: string,
     admission?: ElementAdmission,
   ) => Effect.Effect<InputReceipt, BrowserError>;
   readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
@@ -275,6 +294,8 @@ const action = decoded(ActionResult, "action-result");
 const pointerMoved = decoded(InputReceipt, "pointer-move");
 const hovered = decoded(InputReceipt, "hover");
 const wheeled = decoded(InputReceipt, "wheel");
+const pressed = decoded(InputReceipt, "press");
+const typed = decoded(InputReceipt, "type");
 
 const makeTarget = (bound: BoundControls): BoundTarget => ({
   navigate: (request) =>
@@ -334,6 +355,16 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
             ),
           ),
       ),
+    ),
+  press: (request) =>
+    checked(PressRequest, request, "press").pipe(
+      Effect.flatMap((value) => bound.press(value.key, value.modifiers ?? [], value.into)),
+      Effect.flatMap((input) => pressed({ ...input, kind: "press" })),
+    ),
+  type: (request) =>
+    checked(TypeRequest, request, "type").pipe(
+      Effect.flatMap((value) => bound.type(value.text, value.into)),
+      Effect.flatMap((input) => typed({ ...input, kind: "type" })),
     ),
   screenshot: (request) =>
     checked(ScreenshotRequest, request, "screenshot").pipe(
@@ -487,6 +518,26 @@ const makeSession = <E>(
       checked(ObservedElement, reference, "hover").pipe(
         Effect.flatMap((value) => controls.bind().hover(value, admission?.admit)),
         Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
+      ),
+    pressElement: (reference, stroke, admission) =>
+      checked(ObservedElement, reference, "press").pipe(
+        Effect.flatMap((element) =>
+          checked(KeyStroke, stroke, "press").pipe(
+            Effect.flatMap((value) =>
+              controls.bind().press(value.key, value.modifiers ?? [], element, admission?.admit),
+            ),
+          ),
+        ),
+        Effect.flatMap((input) => pressed({ ...input, kind: "press" })),
+      ),
+    typeElement: (reference, text, admission) =>
+      checked(ObservedElement, reference, "type").pipe(
+        Effect.flatMap((element) =>
+          checked(TypeRequest.fields.text, text, "type").pipe(
+            Effect.flatMap((value) => controls.bind().type(value, element, admission?.admit)),
+          ),
+        ),
+        Effect.flatMap((input) => typed({ ...input, kind: "type" })),
       ),
     pages: controls.pages,
     frames: controls.frames,
