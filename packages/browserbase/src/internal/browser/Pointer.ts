@@ -141,5 +141,5 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       return receipt(page);
     });
 
-  return { pointerMove, hover, wheel };
+  return { pointerMove, hover, wheel, receipt };
 };

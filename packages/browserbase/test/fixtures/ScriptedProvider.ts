@@ -89,7 +89,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
     observations: 0,
     selected: [] as string[],
     readinessChecks: 0,
-    /** Every native pointer command this scripted driver was asked to dispatch, in order. */
+    /** Every native input command this scripted driver was asked to dispatch, in order. */
     input: [] as string[],
   };
 
@@ -276,6 +276,19 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         state.input.push(`wheel ${pageId} ${deltaX},${deltaY}`);
 
         return { position: at ?? null };
+      },
+      // The text itself is never recorded: a receipt, and this log, say only that keys were sent.
+      press: async (key, modifiers, _into, ticket) => {
+        ticket.dispatch();
+        state.input.push(`press ${pageId} ${[...modifiers, key].join("+")}`);
+
+        return { position: null };
+      },
+      type: async (text, _into, ticket) => {
+        ticket.dispatch();
+        state.input.push(`type ${pageId} ${[...text].length}`);
+
+        return { position: null };
       },
       screenshot: async () => new Uint8Array(),
       resize: async (_viewport, ticket) => {
