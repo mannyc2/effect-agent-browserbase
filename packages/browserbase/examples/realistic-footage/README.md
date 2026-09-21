@@ -190,8 +190,14 @@ Budget one action per typed key: `Type` is the expensive scene.
   sample as its own `pointerMove` would fix the first and film the round trip;
   `control.actionMillis.pointerMove` is the number that decides when that
   becomes affordable.
-- Scrolling is played in the page rather than sent as `wheel` input, for the
-  same reason, so it moves the window and not a nested scroll container.
+- Scrolling is played in the page rather than sent as `wheel` input, so it
+  moves the window and not a nested scroll container. That is a measured choice,
+  not a missing adoption: over real CDP on one machine, six native wheel events
+  sent 40ms apart produced exactly six frames, one jump of the full delta each,
+  66ms apart. Headless Chromium does not animate wheel scrolling, and each event
+  is a 25ms action, so native wheel films at about 15 frames a second before any
+  network is involved, where the in-page track plays at display rate. Use `wheel`
+  when what scrolls matters more than how it looks.
 - Whether the library should also offer key presses is an open question:
   [#34](https://github.com/mannyc2/effect-agent-browserbase/issues/34) drew the
   line (the library owns faithful input and trustworthy evidence, the application
