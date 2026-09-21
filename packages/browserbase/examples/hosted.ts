@@ -1,25 +1,14 @@
-import {
-  BrowserbaseBrowser,
-  type BrowserOptions,
-  type LiveView,
-} from "@effect-agent/browserbase/browser";
-import {
-  BrowserPolicy,
-  ClickRequest,
-  NavigateRequest,
-} from "@effect-agent/browserbase/browser-data";
-import { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import {
-  withWriter,
-  type ContextWriterBackend,
-} from "@effect-agent/browserbase/context-coordination";
-import { BrowserbaseDownloads } from "@effect-agent/browserbase/downloads";
-import type { LaunchRecipe } from "@effect-agent/browserbase/launch";
-import { BrowserbaseRecordings } from "@effect-agent/browserbase/recordings";
-import { ContextReference, type SessionReference } from "@effect-agent/browserbase/references";
-import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
-import { RecordingPageReference } from "@effect-agent/browserbase/transfers";
 import { Effect, Layer, Redacted, Stream } from "effect";
+import { BrowserbaseBrowser, type BrowserOptions, type LiveView } from "effect-browserbase/browser";
+import { BrowserPolicy, ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
+import { BrowserbaseClient } from "effect-browserbase/client";
+import { withWriter, type ContextWriterBackend } from "effect-browserbase/context-coordination";
+import { BrowserbaseDownloads } from "effect-browserbase/downloads";
+import type { LaunchRecipe } from "effect-browserbase/launch";
+import { BrowserbaseRecordings } from "effect-browserbase/recordings";
+import { ContextReference, type SessionReference } from "effect-browserbase/references";
+import { BrowserbaseSessions } from "effect-browserbase/sessions";
+import { RecordingPageReference } from "effect-browserbase/transfers";
 
 export interface Credentials {
   readonly projectId: string;

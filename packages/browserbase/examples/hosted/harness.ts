@@ -5,14 +5,14 @@ import { resolve } from "node:path";
 // per phase. No check reads the environment, builds an account or opens a session on its own.
 import { createInterface } from "node:readline/promises";
 
-import * as Account from "@effect-agent/browserbase/account";
+import { Effect, Redacted } from "effect";
+import * as Account from "effect-browserbase/account";
 import {
   BrowserbaseBrowser,
   type BrowserOptions,
   type OpenOptions,
-} from "@effect-agent/browserbase/browser";
-import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
-import { Effect, Redacted } from "effect";
+} from "effect-browserbase/browser";
+import { BrowserPolicy } from "effect-browserbase/browser-data";
 
 import { ceiling, checks, type CheckName } from "./checks.ts";
 

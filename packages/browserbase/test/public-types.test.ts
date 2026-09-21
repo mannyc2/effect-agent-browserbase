@@ -1,19 +1,19 @@
+import { expect, it } from "@effect/vitest";
+import { type Effect, type Scope } from "effect";
 import {
   type BoundTarget,
   type BrowserbaseBrowser,
   type BrowserbaseSession,
-} from "@effect-agent/browserbase/browser";
-import type { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
-import type * as Capture from "@effect-agent/browserbase/capture";
+} from "effect-browserbase/browser";
+import type { BrowserPolicy } from "effect-browserbase/browser-data";
+import type * as Capture from "effect-browserbase/capture";
 import type {
   AllocationError,
   BrowserError,
   ContextError,
   InitializationError,
-} from "@effect-agent/browserbase/errors";
-import type * as PageControl from "@effect-agent/browserbase/page-control";
-import { expect, it } from "@effect/vitest";
-import { type Effect, type Scope } from "effect";
+} from "effect-browserbase/errors";
+import type * as PageControl from "effect-browserbase/page-control";
 
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;

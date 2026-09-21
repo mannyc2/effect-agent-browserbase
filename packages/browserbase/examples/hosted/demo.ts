@@ -10,8 +10,8 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import { recipe } from "@effect-agent/browserbase/launch";
 import { Effect } from "effect";
+import { recipe } from "effect-browserbase/launch";
 
 import { recordDemo } from "../demo-recording.ts";
 import { hostedCase } from "./harness.ts";

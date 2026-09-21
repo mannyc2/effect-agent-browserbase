@@ -1,10 +1,10 @@
+import { Effect } from "effect";
 // H4, narrowed: does a keep-alive session survive detach, and does a registration made before
 // detach still run on a fresh document after reconnect? Duplicate registrations, retired
 // callbacks and a reconnect from a separate process stay open.
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
-import { NavigateRequest } from "@effect-agent/browserbase/browser-data";
-import { recipe } from "@effect-agent/browserbase/launch";
-import { Effect } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
+import { NavigateRequest } from "effect-browserbase/browser-data";
+import { recipe } from "effect-browserbase/launch";
 
 import { hostedCase } from "./harness.ts";
 

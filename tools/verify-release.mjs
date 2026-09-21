@@ -61,7 +61,7 @@ export function verifyReleaseSet(directory, sourceSha, tag, expectedDigest) {
       // additionally typechecks this graph with both optional/native/framework absent.
       const declarations = paths.filter((name) => name.endsWith(".d.mts"));
       const text = tar(["-xOf", path, ...declarations]);
-      assert.doesNotMatch(text, /["'](?:effect-agent|@effect-agent\/(?:testing|platform-browserbase)|playwright(?:-core)?|@browserbasehq\/sdk)(?:[/'"])/, "Generic declaration imports a forbidden dependency");
+      assert.doesNotMatch(text, /["'](?:effect-agent|effect-agent-browserbase|@effect-agent\/testing|playwright(?:-core)?|@browserbasehq\/sdk)(?:[/'"])/, "Generic declaration imports a forbidden dependency");
     }
   }
   return receipt;

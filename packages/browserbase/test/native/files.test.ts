@@ -1,14 +1,14 @@
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
+import { expect, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import {
   ClickRequest,
   InlineFile,
   NavigateRequest,
   ReadTextRequest,
-} from "@effect-agent/browserbase/browser-data";
-import { UploadReceipt } from "@effect-agent/browserbase/transfers";
-import { BrowserbaseUploads } from "@effect-agent/browserbase/uploads";
-import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+} from "effect-browserbase/browser-data";
+import { UploadReceipt } from "effect-browserbase/transfers";
+import { BrowserbaseUploads } from "effect-browserbase/uploads";
 
 import { account, localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
 

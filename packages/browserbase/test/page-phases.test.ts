@@ -1,5 +1,5 @@
-import { BrowserError } from "@effect-agent/browserbase/errors";
 import { expect, it } from "@effect/vitest";
+import { BrowserError } from "effect-browserbase/errors";
 
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 import { PageExecution } from "../src/internal/browser/PageExecution.ts";

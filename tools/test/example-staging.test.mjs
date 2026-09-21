@@ -17,7 +17,7 @@ test("staging retains complete transitive examples and their unchanged public-pa
   const f = fixture(t);
   const entry = "packages/browserbase/test/consumer/native.ts";
   f.write(entry, 'import "../../examples/record-video.ts";\n');
-  f.write("packages/browserbase/examples/record-video.ts", 'import { start } from "@effect-agent/browserbase/capture";\nexport { fixture } from "../test/fixtures/local.ts";\n');
+  f.write("packages/browserbase/examples/record-video.ts", 'import { start } from "effect-browserbase/capture";\nexport { fixture } from "../test/fixtures/local.ts";\n');
   f.write("packages/browserbase/test/fixtures/local.ts", 'export const fixture = true;\n');
   const files = stageConsumer(f.tree, f.out, [entry]);
   assert.equal(files.length, 3);

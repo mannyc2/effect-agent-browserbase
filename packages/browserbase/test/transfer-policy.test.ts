@@ -1,9 +1,9 @@
-import type { DownloadPolicy } from "@effect-agent/browserbase/downloads";
-import { ArtifactError, FileError } from "@effect-agent/browserbase/errors";
-import type { DownloadLimits } from "@effect-agent/browserbase/recordings";
-import { ArtifactTransferPolicy } from "@effect-agent/browserbase/transfers";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import type { DownloadPolicy } from "effect-browserbase/downloads";
+import { ArtifactError, FileError } from "effect-browserbase/errors";
+import type { DownloadLimits } from "effect-browserbase/recordings";
+import { ArtifactTransferPolicy } from "effect-browserbase/transfers";
 
 import { downloadTransferPolicy, transferPolicy } from "../src/internal/artifact/TransferPolicy.ts";
 

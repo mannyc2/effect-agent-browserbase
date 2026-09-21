@@ -7,7 +7,7 @@ const read = (path) => readFileSync(new URL(path, root), "utf8");
 const generic = JSON.parse(read("packages/browserbase/package.json"));
 
 test("generic installation contracts do not acquire the framework or framework testing", () => {
-  assert.equal(generic.name, "@effect-agent/browserbase");
+  assert.equal(generic.name, "effect-browserbase");
   for (const section of ["dependencies", "peerDependencies", "optionalDependencies", "devDependencies"]) {
     for (const dependency of Object.keys(generic[section] ?? {})) {
       assert.notEqual(dependency, "effect-agent");
@@ -29,7 +29,7 @@ test("every generic public entry has a real module and declaration build entry",
     assert.ok(key === "." || /^\.\/[a-z][a-z-]+$/.test(key));
     assert.ok(!key.includes("legacy") && !key.includes("internal"));
     const source = read(`packages/browserbase/${target.slice(2)}`);
-    assert.doesNotMatch(source, /from\s+["'](?:effect-agent|@effect-agent\/testing|playwright-core)[/"']/);
+    assert.doesNotMatch(source, /from\s+["'](?:effect-agent|effect-agent-browserbase|@effect-agent\/testing|playwright-core)[/"']/);
   }
   assert.equal(JSON.parse(read("packages/browserbase/tsconfig.json")).compilerOptions.skipLibCheck, false);
 });
@@ -50,11 +50,11 @@ test("bootstrap's lock and guide describe the canonical adapter rather than reti
   assert.ok(start > 0 && end > start, "the pinned patch contains the adapter workspace inventory");
   const workspace = patch.slice(start, end).replace(/^\+/gm, "");
   const dependencies = workspace.slice(workspace.indexOf('"dependencies"'), workspace.indexOf('"devDependencies"'));
-  assert.match(dependencies, /"@effect-agent\/browserbase": "workspace:\*"/);
+  assert.match(dependencies, /"effect-browserbase": "workspace:\*"/);
   assert.match(dependencies, /"effect-agent": "workspace:\*"/);
   const peers = workspace.slice(workspace.indexOf('"peerDependencies"'));
   assert.doesNotMatch(peers, /playwright-core|optionalPeers/);
-  assert.match(patch, /generic `@effect-agent\/browserbase` package owns independent/);
+  assert.match(patch, /generic `effect-browserbase` package owns independent/);
   assert.doesNotMatch(patch, /The adapter also exposes independent `recordings`/);
   assert.match(patch, /fromSession\(session\)/);
 });

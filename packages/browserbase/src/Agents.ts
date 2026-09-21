@@ -219,7 +219,7 @@ export class BrowserbaseAgents extends Context.Service<
       options: AgentRunWaitOptions,
     ) => Effect.Effect<AgentRun, PlatformError>;
   }
->()("@effect-agent/browserbase/Agents") {
+>()("effect-browserbase/Agents") {
   static readonly layer: Layer.Layer<BrowserbaseAgents, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseAgents,
     Effect.gen(function* () {

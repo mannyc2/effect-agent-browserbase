@@ -55,7 +55,7 @@ function workspace(t, modify) {
 // These fixtures exercise real npm packing/receipt inspection, not a substitute
 // for the three production tarball consumers required by packed-consumer.sh.
 test("only the two canonical packages may enter the dependency-ordered release set", () => {
-  assert.deepEqual(packages.map((p) => p.name), ["@effect-agent/browserbase", "@effect-agent/platform-browserbase"]);
+  assert.deepEqual(packages.map((p) => p.name), ["effect-browserbase", "effect-agent-browserbase"]);
   assert.equal(manifest(0).repository.url, repositoryUrl);
   assert.throws(() => publicationManifest({ ...source(0), name: "effect-agent" }, {}, versions), /Only this repository/);
   assert.throws(() => publicationManifest({ ...source(0), repository: { ...source(0).repository, url: "https://elsewhere.invalid" } }, {}, versions), /OIDC identity/);

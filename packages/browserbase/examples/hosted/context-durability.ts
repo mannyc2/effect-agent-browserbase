@@ -4,16 +4,16 @@
 // whatever happens.
 import { randomUUID } from "node:crypto";
 
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
-import { NavigateRequest, ReadTextRequest } from "@effect-agent/browserbase/browser-data";
+import { Effect } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
+import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 import {
   type ContextWriterBackend,
   withWriter,
   type WriterSettlementFacts,
-} from "@effect-agent/browserbase/context-coordination";
-import { BrowserbaseContexts } from "@effect-agent/browserbase/contexts";
-import { recipe } from "@effect-agent/browserbase/launch";
-import { Effect } from "effect";
+} from "effect-browserbase/context-coordination";
+import { BrowserbaseContexts } from "effect-browserbase/contexts";
+import { recipe } from "effect-browserbase/launch";
 
 import { hostedCase } from "./harness.ts";
 

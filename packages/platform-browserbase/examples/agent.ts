@@ -1,6 +1,6 @@
-import type { BrowserbaseAgentSession } from "@effect-agent/platform-browserbase/adapter";
-import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
 import { Effect, Layer, Schema } from "effect";
+import type { BrowserbaseAgentSession } from "effect-agent-browserbase/adapter";
+import * as BrowserTools from "effect-agent-browserbase/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";

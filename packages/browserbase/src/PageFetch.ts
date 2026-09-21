@@ -51,7 +51,7 @@ export class BrowserbasePageFetch extends Context.Service<
   {
     readonly fetch: (request: PageFetchRequest) => Effect.Effect<PageFetchResult, PlatformError>;
   }
->()("@effect-agent/browserbase/PageFetch") {
+>()("effect-browserbase/PageFetch") {
   static readonly layer: Layer.Layer<BrowserbasePageFetch, never, BrowserbaseClient> = Layer.effect(
     BrowserbasePageFetch,
     Effect.gen(function* () {

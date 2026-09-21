@@ -99,7 +99,7 @@ export class BrowserbaseReplays extends Context.Service<
       reference: RecordingPageReference,
     ) => Effect.Effect<ReplayAccess, ArtifactError>;
   }
->()("@effect-agent/browserbase/Replays") {
+>()("effect-browserbase/Replays") {
   static readonly layer: Layer.Layer<
     BrowserbaseReplays,
     never,

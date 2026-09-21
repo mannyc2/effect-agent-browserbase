@@ -130,7 +130,7 @@ export class BrowserbaseSessions extends Context.Service<
       expiresInSeconds?: number,
     ) => Effect.Effect<LiveView, SessionError>;
   }
->()("@effect-agent/browserbase/Sessions") {
+>()("effect-browserbase/Sessions") {
   static readonly layer: Layer.Layer<BrowserbaseSessions, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseSessions,
     Effect.gen(function* () {

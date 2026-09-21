@@ -1,7 +1,7 @@
-import type { BrowserbaseSession } from "@effect-agent/browserbase/browser";
-import { NavigateRequest, ScrollRequest } from "@effect-agent/browserbase/browser-data";
-import type { BrowserError } from "@effect-agent/browserbase/errors";
 import { Effect, Fiber } from "effect";
+import type { BrowserbaseSession } from "effect-browserbase/browser";
+import { NavigateRequest, ScrollRequest } from "effect-browserbase/browser-data";
+import type { BrowserError } from "effect-browserbase/errors";
 
 import { recordInterval } from "./record-video.ts";
 

@@ -1,10 +1,10 @@
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { NavigateRequest, ReadTextRequest } from "@effect-agent/browserbase/browser-data";
-import type { CleanupResult } from "@effect-agent/browserbase/cleanup";
-import { BrowserError, InitializationError } from "@effect-agent/browserbase/errors";
 import { expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import type { CleanupResult } from "effect-browserbase/cleanup";
+import { BrowserError, InitializationError } from "effect-browserbase/errors";
 import type { Frame, Page } from "playwright-core";
 
 import {

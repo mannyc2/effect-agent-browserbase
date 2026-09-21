@@ -2,7 +2,7 @@
 
 Publication is not performed by ordinary CI. This workflow prepares two independently published Browserbase packages from the pinned upstream integration workspace; it does **not** publish the rest of the Effect Agent monorepo.
 
-The canonical names are `@effect-agent/browserbase` and `@effect-agent/platform-browserbase`. Confirm control and configure trusted publishing for **both** names before enabling publication. This repository does not establish npm ownership, register a package, rename the scope or perform a first-release account bootstrap on your behalf.
+The canonical names are `effect-browserbase` and `effect-agent-browserbase`. They are unscoped and were unclaimed when chosen; the first publication of each claims it for the publishing npm account. npm configures trusted publishing in an existing package's settings, so each name needs one first version published by its owner before the OIDC workflow below can take over. Confirm control and configure trusted publishing for **both** names before enabling publication. This repository does not establish npm ownership, register a package or perform that first-release account bootstrap on your behalf.
 
 ## Configure npm trusted publishing
 

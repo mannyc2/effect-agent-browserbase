@@ -1,15 +1,11 @@
 import assert from "node:assert/strict";
 
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import {
-  PageSuspension,
-  ClickRequest,
-  NavigateRequest,
-} from "@effect-agent/browserbase/browser-data";
-import * as Capture from "@effect-agent/browserbase/capture";
-import * as PageControl from "@effect-agent/browserbase/page-control";
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema, Stream } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { PageSuspension, ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
+import * as Capture from "effect-browserbase/capture";
+import * as PageControl from "effect-browserbase/page-control";
 import type { Page } from "playwright-core";
 
 import {

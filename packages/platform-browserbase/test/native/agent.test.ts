@@ -1,14 +1,12 @@
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import * as Capture from "@effect-agent/browserbase/capture";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { expect, it } from "@effect/vitest";
+import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import {
   BrowserbaseInteractiveHost,
   fromSession,
   type BrowserbaseAgentSession,
-} from "@effect-agent/platform-browserbase/adapter";
-import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
-import { expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
+} from "effect-agent-browserbase/adapter";
+import * as BrowserTools from "effect-agent-browserbase/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
@@ -17,6 +15,8 @@ import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
 } from "effect-agent/interactive-browser";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import * as Capture from "effect-browserbase/capture";
 import { Model } from "effect/unstable/ai";
 
 import {

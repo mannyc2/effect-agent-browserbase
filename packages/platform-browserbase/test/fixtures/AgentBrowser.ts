@@ -5,16 +5,16 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import * as BrowserBinding from "@effect-agent/browserbase/browser-binding";
-import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
-import { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import { BrowserError } from "@effect-agent/browserbase/errors";
-import type { LaunchRecipe } from "@effect-agent/browserbase/launch";
-import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
-import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/adapter";
 import { Effect, Layer, Redacted, Schema } from "effect";
+import { BrowserbaseInteractiveHost } from "effect-agent-browserbase/adapter";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import * as BrowserBinding from "effect-browserbase/browser-binding";
+import { BrowserPolicy } from "effect-browserbase/browser-data";
+import { BrowserbaseClient } from "effect-browserbase/client";
+import { BrowserError } from "effect-browserbase/errors";
+import type { LaunchRecipe } from "effect-browserbase/launch";
+import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { FetchHttpClient } from "effect/unstable/http";
 import { chromium } from "playwright-core";
 

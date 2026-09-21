@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/browserbase",
+  "name": "effect-browserbase",
   "version": "0.1.0-beta.102",
   "description": "Effect-based Browserbase resources, owned browser control and independent browser artifacts.",
   "license": "MIT",

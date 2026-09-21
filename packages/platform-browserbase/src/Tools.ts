@@ -1,5 +1,3 @@
-import { Observation, ObservedElement } from "@effect-agent/browserbase/browser-data";
-import { BrowserError } from "@effect-agent/browserbase/errors";
 import { Effect, Schema } from "effect";
 import {
   BrowserActionResult,
@@ -8,6 +6,8 @@ import {
   BrowserScrollRequest,
   type InteractiveBrowserError,
 } from "effect-agent/interactive-browser";
+import { Observation, ObservedElement } from "effect-browserbase/browser-data";
+import { BrowserError } from "effect-browserbase/errors";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { BrowserbaseAgentSession } from "./Adapter.ts";

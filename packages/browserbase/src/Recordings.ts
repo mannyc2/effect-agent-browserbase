@@ -64,7 +64,7 @@ export class BrowserbaseRecordings extends Context.Service<
       limits: DownloadLimits,
     ) => Stream.Stream<Uint8Array, ArtifactError>;
   }
->()("@effect-agent/browserbase/Recordings") {
+>()("effect-browserbase/Recordings") {
   static readonly layer: Layer.Layer<
     BrowserbaseRecordings,
     never,

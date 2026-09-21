@@ -1,19 +1,19 @@
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { fromSession } from "effect-agent-browserbase/adapter";
+import * as BrowserTools from "effect-agent-browserbase/tools";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as InMemory from "effect-agent/in-memory";
 // Installed-package workflow for an actual Effect Agent consumer.
 //
 // It runs as an ordinary program on the pinned Node and Bun with both published
 // packages installed from their candidate tarballs. A real AgentRuntime turn
 // drives the fixed browser toolkit over one execution-owned session on a local
 // Chromium process; only the provider control plane is scripted.
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import * as Capture from "@effect-agent/browserbase/capture";
-import type { InitializationError } from "@effect-agent/browserbase/errors";
-import { fromSession } from "@effect-agent/platform-browserbase/adapter";
-import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import * as Capture from "effect-browserbase/capture";
+import type { InitializationError } from "effect-browserbase/errors";
 import { Model } from "effect/unstable/ai";
 
 import {

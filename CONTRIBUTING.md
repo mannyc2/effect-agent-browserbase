@@ -40,7 +40,7 @@ npm_config_offline=true node --test tools/test/*.test.mjs
 bash tools/bootstrap.sh
 
 cd .work/upstream/tree
-./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
+./node_modules/.bin/vp run -F effect-agent-browserbase check
 cd packages/platform-browserbase
 # Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
 # hand-formatting to satisfy that gate does not reproduce this output.

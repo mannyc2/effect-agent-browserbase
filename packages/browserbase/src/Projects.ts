@@ -49,7 +49,7 @@ export class BrowserbaseProjects extends Context.Service<
     readonly retrieve: Effect.Effect<ProjectMetadata, ProjectError>;
     readonly usage: Effect.Effect<ProjectUsage, ProjectError>;
   }
->()("@effect-agent/browserbase/Projects") {
+>()("effect-browserbase/Projects") {
   static readonly layer: Layer.Layer<BrowserbaseProjects, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseProjects,
     Effect.gen(function* () {

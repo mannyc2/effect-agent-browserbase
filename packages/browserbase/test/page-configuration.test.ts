@@ -1,10 +1,10 @@
-import { BrowserbaseBrowser, type BrowserOptions } from "@effect-agent/browserbase/browser";
-import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
-import { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import type { LaunchRecipe } from "@effect-agent/browserbase/launch";
-import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
+import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
+import { BrowserPolicy } from "effect-browserbase/browser-data";
+import { BrowserbaseClient } from "effect-browserbase/client";
+import type { LaunchRecipe } from "effect-browserbase/launch";
+import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const launch: LaunchRecipe = {

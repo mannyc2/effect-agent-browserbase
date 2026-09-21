@@ -76,7 +76,7 @@ export class BrowserbaseUploads extends Context.Service<
       file: UploadFile,
     ) => Effect.Effect<UploadReceipt, FileError>;
   }
->()("@effect-agent/browserbase/Uploads") {
+>()("effect-browserbase/Uploads") {
   static readonly layer: Layer.Layer<
     BrowserbaseUploads,
     never,

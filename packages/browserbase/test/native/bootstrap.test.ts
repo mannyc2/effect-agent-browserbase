@@ -1,8 +1,8 @@
-import * as Bootstrap from "@effect-agent/browserbase/bootstrap";
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { NavigateRequest, ReadTextRequest } from "@effect-agent/browserbase/browser-data";
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
+import * as Bootstrap from "effect-browserbase/bootstrap";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 
 import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
 

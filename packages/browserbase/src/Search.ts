@@ -36,7 +36,7 @@ export class BrowserbaseSearch extends Context.Service<
   {
     readonly web: (query: SearchQuery) => Effect.Effect<SearchResults, PlatformError>;
   }
->()("@effect-agent/browserbase/Search") {
+>()("effect-browserbase/Search") {
   static readonly layer: Layer.Layer<BrowserbaseSearch, never, BrowserbaseClient> = Layer.effect(
     BrowserbaseSearch,
     Effect.gen(function* () {

@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import { NavigateRequest, ReadTextRequest } from "@effect-agent/browserbase/browser-data";
-import type { SessionReference } from "@effect-agent/browserbase/references";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import type { SessionReference } from "effect-browserbase/references";
 
 // Type-only, so nothing runs here; it keeps the child program beside this suite wherever the
 // suite is staged, including the packed-consumer run.

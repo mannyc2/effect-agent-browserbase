@@ -78,7 +78,7 @@ export class BrowserbaseClient extends Context.Service<
     ) => Stream.Stream<Uint8Array, ClientError>;
     readonly validateMediaUrl: (value: string) => boolean;
   }
->()("@effect-agent/browserbase/Client") {
+>()("effect-browserbase/Client") {
   static layer(options: ClientOptions): Layer.Layer<BrowserbaseClient, ClientError> {
     return Layer.effect(
       BrowserbaseClient,

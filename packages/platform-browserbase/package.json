@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/platform-browserbase",
+  "name": "effect-agent-browserbase",
   "version": "0.1.0-beta.102",
   "description": "Effect Agent adapter and Tools for the canonical Browserbase browser.",
   "license": "MIT",
@@ -30,8 +30,8 @@
     "test:native": "vp test --config vite.native.config.ts --run"
   },
   "dependencies": {
-    "@effect-agent/browserbase": "workspace:*",
-    "effect-agent": "workspace:*"
+    "effect-agent": "workspace:*",
+    "effect-browserbase": "workspace:*"
   },
   "devDependencies": {
     "@effect-agent/testing": "workspace:*",

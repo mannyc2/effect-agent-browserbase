@@ -1,10 +1,10 @@
+import { Effect, Redacted } from "effect";
 // Operator takeover and release, which no script can do on a person's behalf. The check opens a
 // session, hands its Live View to the operator at this terminal, waits for them to act and
 // say so, then resumes and reports what the page looks like afterwards. The Live View URL
 // grants control, so it goes to the terminal only and never into the JSON record.
-import { NavigateRequest } from "@effect-agent/browserbase/browser-data";
-import { recipe } from "@effect-agent/browserbase/launch";
-import { Effect, Redacted } from "effect";
+import { NavigateRequest } from "effect-browserbase/browser-data";
+import { recipe } from "effect-browserbase/launch";
 
 import { hostedCase } from "./harness.ts";
 

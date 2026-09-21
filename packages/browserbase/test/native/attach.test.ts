@@ -1,12 +1,8 @@
-import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
-import {
-  ClickRequest,
-  NavigateRequest,
-  ReadTextRequest,
-} from "@effect-agent/browserbase/browser-data";
-import type { SessionReference } from "@effect-agent/browserbase/references";
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { ClickRequest, NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import type { SessionReference } from "effect-browserbase/references";
 
 import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
 

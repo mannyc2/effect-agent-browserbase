@@ -1,6 +1,6 @@
 # Browserbase adapter for Effect Agent
 
-`@effect-agent/platform-browserbase` connects [`@effect-agent/browserbase`](../browserbase/README.md) to Effect Agent. It contains only the two things that need the framework: the `InteractiveBrowser` implementation and the fixed browser Toolkit an `AgentRuntime` can call.
+`effect-agent-browserbase` connects [`effect-browserbase`](../browserbase/README.md) to Effect Agent. It contains only the two things that need the framework: the `InteractiveBrowser` implementation and the fixed browser Toolkit an `AgentRuntime` can call.
 
 Everything else — allocation, the Playwright/CDP connection, live capture, page holds, recordings, replays and downloads — belongs to the generic package. This one has no Playwright peer at all.
 
@@ -15,10 +15,10 @@ Everything else — allocation, the Playwright/CDP connection, live capture, pag
 import {
   BrowserbaseInteractiveHost,
   browserbaseInteractiveLayer,
-} from "@effect-agent/platform-browserbase/adapter";
-import * as BrowserTools from "@effect-agent/platform-browserbase/tools";
-import { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
+} from "effect-agent-browserbase/adapter";
+import * as BrowserTools from "effect-agent-browserbase/tools";
+import { BrowserbaseClient } from "effect-browserbase/client";
+import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { Effect, Layer, Redacted } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 

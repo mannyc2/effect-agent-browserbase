@@ -1,5 +1,5 @@
-import type { CapturedFrame, CaptureSummary } from "@effect-agent/browserbase/capture";
 import { Schema } from "effect";
+import type { CapturedFrame, CaptureSummary } from "effect-browserbase/capture";
 
 /** Safe, fixed-size failure data. Never project target identity, errors, URLs or image bytes. */
 export const CaptureEvidence = Schema.Struct({

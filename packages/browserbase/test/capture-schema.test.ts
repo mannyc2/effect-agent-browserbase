@@ -1,8 +1,8 @@
-import { type PageInfo, Target } from "@effect-agent/browserbase/browser-data";
-import * as Capture from "@effect-agent/browserbase/capture";
-import type { BrowserError } from "@effect-agent/browserbase/errors";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, type Scope, Stream } from "effect";
+import { type PageInfo, Target } from "effect-browserbase/browser-data";
+import * as Capture from "effect-browserbase/capture";
+import type { BrowserError } from "effect-browserbase/errors";
 
 import type { CaptureParent } from "../src/internal/browser/Association.ts";
 import type { NativeFrame } from "../src/internal/browser/Driver.ts";

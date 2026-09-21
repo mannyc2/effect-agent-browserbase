@@ -470,7 +470,7 @@ export class BrowserbaseBrowser extends Context.Service<
       Exclude<R | R2, Scope.Scope>
     >;
   }
->()("@effect-agent/browserbase/Browser") {
+>()("effect-browserbase/Browser") {
   static layer(
     options: BrowserOptions,
   ): Layer.Layer<BrowserbaseBrowser, BrowserError, BrowserbaseClient | BrowserbaseSessions> {
