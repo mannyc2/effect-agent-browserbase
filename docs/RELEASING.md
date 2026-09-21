@@ -1,12 +1,12 @@
-# Releasing this package
+# Releasing the canonical two-package set
 
-Publication is not performed by ordinary CI. This workflow prepares an independently published Browserbase package from the pinned upstream integration workspace; it does **not** publish the rest of the Effect Agent monorepo.
+Publication is not performed by ordinary CI. This workflow prepares two independently published Browserbase packages from the pinned upstream integration workspace; it does **not** publish the rest of the Effect Agent monorepo.
 
-The current npm name is `@effect-agent/platform-browserbase`. Confirm that you control that package/scope before enabling publication. This repository does not establish npm ownership, register a package, rename the scope or perform a first-release account bootstrap on your behalf.
+The canonical names are `@effect-agent/browserbase` and `@effect-agent/platform-browserbase`. Confirm control and configure trusted publishing for **both** names before enabling publication. This repository does not establish npm ownership, register a package, rename the scope or perform a first-release account bootstrap on your behalf.
 
 ## Configure npm trusted publishing
 
-On the package's npm settings, configure the following exact identity:
+In each package's npm settings, configure the following exact identity:
 
 | Setting | Value |
 | --- | --- |
@@ -29,26 +29,30 @@ Official references: [npm trusted publishers](https://docs.npmjs.com/trusted-pub
 
 ## Prepare a release
 
-Update the package version and relevant integration lockfile/changeset entries in a PR. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The upstream fixed release-train invariants are still enforced; standalone versioning is not introduced by this maintenance change.
+Update both coordinated package versions and the relevant integration lockfile/changeset entries in one PR. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The upstream fixed release-train invariants are still enforced; standalone versioning is not introduced by this maintenance change.
 
 After that PR is merged and acceptance passes, create an immutable `v<package-version>` tag on its commit. This document describes the maintainer release procedure; neither creating a tag nor publishing is part of automated maintenance work.
 
 Run **npm release** manually on that **tag**, with `publish` left **false** first. Branch dispatches, tags not reachable from `main`, and tags that do not exactly match the package version are rejected. Tag-scoped execution also ensures provenance refers to the released source commit rather than an unrelated current `main` commit.
 
-The workflow checks fresh full acceptance through `ci.yml`. It builds the package once for the release artifact, tests that exact tarball in the external consumer, and performs `npm publish --dry-run --ignore-scripts`. It retains the receipt, source, logs, decoded video and SHA-256 checksums. A dry-run does not validate npm OIDC configuration or claim publication.
+The workflow checks fresh full acceptance through `ci.yml`. It builds both packages, packs each once, verifies the exact archives in three clean consumers, and performs `npm publish --dry-run --ignore-scripts` for each archive. Resources-only, generic-native, and actual AgentRuntime consumers run on the pinned Node and Bun versions; all public declarations and migrated examples are checked with `skipLibCheck:false`. There is no legacy consumer or compatibility export fallback. It retains the receipt, source, logs, decoded video and SHA-256 checksums. A dry-run does not validate npm OIDC configuration or claim publication.
 
 ## Publish deliberately
 
 Run the same workflow on the same immutable tag with `publish=true` after enabling `NPM_PUBLISH_ENABLED`. Acceptance is run again; the protected `npm` environment then gates the only job with `id-token: write`.
 
-That job downloads the exact immutable artifact ID returned by its own successful build, verifies the source commit, version, package name, repository and SHA-256 against the build output, and inspects the tarball without executing its contents. It runs no dependency install, build or package lifecycle script. `npm publish` receives only the already-tested tarball, with public access and provenance.
+That job downloads the exact immutable artifact ID returned by its own successful build, verifies the source commit, coordinated versions, package identities and both archives against the **release-set receipt SHA-256** returned by the successful build. Each member carries a SHA-256 digest and SHA-512 integrity; the verifier inspects both archives without extracting or executing their contents. A missing, reordered, mixed-source, mixed-version or corrupted member rejects the entire set before publication. It runs no dependency install, build or package lifecycle script. `npm publish` receives only each already-tested tarball, with public access and provenance, **generic before adapter**. The adapter's exact generic dependency is never rewritten to a local path in the tarball. Only private verification consumers use a file-tarball override and prove that the root and adapter resolve the same generic installation.
 
 `alpha.N`, `beta.N` and `rc.N` versions use their corresponding dist-tag; a stable `x.y.z` release uses `latest`. A prerelease can never fall through to `latest`. This is an ESM distribution with `.d.mts` declarations; it does not claim CommonJS support.
 
-The workflow has no GitHub contents-write permission. It does not bump versions, commit formatting, push tags, create GitHub releases, provision services, deploy documentation or allocate Browserbase sessions. No automatic retries attempt a second publication after an ambiguous registry result: inspect the registry before deliberately retrying. Never move the tag or overwrite a published version to fix it; publish a reviewed new version.
+The workflow has no GitHub contents-write permission. It does not bump versions, commit formatting, push tags, create GitHub releases, provision services, deploy documentation or allocate Browserbase sessions. There is no atomic two-package registry transaction and no automatic retry after an ambiguous publication. On a deliberately authorized rerun, `tools/publish-release.mjs` reads the exact registry version's `dist.integrity`: an identical already-published member is retained, an absent member is published, and a differing integrity stops recovery. Only a structured registry `E404` means absent; a network/authentication failure does not. Per-member outcomes are retained in `publication.ndjson`, so a later failure does not erase earlier facts. Never move the tag or overwrite a published version to fix it; publish a reviewed new version.
 
 ## Package contents and evidence
 
-`tools/package-release.mjs` is the single staging path for external-consumer verification and publication. It emits only `dist`, README, license and a normalized manifest; resolves the actual pinned framework dependency; and refuses missing declarations, unexpected export paths, symlinks, private packages and unresolved development specifiers. `tools/verify-release.mjs` is a dependency-free verifier for the privileged job.
+`tools/packages.mjs` inventories exactly the generic package and the adapter in dependency order. Source manifests own their explicit export maps; the adapter is restricted to `.`, `./adapter`, and `./tools`. The generic package has no framework dependency and its declarations cannot import Playwright or an undeclared SDK.
 
-The upstream `release:publish --dry-run` remains a compatibility check only. Do **not** run its non-dry-run form from this repository: that command owns the upstream multi-package release train, not this package's independent publisher.
+`tools/package-release.mjs` is the single staging path. It produces two dist-only archives and **`release-set.json` (schema version 2)**, with one source SHA, coordinated package version, framework version, release channel, and both member identities/hashes. No old `release.json` reader or success fallback remains. Staging refuses existing output or partial-set reuse; an incomplete packing attempt never writes a success receipt. Preserve failed output for diagnosis, then use a fresh output directory.
+
+`tools/verify-release.mjs` checks the whole source-bound set. `tools/publish-release.mjs` is its dependency-free dry-run/authorized-publication caller. Both remain host-only repository tooling; the OIDC job installs no dependencies and executes no package lifecycle scripts. `tools/packed-consumers.mjs` stages only approved test/example dependency closures, never production source or workspace aliases, and verifies installed member bytes against their candidate archives.
+
+The upstream `release:publish --dry-run` remains an integration check only. Do **not** run its non-dry-run form from this repository: that command owns the upstream multi-package release train, not this repository's two-package publisher.

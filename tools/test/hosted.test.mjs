@@ -48,7 +48,7 @@ test("both hosted commands refuse to allocate without an explicit operator opt-i
 });
 
 test("the demo example encodes its own frames instead of retrieving provider media", () => {
-  const example = read("packages/platform-browserbase/examples/hosted-demo.ts");
+  const example = read("packages/browserbase/examples/hosted-demo.ts");
   assert.ok(example.includes("recordSession: false"));
   assert.doesNotMatch(example, /artifactOrigins|BrowserbaseRecordings|BrowserbaseReplays|BrowserbaseDownloads/);
   assert.ok(example.includes('process.env.EFFECT_AGENT_BROWSERBASE_LIVE !== "1"'));

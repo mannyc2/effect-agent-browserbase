@@ -1,0 +1,438 @@
+import assert from "node:assert/strict";
+
+import { Effect, Layer, Redacted } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+import { BrowserbaseClient } from "../../src/Client.ts";
+import { BrowserbaseContexts } from "../../src/Contexts.ts";
+import type {
+  ClientError,
+  ContextError,
+  ExtensionError,
+  FileError,
+  SessionError,
+} from "../../src/Errors.ts";
+import { BrowserbaseExtensions } from "../../src/Extensions.ts";
+import { ContextReference, ExtensionReference, SessionReference } from "../../src/References.ts";
+import { BrowserbaseSessions } from "../../src/Sessions.ts";
+import { BrowserbaseUploads } from "../../src/Uploads.ts";
+import { buildZip, extensionArchive } from "./Zip.ts";
+
+/** One declared control-plane failure channel; each case keeps its own typed subset. */
+interface Case {
+  readonly name: string;
+  readonly run: Effect.Effect<
+    void,
+    ClientError | SessionError | ContextError | ExtensionError | FileError
+  >;
+}
+
+const account = {
+  projectId: "project-1",
+  apiKey: Redacted.make("test-account-key"),
+};
+
+const sessionReference = SessionReference.make({
+  provider: "browserbase",
+  projectId: "project-1",
+  sessionId: "session-1",
+});
+
+const contextReference = ContextReference.make({
+  provider: "browserbase",
+  projectId: "project-1",
+  contextId: "context-1",
+});
+
+const providerSession = (status: "PENDING" | "RUNNING" | "ERROR" | "TIMED_OUT" | "COMPLETED") => ({
+  id: "session-1",
+  projectId: "project-1",
+  status,
+  createdAt: "2026-09-20T19:00:00.000Z",
+  updatedAt: "2026-09-20T19:01:00.000Z",
+  expiresAt: "2026-09-20T20:00:00.000Z",
+  startedAt: "2026-09-20T19:00:01.000Z",
+  keepAlive: true,
+  proxyBytes: 0,
+  region: "us-east-1" as const,
+});
+
+const extensionReference = ExtensionReference.make({
+  provider: "browserbase",
+  projectId: "project-1",
+  extensionId: "extension-1",
+});
+
+const resourceLayer = Layer.mergeAll(
+  BrowserbaseSessions.layer,
+  BrowserbaseContexts.layer,
+  BrowserbaseExtensions.layer,
+  BrowserbaseUploads.layer.pipe(Layer.provide(BrowserbaseSessions.layer)),
+).pipe(Layer.provide(BrowserbaseClient.layer(account)));
+
+export const controlPlaneCases: ReadonlyArray<Case> = [
+  {
+    name: "one immutable Client captures account authority and does no work during construction",
+    run: Effect.gen(function* () {
+      let requests = 0;
+
+      const options = {
+        ...account,
+        artifactOrigins: ["https://media.example.test"],
+      };
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        requests++;
+        const request = new Request(input, init);
+
+        assert.equal(request.headers.get("x-bb-api-key"), "test-account-key");
+
+        return Response.json(providerSession("COMPLETED"));
+      };
+
+      yield* Effect.gen(function* () {
+        const client = yield* BrowserbaseClient;
+
+        assert.equal(requests, 0);
+        assert.equal(client.projectId, "project-1");
+        assert.equal(Object.isFrozen(client), true);
+        options.artifactOrigins.push("https://other.example.test");
+        assert.equal(client.validateMediaUrl("https://media.example.test/file"), true);
+        assert.equal(client.validateMediaUrl("https://other.example.test/file"), false);
+        yield* client.json("GET", "/v1/sessions/session-1");
+        assert.equal(requests, 1);
+      }).pipe(
+        Effect.provide(BrowserbaseClient.layer(options)),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+      );
+    }),
+  },
+  {
+    name: "Sessions separates passive inspection from explicit release",
+    run: Effect.gen(function* () {
+      const requests: Array<{
+        readonly method: string;
+        readonly path: string;
+        readonly body: unknown;
+      }> = [];
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        const url = new URL(request.url);
+
+        requests.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
+        if (url.pathname === "/v1/sessions" && request.method === "GET") {
+          return Response.json([providerSession("RUNNING")]);
+        }
+
+        return Response.json(providerSession(request.method === "POST" ? "COMPLETED" : "RUNNING"));
+      };
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* BrowserbaseSessions;
+        const inspected = yield* sessions.retrieve(sessionReference);
+
+        assert.equal(inspected.status, "RUNNING");
+        assert.deepEqual(
+          requests.map(({ method }) => method),
+          ["GET"],
+        );
+
+        const listed = yield* sessions.list({ status: "RUNNING", q: "user:42" });
+
+        assert.equal(listed.length, 1);
+        assert.match(requests[1]!.path, /^\/v1\/sessions\?/);
+        assert.equal(requests[1]!.method, "GET");
+
+        const released = yield* sessions.requestRelease(sessionReference);
+
+        assert.equal(released.status, "COMPLETED");
+        assert.deepEqual(requests[2], {
+          method: "POST",
+          path: "/v1/sessions/session-1",
+          body: { projectId: "project-1", status: "REQUEST_RELEASE" },
+        });
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
+    }),
+  },
+  {
+    name: "Contexts provision, inspect and explicitly delete project-qualified resources",
+    run: Effect.gen(function* () {
+      const requests: Array<{
+        readonly method: string;
+        readonly path: string;
+        readonly body: unknown;
+      }> = [];
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const body = request.method === "POST" ? await request.json() : undefined;
+        const path = new URL(request.url).pathname;
+
+        requests.push({ method: request.method, path, body });
+        if (request.method === "POST") {
+          return Response.json({
+            id: "context-1",
+            cipherAlgorithm: "AES-256-CBC",
+            initializationVectorSize: 16,
+            publicKey: "not-consumer-state",
+            uploadUrl: "https://deprecated.invalid",
+          });
+        }
+        if (request.method === "DELETE") return new Response(null, { status: 204 });
+
+        return Response.json({
+          id: "context-1",
+          projectId: "project-1",
+          createdAt: "2026-09-20T18:00:00.000Z",
+          updatedAt: "2026-09-20T19:00:00.000Z",
+          name: "support-account-42",
+        });
+      };
+
+      yield* Effect.gen(function* () {
+        const contexts = yield* BrowserbaseContexts;
+        const created = yield* contexts.create({ name: "support-account-42" });
+
+        assert.deepEqual(created.reference, contextReference);
+        const metadata = yield* contexts.retrieve(created.reference);
+
+        assert.equal(metadata.name, "support-account-42");
+        yield* contexts.delete(created.reference);
+        assert.deepEqual(requests, [
+          {
+            method: "POST",
+            path: "/v1/contexts",
+            body: { projectId: "project-1", name: "support-account-42" },
+          },
+          { method: "GET", path: "/v1/contexts/context-1", body: undefined },
+          { method: "DELETE", path: "/v1/contexts/context-1", body: undefined },
+        ]);
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
+    }),
+  },
+  {
+    name: "Extensions register one inspected archive and reuse it by reference",
+    run: Effect.gen(function* () {
+      const archive = extensionArchive([{ name: "background.js", content: "self.ok = true;" }]);
+
+      const requests: Array<{
+        readonly method: string;
+        readonly path: string;
+        readonly part?: { readonly name: string; readonly type: string; readonly bytes: number };
+      }> = [];
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const path = new URL(request.url).pathname;
+
+        if (request.method === "POST") {
+          // The provider parses a standard multipart body, so this fixture does too.
+          const form = await request.formData();
+          const file = form.get("file");
+
+          assert.ok(file instanceof File);
+          assert.equal(form.has("projectId"), false);
+          requests.push({
+            method: request.method,
+            path,
+            part: { name: file.name, type: file.type, bytes: file.size },
+          });
+          assert.deepEqual(new Uint8Array(await file.arrayBuffer()), archive);
+
+          return Response.json({
+            id: "extension-1",
+            projectId: "project-1",
+            fileName: "extension.zip",
+          });
+        }
+        requests.push({ method: request.method, path });
+        if (request.method === "DELETE") return new Response(null, { status: 204 });
+
+        return Response.json({
+          id: "extension-1",
+          projectId: "project-1",
+          fileName: "extension.zip",
+          createdAt: "2026-09-20T18:00:00.000Z",
+          updatedAt: "2026-09-20T18:00:00.000Z",
+        });
+      };
+
+      yield* Effect.gen(function* () {
+        const extensions = yield* BrowserbaseExtensions;
+        const registered = yield* extensions.register(archive);
+
+        assert.deepEqual(registered.reference, extensionReference);
+        assert.equal(registered.entries, 2);
+        assert.equal(registered.archiveBytes, archive.byteLength);
+
+        const metadata = yield* extensions.retrieve(registered.reference);
+
+        assert.equal(metadata.fileName, "extension.zip");
+        yield* extensions.delete(registered.reference);
+        assert.deepEqual(requests, [
+          {
+            method: "POST",
+            path: "/v1/extensions",
+            part: { name: "extension.zip", type: "application/zip", bytes: archive.byteLength },
+          },
+          { method: "GET", path: "/v1/extensions/extension-1" },
+          { method: "DELETE", path: "/v1/extensions/extension-1" },
+        ]);
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
+    }),
+  },
+  {
+    name: "an archive without a root manifest never reaches the provider",
+    run: Effect.gen(function* () {
+      let requests = 0;
+
+      yield* Effect.gen(function* () {
+        const extensions = yield* BrowserbaseExtensions;
+
+        const rejected = yield* extensions
+          .register(buildZip([{ name: "background.js", content: "self.ok = true;" }]))
+          .pipe(Effect.result);
+
+        assert.equal(rejected._tag, "Failure");
+        if (rejected._tag === "Failure") {
+          assert.equal(rejected.failure.operation, "extension-archive");
+          assert.equal(rejected.failure.reason, "configuration");
+          assert.equal(rejected.failure.outcome, "undispatched");
+        }
+
+        const oversize = yield* extensions
+          .register(extensionArchive(), { maxBytes: 8 })
+          .pipe(Effect.result);
+
+        assert.equal(oversize._tag, "Failure");
+        if (oversize._tag === "Failure") {
+          assert.equal(oversize.failure.operation, "extension-archive-limit");
+          assert.equal(oversize.failure.reason, "limit");
+        }
+        assert.equal(requests, 0);
+      }).pipe(
+        Effect.provide(resourceLayer),
+        Effect.provideService(FetchHttpClient.Fetch, async () => {
+          requests++;
+
+          return Response.json({});
+        }),
+      );
+    }),
+  },
+  {
+    name: "Uploads place bytes for the exact running session and report only what came back",
+    run: Effect.gen(function* () {
+      const bytes = new TextEncoder().encode("quarter,amount\nQ1,42\n");
+      const calls: string[] = [];
+      let part: { name: string; type: string; size: number } | undefined;
+      let status: "RUNNING" | "COMPLETED" = "RUNNING";
+      let path = "/browserbase/uploads/report.csv";
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const url = new URL(request.url);
+
+        calls.push(`${request.method} ${url.pathname}`);
+        if (url.pathname.endsWith("/uploads")) {
+          const file = (await request.formData()).get("file");
+
+          assert.ok(file instanceof File);
+          part = { name: file.name, type: file.type, size: file.size };
+          assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes);
+
+          return Response.json({ message: "File uploaded successfully", path });
+        }
+
+        return Response.json(providerSession(status));
+      };
+
+      yield* Effect.gen(function* () {
+        const uploads = yield* BrowserbaseUploads;
+
+        const file = {
+          filename: "report.csv",
+          mediaType: "text/csv",
+          bytes,
+        };
+
+        const receipt = yield* uploads.create(sessionReference, file);
+
+        assert.deepEqual(receipt.reference, sessionReference);
+        assert.equal(receipt.remotePath, path);
+        assert.equal(receipt.acknowledgement, "File uploaded successfully");
+        assert.equal(receipt.bytes, bytes.byteLength);
+        assert.deepEqual(part, { name: "report.csv", type: "text/csv", size: bytes.byteLength });
+        assert.deepEqual(calls, [
+          "GET /v1/sessions/session-1",
+          "POST /v1/sessions/session-1/uploads",
+        ]);
+
+        // A traversing path is never carried forward as an attachable location.
+        path = "/browserbase/../etc/passwd";
+        const unsafe = yield* uploads.create(sessionReference, file).pipe(Effect.result);
+
+        assert.equal(unsafe._tag, "Failure");
+        if (unsafe._tag === "Failure") {
+          assert.equal(unsafe.failure.reason, "malformed");
+          assert.equal(unsafe.failure.outcome, "unknown");
+        }
+
+        // A terminal session cannot receive files, and nothing is sent to find out.
+        status = "COMPLETED";
+        const terminal = yield* uploads.create(sessionReference, file).pipe(Effect.result);
+
+        assert.equal(terminal._tag, "Failure");
+        if (terminal._tag === "Failure") {
+          assert.equal(terminal.failure.reason, "expired");
+          assert.equal(terminal.failure.outcome, "undispatched");
+        }
+        assert.equal(calls.filter((call) => call.endsWith("/uploads")).length, 2);
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
+    }),
+  },
+  {
+    name: "resource services reject foreign project identities before transport",
+    run: Effect.gen(function* () {
+      let requests = 0;
+      const foreignSession = SessionReference.make({ ...sessionReference, projectId: "project-2" });
+      const foreignContext = ContextReference.make({ ...contextReference, projectId: "project-2" });
+
+      const foreignExtension = ExtensionReference.make({
+        ...extensionReference,
+        projectId: "project-2",
+      });
+
+      yield* Effect.gen(function* () {
+        const sessions = yield* BrowserbaseSessions;
+        const contexts = yield* BrowserbaseContexts;
+        const extensions = yield* BrowserbaseExtensions;
+
+        for (const effect of [
+          sessions.retrieve(foreignSession).pipe(Effect.result),
+          contexts.retrieve(foreignContext).pipe(Effect.result),
+          extensions.retrieve(foreignExtension).pipe(Effect.result),
+          extensions.delete(foreignExtension).pipe(Effect.result),
+        ]) {
+          const result = yield* effect;
+
+          assert.equal(result._tag, "Failure");
+          if (result._tag === "Failure") {
+            assert.equal(result.failure.reason, "authorization");
+            assert.equal(result.failure.outcome, "undispatched");
+          }
+        }
+        assert.equal(requests, 0);
+      }).pipe(
+        Effect.provide(resourceLayer),
+        Effect.provideService(FetchHttpClient.Fetch, async () => {
+          requests++;
+
+          return Response.json({});
+        }),
+      );
+    }),
+  },
+];

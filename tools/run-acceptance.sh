@@ -36,27 +36,31 @@ TREE="$WORK_ROOT/upstream/tree"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
+  run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/browserbase check
   run typecheck timeout 180s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase check
-  run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/platform-browserbase install:test-browser
+  run install-browser timeout 300s ./node_modules/.bin/vp run -F @effect-agent/browserbase install:test-browser
   # record-video intentionally keeps ffmpeg/ffprobe caller-owned; install them only
   # in this unpaid native acceptance environment rather than as package dependencies.
   run install-media-tools timeout 300s bash -lc 'sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg && ffmpeg -version && ffprobe -version'
-  cd packages/platform-browserbase
-  run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
-  run native timeout 240s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-workspace" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+  cd packages/browserbase
+  run generic-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
+  # The browser owner, live capture and provider artifacts all belong to this package now.
+  run generic-native timeout 600s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-generic" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+  run generic-build timeout 180s ../../node_modules/.bin/vp pack
+  cd "$TREE/packages/platform-browserbase"
+  run unit timeout 180s ../../node_modules/.bin/vp test --run --passWithNoTests --maxWorkers=1
+  run native timeout 300s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   run build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE"
   run exports timeout 180s ./node_modules/.bin/vp run check:exports
   run purity timeout 180s ./node_modules/.bin/vp run verify:package-purity
   cd "$SOURCE_ROOT"
-  run packed-consumer timeout 300s bash tools/packed-consumer.sh "$TREE" "$OUT"
+  run packed-consumer timeout 900s bash tools/packed-consumer.sh "$TREE" "$OUT"
   if [ "$LAST_CODE" = 0 ]; then
-    FILE="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).filename)' "$OUT/release.json")"
-    TAG="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).distTag)' "$OUT/release.json")"
-    DIGEST="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).sha256)' "$OUT/release.json")"
-    VERSION="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$OUT/release.json")"
+    VERSION="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$OUT/release-set.json")"
+    DIGEST="$(node --input-type=module -e 'import { releaseSetDigest } from "./tools/package-release.mjs"; console.log(releaseSetDigest(process.argv[1]));' "$OUT")"
     run release-identity node tools/verify-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST"
-    run package-dry-run timeout 120s npm publish "$OUT/$FILE" --dry-run --ignore-scripts --provenance=false --access public --tag "$TAG" --registry https://registry.npmjs.org/ --json
+    run package-dry-run timeout 300s node tools/publish-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST" --dry-run
   fi
   cd "$TREE"
   # Run the entire upstream gate, without filtering suites or changing assertions.
@@ -68,13 +72,13 @@ if [ "$LAST_CODE" = 0 ]; then
   run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
   # Only candidate source files belong in the review patch. Native CDP can leave
   # generated downloads below the package; a directory-wide add would include them.
-  git -C "$SOURCE_ROOT" ls-files -z -- packages/platform-browserbase | \
+  git -C "$SOURCE_ROOT" ls-files -z -- packages/browserbase packages/platform-browserbase | \
     git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
   git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
   run review-check git diff --check
 
   git diff --binary > "$OUT/review.patch"
-  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/platform-browserbase
+  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browserbase packages/platform-browserbase
 fi
 cd "$SOURCE_ROOT"
 run source-cleanliness bash -c 'test -z "$(git status --porcelain)"'

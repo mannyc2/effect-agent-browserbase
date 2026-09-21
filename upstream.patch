@@ -1,46 +1,71 @@
 diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
 new file mode 100644
-index 00000000..d6cead31
+index 00000000..ea899b79
 --- /dev/null
 +++ b/.changeset/browserbase-interactive.md
-@@ -0,0 +1,5 @@
+@@ -0,0 +1,6 @@
 +---
++"@effect-agent/browserbase": minor
 +"@effect-agent/platform-browserbase": minor
 +---
 +
-+Add scoped Browserbase interactive control, independent recording/replay/download access, and bounded same-page live capture for trusted Node and Bun hosts.
++Add Browserbase in two packages: `@effect-agent/browserbase` owns one strict Client, session/context/extension resources, E/R-preserving typed bootstrap bindings, document readiness, scoped owned or borrowed browser operations, bounded capture, file selection and provider artifacts, with no Effect Agent dependency. `@effect-agent/platform-browserbase` adds the actual Effect Agent adapter and fixed Toolkit, including adaptation of the exact generic owner with shared connection, action and capture accounting, with no Playwright peer. Superseded constructors, subpaths, aliases and reexports are removed; maintained consumers use only the canonical packages.
 diff --git a/.changeset/config.json b/.changeset/config.json
-index 7db06dca..ed0bf019 100644
+index 7db06dca..a331c2d6 100644
 --- a/.changeset/config.json
 +++ b/.changeset/config.json
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,8 @@
    "fixed": [
      [
        "@effect-agent/ai-typesafe",
++      "@effect-agent/browserbase",
 +      "@effect-agent/platform-browserbase",
        "@effect-agent/platform-cloudflare",
        "@effect-agent/platform-node",
        "@effect-agent/pr-review",
 diff --git a/bun.lock b/bun.lock
-index 2a9fbf1c..882d2de9 100644
+index 2a9fbf1c..d0069b25 100644
 --- a/bun.lock
 +++ b/bun.lock
-@@ -8,6 +8,7 @@
+@@ -8,6 +8,8 @@
          "@changesets/changelog-github": "0.7.0",
          "@changesets/cli": "2.31.0",
          "@effect-agent/ai-typesafe": "workspace:*",
++        "@effect-agent/browserbase": "workspace:*",
 +        "@effect-agent/platform-browserbase": "workspace:*",
          "@effect-agent/platform-cloudflare": "workspace:*",
          "@effect-agent/platform-node": "workspace:*",
          "@effect-agent/sandbox-local": "workspace:*",
-@@ -119,6 +120,31 @@
+@@ -119,6 +121,49 @@
          "effect": "^4.0.0-rc.115",
        },
      },
++    "packages/browserbase": {
++      "name": "@effect-agent/browserbase",
++      "version": "0.1.0-beta.102",
++      "devDependencies": {
++        "@effect/platform-bun": "catalog:",
++        "@effect/platform-node": "catalog:",
++        "@effect/vitest": "catalog:",
++        "@types/node": "catalog:",
++        "effect": "catalog:",
++        "playwright-core": "catalog:",
++        "typescript": "catalog:",
++        "vite-plus": "catalog:"
++      },
++      "peerDependencies": {
++        "effect": "^4.0.0-rc.115",
++        "playwright-core": "1.63.0"
++      },
++      "optionalPeers": [
++        "playwright-core"
++      ]
++    },
 +    "packages/platform-browserbase": {
 +      "name": "@effect-agent/platform-browserbase",
 +      "version": "0.1.0-beta.102",
 +      "dependencies": {
++        "@effect-agent/browserbase": "workspace:*",
 +        "effect-agent": "workspace:*",
 +      },
 +      "devDependencies": {
@@ -56,16 +81,12 @@ index 2a9fbf1c..882d2de9 100644
 +      },
 +      "peerDependencies": {
 +        "effect": "^4.0.0-rc.115",
-+        "playwright-core": "1.63.0",
 +      },
-+      "optionalPeers": [
-+        "playwright-core",
-+      ],
 +    },
      "packages/platform-cloudflare": {
        "name": "@effect-agent/platform-cloudflare",
        "version": "0.1.0-beta.102",
-@@ -503,6 +529,7 @@
+@@ -503,6 +548,7 @@
      "lucide-react": "1.27.0",
      "memfs": "4.71.0",
      "miniflare": "5.20260811.1-alpha",
@@ -73,16 +94,18 @@ index 2a9fbf1c..882d2de9 100644
      "react": "19.2.8",
      "react-dom": "19.2.8",
      "scheduler": "0.27.0",
-@@ -724,6 +751,8 @@
+@@ -724,6 +770,10 @@
  
      "@effect-agent/example-travel-planner": ["@effect-agent/example-travel-planner@workspace:examples/travel-planner"],
  
++    "@effect-agent/browserbase": ["@effect-agent/browserbase@workspace:packages/browserbase"],
++
 +    "@effect-agent/platform-browserbase": ["@effect-agent/platform-browserbase@workspace:packages/platform-browserbase"],
 +
      "@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@workspace:packages/platform-cloudflare"],
  
      "@effect-agent/platform-node": ["@effect-agent/platform-node@workspace:packages/platform-node"],
-@@ -2558,6 +2587,8 @@
+@@ -2558,6 +2608,8 @@
  
      "platform": ["platform@1.3.6", "", {}, "sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg=="],
  
@@ -106,10 +129,10 @@ index bd0a4a63..42b02630 100644
  testing package, and both Cloudflare packages separate runners. The remaining workspace suites
  share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 diff --git a/docs/guide/browser.md b/docs/guide/browser.md
-index efaa1da4..fd9c5120 100644
+index efaa1da4..a47c828f 100644
 --- a/docs/guide/browser.md
 +++ b/docs/guide/browser.md
-@@ -115,6 +115,30 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
+@@ -115,6 +115,39 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
  `Unrestricted`. One policy also fixes maximum actions, elapsed time, and bytes returned by each
  operation.
  
@@ -126,11 +149,20 @@ index efaa1da4..fd9c5120 100644
 +before allocation because request interception cannot establish connection-time public-address
 +containment. Neither mode silently falls back to `Unrestricted`.
 +
-+The adapter also exposes independent `recordings`, `replays`, and `downloads` entry points.
-+Provider MP4 assembly and replay retrieval can outlive the interactive Scope; signed media URLs are
-+temporary access material rather than artifact identity. Optional `capture` borrows the selected
-+live page and streams bounded JPEG frames with source/receipt clocks and drop accounting. It owns
-+no encoder or filesystem and does not claim website-audio capture.
++The generic `@effect-agent/browserbase` package owns independent `recordings`, `replays`, and
++`downloads` entry points. Provider MP4 assembly and replay retrieval can outlive the interactive
++Scope; signed media URLs are temporary access material rather than artifact identity. Its optional
++`capture` borrows an owned page and streams bounded JPEG frames with source/receipt clocks and drop
++accounting. It owns no encoder or filesystem and does not claim website-audio capture. The adapter
++exports only its actual `adapter` and `tools` entry points, not generic or legacy reexports.
++
++Acquire typed initialization with `browser.withBrowser(policy, { bootstrap }, use)` or explicit
++`browser.open(policy, { bootstrap })`. `Bootstrap.binding` preserves consumer errors and services,
++admits finite work before spawning a scoped callback, and checks the native caller's origin and
++document identity before decoding, before running the handler and before replying. Fail-session
++callbacks supervise `withBrowser`; page-visible rejections never contain host causes or stacks.
++Use `fromSession(session)` from the adapter to give the fixed Toolkit that exact generic owner,
++with the same connection, action budget and capture accounting, rather than opening another one.
 +
 +Host handoff pauses automation before returning temporary Live View material. Resume requires an
 +explicit operator-release decision and obtains a fresh observation while retaining the mutation
@@ -141,7 +173,7 @@ index efaa1da4..fd9c5120 100644
  
  This complete composition captures rendered Markdown through the Node-safe REST adapter. The
 diff --git a/package.json b/package.json
-index 183913dc..4536aada 100644
+index 183913dc..bd70f0a6 100644
 --- a/package.json
 +++ b/package.json
 @@ -22,7 +22,7 @@
@@ -153,15 +185,16 @@ index 183913dc..4536aada 100644
      "build": "vp run -r build && vp run docs:build && vp run action:build",
      "ready": "vp run check && vp run test && vp run build"
    },
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,8 @@
      "@changesets/changelog-github": "0.7.0",
      "@changesets/cli": "2.31.0",
      "@effect-agent/ai-typesafe": "workspace:*",
++    "@effect-agent/browserbase": "workspace:*",
 +    "@effect-agent/platform-browserbase": "workspace:*",
      "@effect-agent/platform-cloudflare": "workspace:*",
      "@effect-agent/platform-node": "workspace:*",
      "@effect-agent/sandbox-local": "workspace:*",
-@@ -137,7 +138,8 @@
+@@ -137,7 +139,8 @@
      "isomorphic-git": "1.41.9",
      "memfs": "4.71.0",
      "@alchemy.run/cloudflare-runtime": "2.0.0-beta.77",
@@ -172,42 +205,46 @@ index 183913dc..4536aada 100644
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
 diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/toolchain.test.ts
-index 0b337058..a5e0b7c5 100644
+index 0b337058..35cdf0cf 100644
 --- a/packages/testing/test/toolchain.test.ts
 +++ b/packages/testing/test/toolchain.test.ts
-@@ -98,6 +98,7 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
+@@ -98,6 +98,8 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
  const packageNames = [
    "ai-typesafe",
    "effect-agent",
++  "browserbase",
 +  "platform-browserbase",
    "platform-cloudflare",
    "platform-node",
    "pr-review",
-@@ -128,6 +129,7 @@ const toolingNames = [
+@@ -128,6 +130,8 @@ const toolingNames = [
  const effectTestPackageNames = [
    "ai-typesafe",
    "effect-agent",
++  "browserbase",
 +  "platform-browserbase",
    "platform-cloudflare",
    "platform-node",
    "pr-review",
-@@ -142,6 +144,7 @@ const effectTestPackageNames = [
+@@ -142,6 +146,8 @@ const effectTestPackageNames = [
  const productionPackageNames = [
    "ai-typesafe",
    "effect-agent",
++  "browserbase",
 +  "platform-browserbase",
    "platform-cloudflare",
    "platform-node",
    "pr-review",
-@@ -209,6 +212,7 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
+@@ -209,6 +215,8 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
  const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
    "ai-typesafe": [],
    "effect-agent": [],
-+  "platform-browserbase": ["effect-agent", "testing"],
++  browserbase: [],
++  "platform-browserbase": ["browserbase", "effect-agent", "testing"],
    "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
    "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
    "pr-review": ["effect-agent"],
-@@ -1403,7 +1407,7 @@ esac
+@@ -1403,7 +1411,7 @@ esac
              edges.filter((edge) => !allowed.includes(edge)),
              `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
            ).toEqual([]);
@@ -216,7 +253,7 @@ index 0b337058..a5e0b7c5 100644
            // reappear in dependencies, peerDependencies, or optionalDependencies,
            // where they would ship or leak into consumer resolution.
            if (section !== "devDependencies") {
-@@ -1576,15 +1580,20 @@ esac
+@@ -1576,15 +1584,20 @@ esac
  
            // No production package ever SHIPS depending on the testing package.
            expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");

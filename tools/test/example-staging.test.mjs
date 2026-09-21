@@ -1,46 +1,35 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { stageConsumer } from "../stage-consumer.mjs";
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
+function fixture(t) {
+  const directory = mkdtempSync(join(tmpdir(), "browserbase-stage-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tree = join(directory, "tree"), out = join(directory, "out"); mkdirSync(tree); mkdirSync(out);
+  const write = (path, content) => { mkdirSync(dirname(join(tree, path)), { recursive: true }); writeFileSync(join(tree, path), content); };
+  return { tree, out, write };
+}
 
-test("packed native suites include their complete local example dependency graph", () => {
-  const destination = mkdtempSync(join(tmpdir(), "browserbase-example-staging-"));
-  try {
-    const script = readFileSync(join(root, "tools/packed-consumer.sh"), "utf8");
-    const copies = script.split("\n").filter((line) => line.startsWith('  cp "$PKG'));
-    assert.ok(copies.length > 0);
-    execFileSync("bash", ["-eu", "-c", 'mkdir -p test/native test/fixtures examples\n' + copies.join("\n")], {
-      cwd: destination,
-      env: { ...process.env, PKG: join(root, "packages/platform-browserbase") },
-    });
-    const verify = () => {
-      const seen = new Set();
-      const check = (file) => {
-        assert.ok(file.startsWith(destination + "/"), `Dependency escapes consumer: ${file}`);
-        assert.ok(existsSync(file), `Missing staged dependency: ${file}`);
-        if (seen.has(file)) return;
-        seen.add(file);
-        const source = readFileSync(file, "utf8");
-        for (const match of source.matchAll(/from\s+["'](\.[^"']+)["']/g)) {
-          check(resolve(dirname(file), match[1]));
-        }
-      };
-      for (const name of readdirSync(join(destination, "test/native"))) {
-        if (name.endsWith(".test.ts")) check(join(destination, "test/native", name));
-      }
-      assert.ok(seen.has(join(destination, "examples/demo-recording.ts")));
-      assert.ok(seen.has(join(destination, "examples/record-video.ts")));
-    };
-    verify();
-    // Prove the original omission is detected without running a browser or a provider.
-    rmSync(join(destination, "examples/demo-recording.ts"));
-    assert.throws(verify, /Missing staged dependency: .*examples\/demo-recording\.ts/);
-  } finally {
-    rmSync(destination, { recursive: true, force: true });
+test("staging retains complete transitive examples and their unchanged public-package imports", (t) => {
+  const f = fixture(t);
+  const entry = "packages/browserbase/test/consumer/native.ts";
+  f.write(entry, 'import "../../examples/record-video.ts";\n');
+  f.write("packages/browserbase/examples/record-video.ts", 'import { start } from "@effect-agent/browserbase/capture";\nexport { fixture } from "../test/fixtures/local.ts";\n');
+  f.write("packages/browserbase/test/fixtures/local.ts", 'export const fixture = true;\n');
+  const files = stageConsumer(f.tree, f.out, [entry]);
+  assert.equal(files.length, 3);
+  for (const path of files) assert.deepEqual(readFileSync(join(f.out, path)), readFileSync(join(f.tree, path)));
+  rmSync(join(f.tree, "packages/browserbase/test/fixtures/local.ts"));
+  assert.throws(() => stageConsumer(f.tree, f.out, [entry]), /ENOENT/);
+});
+
+test("a maintained example cannot smuggle production code or local module aliases into a packed consumer", (t) => {
+  const f = fixture(t), entry = "packages/browserbase/examples/demo.ts";
+  for (const specifier of ["../src/Browser.ts", "/tmp/browser.ts", "file:/tmp/browser.mjs", "#workspace-browser"]) {
+    f.write(entry, `import ${JSON.stringify(specifier)};\n`);
+    assert.throws(() => stageConsumer(f.tree, f.out, [entry]));
   }
 });

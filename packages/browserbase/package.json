@@ -1,0 +1,84 @@
+{
+  "name": "@effect-agent/browserbase",
+  "version": "0.1.0-beta.102",
+  "description": "Effect-based Browserbase resources, owned browser control and independent browser artifacts.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+    "directory": "packages/browserbase"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./account": "./src/Account.ts",
+    "./agents": "./src/Agents.ts",
+    "./allocation": "./src/Allocation.ts",
+    "./bootstrap": "./src/Bootstrap.ts",
+    "./browser": "./src/Browser.ts",
+    "./browser-binding": "./src/BrowserBinding.ts",
+    "./browser-data": "./src/BrowserData.ts",
+    "./capture": "./src/Capture.ts",
+    "./certificates": "./src/Certificates.ts",
+    "./cleanup": "./src/Cleanup.ts",
+    "./client": "./src/Client.ts",
+    "./context-coordination": "./src/ContextCoordination.ts",
+    "./contexts": "./src/Contexts.ts",
+    "./downloads": "./src/Downloads.ts",
+    "./errors": "./src/Errors.ts",
+    "./extensions": "./src/Extensions.ts",
+    "./functions": "./src/Functions.ts",
+    "./launch": "./src/Launch.ts",
+    "./page-control": "./src/PageControl.ts",
+    "./page-fetch": "./src/PageFetch.ts",
+    "./projects": "./src/Projects.ts",
+    "./recordings": "./src/Recordings.ts",
+    "./references": "./src/References.ts",
+    "./replays": "./src/Replays.ts",
+    "./search": "./src/Search.ts",
+    "./session-data": "./src/SessionData.ts",
+    "./sessions": "./src/Sessions.ts",
+    "./transfers": "./src/Transfers.ts",
+    "./uploads": "./src/Uploads.ts",
+    "./webhooks": "./src/Webhooks.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "install:test-browser": "playwright-core install --with-deps chromium",
+    "test:native": "vp test --config vite.native.config.ts --run",
+    "example:capture-evidence": "bun examples/capture-evidence.ts",
+    "example:hosted": "bun examples/hosted.ts",
+    "example:record-video": "bun examples/record-video.ts"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "playwright-core": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0-rc.115",
+    "playwright-core": "1.63.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

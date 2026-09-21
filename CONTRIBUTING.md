@@ -49,6 +49,8 @@ cd packages/platform-browserbase
 ../../node_modules/.bin/vp pack
 ```
 
+`node tools/verify-launch-contract.mjs` re-derives the committed session-create inventory from both authorities `Contract.ts` cites: the pinned SDK revision, checked against the digest that records the bytes it was read from, and the published OpenAPI specification, which is unpinned so that a field Browserbase adds fails the check instead of passing as a silent gap. It also reports whether a newer SDK release exists; `--require-current` turns a stale pin into a failure. It needs network access and is therefore run deliberately rather than from acceptance, which stays offline. The offline tooling tests cover its parsing rules against synthetic sources.
+
 Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
 
 Make edits in this repository's `packages/platform-browserbase`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
