@@ -1,25 +1,15 @@
 import { Schema } from "effect";
-import type {
-  Browser,
-  BrowserContext,
-  CDPSession,
-  Dialog,
-  Disposable,
-  Frame,
-  Page,
-} from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Dialog, Page } from "playwright-core";
 
 import { BrowserError, InitializationError } from "../../Errors.ts";
 import { makeActions } from "./Actions.ts";
-import type { CompiledBootstrap } from "./Bootstrap.ts";
 import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
-import type { Driver, DriverEvents, DriverOptions, ReadinessState } from "./Driver.ts";
-import { makeNativeBindings } from "./NativeBindings.ts";
+import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
+import { makeInitialization } from "./Initialization.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
-import type { Ticket } from "./Owner.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
@@ -105,82 +95,12 @@ export const makePlaywrightDriver = async (
 
   if (contexts.length !== 1) throw failure("context", "ambiguous");
   const context: BrowserContext = contexts[0];
-  const registeredEpochs = new WeakMap<Frame, number>();
-  const readyDocuments = new WeakMap<Frame, number>();
   const dialogs = new Set<Dialog>();
   const callbacks = new CallbackTasks(32, () => events.fault());
 
   let closing = false;
   let initialized = false;
   let browserCdp: CDPSession | undefined;
-  const registrations: Disposable[] = [];
-  let initializationClosed = false;
-  let initializationDisposal: Promise<void> | undefined;
-
-  const initializationFault = (error: InitializationError) => {
-    if (closing || initializationClosed) return;
-    if (options.onBindingFault === undefined) events.fault();
-    else options.onBindingFault(error);
-  };
-
-  const bindingTask = (action: () => Promise<void>) => {
-    const admitted = callbacks.submit(async () => {
-      try {
-        await action();
-      } catch (cause) {
-        initializationFault(
-          Schema.is(InitializationError)(cause)
-            ? cause
-            : InitializationError.make({
-                operation: "register",
-                step: "bindings",
-                reason: "native",
-              }),
-        );
-      }
-    }, "reject-call");
-
-    if (!admitted)
-      initializationFault(
-        InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
-      );
-  };
-
-  const bindings =
-    options.bindings === undefined || options.bindings.length === 0
-      ? undefined
-      : makeNativeBindings(context, options.bindings, () =>
-          initializationFault(
-            InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
-          ),
-        );
-
-  const attachBindings = async (page: Page) => {
-    if (bindings === undefined) return;
-    await bindings.attach(page, page);
-    for (const frame of page.frames())
-      if (frame !== page.mainFrame()) await bindings.attach(frame, page);
-  };
-
-  const fenceInitialization = () => {
-    initializationClosed = true;
-    bindings?.close();
-  };
-
-  const disposeInitialization = (): Promise<void> => {
-    fenceInitialization();
-    initializationDisposal ??= (async () => {
-      const outcomes = await Promise.allSettled([
-        ...registrations.splice(0).map((registration) => registration.dispose()),
-        ...(bindings === undefined ? [] : [bindings.dispose()]),
-      ]);
-
-      if (outcomes.some((result) => result.status === "rejected"))
-        throw failure("dispose-initialization", "provider");
-    })();
-
-    return initializationDisposal;
-  };
 
   const targets = makeTargets(browser, context, options, callbacks, events, () => closing, {
     opened: (entry, created) => {
@@ -188,7 +108,7 @@ export const makePlaywrightDriver = async (
         callbacks.submit(async () => {
           await pageControl.execution(entry);
         });
-      if (initialized && bindings !== undefined) bindingTask(() => attachBindings(entry.page));
+      if (initialized) initialization.attachPage(entry.page);
       if (initialized && !created) {
         if (options.popupPolicy === "close")
           callbacks.submit(() => closeWithin(() => entry.page.close()));
@@ -202,8 +122,7 @@ export const makePlaywrightDriver = async (
     },
     navigating: (entry, frame) => pageControl.navigating(entry, frame),
     navigated: (entry, frame) => {
-      if (initialized && bindings !== undefined)
-        bindingTask(() => bindings.attach(frame, entry.page));
+      if (initialized) initialization.attachFrame(frame, entry.page);
     },
     frameChanged: (entry, frame) => {
       captures.invalidate(entry, "target-changed", frame);
@@ -224,7 +143,17 @@ export const makePlaywrightDriver = async (
     changed: (reason) => observation.changed(reason),
   });
 
-  const { current, entries, epochOf, register } = targets;
+  const { current, entries, register } = targets;
+
+  const initialization = makeInitialization(
+    context,
+    options,
+    targets,
+    callbacks,
+    events,
+    () => closing,
+  );
+
   const observation = makeObservation(targets, events);
   const actions = makeActions(context, targets, observation);
   const captures = makeCaptureSources(targets);
@@ -266,116 +195,6 @@ export const makePlaywrightDriver = async (
     });
   };
 
-  /**
-   * Registrations are installed once per connection and before this connection creates any
-   * document. Documents that were already running keep their recorded epoch, so the readiness
-   * policy can tell them apart from documents that actually ran the bundle.
-   */
-  const installBootstrap = async (bootstrap: CompiledBootstrap | undefined) => {
-    for (const entry of entries.values())
-      for (const frame of entry.page.frames()) registeredEpochs.set(frame, epochOf(frame));
-    // Host capabilities precede the bundle: a step may depend on a granted capability.
-    for (const grant of bootstrap?.permissions ?? [])
-      await context.grantPermissions([...grant.permissions], { origin: grant.origin });
-
-    // One bundle guarantees callable wrappers exist before dependent init steps. Ordering
-    // between two Playwright addInitScript registrations is intentionally not assumed.
-    const content = [bindings?.bundle, bootstrap?.bundle]
-      .filter((part) => part !== undefined)
-      .join("\n");
-
-    if (content.length > 0) {
-      const registration = await context.addInitScript({ content });
-
-      if (initializationClosed) await registration.dispose();
-      else registrations.push(registration);
-    }
-  };
-
-  const documentOrigin = (frame: Frame): string => {
-    try {
-      const url = new URL(frame.url());
-
-      return ["http:", "https:"].includes(url.protocol) ? url.origin : "";
-    } catch {
-      return "";
-    }
-  };
-
-  /** A finite wait for a page promise. Native work continues; only this wait is bounded. */
-  const evaluateWithin = async (
-    frame: Frame,
-    expression: string,
-    milliseconds: number,
-  ): Promise<unknown> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    try {
-      return await Promise.race([
-        frame.evaluate(expression),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(failure("ready", "timeout")), milliseconds);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-
-  const readiness = async (
-    bootstrap: CompiledBootstrap,
-    ticket: Ticket,
-  ): Promise<ReadinessState> => {
-    const { frame } = current();
-    const epoch = epochOf(frame);
-
-    if (readyDocuments.get(frame) === epoch) return { _tag: "Ready" };
-    ticket.check();
-    // A document that predates registration never ran the bundle; saying so is the contract.
-    if (epoch <= (registeredEpochs.get(frame) ?? -1)) {
-      if (bootstrap.existingDocuments === "RequireFreshNavigation")
-        return { _tag: "RequiresNavigation" };
-    }
-    const origin = documentOrigin(frame);
-
-    const applicable = bootstrap.readiness.filter(
-      (requirement) => requirement.origins === undefined || requirement.origins.includes(origin),
-    );
-
-    if (applicable.length === 0) {
-      readyDocuments.set(frame, epoch);
-
-      return { _tag: "NotApplicable" };
-    }
-
-    for (const requirement of applicable) {
-      const budget = Math.max(1, Math.min(requirement.timeoutMillis, ticket.remainingMillis()));
-      let value: unknown;
-
-      try {
-        value = await evaluateWithin(frame, requirement.expression, budget);
-      } catch (error) {
-        if (epochOf(frame) !== epoch || frame.isDetached())
-          return { _tag: "NotReady", step: requirement.step, reason: "stale" };
-
-        return {
-          _tag: "NotReady",
-          step: requirement.step,
-          reason:
-            Schema.is(BrowserError)(error) && error.reason === "timeout" ? "timeout" : "failed",
-        };
-      }
-      ticket.check();
-      // A completed wait cannot ready a document that replaced the one it observed.
-      if (epochOf(frame) !== epoch)
-        return { _tag: "NotReady", step: requirement.step, reason: "stale" };
-      if (value !== true) return { _tag: "NotReady", step: requirement.step, reason: "failed" };
-    }
-    readyDocuments.set(frame, epoch);
-
-    return { _tag: "Ready" };
-  };
-
   const driver: Driver = {
     ...(options.pageControl
       ? {
@@ -391,15 +210,12 @@ export const makePlaywrightDriver = async (
     listFrames: targets.listFrames,
     selectFrame: targets.selectFrame,
     navigate: actions.navigate,
-    readText: (selector, maximumBytes, ticket) =>
-      observation.readText(selector, maximumBytes, ticket),
-    observe: (maximumBytes, controlLimit, ticket) =>
-      observation.observe(maximumBytes, controlLimit, ticket),
+    readText: observation.readText,
+    observe: observation.observe,
     click: actions.click,
     fill: actions.fill,
     scroll: actions.scroll,
-    screenshot: (fullPage, maximumBytes, ticket) =>
-      observation.screenshot(fullPage, maximumBytes, ticket),
+    screenshot: observation.screenshot,
     resize: (viewport, ticket) =>
       sanitize("resize", async () => {
         const page = current().entry.page;
@@ -416,14 +232,7 @@ export const makePlaywrightDriver = async (
     clickForDownload: actions.clickForDownload,
     selectFiles: actions.selectFiles,
     clickForFileSelection: actions.clickForFileSelection,
-    documentReadiness: (ticket) =>
-      sanitize("ready", async () => {
-        const bootstrap = options.bootstrap;
-
-        return bootstrap === undefined || bootstrap.readiness.length === 0
-          ? { _tag: "Ready" as const }
-          : readiness(bootstrap, ticket);
-      }),
+    documentReadiness: initialization.documentReadiness,
     dismissDialogs: (ticket) =>
       sanitize("dismiss-dialogs", async () => {
         for (const dialog of [...dialogs]) {
@@ -434,19 +243,19 @@ export const makePlaywrightDriver = async (
       }),
     capture: captures.capture,
     invalidateObservation: observation.invalidate,
-    fenceInitialization,
-    disposeInitialization,
+    fenceInitialization: initialization.fence,
+    disposeInitialization: initialization.dispose,
     disconnect: () =>
       sanitize("disconnect", async () => {
         closing = true;
-        fenceInitialization();
+        initialization.fence();
         callbacks.stop();
         observation.invalidate();
         context.off("page", onPage);
         browser.off("disconnected", onDisconnected);
         for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
         captures.clear();
-        await closeWithin(disposeInitialization).catch(() => {});
+        await closeWithin(initialization.dispose).catch(() => {});
         await observation.dispose().catch(() => {});
         await closeWithin(() =>
           Promise.allSettled([...dialogs].map((dialog) => dialog.dismiss())),
@@ -470,14 +279,13 @@ export const makePlaywrightDriver = async (
     });
     // Registrations precede the first document this connection creates, and precede any
     // navigation the caller makes, without this setup navigating anything itself.
-    if (options.bootstrap !== undefined || bindings !== undefined)
-      await installBootstrap(options.bootstrap);
-    for (const entry of entries.values()) await attachBindings(entry.page);
+    await initialization.install();
+    for (const entry of entries.values()) await initialization.attach(entry.page);
     await targets.selectInitial();
     const { selection } = targets;
 
     if (selection.entry === undefined) throw failure("initial-page", "not-found");
-    await attachBindings(selection.entry.page);
+    await initialization.attach(selection.entry.page);
     selection.frame = selection.entry.page.mainFrame();
     if (!options.preserveViewport) {
       await sizeNativeContents(selection.entry);
