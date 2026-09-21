@@ -6,15 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
+import * as BrowserBinding from "@effect-agent/browserbase/browser-binding";
 import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
 import { BrowserbaseClient } from "@effect-agent/browserbase/client";
+import { BrowserError } from "@effect-agent/browserbase/errors";
 import type { LaunchRecipe } from "@effect-agent/browserbase/launch";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { BrowserbaseInteractiveHost } from "@effect-agent/platform-browserbase/adapter";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { FetchHttpClient } from "effect/unstable/http";
-import { chromium, type ConnectOverCDPOptions } from "playwright-core";
+import { chromium } from "playwright-core";
 
 /**
  * This package owns its live-browser harness. The generic package's fixtures are not
@@ -23,8 +25,9 @@ import { chromium, type ConnectOverCDPOptions } from "playwright-core";
  *
  * Only provider allocation, the control address and session status are scripted. Every
  * allocated session is a different real Chromium process with its own persistent default
- * context, and the adapter still crosses connectOverCDP and runs its real code. This is
- * not hosted-provider evidence.
+ * context, and the adapter still crosses connectOverCDP and runs its real code: the fixture
+ * supplies a trusted binding that resolves the provider address locally, and replaces nothing
+ * global. This is not hosted-provider evidence.
  */
 export class AgentFixtureError extends Schema.TaggedError<AgentFixtureError>()(
   "AgentFixtureError",
@@ -91,24 +94,26 @@ export const localAgentBrowser = Effect.acquireRelease(
 
     if (address === null || typeof address === "string") throw new Error("No fixture port");
     const url = `http://127.0.0.1:${address.port}/`;
-    const originalConnect = chromium.connectOverCDP.bind(chromium);
 
-    // Test-only replacement of provider address resolution, NOT of the native engine.
-    // The adapter's configured WSS origin still passes its unmodified validation.
-    chromium.connectOverCDP = async (endpoint: unknown, options?: ConnectOverCDPOptions) => {
-      if (typeof endpoint !== "string") throw new Error("Expected provider URL");
-      const requested = new URL(endpoint);
+    // Only provider address resolution is the fixture's. The binding still applies the
+    // production address checks first and runs the unmodified Playwright connection and
+    // driver; nothing global is replaced.
+    const binding = BrowserBinding.playwright({
+      resolveEndpoint: ({ url }) =>
+        Effect.suspend(() => {
+          const requested = new URL(Redacted.value(url));
 
-      assert.equal(requested.origin, "wss://connect.browserbase.com");
-      const id = requested.searchParams.get("session");
-      const session = id === null ? undefined : sessions.get(id);
+          assert.equal(requested.origin, "wss://connect.browserbase.com");
+          const id = requested.searchParams.get("session");
+          const session = id === null ? undefined : sessions.get(id);
 
-      if (id === null || !session) throw new Error("Unknown scripted provider session");
+          if (id === null || session === undefined)
+            return Effect.fail(BrowserError.make({ operation: "connect", reason: "provider" }));
+          connectionIds.push(id);
 
-      connectionIds.push(id);
-
-      return originalConnect(session.endpoint, options);
-    };
+          return Effect.succeed(session.endpoint);
+        }),
+    });
 
     const fetch: typeof globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
@@ -189,8 +194,8 @@ export const localAgentBrowser = Effect.acquireRelease(
       connectionIds,
       createBodies,
       fetch,
+      binding: BrowserBinding.layer(binding),
       close: async () => {
-        chromium.connectOverCDP = originalConnect;
         await Promise.all(
           [...sessions.values()].map(
             (entry) =>
@@ -241,6 +246,7 @@ export const withAgentBrowser = <A, E, R>(
     Effect.provide(
       BrowserbaseInteractiveHost.layer({ launch, actionTimeoutMillis: 5000 }).pipe(
         Layer.provide(accounts),
+        Layer.provide(fixture.binding),
       ),
     ),
     Effect.provideService(FetchHttpClient.Fetch, fixture.fetch),
@@ -253,7 +259,10 @@ export const withGenericAgentBrowser = <A, E, R>(
 ) =>
   Effect.scoped(effect).pipe(
     Effect.provide(
-      BrowserbaseBrowser.layer({ launch, actionTimeoutMillis: 5000 }).pipe(Layer.provide(accounts)),
+      BrowserbaseBrowser.layer({ launch, actionTimeoutMillis: 5000 }).pipe(
+        Layer.provide(accounts),
+        Layer.provide(fixture.binding),
+      ),
     ),
     Effect.provideService(FetchHttpClient.Fetch, fixture.fetch),
   );
