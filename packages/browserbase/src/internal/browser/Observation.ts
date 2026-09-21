@@ -1,11 +1,12 @@
 import { Schema } from "effect";
 import type { ElementHandle, JSHandle } from "playwright-core";
 
-import { ObservedControl, type ObservedElement } from "../../BrowserData.ts";
+import { ControlFacts, type ObservedElement } from "../../BrowserData.ts";
 import { pngGeometry } from "../capture/Images.ts";
-import type { DriverEvents, NativeObservation } from "./Driver.ts";
+import type { DriverEvents, NativeCheckpoint, NativeObservation } from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize, timeout } from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
+import { identityOf, observedControl, PageReadResult, readPage } from "./PageRead.ts";
 import type { Targets } from "./Targets.ts";
 
 const TextResult = Schema.Struct({
@@ -14,27 +15,34 @@ const TextResult = Schema.Struct({
   overLimit: Schema.Boolean,
 });
 
-const ObservationData = Schema.Struct({
-  text: Schema.String.check(Schema.isMaxLength(131072)),
-  textTruncated: Schema.Boolean,
-  controlsTruncated: Schema.Boolean,
-  controls: Schema.Array(
-    Schema.Struct({
-      kind: ObservedControl.fields.kind,
-      label: ObservedControl.fields.label,
-      disabled: Schema.Boolean,
-    }),
-  ).check(Schema.isMaxLength(64)),
-});
-
 const Geometry = Schema.Struct({ width: Schema.Natural, height: Schema.Natural });
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
 
+const Facts = Schema.Struct({ facts: ControlFacts });
+
+/** Bounds the page traversal itself, so a huge document costs a bounded read. */
+const NodeBudget = 20_000;
+
+/** A host's own decision about one control, made on facts read from the page just now. */
+export type AdmissionPolicy = (facts: ControlFacts) => boolean;
+
+interface Retained {
+  readonly handle: ElementHandle<Element>;
+  /** What made this control the one that was inspected; see `identityOf`. */
+  readonly identity: string;
+}
+
+/**
+ * `suspended` is a page hold: the nodes are kept but none may be acted on until it is checked
+ * again, one node at a time. Anything else that could change the page makes it `invalid`.
+ */
 interface Snapshot {
   readonly id: string;
-  valid: boolean;
-  readonly nodes: Map<string, ElementHandle<Element>>;
+  readonly pageId: string;
+  validity: "valid" | "suspended" | "invalid";
+  readonly nodes: Map<string, Retained>;
+  readonly revalidated: Set<string>;
 }
 
 /**
@@ -47,7 +55,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   let observationSerial = 0;
 
   const invalidate = () => {
-    if (observation !== undefined) observation.valid = false;
+    if (observation !== undefined) observation.validity = "invalid";
   };
 
   const changed = (reason: Parameters<DriverEvents["invalidate"]>[0]) => {
@@ -55,14 +63,26 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     events.invalidate(reason);
   };
 
+  /**
+   * Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed
+   * on it may be acted on unchecked. Another page's observation is untouched: a stage hold is
+   * independent of the page an agent is driving.
+   */
+  const held = (pageId: string) => {
+    if (observation?.pageId === pageId && observation.validity === "valid") {
+      observation.validity = "suspended";
+      observation.revalidated.clear();
+    }
+  };
+
   const dispose = async () => {
     const old = observation;
 
     observation = undefined;
     if (old !== undefined) {
-      old.valid = false;
+      old.validity = "invalid";
       await closeWithin(() =>
-        Promise.allSettled([...old.nodes.values()].map((node) => node.dispose())),
+        Promise.allSettled([...old.nodes.values()].map((node) => node.handle.dispose())),
       );
     }
   };
@@ -112,15 +132,120 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   };
 
   /** A retained node is only as current as the observation that produced it. */
-  const retained = (target: ObservedElement): ElementHandle<Element> => {
-    if (observation === undefined || !observation.valid || observation.id !== target.observationId)
-      throw failure("stale", "undispatched");
-    const node = observation.nodes.get(target.elementId);
+  const retained = (target: ObservedElement, allowSuspended = false): Retained => {
+    const snapshot = observation;
 
-    if (node === undefined) throw failure("stale", "undispatched");
+    if (snapshot === undefined || snapshot.id !== target.observationId)
+      throw failure("stale", "undispatched");
+
+    const usable =
+      snapshot.validity === "valid" ||
+      (snapshot.validity === "suspended" &&
+        (allowSuspended || snapshot.revalidated.has(target.elementId)));
+
+    const node = snapshot.nodes.get(target.elementId);
+
+    if (!usable || node === undefined) throw failure("stale", "undispatched");
 
     return node;
   };
+
+  /**
+   * Read from the exact node, never re-resolved from a selector or a label. It is the same page
+   * function an observation uses, told to read one node and traverse nothing.
+   */
+  const factsOf = async (element: ElementHandle<Element>): Promise<ControlFacts> => {
+    const holder = await current().frame.evaluateHandle(readPage, {
+      scope: "document" as const,
+      maximumBytes: 0,
+      controlLimit: 0,
+      nodeBudget: 0,
+      only: element,
+    });
+
+    try {
+      const data = await holder.getProperty("data");
+
+      try {
+        return safeDecode(Facts, await data.jsonValue()).facts;
+      } finally {
+        await data.dispose();
+      }
+    } finally {
+      await holder.dispose();
+    }
+  };
+
+  /**
+   * The exact attached node a target names, checked against the page right now. A selector must
+   * still match it and nothing else. A retained node must still be the control that was
+   * inspected: the same node with a different destination, type or label is not. A host policy
+   * then decides on those fresh facts, and a refusal or a policy that throws sends nothing.
+   */
+  const resolve = async (
+    target: string | ObservedElement,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
+    allowSuspended = false,
+  ): Promise<{ readonly element: ElementHandle<Element>; readonly kept: boolean }> => {
+    const kept = typeof target !== "string";
+
+    const node = typeof target === "string" ? undefined : retained(target, allowSuspended);
+
+    const element = typeof target === "string" ? await exactElement(target, ticket) : node?.handle;
+
+    if (element === undefined) throw failure("stale", "undispatched");
+    try {
+      const attached: unknown = await element.evaluate(
+        (candidate, selector) => {
+          if (!candidate.isConnected) return false;
+          if (selector === undefined) return true;
+          const matches = candidate.ownerDocument.querySelectorAll(selector);
+
+          return matches.length === 1 && matches[0] === candidate;
+        },
+        typeof target === "string" ? target : undefined,
+      );
+
+      if (attached !== true) throw failure("stale", "undispatched");
+      if (node !== undefined || policy !== undefined) {
+        const facts = await factsOf(element);
+
+        if (node !== undefined && identityOf(facts) !== node.identity)
+          throw failure("stale", "undispatched");
+        if (policy !== undefined) {
+          let admitted = false;
+
+          try {
+            admitted = policy(facts) === true;
+          } catch {
+            admitted = false;
+          }
+          if (!admitted) throw failure("denied", "undispatched");
+        }
+      }
+      ticket.check();
+
+      return { element, kept };
+    } catch (error) {
+      if (!kept) await closeWithin(() => element.dispose()).catch(() => {});
+      throw error;
+    }
+  };
+
+  const controlFacts = (target: ObservedElement, ticket: Ticket) =>
+    sanitize(async () => {
+      const { element } = await resolve(target, ticket);
+
+      return factsOf(element);
+    });
+
+  /** After a hold, one node at a time: still attached, and still the control inspected. */
+  const revalidate = (target: ObservedElement, ticket: Ticket) =>
+    sanitize(async () => {
+      await resolve(target, ticket, undefined, true);
+      observation?.revalidated.add(target.elementId);
+    });
 
   const readText = (selector: string | undefined, maximumBytes: number, ticket: Ticket) =>
     sanitize(async () => {
@@ -153,83 +278,39 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       return value.text;
     });
 
-  const observe = (maximumBytes: number, controlLimit: number, ticket: Ticket) =>
-    sanitize(async () => {
-      await dispose();
-      ticket.check();
+  /** One bounded read of the selected frame, and the node handles it names, in order. */
+  const read = async (
+    scope: "document" | "viewport",
+    maximumBytes: number,
+    controlLimit: number,
+    ticket: Ticket,
+    keepNodes: boolean,
+  ) => {
+    const holder = await current().frame.evaluateHandle(readPage, {
+      scope,
+      maximumBytes,
+      controlLimit,
+      nodeBudget: NodeBudget,
+    });
 
-      const holder = await current().frame.evaluateHandle(
-        ({ maximumBytes, controlLimit }) => {
-          const all = document.querySelectorAll(
-            "a[href],button,input,select,textarea,[role=button]",
-          );
+    const handles: Array<ElementHandle<Element>> = [];
+    let nodesHandle: JSHandle | undefined;
 
-          const nodes: Element[] = [];
-
-          for (let i = 0; i < Math.min(all.length, controlLimit); i++) nodes.push(all[i]);
-          const source = document.body?.innerText ?? "";
-          const encoded = new TextEncoder().encode(source);
-          let end = Math.min(encoded.length, maximumBytes);
-
-          // Do not manufacture a replacement character by cutting a UTF-8 sequence.
-          while (end > 0 && end < encoded.length && (encoded[end] & 192) === 128) end--;
-          const text = new TextDecoder().decode(encoded.subarray(0, end));
-
-          return {
-            nodes,
-            data: {
-              text,
-              textTruncated: end < encoded.length,
-              controlsTruncated: all.length > nodes.length,
-              controls: nodes.map((node) => {
-                const tag = node.tagName.toLowerCase();
-
-                const kind =
-                  tag === "a"
-                    ? "link"
-                    : ["button", "input", "select", "textarea"].includes(tag)
-                      ? tag
-                      : "other";
-
-                const label = (
-                  node.getAttribute("aria-label") ??
-                  node.getAttribute("placeholder") ??
-                  (node instanceof HTMLInputElement
-                    ? node.labels?.[0]?.textContent
-                    : node.textContent) ??
-                  ""
-                ).slice(0, 256);
-
-                return {
-                  kind,
-                  label,
-                  disabled:
-                    node.matches(":disabled") || node.getAttribute("aria-disabled") === "true",
-                };
-              }),
-            },
-          };
-        },
-        { maximumBytes, controlLimit },
-      );
-
-      const nodes = new Map<string, ElementHandle<Element>>();
-      let nodesHandle: JSHandle | undefined;
+    try {
+      const dataHandle = await holder.getProperty("data");
+      let data: PageReadResult;
 
       try {
-        const dataHandle = await holder.getProperty("data");
-        let data: typeof ObservationData.Type;
-
-        try {
-          data = safeDecode(ObservationData, await dataHandle.jsonValue());
-        } finally {
-          await dataHandle.dispose();
-        }
-        if (
-          new TextEncoder().encode(data.text).length > maximumBytes ||
-          data.controls.length > controlLimit
-        )
-          throw failure("limit");
+        data = safeDecode(PageReadResult, await dataHandle.jsonValue());
+      } finally {
+        await dataHandle.dispose();
+      }
+      if (
+        new TextEncoder().encode(data.text).length > maximumBytes ||
+        data.controls.length > controlLimit
+      )
+        throw failure("limit");
+      if (keepNodes) {
         nodesHandle = await holder.getProperty("nodes");
         for (let i = 0; i < data.controls.length; i++) {
           const node = await nodesHandle.getProperty(String(i));
@@ -239,30 +320,59 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
             await node.dispose();
             throw failure("malformed");
           }
-          nodes.set(`element-${i}`, element);
+          handles.push(element);
         }
-        ticket.check();
-        const id = `observation-${++observationSerial}`;
-
-        observation = { id, valid: true, nodes };
-
-        const result: NativeObservation = {
-          ...data,
-          observationId: id,
-          url: targets.selectedUrl(),
-          controls: data.controls.map((control, i) =>
-            ObservedControl.make({ ...control, elementId: `element-${i}` }),
-          ),
-        };
-
-        return result;
-      } catch (error) {
-        await Promise.allSettled([...nodes.values()].map((node) => node.dispose()));
-        throw error;
-      } finally {
-        await nodesHandle?.dispose().catch(() => {});
-        await holder.dispose();
       }
+      ticket.check();
+
+      return { data, handles };
+    } catch (error) {
+      await Promise.allSettled(handles.map((handle) => handle.dispose()));
+      throw error;
+    } finally {
+      await nodesHandle?.dispose().catch(() => {});
+      await holder.dispose();
+    }
+  };
+
+  const observe = (
+    scope: "document" | "viewport",
+    maximumBytes: number,
+    controlLimit: number,
+    ticket: Ticket,
+  ) =>
+    sanitize(async () => {
+      await dispose();
+      ticket.check();
+      const pageId = current().entry.id;
+      const { data, handles } = await read(scope, maximumBytes, controlLimit, ticket, true);
+      const id = `observation-${++observationSerial}`;
+      const nodes = new Map<string, Retained>();
+
+      // One handle per control, in the order the page returned them.
+      handles.forEach((handle, i) => {
+        const facts = data.controls[i];
+
+        if (facts !== undefined) nodes.set(`element-${i}`, { handle, identity: identityOf(facts) });
+      });
+      if (nodes.size !== data.controls.length) {
+        await Promise.allSettled(handles.map((handle) => handle.dispose()));
+        throw failure("malformed");
+      }
+      observation = { id, pageId, validity: "valid", nodes, revalidated: new Set() };
+
+      const result: NativeObservation = {
+        observationId: id,
+        scope,
+        url: targets.selectedUrl(),
+        text: data.text,
+        textTruncated: data.textTruncated,
+        controlsTruncated: data.controlsTruncated,
+        controls: data.controls.map((facts, i) => observedControl(facts, `element-${i}`)),
+        viewport: data.viewport,
+      };
+
+      return result;
     });
 
   const screenshot = (fullPage: boolean, maximumBytes: number, ticket: Ticket) =>
@@ -317,7 +427,49 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       return new Uint8Array(bytes);
     });
 
-  return { invalidate, changed, dispose, exactElement, retained, readText, observe, screenshot };
+  /**
+   * Passive: it reads what is on screen and takes a picture, keeps no node, and leaves the
+   * retained observation exactly as it was. Text and picture are sampled one after the other,
+   * so a document replaced in between is reported rather than hidden.
+   */
+  const checkpoint = (
+    maximumBytes: number,
+    controlLimit: number,
+    pictureBytes: number | undefined,
+    ticket: Ticket,
+  ) =>
+    sanitize(async () => {
+      ticket.check();
+      const { frame } = current();
+      const epoch = targets.epochOf(frame);
+      const { data } = await read("viewport", maximumBytes, controlLimit, ticket, false);
+
+      const picture =
+        pictureBytes === undefined ? undefined : await screenshot(false, pictureBytes, ticket);
+
+      const result: NativeCheckpoint = {
+        url: targets.selectedUrl(),
+        ...data,
+        ...(picture === undefined ? {} : { picture }),
+        documentChanged: targets.epochOf(frame) !== epoch,
+      };
+
+      return result;
+    });
+
+  return {
+    invalidate,
+    changed,
+    held,
+    dispose,
+    resolve,
+    controlFacts,
+    revalidate,
+    readText,
+    observe,
+    screenshot,
+    checkpoint,
+  };
 };
 
 export type Observation = ReturnType<typeof makeObservation>;

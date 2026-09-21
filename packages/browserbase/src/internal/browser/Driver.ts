@@ -1,4 +1,5 @@
 import type {
+  ControlFacts,
   FrameInfo,
   ObservedControl,
   ObservedElement,
@@ -6,11 +7,13 @@ import type {
   PageInfo,
   PageSuspension,
   Viewport,
+  ViewportEvidence,
 } from "../../BrowserData.ts";
 import type { InitializationError } from "../../Errors.ts";
 import type { CaptureSize } from "../capture/CaptureTypes.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
+import type { AdmissionPolicy } from "./Observation.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
@@ -54,11 +57,25 @@ export interface DriverEvents {
 
 export interface NativeObservation {
   readonly observationId: string;
+  readonly scope: "document" | "viewport";
   readonly url: string;
   readonly text: string;
   readonly textTruncated: boolean;
   readonly controls: ReadonlyArray<ObservedControl>;
   readonly controlsTruncated: boolean;
+  readonly viewport: ViewportEvidence;
+}
+
+/** Passive evidence: no node is kept for it, and the retained observation is untouched. */
+export interface NativeCheckpoint {
+  readonly url: string;
+  readonly text: string;
+  readonly textTruncated: boolean;
+  readonly controls: ReadonlyArray<ControlFacts>;
+  readonly controlsTruncated: boolean;
+  readonly viewport: ViewportEvidence;
+  readonly picture?: Uint8Array;
+  readonly documentChanged: boolean;
 }
 
 export interface NativeFrame {
@@ -125,20 +142,41 @@ export interface Driver {
     ticket: Ticket,
   ) => Promise<string>;
   readonly observe: (
+    scope: "document" | "viewport",
     maximumBytes: number,
     controls: number,
     ticket: Ticket,
   ) => Promise<NativeObservation>;
-  readonly click: (target: string | ObservedElement, ticket: Ticket) => Promise<string>;
+  readonly checkpoint: (
+    maximumBytes: number,
+    controls: number,
+    /** Absent means no picture is taken. */
+    pictureBytes: number | undefined,
+    ticket: Ticket,
+  ) => Promise<NativeCheckpoint>;
+  /** Fresh facts from the exact node an observation named. */
+  readonly controlFacts: (target: ObservedElement, ticket: Ticket) => Promise<ControlFacts>;
+  /** After a hold: is this still the attached control that was inspected? */
+  readonly revalidate: (target: ObservedElement, ticket: Ticket) => Promise<void>;
+  readonly click: (
+    target: string | ObservedElement,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
+  ) => Promise<string>;
   readonly fill: (
     target: string | ObservedElement,
     value: string,
     ticket: Ticket,
+    policy?: AdmissionPolicy,
   ) => Promise<string>;
   /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (deltaX: number, deltaY: number, ticket: Ticket) => Promise<string>;
   readonly pointerMove: (to: NativePoint, ticket: Ticket) => Promise<NativeInput>;
-  readonly hover: (target: string | ObservedElement, ticket: Ticket) => Promise<NativeInput>;
+  readonly hover: (
+    target: string | ObservedElement,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
+  ) => Promise<NativeInput>;
   readonly wheel: (
     deltaX: number,
     deltaY: number,

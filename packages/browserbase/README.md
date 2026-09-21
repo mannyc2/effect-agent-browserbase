@@ -124,6 +124,50 @@ The browser owner does not allocate or release anything itself. It supplies the 
 
 Mutations are serialized. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome: the owner is fenced and the package never automatically replays it. `undispatched` is used only when the package established that native mutation dispatch did not occur.
 
+### What is on screen, and what a host may know about it
+
+`session.observe()` reads the whole document. `session.observe({ scope: "viewport" })` keeps only text and controls that are on screen and reachable, and says what it left out:
+
+```ts
+const seen = yield * session.observe({ scope: "viewport" });
+seen.viewport; // { clippedText, coveredText, uncertainText, unreachableControls, exhausted, ... }
+```
+
+Visibility here is geometry and hit-testing, never a pixel comparison, and the counts say which was which. Text is kept when its line boxes intersect the viewport and the browser finds its own element at a sampled point. A text node that crosses the viewport edge contributes only its lines on screen (`clippedText`). Text behind another element is left out (`coveredText`). Text under something that takes no pointer events cannot be hit-tested at all, so it is left out as `uncertainText` rather than called visible. `exhausted` means the traversal budget ran out first and the reading is known to be incomplete. Canvas pixels and compositing effects are not interpreted.
+
+An `Observation` is safe to show a model, and the adapter's `browser_inspect` Tool returns it as is. It therefore carries no destination, form target or field value, in either scope. What a host needs to decide whether a control may be acted on is a separate, host-only read from the exact node:
+
+```ts
+const facts = yield * session.controlFacts(reference);
+// kind, label, disabled, editable, inputType, autocomplete, formMethod, box, placement, hitTest
+// destination: the resolved link target, or where this control submits its form
+```
+
+`destination` is resolved by the browser against the document's base URL, and honours a `formaction` override. It can carry a token, which is why it is not in an `Observation`. An over-long destination is left out, never cut. No value and no markup is ever included.
+
+A reference is to the control that was inspected, not merely to a node. If the same attached node now has a different destination, input type, autocomplete category, form method, label or disabled state, acting on it fails `stale` and `undispatched`, exactly as it does for a replaced or detached node. Nothing is ever re-found by selector or label.
+
+When a decision has to be current at dispatch, pass a policy. It is evaluated on facts read from that exact node immediately before the input:
+
+```ts
+yield *
+  session.fillElement(reference, value, {
+    admit: (facts) => facts.inputType !== "password" && facts.autocomplete !== "cc-number",
+  });
+```
+
+Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the owner's permit is held, where waiting on a model or a network call would stall every other operation. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
+
+### Passive checkpoints for a recorder
+
+`observe()` replaces the one observation whose nodes later actions may name, so a recorder calling it would retire the references an agent is about to use. `session.checkpoint()` is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.
+
+```ts
+const checkpoint = yield * session.checkpoint({ picture: true });
+```
+
+It issues no references, is not a mutation, and leaves the action observation and the selection exactly as they were, so inspect, checkpoint, then act on the inspected node all compose. It is host-only, because it carries control facts. Text and picture are read one after the other, never atomically: the interval is on the host monotonic clock, and `documentChanged` says the document was replaced in between. A checkpoint is charged as one action, like any other bounded read. A held page is refused `busy` rather than woken to be read: take the checkpoint before the hold and keep it.
+
 ### Real pointer and wheel input
 
 `pointerMove`, `hover` and `wheel` send the input a person's hardware would, so pages see trusted events, `:hover` applies, and the browser itself decides what is under the pointer. `scroll` stays what it was: script in the page, instantaneous, raising no wheel event. That difference is how a recording tells one from the other.
@@ -294,7 +338,7 @@ Closing, navigating, detaching a relevant frame, or resizing the captured page e
 
 ## Explicit stage-page holds (opt-in)
 
-Set `pageControl: true` on `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.pages`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
+Set `pageControl: true` on `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.pages`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `session.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
 
 This opt-in uses maintained CDP attachment with `noDefaults: true` and owner-controlled per-page focus emulation. It intentionally does not support `keepAlive`, reattachment, human handoff, or popup/dialog `pause` policies. These combinations fail before provider allocation; use the existing `retain`/`close` popup policies and `dismiss` dialog policy. Resume explicitly activates the native page without changing SDK selection. Do not enable it where another native client owns focus. Modeled input, DOM reads, waits and viewport changes on held/unknown pages fail before dispatch; the scout remains operable. Page close and session close remain available. Capture does not thaw a held page; frame consumption and acknowledgements never suspend/resume it implicitly.
 

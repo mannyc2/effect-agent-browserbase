@@ -2,7 +2,7 @@ import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseBrowserBinding } from "../../src/BrowserBinding.ts";
-import { FrameInfo, PageInfo, Viewport } from "../../src/BrowserData.ts";
+import { FrameInfo, PageInfo, Viewport, ViewportEvidence } from "../../src/BrowserData.ts";
 import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { fromNativeAttempt, issueBinding } from "../../src/internal/browser/Binding.ts";
@@ -135,6 +135,16 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
 
   const viewport = Viewport.make({ width: 640, height: 480 });
 
+  const quietViewport = ViewportEvidence.make({
+    width: 640,
+    height: 480,
+    clippedText: 0,
+    coveredText: 0,
+    uncertainText: 0,
+    unreachableControls: 0,
+    exhausted: false,
+  });
+
   const connector = async (
     _url: unknown,
     _signal: AbortSignal,
@@ -190,18 +200,37 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         return url;
       },
       readText: async () => state.text,
-      observe: async () => {
+      observe: async (scope) => {
         await options.onObserve?.(events);
         state.observations++;
 
         return {
           observationId: `observation-${state.observations}`,
+          scope,
           text: state.text,
           url: state.url,
           controls: [],
           textTruncated: false,
           controlsTruncated: false,
+          viewport: quietViewport,
         };
+      },
+      // Passive by construction here too: it never touches `state.observations`.
+      checkpoint: async (_bytes, _controls, pictureBytes) => ({
+        text: state.text,
+        url: state.url,
+        controls: [],
+        textTruncated: false,
+        controlsTruncated: false,
+        viewport: quietViewport,
+        documentChanged: false,
+        ...(pictureBytes === undefined ? {} : { picture: new Uint8Array([137, 80, 78, 71]) }),
+      }),
+      controlFacts: async () => {
+        throw new Error("PRIVATE-NO-RETAINED-NODE");
+      },
+      revalidate: async () => {
+        throw new Error("PRIVATE-NO-RETAINED-NODE");
       },
       click: async (_target, ticket) => {
         if (options.onClick !== undefined) return options.onClick(ticket);

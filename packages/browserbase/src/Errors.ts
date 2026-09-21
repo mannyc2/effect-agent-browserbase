@@ -32,6 +32,9 @@ export const BrowserOperation = Schema.Literals([
   // reading
   "ready",
   "observe",
+  "checkpoint",
+  "control-facts",
+  "revalidate",
   "read-text",
   "screenshot",
   "wait",
@@ -94,6 +97,8 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
     "context-lease",
     // The pointer cannot be placed on it: outside the viewport, without area, or covered.
     "not-visible",
+    // The host's own admission policy refused it, on facts read just before any input.
+    "denied",
   ]),
   outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
   status: Schema.optionalKey(Schema.Int),

@@ -364,6 +364,43 @@ export const ownershipCases: ReadonlyArray<Case> = [
       }
       assert.deepEqual(f.state.input, ["move page-1 12.5,40", "wheel page-1 0,120"]);
     })),
+  test("a checkpoint is a charged read that leaves the observation and its revision alone", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ maxActions: 2 });
+      const session = yield* (yield* f.acquisition).connect;
+      const observed = yield* session.observe();
+      const sampled = yield* session.checkpoint({ picture: true });
+
+      // Passive: no second observation was taken, and nothing was invalidated to take it.
+      assert.equal(f.state.observations, 1);
+      assert.equal(sampled.revision, observed.revision);
+      assert.deepEqual(sampled.target, observed.target);
+      assert.ok(sampled.picture !== undefined);
+      assert.ok(sampled.completedMonotonicNanos >= sampled.startedMonotonicNanos);
+      assert.equal(
+        (yield* session.checkpoint({ picture: false }).pipe(Effect.result))._tag,
+        "Failure",
+      );
+      // Bounded native work is charged like any other read, so it cannot be unbounded.
+      yield* expectReason(session.checkpoint({ picture: false }), "limit");
+    })),
+  test("a reading may narrow the policy's text bound and never widen it", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const session = yield* (yield* f.acquisition).connect;
+
+      // The fixture's policy returns at most 65536 bytes.
+      yield* expectReason(
+        session.observe({ scope: "viewport", maxTextBytes: 65537 }),
+        "configuration",
+      );
+      yield* expectReason(
+        session.checkpoint({ picture: false, maxTextBytes: 65537 }),
+        "configuration",
+      );
+      assert.equal(f.state.observations, 0);
+      assert.equal((yield* session.observe({ scope: "viewport" })).scope, "viewport");
+    })),
   test("keep-alive reconnect establishes a new generation and observes actual state", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ keepAlive: true });

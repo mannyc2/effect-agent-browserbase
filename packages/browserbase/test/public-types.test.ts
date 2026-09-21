@@ -5,7 +5,13 @@ import {
   type BrowserbaseBrowser,
   type BrowserbaseSession,
 } from "effect-browserbase/browser";
-import type { BrowserPolicy, InputReceipt } from "effect-browserbase/browser-data";
+import type {
+  BrowserPolicy,
+  Checkpoint,
+  ControlFacts,
+  InputReceipt,
+  ObservedElement,
+} from "effect-browserbase/browser-data";
 import type * as Capture from "effect-browserbase/capture";
 import type {
   AllocationError,
@@ -50,6 +56,22 @@ const hoverElementEffect: Same<
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
+/** Host-only reads and the hold check are owned operations with no environment of their own. */
+const checkpointEffect: Same<
+  ReturnType<BrowserbaseSession["checkpoint"]>,
+  Effect.Effect<Checkpoint, BrowserError>
+> = true;
+
+const factsEffect: Same<
+  ReturnType<BrowserbaseSession["controlFacts"]>,
+  Effect.Effect<ControlFacts, BrowserError>
+> = true;
+
+const revalidateEffect: Same<
+  ReturnType<BrowserbaseSession["revalidateElement"]>,
+  Effect.Effect<ObservedElement, BrowserError>
+> = true;
+
 const captureErrors: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserError> = true;
 const captureScope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const sourceSize: Capture.CaptureSize = { width: 640, height: 360 };
@@ -69,6 +91,9 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
       boundTarget &&
       inputEffect &&
       hoverElementEffect &&
+      checkpointEffect &&
+      factsEffect &&
+      revalidateEffect &&
       captureErrors &&
       captureScope &&
       controlErrors &&
