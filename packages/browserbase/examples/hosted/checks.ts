@@ -80,7 +80,7 @@ export const checks = {
     question: null,
     claim:
       "An operator can take over a session through Live View and release it, and resume then returns a fresh observation of the same session.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: { sessions: 1, browserSeconds: 300, actions: 10, captureSeconds: 0, transferBytes: 0 },
     env: [],
     optionalEnv: [],
