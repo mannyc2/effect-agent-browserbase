@@ -8,6 +8,7 @@ it.effect("reject-call failures stay local and leave admission usable", () =>
   Effect.gen(function* () {
     let faults = 0,
       calls = 0;
+
     const tasks = new CallbackTasks(1, () => {
       faults++;
     });
@@ -36,7 +37,9 @@ it.effect("reject-call pressure refuses excess work without poisoning the connec
   Effect.gen(function* () {
     let faults = 0,
       calls = 0;
+
     const finish = gate<void>();
+
     const tasks = new CallbackTasks(1, () => {
       faults++;
     });
@@ -74,6 +77,7 @@ it.effect("reject-call pressure refuses excess work without poisoning the connec
 it.effect("fail-session mode still faults once and permanently closes admission", () =>
   Effect.gen(function* () {
     let faults = 0;
+
     const tasks = new CallbackTasks(1, () => {
       faults++;
     });
