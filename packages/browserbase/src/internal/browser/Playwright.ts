@@ -14,10 +14,9 @@ import type {
 } from "playwright-core";
 
 import {
-  FrameInfo,
   ObservedControl,
   type ObservedElement,
-  PageInfo,
+  type PageInfo,
   type PageSuspension,
 } from "../../BrowserData.ts";
 import { BrowserError, InitializationError } from "../../Errors.ts";
@@ -43,6 +42,7 @@ import { makeNativeBindings } from "./NativeBindings.ts";
 import { closeWithin, failure, safeDecode, sanitize, timeout } from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
 import { PageExecution } from "./PageExecution.ts";
+import { type Entry, makeTargets } from "./Targets.ts";
 
 const TextResult = Schema.Struct({
   text: Schema.String,
@@ -65,23 +65,10 @@ const ObservationData = Schema.Struct({
 
 const Geometry = Schema.Struct({ width: Schema.Natural, height: Schema.Natural });
 
-const TargetInfo = Schema.Struct({
-  targetInfo: Schema.Struct({ targetId: Identifier, type: Schema.Literal("page") }),
-});
-
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
-const URLText = Schema.String.check(Schema.isMaxLength(8192));
 
-interface Entry {
-  readonly id: string;
-  readonly page: Page;
-  targetId?: string;
-  readonly off: Array<() => void>;
-  execution?: Promise<PageExecution>;
-  executionValue?: PageExecution;
-}
 interface Snapshot {
   readonly id: string;
   valid: boolean;
@@ -173,27 +160,17 @@ export const makePlaywrightDriver = async (
 
   if (contexts.length !== 1) throw failure("context", "ambiguous");
   const context: BrowserContext = contexts[0];
-  const entries = new Map<string, Entry>();
-  const byPage = new WeakMap<Page, Entry>();
-  const frameIds = new WeakMap<Frame, string>();
-  // A frame object outlives its documents, so readiness is keyed by frame *and* epoch.
-  const documentEpochs = new WeakMap<Frame, number>();
   const registeredEpochs = new WeakMap<Frame, number>();
   const readyDocuments = new WeakMap<Frame, number>();
   const dialogs = new Set<Dialog>();
   const callbacks = new CallbackTasks(32, () => events.fault());
   const captureWatchers = new Map<string, Set<CaptureWatcher>>();
 
-  let serial = 0,
-    frameSerial = 0,
-    observationSerial = 0,
+  let observationSerial = 0,
     downloadSerial = 0;
 
-  let selected: Entry | undefined;
-  let selectedFrame: Frame | undefined;
   let observation: Snapshot | undefined;
   let closing = false;
-  let creatingPage = false;
   let initialized = false;
   let browserCdp: CDPSession | undefined;
   const registrations: Disposable[] = [];
@@ -274,19 +251,6 @@ export const makePlaywrightDriver = async (
     events.invalidate(reason);
   };
 
-  const epochOf = (frame: Frame): number => documentEpochs.get(frame) ?? 0;
-
-  const frameId = (frame: Frame): string => {
-    let id = frameIds.get(frame);
-
-    if (id === undefined) {
-      id = `frame-${++frameSerial}`;
-      frameIds.set(frame, id);
-    }
-
-    return id;
-  };
-
   const invalidateCaptures = (entry: Entry, reason: CaptureInvalidation, frame?: Frame): void => {
     const watchers = captureWatchers.get(entry.id);
 
@@ -316,23 +280,20 @@ export const makePlaywrightDriver = async (
     }
   };
 
-  const register = (page: Page): Entry => {
-    const existing = byPage.get(page);
-
-    if (existing !== undefined) return existing;
-    const entry: Entry = { id: `page-${++serial}`, page, off: [] };
-
-    byPage.set(page, entry);
-    if (entries.size >= options.maxPages) {
-      callbacks.submit(() => closeWithin(() => page.close()));
-      events.fault();
-
-      return entry;
-    }
-    entries.set(entry.id, entry);
-    for (const frame of page.frames()) frameId(frame);
-
-    const onClose = () => {
+  const targets = makeTargets(browser, context, options, callbacks, events, () => closing, {
+    opened: (entry, created) => {
+      if (initialized && options.pageControl)
+        callbacks.submit(async () => {
+          await executionFor(entry);
+        });
+      if (initialized && bindings !== undefined) bindingTask(() => attachBindings(entry.page));
+      if (initialized && !created) {
+        if (options.popupPolicy === "close")
+          callbacks.submit(() => closeWithin(() => entry.page.close()));
+        else if (options.popupPolicy === "pause") events.pause();
+      }
+    },
+    closed: (entry) => {
       entry.executionValue?.invalidate();
       if (entry.execution !== undefined)
         callbacks.submit(async () => {
@@ -340,34 +301,18 @@ export const makePlaywrightDriver = async (
         });
       invalidateCaptures(entry, "target-changed");
       captureWatchers.delete(entry.id);
-      entries.delete(entry.id);
-      for (const off of entry.off.splice(0)) off();
-      if (selected === entry) {
-        selected = undefined;
-        selectedFrame = undefined;
-        changed("target-changed");
-      }
-    };
-
-    const onNavigation = (frame: Frame) => {
-      if (frame === page.mainFrame() && entry.executionValue?.invalidate()) events.fault();
-      documentEpochs.set(frame, epochOf(frame) + 1);
-      if (initialized && bindings !== undefined) bindingTask(() => bindings.attach(frame, page));
-      frameId(frame);
+    },
+    navigating: (entry, frame) => {
+      if (frame === entry.page.mainFrame() && entry.executionValue?.invalidate()) events.fault();
+    },
+    navigated: (entry, frame) => {
+      if (initialized && bindings !== undefined)
+        bindingTask(() => bindings.attach(frame, entry.page));
+    },
+    frameChanged: (entry, frame) => {
       invalidateCaptures(entry, "target-changed", frame);
-      if (selected === entry && (selectedFrame === frame || frame === page.mainFrame()))
-        changed("target-changed");
-    };
-
-    const onDetached = (frame: Frame) => {
-      invalidateCaptures(entry, "target-changed", frame);
-      if (selectedFrame === frame) {
-        selectedFrame = undefined;
-        changed("target-changed");
-      }
-    };
-
-    const onDialog = (dialog: Dialog) => {
+    },
+    dialog: (dialog) => {
       if (options.dialogPolicy === "dismiss")
         callbacks.submit(() => closeWithin(() => dialog.dismiss()));
       else if (dialogs.size >= 8) {
@@ -378,30 +323,12 @@ export const makePlaywrightDriver = async (
         invalidateObservation();
         events.pause();
       }
-    };
+    },
+    release: () => disposeObservation(),
+    changed: (reason) => changed(reason),
+  });
 
-    page.on("close", onClose);
-    page.on("framenavigated", onNavigation);
-    page.on("framedetached", onDetached);
-    page.on("dialog", onDialog);
-    entry.off.push(
-      () => page.off("close", onClose),
-      () => page.off("framenavigated", onNavigation),
-      () => page.off("framedetached", onDetached),
-      () => page.off("dialog", onDialog),
-    );
-    if (initialized && options.pageControl)
-      callbacks.submit(async () => {
-        await executionFor(entry);
-      });
-    if (initialized && bindings !== undefined) bindingTask(() => attachBindings(page));
-    if (initialized && !creatingPage) {
-      if (options.popupPolicy === "close") callbacks.submit(() => closeWithin(() => page.close()));
-      else if (options.popupPolicy === "pause") events.pause();
-    }
-
-    return entry;
-  };
+  const { current, entries, epochOf, frameId, register } = targets;
 
   const onPage = (page: Page) => {
     register(page);
@@ -417,38 +344,9 @@ export const makePlaywrightDriver = async (
   context.on("page", onPage);
   browser.on("disconnected", onDisconnected);
 
-  const current = () => {
-    if (
-      closing ||
-      !browser.isConnected() ||
-      selected === undefined ||
-      selected.page.isClosed() ||
-      selectedFrame === undefined ||
-      selectedFrame.isDetached()
-    )
-      throw failure("target", "closed", "undispatched");
-
-    return { entry: selected, frame: selectedFrame };
-  };
-
-  const getTargetId = async (entry: Entry): Promise<string> => {
-    if (entry.targetId !== undefined) return entry.targetId;
-    const cdp = await context.newCDPSession(entry.page);
-
-    try {
-      const info: unknown = await cdp.send("Target.getTargetInfo");
-
-      entry.targetId = safeDecode(TargetInfo, info, "target-identity").targetInfo.targetId;
-
-      return entry.targetId;
-    } finally {
-      await closeWithin(() => cdp.detach()).catch(() => {});
-    }
-  };
-
   const sizeNativeContents = async (entry: Entry): Promise<void> => {
     if (browserCdp === undefined) throw failure("viewport", "closed", "undispatched");
-    const targetId = await getTargetId(entry);
+    const targetId = await targets.targetId(entry);
     const current: unknown = await browserCdp.send("Browser.getWindowForTarget", { targetId });
     const native = safeDecode(NativeWindow, current, "viewport");
 
@@ -459,10 +357,8 @@ export const makePlaywrightDriver = async (
     });
   };
 
-  const observationUrl = () => safeDecode(URLText, current().frame.url(), "page-url");
-
   const postUrl = () => {
-    const value = observationUrl();
+    const value = targets.selectedUrl();
     let url: URL;
 
     try {
@@ -827,7 +723,7 @@ export const makePlaywrightDriver = async (
       const cdp = await context.newCDPSession(entry.page);
 
       try {
-        const targetId = await getTargetId(entry);
+        const targetId = await targets.targetId(entry);
 
         if (closing || entry.page.isClosed()) throw failure("page-control", "closed");
         await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
@@ -955,115 +851,14 @@ export const makePlaywrightDriver = async (
           },
         }
       : {}),
-    selected: () => {
-      const { entry, frame } = current();
-
-      return { pageId: entry.id, frameId: frameId(frame) };
-    },
-    selectedTargetId: () => sanitize("target-identity", () => getTargetId(current().entry)),
-    listPages: (ticket) =>
-      sanitize("list-pages", async () => {
-        ticket.check();
-        const output: PageInfo[] = [];
-
-        for (const entry of entries.values()) {
-          const targetId = await getTargetId(entry);
-          const title: unknown = await entry.page.title();
-
-          ticket.check();
-          if (typeof title !== "string") throw failure("list-pages", "malformed");
-          output.push(
-            safeDecode(
-              PageInfo,
-              {
-                pageId: entry.id,
-                targetId,
-                title: title.slice(0, 512),
-                url: entry.page.url(),
-                selected: selected === entry,
-              },
-              "list-pages",
-            ),
-          );
-        }
-
-        return output;
-      }),
-    selectPage: (id, ticket) =>
-      sanitize("select-page", async () => {
-        const entry = entries.get(id);
-
-        ticket.check();
-        if (entry === undefined || entry.page.isClosed())
-          throw failure("select-page", "not-found", "undispatched");
-        await disposeObservation();
-        ticket.check();
-        selected = entry;
-        selectedFrame = entry.page.mainFrame();
-        changed("target-changed");
-      }),
-    newPage: (ticket) =>
-      sanitize("new-page", async () => {
-        if (entries.size >= options.maxPages) throw failure("new-page", "limit", "undispatched");
-        ticket.dispatch();
-        creatingPage = true;
-        try {
-          const page = await context.newPage();
-
-          if (ticket.signal.aborted) {
-            await closeWithin(() => page.close()).catch(() => {});
-            ticket.check();
-          }
-
-          // Creation never silently selects a different tab.
-          return register(page).id;
-        } finally {
-          creatingPage = false;
-        }
-      }),
-    closePage: (id, ticket) =>
-      sanitize("close-page", async () => {
-        const entry = entries.get(id);
-
-        if (entry === undefined) throw failure("close-page", "not-found", "undispatched");
-        ticket.dispatch();
-        await entry.page.close({ runBeforeUnload: false });
-        ticket.check();
-      }),
-    listFrames: (ticket) =>
-      sanitize("list-frames", async () => {
-        ticket.check();
-        const frames = current().entry.page.frames();
-
-        if (frames.length > 128) throw failure("list-frames", "limit");
-
-        return frames.map((frame) =>
-          safeDecode(
-            FrameInfo,
-            {
-              frameId: frameId(frame),
-              parentFrameId: frame.parentFrame() === null ? null : frameId(frame.parentFrame()!),
-              url: frame.url(),
-              name: frame.name().slice(0, 256),
-            },
-            "list-frames",
-          ),
-        );
-      }),
-    selectFrame: (id, ticket) =>
-      sanitize("select-frame", async () => {
-        const entry = selected;
-
-        if (entry === undefined) throw failure("select-frame", "closed");
-        const frame = entry.page.frames().find((f) => frameId(f) === id);
-
-        if (frame === undefined || frame.isDetached())
-          throw failure("select-frame", "not-found", "undispatched");
-        await disposeObservation();
-        ticket.check();
-        selectedFrame = frame;
-        changed("target-changed");
-      }),
+    selected: targets.selected,
+    selectedTargetId: targets.selectedTargetId,
+    listPages: targets.listPages,
+    selectPage: targets.selectPage,
+    newPage: targets.newPage,
+    closePage: targets.closePage,
+    listFrames: targets.listFrames,
+    selectFrame: targets.selectFrame,
     navigate: (url, ticket) =>
       sanitize("navigate", async () => {
         const { frame } = current();
@@ -1201,7 +996,7 @@ export const makePlaywrightDriver = async (
           const result: NativeObservation = {
             ...data,
             observationId: id,
-            url: observationUrl(),
+            url: targets.selectedUrl(),
             controls: data.controls.map((control, i) =>
               ObservedControl.make({ ...control, elementId: `element-${i}` }),
             ),
@@ -1443,13 +1238,13 @@ export const makePlaywrightDriver = async (
 
           if (requested === undefined || requested.page.isClosed())
             throw failure("capture", "not-found", "undispatched");
-          if ((await getTargetId(requested)) !== target.targetId)
+          if ((await targets.targetId(requested)) !== target.targetId)
             throw failure("capture", "stale", "undispatched");
           entry = requested;
           captureFrame = entry.page.mainFrame();
         }
         const page = entry.page;
-        const targetId = await getTargetId(entry);
+        const targetId = await targets.targetId(entry);
         const watchedFrameId = frameId(captureFrame);
 
         // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
@@ -1528,9 +1323,7 @@ export const makePlaywrightDriver = async (
         ).catch(() => {});
         await closeWithin(() => browserCdp?.detach() ?? Promise.resolve()).catch(() => {});
         await closeWithin(() => browser.close());
-        entries.clear();
-        selected = undefined;
-        selectedFrame = undefined;
+        targets.clear();
       }),
   };
 
@@ -1547,29 +1340,17 @@ export const makePlaywrightDriver = async (
     if (options.bootstrap !== undefined || bindings !== undefined)
       await installBootstrap(options.bootstrap);
     for (const entry of entries.values()) await attachBindings(entry.page);
-    if (options.newPage || entries.size === 0) {
-      creatingPage = true;
-      try {
-        selected = register(await context.newPage());
-      } finally {
-        creatingPage = false;
-      }
-    } else if (options.initialTargetId !== undefined) {
-      for (const entry of entries.values())
-        if ((await getTargetId(entry)) === options.initialTargetId) selected = entry;
-      if (selected === undefined) throw failure("initial-page", "not-found");
-    } else {
-      if (entries.size !== 1) throw failure("initial-page", "ambiguous");
-      selected = entries.values().next().value;
-    }
-    if (selected === undefined) throw failure("initial-page", "not-found");
-    await attachBindings(selected.page);
-    selectedFrame = selected.page.mainFrame();
+    await targets.selectInitial();
+    const { selection } = targets;
+
+    if (selection.entry === undefined) throw failure("initial-page", "not-found");
+    await attachBindings(selection.entry.page);
+    selection.frame = selection.entry.page.mainFrame();
     if (!options.preserveViewport) {
-      await sizeNativeContents(selected);
-      await selected.page.setViewportSize(options.viewport);
+      await sizeNativeContents(selection.entry);
+      await selection.entry.page.setViewportSize(options.viewport);
     }
-    await getTargetId(selected);
+    await targets.targetId(selection.entry);
     if (options.pageControl) for (const entry of entries.values()) await executionFor(entry);
     initialized = true;
 
