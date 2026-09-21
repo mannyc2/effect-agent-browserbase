@@ -18,6 +18,16 @@ import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { FetchHttpClient } from "effect/unstable/http";
 import { chromium } from "playwright-core";
 
+import { renderReady } from "./RenderReady.ts";
+
+/**
+ * Bounds the scripted allocation: process start, DevTools port and the first drawn frame. A
+ * starved host takes seconds to bring Chromium's GPU process up. That is this host's cold
+ * start rather than provider latency, so the fixture client waits longer than the ten-second
+ * production default instead of reporting an allocation the fixture is still finishing.
+ */
+const allocationBudgetMillis = 25_000;
+
 /**
  * This package owns its live-browser harness. The generic package's fixtures are not
  * reachable from here: each package is installed on its own, and a relative import
@@ -154,7 +164,7 @@ export const localAgentBrowser = Effect.acquireRelease(
         // Always register process cleanup before waiting for the CDP address.
         sessions.set(id, { process, endpoint: "", status: "RUNNING" });
         try {
-          const deadline = performance.now() + 10000;
+          const deadline = performance.now() + allocationBudgetMillis;
           let port: string | undefined;
 
           while (!port && performance.now() < deadline) {
@@ -166,8 +176,10 @@ export const localAgentBrowser = Effect.acquireRelease(
             }
           }
           if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
+          const endpoint = `http://127.0.0.1:${port}`;
 
-          sessions.set(id, { process, endpoint: `http://127.0.0.1:${port}`, status: "RUNNING" });
+          await Effect.runPromise(renderReady(endpoint, deadline - performance.now()));
+          sessions.set(id, { process, endpoint, status: "RUNNING" });
         } catch (error) {
           console.error("Local process fixture allocation failed", error);
           process.kill("SIGKILL");
@@ -233,6 +245,7 @@ const accounts = BrowserbaseSessions.layer.pipe(
     BrowserbaseClient.layer({
       projectId: "project-1",
       apiKey: Redacted.make("fixture-key-not-a-credential"),
+      requestTimeoutMillis: allocationBudgetMillis + 5000,
     }),
   ),
 );

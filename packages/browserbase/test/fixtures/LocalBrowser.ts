@@ -17,11 +17,21 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { type Browser, chromium, type Page } from "playwright-core";
 
 import { installCaptureDiagnostics } from "./NativeCaptureDiagnostics.ts";
+import { renderReady } from "./RenderReady.ts";
+
+/**
+ * Bounds the scripted allocation: process start, DevTools port and the first drawn frame. A
+ * starved host takes seconds to bring Chromium's GPU process up. That is this host's cold
+ * start rather than provider latency, so the fixture client waits longer than the ten-second
+ * production default instead of reporting an allocation the fixture is still finishing.
+ */
+const allocationBudgetMillis = 25_000;
 
 /** The scripted control plane answers with the same session shape the provider sends. */
 export const clientOptions: ClientOptions = {
   projectId: "project-1",
   apiKey: Redacted.make("fixture-key-not-a-credential"),
+  requestTimeoutMillis: allocationBudgetMillis + 5000,
 };
 
 /** One account and one resource service, shared by every fixture-backed acquisition. */
@@ -252,7 +262,7 @@ export const localBrowser = Effect.acquireRelease(
         // Always register process cleanup before waiting for the CDP address.
         sessions.set(id, { process, endpoint: "", status: "RUNNING" });
         try {
-          const deadline = performance.now() + 10000;
+          const deadline = performance.now() + allocationBudgetMillis;
           let port: string | undefined;
 
           while (!port && performance.now() < deadline) {
@@ -266,6 +276,7 @@ export const localBrowser = Effect.acquireRelease(
           if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
           const endpoint = `http://127.0.0.1:${port}`;
 
+          await Effect.runPromise(renderReady(endpoint, deadline - performance.now()));
           sessions.set(id, { process, endpoint, status: "RUNNING" });
           // Production configures Browserbase's required relative "downloads"
           // directory through real CDP. cwd keeps those files execution-owned;
@@ -402,6 +413,10 @@ export const localBrowser = Effect.acquireRelease(
  * so a resolved capture start means the client is registered, not that a frame
  * exists. A fixed sleep therefore asserts scheduling rather than the property
  * under test, and fails intermittently under load.
+ *
+ * This covers progress inside a browser that can already draw. The seconds a
+ * cold browser spends unable to draw at all are spent during allocation, by
+ * `renderReady`, and are not something a test should budget for here.
  *
  * The budget still bounds the wait, so a page that never resumes a clock, or a
  * target that is never registered, fails on the same assertion with the same
