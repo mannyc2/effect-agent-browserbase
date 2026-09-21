@@ -125,7 +125,13 @@ export const acquireSession = Effect.fnUntraced(function* (
         try: () => acquired.disconnect(),
         catch: () => BrowserError.make({ operation: "disconnect", reason: "provider" }),
       }).pipe(Effect.as<CleanupResult["local"]>("closed"));
-    }).pipe(Effect.ensuring(Effect.sync(() => (owner.state.phase = "closed")))),
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          owner.state.phase = "closed";
+        }),
+      ),
+    ),
   };
 
   const acquired = yield* acquireRemote(
@@ -373,11 +379,18 @@ export const acquireSession = Effect.fnUntraced(function* (
     };
   };
 
-  /** The remaining execution lifetime bounds waiting for a RUNNING session and its endpoint. */
+  /**
+   * The remaining execution lifetime bounds waiting for a RUNNING session and its endpoint,
+   * within the resource service's own maximum wait. A long business budget does not become
+   * an invalid provider-wait configuration.
+   */
   const remainingMillis = () =>
-    Math.max(
-      1,
-      Math.ceil(owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+    Math.min(
+      600_000,
+      Math.max(
+        1,
+        Math.ceil(owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+      ),
     );
 
   const connectionUrl = (operation: string) =>

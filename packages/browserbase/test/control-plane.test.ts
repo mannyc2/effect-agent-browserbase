@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Effect } from "effect";
+import type { Effect } from "effect";
 
 import type { ClientError, ContextError, SessionError } from "../src/Errors.ts";
 import { controlPlaneCases } from "./fixtures/ControlPlaneCases.ts";

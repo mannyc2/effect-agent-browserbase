@@ -127,6 +127,16 @@ export const ownershipCases: ReadonlyArray<Case> = [
       assert.equal(f.state.releases, 1);
       assert.equal(f.reports.length, 1);
     })),
+  test("a long execution budget still produces a valid provider wait", () =>
+    Effect.gen(function* () {
+      // The resource service accepts at most a ten-minute wait. A business budget above
+      // that must bound the connect wait, not be passed through as invalid configuration.
+      const f = yield* fixture({ lifetimeMillis: 900_000 });
+      const session = yield* (yield* f.acquisition).connect;
+
+      assert.equal(yield* session.bind().readText(), "initial");
+      assert.equal((yield* session.close).remote, "confirmed");
+    })),
   test("other-session metadata never proves attachment or termination", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ statusMismatch: true });
