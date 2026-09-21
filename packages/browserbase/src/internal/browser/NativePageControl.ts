@@ -11,8 +11,9 @@ import { PageExecution } from "./PageExecution.ts";
 import type { Entry, Targets } from "./Targets.ts";
 
 /**
- * One native page execution per registered page, created once over its own CDP session and
- * retired with its page or document. Holds and resumes act on an exact page and target.
+ * One native page execution per registered page, created once over its own CDP session. Its
+ * receipt is invalidated when the page closes or its main frame navigates, and holds and
+ * resumes act only on the exact page and target they name.
  */
 export const makePageControl = (
   browser: Browser,
