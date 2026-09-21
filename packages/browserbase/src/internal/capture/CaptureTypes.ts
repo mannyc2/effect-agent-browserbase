@@ -90,6 +90,9 @@ export const CaptureOptions = Schema.Struct({
 
 export type CaptureOptions = typeof CaptureOptions.Type;
 
+/** An address as the browser reported it. One longer than this is recorded as null, not cut. */
+const DocumentUrl = Schema.NullOr(Schema.String.check(Schema.isMaxLength(8192)));
+
 export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserbaseCaptureSummary")({
   target: Target,
   reason: Schema.String.check(Schema.isMaxLength(64)),
@@ -106,15 +109,24 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserbaseCap
   sourceFirstMillis: Schema.NullOr(Schema.Finite),
   sourceLastMillis: Schema.NullOr(Schema.Finite),
   /**
+   * The captured frame's address when this interval began watching it: the URL of document 0.
+   * It is read in the same turn the watch is installed, so no navigation can fall between them.
+   */
+  initialUrl: DocumentUrl,
+  /**
    * Each main-frame navigation a `page` interval observed, in order, with the last frame
-   * received before it. The native screencast is never restarted for one, so a boundary is not
-   * a gap this package introduced; what Chromium omitted while loading stays `upstreamDrops`.
+   * received before it and the address the new document committed. The native screencast is
+   * never restarted for one, so a boundary is not a gap this package introduced; what Chromium
+   * omitted while loading stays `upstreamDrops`. A boundary is the commit. When that navigation
+   * started and when its document finished loading are the caller's to stamp, on this same
+   * clock, around the operation that caused it. A title is page state, not part of a transition.
    */
   documentBoundaries: Schema.Array(
     Schema.Struct({
       document: Schema.Natural,
       observedMonotonicNanos: Schema.BigInt,
       afterSequence: Schema.NullOr(Schema.Natural),
+      url: DocumentUrl,
     }),
   ).check(Schema.isMaxLength(64)),
   /** More navigations were observed than are recorded above. Frames still count them all. */

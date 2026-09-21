@@ -24,6 +24,7 @@ const summary = (delivered: number, received = delivered, duplicates = 0) =>
     bufferedBytes: 0,
     sourceFirstMillis: delivered ? 1234 : null,
     sourceLastMillis: delivered ? 1234 : null,
+    initialUrl: "https://example.test/",
     documentBoundaries: [],
     documentBoundariesTruncated: false,
     nativeStop: "confirmed",

@@ -66,7 +66,7 @@ const makeFixture = Effect.fnUntraced(function* (
   owner.state.phase = "open";
   const callbacks = new Map<string, (frame: NativeFrame) => void>();
   const invalidators = new Map<string, (reason: CaptureInvalidation) => void>();
-  const documents = new Map<string, () => void>();
+  const documents = new Map<string, (url: string) => void>();
   let starts = 0;
   let stops = 0;
 
@@ -99,12 +99,14 @@ const makeFixture = Effect.fnUntraced(function* (
           frameId: "frame-1",
         }),
         source: {
-          start: async ({ receive, quality, invalidate, size, document }) => {
+          start: async ({ receive, quality, invalidate, size, opened, document }) => {
             starts++;
             options.onRequest?.(quality, size);
             callbacks.set(chosen.pageId, receive);
             invalidators.set(chosen.pageId, invalidate);
             if (document !== undefined) documents.set(chosen.pageId, document);
+            // As the driver does: the address is reported in the turn the watch is installed.
+            opened?.(chosen.url);
             if (options.startFailure) throw new Error("PRIVATE-NATIVE-START");
             await options.start?.();
           },
@@ -153,12 +155,12 @@ const makeFixture = Effect.fnUntraced(function* (
   };
 
   /** What the driver does when a followed page's main frame navigates. */
-  const navigate = (pageId = "page-1") => {
+  const navigate = (url = "https://page-1.example.test/next", pageId = "page-1") => {
     const document = documents.get(pageId);
 
     // An interval that lasts one document registers no hook, and ends instead.
     if (document === undefined) invalidate(pageId, "target-changed");
-    else document();
+    else document(url);
   };
 
   return {
@@ -355,9 +357,10 @@ export const captureCases: ReadonlyArray<Case> = [
 
       f.emit(1000);
       f.emit(1010);
-      f.navigate();
+      f.navigate("https://page-1.example.test/loading");
       f.emit(1020);
-      f.navigate();
+      // Longer than any address this package will record.
+      f.navigate(`https://page-1.example.test/${"a".repeat(8192)}`);
       f.emit(1030);
       const summary = yield* interval.stop;
       const frames = yield* Stream.runCollect(interval.frames);
@@ -383,6 +386,14 @@ export const captureCases: ReadonlyArray<Case> = [
         ],
       );
       assert.equal(summary.documentBoundariesTruncated, false);
+      // Every document a frame can name has an address: the first from when the watch began,
+      // the rest from the navigation that committed them. One too long to record is null, never
+      // cut down to an address the page did not show.
+      assert.equal(summary.initialUrl, "https://page-1.example.test/");
+      assert.deepEqual(
+        summary.documentBoundaries.map((boundary) => boundary.url),
+        ["https://page-1.example.test/loading", null],
+      );
     })),
   test("an interval that lasts one document still ends when its page navigates", () =>
     Effect.gen(function* () {
@@ -397,6 +408,8 @@ export const captureCases: ReadonlyArray<Case> = [
 
       assert.equal(summary.received, 1);
       assert.deepEqual(summary.documentBoundaries, []);
+      // It filmed one document, and still says which.
+      assert.equal(summary.initialUrl, "https://page-1.example.test/");
     })),
   test("boundary records are bounded, and frames keep counting documents past the bound", () =>
     Effect.gen(function* () {
