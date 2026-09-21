@@ -21,7 +21,7 @@ const fixture = (overrides: Partial<PageExecutionNative> = {}) => {
     },
     remainingMillis: () => 1000,
     check: () => {
-      if (aborted) throw BrowserError.make({ operation: "test", reason: "stale" });
+      if (aborted) throw BrowserError.make({ operation: "page-control", reason: "stale" });
     },
     dispatch: () => {
       dispatched = true;

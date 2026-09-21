@@ -444,9 +444,9 @@ export const ownershipCases: ReadonlyArray<Case> = [
 
         owner.state.phase = "open";
         wall = 999999999999;
-        assert.equal(yield* owner.guard("read", () => Effect.succeed(1)), 1);
+        assert.equal(yield* owner.guard("read-text", () => Effect.succeed(1)), 1);
         wall = -9999999;
-        assert.equal(yield* owner.guard("read", () => Effect.succeed(2)), 2);
+        assert.equal(yield* owner.guard("read-text", () => Effect.succeed(2)), 2);
       }).pipe(Effect.provideService(Clock.Clock, clock));
     })),
 ];

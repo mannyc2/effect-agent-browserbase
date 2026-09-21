@@ -2,10 +2,16 @@ import { Schema } from "effect";
 import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from "playwright-core";
 
 import type { ObservedElement } from "../../BrowserData.ts";
-import type { BrowserError } from "../../Errors.ts";
 import { SafeFilename } from "../../Transfers.ts";
 import type { Driver, NativeFileSelection } from "./Driver.ts";
-import { closeWithin, failure, safeDecode, sanitize, timeout } from "./NativeCalls.ts";
+import {
+  closeWithin,
+  failure,
+  type NativeFailure,
+  safeDecode,
+  sanitize,
+  timeout,
+} from "./NativeCalls.ts";
 import type { Observation } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import type { Targets } from "./Targets.ts";
@@ -18,7 +24,7 @@ export const waitEvent = <A>(
 ) => {
   let done = false;
   let resolve: (value: A) => void = () => {};
-  let reject: (error: BrowserError) => void = () => {};
+  let reject: (error: NativeFailure) => void = () => {};
 
   const promise = new Promise<A>((yes, no) => {
     resolve = yes;
@@ -38,7 +44,7 @@ export const waitEvent = <A>(
     if (!done) {
       done = true;
       cleanup();
-      reject(failure("wait", "interrupted"));
+      reject(failure("interrupted"));
     }
   };
 
@@ -54,7 +60,7 @@ export const waitEvent = <A>(
     if (!done) {
       done = true;
       cleanup();
-      reject(failure("wait", "timeout"));
+      reject(failure("timeout"));
     }
   }, ticket.remainingMillis());
 
@@ -78,7 +84,7 @@ export const nativeSelection = (
       readonly payload: Array<{ name: string; mimeType: string; buffer: Buffer }>;
     }
   | { readonly _tag: "Remote"; readonly paths: Array<string> } => {
-  if (files.length === 0) throw failure("select-files", "configuration", "undispatched");
+  if (files.length === 0) throw failure("configuration", "undispatched");
   const inline = files.filter((file) => file._tag === "Inline");
   const remote = files.filter((file) => file._tag === "Remote");
 
@@ -96,7 +102,7 @@ export const nativeSelection = (
   }
   if (remote.length === files.length)
     return { _tag: "Remote", paths: remote.map((file) => file.path) };
-  throw failure("select-files", "configuration", "undispatched");
+  throw failure("configuration", "undispatched");
 };
 
 /**
@@ -118,10 +124,10 @@ export const makeActions = (
     try {
       url = new URL(value);
     } catch {
-      throw failure("page-url", "malformed");
+      throw failure("malformed");
     }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
-      throw failure("page-url", "malformed");
+      throw failure("malformed");
 
     return value;
   };
@@ -148,7 +154,7 @@ export const makeActions = (
         typeof target === "string" ? target : undefined,
       );
 
-      if (attached !== true) throw failure("target", "stale", "undispatched");
+      if (attached !== true) throw failure("stale", "undispatched");
       ticket.check();
       // ElementHandle actions do not re-resolve the selector onto a replacement node.
       ticket.dispatch();
@@ -160,7 +166,7 @@ export const makeActions = (
   };
 
   const click = (target: string | ObservedElement, ticket: Ticket) =>
-    sanitize("click", async () => {
+    sanitize(async () => {
       await withElement(target, ticket, (element) => element.click({ timeout: timeout(ticket) }));
       ticket.check();
 
@@ -177,11 +183,10 @@ export const makeActions = (
     paths: ReadonlyArray<string>,
     ticket: Ticket,
   ) => {
-    if (typeof target !== "string") throw failure("select-files", "unsupported", "undispatched");
+    if (typeof target !== "string") throw failure("unsupported", "undispatched");
     const { entry, frame } = current();
 
-    if (frame !== entry.page.mainFrame())
-      throw failure("select-files", "unsupported", "undispatched");
+    if (frame !== entry.page.mainFrame()) throw failure("unsupported", "undispatched");
     const cdp = await context.newCDPSession(entry.page);
 
     try {
@@ -190,24 +195,18 @@ export const makeActions = (
       const root = safeDecode(
         Schema.Struct({ root: Schema.Struct({ nodeId: Schema.Int }) }),
         await cdp.send("DOM.getDocument", { depth: 0 }),
-        "select-files",
       );
 
       const matched = safeDecode(
         Schema.Struct({ nodeIds: Schema.Array(Schema.Int).check(Schema.isMaxLength(64)) }),
         await cdp.send("DOM.querySelectorAll", { nodeId: root.root.nodeId, selector: target }),
-        "select-files",
       );
 
       ticket.check();
       const nodeId = matched.nodeIds[0];
 
       if (matched.nodeIds.length !== 1 || nodeId === undefined)
-        throw failure(
-          "select-files",
-          matched.nodeIds.length === 0 ? "not-found" : "ambiguous",
-          "undispatched",
-        );
+        throw failure(matched.nodeIds.length === 0 ? "not-found" : "ambiguous", "undispatched");
       ticket.dispatch();
       await cdp.send("DOM.setFileInputFiles", { files: [...paths], nodeId });
     } finally {
@@ -216,7 +215,7 @@ export const makeActions = (
   };
 
   const navigate: Driver["navigate"] = (url, ticket) =>
-    sanitize("navigate", async () => {
+    sanitize(async () => {
       const { frame } = current();
 
       ticket.dispatch();
@@ -227,7 +226,7 @@ export const makeActions = (
     });
 
   const fill: Driver["fill"] = (target, value, ticket) =>
-    sanitize("fill", async () => {
+    sanitize(async () => {
       await withElement(target, ticket, (element) =>
         element.fill(value, { timeout: timeout(ticket) }),
       );
@@ -237,7 +236,7 @@ export const makeActions = (
     });
 
   const scroll: Driver["scroll"] = (deltaX, deltaY, ticket) =>
-    sanitize("scroll", async () => {
+    sanitize(async () => {
       const { frame } = current();
 
       ticket.dispatch();
@@ -251,7 +250,7 @@ export const makeActions = (
     });
 
   const waitFor: Driver["waitFor"] = (selector, state, ticket) =>
-    sanitize("wait", async () => {
+    sanitize(async () => {
       const node = await current().frame.waitForSelector(selector, {
         state,
         strict: true,
@@ -263,7 +262,7 @@ export const makeActions = (
     });
 
   const clickAndWait: Driver["clickAndWait"] = (target, ticket) =>
-    sanitize("click-and-wait", async () => {
+    sanitize(async () => {
       const { entry, frame } = current();
 
       const observer = waitEvent<Frame>(
@@ -286,7 +285,7 @@ export const makeActions = (
     });
 
   const clickForDownload: Driver["clickForDownload"] = (target, ticket) =>
-    sanitize("download-action", async () => {
+    sanitize(async () => {
       const page = current().entry.page;
 
       const observer = waitEvent<Download>(
@@ -299,11 +298,7 @@ export const makeActions = (
         await click(target, ticket);
         const download = await observer.promise;
 
-        const filename = safeDecode(
-          SafeFilename,
-          download.suggestedFilename(),
-          "download-filename",
-        );
+        const filename = safeDecode(SafeFilename, download.suggestedFilename());
 
         const error = await download.failure();
 
@@ -320,7 +315,7 @@ export const makeActions = (
     });
 
   const selectFiles: Driver["selectFiles"] = (target, files, ticket) =>
-    sanitize("select-files", async () => {
+    sanitize(async () => {
       const selection = nativeSelection(files);
 
       if (selection._tag === "Remote") await attachStoredFiles(target, selection.paths, ticket);
@@ -334,12 +329,12 @@ export const makeActions = (
     });
 
   const clickForFileSelection: Driver["clickForFileSelection"] = (target, files, ticket) =>
-    sanitize("file-chooser", async () => {
+    sanitize(async () => {
       const selection = nativeSelection(files);
 
       // A chooser is satisfied with bytes this client holds. A provider-stored file is
       // attached to an exact input node instead, where the browser can open the path.
-      if (selection._tag === "Remote") throw failure("file-chooser", "unsupported", "undispatched");
+      if (selection._tag === "Remote") throw failure("unsupported", "undispatched");
       const page = current().entry.page;
 
       const observer = waitEvent<FileChooser>(
@@ -353,8 +348,7 @@ export const makeActions = (
         const chooser = await observer.promise;
 
         ticket.check();
-        if (!chooser.isMultiple() && selection.payload.length > 1)
-          throw failure("file-chooser", "unsupported");
+        if (!chooser.isMultiple() && selection.payload.length > 1) throw failure("unsupported");
         // Exactly one attachment for this chooser; a second would open another dispatch.
         await chooser.setFiles(selection.payload, { timeout: timeout(ticket) });
         ticket.check();

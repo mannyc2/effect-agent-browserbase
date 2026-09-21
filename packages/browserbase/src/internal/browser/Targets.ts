@@ -162,7 +162,7 @@ export const makeTargets = (
       selection.frame === undefined ||
       selection.frame.isDetached()
     )
-      throw failure("target", "closed", "undispatched");
+      throw failure("closed", "undispatched");
 
     return { entry: selection.entry, frame: selection.frame };
   };
@@ -174,7 +174,7 @@ export const makeTargets = (
     try {
       const info: unknown = await cdp.send("Target.getTargetInfo");
 
-      entry.targetId = safeDecode(TargetInfo, info, "target-identity").targetInfo.targetId;
+      entry.targetId = safeDecode(TargetInfo, info).targetInfo.targetId;
 
       return entry.targetId;
     } finally {
@@ -182,7 +182,7 @@ export const makeTargets = (
     }
   };
 
-  const selectedUrl = () => safeDecode(URLText, current().frame.url(), "page-url");
+  const selectedUrl = () => safeDecode(URLText, current().frame.url());
 
   /**
    * Chooses the connection's first target: a page it opens itself, the one the caller named, or
@@ -199,9 +199,9 @@ export const makeTargets = (
     } else if (options.initialTargetId !== undefined) {
       for (const entry of entries.values())
         if ((await targetId(entry)) === options.initialTargetId) selection.entry = entry;
-      if (selection.entry === undefined) throw failure("initial-page", "not-found");
+      if (selection.entry === undefined) throw failure("not-found");
     } else {
-      if (entries.size !== 1) throw failure("initial-page", "ambiguous");
+      if (entries.size !== 1) throw failure("ambiguous");
       selection.entry = entries.values().next().value;
     }
   };
@@ -218,10 +218,10 @@ export const makeTargets = (
     return { pageId: entry.id, frameId: frameId(frame) };
   };
 
-  const selectedTargetId = () => sanitize("target-identity", () => targetId(current().entry));
+  const selectedTargetId = () => sanitize(() => targetId(current().entry));
 
   const listPages = (ticket: Ticket) =>
-    sanitize("list-pages", async () => {
+    sanitize(async () => {
       ticket.check();
       const output: PageInfo[] = [];
 
@@ -230,19 +230,15 @@ export const makeTargets = (
         const title: unknown = await entry.page.title();
 
         ticket.check();
-        if (typeof title !== "string") throw failure("list-pages", "malformed");
+        if (typeof title !== "string") throw failure("malformed");
         output.push(
-          safeDecode(
-            PageInfo,
-            {
-              pageId: entry.id,
-              targetId: id,
-              title: title.slice(0, 512),
-              url: entry.page.url(),
-              selected: selection.entry === entry,
-            },
-            "list-pages",
-          ),
+          safeDecode(PageInfo, {
+            pageId: entry.id,
+            targetId: id,
+            title: title.slice(0, 512),
+            url: entry.page.url(),
+            selected: selection.entry === entry,
+          }),
         );
       }
 
@@ -250,12 +246,11 @@ export const makeTargets = (
     });
 
   const selectPage = (id: string, ticket: Ticket) =>
-    sanitize("select-page", async () => {
+    sanitize(async () => {
       const entry = entries.get(id);
 
       ticket.check();
-      if (entry === undefined || entry.page.isClosed())
-        throw failure("select-page", "not-found", "undispatched");
+      if (entry === undefined || entry.page.isClosed()) throw failure("not-found", "undispatched");
       await hooks.release();
       ticket.check();
       selection.entry = entry;
@@ -264,8 +259,8 @@ export const makeTargets = (
     });
 
   const newPage = (ticket: Ticket) =>
-    sanitize("new-page", async () => {
-      if (entries.size >= options.maxPages) throw failure("new-page", "limit", "undispatched");
+    sanitize(async () => {
+      if (entries.size >= options.maxPages) throw failure("limit", "undispatched");
       ticket.dispatch();
       creatingPage = true;
       try {
@@ -284,45 +279,40 @@ export const makeTargets = (
     });
 
   const closePage = (id: string, ticket: Ticket) =>
-    sanitize("close-page", async () => {
+    sanitize(async () => {
       const entry = entries.get(id);
 
-      if (entry === undefined) throw failure("close-page", "not-found", "undispatched");
+      if (entry === undefined) throw failure("not-found", "undispatched");
       ticket.dispatch();
       await entry.page.close({ runBeforeUnload: false });
       ticket.check();
     });
 
   const listFrames = (ticket: Ticket) =>
-    sanitize("list-frames", async () => {
+    sanitize(async () => {
       ticket.check();
       const frames = current().entry.page.frames();
 
-      if (frames.length > 128) throw failure("list-frames", "limit");
+      if (frames.length > 128) throw failure("limit");
 
       return frames.map((frame) =>
-        safeDecode(
-          FrameInfo,
-          {
-            frameId: frameId(frame),
-            parentFrameId: frame.parentFrame() === null ? null : frameId(frame.parentFrame()!),
-            url: frame.url(),
-            name: frame.name().slice(0, 256),
-          },
-          "list-frames",
-        ),
+        safeDecode(FrameInfo, {
+          frameId: frameId(frame),
+          parentFrameId: frame.parentFrame() === null ? null : frameId(frame.parentFrame()!),
+          url: frame.url(),
+          name: frame.name().slice(0, 256),
+        }),
       );
     });
 
   const selectFrame = (id: string, ticket: Ticket) =>
-    sanitize("select-frame", async () => {
+    sanitize(async () => {
       const entry = selection.entry;
 
-      if (entry === undefined) throw failure("select-frame", "closed");
+      if (entry === undefined) throw failure("closed");
       const frame = entry.page.frames().find((f) => frameId(f) === id);
 
-      if (frame === undefined || frame.isDetached())
-        throw failure("select-frame", "not-found", "undispatched");
+      if (frame === undefined || frame.isDetached()) throw failure("not-found", "undispatched");
       await hooks.release();
       ticket.check();
       selection.frame = frame;

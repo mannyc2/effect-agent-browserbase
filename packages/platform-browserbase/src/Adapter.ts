@@ -57,9 +57,12 @@ export interface BrowserbaseAgentAcquisition {
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
 }
 
+/** All the framework's error needs from a failure here: why it failed and whether it was sent. */
+type Failure = Pick<BrowserError, "reason" | "outcome">;
+
 const operationError = (
   operation: InteractiveBrowserActionError["operation"],
-  error: BrowserError,
+  error: Failure,
 ): InteractiveBrowserError => {
   const implementation = browserbaseInteractiveImplementation;
 
@@ -103,9 +106,7 @@ const operationError = (
 
 const decode = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
-    Effect.mapError(() =>
-      BrowserError.make({ operation: "result", reason: "malformed", outcome: "unknown" }),
-    ),
+    Effect.mapError((): Failure => ({ reason: "malformed", outcome: "unknown" })),
   );
 
 const makeHandle = <E>(target: BoundTarget, session: BrowserbaseSession<E>): BrowserHandle => ({
@@ -268,14 +269,13 @@ export const browserbaseInteractiveLayer = (
                     "navigate",
                     error._tag === "BrowserError"
                       ? error
-                      : BrowserError.make({
-                          operation: "allocate",
+                      : {
                           reason:
                             error._tag === "AllocationError" && error.outcome === "unknown"
                               ? "allocation-unknown"
                               : error.reason,
                           outcome: error.outcome ?? "unknown",
-                        }),
+                        },
                   )
                 : error._tag === "InitializationError"
                   ? InteractiveBrowserActionError.make({

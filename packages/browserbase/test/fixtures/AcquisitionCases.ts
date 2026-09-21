@@ -54,8 +54,9 @@ const metadata = (status = "RUNNING", projectId = account.projectId) => ({
 
 const layers = BrowserbaseSessions.layer.pipe(Layer.provideMerge(BrowserbaseClient.layer(account)));
 
-const fail = (operation: string) =>
-  BrowserError.make({ operation, reason: "provider", outcome: "unknown" });
+/** Cleanup reports a failed local step as a `CleanupIssue`; the operation never survives it. */
+const fail = () =>
+  BrowserError.make({ operation: "close", reason: "provider", outcome: "unknown" });
 
 const expectFailure = <A, E, R>(value: Effect.Effect<A, E, R>) =>
   value.pipe(
@@ -111,7 +112,7 @@ const fixture = (scenario: Scenario = {}) => {
     Effect.suspend(() => {
       order.push(step);
 
-      return scenario.localFailure === step ? Effect.fail(fail(step)) : Effect.void;
+      return scenario.localFailure === step ? Effect.fail(fail()) : Effect.void;
     });
 
   const local: LocalCleanup = {

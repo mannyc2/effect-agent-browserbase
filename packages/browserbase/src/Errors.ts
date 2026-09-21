@@ -2,8 +2,65 @@ import { Schema } from "effect";
 
 import { AllocationAttempt, SessionReference } from "./References.ts";
 
+/**
+ * What a caller asked the owned browser to do. The vocabulary is closed: the owner stamps it
+ * when it admits an operation, so a native step's own name can never become API, and a new
+ * spelling is a deliberate edit here rather than a string that merely compiles.
+ */
+export const BrowserOperation = Schema.Literals([
+  // configuration and lifetime
+  "configure",
+  "launch",
+  "connect",
+  "reconnect",
+  "detach",
+  "disconnect",
+  "close",
+  "handoff",
+  "resume",
+  "live-view",
+  // targets
+  "target",
+  "handle",
+  "list-pages",
+  "list-frames",
+  "select-page",
+  "select-frame",
+  "new-page",
+  "close-page",
+  "resize",
+  // reading
+  "ready",
+  "observe",
+  "read-text",
+  "screenshot",
+  "wait",
+  // input
+  "navigate",
+  "click",
+  "fill",
+  "scroll",
+  "click-and-wait",
+  "download-action",
+  "select-files",
+  "file-chooser",
+  "action-result",
+  // page control
+  "page-control",
+  "page-state",
+  "page-suspend",
+  "page-resume",
+  // capture
+  "capture",
+  "capture-start",
+  "capture-stop",
+  "capture-consume",
+]);
+
+export type BrowserOperation = typeof BrowserOperation.Type;
+
 export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserError", {
-  operation: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+  operation: BrowserOperation,
   reason: Schema.Literals([
     "configuration",
     "unsupported",

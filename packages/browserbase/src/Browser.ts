@@ -30,6 +30,7 @@ import { BrowserbaseClient } from "./Client.ts";
 import {
   type AllocationError,
   BrowserError,
+  type BrowserOperation,
   type ContextError,
   InitializationError,
   type SessionError,
@@ -175,7 +176,7 @@ export interface BrowserAcquisition<E = never> {
 const checked = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
   value: unknown,
-  operation: string,
+  operation: BrowserOperation,
 ) =>
   Schema.decodeUnknownEffect(schema)(value, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() =>
@@ -184,7 +185,7 @@ const checked = <A>(
   );
 
 const decoded =
-  <A>(schema: Schema.Codec<A, unknown, never, never>, operation: string) =>
+  <A>(schema: Schema.Codec<A, unknown, never, never>, operation: BrowserOperation) =>
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
       Effect.mapError(() => BrowserError.make({ operation, reason: "malformed" })),
@@ -238,7 +239,7 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
 const selection = (
   request: SelectFilesRequest,
   reference: SessionReference,
-  operation: string,
+  operation: BrowserOperation,
 ): Effect.Effect<ReadonlyArray<NativeFileSelection>, BrowserError> =>
   Effect.suspend(() => {
     const invalid = BrowserError.make({

@@ -26,7 +26,7 @@ const summary = (delivered: number, received = delivered, duplicates = 0) =>
     sourceLastMillis: delivered ? 1234 : null,
     nativeStop: "confirmed",
     upstreamDrops: "unknown",
-    error: BrowserError.make({ operation: "PRIVATE-ERROR", reason: "provider" }),
+    error: BrowserError.make({ operation: "capture", reason: "provider" }),
   });
 
 const frame: CapturedFrame = {
@@ -76,6 +76,10 @@ it("projects fixed scalar metadata and never image bytes, target identity or nes
   expect(encoded).not.toContain("PRIVATE");
   expect(encoded).not.toContain('"bytes"');
   expect(encoded).not.toContain('"error"');
+  // An operation is a closed vocabulary now, so it cannot carry a marker: look for the error's
+  // own tag and reason instead.
+  expect(encoded).not.toContain("BrowserError");
+  expect(encoded).not.toContain("provider");
   expect(encoded).not.toContain('"target"');
   expect(frame.sourceTimeMillis).toBe(1234);
   expect(frame.receivedMonotonicNanos).toBe(15n);
