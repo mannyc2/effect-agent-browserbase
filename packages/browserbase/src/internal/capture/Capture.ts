@@ -19,6 +19,16 @@ import { jpegGeometry } from "./Images.ts";
 const MaxParentCaptures = 4;
 const MaxParentBufferedBytes = 64 * 1024 * 1024;
 
+/**
+ * Chromium stamps a screencast frame on its UI thread, encodes it on an unsequenced thread
+ * pool, and emits it when that encode completes. It admits a new frame while at most two are
+ * unacknowledged (`kMaxScreencastFramesInFlight`), so up to three encode at once and two
+ * frames stamped close together can complete in either order. Every frame stamped before an
+ * accepted one was already in flight when that one was stamped, so at most two late frames
+ * can arrive in a row. A longer run is source time that really went backwards.
+ */
+const MaxConsecutiveLateFrames = 2;
+
 // Synchronous Schema decoding at the callback boundary; no Effect/Fiber is allocated for each frame.
 const Metadata = Schema.Struct({
   timestamp: Schema.Finite.check(Schema.isGreaterThan(0)),
@@ -93,7 +103,9 @@ export const startCapture = Effect.fnUntraced(function* (
   let received = 0,
     delivered = 0,
     rejected = 0,
-    duplicates = 0;
+    duplicates = 0,
+    late = 0,
+    lateRun = 0;
 
   let first: number | undefined, last: number | undefined;
 
@@ -123,6 +135,7 @@ export const startCapture = Effect.fnUntraced(function* (
       delivered,
       dropped: buffer.dropped + rejected,
       duplicates,
+      late,
       peakBufferedFrames: buffer.highWaterFrames,
       peakBufferedBytes: buffer.highWaterBytes,
       bufferedFrames: buffer.size,
@@ -205,11 +218,16 @@ export const startCapture = Effect.fnUntraced(function* (
         return;
       }
       if (last !== undefined && meta.timestamp < last) {
+        // A newer frame is already accepted, so this one can no longer be presented in order.
+        // It is discarded and counted rather than sorted in or given an invented time.
         rejected++;
-        finish(
-          "timestamp-discontinuity",
-          BrowserError.make({ operation: "capture", reason: "timestamp" }),
-        );
+        late++;
+        if (++lateRun > MaxConsecutiveLateFrames) {
+          finish(
+            "timestamp-discontinuity",
+            BrowserError.make({ operation: "capture", reason: "timestamp" }),
+          );
+        }
 
         return;
       }
@@ -254,6 +272,7 @@ export const startCapture = Effect.fnUntraced(function* (
       };
       first ??= meta.timestamp;
       last = meta.timestamp;
+      lateRun = 0;
       buffer.offer({
         bytes: new Uint8Array(frame.data),
         mediaType: "image/jpeg",

@@ -17,6 +17,7 @@ const summary = (delivered: number, received = delivered, duplicates = 0) =>
     delivered,
     dropped: duplicates,
     duplicates,
+    late: 0,
     peakBufferedFrames: delivered,
     peakBufferedBytes: delivered * 100,
     bufferedFrames: 0,

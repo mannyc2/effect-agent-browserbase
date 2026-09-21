@@ -238,13 +238,81 @@ export const captureCases: ReadonlyArray<Case> = [
         [0, 2],
       );
     })),
-  test("a backwards source timestamp ends with a typed partial stream", () =>
+  test("a frame that arrives behind a newer one is discarded and counted, not reordered in", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, { ...options, maxFrames: 8 });
+
+      // The pair recorded on #9: stamped 1.094ms apart after a 33ms stall, emitted in the
+      // order their concurrent encodes completed.
+      f.emit(1_789_919_823_339.043);
+      f.emit(1_789_919_823_372.043);
+      f.emit(1_789_919_823_370.949);
+      f.emit(1_789_919_823_388.7);
+      const summary = yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+
+      assert.deepEqual(
+        frames.map((frame) => frame.sequence),
+        [0, 1, 3],
+      );
+      assert.deepEqual(
+        frames.map((frame) => frame.sourceTimeMillis),
+        [1_789_919_823_339.043, 1_789_919_823_372.043, 1_789_919_823_388.7],
+      );
+      assert.equal(summary.late, 1);
+      assert.equal(summary.dropped, 1);
+      assert.equal(summary.duplicates, 0);
+      assert.equal(summary.reason, "stopped");
+      assert.equal(summary.error, undefined);
+      assert.equal(summary.sourceLastMillis, 1_789_919_823_388.7);
+    })),
+  test("two late frames in a row are the most concurrent encoding can produce", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, { ...options, maxFrames: 8 });
+
+      // Three frames in flight, and the newest encode finishes first.
+      f.emit(1000);
+      f.emit(1012);
+      f.emit(1010);
+      f.emit(1011);
+      f.emit(1030);
+      const summary = yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+
+      assert.deepEqual(
+        frames.map((frame) => frame.sourceTimeMillis),
+        [1000, 1012, 1030],
+      );
+      assert.equal(summary.late, 2);
+      assert.equal(summary.error, undefined);
+    })),
+  test("an accepted frame ends a late run, so separate reorderings never accumulate", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, { ...options, maxFrames: 8 });
+
+      for (const time of [1000, 990, 995, 1010, 1005, 1006, 1020]) f.emit(time);
+      const summary = yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+
+      assert.deepEqual(
+        frames.map((frame) => frame.sourceTimeMillis),
+        [1000, 1010, 1020],
+      );
+      assert.equal(summary.late, 4);
+      assert.equal(summary.error, undefined);
+    })),
+  test("a third consecutive late frame is source time going backwards and ends the interval", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();
       const interval = yield* startCapture(f.parent, options);
 
       f.emit(1000);
-      f.emit(900);
+      for (const time of [900, 910, 920]) f.emit(time);
+      // The interval has ended, so nothing later is admitted even if it looks in order.
+      f.emit(2000);
       const delivered: number[] = [];
 
       yield* expectReason(
@@ -259,6 +327,8 @@ export const captureCases: ReadonlyArray<Case> = [
       const summary = yield* interval.completed;
 
       assert.equal(summary.reason, "timestamp-discontinuity");
+      assert.equal(summary.late, 3);
+      assert.equal(summary.received, 4);
       assert.equal(summary.nativeStop, "confirmed");
     })),
   test("actual JPEG geometry changes terminate an interval even at unchanged CSS dimensions", () =>
