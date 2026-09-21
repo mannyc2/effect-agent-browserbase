@@ -1,3 +1,4 @@
+export * as Bootstrap from "./Bootstrap.ts";
 export * as Browser from "./Browser.ts";
 export * as BrowserData from "./BrowserData.ts";
 export * as Capture from "./Capture.ts";

@@ -16,6 +16,7 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./bootstrap": "./src/Bootstrap.ts",
     "./browser": "./src/Browser.ts",
     "./browser-data": "./src/BrowserData.ts",
     "./capture": "./src/Capture.ts",

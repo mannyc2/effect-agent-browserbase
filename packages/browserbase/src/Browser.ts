@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, type Option, type Redacted, Schema, type Scope } from "effect";
 
+import * as Bootstrap from "./Bootstrap.ts";
 import {
   ActionResult,
   AutomationOptions,
@@ -25,8 +26,14 @@ import {
 } from "./BrowserData.ts";
 import type { CleanupResult } from "./Cleanup.ts";
 import { BrowserbaseClient } from "./Client.ts";
-import { type AllocationError, BrowserError, type ContextError } from "./Errors.ts";
+import {
+  type AllocationError,
+  BrowserError,
+  type ContextError,
+  InitializationError,
+} from "./Errors.ts";
 import { associate } from "./internal/browser/Association.ts";
+import { compileBootstrap, duplicateStep } from "./internal/browser/Bootstrap.ts";
 import type { NativeFileSelection } from "./internal/browser/Driver.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
 import { associatePageControl } from "./internal/browser/PageControlAssociation.ts";
@@ -47,6 +54,8 @@ export type { LiveView } from "./internal/browser/LiveView.ts";
 /** Host configuration. Credentials live in the Client; a model never selects these values. */
 export interface BrowserOptions extends AutomationOptions {
   readonly launch: LaunchRecipe;
+  /** Trusted registrations installed on every connection this owner makes. */
+  readonly bootstrap?: Bootstrap.Plan;
   /** Required whenever the launch recipe persists a context. */
   readonly contextWriter?: ContextWriterPermit;
   readonly onCleanup?: (result: CleanupResult) => Effect.Effect<void>;
@@ -112,6 +121,12 @@ export interface BrowserbaseSession {
   readonly clickForFileSelection: (
     request: SelectFilesRequest,
   ) => Effect.Effect<ActionResult, BrowserError>;
+  /**
+   * Readiness of the current document only. Dependent operations wait for it themselves;
+   * this reports it without charging an action, so a caller can decide what to do about a
+   * document that predates the registrations.
+   */
+  readonly ready: Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
   readonly liveView: (expiresInSeconds?: number) => Effect.Effect<LiveView, BrowserError>;
   readonly beginHandoff: (expiresInSeconds?: number) => Effect.Effect<Handoff, BrowserError>;
   readonly resume: (
@@ -251,6 +266,22 @@ const selection = (
     return Effect.succeed(files);
   });
 
+/** A browser-operation failure keeps its meaning when it is reported as an initialization one. */
+const initialization = (reason: BrowserError["reason"]): InitializationError["reason"] =>
+  reason === "busy"
+    ? "busy"
+    : reason === "closed" || reason === "disconnected"
+      ? "closed"
+      : reason === "timeout"
+        ? "timeout"
+        : reason === "stale"
+          ? "stale"
+          : reason === "unsupported"
+            ? "unsupported"
+            : reason === "configuration"
+              ? "configuration"
+              : "native";
+
 const makeSession = (controls: SessionControls): BrowserbaseSession => {
   const currentTarget = controls.currentTarget.pipe(Effect.map(() => makeTarget(controls.bind())));
 
@@ -335,6 +366,26 @@ const makeSession = (controls: SessionControls): BrowserbaseSession => {
         ),
         Effect.flatMap(navigate),
       ),
+    ready: controls.readiness.pipe(
+      Effect.mapError((error) =>
+        InitializationError.make({
+          operation: "ready",
+          step: "session",
+          reason: initialization(error.reason),
+        }),
+      ),
+      Effect.flatMap((state) =>
+        state._tag === "NotReady"
+          ? Effect.fail(
+              InitializationError.make({
+                operation: "ready",
+                step: state.step,
+                reason: state.reason === "failed" ? "output" : state.reason,
+              }),
+            )
+          : Effect.succeed<Bootstrap.ReadinessOutcome>({ _tag: state._tag }),
+      ),
+    ),
     liveView: (ttl = 60) => controls.liveView(ttl),
     beginHandoff: (ttl = 60) => controls.beginHandoff(ttl),
     resume: (token, released) => controls.resume(token, released),
@@ -410,12 +461,27 @@ export class BrowserbaseBrowser extends Context.Service<
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
           return yield* BrowserError.make({ operation: "configure", reason: "context-lease" });
 
+        const plan =
+          options.bootstrap === undefined
+            ? undefined
+            : yield* checked(Bootstrap.Plan, options.bootstrap, "configure");
+
+        // Ambiguous step identity would make registration order and reports meaningless.
+        if (plan !== undefined && duplicateStep(plan))
+          return yield* BrowserError.make({
+            operation: "configure",
+            reason: "configuration",
+            outcome: "undispatched",
+          });
+        const bootstrap = plan === undefined ? undefined : compileBootstrap(plan);
+
         const driver = {
           pageControl,
           viewport,
           maxPages,
           popupPolicy,
           dialogPolicy,
+          ...(bootstrap === undefined ? {} : { bootstrap }),
           ...(automation.initialPage === undefined
             ? {}
             : "targetId" in automation.initialPage

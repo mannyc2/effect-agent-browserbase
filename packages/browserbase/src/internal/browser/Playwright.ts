@@ -23,6 +23,7 @@ import { BrowserError } from "../../Errors.ts";
 import { Identifier } from "../../References.ts";
 import { SafeFilename } from "../../Transfers.ts";
 import { pngGeometry } from "../capture/Images.ts";
+import type { CompiledBootstrap } from "./Bootstrap.ts";
 import { CallbackTasks } from "./CallbackTasks.ts";
 import type {
   CaptureBinding,
@@ -35,6 +36,7 @@ import type {
   NativeFileSelection,
   NativeFrame,
   NativeObservation,
+  ReadinessState,
 } from "./Driver.ts";
 import type { Ticket } from "./Owner.ts";
 import { PageExecution } from "./PageExecution.ts";
@@ -192,6 +194,10 @@ export const makePlaywrightDriver = async (
   const entries = new Map<string, Entry>();
   const byPage = new WeakMap<Page, Entry>();
   const frameIds = new WeakMap<Frame, string>();
+  // A frame object outlives its documents, so readiness is keyed by frame *and* epoch.
+  const documentEpochs = new WeakMap<Frame, number>();
+  const registeredEpochs = new WeakMap<Frame, number>();
+  const readyDocuments = new WeakMap<Frame, number>();
   const dialogs = new Set<Dialog>();
   const callbacks = new CallbackTasks(32, () => events.fault());
   const captureWatchers = new Map<string, Set<CaptureWatcher>>();
@@ -217,6 +223,8 @@ export const makePlaywrightDriver = async (
     invalidateObservation();
     events.invalidate(reason);
   };
+
+  const epochOf = (frame: Frame): number => documentEpochs.get(frame) ?? 0;
 
   const frameId = (frame: Frame): string => {
     let id = frameIds.get(frame);
@@ -293,6 +301,7 @@ export const makePlaywrightDriver = async (
 
     const onNavigation = (frame: Frame) => {
       if (frame === page.mainFrame() && entry.executionValue?.invalidate()) events.fault();
+      documentEpochs.set(frame, epochOf(frame) + 1);
       frameId(frame);
       invalidateCaptures(entry, "target-changed", frame);
       if (selected === entry && (selectedFrame === frame || frame === page.mainFrame()))
@@ -559,6 +568,104 @@ export const makePlaywrightDriver = async (
     if (ticket.signal.aborted) abort();
 
     return { promise, cancel: abort };
+  };
+
+  /**
+   * Registrations are installed once per connection and before this connection creates any
+   * document. Documents that were already running keep their recorded epoch, so the readiness
+   * policy can tell them apart from documents that actually ran the bundle.
+   */
+  const installBootstrap = async (bootstrap: CompiledBootstrap) => {
+    for (const entry of entries.values())
+      for (const frame of entry.page.frames()) registeredEpochs.set(frame, epochOf(frame));
+    // Host capabilities precede the bundle: a step may depend on a granted capability.
+    for (const grant of bootstrap.permissions)
+      await context.grantPermissions([...grant.permissions], { origin: grant.origin });
+    if (bootstrap.bundle !== undefined) await context.addInitScript({ content: bootstrap.bundle });
+  };
+
+  const documentOrigin = (frame: Frame): string => {
+    try {
+      const url = new URL(frame.url());
+
+      return ["http:", "https:"].includes(url.protocol) ? url.origin : "";
+    } catch {
+      return "";
+    }
+  };
+
+  /** A finite wait for a page promise. Native work continues; only this wait is bounded. */
+  const evaluateWithin = async (
+    frame: Frame,
+    expression: string,
+    milliseconds: number,
+  ): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      return await Promise.race([
+        frame.evaluate(expression),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(failure("ready", "timeout")), milliseconds);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const readiness = async (
+    bootstrap: CompiledBootstrap,
+    ticket: Ticket,
+  ): Promise<ReadinessState> => {
+    const { frame } = current();
+    const epoch = epochOf(frame);
+
+    if (readyDocuments.get(frame) === epoch) return { _tag: "Ready" };
+    ticket.check();
+    // A document that predates registration never ran the bundle; saying so is the contract.
+    if (epoch <= (registeredEpochs.get(frame) ?? -1)) {
+      if (bootstrap.existingDocuments === "RequireFreshNavigation")
+        return { _tag: "RequiresNavigation" };
+    }
+    const origin = documentOrigin(frame);
+
+    const applicable = bootstrap.readiness.filter(
+      (requirement) => requirement.origins === undefined || requirement.origins.includes(origin),
+    );
+
+    if (applicable.length === 0) {
+      readyDocuments.set(frame, epoch);
+
+      return { _tag: "NotApplicable" };
+    }
+
+    for (const requirement of applicable) {
+      const budget = Math.max(1, Math.min(requirement.timeoutMillis, ticket.remainingMillis()));
+      let value: unknown;
+
+      try {
+        value = await evaluateWithin(frame, requirement.expression, budget);
+      } catch (error) {
+        if (epochOf(frame) !== epoch || frame.isDetached())
+          return { _tag: "NotReady", step: requirement.step, reason: "stale" };
+
+        return {
+          _tag: "NotReady",
+          step: requirement.step,
+          reason:
+            Schema.is(BrowserError)(error) && error.reason === "timeout" ? "timeout" : "failed",
+        };
+      }
+      ticket.check();
+      // A completed wait cannot ready a document that replaced the one it observed.
+      if (epochOf(frame) !== epoch)
+        return { _tag: "NotReady", step: requirement.step, reason: "stale" };
+      if (value !== true) return { _tag: "NotReady", step: requirement.step, reason: "failed" };
+    }
+    readyDocuments.set(frame, epoch);
+
+    return { _tag: "Ready" };
   };
 
   /**
@@ -1235,6 +1342,14 @@ export const makePlaywrightDriver = async (
           observer.cancel();
         }
       }),
+    documentReadiness: (ticket) =>
+      sanitize("ready", async () => {
+        const bootstrap = options.bootstrap;
+
+        return bootstrap === undefined || bootstrap.readiness.length === 0
+          ? { _tag: "Ready" as const }
+          : readiness(bootstrap, ticket);
+      }),
     dismissDialogs: (ticket) =>
       sanitize("dismiss-dialogs", async () => {
         for (const dialog of [...dialogs]) {
@@ -1353,6 +1468,9 @@ export const makePlaywrightDriver = async (
       downloadPath: "downloads",
       eventsEnabled: true,
     });
+    // Registrations precede the first document this connection creates, and precede any
+    // navigation the caller makes, without this setup navigating anything itself.
+    if (options.bootstrap !== undefined) await installBootstrap(options.bootstrap);
     if (options.newPage || entries.size === 0) {
       creatingPage = true;
       try {

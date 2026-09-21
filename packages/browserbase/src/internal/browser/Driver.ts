@@ -8,6 +8,7 @@ import type {
   Viewport,
 } from "../../BrowserData.ts";
 import type { CaptureSize } from "../capture/CaptureTypes.ts";
+import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
@@ -20,7 +21,23 @@ export interface DriverOptions {
   readonly maxPages: number;
   readonly preserveViewport?: boolean;
   readonly pageControl?: boolean;
+  /** Installed once per connection, before any document this connection creates. */
+  readonly bootstrap?: CompiledBootstrap;
 }
+
+/**
+ * Readiness of the currently selected document only. `NotReady` is a reportable state rather
+ * than a native failure: the document exists, it simply cannot admit dependent work yet.
+ */
+export type ReadinessState =
+  | { readonly _tag: "Ready" }
+  | { readonly _tag: "NotApplicable" }
+  | { readonly _tag: "RequiresNavigation" }
+  | {
+      readonly _tag: "NotReady";
+      readonly step: string;
+      readonly reason: "timeout" | "failed" | "stale";
+    };
 
 export interface DriverEvents {
   readonly invalidate: (reason: Invalidation) => void;
@@ -144,6 +161,8 @@ export interface Driver {
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
   ) => Promise<string>;
+  /** Evaluated once per document; a later document never inherits an earlier one's result. */
+  readonly documentReadiness: (ticket: Ticket) => Promise<ReadinessState>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
   readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
   readonly invalidateObservation: () => void;

@@ -252,16 +252,59 @@ export const acquireSession = Effect.fnUntraced(function* (
     return driver;
   };
 
+  /**
+   * Work that depends on an initialized document waits for the current document's readiness.
+   * Navigation, selection and page management deliberately do not: initialization must never
+   * deadlock the navigation that produces the document it is waiting for.
+   */
+  const dependent = [
+    "read-text",
+    "click",
+    "fill",
+    "scroll",
+    "screenshot",
+    "observe",
+    "wait",
+    "click-and-wait",
+    "download-action",
+    "select-files",
+    "file-chooser",
+  ];
+
+  const requireReady = async (operation: string, ticket: Ticket) => {
+    if (!dependent.includes(operation)) return;
+    const state = await getDriver().documentReadiness(ticket);
+
+    if (state._tag === "Ready" || state._tag === "NotApplicable") return;
+    throw BrowserError.make({
+      operation,
+      reason:
+        state._tag === "RequiresNavigation" || state.reason === "stale"
+          ? "stale"
+          : state.reason === "timeout"
+            ? "timeout"
+            : "failed",
+      outcome: "undispatched",
+    });
+  };
+
+  /**
+   * `dependent` is false for lifecycle observations, which report what is actually on the
+   * reattached page. Readiness governs work that depends on initialization, not the reading
+   * that tells a caller whether this document was initialized at all.
+   */
   const observeInside = (
     ticket: Ticket,
     maximumBytes = Math.min(options.maxReturnedBytes, 16384),
     controls = 32,
+    dependent = true,
   ) =>
     Effect.suspend(() => {
       const revision = owner.state.revision;
 
       return native("observe", ticket, async () => {
         await getDriver().pageControl?.checkSelected(ticket);
+        if (dependent) await requireReady("observe", ticket);
 
         return getDriver().observe(maximumBytes, controls, ticket);
       }).pipe(
@@ -331,6 +374,7 @@ export const acquireSession = Effect.fnUntraced(function* (
             ].includes(operation)
           )
             await getDriver().pageControl?.checkSelected(ticket);
+          await requireReady(operation, ticket);
 
           return action(getDriver(), ticket);
         }),
@@ -362,6 +406,7 @@ export const acquireSession = Effect.fnUntraced(function* (
         (ticket) =>
           native(operation, ticket, async () => {
             await getDriver().pageControl?.checkSelected(ticket);
+            await requireReady(operation, ticket);
 
             return action(getDriver(), ticket);
           }),
@@ -499,6 +544,12 @@ export const acquireSession = Effect.fnUntraced(function* (
 
       return owner.guard("observe", (ticket) => observeInside(ticket, bytes, controlLimit));
     },
+    // Inspecting readiness is not an action: it charges nothing and mutates nothing.
+    readiness: owner.guard(
+      "ready",
+      (ticket) => native("ready", ticket, () => getDriver().documentReadiness(ticket)),
+      { charge: false },
+    ),
     pages: nativeOperation(
       "list-pages",
       (driver, ticket) => driver.listPages(ticket),
@@ -608,7 +659,7 @@ export const acquireSession = Effect.fnUntraced(function* (
               });
             }
             yield* native("resume", ticket, () => getDriver().dismissDialogs(ticket));
-            const observation = yield* observeInside(ticket);
+            const observation = yield* observeInside(ticket, undefined, undefined, false);
 
             // This synchronous commit remains under the same permit as the fresh observation.
             owner.state.phase = "open";
@@ -682,7 +733,7 @@ export const acquireSession = Effect.fnUntraced(function* (
                 newPage: false,
                 preserveViewport: true,
               });
-              const observation = yield* observeInside(ticket);
+              const observation = yield* observeInside(ticket, undefined, undefined, false);
 
               owner.state.phase = "open";
 

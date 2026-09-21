@@ -4,7 +4,12 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { FrameInfo, PageInfo, Viewport } from "../../src/BrowserData.ts";
 import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
-import type { CaptureSource, Driver, DriverEvents } from "../../src/internal/browser/Driver.ts";
+import type {
+  CaptureSource,
+  Driver,
+  DriverEvents,
+  ReadinessState,
+} from "../../src/internal/browser/Driver.ts";
 import type { Ticket } from "../../src/internal/browser/Owner.ts";
 import { acquireSession } from "../../src/internal/browser/Session.ts";
 import type { ContextWriterPermit } from "../../src/internal/session/WriterFacts.ts";
@@ -42,6 +47,8 @@ export interface ScriptOptions {
   readonly onClick?: (ticket: Ticket) => Promise<string>;
   readonly onObserve?: (events: DriverEvents) => Promise<void>;
   readonly onConnect?: (driver: Driver, events: DriverEvents) => Promise<Driver>;
+  /** Script the document-readiness state the owner must respect before dependent work. */
+  readonly readiness?: () => ReadinessState;
   /** Exercise the persistent-context path through the canonical writer permit. */
   readonly contextWriter?: ContextWriterPermit;
 }
@@ -74,6 +81,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
     url: "https://example.test/",
     observations: 0,
     selected: [] as string[],
+    readinessChecks: 0,
   };
 
   const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -238,6 +246,12 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         );
 
         return state.url;
+      },
+      documentReadiness: async (ticket) => {
+        ticket.check();
+        state.readinessChecks++;
+
+        return options.readiness?.() ?? { _tag: "Ready" as const };
       },
       dismissDialogs: async () => {},
       capture: async (target) => ({

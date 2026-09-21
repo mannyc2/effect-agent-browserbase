@@ -19,6 +19,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/Bootstrap.ts",
       "src/Browser.ts",
       "src/BrowserData.ts",
       "src/Capture.ts",
