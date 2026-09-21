@@ -65,7 +65,7 @@ These remain integration packages for the pinned upstream workspace, not a secon
 
 `Hosted Browserbase` is the only workflow intended to allocate provider sessions. It is manual and default-off; configure its branch-restricted protected environment before enabling it. It never runs on a pull request, so fork contributors are never blocked on a credential they cannot have. See [hosted runs](docs/HOSTED.md).
 
-The npm job is separate: it receives OIDC permission only after fresh acceptance and an explicit maintainer opt-in. It verifies and publishes the same immutable tarball the external consumer tested, without installing dependencies or executing package lifecycle scripts in the publishing job.
+The npm job is separate: it receives OIDC permission only after fresh acceptance and an explicit maintainer opt-in. An isolated [ts-release 0.4.0 application](tools/release/) publishes the two tested tarballs through native npm trusted publishing and provenance. It retains the signed bundle and plan in Git and uses a durable dispatch journal to resume partial releases without blindly resending an uncertain upload. The publishing job installs nothing and runs no package lifecycle scripts; its tested tooling arrives as a hashed build artifact.
 
 Historical acceptance is linked from [status](docs/STATUS.md). Checkpoints are immutable provenance under `checkpoints/`, not build inputs. Obsolete recovery scripts and transient run logs remain accessible in Git history, not on the active maintenance path.
 

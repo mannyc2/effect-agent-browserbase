@@ -22,6 +22,12 @@ on:
       release_set_sha256:
         description: Hash of the source-bound two-package release-set receipt
         value: ${{ jobs.acceptance.outputs.release_set_sha256 }}
+      release_tooling_artifact_id:
+        description: Immutable tested ts-release host and frozen dependencies
+        value: ${{ jobs.release-tooling.outputs.artifact_id }}
+      release_tooling_sha256:
+        description: SHA-256 of the tested release-tooling archive
+        value: ${{ jobs.release-tooling.outputs.sha256 }}
 
 permissions:
   contents: read
@@ -31,6 +37,50 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  release-tooling:
+    name: Native release recovery
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.22.2'
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.4.2'
+          no-cache: true
+      - name: Install frozen release tooling without lifecycle scripts
+        working-directory: tools/release
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Test native provider and durable recovery without public writes
+        working-directory: tools/release
+        run: |
+          bun run check
+          bun test
+          bun run build
+      - name: Check production Node imports and package the tested host
+        id: pack
+        run: |
+          node --input-type=module -e 'await import("./tools/release/dist/tools/release/main.js")'
+          digest="$(bun tools/release/pack.mjs "$RUNNER_TEMP/release-tooling")"
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: artifact
+        with:
+          name: browserbase-release-tooling-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-tooling
+          if-no-files-found: error
+          retention-days: 14
+
   acceptance:
     name: Unpaid acceptance
     # Fork PRs are welcome. No credentials, hosted sessions or write permissions.
