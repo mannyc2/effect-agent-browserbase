@@ -1,18 +1,24 @@
 # Browserbase platform, package architecture and engineering plan
 
-**Research date:** 20 September 2026. **Repository baseline:** [`1b3e9b1916621d036f2568c821e83bed72400f9c`](https://github.com/mannyc2/effect-agent-browserbase/commit/1b3e9b1916621d036f2568c821e83bed72400f9c). **Delivery:** documentation-only research and structural follow-up in [draft PR #30](https://github.com/mannyc2/effect-agent-browserbase/pull/30). No proposed runtime/package/API change is implemented by this report.
+**Research dates:** 20–21 September 2026. **Delivery:** documentation-only research in [PR #30](https://github.com/mannyc2/effect-agent-browserbase/pull/30). Runtime implementation is tracked separately in [PR #31](https://github.com/mannyc2/effect-agent-browserbase/pull/31). Proposed APIs and experiments in this report are not implemented or validated merely by merging documentation.
+
+## Read this first: current decisions and historical proposals
+
+The maintainer explicitly superseded the original compatibility-window proposal. The active contract is a **hard cutover**: remove compatibility facades, legacy constructors, aliases, reexports and error projections; migrate every maintained consumer; do not add `internal/Legacy.ts`, a migration window or a fourth legacy consumer. References to those mechanisms in the original chapters are historical proposals, not implementation instructions. The required distribution is **two candidate packages and three clean consumers**, with raw-zero declaration checks and `skipLibCheck:false`.
+
+The original research inspected source [`1b3e9b1916621d036f2568c821e83bed72400f9c`](https://github.com/mannyc2/effect-agent-browserbase/commit/1b3e9b1916621d036f2568c821e83bed72400f9c). Its descriptions of absent capabilities are baseline findings, not the current implementation status. The [21 September recorded-workflow chapter](recorded-workflows.md) reviews #31 at [`5ce468e7fec5f6dd37b336c80a4da2fcd69969cb`](https://github.com/mannyc2/effect-agent-browserbase/commit/5ce468e7fec5f6dd37b336c80a4da2fcd69969cb) and the updated [issue #34](https://github.com/mannyc2/effect-agent-browserbase/issues/34). It does not backport that runtime onto this documentation branch.
+
+[PR #33](https://github.com/mannyc2/effect-agent-browserbase/pull/33) owns the hosted-check registry and its separately authorized, narrowed provider claims. The original H1–H7 research questions are not all established by those narrower checks; equally, the registry must not be described as missing or rebuilt here. Check each entry's claim and retained evidence. This research adds no hosted run or spending authorization.
 
 ## Recommendation
 
-Build a **generic Effect-based Browserbase package plus a thin Effect Agent adapter**, preserving the existing scoped mutation owner, allocation identity, unknown-outcome fencing, exact-node actions and bounded target-pinned capture.
-
-Proposed `@effect-agent/browserbase` owns Browserbase resources and managed browser operation. Existing `@effect-agent/platform-browserbase` owns framework policy, BrowserHandle/Tool/error translation and legacy compatibility. The proposed new name does not imply npm availability or publishing authorization. Do not initially split resources, Playwright, capture and artifacts into additional packages: independent lifetimes deserve clear modules/scopes, and Playwright is already optional and lazily loaded.
+Keep **`@effect-agent/browserbase`** as the generic Effect integration owning Browserbase resources and managed browser operations. Keep **`@effect-agent/platform-browserbase`** as the actual Effect Agent adapter and Toolkit, borrowing that exact generic owner. Only the adapter imports the framework. No second connection, action budget, capture reservation or cleanup owner is introduced by adaptation.
 
 ```text
 Generic Browserbase consumer               Effect Agent consumer
              │                                     │
              │                       @effect-agent/platform-browserbase
-             │                             framework/legacy adapter
+             │                              framework adapter
              └─────────────────────┬───────────────┘
                          @effect-agent/browserbase
                       resources + one managed owner
@@ -20,81 +26,65 @@ Generic Browserbase consumer               Effect Agent consumer
                        Effect         optional lazy Playwright
 ```
 
-Within the generic package, keep the original resource/lifetime distinction:
+Keep resources, native operations, capture and artifacts as deliberate modules/subpaths rather than creating a package for every lifetime. Generic declarations must not pull in Effect Agent or Playwright types; resources-only consumers must not install either. No package publication is authorized by the proposed names.
 
-```text
-Persistent Context / uploaded extension / application environment recipe
-                              ↓ launch
-                      finite remote Session
-                              ↓ attach
-                    scoped local connection
-                              ↓ initialize
-                    pages / frames / documents
-                              ↓ owned operation
-                  observations / files / capture
-                              ↓ independent retrieval
-                      recording / replay artifacts
-```
+The resource/lifetime distinctions remain essential: a persistent provider Context is not a Playwright BrowserContext or an Effect Context; a durable SessionReference is not a live browser capability; local disconnect is not remote release; terminal session status is not proof of Context synchronization. Extension provisioning, browser connection, document initialization and post-session artifact retrieval have different owners and cleanup consequences.
 
-A Browserbase Context is not a Playwright BrowserContext or Effect Context. Local disconnection is not remote release; a terminal session is not a documented Context-flush receipt. Package separation must preserve those operational distinctions rather than hide them behind another forwarding layer.
+## Recorded-workflow follow-on: issue #34
+
+**Own faithful execution and trustworthy evidence; leave presentation choices to the application.** Owning less presentation requires a better public API, not private-native escape hatches or consumer guesses.
+
+The [new chapter](recorded-workflows.md) covers the entire request, not only cursor styling:
+
+- Scoped in-flight navigation, short owner transitions plus conflict reservations, intermediate checkpoints, explicit stop/cancellation semantics and independent-page progress.
+- Capture continuity across document changes, ambiguous transition attribution, bounded metadata/loss, actual geometry and separate browser-presentation, host-monotonic and output-media clocks.
+- Viewport evidence, clipped/occluded text, bounded control facts and checked host admission without default field-value or HTML disclosure.
+- Native move/hover/wheel and a conditional finite gesture executor: caller-selected easing, library-owned target validation, per-event budgets and late-native accounting.
+- **Passive recording snapshots versus actionable observations:** a checkpoint must not replace the node map used by agent tools; exact-node retention or checked revalidation across a hold must never retarget by selector or label or revive stale authority.
+- Request admission as a separate, coverage-qualified security capability, not a route callback marketed as whole-browser containment.
+
+Pinned Playwright source adds important constraints: action decorations can display fill values and delay input; capture acknowledgements and cached first frames do not prove suspension or freshness; ordinary screenshots are not proven non-waking held-page readers; and the pinned route implementation does not expose redirects as ordinary user routes. These are source findings, not newly executed tests.
+
+The library should supply the page/document/input/timing facts that a maintained public-API example uses to record and present a workflow. The application still owns cursor artwork, browser-window graphics, captions, narration, encoding, storage and playback. Do not create another recording owner, agent runtime, natural-language planner or generic event-sourcing system.
 
 ## Report chapters
 
-| Chapter | What it provides |
+| Chapter | Scope and applicability |
 | --- | --- |
-| [Platform research](platform.md) | Browserbase resources, SDK/API evolution, Contexts, sessions, settings, network/identity, extensions, files, observability and retention |
-| [Capability map](capability-map.md) | Current support classifications with actual code/provider evidence; target package/module/stage for each gap |
-| [Target architecture and API](architecture.md) | Generic session/page contract, explicit adapter composition, shared Client, launch recipe, ownership, Context coordination and document readiness |
-| [Code organization and package decision](organization.md) | Concrete target directory tree, package dependency graph, alternatives/tradeoffs, current-module→owner mapping, state authority and export compatibility |
-| [Effect implementation conventions](effect-conventions.md) | Exact rc.115 guidance/source, service/Layer composition, Schema/errors, Scope signatures, native callbacks, bounded concurrency, cancellation, observability and finalizer ordering |
-| [Consumer workflows](workflows.md) | Current API plus proposed generic/resource/agent consumers, typed writer coordination, customized documents, borrowed attachment and multi-page capture |
-| [Implementation plan](implementation-plan.md) | Ordered structural/capability stages, exact packaging changes, migration obligations, four emitted-consumer gates, change recipes and hosted H1–H7 |
-| [Evidence ledger](evidence.md) | Immutable source revisions, inspected code/guidance, historical observations, environment failures and explicit no-typecheck/no-execution boundaries |
+| [Recorded workflows and evidence](recorded-workflows.md) | 21 September source-backed #34 research, ownership decisions, modelling, implementation increments and unexecuted acceptance experiments |
+| [Platform research](platform.md) | Original provider/resource/API findings at the declared baseline; later scope decisions and hosted claims are tracked by #31–#33 |
+| [Capability map](capability-map.md) | Original support classifications, proposed owners and stages; not a current implementation inventory |
+| [Target architecture and API](architecture.md) | Generic session/page composition, shared Client, launch and ownership; compatibility passages are superseded by the hard cutover above |
+| [Code organization and package decision](organization.md) | Module/state ownership, package tradeoffs, source/export/fixture organization; legacy facade paths are historical, not required |
+| [Effect implementation conventions](effect-conventions.md) | Pinned services/Layers, Schema, E/R, Scope, bounded supervision and cleanup; historical compatibility/error examples are not active public contracts |
+| [Consumer workflows](workflows.md) | Resource, browser, Agent, writer, bootstrap and borrowed-attachment rationale; use canonical maintained APIs rather than legacy examples |
+| [Implementation plan](implementation-plan.md) | Original Stage 0A–5 dependencies and proof obligations; apply the hard-cutover override and three-consumer requirement |
+| [Evidence ledger](evidence.md) | Original revisions, inspected guidance and execution limitations; follow-on source links and limitations are in the recorded-workflow chapter |
 
-## Structural decisions
+The original chapters remain available for provenance. This index and the maintainer's explicit decisions take precedence over their superseded compatibility recommendations; the new research is a follow-on, not permission to widen #31's production scope silently.
 
-**The framework dependency is the justified package boundary.** The current manifest requires `effect-agent`, and the public session's BrowserHandle dependency is asserted by its type tests. Moving artifact modules behind more subpaths would not remove that dependency. The generic package needs its own browser policy/page/session contract; the adapter projects into the existing framework contract without allocating another owner or connection. [Package analysis](organization.md#1-decision-two-packages-not-a-package-for-every-lifetime).
+## Structural and Effect rules retained
 
-**A shared Client is the first extraction.** Normalize strict account configuration once; resource services acquire it through Layers. They own their routes rather than each constructing another HTTP/provider wrapper. The existing interactive/artifact options mismatch is a concrete consumer failure, not merely a style concern. Keep API credentials and credential-free media access as separate authorities. [Capability assessment](capability-map.md), [Stage 0A](implementation-plan.md#stage-0a--dependency-boundaries-before-filepackage-movement).
+**One strict Client.** Capture immutable account/fetch/media policy once; resource services acquire that dependency and own their endpoints. Provider credentials and approved media origins are distinct authorities. Input Schema validation remains strict; native/provider diagnostics stay sanitized.
 
-**Give every mutable state one owner.** Owner keeps lifecycle/generation/admission/dispatch stamps and budget; Connection keeps the current/pending native connection under the owner-issued epoch; Targets keeps page/frame maps and selection values; Documents keeps document readiness; Observation keeps retained nodes; Capture.Manager keeps aggregate target reservations. Small helpers and per-session controllers do not all become singleton services. [Module/state mapping](organization.md).
+**One authority for each mutable fact.** The owner retains lifecycle, admission, dispatch and budgets. Connection and page/document registries, observations, callbacks and aggregate capture reservations stay subordinate to it. Small helpers and per-session resources are factories, not mandatory ambient singleton services. Share identity facts rather than maintaining contradictory document epochs in each feature.
 
-**The adapter is a compatibility boundary, not a second engine.** Preserve current subpaths, legacy handle and result shapes, canonical Schema/service identities, privacy defaults and unknown-outcome semantics during an explicit prerelease window. Resource reexports must refer to the same service tags. Legacy capture/page-control facades delegate using the canonical generic session; copied wrappers do not mint authority. Removal of old contracts needs a separately announced breaking release. [Compatibility design](organization.md#5-export-and-compatibility-rules).
+**Preserve E/R and Scope.** Public asynchronous operations return Effect or Stream. Explicit acquisition retains Scope; a helper supplying Scope removes that requirement from both library and consumer work without erasing other services. Callback errors remain typed on host supervision; an installation Effect cannot retroactively fail. Admission must be finite before callback fibers or native work begin.
 
-**Effect conventions are pinned and concrete.** The rc.115 publishing script copies root LLMS.md into package AGENTS.md; that source was read in full. Use Context.Service/Layer for dependencies, Schema for boundaries, traced fn for useful operations and fnUntraced for internal/hot paths. Helpers supplying Scope remove it from R, including Scope introduced by consumer/initialization work. Consumer callback services/errors remain typed, and failures after installation need live supervision rather than a misleading installation E channel. [Conventions and code](effect-conventions.md).
+**Interruption is not rollback.** Preserve pre-POST allocation identity, exact resource validation, synchronous fencing, late-native disposal and uncertain-outcome quarantine. Never replay an unresolved mutation. Page, connection, allocation, writer and artifact namespaces are distinct, even when URLs happen to match.
 
-**Cleanup simplification must preserve native reality.** Mechanical extraction preserves current finalizer order. The target quiesce→local disconnect→remote reconciliation→writer settlement order is a deliberate later lifecycle change with failpoints and provider checks, not a consequence that follows automatically from moving files. Retain pre-POST identity journaling, cached close receipts, late-result disposal and immediate synchronous fencing. Interruption cannot undo a native command or preempt blocking/uninterruptible host code. [Cleanup contract](effect-conventions.md#6-cleanup-one-ordered-program-and-honest-receipts).
+**Cleanup and adaptation do not mint authority.** Quiesce admission before managed callback finalizers, dispose owned registrations, disconnect locally and independently reconcile remote release. A borrowed attachment never acquires release authority. The adapter translates the installed framework contract once and shares the generic owner's action/capture accounting.
 
-**A package split is incomplete until distribution proves it.** Bootstrap currently copies one package, release tooling allows one tarball and one workspace dependency, and the packed consumer always installs the framework/native peer. The plan changes those exact constraints, using an explicit two-package inventory, a versioned release-set receipt and four clean consumers. Repository maintenance/publishing scripts stay dependency-free. [Stage 0B](implementation-plan.md#stage-0b--two-package-distribution-and-compatibility).
+## Implementation and acceptance boundaries
 
-## Revised implementation sequence
+The hard-cutover prerequisites remain Stage 0A's shared native-neutral injectable Effect binding and fixture migration, canonical two-package distribution, provider-faithful launch/resources, typed writer coordination, scoped bootstrap, fresh-process borrowed attachment, ordered cleanup, and files/artifact diagnostics. #31 owns their current implementation and exact-head acceptance record.
 
-| Stage | Result |
-| --- | --- |
-| 0A | Shared strict Client and trusted injectable binding, preserving current runtime behavior |
-| 0B | Generic Browserbase plus adapter distributions, compatibility facade and two-tarball/four-consumer acceptance |
-| 1 | Provider-faithful launch compiler, provider-managed viewport, passive inspection and precise allocation errors |
-| 2 | Context resources, typed consumer writer coordination and honest persistence evidence |
-| 3 | Scoped extension/script/binding/permission customization with target/document/observation extraction |
-| 4 | Borrowed cross-process attachment and separately verified cleanup/lifecycle organization |
-| 5 | Complete files, artifacts and multi-page operational diagnosis |
+For #34, first establish shared identities and bounded evidence, viewport/control facts and real input, with a maintained public-API recorded-workflow example. Implement navigation operations, checkpoints and capture continuity together against incremental HTML. Treat request-admission coverage as a separate security increment. A finite gesture executor is conditional on demonstrated latency need, not a new mandatory choreography runtime.
 
-Each stage names file moves/new modules, dependency/export implications, migration and independent acceptance. Three change recipes show the files/tests for a provider setting, a resource operation and a bootstrap capability. Keep the existing native reliability investigations separate; no retry-until-green or weakened capture assertions are part of the redesign.
+Each production increment must verify the same two unmodified candidate tarballs in the three canonical profiles: resources-only without framework/native peers, generic real-native browser/capture, and actual AgentRuntime sharing the generic owner. Keep `skipLibCheck:false`; a raw compiler failure in a dependency is still a failure. Update bootstrap, manifests/builds/exports, inventory and every receipt consumer when an implemented public boundary changes. No source inspection, design sketch, previously green head or documentation CI run proves those new behaviors.
 
-## Original platform findings carried forward
+## Versions and validation
 
-Current launch coverage is much narrower than Browserbase: proxies/logging/CAPTCHA solving are fixed off, and region/extensions/Verified/broader settings are not publicly configurable. Context ID/persist/lease already exist, while resource provisioning and persistence visibility remain incomplete. Existing reconnect is same-owner/same-scope, not fresh-process recovery. Provider reconciliation requests release and is not passive inspection.
+The reviewed pins remain Effect **4.0.0-rc.115**, TypeScript **7.0.2**, effect-agent/testing **0.1.0-beta.102**, Playwright **1.63.0**, Node **24.14.1**, Bun **1.4.2** and Vite+ **0.3.2**. Exact original Effect source: `4a05d4914fa2327a42bd75fe77c22c188becf3b4`. Browserbase SDK **2.20.0** was a contract reference, not an added runtime dependency.
 
-Native scripts, permissions, cookies and bindings are available underneath the driver but inaccessible through the owned public session. Scoped customization makes them usable without exposing a raw browser object or second unfenced CDP connection. Provider allowedDomains remains weaker than ExactHosts/PublicWeb. Live View presentation is not read-only authorization. Current SDK webhooks are Functions-only. Recordings, replay and live capture remain separate; audio, extension state, Context synchronization and cross-page identity need evidence. [Provider research](platform.md), [capability map](capability-map.md).
-
-## API acceptance details
-
-Initialization must not deadlock its own first navigation. Install registrations, then permit navigation to produce a new document and await that document's readiness. Origin-excluded documents need an explicit skipped/not-applicable state. A truthy page global alone is not trusted cross-process readiness: validate recipe version, current epoch and host registration state. Do not automatically reload a page that may contain an uncertain transaction.
-
-The proposed per-acquisition `contextWriter` is a scoped permit from typed coordinator composition, not a serializable lease or provider-enforced lock. Consumer settlement errors/services remain visible; the helper records exact attempt/cleanup facts and quarantines unconfirmed writers. [Worked coordination contract](workflows.md#4-persistent-account-workflow-and-coordinator-types).
-
-## Versions and validation boundary
-
-Current pins remain Effect **4.0.0-rc.115**, TypeScript **7.0.2**, effect-agent/testing **0.1.0-beta.102**, Playwright **1.63.0**, Node **24.14.1**, Bun **1.4.2** and Vite+ **0.3.2**. Exact Effect source: `4a05d4914fa2327a42bd75fe77c22c188becf3b4`. Browserbase SDK contract reference: **2.20.0**, not an installed runtime dependency. [Evidence and primary references](evidence.md).
-
-The sandbox could not resolve GitHub or the npm registry and had neither the pinned runtimes nor a checkout. **No new examples were typechecked; no package/native/hosted tests or canonical formatter ran.** Current examples are source-aligned; proposed examples remain explicitly proposed. Historical test/provider reports are attributed, not claimed as fresh observations. All changes are incrementally committed documentation on the same branch; runtime code, package names, dependencies, workflows, account permissions and publication remain unchanged.
+The original 20 September environment limitations and no-execution statement remain in the evidence ledger. The 21 September follow-on is also source-backed research: no proposed API was typechecked and no package/native/hosted experiment was executed for it. Incorporation changes documentation only; structural checks and any exact-commit CI result must be reported separately. Runtime source, dependency pins, workflows, permissions and publication settings are unchanged.
