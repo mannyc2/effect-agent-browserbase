@@ -143,7 +143,17 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
           expect(actual.js).toMatchObject({ innerWidth: 640, innerHeight: 480 });
           expect(actual.layout).toEqual(dimensions);
           expect(actual.window.bounds).toEqual(before.window.bounds);
-          expect(yield* geometry(stageNative)).toEqual(before);
+          const after = yield* geometry(stageNative);
+
+          expect(after.viewport).toEqual(before.viewport);
+          expect(after.layout).toEqual(before.layout);
+          expect(after.window).toEqual(before.window);
+          // Chromium changes emulated outer chrome metrics when another tab becomes active.
+          expect(after.js).toMatchObject({
+            innerWidth: before.js.innerWidth,
+            innerHeight: before.js.innerHeight,
+            devicePixelRatio: before.js.devicePixelRatio,
+          });
 
           const interval = yield* Capture.start(session, {
             target: stage,
