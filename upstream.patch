@@ -199,7 +199,7 @@ index 183913dc..bd70f0a6 100644
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
 diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/toolchain.test.ts
-index 0b337058..e9a16d37 100644
+index 0b337058..35cdf0cf 100644
 --- a/packages/testing/test/toolchain.test.ts
 +++ b/packages/testing/test/toolchain.test.ts
 @@ -98,6 +98,8 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
@@ -234,7 +234,7 @@ index 0b337058..e9a16d37 100644
    "ai-typesafe": [],
    "effect-agent": [],
 +  browserbase: [],
-+  "platform-browserbase": ["effect-agent", "testing"],
++  "platform-browserbase": ["browserbase", "effect-agent", "testing"],
    "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
    "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
    "pr-review": ["effect-agent"],

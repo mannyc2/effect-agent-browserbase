@@ -149,7 +149,7 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
   navigate: (request) =>
     checked(NavigateRequest, request, "navigate").pipe(
       Effect.flatMap((value) => bound.navigate(value.url)),
-      Effect.flatMap(decoded(NavigationResult, "navigate")),
+      Effect.flatMap((url) => decoded(NavigationResult, "navigate")({ url })),
     ),
   readText: (request) =>
     checked(ReadTextRequest, request, "read-text").pipe(

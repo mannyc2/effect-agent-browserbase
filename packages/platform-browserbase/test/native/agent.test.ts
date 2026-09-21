@@ -7,8 +7,7 @@ import { Agent, AgentRuntime, InMemory } from "effect-agent";
 import { BrowserNavigateRequest, BrowserReadTextRequest } from "effect-agent/interactive-browser";
 import { Model } from "effect/unstable/ai";
 
-import { localBrowser } from "../../../browserbase/test/fixtures/LocalBrowser.ts";
-import { agentPolicy, withAgentBrowser } from "../fixtures/AgentBrowser.ts";
+import { agentPolicy, localAgentBrowser, withAgentBrowser } from "../fixtures/AgentBrowser.ts";
 
 const agent = Agent.make("browser-package-acceptance", {
   input: Schema.String,
@@ -43,7 +42,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const f = yield* localBrowser;
+        const f = yield* localAgentBrowser;
         const references: string[] = [];
         let modelFinalizers = 0;
 
@@ -130,7 +129,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const f = yield* localBrowser;
+        const f = yield* localAgentBrowser;
 
         yield* withAgentBrowser(
           f,
@@ -197,7 +196,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const f = yield* localBrowser;
+        const f = yield* localAgentBrowser;
         const waiting = yield* Deferred.make<void>();
         let finalized = 0;
 
