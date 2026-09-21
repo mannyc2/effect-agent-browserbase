@@ -6,9 +6,10 @@ import {
   type HttpClientResponse,
 } from "effect/unstable/http";
 
-import type { ClientMethod, ClientOptions } from "../../Client.ts";
+import type { ClientMethod, ClientOptions, MultipartFile, UploadLimits } from "../../Client.ts";
 import { ClientError } from "../../Errors.ts";
 import { Identifier } from "../../References.ts";
+import { encodeFilePart } from "./Multipart.ts";
 
 const API_ORIGIN = "https://api.browserbase.com";
 const MAX_JSON_BYTES = 1024 * 1024;
@@ -305,26 +306,11 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     );
   });
 
-  const jsonOnce = Effect.fnUntraced(function* (
+  const readJson = Effect.fnUntraced(function* (
     method: ClientMethod,
-    path: string,
-    body?: Schema.Json,
+    response: HttpClientResponse.HttpClientResponse,
+    operation: string,
   ) {
-    const operation = method === "GET" ? "provider-read" : "provider-mutation";
-    let request = apiRequest(method, path, "application/json");
-
-    if (body !== undefined) {
-      request = yield* HttpClientRequest.bodyJson(request, body).pipe(
-        Effect.mapError(() =>
-          ClientError.make({
-            operation,
-            reason: "configuration",
-            outcome: "undispatched",
-          }),
-        ),
-      );
-    }
-    const response = yield* execute(request, operation, method === "GET" ? undefined : "unknown");
     const stream = yield* inspectJson(method, response, operation);
     const bytes = yield* collect(stream, MAX_JSON_BYTES, operation);
 
@@ -354,6 +340,81 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           ...(mutationOutcome(method) === undefined ? {} : { outcome: mutationOutcome(method) }),
         }),
       ),
+    );
+  });
+
+  const jsonOnce = Effect.fnUntraced(function* (
+    method: ClientMethod,
+    path: string,
+    body?: Schema.Json,
+  ) {
+    const operation = method === "GET" ? "provider-read" : "provider-mutation";
+    let request = apiRequest(method, path, "application/json");
+
+    if (body !== undefined) {
+      request = yield* HttpClientRequest.bodyJson(request, body).pipe(
+        Effect.mapError(() =>
+          ClientError.make({
+            operation,
+            reason: "configuration",
+            outcome: "undispatched",
+          }),
+        ),
+      );
+    }
+    const response = yield* execute(request, operation, method === "GET" ? undefined : "unknown");
+
+    return yield* readJson(method, response, operation);
+  });
+
+  /**
+   * One bounded in-memory file part. The encoder proves its delimiter absent from the
+   * content, and an accepted multipart mutation is never retried: a lost reply is unknown.
+   */
+  const upload = Effect.fnUntraced(function* (
+    path: string,
+    part: MultipartFile,
+    limits: UploadLimits,
+    outerDeadline?: number,
+  ) {
+    const operation = "provider-upload";
+    const timeoutMillis = limits.timeoutMillis ?? 60_000;
+
+    if (!Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
+      return yield* ClientError.make({
+        operation,
+        reason: "configuration",
+        outcome: "undispatched",
+      });
+    }
+
+    const encoded = encodeFilePart(part, limits.maxBytes);
+
+    if (encoded._tag === "Rejected") {
+      return yield* ClientError.make({
+        operation,
+        reason: encoded.reason,
+        outcome: "undispatched",
+      });
+    }
+
+    const request = HttpClientRequest.bodyUint8Array(
+      apiRequest("POST", path, "application/json"),
+      encoded.body,
+      encoded.contentType,
+    );
+
+    const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
+
+    return yield* within(
+      Effect.scoped(
+        execute(request, operation, "unknown").pipe(
+          Effect.flatMap((response) => readJson("POST", response, operation)),
+        ),
+      ),
+      deadline,
+      operation,
+      "unknown",
     );
   });
 
@@ -583,6 +644,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     projectId: configured.projectId,
     json,
     noContent,
+    upload,
     text,
     bytes,
     media,

@@ -28,6 +28,7 @@ export default defineConfig({
       "src/Contexts.ts",
       "src/Downloads.ts",
       "src/Errors.ts",
+      "src/Extensions.ts",
       "src/Launch.ts",
       "src/PageControl.ts",
       "src/Recordings.ts",

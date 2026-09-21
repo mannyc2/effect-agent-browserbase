@@ -7,6 +7,7 @@ export * as ContextCoordination from "./ContextCoordination.ts";
 export * as Contexts from "./Contexts.ts";
 export * as Downloads from "./Downloads.ts";
 export * as Errors from "./Errors.ts";
+export * as Extensions from "./Extensions.ts";
 export * as Launch from "./Launch.ts";
 export * as PageControl from "./PageControl.ts";
 export * as Recordings from "./Recordings.ts";

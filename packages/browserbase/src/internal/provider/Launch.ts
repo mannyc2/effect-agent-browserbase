@@ -56,12 +56,19 @@ export const compileLaunch = Effect.fnUntraced(function* (
   const fail = () =>
     BrowserError.make({ operation: "launch", reason: "configuration", outcome: "undispatched" });
 
+  // One top-level extension selection. A conflicting provider alias is rejected rather
+  // than resolved by an undocumented precedence, and a foreign project never reaches POST.
   if (
     (recipe.context !== undefined && recipe.context.reference.projectId !== attempt.projectId) ||
+    (recipe.extension !== undefined &&
+      (recipe.extension.projectId !== attempt.projectId ||
+        (recipe.provider.extensionId !== undefined &&
+          recipe.provider.extensionId !== recipe.extension.extensionId))) ||
     (settings.verified === true && recipe.viewport._tag !== "ProviderManaged") ||
     (settings.os !== undefined && settings.verified !== true)
   )
     return yield* fail();
+  const extensionId = recipe.extension?.extensionId ?? recipe.provider.extensionId;
 
   const viewport =
     recipe.viewport._tag === "Fixed"
@@ -145,9 +152,7 @@ export const compileLaunch = Effect.fnUntraced(function* (
     ...(recipe.provider.proxySettings === undefined
       ? {}
       : { proxySettings: recipe.provider.proxySettings }),
-    ...(recipe.provider.extensionId === undefined
-      ? {}
-      : { extensionId: recipe.provider.extensionId }),
+    ...(extensionId === undefined ? {} : { extensionId }),
     browserSettings: {
       ...settings,
       recordSession,

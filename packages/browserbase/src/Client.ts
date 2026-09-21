@@ -14,6 +14,20 @@ export interface ClientOptions {
 
 export type ClientMethod = "GET" | "POST" | "DELETE";
 
+/** One bounded in-memory file part. A filesystem path is never a transport input. */
+export interface MultipartFile {
+  readonly field: string;
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly bytes: Uint8Array;
+}
+
+/** Upload bounds are caller-owned; an omitted timeout keeps the 60-second default. */
+export interface UploadLimits {
+  readonly maxBytes: number;
+  readonly timeoutMillis?: number;
+}
+
 /**
  * One immutable Browserbase account and approved transport, shared by every resource Layer.
  * Constructing the Layer performs no request and never loads the native browser peer.
@@ -34,6 +48,13 @@ export class BrowserbaseClient extends Context.Service<
       body?: Schema.Json,
       outerDeadline?: number,
     ) => Effect.Effect<void, ClientError>;
+    /** One bounded multipart mutation. A lost reply stays unknown and is never retried. */
+    readonly upload: (
+      path: string,
+      part: MultipartFile,
+      limits: UploadLimits,
+      outerDeadline?: number,
+    ) => Effect.Effect<Schema.Json, ClientError>;
     readonly text: (
       path: string,
       maximum: number,

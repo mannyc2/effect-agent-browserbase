@@ -5,14 +5,16 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { BrowserbaseContexts } from "../../src/Contexts.ts";
-import type { ClientError, ContextError, SessionError } from "../../src/Errors.ts";
-import { ContextReference, SessionReference } from "../../src/References.ts";
+import type { ClientError, ContextError, ExtensionError, SessionError } from "../../src/Errors.ts";
+import { BrowserbaseExtensions } from "../../src/Extensions.ts";
+import { ContextReference, ExtensionReference, SessionReference } from "../../src/References.ts";
 import { BrowserbaseSessions } from "../../src/Sessions.ts";
+import { buildZip, extensionArchive } from "./Zip.ts";
 
 /** One declared control-plane failure channel; each case keeps its own typed subset. */
 interface Case {
   readonly name: string;
-  readonly run: Effect.Effect<void, ClientError | SessionError | ContextError>;
+  readonly run: Effect.Effect<void, ClientError | SessionError | ContextError | ExtensionError>;
 }
 
 const account = {
@@ -45,9 +47,17 @@ const providerSession = (status: "PENDING" | "RUNNING" | "ERROR" | "TIMED_OUT" |
   region: "us-east-1" as const,
 });
 
-const resourceLayer = Layer.merge(BrowserbaseSessions.layer, BrowserbaseContexts.layer).pipe(
-  Layer.provide(BrowserbaseClient.layer(account)),
-);
+const extensionReference = ExtensionReference.make({
+  provider: "browserbase",
+  projectId: "project-1",
+  extensionId: "extension-1",
+});
+
+const resourceLayer = Layer.mergeAll(
+  BrowserbaseSessions.layer,
+  BrowserbaseContexts.layer,
+  BrowserbaseExtensions.layer,
+).pipe(Layer.provide(BrowserbaseClient.layer(account)));
 
 export const controlPlaneCases: ReadonlyArray<Case> = [
   {
@@ -192,19 +202,137 @@ export const controlPlaneCases: ReadonlyArray<Case> = [
     }),
   },
   {
+    name: "Extensions register one inspected archive and reuse it by reference",
+    run: Effect.gen(function* () {
+      const archive = extensionArchive([{ name: "background.js", content: "self.ok = true;" }]);
+
+      const requests: Array<{
+        readonly method: string;
+        readonly path: string;
+        readonly part?: { readonly name: string; readonly type: string; readonly bytes: number };
+      }> = [];
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const path = new URL(request.url).pathname;
+
+        if (request.method === "POST") {
+          // The provider parses a standard multipart body, so this fixture does too.
+          const form = await request.formData();
+          const file = form.get("file");
+
+          assert.ok(file instanceof File);
+          assert.equal(form.has("projectId"), false);
+          requests.push({
+            method: request.method,
+            path,
+            part: { name: file.name, type: file.type, bytes: file.size },
+          });
+          assert.deepEqual(new Uint8Array(await file.arrayBuffer()), archive);
+
+          return Response.json({
+            id: "extension-1",
+            projectId: "project-1",
+            fileName: "extension.zip",
+          });
+        }
+        requests.push({ method: request.method, path });
+        if (request.method === "DELETE") return new Response(null, { status: 204 });
+
+        return Response.json({
+          id: "extension-1",
+          projectId: "project-1",
+          fileName: "extension.zip",
+          createdAt: "2026-09-20T18:00:00.000Z",
+          updatedAt: "2026-09-20T18:00:00.000Z",
+        });
+      };
+
+      yield* Effect.gen(function* () {
+        const extensions = yield* BrowserbaseExtensions;
+        const registered = yield* extensions.register(archive);
+
+        assert.deepEqual(registered.reference, extensionReference);
+        assert.equal(registered.entries, 2);
+        assert.equal(registered.archiveBytes, archive.byteLength);
+
+        const metadata = yield* extensions.retrieve(registered.reference);
+
+        assert.equal(metadata.fileName, "extension.zip");
+        yield* extensions.delete(registered.reference);
+        assert.deepEqual(requests, [
+          {
+            method: "POST",
+            path: "/v1/extensions",
+            part: { name: "extension.zip", type: "application/zip", bytes: archive.byteLength },
+          },
+          { method: "GET", path: "/v1/extensions/extension-1" },
+          { method: "DELETE", path: "/v1/extensions/extension-1" },
+        ]);
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
+    }),
+  },
+  {
+    name: "an archive without a root manifest never reaches the provider",
+    run: Effect.gen(function* () {
+      let requests = 0;
+
+      yield* Effect.gen(function* () {
+        const extensions = yield* BrowserbaseExtensions;
+
+        const rejected = yield* extensions
+          .register(buildZip([{ name: "background.js", content: "self.ok = true;" }]))
+          .pipe(Effect.result);
+
+        assert.equal(rejected._tag, "Failure");
+        if (rejected._tag === "Failure") {
+          assert.equal(rejected.failure.operation, "extension-archive");
+          assert.equal(rejected.failure.reason, "configuration");
+          assert.equal(rejected.failure.outcome, "undispatched");
+        }
+
+        const oversize = yield* extensions
+          .register(extensionArchive(), { maxBytes: 8 })
+          .pipe(Effect.result);
+
+        assert.equal(oversize._tag, "Failure");
+        if (oversize._tag === "Failure") {
+          assert.equal(oversize.failure.operation, "extension-archive-limit");
+          assert.equal(oversize.failure.reason, "limit");
+        }
+        assert.equal(requests, 0);
+      }).pipe(
+        Effect.provide(resourceLayer),
+        Effect.provideService(FetchHttpClient.Fetch, async () => {
+          requests++;
+
+          return Response.json({});
+        }),
+      );
+    }),
+  },
+  {
     name: "resource services reject foreign project identities before transport",
     run: Effect.gen(function* () {
       let requests = 0;
       const foreignSession = SessionReference.make({ ...sessionReference, projectId: "project-2" });
       const foreignContext = ContextReference.make({ ...contextReference, projectId: "project-2" });
 
+      const foreignExtension = ExtensionReference.make({
+        ...extensionReference,
+        projectId: "project-2",
+      });
+
       yield* Effect.gen(function* () {
         const sessions = yield* BrowserbaseSessions;
         const contexts = yield* BrowserbaseContexts;
+        const extensions = yield* BrowserbaseExtensions;
 
         for (const effect of [
           sessions.retrieve(foreignSession).pipe(Effect.result),
           contexts.retrieve(foreignContext).pipe(Effect.result),
+          extensions.retrieve(foreignExtension).pipe(Effect.result),
+          extensions.delete(foreignExtension).pipe(Effect.result),
         ]) {
           const result = yield* effect;
 
