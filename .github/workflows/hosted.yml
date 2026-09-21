@@ -9,12 +9,11 @@ name: Hosted Browserbase
 on:
   workflow_dispatch:
     inputs:
-      run:
-        description: Which guarded hosted command to execute
+      checks:
+        description: Space-separated hosted checks from packages/browserbase/examples/hosted/checks.ts
         required: true
         default: demo
-        type: choice
-        options: [demo, acceptance, both]
+        type: string
       demo_url:
         description: Exact HTTPS page the published demo recording should show
         required: false
@@ -40,12 +39,15 @@ jobs:
       - name: Require an explicit, separately enabled hosted opt-in
         env:
           LIVE_ENABLED: ${{ vars.BROWSERBASE_LIVE_ENABLED }}
+          CHECKS: ${{ inputs.checks }}
         run: |
           set -euo pipefail
           if [ "$LIVE_ENABLED" != true ]; then
             echo 'Hosted Browserbase runs are disabled. Configure the protected browserbase-live environment, then set BROWSERBASE_LIVE_ENABLED=true.' >&2
             exit 1
           fi
+          # Names only; the registry itself is consulted by the runner before any allocation.
+          [[ "$CHECKS" =~ ^[a-z-]+(\ [a-z-]+)*$ ]] || { echo 'checks must be space-separated check names' >&2; exit 1; }
 
   live:
     name: Guarded hosted run
@@ -78,37 +80,27 @@ jobs:
       - name: Restore the pinned integration workspace
         run: bash tools/bootstrap.sh "$BROWSERBASE_WORK_ROOT/upstream"
       - name: Install the caller-owned media tools
-        if: ${{ inputs.run != 'acceptance' }}
+        if: ${{ contains(format(' {0} ', inputs.checks), ' demo ') }}
         run: sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg
-      - name: Record the published demo
-        if: ${{ inputs.run != 'acceptance' }}
-        env:
-          EFFECT_AGENT_BROWSERBASE_LIVE: '1'
-          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
-          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
-          BROWSERBASE_DEMO_URL: ${{ inputs.demo_url }}
-        run: |
-          set -euo pipefail
-          test -n "${BROWSERBASE_DEMO_URL}" || unset BROWSERBASE_DEMO_URL
-          bash tools/hosted-demo.sh "$BROWSERBASE_WORK_ROOT/upstream/tree" "$BROWSERBASE_WORK_ROOT/demo"
-      - name: Run the guarded hosted acceptance
-        if: ${{ inputs.run != 'demo' }}
+      - name: Run the guarded hosted checks
         env:
           EFFECT_AGENT_BROWSERBASE_LIVE: '1'
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
           BROWSERBASE_ARTIFACT_ORIGINS: ${{ secrets.BROWSERBASE_ARTIFACT_ORIGINS }}
+          BROWSERBASE_DEMO_URL: ${{ inputs.demo_url }}
+          CHECKS: ${{ inputs.checks }}
         run: |
           set -euo pipefail
-          bash tools/hosted-acceptance.sh "$BROWSERBASE_WORK_ROOT/upstream/tree" \
-            | tee "$BROWSERBASE_WORK_ROOT/hosted-acceptance.jsonl"
+          test -n "${BROWSERBASE_DEMO_URL}" || unset BROWSERBASE_DEMO_URL
+          test -n "${BROWSERBASE_ARTIFACT_ORIGINS}" || unset BROWSERBASE_ARTIFACT_ORIGINS
+          read -ra names <<< "$CHECKS"
+          bash tools/hosted-run.sh "$BROWSERBASE_WORK_ROOT/upstream/tree" "$BROWSERBASE_WORK_ROOT/hosted" "${names[@]}"
       - name: Retain the recording, records and checksums
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: browserbase-hosted-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/browserbase-hosted/demo
-            ${{ runner.temp }}/browserbase-hosted/hosted-acceptance.jsonl
+          path: ${{ runner.temp }}/browserbase-hosted/hosted
           if-no-files-found: error
           retention-days: 14

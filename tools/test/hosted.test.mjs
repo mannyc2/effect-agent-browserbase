@@ -4,6 +4,8 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import { loadRegistry, select, verify } from "../hosted-registry.mjs";
+
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
 
@@ -31,29 +33,112 @@ test("the only paid workflow is manual, opt-in gated and credential-isolated", (
   assert.ok((live.match(/secrets\./g) ?? []).length > 0);
 });
 
-test("both hosted commands refuse to allocate without an explicit operator opt-in", () => {
-  for (const name of ["tools/hosted-acceptance.sh", "tools/hosted-demo.sh"]) {
-    const script = read(name);
-    assert.ok(script.includes('test "${EFFECT_AGENT_BROWSERBASE_LIVE:-}" = 1 ||'), name);
-    assert.ok(script.includes('exit 2'), name);
-    assert.ok(script.includes(': "${BROWSERBASE_API_KEY:?'), name);
-    assert.ok(script.includes(': "${BROWSERBASE_PROJECT_ID:?'), name);
-  }
-  // A recording published as documentation must not silently become the
-  // provider-artifact acceptance run, which needs approved delivery origins.
-  assert.ok(read("tools/hosted-acceptance.sh").includes('BROWSERBASE_ARTIFACT_ORIGINS:?'));
-  assert.doesNotMatch(read("tools/hosted-demo.sh"), /BROWSERBASE_ARTIFACT_ORIGINS/);
-  // Neither one may be reachable from the unpaid gate.
-  assert.doesNotMatch(read("tools/run-acceptance.sh"), /hosted-demo\.sh|hosted-acceptance\.sh/);
+test("the hosted runner refuses to allocate without an explicit operator opt-in", () => {
+  const script = read("tools/hosted-run.sh");
+
+  assert.ok(script.includes('test "${EFFECT_AGENT_BROWSERBASE_LIVE:-}" = 1 ||'));
+  assert.ok(script.includes("exit 2"));
+  assert.ok(script.includes(': "${BROWSERBASE_API_KEY:?'));
+  assert.ok(script.includes(': "${BROWSERBASE_PROJECT_ID:?'));
+  // Every name is validated against the registry before the first check runs.
+  assert.ok(script.indexOf("hosted-registry.mjs\" select") < script.indexOf("vp exec bun"));
+  // Nothing hosted may be reachable from the unpaid gate.
+  assert.doesNotMatch(read("tools/run-acceptance.sh"), /hosted-run\.sh|hosted-registry|examples\/hosted/);
 });
 
-test("the demo example encodes its own frames instead of retrieving provider media", () => {
-  const example = read("packages/browserbase/examples/hosted-demo.ts");
+const hostedDirectory = "packages/browserbase/examples/hosted";
+const registry = await loadRegistry(join(root, hostedDirectory, "checks.ts"));
+const knownSettings = new Set(["BROWSERBASE_ARTIFACT_ORIGINS"]);
+
+test("every registered check is a case that passes through the one gate", () => {
+  const files = readdirSync(join(root, hostedDirectory)).filter((name) => name.endsWith(".ts"));
+  const cases = files.filter((name) => name !== "harness.ts" && name !== "checks.ts");
+
+  assert.deepEqual(cases.map((name) => name.slice(0, -3)).sort(), Object.keys(registry.checks).sort());
+  for (const name of Object.keys(registry.checks)) {
+    const source = read(`${hostedDirectory}/${name}.ts`);
+
+    assert.ok(source.includes(`hostedCase(${JSON.stringify(name)})`), name);
+    // Credentials, settings and allocation come from the harness, never from a case itself.
+    assert.doesNotMatch(source, /process\.env|BrowserbaseClient|account\.layer|Account\.layer/, name);
+    assert.doesNotMatch(source, /\)\.open\(|\.acquire\(|\.attach\(/, name);
+    assert.ok(source.includes("await h.run("), name);
+  }
+});
+
+test("every registered check stays inside the ceiling and declares what it supports", () => {
+  const { ceiling, checks } = registry;
+  const headings = new Set(
+    read("docs/STATUS.md")
+      .split("\n")
+      .filter((line) => line.startsWith("## "))
+      .map((line) => line.slice(3).toLowerCase().replace(/[^a-z0-9 -]/g, "").replace(/ /g, "-")),
+  );
+
+  for (const [name, check] of Object.entries(checks)) {
+    for (const [key, limit] of Object.entries(ceiling)) {
+      assert.ok(Number.isSafeInteger(check.budget[key]) && check.budget[key] >= 0, `${name} ${key}`);
+      assert.ok(check.budget[key] <= limit, `${name} exceeds the ${key} ceiling`);
+    }
+    assert.ok(check.budget.sessions >= 1, name);
+    assert.ok(check.claim.length > 0, name);
+    for (const key of check.env) assert.ok(knownSettings.has(key), `${name} requires ${key}`);
+    // A recorded claim must point at the run record that established it.
+    if (check.evidence !== null) {
+      const [page, anchor] = check.evidence.split("#");
+
+      assert.equal(page, "docs/STATUS.md", name);
+      assert.ok(headings.has(anchor), `${name} cites a missing record: ${anchor}`);
+    }
+  }
+  // Provider media is only ever fetched through origins an operator approved.
+  for (const [name, check] of Object.entries(checks)) {
+    const source = read(`${hostedDirectory}/${name}.ts`);
+
+    if (/BrowserbaseRecordings|BrowserbaseReplays|BrowserbaseDownloads/.test(source)) {
+      assert.ok(check.env.includes("BROWSERBASE_ARTIFACT_ORIGINS"), name);
+    }
+  }
+});
+
+test("the registry refuses unknown, duplicate, unconfigured and unattended checks", () => {
+  const env = { BROWSERBASE_ARTIFACT_ORIGINS: "https://example.test" };
+
+  assert.deepEqual(
+    select(registry, ["acceptance", "demo"], env).map((item) => [item.name, item.media]),
+    [["acceptance", false], ["demo", true]],
+  );
+  assert.throws(() => select(registry, [], env), /at least one/);
+  assert.throws(() => select(registry, ["demo", "demo"], env), /twice/);
+  assert.throws(() => select(registry, ["toString"], env), /Unknown hosted check/);
+  assert.throws(() => select(registry, ["acceptance"], {}), /BROWSERBASE_ARTIFACT_ORIGINS/);
+  assert.throws(() => select(registry, ["handoff"], { CI: "true" }), /never runs in CI/);
+  const inflated = { ...registry, checks: { demo: { ...registry.checks.demo, budget: { ...registry.checks.demo.budget, sessions: 9 } } } };
+
+  assert.throws(() => select(inflated, ["demo"], {}), /sessions ceiling/);
+});
+
+test("a hosted record fails when it overspent or never completed", () => {
+  const line = (phase) => JSON.stringify({ check: "demo", phase, result: null });
+
+  assert.deepEqual(verify(registry, "demo", [line("allocated"), line("complete")].join("\n")), {
+    name: "demo",
+    allocated: 1,
+  });
+  assert.throws(
+    () => verify(registry, "demo", [line("allocated"), line("allocated"), line("complete")].join("\n")),
+    /allocated 2 of 1/,
+  );
+  assert.throws(() => verify(registry, "demo", [line("allocated"), line("failure")].join("\n")), /did not complete/);
+});
+
+test("the demo check encodes its own frames instead of retrieving provider media", () => {
+  const example = read(`${hostedDirectory}/demo.ts`);
+
   assert.ok(example.includes("recordSession: false"));
   assert.doesNotMatch(example, /artifactOrigins|BrowserbaseRecordings|BrowserbaseReplays|BrowserbaseDownloads/);
-  assert.ok(example.includes('process.env.EFFECT_AGENT_BROWSERBASE_LIVE !== "1"'));
-  // A published recording shows a host-configured destination, never one a page
-  // or a model chose.
+  assert.deepEqual(registry.checks.demo.env, []);
+  // A published recording shows a host-configured destination, never one a page or a model chose.
   assert.ok(example.includes('url.protocol !== "https:"'));
 });
 

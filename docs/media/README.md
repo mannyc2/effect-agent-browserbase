@@ -8,7 +8,7 @@ products.
 
 ## Rules
 
-- Only files produced by `tools/hosted-demo.sh` from a commit on `main`.
+- Only files produced by the `demo` check (`tools/hosted-run.sh`) from a commit on `main`.
 - Only the extensions and sizes declared in [`budget.json`](budget.json).
   `tools/test/hosted.test.mjs` enforces that budget and fails ordinary unpaid CI
   if documentation references media that is not committed.
@@ -34,8 +34,8 @@ products.
 | `hosted-demo.gif` | `f9a6368975949e2ddb05d065207dfe0ca9691ffde71a3216f642871fbdda49fd` |
 
 This file **deviates from the first rule above** and the deviation is deliberate,
-not an oversight. It was produced by running `examples/hosted-demo.ts` directly
-from the branch head, not by `tools/hosted-demo.sh` from a commit on `main`,
+not an oversight. It was produced by running `examples/hosted-demo.ts` (now the `demo` check)
+directly from the branch head, not by the hosted runner from a commit on `main`,
 because the `Hosted Browserbase` workflow's protected environment and secrets
 are not configured yet, and the wrapper additionally requires a bootstrapped
 upstream worktree. The GIF was encoded with the exact ladder from that script
@@ -56,16 +56,16 @@ preview-encoding command.
 ## Producing the recording
 
 The recording requires a paid Browserbase session, so it is never produced by
-ordinary CI. Run the **Hosted Browserbase** workflow manually with `run: demo`
+ordinary CI. Run the **Hosted Browserbase** workflow manually with `checks: demo`
 (see [hosted testing](../HOSTED.md)), download its artifact, and commit the
 files you want from it:
 
 ```sh
 # From the downloaded artifact directory.
-cp hosted-demo.gif hosted-demo.mp4 docs/media/
+cp demo/hosted-demo.gif demo/hosted-demo.mp4 docs/media/
 ```
 
-`hosted-demo.jsonl`, `source-sha.txt` and `SHA256SUMS` from the same artifact
+`demo.jsonl`, `source-sha.txt` and `SHA256SUMS` from the same artifact
 identify the exact source commit, session, capture summary and decoded frame
 counts behind the recording. Cite that run in the pull request that commits the
 media; do not commit the records themselves.
