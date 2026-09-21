@@ -25,6 +25,9 @@ export function consumerManifest(mode, receipt, out, catalog) {
     devDependencies["@effect/vitest"] = catalog["@effect/vitest"];
     devDependencies.vitest = catalog.vitest;
   }
+  // The generic consumer compiles and runs every example; realistic-footage spawns its encoder
+  // and serves its stage through Effect's Node platform services.
+  if (mode === "generic") devDependencies["@effect/platform-node"] = catalog["@effect/platform-node"];
   if (mode === "agent") {
     dependencies[packages[1].name] = file(1);
     dependencies["effect-agent"] = receipt.frameworkVersion;
