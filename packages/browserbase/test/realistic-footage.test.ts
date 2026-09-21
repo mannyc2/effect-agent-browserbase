@@ -356,6 +356,6 @@ it.effect("each document gets the library's address and commit, and this layer's
     expect(after.documents[0]?.committedAtMillis).toBeNull();
     expect(after.documents[1]?.committedAtMillis).not.toBeNull();
     expect(after.documents[1]?.heldMillis).toBe(170);
-    expect(after.capture.interval).toMatchObject({ reason: "stopped", dropped: 0 });
+    expect(after.capture.interval).toMatchObject({ reason: "stopped", dropped: 0, late: 0 });
   }).pipe(Effect.provide(Telemetry.layer)),
 );
