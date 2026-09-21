@@ -4,7 +4,7 @@ import * as Capture from "@effect-agent/browserbase/capture";
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
 
-import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 
 it.live(
   "real CDP: independent source-size requests fit JPEGs without resizing either viewport",
@@ -20,7 +20,11 @@ it.live(
 
             yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
             yield* session.bind().click(ClickRequest.make({ selector: "#popup" }));
-            const initial = yield* session.pages;
+            // A dispatched click is not a registered target: the popup reaches this
+            // session only once Chromium reports it and the owner registers it.
+            // Reading the list immediately failed once in 30 loaded rounds with the
+            // popup still missing. A popup never registered fails on the same finds.
+            const initial = yield* settle(session.pages, (open) => open.length === 2);
             const original = initial.find((page) => page.selected)!;
             const popup = initial.find((page) => !page.selected)!;
             const scout = yield* session.selectPage(popup.pageId);
