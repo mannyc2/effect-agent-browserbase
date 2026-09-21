@@ -1,7 +1,7 @@
 {
-  "name": "@effect-agent/platform-browserbase",
+  "name": "effect-agent-browserbase",
   "version": "0.1.0-beta.102",
-  "description": "Execution-scoped Browserbase browser control and independent browser artifacts for Effect Agent.",
+  "description": "Effect Agent adapter and Tools for the canonical Browserbase browser.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,14 +16,8 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./interactive-browser": "./src/InteractiveBrowser.ts",
-    "./types": "./src/Types.ts",
-    "./tools": "./src/Tools.ts",
-    "./recordings": "./src/Recordings.ts",
-    "./replays": "./src/Replays.ts",
-    "./downloads": "./src/Downloads.ts",
-    "./capture": "./src/Capture.ts",
-    "./page-control": "./src/PageControl.ts"
+    "./adapter": "./src/Adapter.ts",
+    "./tools": "./src/Tools.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -33,13 +27,11 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "install:test-browser": "playwright-core install --with-deps chromium",
     "example:agent": "bun examples/agent.ts",
-    "example:hosted": "bun examples/hosted.ts",
-    "example:hosted-demo": "bun examples/hosted-demo.ts",
-    "example:record-video": "bun examples/record-video.ts",
     "test:native": "vp test --config vite.native.config.ts --run"
   },
   "dependencies": {
-    "effect-agent": "workspace:*"
+    "effect-agent": "workspace:*",
+    "effect-browserbase": "workspace:*"
   },
   "devDependencies": {
     "@effect-agent/testing": "workspace:*",
@@ -53,13 +45,7 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.115",
-    "playwright-core": "1.63.0"
-  },
-  "peerDependenciesMeta": {
-    "playwright-core": {
-      "optional": true
-    }
+    "effect": "^4.0.0-rc.115"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

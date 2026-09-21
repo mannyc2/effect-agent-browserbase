@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the verified package (false performs acceptance and dry-run only)
+        description: Publish the verified two-package set (false performs acceptance and dry-run only)
         required: true
         default: false
         type: boolean
@@ -50,10 +50,8 @@ jobs:
             exit 1
           fi
           node --input-type=module <<'JS'
-          import { readFileSync } from 'node:fs';
-          import { checkTag } from './tools/package-release.mjs';
-          const manifest = JSON.parse(readFileSync('packages/platform-browserbase/package.json', 'utf8'));
-          checkTag(process.env.RELEASE_TAG, manifest.version);
+          import { checkTag, readPackageSet } from './tools/packages.mjs';
+          for (const manifest of readPackageSet(process.cwd())) checkTag(process.env.RELEASE_TAG, manifest.version);
           JS
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
@@ -69,23 +67,21 @@ jobs:
       contents: read
 
   publish:
-    name: Publish verified tarball through npm OIDC
+    name: Publish or resume through native ts-release npm OIDC
     needs: [resolve, build]
     if: ${{ inputs.publish && vars.NPM_PUBLISH_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment: npm
     permissions:
-      contents: read
+      # Durable prepared artifacts and the append-only ts-release journal.
+      contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve.outputs.source_sha }}
-          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version-file: .node-version
+          # Release-host pin; the library's acceptance pins remain independent.
+          node-version: '22.22.2'
           package-manager-cache: false
       - name: Download this run's immutable tested artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -93,22 +89,54 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.artifact_id }}
           path: ${{ runner.temp }}/npm-release
           merge-multiple: true
-      - name: Verify and publish without install, build, tokens or lifecycle scripts
+      - name: Download this run's tested release host
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.release_tooling_artifact_id }}
+          path: ${{ runner.temp }}/release-tooling
+          merge-multiple: true
+      - name: Verify and unpack the frozen host
+        env:
+          EXPECTED_TOOLING_DIGEST: ${{ needs.build.outputs.release_tooling_sha256 }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release-tooling"
+          printf '%s  release-tooling.tar.gz\n' "$EXPECTED_TOOLING_DIGEST" | sha256sum --check --strict
+          tar -xzf release-tooling.tar.gz
+      - name: Publish exact artifacts with durable recovery
         env:
           SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
           RELEASE_TAG: ${{ github.ref_name }}
-          EXPECTED_DIGEST: ${{ needs.build.outputs.package_sha256 }}
+          EXPECTED_DIGEST: ${{ needs.build.outputs.release_set_sha256 }}
           ARTIFACT_DIRECTORY: ${{ runner.temp }}/npm-release
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-release.npmrc
-          NODE_AUTH_TOKEN: ''
-          NPM_TOKEN: ''
+          GITHUB_TOKEN: ${{ github.token }}
+          NPM_PUBLISH_ENABLED: ${{ vars.NPM_PUBLISH_ENABLED }}
         run: |
           set -euo pipefail
-          test "$(node --version)" = v24.14.1
-          test "$(npm --version)" = 11.11.0
+          test "$(node --version)" = v22.22.2
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
-          node tools/verify-release.mjs "$ARTIFACT_DIRECTORY" "$SOURCE_SHA" "$RELEASE_TAG" "$EXPECTED_DIGEST"
-          FILE="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).filename)' "$ARTIFACT_DIRECTORY/release.json")"
-          TAG="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).distTag)' "$ARTIFACT_DIRECTORY/release.json")"
-          npm publish "$ARTIFACT_DIRECTORY/$FILE" --access public --tag "$TAG" --registry https://registry.npmjs.org/ --provenance --ignore-scripts
+          # No installs, builds, npm subprocesses or package lifecycle scripts.
+          # Installs used --ignore-scripts in the read-only build job.
+          cd "$RUNNER_TEMP/release-tooling/tools/release"
+          node --input-type=module <<'JS'
+          import { writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const cacheDirectory = join(process.env.RUNNER_TEMP, 'release-state');
+          await writeFile('release-input.json', JSON.stringify({
+            sourceSha: process.env.SOURCE_SHA,
+            tag: process.env.RELEASE_TAG,
+            expectedDigest: process.env.EXPECTED_DIGEST,
+            artifacts: process.env.ARTIFACT_DIRECTORY,
+            cacheDirectory,
+            authorize: true,
+          }));
+          JS
+          node node_modules/.bin/ts-release src/application.js release-input.json > "$ARTIFACT_DIRECTORY/publication-report.json"
+      - name: Retain the derived publication report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browserbase-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-release/publication-report.json
+          if-no-files-found: warn
+          retention-days: 30

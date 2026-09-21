@@ -66,7 +66,7 @@ const BrowserLive = BrowserbaseBrowser.layer.pipe(
 
 `account` is a host-supplied strict account configuration, not a launch recipe. The application also provides the required approved Fetch service, as shown in workflows. Share the **same Layer value**; repeatedly constructing equal-looking Client Layers is not the intended sharing contract. Resource-only consumers use ResourcesLive and never install the framework or native peer.
 
-Client still captures an approved fetch and uses official FetchHttpClient with its own RequestInit/tracing isolation. It does not accept an arbitrary ambient HttpClient transformer that can forward credentials. Environment loading belongs at the consumer entry point. Sharing Client is not proof that current clients have rate schedulers; new shared admission requires its own implementation. Likewise, replace recording's global mutation gate with a bounded keyed gate only when supported by actual independent-session tests.
+Client still captures an approved fetch and uses official FetchHttpClient with its own RequestInit/tracing isolation. It does not accept an arbitrary ambient HttpClient transformer that can forward credentials. Environment loading belongs at the consumer entry point. (`BrowserbaseClient.layerConfig`, [#32](https://github.com/mannyc2/effect-agent-browserbase/issues/32), reads through the consumer's `ConfigProvider` when the Layer is built, so the consumer still chooses the source.) Sharing Client is not proof that current clients have rate schedulers; new shared admission requires its own implementation. Likewise, replace recording's global mutation gate with a bounded keyed gate only when supported by actual independent-session tests.
 
 ### Representative resource operation
 

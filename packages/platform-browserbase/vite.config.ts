@@ -4,7 +4,7 @@ export default defineConfig({
   run: {
     tasks: {
       test: {
-        command: "vp test --run && vp run test:native",
+        command: "vp test --run --passWithNoTests && vp run test:native",
         input: [
           { auto: true },
           { pattern: "bun.lock", base: "workspace" },
@@ -17,17 +17,7 @@ export default defineConfig({
     },
   },
   pack: {
-    entry: [
-      "src/index.ts",
-      "src/InteractiveBrowser.ts",
-      "src/Types.ts",
-      "src/Tools.ts",
-      "src/Recordings.ts",
-      "src/Replays.ts",
-      "src/Downloads.ts",
-      "src/Capture.ts",
-      "src/PageControl.ts",
-    ],
+    entry: ["src/index.ts", "src/Adapter.ts", "src/Tools.ts"],
     dts: true,
     sourcemap: true,
   },

@@ -17,13 +17,13 @@ test "$(git -C "$TREE" rev-parse HEAD)" = "$REV"
 git -C "$TREE" apply --check "$ROOT/upstream.patch"
 git -C "$TREE" apply "$ROOT/upstream.patch"
 # Copy tracked source only: ignored downloads, credentials and build products
-# from a developer's working copy cannot enter the compatibility workspace.
+# from a developer's working copy cannot enter the canonical integration workspace.
 python3 - "$ROOT" "$TREE" <<'PY'
 from pathlib import Path
 import shutil, subprocess, sys
 root, tree = map(Path, sys.argv[1:])
 for name in subprocess.check_output([
-    'git', '-C', str(root), 'ls-files', '-z', '--', 'packages/platform-browserbase'
+    'git', '-C', str(root), 'ls-files', '-z', '--', 'packages/browserbase', 'packages/platform-browserbase'
 ]).decode().split('\0'):
     if not name:
         continue

@@ -1,5 +1,5 @@
 {
-  "comment": "Bounds for media committed under docs/media. tools/hosted-demo.sh encodes to fit these and tools/test/hosted.test.mjs enforces them in ordinary unpaid CI.",
+  "comment": "Bounds for media committed under docs/media. tools/hosted-media.sh encodes to fit these and tools/test/hosted.test.mjs enforces them in ordinary unpaid CI.",
   "maxGifBytes": 4194304,
   "maxMp4Bytes": 8388608,
   "maxFiles": 8,

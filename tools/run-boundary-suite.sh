@@ -15,7 +15,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$OUTDIR" "$STAGE/overlay/packages" "$STAGE/probes"
-cp -r "$REPO_ROOT/packages/platform-browserbase" "$STAGE/overlay/packages/"
+cp -r "$REPO_ROOT/packages/browserbase" "$STAGE/overlay/packages/"
 cp "$REPO_ROOT/tools/boundary-runner.mjs" "$STAGE/probes/run.mjs"
 printf '{"name":"boundary-harness","private":true,"type":"module"}\n' > "$STAGE/package.json"
 

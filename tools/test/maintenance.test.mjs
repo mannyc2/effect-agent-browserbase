@@ -34,7 +34,7 @@ test("ordinary acceptance has no live publisher, hosted opt-in or write-enabled 
   for (const line of acceptance.split("\n").filter((line) => /npm publish|release:publish/.test(line))) {
     assert.ok(line.includes("--dry-run"), `Unsafe ordinary acceptance command: ${line}`);
   }
-  assert.doesNotMatch(acceptance, /EFFECT_AGENT_BROWSERBASE_LIVE=1|hosted-acceptance\.sh/);
+  assert.doesNotMatch(acceptance, /EFFECT_AGENT_BROWSERBASE_LIVE=1|hosted-run\.sh/);
 });
 
 test("OIDC is isolated to the opt-in publisher, which installs no dependencies", () => {
@@ -46,6 +46,12 @@ test("OIDC is isolated to the opt-in publisher, which installs no dependencies",
   assert.ok(publisher.includes("environment: npm"));
   assert.ok(publisher.includes("--ignore-scripts"));
   assert.ok(publisher.includes("artifact-ids:"));
-  assert.doesNotMatch(publisher, /npm (?:ci|install)|bun install|secrets\.|contents: write/);
+  assert.doesNotMatch(publisher, /npm (?:ci|install)|bun install|secrets\.|npm publish/);
+  assert.equal((workflow.match(/contents: write/g) ?? []).length, 1);
+  assert.ok(publisher.includes("contents: write"));
+  assert.ok(publisher.includes("release_tooling_sha256"));
+  assert.ok(publisher.includes("sha256sum --check --strict"));
+  assert.ok(publisher.includes("node node_modules/.bin/ts-release src/application.js release-input.json"));
+  assert.ok(publisher.includes("publication-report.json"));
   assert.ok(workflow.includes("default: false"));
 });

@@ -4,36 +4,10 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkManifest, distTag, packages, readJson, readPackageSet, regularFile, repositoryUrl } from "./packages.mjs";
 
-export const packageName = "@effect-agent/platform-browserbase";
-export const repositoryUrl = "git+https://github.com/mannyc2/effect-agent-browserbase.git";
-export const packageDirectory = "packages/platform-browserbase";
-export const publicSubpaths = [".", "./interactive-browser", "./types", "./tools", "./recordings", "./replays", "./downloads", "./capture", "./page-control"];
-const number = "(?:0|[1-9][0-9]*)";
-const versionPattern = new RegExp(`^${number}\\.${number}\\.${number}(?:-(alpha|beta|rc)\\.${number})?$`);
-
-// Deliberately the project's supported release train, not a general SemVer parser.
-export function distTag(version) {
-  assert.equal(typeof version, "string", "A release version is required");
-  const match = versionPattern.exec(version);
-  assert.ok(match, "Expected x.y.z or x.y.z-(alpha|beta|rc).N");
-  return match[1] ?? "latest";
-}
-
-export function checkTag(tag, version) {
-  distTag(version);
-  assert.equal(tag, `v${version}`, "Release tag must exactly match the package version");
-}
-
-export function publicationManifest(source, catalog, frameworkVersion) {
-  assert.equal(source.name, packageName, "Only this repository's package may be released");
-  assert.equal(source.private, undefined, "Cannot stage a private package");
-  assert.equal(source.repository?.url, repositoryUrl, "Repository must match the npm OIDC identity");
-  assert.equal(source.repository?.directory, packageDirectory);
-  assert.equal(source.type, "module", "The supported distribution is ESM");
-  assert.equal(source.license, "MIT");
-  assert.deepEqual(Object.keys(source.exports).sort(), [...publicSubpaths].sort());
-  distTag(frameworkVersion);
+export function publicationManifest(source, catalog, workspaceVersions) {
+  checkManifest(source);
   const manifest = {};
   for (const key of ["name", "version", "description", "license", "repository", "type", "sideEffects", "engines", "dependencies", "peerDependencies", "peerDependenciesMeta"]) {
     if (source[key] !== undefined) manifest[key] = structuredClone(source[key]);
@@ -43,26 +17,19 @@ export function publicationManifest(source, catalog, frameworkVersion) {
   manifest.files = ["dist"];
   manifest.exports = {};
   for (const [key, value] of Object.entries(source.exports)) {
-    assert.equal(typeof value, "string");
-    assert.match(value, /^\.\/src\/[A-Za-z][A-Za-z0-9/]*\.ts$/, "Expected a source entry point");
     const stem = value.slice("./src/".length, -3);
     manifest.exports[key] = { types: `./dist/${stem}.d.mts`, default: `./dist/${stem}.mjs` };
   }
   for (const section of ["dependencies", "peerDependencies"]) {
     for (const [name, value] of Object.entries(manifest[section] ?? {})) {
-      let resolved = value;
-      if (value === "workspace:*") {
-        assert.equal(name, "effect-agent", "Unexpected workspace dependency");
-        resolved = frameworkVersion;
-      } else if (value === "catalog:") {
-        resolved = catalog[name];
-      }
+      const resolved = value === "workspace:*" ? workspaceVersions[name] : value === "catalog:" ? catalog[name] : value;
       assert.equal(typeof resolved, "string", `Unresolved dependency ${name}`);
       assert.match(resolved, /^[~^]?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/, `Non-registry dependency ${name}`);
       manifest[section][name] = resolved;
     }
   }
   manifest.publishConfig = { access: "public", registry: "https://registry.npmjs.org/", tag: distTag(source.version) };
+  checkManifest(manifest, { built: true, genericVersion: workspaceVersions[packages[0].name], frameworkVersion: workspaceVersions["effect-agent"] });
   return manifest;
 }
 
@@ -98,36 +65,62 @@ export function checkPackagePaths(paths, manifest) {
   }
 }
 
-export function packageRelease(tree, out, sourceSha) {
+export const digest = (bytes, algorithm = "sha256", encoding = "hex") => createHash(algorithm).update(bytes).digest(encoding);
+
+export function releaseSetDigest(directory) {
+  const path = join(directory, "release-set.json");
+  regularFile(path);
+  return digest(readFileSync(path));
+}
+
+/** Both immutable tarballs are written before the single source-bound receipt. */
+export function packageReleaseSet(tree, out, sourceSha) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/, "Expected immutable source commit");
-  const sourceDirectory = join(tree, packageDirectory);
-  const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
-  const manifest = publicationManifest(readJson(join(sourceDirectory, "package.json")), readJson(join(tree, "package.json")).catalog, readJson(join(tree, "packages/effect-agent/package.json")).version);
-  const files = distributionFiles(join(sourceDirectory, "dist"));
-  checkPackagePaths(["package/package.json", "package/README.md", "package/LICENSE", ...files.map((path) => `package/dist/${path}`)], manifest);
-  const stage = join(out, "packed-stage");
-  assert.ok(!existsSync(stage), "Refusing an existing package stage");
-  mkdirSync(stage, { recursive: true });
-  cpSync(join(sourceDirectory, "dist"), join(stage, "dist"), { recursive: true });
-  for (const name of ["README.md", "LICENSE"]) {
-    assert.ok(lstatSync(join(sourceDirectory, name)).isFile() && !lstatSync(join(sourceDirectory, name)).isSymbolicLink());
-    cpSync(join(sourceDirectory, name), join(stage, name));
+  const sources = readPackageSet(tree);
+  const catalog = readJson(join(tree, "package.json")).catalog;
+  const frameworkVersion = readJson(join(tree, "packages/effect-agent/package.json")).version;
+  distTag(frameworkVersion);
+  const version = sources[0].version;
+  const workspaceVersions = { [packages[0].name]: version, "effect-agent": frameworkVersion };
+  const manifests = sources.map((source) => publicationManifest(source, catalog, workspaceVersions));
+  const stageRoot = join(out, "packed-stage");
+  assert.ok(!existsSync(stageRoot) && !existsSync(join(out, "release-set.json")) && !existsSync(join(out, "release.json")), "Refusing an existing package stage or receipt");
+  // Validate all members before npm packs anything. Failure leaves no success receipt.
+  for (const [index, item] of packages.entries()) {
+    const directory = join(tree, item.directory);
+    const files = distributionFiles(join(directory, "dist"));
+    checkPackagePaths(["package/package.json", "package/README.md", "package/LICENSE", ...files.map((path) => `package/dist/${path}`)], manifests[index]);
+    regularFile(join(directory, "README.md"));
+    regularFile(join(directory, "LICENSE"));
+    assert.ok(!existsSync(join(out, `${item.stem}-${version}.tgz`)), "Refusing an existing tarball");
   }
-  writeFileSync(join(stage, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
-  const filename = `effect-agent-platform-browserbase-${manifest.version}.tgz`;
-  assert.ok(!existsSync(join(out, filename)), "Refusing an existing tarball");
-  const packed = JSON.parse(execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", resolve(out)], { cwd: stage, encoding: "utf8" }));
-  assert.equal(packed.length, 1);
-  assert.equal(packed[0].filename, filename);
-  checkPackagePaths(packed[0].files.map(({ path }) => `package/${path}`), manifest);
-  const bytes = readFileSync(join(out, filename));
-  const receipt = { schemaVersion: 1, name: packageName, version: manifest.version, distTag: distTag(manifest.version), repository: repositoryUrl, sourceSha, filename, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
-  writeFileSync(join(out, "release.json"), JSON.stringify(receipt, null, 2) + "\n");
+  mkdirSync(stageRoot, { recursive: true });
+  const receipts = [];
+  for (const [index, item] of packages.entries()) {
+    const directory = join(tree, item.directory);
+    const stage = join(stageRoot, item.directory.split("/").at(-1));
+    mkdirSync(stage);
+    cpSync(join(directory, "dist"), join(stage, "dist"), { recursive: true });
+    for (const name of ["README.md", "LICENSE"]) cpSync(join(directory, name), join(stage, name));
+    writeFileSync(join(stage, "package.json"), JSON.stringify(manifests[index], null, 2) + "\n");
+    const filename = `${item.stem}-${version}.tgz`;
+    const packed = JSON.parse(execFileSync("npm", ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", resolve(out)], { cwd: stage, encoding: "utf8", timeout: 60_000 }));
+    assert.equal(packed.length, 1);
+    assert.equal(packed[0].filename, filename);
+    checkPackagePaths(packed[0].files.map(({ path }) => `package/${path}`), manifests[index]);
+    const bytes = readFileSync(join(out, filename));
+    const integrity = `sha512-${digest(bytes, "sha512", "base64")}`;
+    assert.equal(packed[0].integrity, integrity);
+    receipts.push({ name: item.name, version, directory: item.directory, filename, bytes: bytes.length, sha256: digest(bytes), integrity });
+  }
+  const receipt = { schemaVersion: 2, repository: repositoryUrl, sourceSha, version, frameworkVersion, distTag: distTag(version), packages: receipts };
+  writeFileSync(join(out, "release-set.json"), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx" });
   return receipt;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [tree, out, sha] = process.argv.slice(2);
   assert.ok(tree && out && sha, "Usage: node tools/package-release.mjs WORKSPACE OUT SOURCE_SHA");
-  console.log(JSON.stringify(packageRelease(resolve(tree), resolve(out), sha)));
+  const receipt = packageReleaseSet(resolve(tree), resolve(out), sha);
+  console.log(JSON.stringify({ ...receipt, receiptSha256: releaseSetDigest(out) }));
 }

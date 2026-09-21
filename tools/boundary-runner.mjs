@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { Effect } from 'effect';
-const root = '../overlay/packages/platform-browserbase/test/fixtures/';
+const root = '../overlay/packages/browserbase/test/fixtures/';
 const selection = process.argv[2] ?? 'all';
 const suites = selection === 'regressions' ? ['RecoveryCases'] : ['OwnershipCases', 'ArtifactCases', 'CaptureCases', 'RecoveryCases'];
 const rows = [];
