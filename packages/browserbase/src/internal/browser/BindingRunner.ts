@@ -14,6 +14,8 @@ export type BindingAdmission<A, E> =
  * consumer failures remain in an Exit on the host and are never page reply material here.
  */
 export interface BindingRunner<I, A, E> {
+  /** Fence new callbacks synchronously; the owning Scope still owns accepted work. */
+  readonly close: () => void;
   readonly submit: (input: I, failureMode?: CallbackFailureMode) => BindingAdmission<A, E>;
 }
 
@@ -30,6 +32,7 @@ export const makeBindingRunner = <I, A, E, R>(
     // Do not depend on an application's ambient finalizer strategy for callback ordering.
     // One private sequential child owns both FiberSet and the admission fence.
     const runtimeScope = yield* Scope.fork(parent, "sequential");
+
     const run = yield* FiberSet.makeRuntimePromise<R, Exit.Exit<A, E>, never>().pipe(
       Scope.provide(runtimeScope),
     );
@@ -37,6 +40,10 @@ export const makeBindingRunner = <I, A, E, R>(
     let accepting = true;
     let faulted = false;
     let inFlight = 0;
+
+    const close = () => {
+      accepting = false;
+    };
 
     const fault = () => {
       if (!accepting || faulted) return;
@@ -46,12 +53,7 @@ export const makeBindingRunner = <I, A, E, R>(
 
     // FiberSet registered its child-scope finalizer first. Sequential reverse registration
     // order therefore closes admission before the set interrupts accepted callbacks.
-    yield* Scope.addFinalizer(
-      runtimeScope,
-      Effect.sync(() => {
-        accepting = false;
-      }),
-    );
+    yield* Scope.addFinalizer(runtimeScope, Effect.sync(close));
 
     const submit = (
       input: I,
@@ -68,6 +70,7 @@ export const makeBindingRunner = <I, A, E, R>(
       // Construct the consumer Effect inside the admitted fiber as well: a consumer callback
       // that throws while producing its Effect is a host defect, not work allowed before admission.
       const execution = run(Effect.exit(Effect.suspend(() => handle(input))));
+
       const result = execution
         .then(
           (exit) => {
@@ -91,6 +94,6 @@ export const makeBindingRunner = <I, A, E, R>(
       return { _tag: "Accepted", result };
     };
 
-    return { submit };
+    return { close, submit };
   });
 };
