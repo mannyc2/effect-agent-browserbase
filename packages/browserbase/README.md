@@ -6,17 +6,22 @@ It has no Effect Agent dependency. Playwright is an optional peer, loaded lazily
 
 ## One account, then resources
 
-Construct `BrowserbaseClient.layer(account)` once and provide it to everything else. Credentials, approved artifact origins and request bounds live there and nowhere else; a browser recipe cannot carry them.
+Construct one account Layer and provide it to everything else. Credentials, approved artifact origins and request bounds live there and nowhere else; a browser recipe cannot carry them.
 
 ```ts
 import * as Account from "@effect-agent/browserbase/account";
 
 // Reads BROWSERBASE_PROJECT_ID and a redacted BROWSERBASE_API_KEY from the active
 // ConfigProvider (the environment by default) when the Layer is built.
-const account = Account.layerConfig({ artifactOrigins: ["https://media.browserbase.com"] });
+const account = Account.layerConfig({
+  // Your project's own recording-delivery origin; see below for how to find it.
+  artifactOrigins: ["https://recording-delivery.example"],
+});
 ```
 
 `Account.layer({ projectId, apiKey: Redacted.make(key), ... })` takes the same authority explicitly. Either one bundles every resource service on a single Client, so credentials are composed once instead of per service; each service still exports its own `layer` when you want a narrower set. `BrowserbaseBrowser.layer` stays separate, because a browser also fixes budgets and a connection lifetime that an account does not. The Client uses Effect's `FetchHttpClient.Fetch` reference, which already defaults to `globalThis.fetch`; provide a different `fetch` only when you need one.
+
+`artifactOrigins` is the exact set of HTTPS origins this client will fetch provider media from, and it is deliberately empty by default: recording downloads and replay media are refused with `unsafe-url` until you approve a host. Browserbase documents only a "signed CDN URL" and does not publish that origin, so discover your own rather than copying anyone's — request a recording for a completed session, read `downloadUrl` from `GET /v1/sessions/{id}/recording/downloads`, and approve exactly its origin. A hosted run on 21 September 2026 confirmed that a completed recording then downloads through this check rather than around it. The origin is an observation and not a contract: it may differ by project or region, the provider can re-point it without notice, and a BYOS project returns no signed URL at all. Treat a later `unsafe-url` as the delivery host having moved, not as a defect.
 
 `sessions.retrieve`, `list`, `waitUntilRunning` and `waitForTerminal` are passive. `sessions.requestRelease` is an explicit remote mutation and is never issued as a side effect of reading. Context create/retrieve/delete are separate resource operations; deleting a Context is never a browser finalizer. Mutating control-plane requests are never retried automatically, and a rejected request stays distinguishable from one whose effect is unknown.
 
