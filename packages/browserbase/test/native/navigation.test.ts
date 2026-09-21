@@ -241,6 +241,12 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
           expect(summary.error).toBeUndefined();
           expect(summary.nativeStop).toBe("confirmed");
           expect(summary.documentBoundaries.map((boundary) => boundary.document)).toEqual([1]);
+          // An address for every document a frame names: enough to draw an address bar over the
+          // finished reel without sampling the page between actions.
+          expect(summary.initialUrl).toBe(f.url);
+          expect(summary.documentBoundaries.map((boundary) => boundary.url)).toEqual([
+            `${f.url}clocks`,
+          ]);
           expect(new Set(documents)).toEqual(new Set([0, 1]));
           // Receipt order is kept: no frame of the first document follows one of the second.
           expect(documents).toEqual([...documents].sort());

@@ -107,10 +107,15 @@ export interface CaptureStart {
   readonly size?: CaptureSize;
   readonly invalidate: (reason: CaptureInvalidation) => void;
   /**
-   * Present when the interval follows its page across documents. A main-frame navigation then
-   * reports a new document here instead of ending the interval.
+   * The captured frame's address, reported once in the same turn the watch below is installed,
+   * so a navigation is either already in it or arrives afterwards as a new document.
    */
-  readonly document?: () => void;
+  readonly opened?: (url: string) => void;
+  /**
+   * Present when the interval follows its page across documents. A main-frame navigation then
+   * reports a new document here, with the address it committed, instead of ending the interval.
+   */
+  readonly document?: (url: string) => void;
 }
 
 export interface CaptureSource {
