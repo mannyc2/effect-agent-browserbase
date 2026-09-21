@@ -37,7 +37,7 @@ export const perform = (session: BrowserbaseSession, storyboard: Storyboard) =>
       Pause: ({ millis }) => Effect.sleep(millis),
       Read: ({ words }) => Actor.read(words),
       ScrollTo: ({ selector }) => Actor.scrollTo(selector),
-      MoveTo: ({ selector }) => Actor.moveTo(selector),
+      MoveTo: ({ selector }) => Actor.moveTo(session, selector),
       Click: ({ selector }) => Effect.asVoid(Actor.click(session, selector)),
       Follow: ({ selector }) => Effect.asVoid(Actor.follow(session, selector)),
       Type: ({ selector, text }) => Actor.type(session, selector, text),

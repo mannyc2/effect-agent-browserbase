@@ -124,10 +124,12 @@ it.live(
             expect(latency.p50).toBeGreaterThan(-clock.uncertaintyMillis - 5);
             expect(latency.p50).toBeLessThan(500);
 
-            // Every action the storyboard dispatched was timed: six keys, three clicks, one link.
+            // Every action the storyboard dispatched was timed: six keys, three clicks, one
+            // link, and one native pointer move for each of the four glides that preceded them.
             expect(metrics.control.actionMillis.fill?.count).toBe(6);
             expect(metrics.control.actionMillis.click?.count).toBe(3);
             expect(metrics.control.actionMillis.clickAndWait?.count).toBe(1);
+            expect(metrics.control.actionMillis.pointerMove?.count).toBe(4);
             expect(metrics.control.clickToFrameMillis?.count).toBe(3);
             expect(metrics.control.cueRoundTripMillis?.count).toBeGreaterThan(5);
 

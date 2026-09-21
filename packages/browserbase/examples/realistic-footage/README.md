@@ -35,8 +35,9 @@ film and are out of scope here.
 
 ## How it fits the library
 
-The library has no pointer-move and no single key press, and it lets a page call
-the host but never the reverse. The example is built on what it does have:
+The library sends one native pointer move per action and has no single key
+press, and it lets a page call the host but never the reverse. A glide is sixty
+positions a second, so the example builds on what makes that affordable:
 
 ```
 host                                            page (allowed origins only)
@@ -44,7 +45,7 @@ host                                            page (allowed origins only)
 Storyboard ─► Actor ─► Director.perform(cue) ◄── footageCue(report) ── Stagehand
                 │            slot + ack          typed Bootstrap.binding   draws pointer,
                 │                                                          plays tracks
-                └────► session.click / fill / clickAndWait ──────────────► real input events
+                └────► session.pointerMove / click / fill / clickAndWait ► real input events
 Camera ◄── Capture.start … one interval per document ◄──────────────────── screencast
    ├─► Broadcast ─► /live.mjpeg   every frame, as it arrives, to whoever is watching
    ├─► Reel (constant rate) ─► ffmpeg stdin ─► .mp4
@@ -132,9 +133,9 @@ viewer's player or network. Each live frame carries `X-Source-Time-Millis` so an
 application can measure its own last hop.
 
 On one machine, the committed storyboard measures about 6ms p50 capture latency
-with a clock offset of −0.6 ± 1.0ms, 170ms uncovered at the navigation, and 3ms
-p50 cue round trip. Those are loopback numbers; hosted ones will be dominated by
-the network and have not been measured.
+with a clock offset of −0.5 ± 0.9ms, 70–170ms uncovered at the navigation, 3ms
+p50 cue round trip and 14ms per native pointer move. Those are loopback numbers;
+hosted ones will be dominated by the network and have not been measured.
 
 ## Running it
 
@@ -181,16 +182,22 @@ Budget one action per typed key: `Type` is the expensive scene.
 
 ## Limits worth knowing
 
-- Whether the library should offer real pointer movement, wheel input and key
-  presses is an open question, tracked in
-  [#34](https://github.com/mannyc2/effect-agent-browserbase/issues/34). That
-  issue's position is that the library owns faithful input and trustworthy
-  evidence while the application owns cursor artwork, window graphics, easing and
-  encoding. This example is the application side of that line, built on today's
-  actions; the next two limits are what the missing input costs.
-- The drawn pointer is not the real one. The real pointer moves only when the
-  session clicks, so `:hover` styles do not follow the glide, and the real click
-  lands on the element's centre while the ripple is drawn at the aim point.
+- The drawn pointer is not the real one, but the real one joins it. The glide
+  plays in the page; when it lands, one native `pointerMove` puts the real
+  pointer on the same aim point, so `:hover` applies before the press. Hover
+  states along the way do not fire, and the real click still lands on the
+  element's centre while the ripple is drawn at the aim point. Sending every
+  sample as its own `pointerMove` would fix the first and film the round trip;
+  `control.actionMillis.pointerMove` is the number that decides when that
+  becomes affordable.
+- Scrolling is played in the page rather than sent as `wheel` input, for the
+  same reason, so it moves the window and not a nested scroll container.
+- Whether the library should also offer key presses is an open question:
+  [#34](https://github.com/mannyc2/effect-agent-browserbase/issues/34) drew the
+  line (the library owns faithful input and trustworthy evidence, the application
+  owns cursor artwork, window graphics, easing and encoding) and its pointer and
+  wheel input has landed. The keyboard was not part of it; the next limit is
+  what that costs.
 - Each `fill` selects the field's contents before replacing them, and a camera
   catches that as a flash. The stagehand stops selections in fields from being
   painted while it is installed. A modeled key-press action would remove the

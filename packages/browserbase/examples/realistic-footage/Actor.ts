@@ -1,6 +1,6 @@
 import { Duration, Effect } from "effect";
 import type { BrowserbaseSession } from "effect-browserbase/browser";
-import { ClickRequest, FillRequest } from "effect-browserbase/browser-data";
+import { ClickRequest, FillRequest, PointerMoveRequest } from "effect-browserbase/browser-data";
 
 import { type Answer, Report } from "./Cues.ts";
 import { type CueRequest, Director } from "./Director.ts";
@@ -69,7 +69,14 @@ const bringIntoView = Effect.fn("Actor.bringIntoView")(function* (selector: stri
   return yield* locate(selector);
 });
 
-const glideOnto = Effect.fnUntraced(function* (found: Located) {
+/**
+ * The drawn pointer travels the whole path in the page; the real one joins it
+ * where it lands, in one native move. The page then sees a trusted pointer at
+ * the aim point, so `:hover` applies before the press as it would for a person.
+ * Sending every sample of the path as its own native move would film the
+ * round trip instead of the motion.
+ */
+const glideOnto = Effect.fnUntraced(function* (session: BrowserbaseSession, found: Located) {
   const aim = yield* Humanize.aimPoint(found.box);
 
   const path = yield* Humanize.pointerPath(
@@ -79,18 +86,33 @@ const glideOnto = Effect.fnUntraced(function* (found: Located) {
   );
 
   yield* cue({ _tag: "Glide", path }, "Played");
+  const target = yield* session.currentTarget;
+
+  yield* timed(
+    "pointerMove",
+    target.pointerMove(
+      PointerMoveRequest.make({ to: { x: Math.max(0, aim.x), y: Math.max(0, aim.y) } }),
+    ),
+  );
 });
 
 export const scrollTo = (selector: string) => Effect.asVoid(bringIntoView(selector));
 
-export const moveTo = Effect.fn("Actor.moveTo")(function* (selector: string) {
-  yield* glideOnto(yield* bringIntoView(selector));
+export const moveTo = Effect.fn("Actor.moveTo")(function* (
+  session: BrowserbaseSession,
+  selector: string,
+) {
+  yield* glideOnto(session, yield* bringIntoView(selector));
 });
 
 /** Arrive, settle, then let the session press: the ripple is drawn from its real event. */
-const press = <A, E, R>(selector: string, action: Effect.Effect<A, E, R>) =>
+const press = <A, E, R>(
+  session: BrowserbaseSession,
+  selector: string,
+  action: Effect.Effect<A, E, R>,
+) =>
   Effect.gen(function* () {
-    yield* moveTo(selector);
+    yield* moveTo(session, selector);
     yield* Effect.sleep(yield* Humanize.between(Humanize.Pacing.dwellBeforeClickMillis));
     const result = yield* action;
 
@@ -105,7 +127,11 @@ export const click = Effect.fn("Actor.click")(function* (
 ) {
   const target = yield* session.currentTarget;
 
-  return yield* press(selector, timed("click", target.click(ClickRequest.make({ selector }))));
+  return yield* press(
+    session,
+    selector,
+    timed("click", target.click(ClickRequest.make({ selector }))),
+  );
 });
 
 /**
@@ -118,6 +144,7 @@ export const follow = Effect.fn("Actor.follow")(function* (
   selector: string,
 ) {
   const result = yield* press(
+    session,
     selector,
     timed("clickAndWait", session.clickAndWait(ClickRequest.make({ selector }))),
   );

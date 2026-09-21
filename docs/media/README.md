@@ -72,11 +72,12 @@ credential or model was involved.
 | --- | --- |
 | Runtime | Node 24.14.1, Playwright 1.63.0, Chromium 153.0.8010.12, Effect 4.0.0-rc.115 |
 | Seed | `night-rail-atlas` |
-| Actions | one navigation, six fills, three clicks, one click-and-wait |
-| Capture | two intervals, 0 dropped, both `nativeStop: "confirmed"` |
-| Encoded | 552 decoded frames, 18.4s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream |
-| `realistic-footage.mp4` | `a20f40b76ec56a8852826fd23f0872f4a194e036195f45bf214aa95e2fb2e933` |
-| `realistic-footage.gif` | `5b62317ab9efc630c84db6f3d764222334fa2ce9451b7146fda7b0615843254b` |
+| Actions | one navigation, four native pointer moves, six fills, three clicks, one click-and-wait |
+| Capture | two intervals, 0 dropped, both `nativeStop: "confirmed"`, 70 ms uncovered at the cut |
+| Measured | capture latency p50 5.6 ms against a clock offset of −0.5 ± 0.9 ms; loopback, one machine |
+| Encoded | 554 decoded frames, 18.5s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream |
+| `realistic-footage.mp4` | `6990c343b84a277d5de913b6d189e248d6fe8c1610d6585c63a74a2dcefe1a6d` |
+| `realistic-footage.gif` | `26b83d0c560638be38682495a18d03a38a5f3ac26266c6bf42c20919814921f1` |
 
 The seed fixes every path and pause, but not the bytes: frame delivery follows
 Chromium's own repaint schedule, so a retake is the same performance with a
