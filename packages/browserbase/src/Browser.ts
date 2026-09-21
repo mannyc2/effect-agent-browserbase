@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, type Option, type Redacted, Schema, Scope } from "effect";
 
 import * as Bootstrap from "./Bootstrap.ts";
+import { BrowserbaseBrowserBinding } from "./BrowserBinding.ts";
 import {
   ActionResult,
   AutomationOptions,
@@ -478,6 +479,8 @@ export class BrowserbaseBrowser extends Context.Service<
       Effect.gen(function* () {
         const client = yield* BrowserbaseClient;
         const sessions = yield* BrowserbaseSessions;
+        // The engine is fixed where the Layer is built, like the account it connects for.
+        const binding = yield* BrowserbaseBrowserBinding;
         const automation = yield* checked(AutomationOptions, projected(options), "configure");
 
         const viewport = yield* checked(
@@ -567,6 +570,7 @@ export class BrowserbaseBrowser extends Context.Service<
             // The Layer owns the one account and resource service; acquisition never re-resolves them.
             Effect.provideService(BrowserbaseClient, client),
             Effect.provideService(BrowserbaseSessions, sessions),
+            Effect.provideService(BrowserbaseBrowserBinding, binding),
             Scope.provide(scope),
           );
 
@@ -638,6 +642,7 @@ export class BrowserbaseBrowser extends Context.Service<
           ).pipe(
             Effect.provideService(BrowserbaseClient, client),
             Effect.provideService(BrowserbaseSessions, sessions),
+            Effect.provideService(BrowserbaseBrowserBinding, binding),
             Scope.provide(scope),
           );
 

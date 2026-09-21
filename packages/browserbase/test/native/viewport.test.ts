@@ -67,6 +67,18 @@ const geometry = Effect.fnUntraced(function* (page: Page) {
   };
 }, Effect.scoped);
 
+/** The geometry an owner sets or preserves: emulation, inner size, layout and native bounds. */
+const controlled = (measured: Effect.Success<ReturnType<typeof geometry>>) => ({
+  viewport: measured.viewport,
+  inner: {
+    width: measured.js.innerWidth,
+    height: measured.js.innerHeight,
+    devicePixelRatio: measured.js.devicePixelRatio,
+  },
+  layout: measured.layout,
+  window: measured.window,
+});
+
 it.live("real CDP: ProviderManaged keeps the native viewport through passive observation", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -143,17 +155,11 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
           expect(actual.js).toMatchObject({ innerWidth: 640, innerHeight: 480 });
           expect(actual.layout).toEqual(dimensions);
           expect(actual.window.bounds).toEqual(before.window.bounds);
-          const after = yield* geometry(stageNative);
-
-          expect(after.viewport).toEqual(before.viewport);
-          expect(after.layout).toEqual(before.layout);
-          expect(after.window).toEqual(before.window);
-          // Chromium changes emulated outer chrome metrics when another tab becomes active.
-          expect(after.js).toMatchObject({
-            innerWidth: before.js.innerWidth,
-            innerHeight: before.js.innerHeight,
-            devicePixelRatio: before.js.devicePixelRatio,
-          });
+          // The stage keeps everything the owner controls. Its emulated window.outerWidth and
+          // outerHeight are Chromium's report, not a setting: measured here they settle from the
+          // native window's outer height (623) to the emulated height (480) once the renderer
+          // applies the override, with native bounds unchanged throughout, so they are excluded.
+          expect(controlled(yield* geometry(stageNative))).toEqual(controlled(before));
 
           const interval = yield* Capture.start(session, {
             target: stage,

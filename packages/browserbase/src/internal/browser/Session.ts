@@ -1,5 +1,6 @@
 import { Clock, Deferred, Effect, Exit, type Option, Redacted, Schema, Scope } from "effect";
 
+import { BrowserbaseBrowserBinding } from "../../BrowserBinding.ts";
 import {
   Observation,
   type ObservedElement,
@@ -11,7 +12,7 @@ import {
 import type { CleanupResult } from "../../Cleanup.ts";
 import { BrowserbaseClient } from "../../Client.ts";
 import type { AllocationError, ContextError, SessionError } from "../../Errors.ts";
-import { BrowserError, InitializationError } from "../../Errors.ts";
+import { BrowserError } from "../../Errors.ts";
 import type { LaunchRecipe } from "../../Launch.ts";
 import type { AllocationAttempt, SessionReference } from "../../References.ts";
 import { BrowserbaseSessions } from "../../Sessions.ts";
@@ -20,11 +21,11 @@ import { attachRemote } from "../session/Attachment.ts";
 import type { LocalCleanup } from "../session/Cleanup.ts";
 import type { ContextWriterPermit } from "../session/WriterFacts.ts";
 import { type CaptureParent } from "./Association.ts";
+import { bindingImplementation } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
 import { issueLiveView } from "./LiveView.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
-import { connectPlaywright } from "./Playwright.ts";
 
 /**
  * What this owner needs from the remote session it drives, whether it allocated that session
@@ -102,13 +103,6 @@ export const borrowedRemote =
   (local) =>
     attachRemote(options, local);
 
-export type Connector = (
-  connection: unknown,
-  signal: AbortSignal,
-  options: DriverOptions,
-  events: DriverEvents,
-) => Promise<Driver>;
-
 /**
  * The one owned browser. Remote allocation, release and terminal observation belong to the
  * canonical control plane; this owner supplies only the local connection's cleanup evidence.
@@ -116,8 +110,16 @@ export type Connector = (
 export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease, E>(
   limits: Limits,
   options: SessionOptions<L, E>,
-  connector: Connector = connectPlaywright,
 ) {
+  // The engine is resolved before anything is allocated, so an unissued binding costs nothing.
+  const engine = bindingImplementation(yield* BrowserbaseBrowserBinding);
+
+  if (engine === undefined)
+    return yield* BrowserError.make({
+      operation: "connect",
+      reason: "configuration",
+      outcome: "undispatched",
+    });
   const client = yield* BrowserbaseClient;
   const sessions = yield* BrowserbaseSessions;
   const parentScope = yield* Scope.Scope;
@@ -302,44 +304,22 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         }
 
         const acquired = yield* restore(
-          Effect.tryPromise({
-            try: (signal) => {
-              const pending = connector(
-                Redacted.value(url),
-                signal,
-                {
-                  ...nativeOptions,
-                  ...(bindings === undefined
-                    ? {}
-                    : {
-                        bindings: bindings.bindings,
-                        onBindingFault: bindings.reportFailure,
-                      }),
-                },
-                events,
-              ).then(async (acquired) => {
-                if (signal.aborted) {
-                  bindings?.close();
-                  acquired.fenceInitialization?.();
-                  await acquired.disconnect().catch(() => {});
-                  throw BrowserError.make({ operation: "connect", reason: "interrupted" });
-                }
-
-                return acquired;
-              });
-
-              const settled = () => {
-                if (activeConnection === connectionLease) connectPending = false;
-              };
-
-              void pending.then(settled, settled);
-
-              return pending;
+          engine.connect({
+            connection: Redacted.value(url),
+            options: {
+              ...nativeOptions,
+              ...(bindings === undefined
+                ? {}
+                : {
+                    bindings: bindings.bindings,
+                    onBindingFault: bindings.reportFailure,
+                  }),
             },
-            catch: (error) =>
-              Schema.is(BrowserError)(error) || Schema.is(InitializationError)(error)
-                ? error
-                : BrowserError.make({ operation: "connect", reason: "provider" }),
+            events,
+            onAbandoned: () => bindings?.close(),
+            onSettled: () => {
+              if (activeConnection === connectionLease) connectPending = false;
+            },
           }),
         );
 

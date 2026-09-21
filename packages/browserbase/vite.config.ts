@@ -24,6 +24,7 @@ export default defineConfig({
       "src/Allocation.ts",
       "src/Bootstrap.ts",
       "src/Browser.ts",
+      "src/BrowserBinding.ts",
       "src/BrowserData.ts",
       "src/Capture.ts",
       "src/Certificates.ts",

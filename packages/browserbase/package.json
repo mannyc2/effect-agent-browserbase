@@ -21,6 +21,7 @@
     "./allocation": "./src/Allocation.ts",
     "./bootstrap": "./src/Bootstrap.ts",
     "./browser": "./src/Browser.ts",
+    "./browser-binding": "./src/BrowserBinding.ts",
     "./browser-data": "./src/BrowserData.ts",
     "./capture": "./src/Capture.ts",
     "./certificates": "./src/Certificates.ts",
