@@ -29,8 +29,13 @@ export const makeBindingRunner = <I, A, E, R>(
     throw new RangeError("Invalid binding callback capacity");
 
   return Effect.gen(function* () {
-    const run = yield* FiberSet.makeRuntimePromise<R, Exit.Exit<A, E>, never>();
-    const scope = yield* Scope.Scope;
+    const parent = yield* Scope.Scope;
+    // Do not depend on an application's ambient finalizer strategy for callback ordering.
+    // One private sequential child owns both FiberSet and the admission fence.
+    const runtimeScope = yield* Scope.fork(parent, "sequential");
+    const run = yield* FiberSet.makeRuntimePromise<R, Exit.Exit<A, E>, never>().pipe(
+      Scope.provide(runtimeScope),
+    );
 
     let accepting = true;
     let faulted = false;
@@ -42,10 +47,10 @@ export const makeBindingRunner = <I, A, E, R>(
       onFault();
     };
 
-    // FiberSet registered its finalizer first. Effect scopes close finalizers in reverse
-    // registration order, so admission closes before the set interrupts accepted callbacks.
+    // FiberSet registered its child-scope finalizer first. Sequential reverse registration
+    // order therefore closes admission before the set interrupts accepted callbacks.
     yield* Scope.addFinalizer(
-      scope,
+      runtimeScope,
       Effect.sync(() => {
         accepting = false;
       }),

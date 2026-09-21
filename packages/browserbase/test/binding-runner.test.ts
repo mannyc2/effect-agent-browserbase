@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
-import { Effect, Exit, type Scope } from "effect";
+import { Effect, Exit, Scope } from "effect";
 
 import {
   type BindingRunner,
@@ -164,13 +164,14 @@ it.effect("fail-session capacity pressure fences without starting rejected work"
   ),
 );
 
-it.effect("scope closure stops admission before interrupting accepted callbacks", () =>
+it.effect("parallel parent teardown still fences admission before callback interruption", () =>
   Effect.gen(function* () {
     let faults = 0;
     let escaped: BindingRunner<void, never, never> | undefined;
     let pending: Promise<unknown> | undefined;
+    const parent = yield* Scope.make("parallel");
 
-    yield* Effect.scoped(
+    yield* Scope.provide(parent)(
       Effect.gen(function* () {
         const runner = yield* makeBindingRunner<void, never, never, never>(
           1,
@@ -186,6 +187,7 @@ it.effect("scope closure stops admission before interrupting accepted callbacks"
         if (admitted._tag === "Accepted") pending = admitted.result;
       }),
     );
+    yield* Scope.close(parent, Exit.void);
 
     assert.ok(escaped);
     assert.deepEqual(escaped.submit(undefined, "fail-session"), {
