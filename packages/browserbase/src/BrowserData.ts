@@ -156,6 +156,19 @@ export class NavigateRequest extends Schema.Class<NavigateRequest>("BrowserbaseN
   url: TargetUrl,
 }) {}
 
+/**
+ * A navigation left in flight. `timeoutMillis` is how long the browser may take to reach
+ * DOMContentLoaded; omitted, it is the action timeout, as it is for `navigate`.
+ */
+export class StartNavigationRequest extends Schema.Class<StartNavigationRequest>(
+  "BrowserbaseStartNavigationRequest",
+)({
+  url: TargetUrl,
+  timeoutMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600000 })),
+  ),
+}) {}
+
 export class ReadTextRequest extends Schema.Class<ReadTextRequest>("BrowserbaseReadTextRequest")({
   selector: Schema.optionalKey(Selector),
 }) {}

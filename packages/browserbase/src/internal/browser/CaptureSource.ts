@@ -13,6 +13,7 @@ import type { Entry, Targets } from "./Targets.ts";
 interface CaptureWatcher {
   readonly frameId: string;
   readonly invalidate: (reason: CaptureInvalidation) => void;
+  readonly document?: () => void;
 }
 
 /**
@@ -32,11 +33,21 @@ export const makeCaptureSources = (targets: Targets) => {
 
     for (const watcher of [...watchers]) {
       if (
-        frame === undefined ||
-        changedFrameId === mainFrameId ||
-        changedFrameId === watcher.frameId
+        frame !== undefined &&
+        changedFrameId !== mainFrameId &&
+        changedFrameId !== watcher.frameId
       )
-        watcher.invalidate(reason);
+        continue;
+      // The page's screencast keeps running across a main-frame navigation. An interval that
+      // follows its page is told a new document began; one bound to a document ends, as before.
+      if (
+        watcher.document !== undefined &&
+        reason === "target-changed" &&
+        changedFrameId === mainFrameId &&
+        watcher.frameId === mainFrameId
+      )
+        watcher.document();
+      else watcher.invalidate(reason);
     }
   };
 
@@ -78,18 +89,22 @@ export const makeCaptureSources = (targets: Targets) => {
       let watcher: CaptureWatcher | undefined;
 
       const source: CaptureSource = {
-        start: (callback, quality, invalidate, size) =>
+        start: ({ receive, quality, size, invalidate, document }) =>
           sanitize(async () => {
             watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
             captureWatchers.set(entry.id, watcherSet);
-            watcher = { frameId: watchedFrameId, invalidate };
+            watcher = {
+              frameId: watchedFrameId,
+              invalidate,
+              ...(document === undefined ? {} : { document }),
+            };
             watcherSet.add(watcher);
             try {
               await page.screencast.start({
                 quality,
                 ...(size === undefined ? {} : { size }),
                 onFrame: (frame: NativeFrame) => {
-                  callback(frame);
+                  receive(frame);
                 },
               });
             } catch (error) {

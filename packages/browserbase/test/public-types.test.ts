@@ -4,6 +4,7 @@ import {
   type BoundTarget,
   type BrowserbaseBrowser,
   type BrowserbaseSession,
+  type NavigationOperation,
 } from "effect-browserbase/browser";
 import type {
   BrowserPolicy,
@@ -72,6 +73,14 @@ const revalidateEffect: Same<
   Effect.Effect<ObservedElement, BrowserError>
 > = true;
 
+/** A navigation left in flight is a scoped resource; completing or stopping it needs nothing. */
+const navigationEffect: Same<
+  ReturnType<BoundTarget["startNavigation"]>,
+  Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>
+> = true;
+
+const navigationStop: Same<NavigationOperation["stop"], Effect.Effect<void, BrowserError>> = true;
+
 const captureErrors: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserError> = true;
 const captureScope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const sourceSize: Capture.CaptureSize = { width: 640, height: 360 };
@@ -91,6 +100,8 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
       boundTarget &&
       inputEffect &&
       hoverElementEffect &&
+      navigationEffect &&
+      navigationStop &&
       checkpointEffect &&
       factsEffect &&
       revalidateEffect &&

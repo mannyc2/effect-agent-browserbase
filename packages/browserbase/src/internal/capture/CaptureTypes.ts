@@ -42,6 +42,13 @@ export const CapturedFrame = Schema.Struct({
   mediaType: Schema.Literal("image/jpeg"),
   target: Target,
   sequence: Schema.Natural,
+  /**
+   * Which document of its page this frame was received during: 0 at the start, one more for each
+   * main-frame navigation the interval observed. It is attribution by receipt order, not proof
+   * of whose pixels these are: a frame received just after a navigation can still show the
+   * document before it. Always 0 for an interval that lasts one document.
+   */
+  document: Schema.Natural,
   sourceTimeMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
   sourceClock: Schema.Literal("presentation-unix-millis"),
   receivedMonotonicNanos: Schema.BigInt,
@@ -73,6 +80,12 @@ export const CaptureOptions = Schema.Struct({
   quality: Schema.optionalKey(LimitFields.quality),
   /** Source fit only. Does not resize the viewport or impose an FPS cap. */
   size: Schema.optionalKey(CaptureSize),
+  /**
+   * `document`, the default, ends the interval when its page navigates. `page` follows the page
+   * across documents, so a capture started before a navigation covers the loading in between.
+   * It applies to a page's main frame; a capture bound to a child frame still ends with it.
+   */
+  lifetime: Schema.optionalKey(Schema.Literals(["document", "page"])),
 }).check(FrameBudget);
 
 export type CaptureOptions = typeof CaptureOptions.Type;
@@ -92,6 +105,20 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserbaseCap
   bufferedBytes: Schema.Natural,
   sourceFirstMillis: Schema.NullOr(Schema.Finite),
   sourceLastMillis: Schema.NullOr(Schema.Finite),
+  /**
+   * Each main-frame navigation a `page` interval observed, in order, with the last frame
+   * received before it. The native screencast is never restarted for one, so a boundary is not
+   * a gap this package introduced; what Chromium omitted while loading stays `upstreamDrops`.
+   */
+  documentBoundaries: Schema.Array(
+    Schema.Struct({
+      document: Schema.Natural,
+      observedMonotonicNanos: Schema.BigInt,
+      afterSequence: Schema.NullOr(Schema.Natural),
+    }),
+  ).check(Schema.isMaxLength(64)),
+  /** More navigations were observed than are recorded above. Frames still count them all. */
+  documentBoundariesTruncated: Schema.Boolean,
   nativeStop: Schema.Literals(["confirmed", "unconfirmed"]),
   /** Package accounting cannot measure frames omitted by Chromium, transport, or the provider. */
   upstreamDrops: Schema.Literal("unknown"),

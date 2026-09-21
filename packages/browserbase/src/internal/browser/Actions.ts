@@ -117,8 +117,8 @@ export const makeActions = (
   const { current } = targets;
   let downloadSerial = 0;
 
-  const postUrl = () => {
-    const value = targets.selectedUrl();
+  /** A result URL is only ever an http(s) address without credentials. */
+  const httpUrl = (value: string) => {
     let url: URL;
 
     try {
@@ -131,6 +131,8 @@ export const makeActions = (
 
     return value;
   };
+
+  const postUrl = () => httpUrl(targets.selectedUrl());
 
   /**
    * Acts on the exact attached node a target names. The observation seam establishes that it is
@@ -221,15 +223,42 @@ export const makeActions = (
     }
   };
 
-  const navigate: Driver["navigate"] = (url, ticket) =>
+  const beginNavigation: Driver["beginNavigation"] = (url, timeoutMillis, ticket) =>
     sanitize(async () => {
-      const { frame } = current();
+      const { entry, frame } = current();
 
       ticket.dispatch();
-      await frame.goto(url, { waitUntil: "domcontentloaded", timeout: timeout(ticket) });
-      ticket.check();
+      targets.navigating.begin(entry.id);
 
-      return postUrl();
+      // Not awaited here: the permit that dispatched it is released while the browser loads.
+      const settled = sanitize(async () => {
+        try {
+          await frame.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMillis });
+        } finally {
+          targets.navigating.end(entry.id);
+        }
+
+        // The frame that navigated, not whatever is selected by the time it finishes.
+        return httpUrl(targets.urlOf(frame));
+      });
+
+      // Whoever awaits it sees the failure; a caller that never does raises nothing unhandled.
+      void settled.catch(() => {});
+
+      return {
+        pageId: entry.id,
+        settled,
+        stop: () =>
+          sanitize(async () => {
+            const cdp = await context.newCDPSession(entry.page);
+
+            try {
+              await cdp.send("Page.stopLoading");
+            } finally {
+              await closeWithin(() => cdp.detach()).catch(() => {});
+            }
+          }),
+      };
     });
 
   const fill: Driver["fill"] = (target, value, ticket, policy) =>
@@ -371,7 +400,7 @@ export const makeActions = (
 
   return {
     withAdmittedElement,
-    navigate,
+    beginNavigation,
     click,
     fill,
     scroll,
