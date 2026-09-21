@@ -18,7 +18,6 @@ import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
 import { BrowserbaseClient } from "@effect-agent/browserbase/client";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { Effect, Layer, Redacted } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import { recordDemo } from "./demo-recording.ts";
 
@@ -119,7 +118,6 @@ const program = Effect.scoped(
         ),
       ),
     ),
-    Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
     Effect.tapError((error) => Effect.sync(() => report("failure", error))),
   ),
 );

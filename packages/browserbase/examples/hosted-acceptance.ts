@@ -6,7 +6,6 @@ import { BrowserbaseRecordings } from "@effect-agent/browserbase/recordings";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
 import { RecordingPageReference } from "@effect-agent/browserbase/transfers";
 import { Effect, Layer, Redacted, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
 
 const apiKey = process.env.BROWSERBASE_API_KEY;
 const projectId = process.env.BROWSERBASE_PROJECT_ID;
@@ -118,7 +117,6 @@ const interactive = Effect.scoped(
           Effect.sync(() => report("allocation-unknown", attempt)),
       }).pipe(Layer.provide(account)),
     ),
-    Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
   ),
 );
 
@@ -163,7 +161,6 @@ const program = Effect.gen(function* () {
   };
 }).pipe(
   Effect.provide(BrowserbaseRecordings.layer.pipe(Layer.provide(account))),
-  Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
   Effect.tapError((error) => Effect.sync(() => report("failure", error))),
 );
 
