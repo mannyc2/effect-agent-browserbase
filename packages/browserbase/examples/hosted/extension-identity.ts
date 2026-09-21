@@ -52,7 +52,7 @@ await h.run(
 
       const loaded = yield* Effect.scoped(
         Effect.gen(function* () {
-          const session = yield* h.open;
+          const session = yield* h.open();
 
           yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com/" }));
           yield* session.waitFor({ selector: "#effect-agent-extension", state: "attached" });

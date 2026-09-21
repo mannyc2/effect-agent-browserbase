@@ -60,7 +60,7 @@ const chooser = Bootstrap.init({
 await h.run(
   Effect.scoped(
     Effect.gen(function* () {
-      const session = yield* h.open;
+      const session = yield* h.open({ bootstrap: chooser });
 
       yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com/" }));
 
@@ -114,6 +114,6 @@ await h.run(
         .pipe(Effect.tapError(() => h.report("observed", observed)));
 
       return { reference: session.reference, remotePath: receipt.remotePath, observed, cleanup };
-    }).pipe(Effect.provide(h.browser({ launch: recipe(), bootstrap: chooser }))),
+    }).pipe(Effect.provide(h.browser({ launch: recipe() }))),
   ),
 );

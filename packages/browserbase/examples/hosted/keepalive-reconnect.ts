@@ -26,7 +26,7 @@ const plan = Bootstrap.init({
 await h.run(
   Effect.scoped(
     Effect.gen(function* () {
-      const session = yield* h.open;
+      const session = yield* h.open({ bootstrap: plan });
 
       yield* session.bind().navigate(NavigateRequest.make({ url: `${origin}/?phase=before` }));
       const before = yield* session.ready;
@@ -55,6 +55,6 @@ await h.run(
         after,
         cleanup,
       };
-    }).pipe(Effect.provide(h.browser({ launch: recipe({ keepAlive: true }), bootstrap: plan }))),
+    }).pipe(Effect.provide(h.browser({ launch: recipe({ keepAlive: true }) }))),
   ),
 );

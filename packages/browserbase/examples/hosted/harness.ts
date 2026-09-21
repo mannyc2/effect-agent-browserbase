@@ -6,7 +6,11 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import * as Account from "@effect-agent/browserbase/account";
-import { BrowserbaseBrowser, type BrowserOptions } from "@effect-agent/browserbase/browser";
+import {
+  BrowserbaseBrowser,
+  type BrowserOptions,
+  type OpenOptions,
+} from "@effect-agent/browserbase/browser";
 import { BrowserPolicy } from "@effect-agent/browserbase/browser-data";
 import { Effect, Redacted } from "effect";
 
@@ -117,17 +121,18 @@ export const hostedCase = (name: CheckName) => {
         onAllocationUncertain: (attempt) => report("allocation-unknown", attempt),
       }),
     /** The only way a check allocates, so the session budget is enforced before spending. */
-    open: Effect.gen(function* () {
-      if (opened >= budget.sessions) {
-        return yield* Effect.die(`The ${name} check is budgeted for ${budget.sessions} sessions`);
-      }
-      opened += 1;
-      const session = yield* (yield* BrowserbaseBrowser).open(policy);
+    open: (options: OpenOptions = {}) =>
+      Effect.gen(function* () {
+        if (opened >= budget.sessions) {
+          return yield* Effect.die(`The ${name} check is budgeted for ${budget.sessions} sessions`);
+        }
+        opened += 1;
+        const session = yield* (yield* BrowserbaseBrowser).open(policy, options);
 
-      yield* report("allocated", session.reference);
+        yield* report("allocated", session.reference);
 
-      return session;
-    }),
+        return session;
+      }),
     /** Fail unless every fact holds, so a `complete` record always means the claim held. */
     established: (
       facts: Record<string, boolean>,

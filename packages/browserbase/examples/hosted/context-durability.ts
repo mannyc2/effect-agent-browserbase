@@ -48,28 +48,29 @@ const read = Bootstrap.init({
 });`,
 });
 
-const observe = Effect.scoped(
-  Effect.gen(function* () {
-    const session = yield* h.open;
-    const target = session.bind();
+const observe = (bootstrap: Bootstrap.Plan<never, never>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* h.open({ bootstrap });
+      const target = session.bind();
 
-    yield* target.navigate(NavigateRequest.make({ url: `${origin}/` }));
+      yield* target.navigate(NavigateRequest.make({ url: `${origin}/` }));
 
-    const { text } = yield* target.readText(
-      ReadTextRequest.make({ selector: "#effect-agent-probe" }),
-    );
+      const { text } = yield* target.readText(
+        ReadTextRequest.make({ selector: "#effect-agent-probe" }),
+      );
 
-    const seen = JSON.parse(text) as { storage: unknown; cookie: unknown };
-    const cleanup = yield* session.close;
+      const seen = JSON.parse(text) as { storage: unknown; cookie: unknown };
+      const cleanup = yield* session.close;
 
-    return {
-      reference: session.reference,
-      storage: seen.storage === marker,
-      cookie: seen.cookie === marker,
-      cleanup,
-    };
-  }),
-);
+      return {
+        reference: session.reference,
+        storage: seen.storage === marker,
+        cookie: seen.cookie === marker,
+        cleanup,
+      };
+    }),
+  );
 
 // This probe is the only writer of a context it created moments ago, so an in-process lease is
 // enough. A shared context needs a real distributed lease that retains quarantine facts.
@@ -88,7 +89,7 @@ await h.run(
     yield* h.report("context-created", reference);
 
     return yield* Effect.gen(function* () {
-      let readback: Effect.Success<typeof observe> | undefined;
+      let readback: Effect.Success<ReturnType<typeof observe>> | undefined;
 
       // The readback runs while the writer lease is still held, which is what lets the writer
       // settle as released rather than quarantined, and so lets the context be deleted.
@@ -96,11 +97,10 @@ await h.run(
         backend,
         reference,
         (permit) =>
-          observe.pipe(
+          observe(Bootstrap.combine(write, read)).pipe(
             Effect.provide(
               h.browser({
                 launch: recipe({ context: { reference, persist: true } }),
-                bootstrap: Bootstrap.combine(write, read),
                 contextWriter: permit,
               }),
             ),
@@ -110,11 +110,10 @@ await h.run(
             Effect.gen(function* () {
               yield* Effect.sleep(settleMillis);
 
-              const seen = yield* observe.pipe(
+              const seen = yield* observe(read).pipe(
                 Effect.provide(
                   h.browser({
                     launch: recipe({ context: { reference, persist: false } }),
-                    bootstrap: read,
                   }),
                 ),
               );

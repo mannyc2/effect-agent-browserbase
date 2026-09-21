@@ -54,7 +54,7 @@ await mkdir(h.output, { recursive: true });
 await h.run(
   Effect.scoped(
     Effect.gen(function* () {
-      const session = yield* h.open;
+      const session = yield* h.open();
       const demo = yield* recordDemo(session, targetUrl, output, { durationMillis });
       const cleanup = yield* session.close;
 

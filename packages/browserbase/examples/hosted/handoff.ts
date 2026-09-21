@@ -15,7 +15,7 @@ const start = "https://example.com/";
 await h.run(
   Effect.scoped(
     Effect.gen(function* () {
-      const session = yield* h.open;
+      const session = yield* h.open();
 
       yield* session.bind().navigate(NavigateRequest.make({ url: start }));
       const handoff = yield* session.beginHandoff(240);

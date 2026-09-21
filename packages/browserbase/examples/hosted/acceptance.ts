@@ -14,7 +14,7 @@ const h = hostedCase("acceptance");
 
 const interactive = Effect.scoped(
   Effect.gen(function* () {
-    const session = yield* h.open;
+    const session = yield* h.open();
 
     yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com/" }));
     const observation = yield* session.observe({ maxTextBytes: 16 * 1024, maxControls: 16 });
