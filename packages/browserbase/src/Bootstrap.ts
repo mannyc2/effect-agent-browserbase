@@ -134,12 +134,14 @@ export interface BindingDiagnostics<E> {
 }
 
 /**
- * Serializable portion of a plan. Bindings retain trusted host codecs and closures and therefore
- * are validated by their builder/native boundary rather than encoded as configuration data.
+ * Static plans remain serializable. Live binding plans retain issued registrations by identity;
+ * this schema neither executes their callbacks nor turns copied metadata into authority. Typed
+ * acquisition validates a separate snapshot so consumer E/R is not erased by a generic decoder.
  */
 export const Plan = Schema.Struct({
   scripts: Schema.Array(InitScript).check(Schema.isMaxLength(16)),
   permissions: Schema.Array(PermissionGrant).check(Schema.isMaxLength(16)),
+  bindings: Schema.optionalKey(Schema.Array(Registration.schema).check(Schema.isMaxLength(16))),
 });
 
 type AnyPlan = Plan<unknown, unknown>;

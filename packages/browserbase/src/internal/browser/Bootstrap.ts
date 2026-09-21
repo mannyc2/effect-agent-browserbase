@@ -71,6 +71,8 @@ export const compileBootstrap = (
 };
 
 /** Duplicate step identity would make registration order and readiness reports ambiguous. */
-export const duplicateStep = (plan: Pick<Plan, "scripts" | "permissions">): boolean =>
+export const duplicateStep = (plan: Pick<Plan, "scripts" | "permissions" | "bindings">): boolean =>
   new Set(plan.scripts.map((script) => script.id)).size !== plan.scripts.length ||
-  new Set(plan.permissions.map((grant) => grant.origin)).size !== plan.permissions.length;
+  new Set(plan.permissions.map((grant) => grant.origin)).size !== plan.permissions.length ||
+  new Set((plan.bindings ?? []).map((registration) => registration.name)).size !==
+    (plan.bindings?.length ?? 0);

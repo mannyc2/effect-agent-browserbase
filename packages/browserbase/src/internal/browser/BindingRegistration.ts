@@ -53,6 +53,13 @@ export interface Registration<E, R> extends Metadata {
   ) => Effect.Effect<string, E | InitializationError, R>;
 }
 
+/** Retain an issued live capability at schema boundaries; a copied shape is not authority. */
+export const schema = Schema.declare<Registration<unknown, unknown>>(
+  (value): value is Registration<unknown, unknown> =>
+    typeof value === "object" && value !== null && issued.has(value),
+  { title: "an issued Browserbase binding registration" },
+);
+
 const issue = <E, R>(
   metadata: Metadata,
   invoke: Registration<E, R>[typeof Invoke],
