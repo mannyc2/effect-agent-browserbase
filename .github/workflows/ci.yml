@@ -1,13 +1,21 @@
 name: Library CI
 
 on:
+  # Stacked implementation PRs need the same feedback as PRs targeting main.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   merge_group:
     types: [checks_requested]
+  schedule:
+    - cron: '37 4 * * *'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Full upstream integration or focused library acceptance
+        type: choice
+        options: [full, library]
+        default: full
   workflow_call:
     inputs:
       source_sha:
@@ -15,9 +23,14 @@ on:
         required: false
         default: ''
         type: string
+      full_acceptance:
+        description: Reusable release validation defaults to the full gate
+        required: false
+        default: true
+        type: boolean
     outputs:
       artifact_id:
-        description: Immutable acceptance artifact from this run
+        description: Full-acceptance artifact only; focused results cannot authorize release
         value: ${{ jobs.acceptance.outputs.artifact_id }}
       release_set_sha256:
         description: Hash of the source-bound two-package release-set receipt
@@ -27,18 +40,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: library-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: library-ci-${{ github.workflow }}-${{ github.event_name }}-${{ inputs.source_sha || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   acceptance:
+    # Always report the same required check, including explicitly docs-only work.
     name: Unpaid acceptance
-    # Fork PRs are welcome. No credentials, hosted sessions or write permissions.
     if: ${{ github.event.repository.private == false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
-      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_id: ${{ steps.release.outcome == 'success' && steps.artifact.outputs.artifact-id || '' }}
       release_set_sha256: ${{ steps.release.outputs.sha256 }}
     env:
       CI: 'true'
@@ -51,6 +64,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -60,23 +74,37 @@ jobs:
         with:
           bun-version: '1.4.2'
           no-cache: true
-      - name: Execute complete unpaid acceptance
-        run: bash tools/run-acceptance.sh
-      - name: Record tested release-set digest
+      - name: Select and record the required validation scope
+        id: plan
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          CI_FORCE_FULL: ${{ inputs.full_acceptance == true || inputs.source_sha != '' }}
+          CI_REQUESTED_PROFILE: ${{ inputs.profile || 'full' }}
+        run: node tools/ci-plan.mjs write "$BROWSERBASE_WORK_ROOT/ci-plan.json"
+      - name: Execute recorded acceptance profile
+        env:
+          ACCEPTANCE_PROFILE: ${{ steps.plan.outputs.profile }}
+        # This is a watchdog, not a performance claim. Normal library feedback targets 3–5 minutes.
+        timeout-minutes: ${{ steps.plan.outputs.profile == 'full' && 55 || 8 }}
+        run: bash tools/run-acceptance.sh "$ACCEPTANCE_PROFILE"
+      - name: Record fully tested release-set digest
         id: release
+        if: ${{ success() && steps.plan.outputs.profile == 'full' }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync, appendFileSync } from 'node:fs';
+          import { verifyStages } from './tools/ci-evidence.mjs';
           import { releaseSetDigest } from './tools/package-release.mjs';
           import { verifyReleaseSet } from './tools/verify-release.mjs';
           const directory = `${process.env.BROWSERBASE_WORK_ROOT}/results`;
+          verifyStages(directory, 'full');
           const receipt = JSON.parse(readFileSync(`${directory}/release-set.json`, 'utf8'));
           const source = readFileSync(`${directory}/source-sha.txt`, 'utf8').trim();
           const digest = releaseSetDigest(directory);
           verifyReleaseSet(directory, source, `v${receipt.version}`, digest);
           appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${digest}\n`);
           JS
-      - name: Retain source, package, logs, video and checksums
+      - name: Retain source, packages, logs, video and checksums
         id: artifact
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -85,3 +113,7 @@ jobs:
           path: ${{ runner.temp }}/browserbase-maintenance/results
           if-no-files-found: error
           retention-days: 14
+          compression-level: 1
+          # Generated evidence only, no checkout/home/credentials. Preserve all files
+          # named by SHA256SUMS, including diagnostic dependencies on failed runs.
+          include-hidden-files: true

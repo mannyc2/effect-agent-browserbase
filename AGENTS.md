@@ -18,6 +18,8 @@ The repository wrapper uses dependency-free Node maintenance scripts so the OIDC
 
 Commit the candidate before `bash tools/run-acceptance.sh`; that Ubuntu acceptance command rejects dirty source and reusing an output directory. Read actual command exit records and current Actions results. A saved result is historical evidence, not a new execution. Preserve source-only review patches and keep generated artifacts ignored and in Actions artifacts.
 
+Routine PR feedback uses the explicit `library` profile; it still executes every owned native test against the two candidate tarballs and all three strict Node/Bun consumers. Documentation-only checks, focused library checks and `full` pinned-upstream integration are distinct evidence, never interchangeable passes. Full remains the command default and release prerequisite. Preserve the classifier, raw-exit stage inventory, failure artifacts and `timings.tsv`; see `CONTRIBUTING.md`. Never cache browser installation as though a task result restored its external side effects.
+
 `checkpoints/` is immutable provenance. Do not edit it or use it to reconstruct current source. Old transfer instructions and session logs are historical, not active operating instructions. Keep rationale and current results in PRs rather than adding planning documents or committed transient logs.
 
 ## Maintenance sessions
