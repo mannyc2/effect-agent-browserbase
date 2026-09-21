@@ -1,7 +1,7 @@
 import { Effect, Redacted, Schema } from "effect";
 
 import type { BrowserbaseClient } from "../../Client.ts";
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, ClientError } from "../../Errors.ts";
 import { Identifier, type SessionReference } from "../../References.ts";
 
 const LiveUrl = Schema.String.check(
@@ -42,29 +42,31 @@ export interface LiveView {
  * Issuing a debugger URL is an authorization step, not proof that an operator took control.
  * The URL is redacted here so it cannot be logged or returned as an ordinary model value.
  */
-export const issueLiveView = Effect.fnUntraced(function* (
+export const issueLiveUrls = Effect.fnUntraced(function* (
   client: BrowserbaseClient["Service"],
   reference: SessionReference,
   expiresInSeconds: number,
 ) {
   if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 21600)
-    return yield* BrowserError.make({ operation: "live-view", reason: "configuration" });
+    return yield* ClientError.make({
+      operation: "live-view",
+      reason: "configuration",
+      outcome: "undispatched",
+    });
   if (reference.projectId !== client.projectId)
-    return yield* BrowserError.make({ operation: "live-view", reason: "authorization" });
+    return yield* ClientError.make({
+      operation: "live-view",
+      reason: "authorization",
+      outcome: "undispatched",
+    });
 
-  const raw = yield* client
-    .json(
-      "GET",
-      `/v1/sessions/${encodeURIComponent(reference.sessionId)}/debug?expiresIn=${expiresInSeconds}`,
-    )
-    .pipe(
-      Effect.mapError((error) =>
-        BrowserError.make({ operation: "live-view", reason: error.reason }),
-      ),
-    );
+  const raw = yield* client.json(
+    "GET",
+    `/v1/sessions/${encodeURIComponent(reference.sessionId)}/debug?expiresIn=${expiresInSeconds}`,
+  );
 
   const value = yield* Schema.decodeUnknownEffect(Live)(raw).pipe(
-    Effect.mapError(() => BrowserError.make({ operation: "live-view", reason: "malformed" })),
+    Effect.mapError(() => ClientError.make({ operation: "live-view", reason: "malformed" })),
   );
 
   return {
@@ -76,3 +78,12 @@ export const issueLiveView = Effect.fnUntraced(function* (
     requestedTtlSeconds: expiresInSeconds,
   } satisfies LiveView;
 });
+
+export const issueLiveView = (
+  client: BrowserbaseClient["Service"],
+  reference: SessionReference,
+  expiresInSeconds: number,
+) =>
+  issueLiveUrls(client, reference, expiresInSeconds).pipe(
+    Effect.mapError((error) => BrowserError.make({ operation: "live-view", reason: error.reason })),
+  );

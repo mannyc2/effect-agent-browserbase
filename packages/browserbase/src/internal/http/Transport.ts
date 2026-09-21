@@ -237,14 +237,18 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       ),
     );
 
-  const apiRequest = (method: ClientMethod, path: string, accept: string) => {
-    if (!validApiPath(path)) throw new Error("Invalid internal Browserbase API path");
-
-    return HttpClientRequest.make(method)(`${API_ORIGIN}${path}`).pipe(
-      HttpClientRequest.setHeader("x-bb-api-key", apiKey),
-      HttpClientRequest.setHeader("accept", accept),
-    );
-  };
+  /** A rejected path is a typed, undispatched configuration failure, never a defect. */
+  const apiRequest = (method: ClientMethod, path: string, accept: string, operation: string) =>
+    validApiPath(path)
+      ? Effect.succeed(
+          HttpClientRequest.make(method)(`${API_ORIGIN}${path}`).pipe(
+            HttpClientRequest.setHeader("x-bb-api-key", apiKey),
+            HttpClientRequest.setHeader("accept", accept),
+          ),
+        )
+      : Effect.fail(
+          ClientError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+        );
 
   const inspectJson = Effect.fnUntraced(function* (
     method: ClientMethod,
@@ -349,7 +353,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     body?: Schema.Json,
   ) {
     const operation = method === "GET" ? "provider-read" : "provider-mutation";
-    let request = apiRequest(method, path, "application/json");
+    let request = yield* apiRequest(method, path, "application/json", operation);
 
     if (body !== undefined) {
       request = yield* HttpClientRequest.bodyJson(request, body).pipe(
@@ -399,7 +403,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     }
 
     const request = HttpClientRequest.bodyUint8Array(
-      apiRequest("POST", path, "application/json"),
+      yield* apiRequest("POST", path, "application/json", operation),
       encoded.body,
       encoded.contentType,
     );
@@ -460,7 +464,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     outerDeadline?: number,
   ) {
     const operation = "provider-mutation";
-    let request = apiRequest(method, path, "*/*");
+    let request = yield* apiRequest(method, path, "*/*", operation);
 
     if (body !== undefined) {
       request = yield* HttpClientRequest.bodyJson(request, body).pipe(
@@ -557,11 +561,14 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         }
         const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
 
-        const response = yield* within(
-          execute(apiRequest("GET", path, types[0] ?? "application/octet-stream"), operation),
-          deadline,
+        const request = yield* apiRequest(
+          "GET",
+          path,
+          types[0] ?? "application/octet-stream",
           operation,
         );
+
+        const response = yield* within(execute(request, operation), deadline, operation);
 
         const stream = yield* inspectBytes(response, operation, types, maximum);
 

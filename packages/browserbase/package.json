@@ -16,10 +16,12 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./agents": "./src/Agents.ts",
     "./bootstrap": "./src/Bootstrap.ts",
     "./browser": "./src/Browser.ts",
     "./browser-data": "./src/BrowserData.ts",
     "./capture": "./src/Capture.ts",
+    "./certificates": "./src/Certificates.ts",
     "./cleanup": "./src/Cleanup.ts",
     "./client": "./src/Client.ts",
     "./context-coordination": "./src/ContextCoordination.ts",
@@ -27,15 +29,20 @@
     "./downloads": "./src/Downloads.ts",
     "./errors": "./src/Errors.ts",
     "./extensions": "./src/Extensions.ts",
+    "./functions": "./src/Functions.ts",
     "./launch": "./src/Launch.ts",
     "./page-control": "./src/PageControl.ts",
+    "./page-fetch": "./src/PageFetch.ts",
+    "./projects": "./src/Projects.ts",
     "./recordings": "./src/Recordings.ts",
     "./references": "./src/References.ts",
     "./replays": "./src/Replays.ts",
+    "./search": "./src/Search.ts",
     "./session-data": "./src/SessionData.ts",
     "./sessions": "./src/Sessions.ts",
     "./transfers": "./src/Transfers.ts",
-    "./uploads": "./src/Uploads.ts"
+    "./uploads": "./src/Uploads.ts",
+    "./webhooks": "./src/Webhooks.ts"
   },
   "publishConfig": {
     "access": "public"

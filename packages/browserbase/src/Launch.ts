@@ -90,3 +90,15 @@ export const LaunchRecipe = Schema.Struct({
 });
 
 export type LaunchRecipe = typeof LaunchRecipe.Type;
+
+/**
+ * A recipe with the smallest reasonable choices filled in: a five-minute provider lifetime,
+ * a provider-managed viewport (which Verified requires) and no provider options. Privacy
+ * defaults are unchanged: recording, logging and captcha solving stay off unless requested.
+ */
+export const recipe = (options: Partial<LaunchRecipe> = {}): LaunchRecipe => ({
+  remoteTimeoutSeconds: 300,
+  viewport: { _tag: "ProviderManaged" },
+  provider: {},
+  ...options,
+});

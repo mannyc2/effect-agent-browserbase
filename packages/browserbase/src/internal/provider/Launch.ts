@@ -14,7 +14,7 @@ export interface CompiledLaunch {
   readonly recordSession: boolean;
 }
 
-const proxy = (rule: ProxyRule): Schema.Json =>
+export const proxy = (rule: ProxyRule): Schema.Json =>
   rule.type === "external"
     ? {
         type: rule.type,

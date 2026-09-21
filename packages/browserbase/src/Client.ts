@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, type Redacted, type Schema, type Stream } from "effect";
+import { Config, Context, Effect, Layer, type Redacted, type Schema, type Stream } from "effect";
 
 import type { ClientError } from "./Errors.ts";
 import { makeTransport } from "./internal/http/Transport.ts";
@@ -12,7 +12,7 @@ export interface ClientOptions {
   readonly requestTimeoutMillis?: number;
 }
 
-export type ClientMethod = "GET" | "POST" | "DELETE";
+export type ClientMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** One bounded in-memory file part. A filesystem path is never a transport input. */
 export interface MultipartFile {
@@ -85,6 +85,24 @@ export class BrowserbaseClient extends Context.Service<
       makeTransport(options).pipe(
         Effect.map((client) => BrowserbaseClient.of(Object.freeze(client))),
       ),
+    );
+  }
+
+  /**
+   * Account authority from the application's `ConfigProvider` (the environment by default):
+   * `BROWSERBASE_PROJECT_ID` and a redacted `BROWSERBASE_API_KEY`. Transport options stay
+   * explicit. Configuration is read when the Layer is built, never at import.
+   */
+  static layerConfig(
+    options: Omit<ClientOptions, "projectId" | "apiKey"> = {},
+  ): Layer.Layer<BrowserbaseClient, ClientError | Config.ConfigError> {
+    return Layer.unwrap(
+      Effect.gen(function* () {
+        const projectId = yield* Config.String("BROWSERBASE_PROJECT_ID");
+        const apiKey = yield* Config.Redacted("BROWSERBASE_API_KEY");
+
+        return BrowserbaseClient.layer({ ...options, projectId, apiKey });
+      }),
     );
   }
 }

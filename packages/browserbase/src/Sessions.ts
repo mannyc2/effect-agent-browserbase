@@ -3,6 +3,8 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import type { ClientError } from "./Errors.ts";
 import { SessionError } from "./Errors.ts";
+import { issueLiveUrls, type LiveView } from "./internal/browser/LiveView.ts";
+export type { LiveView } from "./internal/browser/LiveView.ts";
 import { SessionReference } from "./References.ts";
 import {
   ProviderSession,
@@ -27,6 +29,51 @@ export const SessionWaitOptions = Schema.Struct({
 });
 
 export type SessionWaitOptions = typeof SessionWaitOptions.Type;
+
+const Millis = Schema.Finite;
+
+/**
+ * One CDP-level log entry. Protocol payloads are present only when requested: they carry
+ * page content, cookies and typed input, so they are host evidence, never model input.
+ */
+export class SessionLogEntry extends Schema.Class<SessionLogEntry>("BrowserbaseSessionLogEntry")({
+  method: Schema.String.check(Schema.isMaxLength(256)),
+  pageId: Schema.Int,
+  frameId: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
+  loaderId: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
+  timestamp: Schema.optionalKey(Millis),
+  requestTimestamp: Schema.optionalKey(Millis),
+  responseTimestamp: Schema.optionalKey(Millis),
+  params: Schema.optionalKey(Schema.Json),
+  result: Schema.optionalKey(Schema.Json),
+}) {}
+
+const ProviderLog = Schema.Struct({
+  method: SessionLogEntry.fields.method,
+  pageId: Schema.Int,
+  sessionId: Schema.String,
+  frameId: SessionLogEntry.fields.frameId,
+  loaderId: SessionLogEntry.fields.loaderId,
+  timestamp: Schema.optionalKey(Millis),
+  request: Schema.optionalKey(
+    Schema.Struct({
+      params: Schema.optionalKey(Schema.Json),
+      timestamp: Schema.optionalKey(Millis),
+    }),
+  ),
+  response: Schema.optionalKey(
+    Schema.Struct({
+      result: Schema.optionalKey(Schema.Json),
+      timestamp: Schema.optionalKey(Millis),
+    }),
+  ),
+});
+
+export interface SessionLogOptions {
+  /** Include CDP `params`/`result` payloads. Off by default; see `SessionLogEntry`. */
+  readonly includePayloads?: boolean;
+}
+
 const now = Clock.monotonicTimeNanos.pipe(Effect.map((value) => Number(value) / 1000000));
 
 const fromClient = (operation: string, error: ClientError): SessionError =>
@@ -69,6 +116,19 @@ export class BrowserbaseSessions extends Context.Service<
       reference: SessionReference,
       options: SessionWaitOptions,
     ) => Effect.Effect<SessionMetadata, SessionError>;
+    /** Session logs, bounded by the 1 MiB control-plane reply limit (`reason: "limit"`). */
+    readonly logs: (
+      reference: SessionReference,
+      options?: SessionLogOptions,
+    ) => Effect.Effect<ReadonlyArray<SessionLogEntry>, SessionError>;
+    /**
+     * Redacted Live View URLs for any session in the project, owned or not. Issuing a URL
+     * grants view and input access to whoever holds it; it does not pause automation.
+     */
+    readonly liveUrls: (
+      reference: SessionReference,
+      expiresInSeconds?: number,
+    ) => Effect.Effect<LiveView, SessionError>;
   }
 >()("@effect-agent/browserbase/Sessions") {
   static readonly layer: Layer.Layer<BrowserbaseSessions, never, BrowserbaseClient> = Layer.effect(
@@ -214,7 +274,60 @@ export class BrowserbaseSessions extends Context.Service<
         }
       });
 
+      const logs = Effect.fn("BrowserbaseSessions.logs")(function* (
+        reference: SessionReference,
+        options: SessionLogOptions = {},
+      ) {
+        const ref = yield* validate(reference, "session-logs");
+
+        const raw = yield* client
+          .json("GET", `/v1/sessions/${encodeURIComponent(ref.sessionId)}/logs`)
+          .pipe(Effect.mapError((error) => fromClient("session-logs", error)));
+
+        const rows = yield* Schema.decodeUnknownEffect(
+          Schema.Array(ProviderLog).check(Schema.isMaxLength(100_000)),
+        )(raw).pipe(Effect.mapError(() => malformed("session-logs")));
+
+        if (rows.some((row) => row.sessionId !== ref.sessionId))
+          return yield* malformed("session-logs");
+
+        return rows.map((row) =>
+          SessionLogEntry.make({
+            method: row.method,
+            pageId: row.pageId,
+            ...(row.frameId === undefined ? {} : { frameId: row.frameId }),
+            ...(row.loaderId === undefined ? {} : { loaderId: row.loaderId }),
+            ...(row.timestamp === undefined ? {} : { timestamp: row.timestamp }),
+            ...(row.request?.timestamp === undefined
+              ? {}
+              : { requestTimestamp: row.request.timestamp }),
+            ...(row.response?.timestamp === undefined
+              ? {}
+              : { responseTimestamp: row.response.timestamp }),
+            ...(options.includePayloads === true && row.request?.params !== undefined
+              ? { params: row.request.params }
+              : {}),
+            ...(options.includePayloads === true && row.response?.result !== undefined
+              ? { result: row.response.result }
+              : {}),
+          }),
+        );
+      });
+
+      const liveUrls = Effect.fn("BrowserbaseSessions.liveUrls")(function* (
+        reference: SessionReference,
+        expiresInSeconds = 300,
+      ) {
+        const ref = yield* validate(reference, "session-live-view");
+
+        return yield* issueLiveUrls(client, ref, expiresInSeconds).pipe(
+          Effect.mapError((error) => fromClient("session-live-view", error)),
+        );
+      });
+
       return BrowserbaseSessions.of({
+        logs,
+        liveUrls,
         retrieve,
         list,
         requestRelease,

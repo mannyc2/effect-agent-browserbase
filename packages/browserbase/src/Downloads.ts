@@ -19,6 +19,21 @@ export interface DownloadListing {
   readonly complete: boolean;
 }
 
+const Timestamp = Schema.String.check(Schema.isMaxLength(64));
+
+/** Provider-side filters over one session's files; every bound is optional. */
+export const DownloadQuery = Schema.Struct({
+  offset: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10_000 }))),
+  filename: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(1024))),
+  mimeType: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(256))),
+  minSize: Schema.optionalKey(Schema.Natural),
+  maxSize: Schema.optionalKey(Schema.Natural),
+  createdAfter: Schema.optionalKey(Timestamp),
+  createdBefore: Schema.optionalKey(Timestamp),
+});
+
+export type DownloadQuery = typeof DownloadQuery.Type;
+
 const Listing = Schema.Struct({
   downloads: Schema.Array(DownloadMetadata).check(Schema.isMaxLength(100)),
   total: Schema.Natural,
@@ -45,7 +60,7 @@ export class BrowserbaseDownloads extends Context.Service<
   {
     readonly list: (
       reference: SessionReference,
-      offset?: number,
+      query?: DownloadQuery,
     ) => Effect.Effect<DownloadListing, FileError>;
     readonly metadata: (
       reference: SessionReference,
@@ -56,6 +71,11 @@ export class BrowserbaseDownloads extends Context.Service<
       downloadId: string,
       policy: DownloadPolicy,
     ) => Stream.Stream<Uint8Array, FileError>;
+    /** Deletes one stored file. A lost reply is `outcome: "unknown"` and is never retried. */
+    readonly delete: (
+      reference: SessionReference,
+      downloadId: string,
+    ) => Effect.Effect<void, FileError>;
     readonly waitForNew: (
       reference: SessionReference,
       previousIds: ReadonlyArray<string>,
@@ -80,24 +100,42 @@ export class BrowserbaseDownloads extends Context.Service<
           Effect.asVoid,
         );
 
-      const list = Effect.fnUntraced(function* (ref: SessionReference, offset = 0) {
-        if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000)
-          return yield* failure("downloads-list", "configuration");
+      const list = Effect.fnUntraced(function* (ref: SessionReference, query: DownloadQuery = {}) {
+        const checked = yield* Schema.decodeEffect(DownloadQuery)(query, {
+          onExcessProperty: "error",
+        }).pipe(Effect.mapError(() => failure("downloads-list", "configuration")));
+
+        const offset = checked.offset ?? 0;
+
         yield* owned(ref, "downloads-list");
 
-        const raw = yield* client
-          .json(
-            "GET",
-            `/v1/downloads?sessionId=${encodeURIComponent(ref.sessionId)}&limit=100&offset=${offset}`,
-          )
-          .pipe(
-            Effect.mapError(fromClient("downloads-list")),
-            Effect.flatMap((value) =>
-              Schema.decodeUnknownEffect(Listing)(value).pipe(
-                Effect.mapError(() => failure("downloads-list", "malformed")),
-              ),
+        const search = new URLSearchParams({
+          sessionId: ref.sessionId,
+          limit: "100",
+          offset: String(offset),
+        });
+
+        for (const key of [
+          "filename",
+          "mimeType",
+          "minSize",
+          "maxSize",
+          "createdAfter",
+          "createdBefore",
+        ] as const) {
+          const value = checked[key];
+
+          if (value !== undefined) search.set(key, String(value));
+        }
+
+        const raw = yield* client.json("GET", `/v1/downloads?${search}`).pipe(
+          Effect.mapError(fromClient("downloads-list")),
+          Effect.flatMap((value) =>
+            Schema.decodeUnknownEffect(Listing)(value).pipe(
+              Effect.mapError(() => failure("downloads-list", "malformed")),
             ),
-          );
+          ),
+        );
 
         if (
           raw.downloads.some((entry) => entry.sessionId !== ref.sessionId) ||
@@ -209,7 +247,38 @@ export class BrowserbaseDownloads extends Context.Service<
         return yield* failure("download-wait", "timeout");
       });
 
-      return BrowserbaseDownloads.of({ list, metadata, stream, waitForNew });
+      const remove = Effect.fnUntraced(function* (ref: SessionReference, id: string) {
+        yield* Schema.decodeEffect(Identifier)(id).pipe(
+          Effect.mapError(() =>
+            FileError.make({
+              operation: "download-delete",
+              reason: "configuration",
+              outcome: "undispatched",
+            }),
+          ),
+        );
+
+        // Ownership is proved by reading the file's session before any mutation.
+        yield* metadata(ref, id).pipe(
+          Effect.mapError((error) =>
+            FileError.make({
+              operation: "download-delete",
+              reason: error.reason,
+              outcome: "undispatched",
+              ...(error.status === undefined ? {} : { status: error.status }),
+              ...(error.retryAfterMillis === undefined
+                ? {}
+                : { retryAfterMillis: error.retryAfterMillis }),
+            }),
+          ),
+        );
+
+        yield* client
+          .noContent("DELETE", `/v1/downloads/${encodeURIComponent(id)}`)
+          .pipe(Effect.mapError(fromClient("download-delete")));
+      });
+
+      return BrowserbaseDownloads.of({ list, metadata, stream, waitForNew, delete: remove });
     }),
   );
 }

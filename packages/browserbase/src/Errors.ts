@@ -84,6 +84,27 @@ export class ExtensionError extends Schema.TaggedError<ExtensionError>()(
   RequestFields,
 ) {}
 
+/** Project inspection and usage. */
+export class ProjectError extends Schema.TaggedError<ProjectError>()(
+  "ProjectError",
+  RequestFields,
+) {}
+
+/** Proxy CA certificate administration. */
+export class CertificateError extends Schema.TaggedError<CertificateError>()(
+  "CertificateError",
+  RequestFields,
+) {}
+
+/**
+ * Browserbase platform services outside a browser session: Search, Fetch, Agents, Functions
+ * and Webhooks. `service` names which one; these are host APIs, never model-facing tools.
+ */
+export class PlatformError extends Schema.TaggedError<PlatformError>()("PlatformError", {
+  ...RequestFields,
+  service: Schema.Literals(["search", "fetch", "agents", "functions", "webhooks"]),
+}) {}
+
 export class FileError extends Schema.TaggedError<FileError>()("FileError", {
   ...RequestFields,
   reason: Schema.Literals([

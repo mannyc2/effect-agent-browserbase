@@ -83,7 +83,25 @@ export class BrowserPolicy extends Schema.Class<BrowserPolicy>("BrowserbaseBrows
   maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1000)),
   maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(21_600_000)),
   maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
-}) {}
+}) {
+  /**
+   * Conservative bounds for trusted host code: 100 actions, five minutes, 2 MiB returned.
+   * The network choice is spelled out in the name because Browserbase cannot prove a
+   * narrower one; override any bound, never the network.
+   */
+  static unrestricted(
+    bounds: Partial<
+      Pick<BrowserPolicy, "maxActions" | "maxElapsedMillis" | "maxReturnedBytes">
+    > = {},
+  ): BrowserPolicy {
+    return BrowserPolicy.make({
+      network: { _tag: "Unrestricted" },
+      maxActions: bounds.maxActions ?? 100,
+      maxElapsedMillis: bounds.maxElapsedMillis ?? 5 * 60_000,
+      maxReturnedBytes: bounds.maxReturnedBytes ?? 2 * 1024 * 1024,
+    });
+  }
+}
 
 export const TargetUrl = Schema.NonEmptyString.check(
   Schema.isMaxLength(8192),

@@ -1,6 +1,6 @@
 # Browserbase for Effect
 
-`@effect-agent/browserbase` owns the whole Browserbase surface for an Effect application: account identity and transport, session, context and extension resources, one owned browser over Playwright/CDP — allocated or borrowed — with trusted registrations, modeled file selection, bounded live capture, explicit page holds, and the provider's recordings, replays, uploads and website downloads.
+`@effect-agent/browserbase` owns the whole Browserbase surface for an Effect application: account identity and transport, session, context and extension resources, one owned browser over Playwright/CDP — allocated or borrowed — with trusted registrations, modeled file selection, bounded live capture, explicit page holds, the provider's recordings, replays, uploads and website downloads, and the platform APIs outside a browser session (projects, certificates, Search, Fetch, Agents, Functions and webhooks).
 
 It has no Effect Agent dependency. Playwright is an optional peer, loaded lazily and only when a browser actually connects; a consumer that just reads artifacts never imports it. The package targets trusted Node and Bun hosts. It is an unpublished maintainer-review candidate: hosted provider behavior requires separate validation, and ordinary tests never create a paid Browserbase session or invoke a paid model.
 
@@ -11,18 +11,18 @@ Construct `BrowserbaseClient.layer(account)` once and provide it to everything e
 ```ts
 import { BrowserbaseClient } from "@effect-agent/browserbase/client";
 import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
-import { Layer, Redacted } from "effect";
+import { Layer } from "effect";
 
+// Reads BROWSERBASE_PROJECT_ID and a redacted BROWSERBASE_API_KEY from the active
+// ConfigProvider (the environment by default) when the Layer is built.
 const account = BrowserbaseSessions.layer.pipe(
   Layer.provideMerge(
-    BrowserbaseClient.layer({
-      projectId: process.env.BROWSERBASE_PROJECT_ID!,
-      apiKey: Redacted.make(process.env.BROWSERBASE_API_KEY!),
-      artifactOrigins: ["https://media.browserbase.com"],
-    }),
+    BrowserbaseClient.layerConfig({ artifactOrigins: ["https://media.browserbase.com"] }),
   ),
 );
 ```
+
+`BrowserbaseClient.layer({ projectId, apiKey: Redacted.make(key), ... })` takes the same authority explicitly. The Client uses Effect's `FetchHttpClient.Fetch` reference, which already defaults to `globalThis.fetch`; provide a different `fetch` only when you need one.
 
 `sessions.retrieve`, `list`, `waitUntilRunning` and `waitForTerminal` are passive. `sessions.requestRelease` is an explicit remote mutation and is never issued as a side effect of reading. Context create/retrieve/delete are separate resource operations; deleting a Context is never a browser finalizer. Mutating control-plane requests are never retried automatically, and a rejected request stays distinguishable from one whose effect is unknown.
 
@@ -37,23 +37,16 @@ For the simplest post-session video path, opt in to Browserbase recording in the
 ```ts
 import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
 import { BrowserPolicy, NavigateRequest } from "@effect-agent/browserbase/browser-data";
+import { recipe } from "@effect-agent/browserbase/launch";
 import { BrowserbaseRecordings } from "@effect-agent/browserbase/recordings";
 import { RecordingPageReference } from "@effect-agent/browserbase/transfers";
 import { Effect, Layer, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
 
-const launch = {
-  remoteTimeoutSeconds: 600,
-  viewport: { _tag: "Fixed", width: 1280, height: 720 },
-  provider: { browserSettings: { recordSession: true } },
-} as const;
+// Five-minute provider lifetime and a provider-managed viewport unless overridden.
+const launch = recipe({ provider: { browserSettings: { recordSession: true } } });
 
-const policy = BrowserPolicy.make({
-  network: { _tag: "Unrestricted" },
-  maxActions: 40,
-  maxElapsedMillis: 5 * 60_000,
-  maxReturnedBytes: 2 * 1024 * 1024,
-});
+// 100 actions, five minutes, 2 MiB returned unless overridden.
+const policy = BrowserPolicy.unrestricted();
 
 const layers = Layer.merge(BrowserbaseBrowser.layer({ launch }), BrowserbaseRecordings.layer).pipe(
   Layer.provide(account),
@@ -88,10 +81,16 @@ const program = Effect.gen(function* () {
     .pipe(Stream.runCollect);
 
   return { batch, bytes };
-}).pipe(Effect.provide(layers), Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch));
+}).pipe(Effect.provide(layers));
 ```
 
-The launch recipe deliberately leaves `recordSession` off, even though Browserbase itself currently records sessions by default. Set it explicitly if you need `Recordings` or `Replays`; it cannot be enabled retroactively after allocation.
+The launch recipe deliberately differs from three Browserbase defaults. Set a field explicitly to get the provider's behavior; recording cannot be enabled retroactively after allocation.
+
+| Setting         | Browserbase default | This package | Why                                               |
+| --------------- | ------------------- | ------------ | ------------------------------------------------- |
+| `recordSession` | on                  | off          | page video is sensitive; `Recordings` needs it on |
+| `logSession`    | on                  | off          | CDP logs carry page content and typed input       |
+| `solveCaptchas` | on                  | off          | solving is an action the host should choose       |
 
 For model-driven control, use `@effect-agent/platform-browserbase`, whose tools borrow an already-owned session rather than allocating a browser per tool call. Provider credentials, CDP URLs, context choices, Live View controls and recording configuration are host decisions and are never Tool parameters.
 
@@ -172,6 +171,18 @@ A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `r
 
 `Unrestricted` is the only supported `BrowserPolicy.network`, and only when selected by trusted host policy. The adapter package refuses Effect Agent's `ExactHosts` before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers, and refuses `PublicWeb` because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
 
+## Beyond the browser session
+
+These services share the Client and its rules: strict input decoding, identity-checked replies, 1 MiB reply bounds, mutations that are never retried, and typed failures whose `outcome` says whether a request was sent. They are host APIs; none of them is exposed to a model by the adapter package.
+
+- `sessions.logs(reference, { includePayloads? })` returns CDP log entries. Protocol payloads are omitted unless requested, because they carry page content, cookies and typed input.
+- `sessions.liveUrls(reference, ttl?)` issues redacted Live View URLs for any session in the project. Unlike `beginHandoff`, it does not pause automation.
+- `downloads.list(reference, query)` filters by filename, MIME type, size and creation time at the provider. `downloads.delete` first proves that the file belongs to the session.
+- `projects` reads the Client's project and its usage. `certificates` registers proxy CA certificates for `proxySettings.caCertificates`.
+- `search` and `page-fetch` are Browserbase's billed Search and Fetch APIs. `agents` starts, observes and stops hosted agent runs. `functions` invokes and observes deployed Functions; deployment stays with Browserbase's CLI. `webhooks` manages endpoints and returns signing secrets as `Redacted`.
+
+An agent run or Function invocation that persists a Context writes it from Browserbase's side, outside `ContextCoordination.withWriter`. It is refused while a local writer holds that Context, but nothing stops a later local writer from racing the hosted run.
+
 ## Public entry points
 
 - `client` — one immutable account, transport and approved artifact origins.
@@ -185,7 +196,9 @@ A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `r
 - `page-control` — opt-in host-owned stage holds and explicit receipt-based resume, independent of scout selection.
 - `recordings` — post-session Browserbase MP4 assembly, status and bounded retrieval. Stable identity is session + recording page; signed URLs are refreshed and are not durable identity.
 - `replays` — host-authorized replay metadata and validated HLS media proxy material. It is playback access to a recording, not another recording.
-- `downloads` — ordinary website download metadata and bounded byte streams, separate from provider recordings.
+- `downloads` — ordinary website download metadata, provider-side filters, bounded byte streams and deletion, separate from provider recordings.
+- `projects`, `certificates` — project inspection and usage; proxy CA certificate administration.
+- `search`, `page-fetch`, `agents`, `functions`, `webhooks` — the Browserbase platform APIs outside a browser session.
 
 Everything under `src/internal/` is private, and no consumer CDP seam or lower-level binding/lifecycle Layer is exported. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
 
