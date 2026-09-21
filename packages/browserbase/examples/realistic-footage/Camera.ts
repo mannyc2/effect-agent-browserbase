@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect, Fiber, Schedule, Schema, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, Schema, Stream } from "effect";
 import type { BrowserbaseSession } from "effect-browserbase/browser";
 import * as Capture from "effect-browserbase/capture";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -63,7 +63,7 @@ export interface Footage<A> {
   readonly height: number;
   readonly frames: number;
   readonly seconds: number;
-  /** Everything this layer is answerable for, including what each cut left unfilmed. */
+  /** Everything this layer is answerable for, including how long each navigation held the picture. */
   readonly metrics: Metrics;
 }
 
@@ -80,11 +80,13 @@ interface Signals {
 }
 
 /**
- * One capture interval. Navigating the filmed page ends its interval by
- * design, so that ending is a cut between takes rather than a failure. What
- * the cut left unfilmed is measured by `Telemetry`, not hidden.
+ * One capture interval for the whole film. It follows its page across
+ * documents, so a navigation is filmed as it loads instead of ending the
+ * interval, and the library says where each document began. The interval is
+ * bounded at ten minutes. If it ends before the film is cut, the film fails
+ * rather than silently holding its last picture to the end.
  */
-const take = (
+const footage = (
   session: BrowserbaseSession,
   options: Required<FilmOptions>,
   telemetry: Telemetry["Service"],
@@ -94,39 +96,31 @@ const take = (
       const attemptedAt = yield* telemetry.now;
 
       const interval = yield* Capture.start(session, {
+        lifetime: "page",
         quality: options.quality,
         size: options.size,
         maxFrames: 64,
         maxFrameBytes: 8 * 1024 * 1024,
         maxBufferedBytes: 64 * 1024 * 1024,
         maxDurationMillis: 600_000,
-      }).pipe(
-        // The page's previous interval may still be releasing its reservation.
-        Effect.retry({
-          while: (error) => error.reason === "busy",
-          schedule: Schedule.spaced("50 millis"),
-          times: 100,
-        }),
-      );
+      });
 
-      // Only a take that started is counted, dated from its first attempt so that any
-      // wait above shows in its time to first frame.
-      yield* telemetry.takeStarted(attemptedAt);
+      yield* telemetry.captureStarted(attemptedAt);
 
       return interval.frames.pipe(
-        Stream.ensuring(Effect.flatMap(interval.stop, telemetry.takeEnded)),
+        Stream.concat(
+          Stream.fail(
+            FootageError.make({ reason: "capture-ended", detail: "before the film was cut" }),
+          ),
+        ),
+        Stream.ensuring(Effect.flatMap(interval.stop, telemetry.captureEnded)),
       );
     }),
-  ).pipe(
-    Stream.catchIf(
-      (error) => error.reason === "target-changed",
-      () => Stream.empty,
-    ),
   );
 
 /**
- * Takes back to back until the cut. Each frame goes to the live view as it
- * arrives, and onto one constant-rate reel of JPEG bytes for the encoder.
+ * Each frame goes to the live view as it arrives, and onto one constant-rate
+ * reel of JPEG bytes for the encoder, until the cut.
  */
 const reel = (
   session: BrowserbaseSession,
@@ -135,8 +129,7 @@ const reel = (
   telemetry: Telemetry["Service"],
   broadcast: Broadcast["Service"],
 ) =>
-  take(session, options, telemetry).pipe(
-    Stream.repeat(Schedule.spaced("25 millis")),
+  footage(session, options, telemetry).pipe(
     Stream.tap((frame) =>
       Effect.all([
         telemetry.frame(frame),

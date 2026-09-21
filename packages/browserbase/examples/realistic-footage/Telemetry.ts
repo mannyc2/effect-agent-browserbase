@@ -1,12 +1,14 @@
 import { Clock, Context, Effect, Layer, Ref, Schema } from "effect";
+import type { InputReceipt } from "effect-browserbase/browser-data";
 import type { CapturedFrame, CaptureSummary } from "effect-browserbase/capture";
 
 /**
  * What this layer of a recording or a livestream is answerable for.
  *
  * The example sits between a browser and whoever watches. It owns how late
- * frames reach the host, how evenly, what was lost or never covered, what each
- * action cost, and how much of the output is a held picture. It does not own a
+ * frames reach the host, how evenly, what this host lost, how long the picture
+ * held across each navigation, what each action cost, and how much of the
+ * output is a held picture. It does not own a
  * viewer's player, their network or a CDN, so nothing here claims
  * glass-to-glass latency; it supplies the timestamps an application needs to
  * measure that for itself.
@@ -41,7 +43,7 @@ export const Metrics = Schema.Struct({
   capture: Schema.Struct({
     frames: Schema.Int,
     framesPerSecond: Schema.NullOr(Schema.Finite),
-    /** Gaps between frames inside a take: the pacing a viewer sees. A still page is a long gap. */
+    /** Gaps between frames of one document: the pacing a viewer sees. A still page is a long gap. */
     interFrameMillis: Schema.NullOr(Distribution),
     /**
      * Presentation in the browser to receipt on the host. `null` until the
@@ -57,24 +59,46 @@ export const Metrics = Schema.Struct({
         samples: Schema.Int,
       }),
     ),
+    /** From the first attempt to start filming to the first frame received. */
+    timeToFirstFrameMillis: Schema.NullOr(Schema.Finite),
+    /** The one interval's own account of itself. `null` until it has ended. */
+    interval: Schema.NullOr(
+      Schema.Struct({
+        reason: Schema.String,
+        received: Schema.Int,
+        delivered: Schema.Int,
+        /** Frames this host discarded. What the browser or the network dropped upstream is unknown. */
+        dropped: Schema.Int,
+        duplicates: Schema.Int,
+        peakBufferedFrames: Schema.Int,
+        nativeStop: Schema.Literals(["confirmed", "unconfirmed"]),
+      }),
+    ),
   }),
-  takes: Schema.Array(
+  /**
+   * Every document the film showed, in order. The address and the commit time
+   * are the library's evidence and arrive when the interval ends; until then a
+   * document seen in frames is listed without them. `heldMillis` is this code's
+   * measurement: the source time between the last frame of the document before
+   * and the first of this one, which on film is a held picture. It is not a gap
+   * anything introduced. One screencast ran the whole way, and what Chromium
+   * left out while loading is unknown. Frames are attributed by receipt order,
+   * so it is good to a frame either way.
+   */
+  documents: Schema.Array(
     Schema.Struct({
-      received: Schema.Int,
-      delivered: Schema.Int,
-      /** Frames this host discarded. What the browser or the network dropped upstream is unknown. */
-      dropped: Schema.Int,
-      duplicates: Schema.Int,
-      peakBufferedFrames: Schema.Int,
-      timeToFirstFrameMillis: Schema.NullOr(Schema.Finite),
-      nativeStop: Schema.Literals(["confirmed", "unconfirmed"]),
+      document: Schema.Int,
+      url: Schema.NullOr(Schema.String),
+      /** When the navigation to it committed, on the host clock. `null` for the opening document. */
+      committedAtMillis: Schema.NullOr(Schema.Finite),
+      heldMillis: Schema.NullOr(Schema.Finite),
     }),
   ),
-  /** Source time no interval filmed, one entry per cut. On film it is a held picture. */
-  uncoveredMillis: Schema.Array(Schema.Finite),
   control: Schema.Struct({
-    /** Dispatch to return of the session's own actions, by kind. */
+    /** Around the call, for actions that report no interval of their own: admission to return. */
     actionMillis: Schema.Record(Schema.String, Distribution),
+    /** From the receipt of native input: the native command alone, with admission excluded. */
+    inputMillis: Schema.Record(Schema.String, Distribution),
     /** A `Locate` cue out and its report back: the page-to-host channel's round trip. */
     cueRoundTripMillis: Schema.NullOr(Distribution),
     /** A click's dispatch to the next frame received: an upper bound on action-to-pixel. */
@@ -133,17 +157,26 @@ export const clockOffset = (samples: ReadonlyArray<ClockSample>) => {
 };
 
 interface FrameRecord {
-  readonly take: number;
+  readonly document: number;
   readonly sourceMillis: number;
   readonly receivedMillis: number;
 }
 
+/** What the library reported about one navigation, with its commit on this layer's host clock. */
+interface Commit {
+  readonly document: number;
+  readonly url: string | null;
+  readonly committedAtMillis: number;
+}
+
 interface Records {
   readonly frames: ReadonlyArray<FrameRecord>;
-  readonly takeStartedMillis: ReadonlyArray<number>;
-  readonly takes: ReadonlyArray<CaptureSummary>;
+  readonly startedMillis: number | null;
+  readonly interval: CaptureSummary | null;
+  readonly commits: ReadonlyArray<Commit>;
   readonly clock: ReadonlyArray<ClockSample>;
   readonly actions: Readonly<Record<string, ReadonlyArray<number>>>;
+  readonly inputs: Readonly<Record<string, ReadonlyArray<number>>>;
   readonly cues: ReadonlyArray<number>;
   readonly clicksAtMillis: ReadonlyArray<number>;
   readonly outputFrames: number;
@@ -152,10 +185,12 @@ interface Records {
 
 const empty: Records = {
   frames: [],
-  takeStartedMillis: [],
-  takes: [],
+  startedMillis: null,
+  interval: null,
+  commits: [],
   clock: [],
   actions: {},
+  inputs: {},
   cues: [],
   clicksAtMillis: [],
   outputFrames: 0,
@@ -171,11 +206,33 @@ const appended = <A>(values: ReadonlyArray<A>, value: A) =>
 const differences = (values: ReadonlyArray<number>) =>
   values.slice(1).map((value, index) => value - (values[index] ?? value));
 
+const distributions = (byKind: Readonly<Record<string, ReadonlyArray<number>>>) =>
+  Object.fromEntries(
+    Object.entries(byKind).flatMap(([kind, values]) => {
+      const spread = distribution(values);
+
+      return spread === null ? [] : [[kind, spread]];
+    }),
+  );
+
 export const summarize = (records: Records): Metrics => {
   const clock = clockOffset(records.clock);
 
-  const byTake = records.takeStartedMillis.map((_, take) =>
-    records.frames.filter((frame) => frame.take === take),
+  // Frames say which documents were filmed as they arrive; the library's summary adds the
+  // address and the commit of each once the interval has ended.
+  const indices = [
+    ...new Set([
+      0,
+      ...records.frames.map((frame) => frame.document),
+      ...records.commits.map((commit) => commit.document),
+    ]),
+  ].sort((left, right) => left - right);
+
+  const byDocument = new Map(
+    indices.map((document) => [
+      document,
+      records.frames.filter((frame) => frame.document === document),
+    ]),
   );
 
   const first = records.frames[0];
@@ -187,7 +244,9 @@ export const summarize = (records: Records): Metrics => {
       frames: records.frames.length,
       framesPerSecond: spanMillis > 0 ? ((records.frames.length - 1) * 1000) / spanMillis : null,
       interFrameMillis: distribution(
-        byTake.flatMap((frames) => differences(frames.map((frame) => frame.sourceMillis))),
+        [...byDocument.values()].flatMap((frames) =>
+          differences(frames.map((frame) => frame.sourceMillis)),
+        ),
       ),
       latencyMillis:
         clock === null
@@ -198,40 +257,41 @@ export const summarize = (records: Records): Metrics => {
               ),
             ),
       clock,
+      timeToFirstFrameMillis:
+        records.startedMillis === null || first === undefined
+          ? null
+          : first.receivedMillis - records.startedMillis,
+      interval:
+        records.interval === null
+          ? null
+          : {
+              reason: records.interval.reason,
+              received: records.interval.received,
+              delivered: records.interval.delivered,
+              dropped: records.interval.dropped,
+              duplicates: records.interval.duplicates,
+              peakBufferedFrames: records.interval.peakBufferedFrames,
+              nativeStop: records.interval.nativeStop,
+            },
     },
-    takes: records.takes.map((take, index) => {
-      const started = records.takeStartedMillis[index];
-      const firstFrame = byTake[index]?.[0];
+    documents: indices.map((document) => {
+      const commit = records.commits.find((candidate) => candidate.document === document);
+      const before = byDocument.get(document - 1)?.at(-1);
+      const after = byDocument.get(document)?.[0];
 
       return {
-        received: take.received,
-        delivered: take.delivered,
-        dropped: take.dropped,
-        duplicates: take.duplicates,
-        peakBufferedFrames: take.peakBufferedFrames,
-        timeToFirstFrameMillis:
-          started === undefined || firstFrame === undefined
+        document,
+        url: document === 0 ? (records.interval?.initialUrl ?? null) : (commit?.url ?? null),
+        committedAtMillis: commit?.committedAtMillis ?? null,
+        heldMillis:
+          before === undefined || after === undefined
             ? null
-            : firstFrame.receivedMillis - started,
-        nativeStop: take.nativeStop,
+            : after.sourceMillis - before.sourceMillis,
       };
     }),
-    uncoveredMillis: byTake.slice(1).flatMap((frames, index) => {
-      const before = byTake[index]?.at(-1);
-      const after = frames[0];
-
-      return before === undefined || after === undefined
-        ? []
-        : [after.sourceMillis - before.sourceMillis];
-    }),
     control: {
-      actionMillis: Object.fromEntries(
-        Object.entries(records.actions).flatMap(([kind, values]) => {
-          const measured = distribution(values);
-
-          return measured === null ? [] : [[kind, measured]];
-        }),
-      ),
+      actionMillis: distributions(records.actions),
+      inputMillis: distributions(records.inputs),
       cueRoundTripMillis: distribution(records.cues),
       clickToFrameMillis: distribution(
         records.clicksAtMillis.flatMap((clickedAt) => {
@@ -254,8 +314,9 @@ export class Telemetry extends Context.Service<
      * and none of them jumps when the wall clock is corrected.
      */
     readonly now: Effect.Effect<number>;
-    readonly takeStarted: (atMillis: number) => Effect.Effect<void>;
-    readonly takeEnded: (summary: CaptureSummary) => Effect.Effect<void>;
+    /** Dated from the first attempt to start, so any wait shows in the time to first frame. */
+    readonly captureStarted: (atMillis: number) => Effect.Effect<void>;
+    readonly captureEnded: (summary: CaptureSummary) => Effect.Effect<void>;
     readonly frame: (frame: CapturedFrame) => Effect.Effect<void>;
     readonly output: (held: boolean) => Effect.Effect<void>;
     readonly clock: (sample: ClockSample) => Effect.Effect<void>;
@@ -264,6 +325,15 @@ export class Telemetry extends Context.Service<
       kind: string,
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E, R>;
+    /**
+     * Native input says when its own command started and completed, on the clock
+     * that stamps frames. That is the better number: timing around the call would
+     * add the wait for the owner's permit and the readiness check to it.
+     */
+    readonly input: <E, R>(
+      kind: string,
+      effect: Effect.Effect<InputReceipt, E, R>,
+    ) => Effect.Effect<InputReceipt, E, R>;
     readonly cueRoundTrip: (millis: number) => Effect.Effect<void>;
     readonly metrics: Effect.Effect<Metrics>;
   }
@@ -280,18 +350,23 @@ export class Telemetry extends Context.Service<
 
       return Telemetry.of({
         now,
-        takeStarted: (atMillis) =>
+        captureStarted: (atMillis) =>
+          Ref.update(records, (all) => ({ ...all, startedMillis: atMillis })),
+        captureEnded: (summary) =>
           Ref.update(records, (all) => ({
             ...all,
-            takeStartedMillis: [...all.takeStartedMillis, atMillis],
+            interval: summary,
+            commits: summary.documentBoundaries.map((boundary) => ({
+              document: boundary.document,
+              url: boundary.url,
+              committedAtMillis: hostMillis(boundary.observedMonotonicNanos),
+            })),
           })),
-        takeEnded: (summary) =>
-          Ref.update(records, (all) => ({ ...all, takes: [...all.takes, summary] })),
         frame: (frame) =>
           Ref.update(records, (all) => ({
             ...all,
             frames: appended(all.frames, {
-              take: all.takeStartedMillis.length - 1,
+              document: frame.document,
               sourceMillis: frame.sourceTimeMillis,
               receivedMillis: hostMillis(frame.receivedMonotonicNanos),
             }),
@@ -319,6 +394,20 @@ export class Telemetry extends Context.Service<
 
             return result;
           }),
+        input: (kind, effect) =>
+          Effect.tap(effect, (receipt) =>
+            Ref.update(records, (all) => ({
+              ...all,
+              inputs: {
+                ...all.inputs,
+                [kind]: appended(
+                  all.inputs[kind] ?? [],
+                  Number(receipt.completedMonotonicNanos - receipt.startedMonotonicNanos) /
+                    1_000_000,
+                ),
+              },
+            })),
+          ),
         cueRoundTrip: (millis) =>
           Ref.update(records, (all) => ({ ...all, cues: appended(all.cues, millis) })),
         metrics: Effect.map(Ref.get(records), summarize),

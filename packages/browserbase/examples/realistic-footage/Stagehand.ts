@@ -91,14 +91,9 @@ const script = String.raw`(() => {
     glyph.style.transform = "translate(" + (pointer.x - hotX) + "px," + (pointer.y - hotY) + "px)";
   };
 
-  // The session fills a field by selecting its contents and replacing them. A
-  // camera catches that selection as a flash on some keys, so it is not painted.
-  const calm = document.createElement("style");
-  calm.textContent = "input::selection,textarea::selection{background:transparent;color:inherit}";
-
   const mount = () => {
     if (!document.documentElement) return void requestAnimationFrame(mount);
-    document.documentElement.append(calm, host);
+    document.documentElement.append(host);
     draw();
   };
   mount();

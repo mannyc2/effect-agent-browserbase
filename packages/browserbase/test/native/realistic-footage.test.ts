@@ -104,14 +104,22 @@ it.live(
             expect(held.text).toContain("Held for twenty minutes");
             expect((yield* session.observe()).url).toBe(`${site.origin}/routes/vienna-venice`);
 
-            // One interval per document: the link's navigation ended the first take, and the
-            // time neither interval filmed is reported rather than only held on film.
-            expect(metrics.takes).toHaveLength(2);
-            expect(metrics.takes.map((take) => take.dropped)).toEqual([0, 0]);
-            expect(metrics.takes.every((take) => take.nativeStop === "confirmed")).toBe(true);
-            expect(metrics.takes.every((take) => take.timeToFirstFrameMillis !== null)).toBe(true);
-            expect(metrics.uncoveredMillis).toHaveLength(1);
-            expect(metrics.uncoveredMillis[0]).toBeGreaterThan(0);
+            // One interval filmed both documents. The link's navigation did not end it, so the
+            // loading is on film, and the library says what each document was and when the
+            // second one committed. How long the picture held across it is this layer's number.
+            expect(metrics.capture.interval).toMatchObject({
+              reason: "stopped",
+              dropped: 0,
+              nativeStop: "confirmed",
+            });
+            expect(metrics.capture.timeToFirstFrameMillis).not.toBeNull();
+            expect(metrics.documents.map((document) => document.url)).toEqual([
+              `${site.origin}/`,
+              `${site.origin}/routes/vienna-venice`,
+            ]);
+            expect(metrics.documents[0]?.committedAtMillis).toBeNull();
+            expect(metrics.documents[1]?.committedAtMillis).not.toBeNull();
+            expect(metrics.documents[1]?.heldMillis).toBeGreaterThan(0);
 
             // The page and the host compared clocks, so capture latency is a measurement. Here
             // both are one machine: the offset is near zero and no frame predates its picture
@@ -124,12 +132,14 @@ it.live(
             expect(latency.p50).toBeGreaterThan(-clock.uncertaintyMillis - 5);
             expect(latency.p50).toBeLessThan(500);
 
-            // Every action the storyboard dispatched was timed: six keys, three clicks, one
-            // link, and one native pointer move for each of the four glides that preceded them.
-            expect(metrics.control.actionMillis.fill?.count).toBe(6);
+            // Everything the storyboard dispatched was timed. Three clicks and one link are timed
+            // around the call. Six real keys, and one native pointer move for each of the four
+            // glides before them, are timed by the receipt the library returned for each.
             expect(metrics.control.actionMillis.click?.count).toBe(3);
             expect(metrics.control.actionMillis.clickAndWait?.count).toBe(1);
-            expect(metrics.control.actionMillis.pointerMove?.count).toBe(4);
+            expect(metrics.control.actionMillis.fill).toBeUndefined();
+            expect(metrics.control.inputMillis.key?.count).toBe(6);
+            expect(metrics.control.inputMillis.pointerMove?.count).toBe(4);
             expect(metrics.control.clickToFrameMillis?.count).toBe(3);
             expect(metrics.control.cueRoundTripMillis?.count).toBeGreaterThan(5);
 

@@ -1,13 +1,14 @@
 import { Effect, Schema } from "effect";
 import type { BrowserbaseSession } from "effect-browserbase/browser";
-import { Selector } from "effect-browserbase/browser-data";
+import { Selector, TypeRequest } from "effect-browserbase/browser-data";
 
 import * as Actor from "./Actor.ts";
 
 /**
  * A performance as data. A storyboard can be written by hand, kept in a file
- * or proposed by a model; decoding it is what makes it safe to perform, and
- * its selectors are held to the same bound as the library's own requests.
+ * or proposed by a model; decoding it is what makes it safe to perform. Its
+ * selectors and typed text are held to the library's own bounds, so a line
+ * break that would press Enter is refused here, before anything is filmed.
  */
 export const Scene = Schema.TaggedUnion({
   /** Show a lower-third caption; an empty string clears it. A navigation clears it too. */
@@ -20,7 +21,7 @@ export const Scene = Schema.TaggedUnion({
   Click: { selector: Selector },
   /** A click that loads another document. */
   Follow: { selector: Selector },
-  Type: { selector: Selector, text: Schema.String.check(Schema.isMaxLength(200)) },
+  Type: { selector: Selector, text: TypeRequest.fields.text.check(Schema.isMaxLength(200)) },
 });
 
 export type Scene = typeof Scene.Type;

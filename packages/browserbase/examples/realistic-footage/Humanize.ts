@@ -29,11 +29,25 @@ export interface ScrollSample {
   readonly top: number;
 }
 
-/** The whole value a field holds after one key, and the pause that precedes that key. */
-export interface Keystroke {
-  readonly value: string;
-  readonly afterMillis: number;
-}
+/** One key a typist presses, and the pause that precedes it. Backspace takes a slip back. */
+export type Keystroke =
+  | { readonly _tag: "Character"; readonly character: string; readonly afterMillis: number }
+  | { readonly _tag: "Backspace"; readonly afterMillis: number };
+
+/** What a field holds once these keys have been pressed into it. */
+export const typedText = (strokes: ReadonlyArray<Keystroke>) =>
+  strokes.reduce(
+    (typed, stroke) =>
+      stroke._tag === "Character" ? typed + stroke.character : [...typed].slice(0, -1).join(""),
+    "",
+  );
+
+/** The characters a US keyboard only produces with Shift held, beside the capital letters. */
+const ShiftedSymbols = '~!@#$%^&*()_+{}|:"<>?';
+
+/** Whether a typist holds Shift for this key, which a page reading the modifier can see. */
+export const needsShift = (character: string) =>
+  /^[A-Z]$/.test(character) || (character.length === 1 && ShiftedSymbols.includes(character));
 
 /** Tracks are sampled at display rate; the page never needs a finer grain than a frame. */
 const SampleMillis = 1000 / 60;
@@ -275,8 +289,8 @@ const keyInterval = Effect.map(standardNormal, (deviation) =>
 );
 
 /**
- * Typing as the sequence of values the field passes through. A slip is just
- * three more values: the wrong letter, the field without it, the right letter.
+ * Typing as the keys a typist presses. A slip is three of them: the wrong
+ * letter, a Backspace once it is noticed, then the right letter.
  */
 export const keystrokes = Effect.fnUntraced(function* (
   text: string,
@@ -297,13 +311,13 @@ export const keystrokes = Effect.fnUntraced(function* (
     if (neighbours !== undefined && (yield* Random.next) < typoChance) {
       const slip = neighbours.charAt(yield* Random.nextIntBetween(0, neighbours.length - 1));
 
-      strokes.push({ value: typed + slip, afterMillis });
-      strokes.push({ value: typed, afterMillis: yield* between(Typing.noticeMillis) });
+      strokes.push({ _tag: "Character", character: slip, afterMillis });
+      strokes.push({ _tag: "Backspace", afterMillis: yield* between(Typing.noticeMillis) });
       afterMillis = yield* keyInterval;
     }
 
     typed += character;
-    strokes.push({ value: typed, afterMillis });
+    strokes.push({ _tag: "Character", character, afterMillis });
   }
 
   return strokes;

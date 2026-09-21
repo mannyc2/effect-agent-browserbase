@@ -58,8 +58,8 @@ preview-encoding command.
 
 `realistic-footage.mp4` and its GIF preview are the output of
 [`examples/realistic-footage`](../../packages/browserbase/examples/realistic-footage/README.md):
-a storyboard performed with a drawn pointer, paced typing and eased scrolling,
-filmed across one navigation.
+a storyboard performed with a drawn pointer, real keys at a typist's cadence and
+eased scrolling, filmed across one navigation in a single capture interval.
 
 It is **not hosted evidence** and supports no claim in [STATUS.md](../STATUS.md).
 It was filmed by `test/native/realistic-footage.test.ts` against a local Chromium
@@ -72,12 +72,12 @@ credential or model was involved.
 | --- | --- |
 | Runtime | Node 24.14.1, Playwright 1.63.0, Chromium 153.0.8010.12, Effect 4.0.0-rc.115 |
 | Seed | `night-rail-atlas` |
-| Actions | one navigation, four native pointer moves, six fills, three clicks, one click-and-wait |
-| Capture | two intervals, 0 dropped, both `nativeStop: "confirmed"`, 70 ms uncovered at the cut |
-| Measured | capture latency p50 5.6 ms against a clock offset of −0.5 ± 0.9 ms; loopback, one machine |
-| Encoded | 554 decoded frames, 18.5s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream |
-| `realistic-footage.mp4` | `6990c343b84a277d5de913b6d189e248d6fe8c1610d6585c63a74a2dcefe1a6d` |
-| `realistic-footage.gif` | `26b83d0c560638be38682495a18d03a38a5f3ac26266c6bf42c20919814921f1` |
+| Actions | one navigation, four native pointer moves, six real keys, three clicks, one click-and-wait |
+| Capture | one page-lifetime interval over two documents, 365 received, 0 dropped, `nativeStop: "confirmed"`; the picture held 17 ms across the navigation |
+| Measured | capture latency p50 5.6 ms against a clock offset of 0.1 ± 1.0 ms; 7 ms per key and 14 ms per pointer move by receipt; loopback, one machine |
+| Encoded | 552 decoded frames, 18.4s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream |
+| `realistic-footage.mp4` | `726e00db42a73f8049881935407581f21917ed171ed72dbb0e6dca0d8c82f1a3` |
+| `realistic-footage.gif` | `0056d6cb21929246694b1d47e62bde25475696af33c9506f27127dfed2783354` |
 
 The seed fixes every path and pause, but not the bytes: frame delivery follows
 Chromium's own repaint schedule, so a retake is the same performance with a

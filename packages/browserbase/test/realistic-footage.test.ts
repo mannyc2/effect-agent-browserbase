@@ -1,5 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Random, Schema } from "effect";
+import { InputReceipt, Target } from "effect-browserbase/browser-data";
+import { type CapturedFrame, CaptureSummary } from "effect-browserbase/capture";
 import { TestClock } from "effect/testing";
 
 import { Cue, PollMillis, type Stage } from "../examples/realistic-footage/Cues.ts";
@@ -60,26 +62,39 @@ it("a click is aimed inside the control and off its exact centre", () => {
   }
 });
 
-it("typing always arrives at the text, one key at a time, and a slip is corrected", () => {
+it("typing always arrives at the text, one key at a time, and a slip is taken back", () => {
   const text = "Where do you want to wake up";
   const careful = seeded(Humanize.keystrokes(text, { typoChance: 0 }));
 
-  expect(careful.map((stroke) => stroke.value)).toEqual(
-    Array.from(text, (_, index) => text.slice(0, index + 1)),
+  // A careful typist presses exactly the keys of the text, and never Backspace.
+  expect(careful.map((stroke) => (stroke._tag === "Character" ? stroke.character : "⌫"))).toEqual(
+    Array.from(text),
   );
   expect(careful.every((stroke) => stroke.afterMillis >= Humanize.Typing.floorMillis)).toBe(true);
 
   const clumsy = seeded(Humanize.keystrokes(text, { typoChance: 1 }));
 
-  expect(clumsy[clumsy.length - 1]!.value).toBe(text);
+  expect(Humanize.typedText(clumsy)).toBe(text);
   expect(clumsy.length).toBeGreaterThan(careful.length);
-  // Every step adds or removes exactly one character, as a keyboard does.
-  expect(
-    clumsy.every(
-      (stroke, index) =>
-        Math.abs(stroke.value.length - (clumsy[index - 1]?.value.length ?? 0)) === 1,
-    ),
-  ).toBe(true);
+
+  // A slip is a wrong key, a Backspace once it is noticed, then the key that was meant.
+  const takenBack = clumsy.flatMap((stroke, index) =>
+    stroke._tag === "Backspace" ? [[clumsy[index - 1], clumsy[index + 1]] as const] : [],
+  );
+
+  expect(takenBack.length).toBeGreaterThan(0);
+  for (const [slip, meant] of takenBack) {
+    expect(slip?._tag).toBe("Character");
+    expect(meant?._tag).toBe("Character");
+    expect(slip).not.toEqual(meant);
+  }
+});
+
+it("Shift is held for the keys a keyboard only produces with it", () => {
+  for (const shifted of ["V", "Z", "!", "?", "_", '"'])
+    expect(Humanize.needsShift(shifted)).toBe(true);
+  // A space, a digit, a lower-case letter, and a capital no US key produces.
+  for (const plain of ["v", "1", " ", "-", "É"]) expect(Humanize.needsShift(plain)).toBe(false);
 });
 
 it("a scroll is several eased flicks that land exactly, in either direction", () => {
@@ -183,6 +198,11 @@ it("a storyboard is decoded before it is performed", () => {
   expect(accepts([])).toBe(false);
   expect(accepts([{ _tag: "Click", selector: "" }])).toBe(false);
   expect(accepts([{ _tag: "Evaluate", script: "alert(1)" }])).toBe(false);
+  // Typed text is held to the library's own rule: a line break would press Enter, so it is
+  // refused while the storyboard is decoded rather than halfway through a film.
+  expect(accepts([{ _tag: "Type", selector: "#q", text: "Venice" }])).toBe(true);
+  expect(accepts([{ _tag: "Type", selector: "#q", text: "Venice\n" }])).toBe(false);
+  expect(accepts([{ _tag: "Type", selector: "#q", text: "" }])).toBe(false);
 });
 
 it("two clocks are compared from the tightest exchange, and its round trip bounds the error", () => {
@@ -229,6 +249,113 @@ it.effect("a completed action is timed, and a failed one stays the caller's fail
     expect(metrics.control.actionMillis.fill).toBeUndefined();
     // No frames and no clock comparison yet: latency is absent, not zero.
     expect(metrics.capture.latencyMillis).toBeNull();
-    expect(metrics.uncoveredMillis).toEqual([]);
+    expect(metrics.capture.interval).toBeNull();
+    // A film always has an opening document, and knows nothing about it until it is told.
+    expect(metrics.documents).toEqual([
+      { document: 0, url: null, committedAtMillis: null, heldMillis: null },
+    ]);
+  }).pipe(Effect.provide(Telemetry.layer)),
+);
+
+const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
+
+const frameAt = (document: number, sourceTimeMillis: number, sequence: number): CapturedFrame => ({
+  bytes: new Uint8Array([255, 216, 255, 217]),
+  mediaType: "image/jpeg",
+  target,
+  sequence,
+  document,
+  sourceTimeMillis,
+  sourceClock: "presentation-unix-millis",
+  receivedMonotonicNanos: BigInt(sequence) * 10_000_000n,
+  width: 64,
+  height: 48,
+  viewportWidth: 64,
+  viewportHeight: 48,
+});
+
+it.effect("native input is timed by its own receipt, not by the wait around it", () =>
+  Effect.gen(function* () {
+    const telemetry = yield* Telemetry;
+
+    const receipt = InputReceipt.make({
+      target,
+      kind: "type",
+      position: null,
+      startedMonotonicNanos: 5_000_000_000n,
+      completedMonotonicNanos: 5_012_000_000n,
+    });
+
+    // Forty milliseconds pass waiting to be admitted; the native command itself took twelve.
+    yield* telemetry.input("key", TestClock.adjust("40 millis").pipe(Effect.as(receipt)));
+    const metrics = yield* telemetry.metrics;
+
+    expect(metrics.control.inputMillis.key).toEqual({
+      count: 1,
+      p50: 12,
+      p95: 12,
+      p99: 12,
+      max: 12,
+    });
+    expect(metrics.control.actionMillis.key).toBeUndefined();
+  }).pipe(Effect.provide(Telemetry.layer)),
+);
+
+it.effect("each document gets the library's address and commit, and this layer's held time", () =>
+  Effect.gen(function* () {
+    const telemetry = yield* Telemetry;
+
+    yield* telemetry.frame(frameAt(0, 1_000, 0));
+    yield* telemetry.frame(frameAt(0, 1_033, 1));
+    // While the film runs, the frames alone say a second document began and how long it held.
+    yield* telemetry.frame(frameAt(1, 1_203, 2));
+    const during = yield* telemetry.metrics;
+
+    expect(during.documents).toEqual([
+      { document: 0, url: null, committedAtMillis: null, heldMillis: null },
+      { document: 1, url: null, committedAtMillis: null, heldMillis: 170 },
+    ]);
+    // Pacing is measured inside a document, so the hold across a navigation is not counted twice.
+    expect(during.capture.interFrameMillis).toMatchObject({ count: 1, max: 33 });
+
+    yield* telemetry.captureEnded(
+      CaptureSummary.make({
+        target,
+        reason: "stopped",
+        received: 3,
+        delivered: 3,
+        dropped: 0,
+        duplicates: 0,
+        late: 0,
+        peakBufferedFrames: 1,
+        peakBufferedBytes: 4,
+        bufferedFrames: 0,
+        bufferedBytes: 0,
+        sourceFirstMillis: 1_000,
+        sourceLastMillis: 1_203,
+        initialUrl: "https://rail.example/",
+        documentBoundaries: [
+          {
+            document: 1,
+            observedMonotonicNanos: 15_000_000n,
+            afterSequence: 1,
+            url: "https://rail.example/routes/vienna-venice",
+          },
+        ],
+        documentBoundariesTruncated: false,
+        nativeStop: "confirmed",
+        upstreamDrops: "unknown",
+      }),
+    );
+    const after = yield* telemetry.metrics;
+
+    expect(after.documents.map((document) => document.url)).toEqual([
+      "https://rail.example/",
+      "https://rail.example/routes/vienna-venice",
+    ]);
+    expect(after.documents[0]?.committedAtMillis).toBeNull();
+    expect(after.documents[1]?.committedAtMillis).not.toBeNull();
+    expect(after.documents[1]?.heldMillis).toBe(170);
+    expect(after.capture.interval).toMatchObject({ reason: "stopped", dropped: 0 });
   }).pipe(Effect.provide(Telemetry.layer)),
 );

@@ -14,6 +14,8 @@ export class FootageError extends Schema.TaggedError<FootageError>()("FootageErr
     "unexpected-report",
     "encoder",
     "no-frames",
+    /** The capture ended before the film did; a film is one interval, bounded at ten minutes. */
+    "capture-ended",
   ]),
   detail: Schema.optionalKey(Schema.String),
   cause: Schema.optionalKey(Schema.Defect()),

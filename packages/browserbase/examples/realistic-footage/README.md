@@ -15,18 +15,18 @@ way to drive the browser.
 Ranked by how much each one matters on screen. The numbers live, with their
 sources, in [`Humanize.ts`](Humanize.ts).
 
-| What a viewer notices                                                                                                                                        | What the example does                                                                                                                                                                                                                                     |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **There is no pointer.** A screencast carries rendered pixels, and the operating system's pointer is not one of them. Controls change under no visible hand. | `Stagehand.ts` draws one in the page, in a closed shadow root that takes no input. It becomes a hand over links and an I-beam over fields by asking the page what cursor it wants there.                                                                  |
-| **The pointer teleports, or moves like a ruler.**                                                                                                            | A cubic Bézier bowed to one side, travelled on the minimum-jerk profile, so it accelerates and lands with no speed left. Duration comes from Fitts's law: a far or small target takes longer. Reaches over 500px sometimes overshoot and come back.       |
-| **Clicks hit the mathematical centre, the instant the pointer arrives.**                                                                                     | The aim point is drawn around the centre, never on it. The pointer settles for 80–180ms, then the session's own `click` is dispatched. The press and ripple are drawn from the page's real `mousedown`, so a ripple on film means the real click arrived. |
-| **Text appears all at once.**                                                                                                                                | One `fill` per key, through every value the field passes through, at log-normal intervals with a 60ms floor, a slower first key of each word, and an occasional neighbouring-key slip that is noticed and corrected.                                      |
-| **The page jumps to the next thing.**                                                                                                                        | Before using anything outside the comfortable middle of the viewport, the page is scrolled to it in a few eased flicks with a breath between them.                                                                                                        |
-| **Nothing is on screen long enough to read.**                                                                                                                | `Read` rests in proportion to how many words just appeared, at a fraction of the measured silent reading rate, within bounds.                                                                                                                             |
-| **Motion stutters, or a still moment vanishes.**                                                                                                             | A screencast only delivers a frame when the page repaints. `Reel.ts` places each frame by its own presentation timestamp on a constant 30 fps grid and holds the picture across empty slots.                                                              |
-| **Soft text.**                                                                                                                                               | Frames are requested at the viewport's own size (the default fit is 800×800) at JPEG quality 92, and encoded once: x264 CRF 18, `yuv420p`, even dimensions, `+faststart`.                                                                                 |
-| **The film opens on a blank or reflowing page.**                                                                                                             | The opening document is loaded, and its fonts are ready, before the camera rolls; the performance starts only after the first frame arrives; the last picture is held for a moment after the final action.                                                |
-| **A retake looks different.**                                                                                                                                | All randomness comes from Effect's `Random`, so one `Random.withSeed` reproduces every path, pause and slip.                                                                                                                                              |
+| What a viewer notices                                                                                                                                        | What the example does                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **There is no pointer.** A screencast carries rendered pixels, and the operating system's pointer is not one of them. Controls change under no visible hand. | `Stagehand.ts` draws one in the page, in a closed shadow root that takes no input. It becomes a hand over links and an I-beam over fields by asking the page what cursor it wants there.                                                                                        |
+| **The pointer teleports, or moves like a ruler.**                                                                                                            | A cubic Bézier bowed to one side, travelled on the minimum-jerk profile, so it accelerates and lands with no speed left. Duration comes from Fitts's law: a far or small target takes longer. Reaches over 500px sometimes overshoot and come back.                             |
+| **Clicks hit the mathematical centre, the instant the pointer arrives.**                                                                                     | The aim point is drawn around the centre, never on it. The pointer settles for 80–180ms, then the session's own `click` is dispatched. The press and ripple are drawn from the page's real `mousedown`, so a ripple on film means the real click arrived.                       |
+| **Text appears all at once.**                                                                                                                                | Real keys, one per action, at log-normal intervals with a 60ms floor, a slower first key of each word, and an occasional neighbouring-key slip that is noticed and taken back with Backspace. The page sees `keydown`/`keyup` for each, and Shift is really held for a capital. |
+| **The page jumps to the next thing.**                                                                                                                        | Before using anything outside the comfortable middle of the viewport, the page is scrolled to it in a few eased flicks with a breath between them.                                                                                                                              |
+| **Nothing is on screen long enough to read.**                                                                                                                | `Read` rests in proportion to how many words just appeared, at a fraction of the measured silent reading rate, within bounds.                                                                                                                                                   |
+| **Motion stutters, or a still moment vanishes.**                                                                                                             | A screencast only delivers a frame when the page repaints. `Reel.ts` places each frame by its own presentation timestamp on a constant 30 fps grid and holds the picture across empty slots.                                                                                    |
+| **Soft text.**                                                                                                                                               | Frames are requested at the viewport's own size (the default fit is 800×800) at JPEG quality 92, and encoded once: x264 CRF 18, `yuv420p`, even dimensions, `+faststart`.                                                                                                       |
+| **The film opens on a blank or reflowing page.**                                                                                                             | The opening document is loaded, and its fonts are ready, before the camera rolls; the performance starts only after the first frame arrives; the last picture is held for a moment after the final action.                                                                      |
+| **A retake looks different.**                                                                                                                                | All randomness comes from Effect's `Random`, so one `Random.withSeed` reproduces every path, pause and slip.                                                                                                                                                                    |
 
 Tools in this space (Screen Studio, Cap, webreel, ghost-cursor, Playwright's own
 `recordVideo`) agree on this list. What they add beyond it is post-production:
@@ -35,9 +35,9 @@ film and are out of scope here.
 
 ## How it fits the library
 
-The library sends one native pointer move per action and has no single key
-press, and it lets a page call the host but never the reverse. A glide is sixty
-positions a second, so the example builds on what makes that affordable:
+The library sends one native pointer move or key per action, and it lets a page
+call the host but never the reverse. A glide is sixty positions a second, so
+the example builds on what makes that affordable:
 
 ```
 host                                            page (allowed origins only)
@@ -45,8 +45,8 @@ host                                            page (allowed origins only)
 Storyboard ─► Actor ─► Director.perform(cue) ◄── footageCue(report) ── Stagehand
                 │            slot + ack          typed Bootstrap.binding   draws pointer,
                 │                                                          plays tracks
-                └────► session.pointerMove / click / fill / clickAndWait ► real input events
-Camera ◄── Capture.start … one interval per document ◄──────────────────── screencast
+                └────► session.pointerMove / click / type / press / clickAndWait ► real input events
+Camera ◄── Capture.start { lifetime: "page" } … one interval, every document ◄── screencast
    ├─► Broadcast ─► /live.mjpeg   every frame, as it arrives, to whoever is watching
    ├─► Reel (constant rate) ─► ffmpeg stdin ─► .mp4
    └─► Telemetry ─► Footage.metrics, and /metrics while it runs
@@ -63,11 +63,11 @@ Camera ◄── Capture.start … one interval per document ◄─────�
 - **Motion plays in the page**, at display rate, from a sampled track the host
   computed. A host that sent one position per round trip would film its own
   latency, and would spend an action per frame.
-- **`Camera.ts`** treats a navigation as a cut. Navigating ends a capture
-  interval by design, so the camera starts the next take and the reel holds the
-  last picture across the gap. Frames stream straight into FFmpeg's stdin;
-  nothing is buffered beyond the capture's own bounds and no frame files are
-  written.
+- **`Camera.ts`** films the whole performance in one capture interval that
+  follows its page across documents, so a navigation is on film as it loads,
+  and the library reports the address of each document with the frame before
+  its commit. Frames stream straight into FFmpeg's stdin; nothing is buffered
+  beyond the capture's own bounds and no frame files are written.
 - **`Broadcast.ts`** sends the same frames to live viewers, and
   **`Telemetry.ts`** accounts for them. Both are described below.
 - **`Storyboard.ts`** is the performance as Schema data, so it can be written by
@@ -116,26 +116,28 @@ finished file; use fragmented MP4 or HLS). Expect seconds, not milliseconds.
 This code sits between a browser and whoever watches. `Telemetry.ts` reports
 what that position is answerable for, and nothing past it.
 
-| Metric                                        | What it tells you                                                                                                                                                                                                                                                                     |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `capture.latencyMillis`                       | Presentation in the browser to receipt on the host, p50/p95/p99/max. A frame's source time is on the **browser's** clock, so this is `null` until the clocks have been compared.                                                                                                      |
-| `capture.clock`                               | That comparison: host minus browser, and its error bound. Every cue exchange doubles as a four-timestamp NTP sample; the tightest round trip wins, and half of it is the uncertainty on every latency above.                                                                          |
-| `capture.interFrameMillis`, `framesPerSecond` | Pacing as delivered. A still page is a long gap, not a fault.                                                                                                                                                                                                                         |
-| `takes[]`                                     | Per interval: received, delivered, dropped **by this host**, duplicates, peak buffer (backpressure from the encoder shows here first), time to first frame, and whether the native stop was confirmed. What the browser or network dropped upstream is unknown, and is not estimated. |
-| `uncoveredMillis[]`                           | Source time that no interval filmed, one entry per cut. On film it is a held picture; here it is a number.                                                                                                                                                                            |
-| `control.actionMillis`                        | Dispatch to return for each of the session's actions, by kind. On a hosted session this is mostly round trip.                                                                                                                                                                         |
-| `control.cueRoundTripMillis`                  | A `Locate` cue out and its report back: the page-to-host channel alone.                                                                                                                                                                                                               |
-| `control.clickToFrameMillis`                  | A click's dispatch to the next frame received. An upper bound on action-to-pixel, since the next frame may be a caret blink.                                                                                                                                                          |
-| `output.heldFrames`                           | Output frames that repeat the previous picture. High on still pages by design; a sudden rise on a busy page means frames are not arriving.                                                                                                                                            |
+| Metric                                        | What it tells you                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `capture.latencyMillis`                       | Presentation in the browser to receipt on the host, p50/p95/p99/max. A frame's source time is on the **browser's** clock, so this is `null` until the clocks have been compared.                                                                                                                                                                    |
+| `capture.clock`                               | That comparison: host minus browser, and its error bound. Every cue exchange doubles as a four-timestamp NTP sample; the tightest round trip wins, and half of it is the uncertainty on every latency above.                                                                                                                                        |
+| `capture.interFrameMillis`, `framesPerSecond` | Pacing as delivered, measured within a document. A still page is a long gap, not a fault.                                                                                                                                                                                                                                                           |
+| `capture.interval`, `timeToFirstFrameMillis`  | The one interval's account of itself: why it ended, received, delivered, dropped **by this host**, duplicates, peak buffer (backpressure from the encoder shows here first), and whether the native stop was confirmed. What the browser or network dropped upstream is unknown, and is not estimated.                                              |
+| `documents[]`                                 | Every document on film, in order: its address and the host time its navigation committed, both the library's evidence, and `heldMillis`, this code's measurement of how long the last picture of the document before stayed on screen. One screencast ran the whole way, so that hold is the browser's own loading, not a gap this code introduced. |
+| `control.actionMillis`                        | Around the call for a click or a click-and-wait, admission to return. On a hosted session this is mostly round trip.                                                                                                                                                                                                                                |
+| `control.inputMillis`                         | For native input, from the receipt the library returns: the native command alone, on the clock that stamps frames, with the wait for the owner's permit left out.                                                                                                                                                                                   |
+| `control.cueRoundTripMillis`                  | A `Locate` cue out and its report back: the page-to-host channel alone.                                                                                                                                                                                                                                                                             |
+| `control.clickToFrameMillis`                  | A click's dispatch to the next frame received. An upper bound on action-to-pixel, since the next frame may be a caret blink.                                                                                                                                                                                                                        |
+| `output.heldFrames`                           | Output frames that repeat the previous picture. High on still pages by design; a sudden rise on a busy page means frames are not arriving.                                                                                                                                                                                                          |
 
 Deliberately absent: glass-to-glass latency, rebuffering, anything about a
 viewer's player or network. Each live frame carries `X-Source-Time-Millis` so an
 application can measure its own last hop.
 
 On one machine, the committed storyboard measures about 6ms p50 capture latency
-with a clock offset of −0.5 ± 0.9ms, 70–170ms uncovered at the navigation, 3ms
-p50 cue round trip and 14ms per native pointer move. Those are loopback numbers;
-hosted ones will be dominated by the network and have not been measured.
+with a clock offset of 0.1 ± 1.0ms, a 17ms hold at the navigation, 2ms p50 cue
+round trip, 14ms per native pointer move and 7ms per key. Those are loopback
+numbers; hosted ones will be dominated by the network and have not been
+measured.
 
 ## Running it
 
@@ -178,7 +180,9 @@ const film = Effect.gen(function* () {
 
 Use `Broadcast.silent` to film to a file only.
 
-Budget one action per typed key: `Type` is the expensive scene.
+Budget one action per typed key: `Type` is the expensive scene. A typed
+`Storyboard` is decoded with the library's own text rule, so a line break,
+which would press Enter, is refused before anything is filmed.
 
 ## Limits worth knowing
 
@@ -198,22 +202,26 @@ Budget one action per typed key: `Type` is the expensive scene.
   is a 25ms action, so native wheel films at about 15 frames a second before any
   network is involved, where the in-page track plays at display rate. Use `wheel`
   when what scrolls matters more than how it looks.
-- Whether the library should also offer key presses is an open question:
-  [#34](https://github.com/mannyc2/effect-agent-browserbase/issues/34) drew the
-  line (the library owns faithful input and trustworthy evidence, the application
-  owns cursor artwork, window graphics, easing and encoding) and its pointer and
-  wheel input has landed. The keyboard was not part of it; the next limit is
-  what that costs.
-- Each `fill` selects the field's contents before replacing them, and a camera
-  catches that as a flash. The stagehand stops selections in fields from being
-  painted while it is installed. A modeled key-press action would remove the
-  need for both this and the per-key budget.
+- Typing is real keys. A slip is a wrong key and a Backspace, the caret is the
+  browser's own, and the field keeps its focus through the click that gave it,
+  so a page that reacts to keys behaves as it does for a person. A character
+  the US layout cannot produce is committed as text, the way an input method
+  commits it, and raises no key event; that is the pinned engine's limit, and
+  the library's README says so.
 - A strict `style-src` policy on the filmed site can refuse the overlay's
   styles. Film origins you control.
 - Captions live in the document, so a navigation clears them.
 - The film shows a page, not a browser window. Tab strip, address bar and window
   chrome would be composited over the finished reel, and a pointer that can
-  leave the page has to be composited too rather than drawn inside it.
+  leave the page has to be composited too rather than drawn inside it. That
+  decision is the library's ([#48](https://github.com/mannyc2/effect-agent-browserbase/issues/48)),
+  and everything a compositor needs is in what this example already collects:
+  the address and commit time of every document (`documents[]`), and the
+  position and interval of every native input (`InputReceipt`), on the clock
+  that stamps frames. A title is page state, read when wanted; the browser's
+  clock is related to the host's only by the measurement `capture.clock` makes.
 - Frame timing follows the browser's presentation clock. On a hosted session
-  the frames also cross a network; drops and uncovered time show up in
-  `Footage.metrics` and are holds on film, never silent.
+  the frames also cross a network; drops and the hold across each navigation
+  show up in `Footage.metrics` and are holds on film, never silent. A film is
+  one interval, bounded at ten minutes; one that outlasts it fails
+  `capture-ended` rather than holding its last picture to the end.

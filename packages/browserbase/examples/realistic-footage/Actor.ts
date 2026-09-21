@@ -1,6 +1,12 @@
 import { Duration, Effect } from "effect";
 import type { BrowserbaseSession } from "effect-browserbase/browser";
-import { ClickRequest, FillRequest, PointerMoveRequest } from "effect-browserbase/browser-data";
+import {
+  ClickRequest,
+  type InputReceipt,
+  PointerMoveRequest,
+  PressRequest,
+  TypeRequest,
+} from "effect-browserbase/browser-data";
 
 import { type Answer, Report } from "./Cues.ts";
 import { type CueRequest, Director } from "./Director.ts";
@@ -14,7 +20,7 @@ import { Telemetry } from "./Telemetry.ts";
  * Presentation (where the pointer travels, how the page scrolls) is cued to
  * the stagehand and changes nothing. Every change to the page is one of the
  * session's own bounded actions, dispatched only after the pointer has visibly
- * arrived. The footage therefore shows the same clicks and fills an unfilmed
+ * arrived. The footage therefore shows the same clicks and keys an unfilmed
  * run would make, no more and no fewer.
  */
 
@@ -46,9 +52,13 @@ const locate = Effect.fnUntraced(function* (selector: string) {
   return found;
 });
 
-/** The session's own action, timed from dispatch to return. */
+/** The session's own action, timed around the call: admission, dispatch and return. */
 const timed = <A, E, R>(kind: string, action: Effect.Effect<A, E, R>) =>
   Effect.flatMap(Telemetry, (telemetry) => telemetry.action(kind, action));
+
+/** Native input reports its own interval, around the native command alone. */
+const received = <E, R>(kind: string, input: Effect.Effect<InputReceipt, E, R>) =>
+  Effect.flatMap(Telemetry, (telemetry) => telemetry.input(kind, input));
 
 /** Scroll until the target sits where a reader would want it, then report where that is. */
 const bringIntoView = Effect.fn("Actor.bringIntoView")(function* (selector: string) {
@@ -88,7 +98,7 @@ const glideOnto = Effect.fnUntraced(function* (session: BrowserbaseSession, foun
   yield* cue({ _tag: "Glide", path }, "Played");
   const target = yield* session.currentTarget;
 
-  yield* timed(
+  yield* received(
     "pointerMove",
     target.pointerMove(
       PointerMoveRequest.make({ to: { x: Math.max(0, aim.x), y: Math.max(0, aim.y) } }),
@@ -135,9 +145,9 @@ export const click = Effect.fn("Actor.click")(function* (
 });
 
 /**
- * A click that loads another document. The capture interval filming this one
- * ends with it; the camera starts the next take, and the new document is not
- * acted on until it reports ready.
+ * A click that loads another document. The camera follows the page across it,
+ * so the loading is on film, and the new document is not acted on until it
+ * reports ready.
  */
 export const follow = Effect.fn("Actor.follow")(function* (
   session: BrowserbaseSession,
@@ -155,9 +165,13 @@ export const follow = Effect.fn("Actor.follow")(function* (
 });
 
 /**
- * The library fills a field in one action and has no single key press, so
- * typing is filmed as the values the field passes through, one fill per key,
- * at a typist's cadence. Each fill counts against the policy's action budget.
+ * Real keys, one at a time at a typist's cadence, so the page sees what it
+ * would from a keyboard: a key event each way for every character, and a slip
+ * taken back with Backspace. The click is what gives the field focus. Every key
+ * is then sent `into` that field, so one that lost focus halfway receives
+ * nothing rather than letting the rest land somewhere else. Shift is really
+ * held for a capital, since a page can read the modifier. Each key is one
+ * action against the policy's budget.
  */
 export const type = Effect.fn("Actor.type")(function* (
   session: BrowserbaseSession,
@@ -170,7 +184,16 @@ export const type = Effect.fn("Actor.type")(function* (
     yield* Effect.sleep(stroke.afterMillis);
     const target = yield* session.currentTarget;
 
-    yield* timed("fill", target.fill(FillRequest.make({ selector, value: stroke.value })));
+    yield* received(
+      "key",
+      stroke._tag === "Backspace"
+        ? target.press(PressRequest.make({ key: "Backspace", into: selector }))
+        : Humanize.needsShift(stroke.character)
+          ? target.press(
+              PressRequest.make({ key: stroke.character, modifiers: ["Shift"], into: selector }),
+            )
+          : target.type(TypeRequest.make({ text: stroke.character, into: selector })),
+    );
   }
 });
 
