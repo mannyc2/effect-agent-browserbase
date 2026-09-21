@@ -85,6 +85,11 @@ await h.run(
       recordingBytes = Array.from(bytes).reduce((total, chunk) => total + chunk.byteLength, 0);
     }
 
+    yield* h.established({
+      released: browser.cleanup.remote === "confirmed",
+      recording: recordingBytes !== null && recordingBytes > 0,
+    });
+
     return {
       ...browser,
       recording: {

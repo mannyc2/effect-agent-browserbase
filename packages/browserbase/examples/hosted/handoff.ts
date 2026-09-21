@@ -40,6 +40,8 @@ await h.run(
       const observation = yield* session.resume(handoff.token, released);
       const cleanup = yield* session.close;
 
+      yield* h.established({ released, moved: observation.url !== start });
+
       return {
         reference: session.reference,
         released,

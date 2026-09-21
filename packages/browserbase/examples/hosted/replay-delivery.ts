@@ -65,6 +65,10 @@ await h.run(
       };
     }
 
+    yield* h.established({
+      replay: replay !== null && replay.firstSegmentBytes > 0,
+    });
+
     return {
       reference,
       cleanup,

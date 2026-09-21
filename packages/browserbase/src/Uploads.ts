@@ -31,6 +31,14 @@ const UploadOptions = Schema.Struct({
  * remote location for the stored file; when the response omits it, the receipt says so
  * instead of inventing one, and attachment by path is refused rather than guessed.
  */
+/**
+ * Where the provider places session uploads inside the remote browser. Observed against the
+ * provider on 21 September 2026 and documented at
+ * https://docs.browserbase.com/platform/browser/files/uploads.md; the create reply does not
+ * return it.
+ */
+const UPLOAD_DIRECTORY = "/tmp/.uploads";
+
 const ProviderUpload = Schema.Struct({
   message: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1024))),
   path: Schema.optionalKey(RemoteFilePath),
@@ -131,19 +139,20 @@ export class BrowserbaseUploads extends Context.Service<
           ),
         );
 
+        // The provider's reply carries only a message; its documented upload location is a
+        // fixed directory keyed by the part's filename, which was validated above. A path the
+        // provider does return still wins, and was checked for traversal when decoded.
+        const remotePath = acknowledged.path ?? `${UPLOAD_DIRECTORY}/${value.filename}`;
+
         const receipt = UploadReceipt.make({
           reference: state.reference,
           filename: value.filename,
           bytes: owned.byteLength,
-          ...(acknowledged.path === undefined ? {} : { remotePath: acknowledged.path }),
+          remotePath,
           ...(acknowledged.message === undefined ? {} : { acknowledgement: acknowledged.message }),
         });
 
-        if (acknowledged.path !== undefined)
-          recordIssuedUpload(receipt, {
-            reference: state.reference,
-            remotePath: acknowledged.path,
-          });
+        recordIssuedUpload(receipt, { reference: state.reference, remotePath });
 
         return receipt;
       });

@@ -128,6 +128,16 @@ export const hostedCase = (name: CheckName) => {
 
       return session;
     }),
+    /** Fail unless every fact holds, so a `complete` record always means the claim held. */
+    established: (
+      facts: Record<string, boolean>,
+    ): Effect.Effect<void, { readonly _tag: "ClaimNotEstablished"; readonly failed: string[] }> => {
+      const failed = Object.keys(facts).filter((key) => facts[key] !== true);
+
+      return failed.length === 0
+        ? Effect.void
+        : Effect.fail({ _tag: "ClaimNotEstablished" as const, failed });
+    },
     /** Show the operator something privately and wait, bounded, for them to type a line. */
     ask: (prompt: string, timeoutMillis: number) =>
       Effect.acquireUseRelease(

@@ -134,7 +134,7 @@ export const checks = {
     budget: {
       sessions: 1,
       browserSeconds: 120,
-      actions: 10,
+      actions: 15,
       captureSeconds: 0,
       transferBytes: 64 * 1024,
     },

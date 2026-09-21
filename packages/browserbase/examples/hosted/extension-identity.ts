@@ -67,6 +67,11 @@ await h.run(
         }).pipe(Effect.provide(h.browser({ launch: recipe({ extension: registered.reference }) }))),
       );
 
+      yield* h.established({
+        sameIdentity: retrieved.reference.extensionId === registered.reference.extensionId,
+        loaded: loaded.marker,
+      });
+
       return {
         registered,
         sameIdentity: retrieved.reference.extensionId === registered.reference.extensionId,

@@ -41,6 +41,12 @@ await h.run(
       const after = yield* session.ready;
       const cleanup = yield* session.close;
 
+      yield* h.established({
+        before: before._tag === "Ready",
+        sameTarget: selected?.targetId === detached.targetId,
+        after: after._tag === "Ready",
+      });
+
       return {
         reference: session.reference,
         before,

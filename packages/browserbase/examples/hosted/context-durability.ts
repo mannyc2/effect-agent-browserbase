@@ -88,29 +88,46 @@ await h.run(
     yield* h.report("context-created", reference);
 
     return yield* Effect.gen(function* () {
-      const written = yield* withWriter(backend, reference, (permit) =>
-        observe.pipe(
-          Effect.provide(
-            h.browser({
-              launch: recipe({ context: { reference, persist: true } }),
-              bootstrap: Bootstrap.combine(write, read),
-              contextWriter: permit,
-            }),
+      let readback: Effect.Success<typeof observe> | undefined;
+
+      // The readback runs while the writer lease is still held, which is what lets the writer
+      // settle as released rather than quarantined, and so lets the context be deleted.
+      const written = yield* withWriter(
+        backend,
+        reference,
+        (permit) =>
+          observe.pipe(
+            Effect.provide(
+              h.browser({
+                launch: recipe({ context: { reference, persist: true } }),
+                bootstrap: Bootstrap.combine(write, read),
+                contextWriter: permit,
+              }),
+            ),
           ),
-        ),
+        {
+          verify: () =>
+            Effect.gen(function* () {
+              yield* Effect.sleep(settleMillis);
+
+              const seen = yield* observe.pipe(
+                Effect.provide(
+                  h.browser({
+                    launch: recipe({ context: { reference, persist: false } }),
+                    bootstrap: read,
+                  }),
+                ),
+              );
+
+              readback = seen;
+              if (!seen.storage || !seen.cookie) {
+                return yield* Effect.fail({ _tag: "MarkersNotReadBack" as const });
+              }
+            }),
+        },
       );
 
-      yield* h.report("written", written);
-      yield* Effect.sleep(settleMillis);
-
-      const readback = yield* observe.pipe(
-        Effect.provide(
-          h.browser({
-            launch: recipe({ context: { reference, persist: false } }),
-            bootstrap: read,
-          }),
-        ),
-      );
+      yield* h.established({ written: written.storage && written.cookie });
 
       return { settleMillis, written, readback };
     }).pipe(
