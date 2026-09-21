@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, type Redacted, type Schema, type Stream } from "effect";
 
-import { ClientError } from "./Errors.ts";
+import type { ClientError } from "./Errors.ts";
 import { makeTransport } from "./internal/http/Transport.ts";
 
 /** Account authority only. Launch recipes and browser-operation policy do not belong here. */
@@ -58,9 +58,7 @@ export class BrowserbaseClient extends Context.Service<
     readonly validateMediaUrl: (value: string) => boolean;
   }
 >()("@effect-agent/browserbase/Client") {
-  static layer(
-    options: ClientOptions,
-  ): Layer.Layer<BrowserbaseClient, ClientError> {
+  static layer(options: ClientOptions): Layer.Layer<BrowserbaseClient, ClientError> {
     return Layer.effect(
       BrowserbaseClient,
       makeTransport(options).pipe(

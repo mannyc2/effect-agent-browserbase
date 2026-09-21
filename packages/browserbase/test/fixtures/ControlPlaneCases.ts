@@ -5,8 +5,15 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { BrowserbaseContexts } from "../../src/Contexts.ts";
-import { BrowserbaseSessions } from "../../src/Sessions.ts";
+import type { ClientError, ContextError, SessionError } from "../../src/Errors.ts";
 import { ContextReference, SessionReference } from "../../src/References.ts";
+import { BrowserbaseSessions } from "../../src/Sessions.ts";
+
+/** One declared control-plane failure channel; each case keeps its own typed subset. */
+interface Case {
+  readonly name: string;
+  readonly run: Effect.Effect<void, ClientError | SessionError | ContextError>;
+}
 
 const account = {
   projectId: "project-1",
@@ -42,24 +49,29 @@ const resourceLayer = Layer.merge(BrowserbaseSessions.layer, BrowserbaseContexts
   Layer.provide(BrowserbaseClient.layer(account)),
 );
 
-export const controlPlaneCases = [
+export const controlPlaneCases: ReadonlyArray<Case> = [
   {
     name: "one immutable Client captures account authority and does no work during construction",
     run: Effect.gen(function* () {
       let requests = 0;
+
       const options = {
         ...account,
         artifactOrigins: ["https://media.example.test"],
       };
+
       const fetch: typeof globalThis.fetch = async (input, init) => {
         requests++;
         const request = new Request(input, init);
+
         assert.equal(request.headers.get("x-bb-api-key"), "test-account-key");
+
         return Response.json(providerSession("COMPLETED"));
       };
 
       yield* Effect.gen(function* () {
         const client = yield* BrowserbaseClient;
+
         assert.equal(requests, 0);
         assert.equal(client.projectId, "project-1");
         assert.equal(Object.isFrozen(client), true);
@@ -77,50 +89,66 @@ export const controlPlaneCases = [
   {
     name: "Sessions separates passive inspection from explicit release",
     run: Effect.gen(function* () {
-      const requests: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+      const requests: Array<{
+        readonly method: string;
+        readonly path: string;
+        readonly body: unknown;
+      }> = [];
+
       const fetch: typeof globalThis.fetch = async (input, init) => {
         const request = new Request(input, init);
         const body = request.method === "POST" ? await request.json() : undefined;
         const url = new URL(request.url);
+
         requests.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
         if (url.pathname === "/v1/sessions" && request.method === "GET") {
           return Response.json([providerSession("RUNNING")]);
         }
+
         return Response.json(providerSession(request.method === "POST" ? "COMPLETED" : "RUNNING"));
       };
 
       yield* Effect.gen(function* () {
         const sessions = yield* BrowserbaseSessions;
         const inspected = yield* sessions.retrieve(sessionReference);
+
         assert.equal(inspected.status, "RUNNING");
-        assert.deepEqual(requests.map(({ method }) => method), ["GET"]);
+        assert.deepEqual(
+          requests.map(({ method }) => method),
+          ["GET"],
+        );
 
         const listed = yield* sessions.list({ status: "RUNNING", q: "user:42" });
+
         assert.equal(listed.length, 1);
         assert.match(requests[1]!.path, /^\/v1\/sessions\?/);
         assert.equal(requests[1]!.method, "GET");
 
         const released = yield* sessions.requestRelease(sessionReference);
+
         assert.equal(released.status, "COMPLETED");
         assert.deepEqual(requests[2], {
           method: "POST",
           path: "/v1/sessions/session-1",
           body: { projectId: "project-1", status: "REQUEST_RELEASE" },
         });
-      }).pipe(
-        Effect.provide(resourceLayer),
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-      );
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
     }),
   },
   {
     name: "Contexts provision, inspect and explicitly delete project-qualified resources",
     run: Effect.gen(function* () {
-      const requests: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+      const requests: Array<{
+        readonly method: string;
+        readonly path: string;
+        readonly body: unknown;
+      }> = [];
+
       const fetch: typeof globalThis.fetch = async (input, init) => {
         const request = new Request(input, init);
         const body = request.method === "POST" ? await request.json() : undefined;
         const path = new URL(request.url).pathname;
+
         requests.push({ method: request.method, path, body });
         if (request.method === "POST") {
           return Response.json({
@@ -132,6 +160,7 @@ export const controlPlaneCases = [
           });
         }
         if (request.method === "DELETE") return new Response(null, { status: 204 });
+
         return Response.json({
           id: "context-1",
           projectId: "project-1",
@@ -144,8 +173,10 @@ export const controlPlaneCases = [
       yield* Effect.gen(function* () {
         const contexts = yield* BrowserbaseContexts;
         const created = yield* contexts.create({ name: "support-account-42" });
+
         assert.deepEqual(created.reference, contextReference);
         const metadata = yield* contexts.retrieve(created.reference);
+
         assert.equal(metadata.name, "support-account-42");
         yield* contexts.delete(created.reference);
         assert.deepEqual(requests, [
@@ -157,10 +188,7 @@ export const controlPlaneCases = [
           { method: "GET", path: "/v1/contexts/context-1", body: undefined },
           { method: "DELETE", path: "/v1/contexts/context-1", body: undefined },
         ]);
-      }).pipe(
-        Effect.provide(resourceLayer),
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-      );
+      }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
     }),
   },
   {
@@ -173,8 +201,13 @@ export const controlPlaneCases = [
       yield* Effect.gen(function* () {
         const sessions = yield* BrowserbaseSessions;
         const contexts = yield* BrowserbaseContexts;
-        for (const effect of [sessions.retrieve(foreignSession).pipe(Effect.result), contexts.retrieve(foreignContext).pipe(Effect.result)]) {
+
+        for (const effect of [
+          sessions.retrieve(foreignSession).pipe(Effect.result),
+          contexts.retrieve(foreignContext).pipe(Effect.result),
+        ]) {
           const result = yield* effect;
+
           assert.equal(result._tag, "Failure");
           if (result._tag === "Failure") {
             assert.equal(result.failure.reason, "authorization");
@@ -186,6 +219,7 @@ export const controlPlaneCases = [
         Effect.provide(resourceLayer),
         Effect.provideService(FetchHttpClient.Fetch, async () => {
           requests++;
+
           return Response.json({});
         }),
       );

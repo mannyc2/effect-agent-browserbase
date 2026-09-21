@@ -18,8 +18,15 @@ export const connectionUrl = Schema.String.check(
   Schema.makeFilter((value) => {
     try {
       const url = new URL(value);
-      return url.protocol === "wss:" && !url.username && !url.password && !url.port &&
-        !url.hash && url.hostname.endsWith(".browserbase.com");
+
+      return (
+        url.protocol === "wss:" &&
+        !url.username &&
+        !url.password &&
+        !url.port &&
+        !url.hash &&
+        url.hostname.endsWith(".browserbase.com")
+      );
     } catch {
       return false;
     }
@@ -32,26 +39,36 @@ export const connectionAddress = Effect.fnUntraced(function* (
   reference: SessionReference,
   timeoutMillis: number,
 ) {
-  const fail = (reason: SessionError["reason"]) => SessionError.make({ operation: "session-connect", reason });
-  const ref = yield* Schema.decodeUnknownEffect(SessionReference)(reference).pipe(
+  const fail = (reason: SessionError["reason"]) =>
+    SessionError.make({ operation: "session-connect", reason });
+
+  const ref = yield* Schema.decodeEffect(SessionReference)(reference).pipe(
     Effect.mapError(() => fail("configuration")),
   );
+
   if (ref.projectId !== client.projectId) return yield* fail("authorization");
   const deadline = yield* deadlineAfter(timeoutMillis);
+
   yield* sessions.waitUntilRunning(ref, { timeoutMillis });
   if ((yield* nowMillis) >= deadline) return yield* fail("timeout");
+
   const raw = yield* until(
     client.json("GET", `/v1/sessions/${encodeURIComponent(ref.sessionId)}`, undefined, deadline),
     deadline,
     () => fail("timeout"),
   ).pipe(Effect.mapError((error) => fail(error.reason)));
+
   const value = yield* Schema.decodeUnknownEffect(Connection)(raw).pipe(
     Effect.mapError(() => fail("malformed")),
   );
-  if (value.id !== ref.sessionId || value.projectId !== ref.projectId) return yield* fail("malformed");
+
+  if (value.id !== ref.sessionId || value.projectId !== ref.projectId)
+    return yield* fail("malformed");
   if (value.status !== "RUNNING") return yield* fail("expired");
-  const url = yield* Schema.decodeUnknownEffect(connectionUrl)(value.connectUrl).pipe(
+
+  const url = yield* Schema.decodeEffect(connectionUrl)(value.connectUrl).pipe(
     Effect.mapError(() => fail("unsafe-url")),
   );
+
   return Redacted.make(url);
 });

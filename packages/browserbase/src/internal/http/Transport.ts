@@ -17,10 +17,7 @@ const MAX_JSON_DEPTH = 64;
 const Options = Schema.Struct({
   projectId: Identifier,
   apiKey: Schema.Redacted(
-    Schema.NonEmptyString.check(
-      Schema.isMaxLength(8192),
-      Schema.isPattern(/^[\x21-\x7e]+$/),
-    ),
+    Schema.NonEmptyString.check(Schema.isMaxLength(8192), Schema.isPattern(/^[\x21-\x7e]+$/)),
   ),
   artifactOrigins: Schema.optionalKey(
     Schema.Array(Schema.String.check(Schema.isMaxLength(8192))).check(
@@ -33,12 +30,9 @@ const Options = Schema.Struct({
   ),
 });
 
-const nowMillis = Clock.monotonicTimeNanos.pipe(
-  Effect.map((value) => Number(value) / 1_000_000),
-);
+const nowMillis = Clock.monotonicTimeNanos.pipe(Effect.map((value) => Number(value) / 1_000_000));
 
-const deadlineAfter = (millis: number) =>
-  nowMillis.pipe(Effect.map((now) => now + millis));
+const deadlineAfter = (millis: number) => nowMillis.pipe(Effect.map((now) => now + millis));
 
 const within = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -50,6 +44,7 @@ const within = <A, E, R>(
     nowMillis.pipe(
       Effect.flatMap((now) => {
         const remaining = deadline - now;
+
         const timeout = () =>
           Effect.fail(
             ClientError.make({
@@ -96,8 +91,10 @@ const mediaType = (value: string | undefined): string =>
 const retryAfter = (value: string | undefined, now: number): number | undefined => {
   if (value === undefined || value.length > 128) return undefined;
   const seconds = Number(value);
+
   if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60_000, seconds * 1000);
   const date = Date.parse(value);
+
   return Number.isFinite(date) ? Math.min(60_000, Math.max(0, date - now)) : undefined;
 };
 
@@ -106,21 +103,14 @@ const mutationOutcome = (
   status?: number,
 ): "rejected" | "unknown" | undefined => {
   if (method === "GET") return undefined;
-  if (
-    status !== undefined &&
-    [400, 401, 403, 404, 409, 410, 422, 429].includes(status)
-  ) {
+  if (status !== undefined && [400, 401, 403, 404, 409, 410, 422, 429].includes(status)) {
     return "rejected";
   }
+
   return "unknown";
 };
 
-const statusError = (
-  method: ClientMethod,
-  status: number,
-  operation: string,
-  after?: number,
-) =>
+const statusError = (method: ClientMethod, status: number, operation: string, after?: number) =>
   ClientError.make({
     operation,
     reason:
@@ -160,24 +150,24 @@ const collect = (
         }
         total += chunk.byteLength;
         chunks.push(chunk);
+
         return Effect.void;
       }),
     );
 
     const body = new Uint8Array(total);
     let offset = 0;
+
     for (const chunk of chunks) {
       body.set(chunk, offset);
       offset += chunk.byteLength;
     }
+
     return body;
   });
 
 const validApiPath = (path: string): boolean =>
-  path.startsWith("/v1/") &&
-  !path.includes("\\") &&
-  !path.includes("#") &&
-  path.length <= 16_384;
+  path.startsWith("/v1/") && !path.includes("\\") && !path.includes("#") && path.length <= 16_384;
 
 export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions) {
   const configured = yield* Schema.decodeEffect(Options)(options, {
@@ -206,6 +196,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           outcome: "undispatched",
         }),
     });
+
     if (url.protocol !== "https:" || url.origin !== origin || url.username || url.password) {
       return yield* ClientError.make({
         operation: "configure",
@@ -247,6 +238,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
 
   const apiRequest = (method: ClientMethod, path: string, accept: string) => {
     if (!validApiPath(path)) throw new Error("Invalid internal Browserbase API path");
+
     return HttpClientRequest.make(method)(`${API_ORIGIN}${path}`).pipe(
       HttpClientRequest.setHeader("x-bb-api-key", apiKey),
       HttpClientRequest.setHeader("accept", accept),
@@ -274,6 +266,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       });
     }
     const length = response.headers["content-length"];
+
     if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > MAX_JSON_BYTES)) {
       return yield* ClientError.make({
         operation,
@@ -282,6 +275,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       });
     }
     let received = 0;
+
     return response.stream.pipe(
       Stream.mapError(() =>
         ClientError.make({
@@ -297,11 +291,14 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
               ClientError.make({
                 operation,
                 reason: "limit",
-                ...(mutationOutcome(method) === undefined ? {} : { outcome: mutationOutcome(method) }),
+                ...(mutationOutcome(method) === undefined
+                  ? {}
+                  : { outcome: mutationOutcome(method) }),
               }),
             );
           }
           received += chunk.byteLength;
+
           return Effect.succeed(new Uint8Array(chunk));
         }),
       ),
@@ -315,6 +312,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
   ) {
     const operation = method === "GET" ? "provider-read" : "provider-mutation";
     let request = apiRequest(method, path, "application/json");
+
     if (body !== undefined) {
       request = yield* HttpClientRequest.bodyJson(request, body).pipe(
         Effect.mapError(() =>
@@ -326,13 +324,10 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         ),
       );
     }
-    const response = yield* execute(
-      request,
-      operation,
-      method === "GET" ? undefined : "unknown",
-    );
+    const response = yield* execute(request, operation, method === "GET" ? undefined : "unknown");
     const stream = yield* inspectJson(method, response, operation);
     const bytes = yield* collect(stream, MAX_JSON_BYTES, operation);
+
     const text = yield* Effect.try({
       try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       catch: () =>
@@ -342,6 +337,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           ...(mutationOutcome(method) === undefined ? {} : { outcome: mutationOutcome(method) }),
         }),
     });
+
     if (!withinJsonDepth(text)) {
       return yield* ClientError.make({
         operation,
@@ -349,6 +345,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         ...(mutationOutcome(method) === undefined ? {} : { outcome: mutationOutcome(method) }),
       });
     }
+
     return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
       Effect.mapError(() =>
         ClientError.make({
@@ -370,6 +367,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       yield* deadlineAfter(requestTimeoutMillis),
       outerDeadline ?? Infinity,
     );
+
     for (let attempt = 0; ; attempt++) {
       const result = yield* within(
         Effect.scoped(jsonOnce(method, path, body)),
@@ -380,12 +378,15 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
 
       if (result._tag === "Success") return result.success;
       const error = result.failure;
+
       const retryable =
         error.reason === "transport" ||
         error.reason === "rate-limited" ||
         (error.reason === "provider" && (error.status ?? 0) >= 500);
+
       if (method !== "GET" || !retryable || attempt >= 2) return yield* error;
       const delay = error.retryAfterMillis ?? (attempt + 1) * 150;
+
       if ((yield* nowMillis) + delay >= deadline) return yield* error;
       yield* Effect.sleep(delay);
     }
@@ -399,6 +400,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
   ) {
     const operation = "provider-mutation";
     let request = apiRequest(method, path, "*/*");
+
     if (body !== undefined) {
       request = yield* HttpClientRequest.bodyJson(request, body).pipe(
         Effect.mapError(() =>
@@ -410,16 +412,19 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         ),
       );
     }
+
     const deadline = Math.min(
       yield* deadlineAfter(requestTimeoutMillis),
       outerDeadline ?? Infinity,
     );
+
     const response = yield* within(
       Effect.scoped(execute(request, operation, "unknown")),
       deadline,
       operation,
       "unknown",
     );
+
     if (![200, 202, 204].includes(response.status)) {
       return yield* statusError(
         method,
@@ -448,10 +453,12 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       return yield* ClientError.make({ operation, reason: "content-type" });
     }
     const length = response.headers["content-length"];
+
     if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > maximum)) {
       return yield* ClientError.make({ operation, reason: "limit" });
     }
     let received = 0;
+
     return response.stream.pipe(
       Stream.mapError(() => ClientError.make({ operation, reason: "transport" })),
       Stream.mapEffect((chunk) =>
@@ -460,6 +467,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
             return Effect.fail(ClientError.make({ operation, reason: "limit" }));
           }
           received += chunk.byteLength;
+
           return Effect.succeed(new Uint8Array(chunk));
         }),
       ),
@@ -487,24 +495,22 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           return yield* ClientError.make({ operation, reason: "configuration" });
         }
         const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
+
         const response = yield* within(
           execute(apiRequest("GET", path, types[0] ?? "application/octet-stream"), operation),
           deadline,
           operation,
         );
+
         const stream = yield* inspectBytes(response, operation, types, maximum);
+
         return Stream.transformPull(stream, (pull) =>
           Effect.succeed(within(pull, deadline, operation)),
         );
       }),
     ).pipe(Stream.scoped);
 
-  const text = (
-    path: string,
-    maximum: number,
-    types: ReadonlyArray<string>,
-    operation: string,
-  ) =>
+  const text = (path: string, maximum: number, types: ReadonlyArray<string>, operation: string) =>
     collect(bytes(path, maximum, types, operation), maximum, operation).pipe(
       Effect.flatMap((body) =>
         Effect.try({
@@ -521,6 +527,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
   const validateMediaUrl = (value: string): boolean => {
     try {
       const url = new URL(value);
+
       return (
         url.protocol === "https:" &&
         !url.username &&
@@ -544,6 +551,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     Stream.unwrap(
       Effect.gen(function* () {
         const value = Redacted.value(url);
+
         if (
           !validateMediaUrl(value) ||
           !Number.isSafeInteger(maximum) ||
@@ -556,12 +564,15 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           return yield* ClientError.make({ operation: "media-download", reason: "unsafe-url" });
         }
         const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
+
         const response = yield* within(
           execute(HttpClientRequest.get(value), "media-download"),
           deadline,
           "media-download",
         );
+
         const stream = yield* inspectBytes(response, "media-download", types, maximum);
+
         return Stream.transformPull(stream, (pull) =>
           Effect.succeed(within(pull, deadline, "media-download")),
         );

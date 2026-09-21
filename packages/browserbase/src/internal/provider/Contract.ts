@@ -7,11 +7,34 @@ export const contractSource = {
 } as const;
 
 export const sessionCreateFields = [
-  "projectId", "timeout", "keepAlive", "region", "proxies", "proxySettings", "extensionId", "browserSettings", "userMetadata",
+  "projectId",
+  "timeout",
+  "keepAlive",
+  "region",
+  "proxies",
+  "proxySettings",
+  "extensionId",
+  "browserSettings",
+  "userMetadata",
 ] as const;
+
 export const browserSettingsFields = [
-  "verified", "os", "allowedDomains", "blockAds", "captchaImageSelector", "captchaInputSelector",
-  "ignoreCertificateErrors", "logSession", "recordSession", "solveCaptchas", "context", "viewport",
+  "verified",
+  "os",
+  "allowedDomains",
+  "blockAds",
+  "captchaImageSelector",
+  "captchaInputSelector",
+  "ignoreCertificateErrors",
+  "logSession",
+  "recordSession",
+  "solveCaptchas",
+  "context",
+  "viewport",
 ] as const;
+
 /** Canonical Verified replaces deprecated advancedStealth; extensionId has one top-level spelling. */
-export const deliberatelyExcluded = ["browserSettings.advancedStealth", "browserSettings.extensionId"] as const;
+export const deliberatelyExcluded = [
+  "browserSettings.advancedStealth",
+  "browserSettings.extensionId",
+] as const;

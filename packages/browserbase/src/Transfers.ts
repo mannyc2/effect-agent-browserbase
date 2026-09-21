@@ -9,6 +9,7 @@ export const ArtifactTransferPolicy = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600_000 })),
   ),
 });
+
 export type ArtifactTransferPolicy = typeof ArtifactTransferPolicy.Type;
 
 /** Portable basename only; never a local or remote filesystem path. */

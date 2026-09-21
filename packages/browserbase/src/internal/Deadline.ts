@@ -5,8 +5,7 @@ export const nowMillis = Clock.monotonicTimeNanos.pipe(
   Effect.map((value) => Number(value) / 1_000_000),
 );
 
-export const deadlineAfter = (millis: number) =>
-  nowMillis.pipe(Effect.map((now) => now + millis));
+export const deadlineAfter = (millis: number) => nowMillis.pipe(Effect.map((now) => now + millis));
 
 export const until = <A, E, R, Timeout>(
   effect: Effect.Effect<A, E, R>,

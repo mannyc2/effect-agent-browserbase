@@ -53,6 +53,7 @@ export const makeCleanup = Effect.fnUntraced(function* (
     Effect.uninterruptible(
       Effect.gen(function* () {
         const issues: CleanupIssue[] = [];
+
         const step = <A, E>(
           name: CleanupIssue["step"],
           action: Effect.Effect<A, E>,
@@ -62,14 +63,14 @@ export const makeCleanup = Effect.fnUntraced(function* (
             Effect.interruptible,
             Effect.timeoutOrElse({
               duration: milliseconds,
-              orElse: () =>
-                Effect.fail(CleanupIssue.make({ step: name, reason: "timeout" })),
+              orElse: () => Effect.fail(CleanupIssue.make({ step: name, reason: "timeout" })),
             }),
             Effect.exit,
             Effect.tap((exit) =>
               Effect.sync(() => {
                 if (Exit.isSuccess(exit)) return;
                 const reason = Cause.findErrorOption(exit.cause);
+
                 issues.push(
                   CleanupIssue.make({
                     step: name,
@@ -95,15 +96,23 @@ export const makeCleanup = Effect.fnUntraced(function* (
         let releaseRequested = false;
         let remote: CleanupResult["remote"] = ownership === "borrowed" ? "not-owned" : "unknown";
         let observedStatus: SessionStatus | undefined;
+
         if (ownership === "owned") {
-          const requested = yield* step("release", sessions.requestRelease(reference), limits.releaseMillis);
+          const requested = yield* step(
+            "release",
+            sessions.requestRelease(reference),
+            limits.releaseMillis,
+          );
+
           releaseRequested = Exit.isSuccess(requested);
+
           // A POST response is never substituted for a passive terminal-state observation.
           const terminal = yield* step(
             "status",
             sessions.waitForTerminal(reference, { timeoutMillis: limits.terminalMillis }),
             limits.terminalMillis,
           );
+
           if (Exit.isSuccess(terminal)) {
             remote = "confirmed";
             observedStatus = terminal.value.status;
@@ -121,9 +130,11 @@ export const makeCleanup = Effect.fnUntraced(function* (
           ...(observedStatus === undefined ? {} : { observedStatus }),
           issues,
         });
+
         Object.freeze(result.issues);
         latest = Object.freeze(result);
         report(latest);
+
         return latest;
       }),
     ),

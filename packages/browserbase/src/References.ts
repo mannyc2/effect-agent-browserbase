@@ -24,13 +24,17 @@ export class AllocationAttempt extends Schema.Class<AllocationAttempt>(
 }) {}
 
 /** Project-qualified durable identity; no browser connection or credential is retained. */
-export class ContextReference extends Schema.Class<ContextReference>("BrowserbaseContextReference")({
-  provider: Schema.Literal("browserbase"),
-  projectId: Identifier,
-  contextId: Identifier,
-}) {}
+export class ContextReference extends Schema.Class<ContextReference>("BrowserbaseContextReference")(
+  {
+    provider: Schema.Literal("browserbase"),
+    projectId: Identifier,
+    contextId: Identifier,
+  },
+) {}
 
-export class ExtensionReference extends Schema.Class<ExtensionReference>("BrowserbaseExtensionReference")({
+export class ExtensionReference extends Schema.Class<ExtensionReference>(
+  "BrowserbaseExtensionReference",
+)({
   provider: Schema.Literal("browserbase"),
   projectId: Identifier,
   extensionId: Identifier,
