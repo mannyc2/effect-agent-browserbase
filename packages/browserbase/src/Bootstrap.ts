@@ -215,9 +215,7 @@ export const binding = <I, IEncoded, O, OEncoded, E, R>(
 export const combine = <const Plans extends ReadonlyArray<AnyPlan>>(
   ...plans: Plans
 ): Plan<PlanError<Plans[number]>, PlanRequirements<Plans[number]>> => {
-  const bindings = plans.flatMap((plan) =>
-    plan.bindings === undefined ? [] : [...plan.bindings],
-  );
+  const bindings = plans.flatMap((plan) => (plan.bindings === undefined ? [] : [...plan.bindings]));
 
   return {
     scripts: plans.flatMap((plan) => [...plan.scripts]),
