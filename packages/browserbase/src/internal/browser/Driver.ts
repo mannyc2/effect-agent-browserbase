@@ -12,6 +12,7 @@ import type { CaptureSize } from "../capture/CaptureTypes.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { Invalidation, Ticket } from "./Owner.ts";
+import type { NativeInput, NativePoint } from "./Pointer.ts";
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
 export interface DriverOptions {
@@ -134,7 +135,16 @@ export interface Driver {
     value: string,
     ticket: Ticket,
   ) => Promise<string>;
+  /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (deltaX: number, deltaY: number, ticket: Ticket) => Promise<string>;
+  readonly pointerMove: (to: NativePoint, ticket: Ticket) => Promise<NativeInput>;
+  readonly hover: (target: string | ObservedElement, ticket: Ticket) => Promise<NativeInput>;
+  readonly wheel: (
+    deltaX: number,
+    deltaY: number,
+    at: NativePoint | undefined,
+    ticket: Ticket,
+  ) => Promise<NativeInput>;
   readonly screenshot: (
     fullPage: boolean,
     maximumBytes: number,

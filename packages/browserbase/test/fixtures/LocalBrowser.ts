@@ -157,6 +157,26 @@ export const localBrowser = Effect.acquireRelease(
 
         return;
       }
+      if (path === "/pointer") {
+        // Static on purpose: nothing repaints unless input does it, so a frame that arrives after
+        // a hover is that hover. `:hover` only ever matches for real pointer input.
+        res.end(`<!doctype html><meta charset=utf-8><title>Pointer fixture</title>
+          <style>body{margin:0;font:14px sans-serif}div,button{position:absolute;box-sizing:border-box}
+          #pad{left:40px;top:40px;width:200px;height:120px;background:rgb(200,0,0)}#pad:hover{background:rgb(0,0,200)}
+          #outer{left:300px;top:40px;width:240px;height:160px;overflow:auto;background:#eee}#inner{position:static;height:2000px}
+          #plain{left:40px;top:180px;width:120px;height:30px}
+          #covered,#cover{left:40px;top:230px;width:120px;height:40px}#cover{background:#888}
+          #below{left:40px;top:2600px;width:120px;height:40px}#tall{position:static;height:3000px}</style>
+          <div id=pad></div><div id=outer><div id=inner>nested</div></div><button id=plain>Plain</button>
+          <button id=covered>Covered</button><div id=cover></div><button id=below>Below</button><div id=tall></div><script>
+          const log={moves:[],entered:[],wheels:[]};
+          addEventListener('mousemove',e=>log.moves.push({x:e.clientX,y:e.clientY,trusted:e.isTrusted}));
+          for(const id of['pad','plain'])document.getElementById(id).addEventListener('mouseenter',e=>log.entered.push({id,trusted:e.isTrusted}));
+          addEventListener('wheel',e=>log.wheels.push({deltaY:e.deltaY,trusted:e.isTrusted,inside:outer.contains(e.target)}),{passive:true});
+          window.read=()=>({...log,pageY:scrollY,outerTop:outer.scrollTop});</script>`);
+
+        return;
+      }
       if (path === "/frame") {
         res.end(
           '<p>frame text</p><button id="inner" onclick="this.textContent=\'frame clicked\'">Frame action</button>',

@@ -327,6 +327,43 @@ export const ownershipCases: ReadonlyArray<Case> = [
       assert.equal((yield* session.currentTarget).pageId, "page-2");
       assert.equal(yield* session.bind().readText(), "initial");
     })),
+  test("native input through a handle that no longer selects its page is never sent", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const session = yield* (yield* f.acquisition).connect;
+      const old = session.bind();
+
+      yield* session.selectPage("page-2");
+      yield* expectReason(old.pointerMove({ x: 1, y: 2 }), "stale");
+      yield* expectReason(old.hover("#target"), "stale");
+      yield* expectReason(old.wheel(0, 120), "stale");
+      // Refused before dispatch: the page now selected received nothing meant for the old one.
+      assert.deepEqual(f.state.input, []);
+      yield* session.bind().pointerMove({ x: 1, y: 2 });
+      assert.deepEqual(f.state.input, ["move page-2 1,2"]);
+    })),
+  test("native input is charged as an action and stamped on the owner's monotonic clock", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ maxActions: 2 });
+      const session = yield* (yield* f.acquisition).connect;
+      const handle = session.bind();
+      const moved = yield* handle.pointerMove({ x: 12.5, y: 40 });
+
+      assert.deepEqual(moved.position, { x: 12.5, y: 40 });
+      assert.equal(moved.target.pageId, "page-1");
+      assert.ok(moved.completedMonotonicNanos >= moved.startedMonotonicNanos);
+      // The pointer has not been placed anywhere by a wheel that names no point.
+      assert.equal((yield* handle.wheel(0, 120)).position, null);
+      const refused = yield* handle.hover("#target").pipe(Effect.result);
+
+      assert.equal(refused._tag, "Failure");
+      if (refused._tag === "Failure") {
+        assert.equal(refused.failure.operation, "hover");
+        assert.equal(refused.failure.reason, "limit");
+        assert.equal(refused.failure.outcome, "undispatched");
+      }
+      assert.deepEqual(f.state.input, ["move page-1 12.5,40", "wheel page-1 0,120"]);
+    })),
   test("keep-alive reconnect establishes a new generation and observes actual state", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ keepAlive: true });

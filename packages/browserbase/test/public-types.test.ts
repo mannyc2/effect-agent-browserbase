@@ -5,7 +5,7 @@ import {
   type BrowserbaseBrowser,
   type BrowserbaseSession,
 } from "effect-browserbase/browser";
-import type { BrowserPolicy } from "effect-browserbase/browser-data";
+import type { BrowserPolicy, InputReceipt } from "effect-browserbase/browser-data";
 import type * as Capture from "effect-browserbase/capture";
 import type {
   AllocationError,
@@ -39,6 +39,17 @@ const operationErrors: Same<
 
 const boundTarget: Same<ReturnType<BrowserbaseSession["bind"]>, BoundTarget> = true;
 
+/** Native input is an ordinary owned operation: one receipt, one error, no environment. */
+const inputEffect: Same<
+  ReturnType<BoundTarget["wheel"]>,
+  Effect.Effect<InputReceipt, BrowserError>
+> = true;
+
+const hoverElementEffect: Same<
+  ReturnType<BrowserbaseSession["hoverElement"]>,
+  Effect.Effect<InputReceipt, BrowserError>
+> = true;
+
 const captureErrors: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserError> = true;
 const captureScope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const sourceSize: Capture.CaptureSize = { width: 640, height: 360 };
@@ -56,6 +67,8 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
       hostErrors &&
       operationErrors &&
       boundTarget &&
+      inputEffect &&
+      hoverElementEffect &&
       captureErrors &&
       captureScope &&
       controlErrors &&

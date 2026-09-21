@@ -32,6 +32,7 @@ import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from ".
 import { issueLiveView } from "./LiveView.ts";
 import { publicError } from "./NativeCalls.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
+import type { NativeInput, NativePoint } from "./Pointer.ts";
 
 /**
  * What this owner needs from the remote session it drives, whether it allocated that session
@@ -370,6 +371,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     "click",
     "fill",
     "scroll",
+    "pointer-move",
+    "hover",
+    "wheel",
     "screenshot",
     "observe",
     "wait",
@@ -518,6 +522,32 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         { mutation, preflight: Effect.suspend(check) },
       );
 
+    /**
+     * Native input, stamped on the host monotonic clock that stamps captured frames, around
+     * the native command alone: admission and readiness are over before the clock is read.
+     */
+    const input = (
+      operation: BrowserOperation,
+      action: (driver: Driver, ticket: Ticket) => Promise<NativeInput>,
+    ) =>
+      run(
+        operation,
+        async (driver, ticket) => {
+          // What the input is sent to, read first: input may replace the document it reaches.
+          const target = capture.target();
+          const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+          const dispatched = await action(driver, ticket);
+
+          return {
+            ...dispatched,
+            target,
+            startedMonotonicNanos,
+            completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+          };
+        },
+        true,
+      );
+
     return {
       navigate: (url: string) =>
         run("navigate", (driver, ticket) => driver.navigate(url, ticket), true),
@@ -531,6 +561,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         run("fill", (driver, ticket) => driver.fill(target, value, ticket), true),
       scroll: (x: number, y: number) =>
         run("scroll", (driver, ticket) => driver.scroll(x, y, ticket), true),
+      pointerMove: (to: NativePoint) =>
+        input("pointer-move", (driver, ticket) => driver.pointerMove(to, ticket)),
+      hover: (target: string | ObservedElement) =>
+        input("hover", (driver, ticket) => driver.hover(target, ticket)),
+      wheel: (deltaX: number, deltaY: number, at?: NativePoint) =>
+        input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket)),
       screenshot: (full: boolean) =>
         run("screenshot", (driver, ticket) =>
           driver.screenshot(full, options.maxReturnedBytes, ticket),

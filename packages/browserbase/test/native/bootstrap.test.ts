@@ -4,7 +4,13 @@ import * as Bootstrap from "effect-browserbase/bootstrap";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 
-import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import {
+  localBrowser,
+  localLaunch,
+  policy,
+  settle,
+  withProvider,
+} from "../fixtures/LocalBrowser.ts";
 
 /** Every reviewed capability is granted against a real browser, not asserted from a list. */
 const reviewed = [...Bootstrap.Permission.literals];
@@ -74,7 +80,12 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
 
           // A frame is its own document: the context-level registration reached it, and
           // readiness follows the selected frame rather than the page that contains it.
-          const frames = yield* session.frames;
+          // The main frame reaching DOMContentLoaded says nothing about its iframe: that frame
+          // is attached, and then navigated, by native events that arrive on their own schedule.
+          const frames = yield* settle(session.frames, (listed) =>
+            listed.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
+          );
+
           const child = frames.find((frame) => frame.name === "child");
           const main = frames.find((frame) => frame.parentFrameId === null);
 

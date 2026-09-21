@@ -132,10 +132,16 @@ export const makeActions = (
     return value;
   };
 
-  const withElement = async <A>(
+  /**
+   * Acts on the exact attached node a target names. `admit` sees that node before anything is
+   * dispatched, so a refusal it raises is still undispatched, and what it learns reaches the
+   * action without the node being resolved a second time.
+   */
+  const withAdmittedElement = async <Admitted, A>(
     target: string | ObservedElement,
     ticket: Ticket,
-    action: (element: ElementHandle<Element>) => Promise<A>,
+    admit: (element: ElementHandle<Element>) => Promise<Admitted>,
+    action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
   ): Promise<A> => {
     const retained = typeof target !== "string";
     let element: ElementHandle<Element>;
@@ -155,15 +161,23 @@ export const makeActions = (
       );
 
       if (attached !== true) throw failure("stale", "undispatched");
+      const admitted = await admit(element);
+
       ticket.check();
       // ElementHandle actions do not re-resolve the selector onto a replacement node.
       ticket.dispatch();
 
-      return await action(element);
+      return await action(element, admitted);
     } finally {
       if (!retained) await closeWithin(() => element.dispose()).catch(() => {});
     }
   };
+
+  const withElement = <A>(
+    target: string | ObservedElement,
+    ticket: Ticket,
+    action: (element: ElementHandle<Element>) => Promise<A>,
+  ): Promise<A> => withAdmittedElement(target, ticket, async () => {}, action);
 
   const click = (target: string | ObservedElement, ticket: Ticket) =>
     sanitize(async () => {
@@ -360,6 +374,7 @@ export const makeActions = (
     });
 
   return {
+    withAdmittedElement,
     navigate,
     click,
     fill,
