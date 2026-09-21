@@ -131,6 +131,26 @@ if [ "$LAST_CODE" = 0 ]; then
   fi
   cd "$TREE"
   if [ "$PROFILE" = full ]; then
+    # Upstream CI transfers node_modules/.vite/task-cache between runs; do the same for the
+    # two upstream stages below, which are where a full run's time goes. Vite Task keys each
+    # result by that task's own inputs, so a restored entry is replayed only when those inputs
+    # match, and ready.log keeps every task's hit/miss decision.
+    #
+    # Seed HERE, never earlier. A replayed result restores workspace files, not effects outside
+    # the workspace: Chromium lives in ~/.cache/ms-playwright, so everything above (browser
+    # install, native suites, packed consumers) has already run for real on this candidate.
+    TASK_CACHE="$TREE/node_modules/.vite/task-cache"
+    SEED="${BROWSERBASE_TASK_CACHE:-}"
+    if [ -n "$SEED" ] && [ -d "$SEED" ]; then
+      mkdir -p "$TASK_CACHE"
+      cp -a "$SEED/." "$TASK_CACHE/"
+      # A lock file belongs to the run that made it.
+      find "$TASK_CACHE" -name '*.lock' -delete
+      printf 'seeded from %s: %s files, %s\n' "$SEED" "$(find "$TASK_CACHE" -type f | wc -l)" \
+        "$(du -sh "$TASK_CACHE" | cut -f1)" > "$OUT/task-cache.txt"
+    else
+      printf 'no seed (%s)\n' "${SEED:-BROWSERBASE_TASK_CACHE unset}" > "$OUT/task-cache.txt"
+    fi
     # Run the entire upstream gate, without filtering suites or changing assertions.
     # Upstream docs/TOOLCHAIN.md and CI isolate heavy suites because concurrent
     # worker pools can starve ownership-lease renewals. Bound this single runner's
@@ -138,6 +158,18 @@ if [ "$LAST_CODE" = 0 ]; then
     run ready timeout 1800s ./node_modules/.bin/vp run -v --concurrency-limit 1 ready
     # Upstream's own release adapter builds and inspects npm-ready manifests without publishing.
     run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
+    # Hand results back even after a failure above: a task that passed produced a legitimate
+    # result. Copy over the seed rather than replacing it, so no caller path is deleted.
+    if [ -n "$SEED" ] && [ -d "$TASK_CACHE" ]; then
+      mkdir -p "$SEED"
+      cp -a "$TASK_CACHE/." "$SEED/"
+      find "$SEED" -name '*.lock' -delete
+      printf 'exported to %s: %s files, %s\n' "$SEED" "$(find "$SEED" -type f | wc -l)" \
+        "$(du -sh "$SEED" | cut -f1)" >> "$OUT/task-cache.txt"
+    fi
+    # How much the seed saved, from vp's own per-task decisions, so the gain stays measured.
+    grep -hoE 'cache (hit|miss)' "$OUT/ready.log" "$OUT/release-dry-run.log" 2>/dev/null | sort | uniq -c \
+      >> "$OUT/task-cache.txt" || true
   fi
   # Only candidate source files belong in the review patch. Native CDP can leave
   # generated downloads below the package; a directory-wide add would include them.

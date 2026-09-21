@@ -27,24 +27,22 @@ export const makePageControl = (
   const { current, entries } = targets;
 
   const execution = (entry: Entry): Promise<PageExecution> => {
-    if (!options.pageControl)
-      return Promise.reject(failure("page-control", "unsupported", "undispatched"));
-    entry.execution ??= sanitize("page-control", async () => {
+    if (!options.pageControl) return Promise.reject(failure("unsupported", "undispatched"));
+    entry.execution ??= sanitize(async () => {
       const cdp = await context.newCDPSession(entry.page);
 
       try {
         const targetId = await targets.targetId(entry);
 
-        if (closing() || entry.page.isClosed()) throw failure("page-control", "closed");
+        if (closing() || entry.page.isClosed()) throw failure("closed");
         await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-        if (closing() || entry.page.isClosed()) throw failure("page-control", "closed");
+        if (closing() || entry.page.isClosed()) throw failure("closed");
 
         const control = new PageExecution(entry.id, targetId, {
           readRate: async () =>
             safeDecode(
               Schema.Struct({ playbackRate: Schema.Finite }),
               await cdp.send("Animation.getPlaybackRate"),
-              "page-rate",
             ).playbackRate,
           rate: async (playbackRate) => {
             await cdp.send("Animation.setPlaybackRate", { playbackRate });
@@ -75,7 +73,6 @@ export const makePageControl = (
                 frameTree: Schema.Struct({ frame: Schema.Struct({ id: Identifier }) }),
               }),
               await cdp.send("Page.getFrameTree"),
-              "page-frame",
             );
 
             ticket.check();
@@ -92,7 +89,6 @@ export const makePageControl = (
               contextId: safeDecode(
                 Schema.Int.check(Schema.isGreaterThan(0)),
                 world.executionContextId,
-                "page-world",
               ),
               awaitPromise: true,
               returnByValue: true,
@@ -102,7 +98,7 @@ export const makePageControl = (
 
             ticket.check();
             if (result.exceptionDetails !== undefined || result.result.value !== true)
-              throw failure("page-resume", "malformed");
+              throw failure("malformed");
           },
         });
 
@@ -125,13 +121,11 @@ export const makePageControl = (
     ticket.check();
     const entry = entries.get(target.pageId);
 
-    if (entry === undefined || entry.page.isClosed())
-      throw failure("page-control", "closed", "undispatched");
+    if (entry === undefined || entry.page.isClosed()) throw failure("closed", "undispatched");
     const control = await execution(entry);
 
     ticket.check();
-    if (control.targetId !== target.targetId)
-      throw failure("page-control", "stale", "undispatched");
+    if (control.targetId !== target.targetId) throw failure("stale", "undispatched");
 
     return control;
   };
@@ -152,15 +146,13 @@ export const makePageControl = (
 
   const operations: NonNullable<Driver["pageControl"]> = {
     state: (page: PageInfo, ticket: Ticket) =>
-      sanitize("page-state", async () => (await explicit(page, ticket)).state()),
+      sanitize(async () => (await explicit(page, ticket)).state()),
     suspend: (page: PageInfo, ticket: Ticket) =>
-      sanitize("page-suspend", async () => (await explicit(page, ticket)).suspend(ticket)),
+      sanitize(async () => (await explicit(page, ticket)).suspend(ticket)),
     resume: (receipt: PageSuspension, ticket: Ticket) =>
-      sanitize("page-resume", async () =>
-        (await explicit(receipt, ticket)).resume(receipt, ticket),
-      ),
+      sanitize(async () => (await explicit(receipt, ticket)).resume(receipt, ticket)),
     checkSelected: (ticket: Ticket) =>
-      sanitize("page-control", async () => {
+      sanitize(async () => {
         ticket.check();
         const control = await execution(current().entry);
 

@@ -1,5 +1,6 @@
-import { BrowserError } from "../../Errors.ts";
-const malformed = () => BrowserError.make({ operation: "image", reason: "malformed" });
+import { failure } from "../browser/NativeCalls.ts";
+
+const malformed = () => failure("malformed");
 
 /** Parse framing only; a caller decoding media must still validate its complete bitstream. */
 export const pngGeometry = (bytes: Uint8Array): { width: number; height: number } => {

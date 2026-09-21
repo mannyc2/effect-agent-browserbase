@@ -76,7 +76,7 @@ export interface SessionLogOptions {
 
 const now = Clock.monotonicTimeNanos.pipe(Effect.map((value) => Number(value) / 1000000));
 
-const fromClient = (operation: string, error: ClientError): SessionError =>
+const fromClient = (operation: SessionError["operation"], error: ClientError): SessionError =>
   SessionError.make({
     operation,
     reason: error.reason,
@@ -85,14 +85,14 @@ const fromClient = (operation: string, error: ClientError): SessionError =>
     ...(error.retryAfterMillis === undefined ? {} : { retryAfterMillis: error.retryAfterMillis }),
   });
 
-const malformed = (operation: string, mutation = false) =>
+const malformed = (operation: SessionError["operation"], mutation = false) =>
   SessionError.make({
     operation,
     reason: "malformed",
     ...(mutation ? { outcome: "unknown" as const } : {}),
   });
 
-const configuration = (operation: string) =>
+const configuration = (operation: SessionError["operation"]) =>
   SessionError.make({ operation, reason: "configuration", outcome: "undispatched" });
 
 /** Passive inspection never releases a remote session. Release is a separate explicit mutation. */
@@ -138,7 +138,7 @@ export class BrowserbaseSessions extends Context.Service<
 
       const validate = Effect.fnUntraced(function* (
         reference: SessionReference,
-        operation: string,
+        operation: SessionError["operation"],
       ) {
         const ref = yield* Schema.decodeEffect(SessionReference)(reference, {
           onExcessProperty: "error",
@@ -156,7 +156,7 @@ export class BrowserbaseSessions extends Context.Service<
 
       const decode = Effect.fnUntraced(function* (
         raw: unknown,
-        operation: string,
+        operation: SessionError["operation"],
         expected?: SessionReference,
         mutation = false,
       ) {

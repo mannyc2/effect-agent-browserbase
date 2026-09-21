@@ -124,6 +124,26 @@ The browser owner does not allocate or release anything itself. It supplies the 
 
 Mutations are serialized. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome: the owner is fenced and the package never automatically replays it. `undispatched` is used only when the package established that native mutation dispatch did not occur.
 
+### Real pointer and wheel input
+
+`pointerMove`, `hover` and `wheel` send the input a person's hardware would, so pages see trusted events, `:hover` applies, and the browser itself decides what is under the pointer. `scroll` stays what it was: script in the page, instantaneous, raising no wheel event. That difference is how a recording tells one from the other.
+
+```ts
+const handle = session.bind();
+
+yield * handle.pointerMove(PointerMoveRequest.make({ to: { x: 140, y: 100 } }));
+yield * handle.hover(HoverRequest.make({ selector: "#menu" }));
+// A nested scroll container under the pointer scrolls, not the page.
+const receipt =
+  yield * handle.wheel(WheelRequest.make({ deltaX: 0, deltaY: 240, at: { x: 420, y: 120 } }));
+```
+
+Coordinates are CSS pixels in the main frame's viewport. Each call is one native command, charged as one action and fenced like any other mutation, so a handle bound to a page that is no longer selected sends nothing to either page. Easing, pacing and cursor artwork are yours: send the points you want, and draw the cursor from the positions the receipts report.
+
+`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`session.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
+
+An `InputReceipt` carries the target it was sent to, the position this owner commanded (null until it has placed the pointer on that page), and an interval on the same host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`. Input and pixels share one timeline, so a compositor can place the pointer on the frame that shows it. A wheel event is dispatched, not awaited: the receipt does not claim the page finished scrolling or that any frame shows it.
+
 The connection endpoint is read through the exact allocated session, so a provider reply that names a different session is refused before any CDP attachment.
 
 Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`; reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
@@ -245,7 +265,7 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `bootstrap` — E/R-preserving bounded typed bindings, one ordered init bundle, reviewed permission grants, per-document readiness and bounded host-only callback diagnostics.
 - `launch`, `references`, `browser-data`, `session-data`, `cleanup`, `transfers`, `errors` — credential-free schemas and typed expected errors.
 - `browser-binding` — the trusted, opaque native engine a browser connects through: Playwright by default, or Playwright routed to a host-resolved endpoint.
-- `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
+- `browser` — scoped allocation, borrowed attachment to a running session, deterministic page control, real pointer and wheel input, host-only tabs/frames/viewport, modeled file selection, Live View handoff, keep-alive detach and explicit reconnect.
 - `capture` — optional target-pinned live-page JPEG frame streams using Playwright 1.63's maintained screencast API. The caller owns encoding, storage and presentation.
 - `page-control` — opt-in host-owned stage holds and explicit receipt-based resume, independent of scout selection.
 - `recordings` — post-session Browserbase MP4 assembly, status and bounded retrieval. Stable identity is session + recording page; signed URLs are refreshed and are not durable identity.
@@ -253,6 +273,8 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `downloads` — ordinary website download metadata, provider-side filters, bounded byte streams and deletion, separate from provider recordings.
 - `projects`, `certificates` — project inspection and usage; proxy CA certificate administration.
 - `search`, `page-fetch`, `agents`, `functions`, `webhooks` — the Browserbase platform APIs outside a browser session.
+
+Every expected failure says three things. `operation` is what you asked for, from a closed vocabulary per error class: `BrowserError` names the browser operations, `SessionError` only session calls, and so on, so you can match on them exhaustively and a misspelling is a type error, not a string that happens to compile. `reason` is why it failed. `outcome`, when present, is whether the work was sent: `undispatched` is safe to retry, `rejected` was refused, and `unknown` means a mutation may have happened and is never replayed for you. Why an extension archive was refused is a `reason` (`limit`, `unsafe-filename`, `configuration`) of the one `extension-archive` operation. A native step's own name never appears: the driver raises a private failure, and the owner stamps the operation it admitted.
 
 Everything under `src/internal/` is private, and no consumer CDP seam or lower-level lifecycle Layer is exported; `browser-binding` chooses the engine and where it connects, never what runs over the connection. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
 
@@ -265,6 +287,8 @@ Website downloads retain their provider download ID, safe filename, MIME type an
 Replay playlists reject arbitrary URI-bearing tags and proxy only indexed media from the validated playlist. API credentials are never returned to a browser client.
 
 Live capture frames carry owned JPEG bytes, captured target identity, sequence number, source presentation time, host monotonic receipt time, geometry and explicit drop accounting. Buffers are bounded by frame count and bytes; slow consumers drop old frames instead of creating an unbounded fiber/callback backlog. Buffer dropping is not page-clock backpressure and does not reduce what the browser produced upstream. Holding a capture callback is not a promise that page timers or animations stop.
+
+`sourceTimeMillis` is the browser's wall clock when it took the frame for the screencast, stamped before the frame is encoded. Chromium encodes up to three frames at once and emits each when its encode completes, so two frames stamped close together can arrive in either order. A frame that arrives behind a newer one can no longer be presented in order: it is discarded and counted in `late`, which is part of `dropped`. It is never sorted back in or given another time, so delivered source times strictly increase and a gap in `sequence` marks the omission. Concurrent encoding can put at most two late frames in a row. A longer run means source time itself went backwards, and the interval ends with reason `timestamp`.
 
 Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined. A definitively closed page releases its capture reservation. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Filming across a navigation, as successive intervals resampled onto one constant-rate reel, is demonstrated in `examples/realistic-footage`. Caller encoding is demonstrated in `examples/record-video.ts`; the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence.
 

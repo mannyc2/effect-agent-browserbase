@@ -84,6 +84,8 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserbaseCap
   delivered: Schema.Natural,
   dropped: Schema.Natural,
   duplicates: Schema.Natural,
+  /** Arrived after a newer frame was accepted; counted within `dropped`, never reordered in. */
+  late: Schema.Natural,
   peakBufferedFrames: Schema.Natural,
   peakBufferedBytes: Schema.Natural,
   bufferedFrames: Schema.Natural,

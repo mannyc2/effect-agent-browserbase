@@ -144,6 +144,9 @@ function runnerFixture() {
   write(join(dir, "packages/browserbase/index.ts"), "export {};\n");
   write(join(dir, "packages/platform-browserbase/index.ts"), "export {};\n");
   write(join(bin, "bun"), '#!/bin/sh\necho "1.4.2"\n', 0o755);
+  // An extension-less script takes its module type from the nearest package.json. Without
+  // this, a TMPDIR inside a "type": "module" checkout parses the CommonJS stub as ESM.
+  write(join(bin, "package.json"), '{ "type": "commonjs" }\n');
   write(join(bin, "timeout"), `#!/usr/bin/env node
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);

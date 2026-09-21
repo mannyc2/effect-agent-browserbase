@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 
 import { BrowserError, InitializationError } from "../../Errors.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
+import { publicError } from "./NativeCalls.ts";
 
 /** What the owner asks of a native engine for one connection attempt. */
 export interface ConnectRequest {
@@ -48,9 +49,9 @@ export const fromNativeAttempt = (attempt: NativeAttempt): BindingImplementation
         return pending;
       },
       catch: (error) =>
-        Schema.is(BrowserError)(error) || Schema.is(InitializationError)(error)
+        Schema.is(InitializationError)(error)
           ? error
-          : BrowserError.make({ operation: "connect", reason: "provider" }),
+          : publicError(error, "connect", { reason: "provider" }),
     }),
 });
 

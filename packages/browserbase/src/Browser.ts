@@ -9,12 +9,15 @@ import {
   ClickRequest,
   FillRequest,
   type FrameInfo,
+  HoverRequest,
   InlineFiles,
+  InputReceipt,
   NavigateRequest,
   NavigationResult,
   type Observation,
   ObservedElement,
   type PageInfo,
+  PointerMoveRequest,
   ReadTextRequest,
   ScreenshotRequest,
   ScreenshotResult,
@@ -24,12 +27,14 @@ import {
   type Target,
   TextResult,
   Viewport,
+  WheelRequest,
 } from "./BrowserData.ts";
 import type { CleanupResult } from "./Cleanup.ts";
 import { BrowserbaseClient } from "./Client.ts";
 import {
   type AllocationError,
   BrowserError,
+  type BrowserOperation,
   type ContextError,
   InitializationError,
   type SessionError,
@@ -76,7 +81,14 @@ export interface BoundTarget {
   readonly readText: (request: ReadTextRequest) => Effect.Effect<TextResult, BrowserError>;
   readonly click: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserError>;
   readonly fill: (request: FillRequest) => Effect.Effect<ActionResult, BrowserError>;
+  /** Script in the page: instantaneous, and it raises no wheel event. */
   readonly scroll: (request: ScrollRequest) => Effect.Effect<ActionResult, BrowserError>;
+  /** One real pointer move, in main-frame viewport pixels. */
+  readonly pointerMove: (request: PointerMoveRequest) => Effect.Effect<InputReceipt, BrowserError>;
+  /** Places the pointer on one exact element where it is, or fails `not-visible` unsent. */
+  readonly hover: (request: HoverRequest) => Effect.Effect<InputReceipt, BrowserError>;
+  /** One real wheel event; the browser decides what under the pointer scrolls. */
+  readonly wheel: (request: WheelRequest) => Effect.Effect<InputReceipt, BrowserError>;
   readonly screenshot: (
     request: ScreenshotRequest,
   ) => Effect.Effect<ScreenshotResult, BrowserError>;
@@ -105,6 +117,7 @@ export interface BrowserbaseSession<E = never> {
     reference: ObservedElement,
     value: string,
   ) => Effect.Effect<ActionResult, BrowserError>;
+  readonly hoverElement: (reference: ObservedElement) => Effect.Effect<InputReceipt, BrowserError>;
   readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
   readonly selectPage: (pageId: string) => Effect.Effect<BoundTarget, BrowserError>;
@@ -175,7 +188,7 @@ export interface BrowserAcquisition<E = never> {
 const checked = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
   value: unknown,
-  operation: string,
+  operation: BrowserOperation,
 ) =>
   Schema.decodeUnknownEffect(schema)(value, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() =>
@@ -184,13 +197,16 @@ const checked = <A>(
   );
 
 const decoded =
-  <A>(schema: Schema.Codec<A, unknown, never, never>, operation: string) =>
+  <A>(schema: Schema.Codec<A, unknown, never, never>, operation: BrowserOperation) =>
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
       Effect.mapError(() => BrowserError.make({ operation, reason: "malformed" })),
     );
 
 const action = decoded(ActionResult, "action-result");
+const pointerMoved = decoded(InputReceipt, "pointer-move");
+const hovered = decoded(InputReceipt, "hover");
+const wheeled = decoded(InputReceipt, "wheel");
 
 const makeTarget = (bound: BoundControls): BoundTarget => ({
   navigate: (request) =>
@@ -218,6 +234,28 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
       Effect.flatMap((value) => bound.scroll(value.deltaX, value.deltaY)),
       Effect.flatMap((url) => action({ url })),
     ),
+  pointerMove: (request) =>
+    checked(PointerMoveRequest, request, "pointer-move").pipe(
+      Effect.flatMap((value) => bound.pointerMove(value.to)),
+      Effect.flatMap((input) => pointerMoved({ ...input, kind: "pointer-move" })),
+    ),
+  hover: (request) =>
+    checked(HoverRequest, request, "hover").pipe(
+      Effect.flatMap((value) => bound.hover(value.selector)),
+      Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
+    ),
+  wheel: (request) =>
+    checked(WheelRequest, request, "wheel").pipe(
+      Effect.flatMap((value) =>
+        bound
+          .wheel(value.deltaX, value.deltaY, value.at)
+          .pipe(
+            Effect.flatMap((input) =>
+              wheeled({ ...input, kind: "wheel", delta: { x: value.deltaX, y: value.deltaY } }),
+            ),
+          ),
+      ),
+    ),
   screenshot: (request) =>
     checked(ScreenshotRequest, request, "screenshot").pipe(
       Effect.flatMap((value) => bound.screenshot(value.fullPage)),
@@ -238,7 +276,7 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
 const selection = (
   request: SelectFilesRequest,
   reference: SessionReference,
-  operation: string,
+  operation: BrowserOperation,
 ): Effect.Effect<ReadonlyArray<NativeFileSelection>, BrowserError> =>
   Effect.suspend(() => {
     const invalid = BrowserError.make({
@@ -337,6 +375,11 @@ const makeSession = <E>(
           ),
         ),
         Effect.flatMap(navigate),
+      ),
+    hoverElement: (reference) =>
+      checked(ObservedElement, reference, "hover").pipe(
+        Effect.flatMap((value) => controls.bind().hover(value)),
+        Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
       ),
     pages: controls.pages,
     frames: controls.frames,

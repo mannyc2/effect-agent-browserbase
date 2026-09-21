@@ -249,14 +249,14 @@ export class BrowserbaseFunctions extends Context.Service<
     Effect.gen(function* () {
       const client = yield* BrowserbaseClient;
 
-      const api = resource(client, (failure) =>
+      const api = resource<PlatformError>(client, (failure) =>
         PlatformError.make({ ...failure, service: "functions" }),
       );
 
       /** Every record names its project; a foreign or mismatched one is malformed. */
       const owned =
         <A extends { readonly id: string; readonly projectId: string }>(
-          operation: string,
+          operation: PlatformError["operation"],
           mutation: boolean,
           expected?: string,
         ) =>
@@ -265,7 +265,8 @@ export class BrowserbaseFunctions extends Context.Service<
             ? Effect.succeed(value)
             : Effect.fail(api.malformed(operation, mutation));
 
-      const id = (value: string, operation: string) => api.input(Identifier, value, operation);
+      const id = (value: string, operation: PlatformError["operation"]) =>
+        api.input(Identifier, value, operation);
 
       const list = Effect.fn("BrowserbaseFunctions.list")(function* (
         query: FunctionPageQuery = {},
@@ -441,7 +442,7 @@ export class BrowserbaseFunctions extends Context.Service<
           .pipe(Effect.flatMap(owned("function-invocation", false, checked)));
       });
 
-      const logs = (path: string, operation: string) =>
+      const logs = (path: string, operation: PlatformError["operation"]) =>
         api
           .request("GET", path, Logs, operation)
           .pipe(Effect.map((value) => ({ items: value.logs, total: value.total })));

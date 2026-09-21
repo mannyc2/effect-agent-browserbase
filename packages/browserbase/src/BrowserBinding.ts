@@ -1,7 +1,8 @@
-import { Context, Effect, Layer, Redacted, Schema } from "effect";
+import { Context, Effect, Layer, Redacted } from "effect";
 
-import { BrowserError } from "./Errors.ts";
+import type { BrowserError } from "./Errors.ts";
 import { fromNativeAttempt, issueBinding } from "./internal/browser/Binding.ts";
+import { publicError } from "./internal/browser/NativeCalls.ts";
 import { connectPlaywrightEndpoint, validateConnection } from "./internal/browser/Playwright.ts";
 
 /**
@@ -37,10 +38,7 @@ export interface PlaywrightOptions {
 const invalid = (connection: unknown) =>
   Effect.try({
     try: () => validateConnection(connection),
-    catch: (error) =>
-      Schema.is(BrowserError)(error)
-        ? error
-        : BrowserError.make({ operation: "connect", reason: "malformed" }),
+    catch: (error) => publicError(error, "connect", { reason: "malformed" }),
   });
 
 /** Playwright over CDP, lazily loaded at connection time and never at Layer construction. */

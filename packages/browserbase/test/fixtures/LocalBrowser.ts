@@ -17,11 +17,21 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { type Browser, chromium, type Page } from "playwright-core";
 
 import { installCaptureDiagnostics } from "./NativeCaptureDiagnostics.ts";
+import { renderReady } from "./RenderReady.ts";
+
+/**
+ * Bounds the scripted allocation: process start, DevTools port and the first drawn frame. A
+ * starved host takes seconds to bring Chromium's GPU process up. That is this host's cold
+ * start rather than provider latency, so the fixture client waits longer than the ten-second
+ * production default instead of reporting an allocation the fixture is still finishing.
+ */
+const allocationBudgetMillis = 25_000;
 
 /** The scripted control plane answers with the same session shape the provider sends. */
 export const clientOptions: ClientOptions = {
   projectId: "project-1",
   apiKey: Redacted.make("fixture-key-not-a-credential"),
+  requestTimeoutMillis: allocationBudgetMillis + 5000,
 };
 
 /** One account and one resource service, shared by every fixture-backed acquisition. */
@@ -147,6 +157,26 @@ export const localBrowser = Effect.acquireRelease(
 
         return;
       }
+      if (path === "/pointer") {
+        // Static on purpose: nothing repaints unless input does it, so a frame that arrives after
+        // a hover is that hover. `:hover` only ever matches for real pointer input.
+        res.end(`<!doctype html><meta charset=utf-8><title>Pointer fixture</title>
+          <style>body{margin:0;font:14px sans-serif}div,button{position:absolute;box-sizing:border-box}
+          #pad{left:40px;top:40px;width:200px;height:120px;background:rgb(200,0,0)}#pad:hover{background:rgb(0,0,200)}
+          #outer{left:300px;top:40px;width:240px;height:160px;overflow:auto;background:#eee}#inner{position:static;height:2000px}
+          #plain{left:40px;top:180px;width:120px;height:30px}
+          #covered,#cover{left:40px;top:230px;width:120px;height:40px}#cover{background:#888}
+          #below{left:40px;top:2600px;width:120px;height:40px}#tall{position:static;height:3000px}</style>
+          <div id=pad></div><div id=outer><div id=inner>nested</div></div><button id=plain>Plain</button>
+          <button id=covered>Covered</button><div id=cover></div><button id=below>Below</button><div id=tall></div><script>
+          const log={moves:[],entered:[],wheels:[]};
+          addEventListener('mousemove',e=>log.moves.push({x:e.clientX,y:e.clientY,trusted:e.isTrusted}));
+          for(const id of['pad','plain'])document.getElementById(id).addEventListener('mouseenter',e=>log.entered.push({id,trusted:e.isTrusted}));
+          addEventListener('wheel',e=>log.wheels.push({deltaY:e.deltaY,trusted:e.isTrusted,inside:outer.contains(e.target)}),{passive:true});
+          window.read=()=>({...log,pageY:scrollY,outerTop:outer.scrollTop});</script>`);
+
+        return;
+      }
       if (path === "/frame") {
         res.end(
           '<p>frame text</p><button id="inner" onclick="this.textContent=\'frame clicked\'">Frame action</button>',
@@ -252,7 +282,7 @@ export const localBrowser = Effect.acquireRelease(
         // Always register process cleanup before waiting for the CDP address.
         sessions.set(id, { process, endpoint: "", status: "RUNNING" });
         try {
-          const deadline = performance.now() + 10000;
+          const deadline = performance.now() + allocationBudgetMillis;
           let port: string | undefined;
 
           while (!port && performance.now() < deadline) {
@@ -266,6 +296,7 @@ export const localBrowser = Effect.acquireRelease(
           if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
           const endpoint = `http://127.0.0.1:${port}`;
 
+          await Effect.runPromise(renderReady(endpoint, deadline - performance.now()));
           sessions.set(id, { process, endpoint, status: "RUNNING" });
           // Production configures Browserbase's required relative "downloads"
           // directory through real CDP. cwd keeps those files execution-owned;
@@ -402,6 +433,10 @@ export const localBrowser = Effect.acquireRelease(
  * so a resolved capture start means the client is registered, not that a frame
  * exists. A fixed sleep therefore asserts scheduling rather than the property
  * under test, and fails intermittently under load.
+ *
+ * This covers progress inside a browser that can already draw. The seconds a
+ * cold browser spends unable to draw at all are spent during allocation, by
+ * `renderReady`, and are not something a test should budget for here.
  *
  * The budget still bounds the wait, so a page that never resumes a clock, or a
  * target that is never registered, fails on the same assertion with the same

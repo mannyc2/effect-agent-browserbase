@@ -54,7 +54,7 @@ export class BrowserbaseProjects extends Context.Service<
     BrowserbaseProjects,
     Effect.gen(function* () {
       const client = yield* BrowserbaseClient;
-      const api = resource(client, (failure) => ProjectError.make(failure));
+      const api = resource<ProjectError>(client, (failure) => ProjectError.make(failure));
       const own = `/v1/projects/${api.segment(client.projectId)}`;
 
       const list = api

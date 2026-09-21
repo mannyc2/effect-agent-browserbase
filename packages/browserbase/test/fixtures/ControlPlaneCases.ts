@@ -308,8 +308,22 @@ export const controlPlaneCases: ReadonlyArray<Case> = [
 
         assert.equal(oversize._tag, "Failure");
         if (oversize._tag === "Failure") {
-          assert.equal(oversize.failure.operation, "extension-archive-limit");
+          // Why an archive was refused is its reason; the operation stays the inspection.
+          assert.equal(oversize.failure.operation, "extension-archive");
           assert.equal(oversize.failure.reason, "limit");
+        }
+
+        // An entry that escapes the archive root is refused by name, which used to be spelled
+        // as a third operation and is now the reason it always was.
+        const escaping = yield* extensions
+          .register(extensionArchive([{ name: "../outside.js", content: "self.ok = true;" }]))
+          .pipe(Effect.result);
+
+        assert.equal(escaping._tag, "Failure");
+        if (escaping._tag === "Failure") {
+          assert.equal(escaping.failure.operation, "extension-archive");
+          assert.equal(escaping.failure.reason, "unsafe-filename");
+          assert.equal(escaping.failure.outcome, "undispatched");
         }
         assert.equal(requests, 0);
       }).pipe(

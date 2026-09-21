@@ -7,9 +7,10 @@ import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { makeInitialization } from "./Initialization.ts";
-import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
+import { closeWithin, failure, NativeFailure, safeDecode, sanitize } from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
+import { makePointer } from "./Pointer.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
@@ -20,14 +21,13 @@ const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
  * reached with an address the provider did not plausibly issue.
  */
 export const validateConnection = (connection: unknown): string => {
-  if (typeof connection !== "string" || connection.length > 16384)
-    throw failure("connect", "malformed");
+  if (typeof connection !== "string" || connection.length > 16384) throw failure("malformed");
   let url: URL;
 
   try {
     url = new URL(connection);
   } catch {
-    throw failure("connect", "malformed");
+    throw failure("malformed");
   }
   if (
     url.protocol !== "wss:" ||
@@ -36,7 +36,7 @@ export const validateConnection = (connection: unknown): string => {
     url.port ||
     !url.hostname.endsWith(".browserbase.com")
   )
-    throw failure("connect", "unsafe-url");
+    throw failure("unsafe-url");
 
   return connection;
 };
@@ -53,10 +53,10 @@ export const connectPlaywrightEndpoint = async (
   events: DriverEvents,
   observe?: (browser: Browser) => void,
 ): Promise<Driver> => {
-  if (signal.aborted) throw failure("connect", "interrupted");
+  if (signal.aborted) throw failure("interrupted");
   const { chromium } = await import("playwright-core");
 
-  const browser = await sanitize("connect", () =>
+  const browser = await sanitize(() =>
     chromium.connectOverCDP(endpoint, {
       timeout: 15000,
       ...(options.pageControl ? { noDefaults: true } : {}),
@@ -65,7 +65,7 @@ export const connectPlaywrightEndpoint = async (
 
   if (signal.aborted) {
     await closeWithin(() => browser.close()).catch(() => {});
-    throw failure("connect", "interrupted");
+    throw failure("interrupted");
   }
   try {
     observe?.(browser);
@@ -73,15 +73,17 @@ export const connectPlaywrightEndpoint = async (
 
     if (signal.aborted) {
       await driver.disconnect().catch(() => {});
-      throw failure("connect", "interrupted");
+      throw failure("interrupted");
     }
 
     return driver;
   } catch (error) {
     await closeWithin(() => browser.close()).catch(() => {});
-    throw Schema.is(BrowserError)(error) || Schema.is(InitializationError)(error)
+    throw Schema.is(BrowserError)(error) ||
+      Schema.is(InitializationError)(error) ||
+      Schema.is(NativeFailure)(error)
       ? error
-      : failure("connect", "provider");
+      : failure("provider");
   }
 };
 
@@ -93,7 +95,7 @@ export const makePlaywrightDriver = async (
 ): Promise<Driver> => {
   const contexts = browser.contexts();
 
-  if (contexts.length !== 1) throw failure("context", "ambiguous");
+  if (contexts.length !== 1) throw failure("ambiguous");
   const context: BrowserContext = contexts[0];
   const dialogs = new Set<Dialog>();
   const callbacks = new CallbackTasks(32, () => events.fault());
@@ -156,6 +158,7 @@ export const makePlaywrightDriver = async (
 
   const observation = makeObservation(targets, events);
   const actions = makeActions(context, targets, observation);
+  const pointer = makePointer(targets, actions);
   const captures = makeCaptureSources(targets);
 
   const pageControl = makePageControl(
@@ -183,10 +186,10 @@ export const makePlaywrightDriver = async (
   browser.on("disconnected", onDisconnected);
 
   const sizeNativeContents = async (entry: Entry): Promise<void> => {
-    if (browserCdp === undefined) throw failure("viewport", "closed", "undispatched");
+    if (browserCdp === undefined) throw failure("closed", "undispatched");
     const targetId = await targets.targetId(entry);
     const current: unknown = await browserCdp.send("Browser.getWindowForTarget", { targetId });
-    const native = safeDecode(NativeWindow, current, "viewport");
+    const native = safeDecode(NativeWindow, current);
 
     await browserCdp.send("Browser.setContentsSize", {
       windowId: native.windowId,
@@ -215,9 +218,12 @@ export const makePlaywrightDriver = async (
     click: actions.click,
     fill: actions.fill,
     scroll: actions.scroll,
+    pointerMove: pointer.pointerMove,
+    hover: pointer.hover,
+    wheel: pointer.wheel,
     screenshot: observation.screenshot,
     resize: (viewport, ticket) =>
-      sanitize("resize", async () => {
+      sanitize(async () => {
         const page = current().entry.page;
         const entry = current().entry;
 
@@ -234,7 +240,7 @@ export const makePlaywrightDriver = async (
     clickForFileSelection: actions.clickForFileSelection,
     documentReadiness: initialization.documentReadiness,
     dismissDialogs: (ticket) =>
-      sanitize("dismiss-dialogs", async () => {
+      sanitize(async () => {
         for (const dialog of [...dialogs]) {
           ticket.dispatch();
           await dialog.dismiss();
@@ -246,7 +252,7 @@ export const makePlaywrightDriver = async (
     fenceInitialization: initialization.fence,
     disposeInitialization: initialization.dispose,
     disconnect: () =>
-      sanitize("disconnect", async () => {
+      sanitize(async () => {
         closing = true;
         initialization.fence();
         callbacks.stop();
@@ -284,7 +290,7 @@ export const makePlaywrightDriver = async (
     await targets.selectInitial();
     const { selection } = targets;
 
-    if (selection.entry === undefined) throw failure("initial-page", "not-found");
+    if (selection.entry === undefined) throw failure("not-found");
     await initialization.attach(selection.entry.page);
     selection.frame = selection.entry.page.mainFrame();
     if (!options.preserveViewport) {

@@ -11,8 +11,13 @@ import {
 } from "../../BrowserData.ts";
 import type { CleanupResult } from "../../Cleanup.ts";
 import { BrowserbaseClient } from "../../Client.ts";
-import type { AllocationError, ContextError, SessionError } from "../../Errors.ts";
-import { BrowserError } from "../../Errors.ts";
+import {
+  type AllocationError,
+  type ContextError,
+  type SessionError,
+  BrowserError,
+  type BrowserOperation,
+} from "../../Errors.ts";
 import type { LaunchRecipe } from "../../Launch.ts";
 import type { AllocationAttempt, SessionReference } from "../../References.ts";
 import { BrowserbaseSessions } from "../../Sessions.ts";
@@ -25,7 +30,9 @@ import { bindingImplementation } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
 import { issueLiveView } from "./LiveView.ts";
+import { publicError } from "./NativeCalls.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
+import type { NativeInput, NativePoint } from "./Pointer.ts";
 
 /**
  * What this owner needs from the remote session it drives, whether it allocated that session
@@ -152,7 +159,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
     const registrations = yield* Effect.tryPromise({
       try: () => driver?.disposeInitialization?.() ?? Promise.resolve(),
-      catch: () => BrowserError.make({ operation: "dispose-initialization", reason: "provider" }),
+      catch: () => BrowserError.make({ operation: "close", reason: "provider" }),
     }).pipe(Effect.exit);
 
     if (Exit.isFailure(callbacks)) return yield* Effect.failCause(callbacks.cause);
@@ -167,7 +174,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       return Target.make({ generation: owner.state.generation, ...driver.selected() });
     },
     resolve: (ticket, requested) =>
-      native("capture-source", ticket, async () => {
+      native("capture-start", ticket, async () => {
         if (driver === undefined)
           throw BrowserError.make({ operation: "capture", reason: "closed" });
         const binding = await driver.capture(requested);
@@ -364,6 +371,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     "click",
     "fill",
     "scroll",
+    "pointer-move",
+    "hover",
+    "wheel",
     "screenshot",
     "observe",
     "wait",
@@ -373,7 +383,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     "file-chooser",
   ];
 
-  const requireReady = async (operation: string, ticket: Ticket) => {
+  const requireReady = async (operation: BrowserOperation, ticket: Ticket) => {
     if (!dependent.includes(operation)) return;
     const state = await getDriver().documentReadiness(ticket);
 
@@ -417,10 +427,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
             const result = yield* Effect.try({
               try: () => Observation.make({ ...raw, target: capture.target(), revision }),
-              catch: (error) =>
-                Schema.is(BrowserError)(error)
-                  ? error
-                  : BrowserError.make({ operation: "observe", reason: "malformed" }),
+              catch: (error) => publicError(error, "observe", { reason: "malformed" }),
             });
 
             const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Observation))(
@@ -456,7 +463,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
   );
 
   const nativeOperation = <A>(
-    operation: string,
+    operation: BrowserOperation,
     action: (driver: Driver, ticket: Ticket) => Promise<A>,
     mutation = false,
     charge = true,
@@ -499,7 +506,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     };
 
     const run = <A>(
-      operation: string,
+      operation: BrowserOperation,
       action: (driver: Driver, ticket: Ticket) => Promise<A>,
       mutation = false,
     ) =>
@@ -515,6 +522,32 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         { mutation, preflight: Effect.suspend(check) },
       );
 
+    /**
+     * Native input, stamped on the host monotonic clock that stamps captured frames, around
+     * the native command alone: admission and readiness are over before the clock is read.
+     */
+    const input = (
+      operation: BrowserOperation,
+      action: (driver: Driver, ticket: Ticket) => Promise<NativeInput>,
+    ) =>
+      run(
+        operation,
+        async (driver, ticket) => {
+          // What the input is sent to, read first: input may replace the document it reaches.
+          const target = capture.target();
+          const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+          const dispatched = await action(driver, ticket);
+
+          return {
+            ...dispatched,
+            target,
+            startedMonotonicNanos,
+            completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+          };
+        },
+        true,
+      );
+
     return {
       navigate: (url: string) =>
         run("navigate", (driver, ticket) => driver.navigate(url, ticket), true),
@@ -528,6 +561,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         run("fill", (driver, ticket) => driver.fill(target, value, ticket), true),
       scroll: (x: number, y: number) =>
         run("scroll", (driver, ticket) => driver.scroll(x, y, ticket), true),
+      pointerMove: (to: NativePoint) =>
+        input("pointer-move", (driver, ticket) => driver.pointerMove(to, ticket)),
+      hover: (target: string | ObservedElement) =>
+        input("hover", (driver, ticket) => driver.hover(target, ticket)),
+      wheel: (deltaX: number, deltaY: number, at?: NativePoint) =>
+        input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket)),
       screenshot: (full: boolean) =>
         run("screenshot", (driver, ticket) =>
           driver.screenshot(full, options.maxReturnedBytes, ticket),
@@ -549,7 +588,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       ),
     );
 
-  const connectionUrl = (operation: string) =>
+  const connectionUrl = (operation: BrowserOperation) =>
     Effect.suspend(() => acquired.connection(remainingMillis())).pipe(
       Effect.mapError((error) => BrowserError.make({ operation, reason: error.reason })),
     );
