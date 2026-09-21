@@ -107,11 +107,14 @@ it.live(
             // One interval filmed both documents. The link's navigation did not end it, so the
             // loading is on film, and the library says what each document was and when the
             // second one committed. How long the picture held across it is this layer's number.
-            expect(metrics.capture.interval).toMatchObject({
-              reason: "stopped",
-              dropped: 0,
-              nativeStop: "confirmed",
-            });
+            const interval = metrics.capture.interval!;
+
+            expect(interval).toMatchObject({ reason: "stopped", nativeStop: "confirmed" });
+            // Nothing was dropped for want of buffer or bytes. A frame that arrives behind a
+            // newer one is discarded and counted as late; Chromium's concurrent encoding makes
+            // that a matter of the host's scheduling, so it is reported rather than forbidden.
+            expect(interval.dropped - interval.late).toBe(0);
+            expect(interval.duplicates).toBe(0);
             expect(metrics.capture.timeToFirstFrameMillis).not.toBeNull();
             expect(metrics.documents.map((document) => document.url)).toEqual([
               `${site.origin}/`,
