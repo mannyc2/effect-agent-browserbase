@@ -132,12 +132,42 @@ jobs:
           CI_FORCE_FULL: ${{ inputs.full_acceptance == true || inputs.source_sha != '' }}
           CI_REQUESTED_PROFILE: ${{ inputs.profile || 'full' }}
         run: node tools/ci-plan.mjs write "$BROWSERBASE_WORK_ROOT/ci-plan.json"
+      # The workspace identity, not the candidate, decides whether a stored upstream task
+      # result can apply at all: the pinned upstream revision lives in bootstrap.sh, the
+      # integration diff in upstream.patch, the runtime in .node-version. Vite Task still
+      # re-checks every task's own inputs, so this key only narrows what is worth downloading.
+      - name: Restore upstream task cache
+        id: task-cache
+        if: ${{ steps.plan.outputs.profile == 'full' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/browserbase-task-cache
+          key: >-
+            browserbase-task-${{ runner.os }}-${{ hashFiles('tools/bootstrap.sh', 'upstream.patch',
+            '.node-version') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            browserbase-task-${{ runner.os }}-${{ hashFiles('tools/bootstrap.sh', 'upstream.patch', '.node-version') }}-
       - name: Execute recorded acceptance profile
         env:
           ACCEPTANCE_PROFILE: ${{ steps.plan.outputs.profile }}
+          BROWSERBASE_TASK_CACHE: ${{ steps.plan.outputs.profile == 'full' && format('{0}/browserbase-task-cache', runner.temp) || '' }}
         # This is a watchdog, not a performance claim. Normal library feedback targets 3–5 minutes.
         timeout-minutes: ${{ steps.plan.outputs.profile == 'full' && 55 || 8 }}
         run: bash tools/run-acceptance.sh "$ACCEPTANCE_PROFILE"
+      # A run that never reached the upstream stages exports nothing; saving the empty directory
+      # would store a newer entry that shadows a usable older one under the same prefix.
+      - name: Report exported task cache
+        id: exported
+        if: ${{ !cancelled() && steps.plan.outputs.profile == 'full' }}
+        run: |
+          entry="$(find "$RUNNER_TEMP/browserbase-task-cache" -type f -print -quit 2>/dev/null || true)"
+          printf 'present=%s\n' "$([ -n "$entry" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Save upstream task cache
+        if: ${{ !cancelled() && steps.exported.outputs.present == 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/browserbase-task-cache
+          key: ${{ steps.task-cache.outputs.cache-primary-key }}
       - name: Record fully tested release-set digest
         id: release
         if: ${{ success() && steps.plan.outputs.profile == 'full' }}

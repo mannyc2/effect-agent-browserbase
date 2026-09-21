@@ -57,9 +57,68 @@ jobs:
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  # A tag points at a main commit that has usually already passed full acceptance (on merge,
+  # nightly or by manual dispatch). Publishing those exact tested archives avoids repeating a
+  # ~30 minute gate; the same digests are re-derived here before anything is trusted.
+  reuse:
+    name: Reuse full acceptance for this exact commit
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reused: ${{ steps.verify.outcome == 'success' && 'true' || 'false' }}
+      run_id: ${{ steps.find.outputs.run_id }}
+      artifact_id: ${{ steps.find.outputs.acceptance_artifact_id }}
+      release_set_sha256: ${{ steps.verify.outputs.release_set_sha256 }}
+      release_tooling_artifact_id: ${{ steps.find.outputs.tooling_artifact_id }}
+      release_tooling_sha256: ${{ steps.verify.outputs.tooling_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Find a successful full run of main for this commit
+        id: find
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/release-reuse.mjs find "${{ needs.resolve.outputs.source_sha }}"
+      - name: Download its tested release set
+        if: ${{ steps.find.outputs.found == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.find.outputs.acceptance_artifact_id }}
+          run-id: ${{ steps.find.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/reused-acceptance
+          merge-multiple: true
+      - name: Download its tested release host
+        if: ${{ steps.find.outputs.found == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.find.outputs.tooling_artifact_id }}
+          run-id: ${{ steps.find.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/reused-tooling
+          merge-multiple: true
+      - name: Re-derive the full profile, source and digests CI recorded
+        id: verify
+        if: ${{ steps.find.outputs.found == 'true' }}
+        run: >-
+          node tools/release-reuse.mjs verify "$RUNNER_TEMP/reused-acceptance"
+          "$RUNNER_TEMP/reused-tooling" "${{ needs.resolve.outputs.source_sha }}"
+
   build:
     name: Verify exact release candidate
-    needs: resolve
+    needs: [resolve, reuse]
+    # Only when no retained full run of this exact commit exists.
+    if: ${{ needs.reuse.outputs.reused != 'true' }}
     uses: ./.github/workflows/ci.yml
     with:
       source_sha: ${{ needs.resolve.outputs.source_sha }}
@@ -68,8 +127,12 @@ jobs:
 
   publish:
     name: Publish or resume through native ts-release npm OIDC
-    needs: [resolve, build]
-    if: ${{ inputs.publish && vars.NPM_PUBLISH_ENABLED == 'true' }}
+    needs: [resolve, reuse, build]
+    # Exactly one of reuse and build supplied the tested artifacts.
+    if: >-
+      ${{ !cancelled() && inputs.publish && vars.NPM_PUBLISH_ENABLED == 'true' &&
+      needs.resolve.result == 'success' && (needs.reuse.outputs.reused == 'true' ||
+      needs.build.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: npm
@@ -77,27 +140,33 @@ jobs:
       # Durable prepared artifacts and the append-only ts-release journal.
       contents: write
       id-token: write
+      # Downloading a reused run's artifacts.
+      actions: read
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Release-host pin; the library's acceptance pins remain independent.
           node-version: '22.22.2'
           package-manager-cache: false
-      - name: Download this run's immutable tested artifact
+      - name: Download the immutable tested artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          artifact-ids: ${{ needs.reuse.outputs.reused == 'true' && needs.reuse.outputs.artifact_id || needs.build.outputs.artifact_id }}
+          run-id: ${{ needs.reuse.outputs.reused == 'true' && needs.reuse.outputs.run_id || github.run_id }}
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/npm-release
           merge-multiple: true
-      - name: Download this run's tested release host
+      - name: Download the tested release host
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          artifact-ids: ${{ needs.build.outputs.release_tooling_artifact_id }}
+          artifact-ids: ${{ needs.reuse.outputs.reused == 'true' && needs.reuse.outputs.release_tooling_artifact_id || needs.build.outputs.release_tooling_artifact_id }}
+          run-id: ${{ needs.reuse.outputs.reused == 'true' && needs.reuse.outputs.run_id || github.run_id }}
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/release-tooling
           merge-multiple: true
       - name: Verify and unpack the frozen host
         env:
-          EXPECTED_TOOLING_DIGEST: ${{ needs.build.outputs.release_tooling_sha256 }}
+          EXPECTED_TOOLING_DIGEST: ${{ needs.reuse.outputs.reused == 'true' && needs.reuse.outputs.release_tooling_sha256 || needs.build.outputs.release_tooling_sha256 }}
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/release-tooling"
@@ -107,7 +176,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
           RELEASE_TAG: ${{ github.ref_name }}
-          EXPECTED_DIGEST: ${{ needs.build.outputs.release_set_sha256 }}
+          EXPECTED_DIGEST: ${{ needs.reuse.outputs.reused == 'true' && needs.reuse.outputs.release_set_sha256 || needs.build.outputs.release_set_sha256 }}
           ARTIFACT_DIRECTORY: ${{ runner.temp }}/npm-release
           GITHUB_TOKEN: ${{ github.token }}
           NPM_PUBLISH_ENABLED: ${{ vars.NPM_PUBLISH_ENABLED }}
