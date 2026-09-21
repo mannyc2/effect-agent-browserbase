@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { selectReusableRun } from "../release-reuse.mjs";
+import { FULL_EVIDENCE_STEP, selectReusableRun } from "../release-reuse.mjs";
 
 const sha = "a".repeat(40);
 
@@ -17,8 +17,16 @@ const run = (id, overrides = {}) => ({
   ...overrides,
 });
 
-const passed = () => [
-  { name: "Unpaid acceptance", conclusion: "success" },
+/** `profile` decides whether the acceptance job ran, or skipped, the full-evidence step. */
+const passed = (profile = "full") => [
+  {
+    name: "Unpaid acceptance",
+    conclusion: "success",
+    steps: [
+      { name: "Execute recorded acceptance profile", conclusion: "success" },
+      { name: FULL_EVIDENCE_STEP, conclusion: profile === "full" ? "success" : "skipped" },
+    ],
+  },
   { name: "Native release recovery", conclusion: "success" },
 ];
 
@@ -55,8 +63,36 @@ test("pull-request, other-commit, other-branch and failed runs are never reused"
   }
 });
 
+test("a successful focused run is not release evidence, so an older full run or a build is used", () => {
+  // The ordinary case: merging a package change runs the library profile on main, under the
+  // same artifact name a full run uses.
+  for (const profile of ["library", "docs"]) {
+    assert.equal(
+      selectReusableRun({ sha, runs: [run(1)], jobs: { 1: passed(profile) }, artifacts: { 1: retained(1) } }),
+      undefined,
+      profile,
+    );
+  }
+  assert.deepEqual(
+    selectReusableRun({
+      sha,
+      runs: [run(1, { event: "workflow_dispatch" }), run(2)],
+      jobs: { 1: passed("full"), 2: passed("library") },
+      artifacts: { 1: retained(1), 2: retained(2) },
+    }),
+    { runId: 1, acceptanceArtifactId: 10, toolingArtifactId: 11 },
+  );
+  // A jobs listing without step detail proves nothing about the profile.
+  const withoutSteps = passed().map(({ steps: _steps, ...job }) => job);
+
+  assert.equal(
+    selectReusableRun({ sha, runs: [run(1)], jobs: { 1: withoutSteps }, artifacts: { 1: retained(1) } }),
+    undefined,
+  );
+});
+
 test("a run missing a passed job or a retained artifact falls back to an older one or to a build", () => {
-  const noTooling = [{ name: "Unpaid acceptance", conclusion: "success" }];
+  const noTooling = passed().slice(0, 1);
   const expired = retained(2).map((artifact) => ({ ...artifact, expired: true }));
 
   assert.deepEqual(

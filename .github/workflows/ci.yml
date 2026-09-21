@@ -147,6 +147,11 @@ jobs:
             '.node-version') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             browserbase-task-${{ runner.os }}-${{ hashFiles('tools/bootstrap.sh', 'upstream.patch', '.node-version') }}-
+      # The nightly run is the drift canary: a replayed task would report yesterday's pass for
+      # today's runner image. It runs cold and still exports, so it also refreshes the cache.
+      - name: Keep the scheduled gate cold
+        if: ${{ github.event_name == 'schedule' }}
+        run: rm -rf "$RUNNER_TEMP/browserbase-task-cache"
       - name: Execute recorded acceptance profile
         env:
           ACCEPTANCE_PROFILE: ${{ steps.plan.outputs.profile }}

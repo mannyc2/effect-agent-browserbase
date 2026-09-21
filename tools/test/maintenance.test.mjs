@@ -67,9 +67,24 @@ test("a release reuses only verified full evidence of the exact commit, else bui
   assert.ok(reuse.includes("release-reuse.mjs find"));
   assert.ok(reuse.includes("release-reuse.mjs verify"));
   // The full gate is skipped only when verified evidence was found.
-  assert.ok(build.includes("if: ${{ needs.reuse.outputs.reused != 'true' }}"));
+  assert.ok(build.includes("needs.reuse.outputs.reused != 'true'"));
   assert.ok(build.includes("uses: ./.github/workflows/ci.yml"));
   assert.match(workflow, /reused: \$\{\{ steps\.verify\.outcome == 'success'/);
+  // Reuse can only ever shorten a release. A failed lookup, download or verification leaves
+  // `reused` false, and a failed reuse job still lets the full gate run.
+  for (const id of ["find", "acceptance", "tooling", "verify"])
+    assert.match(reuse, new RegExp(`id: ${id}\\n(?:\\s+if: [^\\n]+\\n)?\\s+continue-on-error: true`), id);
+  assert.match(build, /if: \$\{\{ !cancelled\(\) && needs\.resolve\.result == 'success' &&/);
+});
+
+test("the step that marks a run as full release evidence exists and is full-only", async () => {
+  const { FULL_EVIDENCE_STEP } = await import("../release-reuse.mjs");
+  const ci = read(".github/workflows/ci.yml");
+  const step = ci.slice(ci.indexOf(`- name: ${FULL_EVIDENCE_STEP}\n`));
+
+  // release-reuse.mjs selects runs by this step's success; renaming it here must fail there.
+  assert.ok(step.startsWith(`- name: ${FULL_EVIDENCE_STEP}\n`));
+  assert.match(step.slice(0, 200), /if: \$\{\{ success\(\) && steps\.plan\.outputs\.profile == 'full' \}\}/);
 });
 
 test("the upstream task cache is seeded only after every stage with external effects", () => {
@@ -85,4 +100,10 @@ test("the upstream task cache is seeded only after every stage with external eff
 
   assert.ok(ci.includes("if: ${{ steps.plan.outputs.profile == 'full' }}"));
   assert.ok(ci.includes("steps.exported.outputs.present == 'true'"));
+  // The nightly canary discards the restored cache before acceptance, and still saves afterwards.
+  const cold = ci.indexOf("- name: Keep the scheduled gate cold");
+
+  assert.ok(cold > ci.indexOf("- name: Restore upstream task cache"));
+  assert.ok(cold < ci.indexOf("- name: Execute recorded acceptance profile"));
+  assert.match(ci.slice(cold, cold + 200), /if: \$\{\{ github\.event_name == 'schedule' \}\}/);
 });

@@ -19,7 +19,14 @@ import { verifyReleaseSet } from "./verify-release.mjs";
 
 /** Only runs of main itself count; a pull-request run validates a merge candidate, not the tag. */
 const TRUSTED_EVENTS = new Set(["push", "schedule", "workflow_dispatch"]);
-const REQUIRED_JOBS = ["Unpaid acceptance", "Native release recovery"];
+const ACCEPTANCE_JOB = "Unpaid acceptance";
+const REQUIRED_JOBS = [ACCEPTANCE_JOB, "Native release recovery"];
+/**
+ * Every profile uploads the same artifact name, and a push to main usually runs the focused
+ * library profile. Only a full run executes this step, so its success is what separates
+ * release evidence from routine feedback before anything is downloaded.
+ */
+export const FULL_EVIDENCE_STEP = "Record fully tested release-set digest";
 
 /**
  * The newest successful run for exactly `sha` on main whose acceptance and release-tooling jobs
@@ -42,6 +49,12 @@ export const selectReusableRun = ({ sha, runs, jobs, artifacts }) => {
     const passed = new Map((jobs[run.id] ?? []).map((job) => [job.name, job.conclusion]));
 
     if (!REQUIRED_JOBS.every((name) => passed.get(name) === "success")) continue;
+    const acceptanceSteps = (jobs[run.id] ?? []).find((job) => job.name === ACCEPTANCE_JOB)?.steps;
+    const full = (acceptanceSteps ?? []).some(
+      (step) => step.name === FULL_EVIDENCE_STEP && step.conclusion === "success",
+    );
+
+    if (!full) continue;
     const retained = (name) =>
       (artifacts[run.id] ?? []).find((artifact) => artifact.name === name && !artifact.expired);
     const acceptance = retained(`browserbase-acceptance-${run.id}-${run.run_attempt}`);
