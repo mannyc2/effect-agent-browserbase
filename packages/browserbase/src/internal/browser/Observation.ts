@@ -320,3 +320,5 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
   return { invalidate, changed, dispose, exactElement, retained, readText, observe, screenshot };
 };
+
+export type Observation = ReturnType<typeof makeObservation>;
