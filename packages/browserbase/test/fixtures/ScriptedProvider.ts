@@ -86,6 +86,8 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
     observations: 0,
     selected: [] as string[],
     readinessChecks: 0,
+    /** Every native pointer command this scripted driver was asked to dispatch, in order. */
+    input: [] as string[],
   };
 
   const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -218,6 +220,24 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         ticket.dispatch();
 
         return state.url;
+      },
+      pointerMove: async (to, ticket) => {
+        ticket.dispatch();
+        state.input.push(`move ${pageId} ${to.x},${to.y}`);
+
+        return { position: to };
+      },
+      hover: async (_target, ticket) => {
+        ticket.dispatch();
+        state.input.push(`hover ${pageId}`);
+
+        return { position: { x: 10, y: 20 } };
+      },
+      wheel: async (deltaX, deltaY, at, ticket) => {
+        ticket.dispatch();
+        state.input.push(`wheel ${pageId} ${deltaX},${deltaY}`);
+
+        return { position: at ?? null };
       },
       screenshot: async () => new Uint8Array(),
       resize: async (_viewport, ticket) => {

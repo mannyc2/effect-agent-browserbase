@@ -10,6 +10,7 @@ import { makeInitialization } from "./Initialization.ts";
 import { closeWithin, failure, NativeFailure, safeDecode, sanitize } from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
+import { makePointer } from "./Pointer.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
@@ -157,6 +158,7 @@ export const makePlaywrightDriver = async (
 
   const observation = makeObservation(targets, events);
   const actions = makeActions(context, targets, observation);
+  const pointer = makePointer(targets, actions);
   const captures = makeCaptureSources(targets);
 
   const pageControl = makePageControl(
@@ -216,6 +218,9 @@ export const makePlaywrightDriver = async (
     click: actions.click,
     fill: actions.fill,
     scroll: actions.scroll,
+    pointerMove: pointer.pointerMove,
+    hover: pointer.hover,
+    wheel: pointer.wheel,
     screenshot: observation.screenshot,
     resize: (viewport, ticket) =>
       sanitize(async () => {

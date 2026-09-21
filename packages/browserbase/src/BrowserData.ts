@@ -145,6 +145,54 @@ export class ScrollRequest extends Schema.Class<ScrollRequest>("BrowserbaseScrol
   deltaY: Schema.Int.check(Schema.isBetween({ minimum: -100000, maximum: 100000 })),
 }) {}
 
+/**
+ * CSS pixels in the main frame's viewport, the space Chromium dispatches pointer input in. It
+ * is not a document offset, a device pixel, or a coordinate inside a child frame.
+ */
+export class ViewportPoint extends Schema.Class<ViewportPoint>("BrowserbaseViewportPoint")({
+  x: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 16384 })),
+  y: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 16384 })),
+}) {}
+
+/** One native pointer move. Easing and pacing are the caller's: send the points you want. */
+export class PointerMoveRequest extends Schema.Class<PointerMoveRequest>(
+  "BrowserbasePointerMoveRequest",
+)({ to: ViewportPoint }) {}
+
+/** Moves the pointer onto one exact element where it is. It never scrolls to reach it. */
+export class HoverRequest extends Schema.Class<HoverRequest>("BrowserbaseHoverRequest")({
+  selector: Selector,
+}) {}
+
+const WheelDelta = Schema.Finite.check(Schema.isBetween({ minimum: -100000, maximum: 100000 }));
+
+/**
+ * One native wheel event where the pointer is, or at `at` after moving there first. The browser
+ * chooses what scrolls, exactly as it would for a person, so a nested scroll container under
+ * the pointer scrolls instead of the page.
+ */
+export class WheelRequest extends Schema.Class<WheelRequest>("BrowserbaseWheelRequest")({
+  deltaX: WheelDelta,
+  deltaY: WheelDelta,
+  at: Schema.optionalKey(ViewportPoint),
+}) {}
+
+/**
+ * What native input was dispatched, where and when. `position` is the point this owner
+ * commanded, or null when it has not yet placed the pointer on this page. The interval is on
+ * the host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`, so input and
+ * pixels share one timeline. A wheel event is dispatched, not awaited: the receipt does not
+ * claim the page finished scrolling, or that any frame shows it.
+ */
+export class InputReceipt extends Schema.Class<InputReceipt>("BrowserbaseInputReceipt")({
+  target: Target,
+  kind: Schema.Literals(["pointer-move", "hover", "wheel"]),
+  position: Schema.NullOr(ViewportPoint),
+  delta: Schema.optionalKey(Schema.Struct({ x: WheelDelta, y: WheelDelta })),
+  startedMonotonicNanos: Schema.BigInt,
+  completedMonotonicNanos: Schema.BigInt,
+}) {}
+
 export class ScreenshotRequest extends Schema.Class<ScreenshotRequest>(
   "BrowserbaseScreenshotRequest",
 )({ fullPage: Schema.Boolean }) {}

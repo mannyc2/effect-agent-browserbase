@@ -45,6 +45,10 @@ export const BrowserOperation = Schema.Literals([
   "select-files",
   "file-chooser",
   "action-result",
+  // native pointer input
+  "pointer-move",
+  "hover",
+  "wheel",
   // page control
   "page-control",
   "page-state",
@@ -88,6 +92,8 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
     "target-changed",
     "interrupted",
     "context-lease",
+    // The pointer cannot be placed on it: outside the viewport, without area, or covered.
+    "not-visible",
   ]),
   outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
   status: Schema.optionalKey(Schema.Int),
