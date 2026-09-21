@@ -24,6 +24,88 @@ test("bootstrap uses a single current patch and frozen installs, not historical 
   assert.equal(JSON.parse(read("package.json")).private, true);
 });
 
+test("acceptance records every stage it did not execute, and why", () => {
+  const acceptance = read("tools/run-acceptance.sh");
+
+  // A stage that was skipped or already satisfied still owes statuses.txt an
+  // entry. Silence there would read as a pass in the retained record.
+  assert.ok(acceptance.includes('printf \'%s %s\\n\' "$name" "$state" | tee -a "$OUT/statuses.txt"'));
+  assert.ok(acceptance.includes("note install-browser satisfied"));
+  assert.ok(acceptance.includes("note install-media-tools satisfied"));
+  // A prerequisite that did not pass must stop dependent stages rather than let
+  // them fail against a missing artifact and read as separate defects.
+  assert.ok(acceptance.includes('run_after "generic-build build" packed-consumer'));
+  assert.ok(acceptance.includes("note release-identity skipped"));
+  assert.ok(acceptance.includes("note package-dry-run skipped"));
+  // A satisfied prerequisite is not a failure, but it is also not a pass.
+  assert.match(acceptance, /case "\$\{CODE\[\$dep\]:-missing\}" in\s*\n\s*0 \| satisfied\) ;;/);
+  assert.ok(acceptance.includes("FAILED=1"), "a skipped stage must not silently succeed");
+});
+
+test("the task-cache transfer speeds the gate up without shrinking or faking it", () => {
+  const acceptance = read("tools/run-acceptance.sh");
+  const ci = read(".github/workflows/ci.yml");
+
+  // The whole point is that nothing was removed to buy the time back.
+  assert.ok(acceptance.includes("--concurrency-limit 1 ready"));
+  assert.doesNotMatch(acceptance, /ready\s+--exclude|-t\s|--testNamePattern|--bail/);
+  // A replayed task restores workspace files, not effects outside the workspace.
+  // install:test-browser puts Chromium in ~/.cache/ms-playwright, so seeding
+  // before it let that task report success from cache without installing the
+  // browser, and native plus packed-consumer then failed against a missing
+  // Chromium. Everything that depends on a real install must precede the seed.
+  const seedAt = acceptance.indexOf('cp -a "$SEED/." "$TASK_CACHE/"');
+  assert.ok(seedAt > 0);
+  for (const stage of [
+    "run bootstrap",
+    "install-browser",
+    "install-media-tools",
+    "run unit",
+    "run native",
+    "packed-consumer",
+  ]) {
+    assert.ok(
+      acceptance.indexOf(stage) < seedAt,
+      `${stage} must run for real, before the task cache is seeded`,
+    );
+  }
+  // The stages the cache exists for must still come after it.
+  assert.ok(seedAt < acceptance.indexOf("run ready"), "ready must be able to use the seed");
+  // A lock file belongs to the run that created it, never to a restored copy.
+  assert.equal((acceptance.match(/-name '\*\.lock' -delete/g) ?? []).length, 2);
+  // The record must distinguish a replayed result from a fresh execution.
+  assert.ok(acceptance.includes('"$OUT/task-cache.txt"'));
+  assert.ok(acceptance.includes("no seed"));
+  // An unset variable must leave a completely cold, self-contained run.
+  assert.ok(acceptance.includes('SEED="${BROWSERBASE_TASK_CACHE:-}"'));
+
+  // runner.temp does not resolve in job env; it is exported by the first step.
+  assert.ok(ci.includes("printf 'BROWSERBASE_TASK_CACHE=%s/browserbase-task-cache\\n' \"$RUNNER_TEMP\""));
+  // Saving an empty export would shadow a usable older entry under the same prefix.
+  assert.ok(ci.includes("steps.exported.outputs.present == 'true'"));
+  // The restore key must change when the workspace identity does.
+  for (const input of ["tools/bootstrap.sh", "upstream.patch", ".node-version", ".bun-version"]) {
+    assert.ok(ci.includes(input), `restore key must cover ${input}`);
+  }
+  // A cache is not a credential and grants no new write scope.
+  assert.doesNotMatch(ci, /permissions:\s*\n\s*contents: write/);
+});
+
+test("the local gate is a fast loop, not a second acceptance program", () => {
+  const verify = read("tools/verify.sh");
+
+  // It must not install system packages or claim any release authority.
+  assert.doesNotMatch(verify, /sudo|apt-get|--with-deps|npm publish|BROWSERBASE_API_KEY/);
+  // It must not mint an evidence bundle that could be mistaken for acceptance.
+  assert.doesNotMatch(verify, /SHA256SUMS|release\.json|candidate\.tar\.gz|review\.patch/);
+  // It must say what it does not cover, and point at the real program.
+  assert.ok(verify.includes("run-acceptance.sh is the fixed evidence program"));
+  assert.ok(verify.includes("Not covered here"));
+  // It reads the same pins as everything else rather than restating them.
+  assert.ok(verify.includes('"v$(cat "$ROOT/.node-version")"'));
+  assert.ok(verify.includes('"$(cat "$ROOT/.bun-version")"'));
+});
+
 test("ordinary acceptance has no live publisher, hosted opt-in or write-enabled workflow", () => {
   const ci = read(".github/workflows/ci.yml");
   const jobEnvironment = ci.slice(ci.indexOf("\n    env:\n"), ci.indexOf("\n    steps:\n"));

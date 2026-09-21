@@ -1,10 +1,12 @@
+import assert from "node:assert/strict";
+
 import { BrowserbaseBrowser } from "@effect-agent/browserbase/browser";
 import { ClickRequest, NavigateRequest } from "@effect-agent/browserbase/browser-data";
 import * as Capture from "@effect-agent/browserbase/capture";
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 
 it.live("real CDP: pinned captures survive tab selection and isolate page close", () =>
   Effect.scoped(
@@ -18,9 +20,20 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
           yield* session.bind().click(ClickRequest.make({ selector: "#popup" }));
-          const initialPages = yield* session.pages;
-          const original = initialPages.find((page) => page.selected)!;
-          const popup = initialPages.find((page) => !page.selected)!;
+
+          // A dispatched click is not a registered target: the popup reaches this
+          // session only once Chromium reports it and the owner registers it.
+          // Reading the list immediately left `popup` undefined, and the non-null
+          // assertion turned that into a TypeError about `pageId` far from its
+          // cause. Reproduced once in 25 rounds of the full native suite on two
+          // loaded cores. The budget still bounds the wait, so a popup that is
+          // never registered fails below with the same count as before.
+          const initialPages = yield* settle(session.pages, (open) => open.length === 2);
+          const original = initialPages.find((page) => page.selected);
+          const popup = initialPages.find((page) => !page.selected);
+
+          assert.ok(original, "the fixture page must still be selected");
+          assert.ok(popup, "the popup must be registered as a second page");
           const popupHandle = yield* session.selectPage(popup.pageId);
 
           yield* popupHandle.navigate(NavigateRequest.make({ url: f.url }));

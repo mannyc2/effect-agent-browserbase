@@ -16,7 +16,13 @@ import * as Capture from "@effect-agent/browserbase/capture";
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema, Stream } from "effect";
 
-import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import {
+  localBrowser,
+  localLaunch,
+  policy,
+  settle,
+  withProvider,
+} from "../fixtures/LocalBrowser.ts";
 
 it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation observers", () =>
   Effect.scoped(
@@ -180,7 +186,9 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
             "dialog completed",
           );
           yield* h.click(ClickRequest.make({ selector: "#popup" }));
-          const pages = yield* session.pages;
+          // A dispatched click is not a registered target: the popup reaches the
+          // session only once Chromium reports it and the owner registers it.
+          const pages = yield* settle(session.pages, (open) => open.length === 2);
 
           expect(pages).toHaveLength(2);
           expect((yield* session.target).pageId).toBe(target.pageId);

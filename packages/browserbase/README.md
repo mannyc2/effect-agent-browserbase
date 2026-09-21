@@ -95,14 +95,16 @@ For model-driven control, use `@effect-agent/platform-browserbase`, whose tools 
 
 ## Choose a video path
 
-|            | Provider recording (`recordings` / `replays`)             | Live `capture`                                      |
-| ---------- | --------------------------------------------------------- | --------------------------------------------------- |
-| Encoding   | Browserbase                                               | caller-owned                                        |
-| Available  | after the session ends                                    | while the session is live                           |
-| Enablement | `recordSession: true` at allocation                       | independent of provider recording                   |
-| Output     | per-page MP4 download or validated HLS replay             | bounded JPEG frames                                 |
-| Control    | provider-owned encoding                                   | JPEG quality/source-fit bounds plus caller encoding |
-| Audio      | not claimed until provider evidence proves a track exists | none; the screencast frame seam has no audio source |
+|            | Provider recording (`recordings` / `replays`) | Live `capture`                                      |
+| ---------- | --------------------------------------------- | --------------------------------------------------- |
+| Encoding   | Browserbase                                   | caller-owned                                        |
+| Available  | after the session ends                        | while the session is live                           |
+| Enablement | `recordSession: true` at allocation           | independent of provider recording                   |
+| Output     | per-page MP4 download or validated HLS replay | bounded JPEG frames                                 |
+| Control    | provider-owned encoding                       | JPEG quality/source-fit bounds plus caller encoding |
+| Audio      | none: measured, see below                     | none; the screencast frame seam has no audio source |
+
+A bounded hosted check ran a page producing a known 440 Hz tone two independent ways, an `<audio>` element and a WebAudio oscillator started under real user activation, and confirmed from inside the page that it was playing (`AudioContext.state: "running"`, the element unpaused, `currentTime` advancing). The assembled provider MP4 decoded to a single h264 video stream with no audio track, in each of three recordings. That follows from the architecture: the provider records a CDP screencast of viewport screenshots, and its MP4 and HLS renditions draw from that same data. This package does not synthesize a silent track or infer audio support from a container; real audio needs control of the browser host process, which a hosted session does not give.
 
 Prefer provider recording when post-session MP4/HLS is enough. Use `capture` when you need frames during the session, need to transform or encode them yourself, did not enable provider recording, are testing locally without a paid session, or need a live-frame path distinct from Browserbase's post-session artifact lifetime. BYOS recording completion is reported explicitly even when Browserbase does not return a download URL.
 

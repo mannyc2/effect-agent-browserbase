@@ -19,12 +19,27 @@ test("the fetcher takes the Node pin from the same file every other command asse
   assert.ok(!toolchain.includes(nodePin), "Node version must not be duplicated in the fetcher");
 });
 
-test("the Bun pin agrees with acceptance and the contributor toolchain table", () => {
-  const declared = toolchain.match(/^BUN_VERSION=(\S+)$/m)?.[1];
-  assert.match(declared ?? "", /^\d+\.\d+\.\d+$/);
-  assert.ok(read("tools/run-acceptance.sh").includes(`test "$(bun --version)" = ${declared}`));
-  assert.ok(read("tools/bootstrap.sh").includes(`test "$(bun --version)" = ${declared}`));
-  assert.ok(read("CONTRIBUTING.md").includes(`| Bun | ${declared} |`));
+test("the Bun pin comes from the same file every other command asserts", () => {
+  assert.ok(toolchain.includes('BUN_VERSION="$(cat "$ROOT/.bun-version")"'));
+  const bunPin = read(".bun-version").trim();
+
+  assert.match(bunPin, /^\d+\.\d+\.\d+$/);
+  // A second copy of the version would drift away from the assertions silently.
+  assert.ok(!toolchain.includes(bunPin), "Bun version must not be duplicated in the fetcher");
+  assert.ok(
+    read("tools/run-acceptance.sh").includes(
+      'test "$(bun --version)" = "$(cat "$SOURCE_ROOT/.bun-version")"',
+    ),
+  );
+  assert.ok(
+    read("tools/bootstrap.sh").includes('test "$(bun --version)" = "$(cat "$ROOT/.bun-version")"'),
+  );
+  assert.ok(read("CONTRIBUTING.md").includes(`| Bun | ${bunPin} (\`.bun-version\`) |`));
+  // CI must read the pin too rather than restating it next to the checkout.
+  for (const workflow of [".github/workflows/ci.yml", ".github/workflows/hosted.yml"]) {
+    assert.ok(read(workflow).includes("bun-version-file: .bun-version"));
+    assert.ok(!read(workflow).includes(bunPin), `${workflow} must not duplicate the Bun version`);
+  }
 });
 
 test("every download is pinned by digest and verified before use", () => {
@@ -56,6 +71,7 @@ const fixture = (t, downloadBody = "exit 6") => {
   mkdirSync(bin);
   mkdirSync(join(directory, "tools"));
   writeFileSync(join(directory, ".node-version"), read(".node-version"));
+  writeFileSync(join(directory, ".bun-version"), read(".bun-version"));
   writeFileSync(join(directory, "tools/pinned-toolchain.sh"), toolchain);
   const executable = (path, body) => {
     mkdirSync(dirname(path), { recursive: true });
@@ -66,7 +82,7 @@ const fixture = (t, downloadBody = "exit 6") => {
   for (const name of ["tar", "unzip"])
     executable(join(bin, name), 'touch "$TEST_ROOT/extraction-attempted"; exit 97');
   const nodeVersion = read(".node-version").trim();
-  const bunVersion = toolchain.match(/^BUN_VERSION=(\S+)$/m)[1];
+  const bunVersion = read(".bun-version").trim();
   const seed = (dest, { bun = true } = {}) => {
     executable(join(dest, `node-v${nodeVersion}-linux-x64/bin/node`), `echo v${nodeVersion}`);
     if (bun) executable(join(dest, `bun-${bunVersion}-linux-x64/bun`), `echo ${bunVersion}`);

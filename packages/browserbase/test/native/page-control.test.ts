@@ -12,7 +12,13 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema, Stream } from "effect";
 import type { Page } from "playwright-core";
 
-import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
+import {
+  localBrowser,
+  localLaunch,
+  policy,
+  settle,
+  withProvider,
+} from "../fixtures/LocalBrowser.ts";
 
 const Counters = Schema.Struct({
   ticks: Schema.Natural,
@@ -51,11 +57,17 @@ for (const capture of [false, true])
             const secondId = yield* session.createPage;
             const scoutHandle = yield* session.selectPage(secondId);
 
-            yield* scoutHandle.navigate(NavigateRequest.make({ url: `${f.url}clocks` }));
+            // The fragment never reaches the fixture server, so both pages load the
+            // same document while staying individually identifiable. Selecting the
+            // native pages positionally would silently pick up any stray tab the
+            // browser happens to expose, which surfaces far from its cause.
+            yield* scoutHandle.navigate(NavigateRequest.make({ url: `${f.url}clocks#scout` }));
             const nativePages = f.nativePages(session.reference.sessionId);
 
-            const stageNative = nativePages[0],
-              scoutNative = nativePages[1];
+            expect(nativePages.map((page) => page.url())).toHaveLength(2);
+
+            const stageNative = nativePages.find((page) => !page.url().endsWith("#scout")),
+              scoutNative = nativePages.find((page) => page.url().endsWith("#scout"));
 
             assert.ok(stageNative);
             assert.ok(scoutNative);
@@ -103,9 +115,24 @@ for (const capture of [false, true])
                   ).pipe(Effect.forkScoped);
 
             yield* Effect.sleep(250);
+            // A started screencast is not yet a flowing one. Pinned Playwright's
+            // `Screencast.addClient` does not await `_startScreencast`, so a
+            // resolved `Capture.start` means the client is registered, not that
+            // Chromium has produced a frame. Wait for the baseline frames rather
+            // than assuming this sleep covers native startup.
+            if (capture) {
+              yield* settle(
+                Effect.sync(() => count),
+                (frames) => frames > 0,
+              );
+              yield* settle(
+                Effect.sync(() => scoutCount),
+                (frames) => frames > 0,
+              );
+            }
 
-            const before = yield* read(stageNative),
-              scoutBefore = yield* read(scoutNative);
+            const before = yield* settle(read(stageNative), (clocks) => clocks.rafs > first.rafs);
+            const scoutBefore = yield* read(scoutNative);
 
             const framesBefore = count;
             const scoutFramesBefore = scoutCount;
@@ -123,14 +150,23 @@ for (const capture of [false, true])
 
             yield* Effect.sleep(350);
             yield* resumedScout.click(ClickRequest.make({ selector: "#click" }));
-            const scoutDuring = yield* read(scoutNative);
+
+            const scoutDuring = yield* settle(
+              read(scoutNative),
+              (clocks) => clocks.rafs > scoutBefore.rafs,
+            );
 
             expect(scoutDuring.ticks).toBeGreaterThan(scoutBefore.ticks);
             expect(scoutDuring.rafs).toBeGreaterThan(scoutBefore.rafs);
             expect(scoutDuring.clicks).toBe(1);
             if (capture) {
+              const scoutDelivered = yield* settle(
+                Effect.sync(() => scoutCount),
+                (frames) => frames > scoutFramesBefore,
+              );
+
               expect(scoutFramesBefore).toBeGreaterThan(0);
-              expect(scoutCount).toBeGreaterThan(scoutFramesBefore);
+              expect(scoutDelivered).toBeGreaterThan(scoutFramesBefore);
             }
             const stale = PageSuspension.make({ ...receipt, suspensionId: "foreign" });
             const refused = yield* PageControl.resume(session, stale).pipe(Effect.result);
@@ -149,15 +185,23 @@ for (const capture of [false, true])
             assert.ok(resume);
             expect(resume).toEqual(freeze);
             expect(after.animation - freeze.animation).toBeLessThan(80);
+            const resumedAt = performance.now();
+
             yield* Effect.sleep(250);
-            const advanced = yield* read(stageNative);
+            const advanced = yield* settle(read(stageNative), (clocks) => clocks.rafs > after.rafs);
+            // A CSS animation's currentTime advances on the same frames rAF does,
+            // so the band has to be taken against the elapsed wall time actually
+            // spent, not against the sleep alone. The ratios are the original
+            // 60ms and 210ms over 250ms: wide enough for scheduling noise, still
+            // narrow enough that a rate left at 0 or restored to 1 fails.
+            const elapsed = performance.now() - resumedAt;
 
             expect(before.ticks).toBeGreaterThan(first.ticks);
             expect(before.rafs).toBeGreaterThan(first.rafs);
             expect(advanced.ticks).toBeGreaterThan(after.ticks);
             expect(advanced.rafs).toBeGreaterThan(after.rafs);
-            expect(advanced.animation - after.animation).toBeGreaterThan(60);
-            expect(advanced.animation - after.animation).toBeLessThan(210);
+            expect(advanced.animation - after.animation).toBeGreaterThan(elapsed * 0.24);
+            expect(advanced.animation - after.animation).toBeLessThan(elapsed * 0.84);
             expect(advanced.paused).toBe(before.paused);
             expect(
               (yield* Effect.promise(() => cdp.send("Animation.getPlaybackRate"))).playbackRate,
@@ -168,8 +212,13 @@ for (const capture of [false, true])
               "Failure",
             );
             if (interval !== undefined && consumer !== undefined) {
+              const delivered = yield* settle(
+                Effect.sync(() => count),
+                (frames) => frames > framesHeld,
+              );
+
               expect(framesBefore).toBeGreaterThan(0);
-              expect(count).toBeGreaterThan(framesHeld);
+              expect(delivered).toBeGreaterThan(framesHeld);
               yield* interval.stop;
               yield* Fiber.join(consumer);
               expect((yield* interval.completed).nativeStop).toBe("confirmed");
