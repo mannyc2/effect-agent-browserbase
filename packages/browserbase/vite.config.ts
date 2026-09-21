@@ -19,7 +19,9 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/Account.ts",
       "src/Agents.ts",
+      "src/Allocation.ts",
       "src/Bootstrap.ts",
       "src/Browser.ts",
       "src/BrowserData.ts",

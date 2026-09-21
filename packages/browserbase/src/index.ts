@@ -1,4 +1,6 @@
+export * as Account from "./Account.ts";
 export * as Agents from "./Agents.ts";
+export * as Allocation from "./Allocation.ts";
 export * as Bootstrap from "./Bootstrap.ts";
 export * as Browser from "./Browser.ts";
 export * as BrowserData from "./BrowserData.ts";

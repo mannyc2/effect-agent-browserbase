@@ -9,20 +9,14 @@ It has no Effect Agent dependency. Playwright is an optional peer, loaded lazily
 Construct `BrowserbaseClient.layer(account)` once and provide it to everything else. Credentials, approved artifact origins and request bounds live there and nowhere else; a browser recipe cannot carry them.
 
 ```ts
-import { BrowserbaseClient } from "@effect-agent/browserbase/client";
-import { BrowserbaseSessions } from "@effect-agent/browserbase/sessions";
-import { Layer } from "effect";
+import * as Account from "@effect-agent/browserbase/account";
 
 // Reads BROWSERBASE_PROJECT_ID and a redacted BROWSERBASE_API_KEY from the active
 // ConfigProvider (the environment by default) when the Layer is built.
-const account = BrowserbaseSessions.layer.pipe(
-  Layer.provideMerge(
-    BrowserbaseClient.layerConfig({ artifactOrigins: ["https://media.browserbase.com"] }),
-  ),
-);
+const account = Account.layerConfig({ artifactOrigins: ["https://media.browserbase.com"] });
 ```
 
-`BrowserbaseClient.layer({ projectId, apiKey: Redacted.make(key), ... })` takes the same authority explicitly. The Client uses Effect's `FetchHttpClient.Fetch` reference, which already defaults to `globalThis.fetch`; provide a different `fetch` only when you need one.
+`Account.layer({ projectId, apiKey: Redacted.make(key), ... })` takes the same authority explicitly. Either one bundles every resource service on a single Client, so credentials are composed once instead of per service; each service still exports its own `layer` when you want a narrower set. `BrowserbaseBrowser.layer` stays separate, because a browser also fixes budgets and a connection lifetime that an account does not. The Client uses Effect's `FetchHttpClient.Fetch` reference, which already defaults to `globalThis.fetch`; provide a different `fetch` only when you need one.
 
 `sessions.retrieve`, `list`, `waitUntilRunning` and `waitForTerminal` are passive. `sessions.requestRelease` is an explicit remote mutation and is never issued as a side effect of reading. Context create/retrieve/delete are separate resource operations; deleting a Context is never a browser finalizer. Mutating control-plane requests are never retried automatically, and a rejected request stays distinguishable from one whose effect is unknown.
 
@@ -117,6 +111,8 @@ Prefer provider recording when post-session MP4/HLS is enough. Use `capture` whe
 
 That split is why an agent can use one browser for many turns while provider artifacts remain accessible after the interactive scope ends. Importing a Layer does not allocate a browser.
 
+`Allocation.scoped(recipe)` allocates a session without connecting a browser, for a caller that drives the remote session with its own automation client. It is the same allocation path the browser owner uses, so the creation request is never retried, an unknown outcome is still reported exactly once, a persisting Context still needs a live writer permit, and no native peer is loaded. The scope owns the release: closing it releases the session whether or not anything ever connected. A reply naming another project is refused, and because a foreign reference is never acted on, the caller is handed that reference rather than a mutation attempted against it.
+
 The browser owner does not allocate or release anything itself. It supplies the local half of cleanup — fence, capture stop, initialization teardown, disconnect — and the canonical control plane owns the release request and the terminal status observation. A local disconnect, an accepted provider release request and provider-confirmed termination therefore stay distinct facts in one `CleanupResult`, together with the exact steps that failed.
 
 Mutations are serialized. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome: the owner is fenced and the package never automatically replays it. `undispatched` is used only when the package established that native mutation dispatch did not occur.
@@ -186,6 +182,8 @@ An agent run or Function invocation that persists a Context writes it from Brows
 ## Public entry points
 
 - `client` — one immutable account, transport and approved artifact origins.
+- `account` — every resource service on one Client, so credentials are composed once.
+- `allocation` — a scoped session with no browser connected, released by its own scope.
 - `sessions`, `contexts`, `context-coordination` — passive inspection, explicit release, context resources and writer settlement.
 - `extensions` — provisioning a Chrome extension archive once as a durable project resource, and selecting it by reference at launch.
 - `uploads` — placing a file where the running session can already reach it, and the receipt that authorizes attaching it.

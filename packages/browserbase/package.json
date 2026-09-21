@@ -16,7 +16,9 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./account": "./src/Account.ts",
     "./agents": "./src/Agents.ts",
+    "./allocation": "./src/Allocation.ts",
     "./bootstrap": "./src/Bootstrap.ts",
     "./browser": "./src/Browser.ts",
     "./browser-data": "./src/BrowserData.ts",
