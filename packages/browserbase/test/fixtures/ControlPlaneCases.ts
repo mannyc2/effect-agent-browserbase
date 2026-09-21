@@ -323,13 +323,13 @@ export const controlPlaneCases: ReadonlyArray<Case> = [
     }),
   },
   {
-    name: "Uploads place bytes for the exact running session and report only what came back",
+    name: "Uploads place bytes for the exact running session at the location the provider uses",
     run: Effect.gen(function* () {
       const bytes = new TextEncoder().encode("quarter,amount\nQ1,42\n");
       const calls: string[] = [];
       let part: { name: string; type: string; size: number } | undefined;
       let status: "RUNNING" | "COMPLETED" = "RUNNING";
-      let path = "/browserbase/uploads/report.csv";
+      let path: string | undefined = "/browserbase/uploads/report.csv";
 
       const fetch: typeof globalThis.fetch = async (input, init) => {
         const request = new Request(input, init);
@@ -370,6 +370,12 @@ export const controlPlaneCases: ReadonlyArray<Case> = [
           "POST /v1/sessions/session-1/uploads",
         ]);
 
+        // The provider's actual reply names no path; the documented upload location is used.
+        path = undefined;
+        const documented = yield* uploads.create(sessionReference, file);
+
+        assert.equal(documented.remotePath, "/tmp/.uploads/report.csv");
+
         // A traversing path is never carried forward as an attachable location.
         path = "/browserbase/../etc/passwd";
         const unsafe = yield* uploads.create(sessionReference, file).pipe(Effect.result);
@@ -389,7 +395,7 @@ export const controlPlaneCases: ReadonlyArray<Case> = [
           assert.equal(terminal.failure.reason, "expired");
           assert.equal(terminal.failure.outcome, "undispatched");
         }
-        assert.equal(calls.filter((call) => call.endsWith("/uploads")).length, 2);
+        assert.equal(calls.filter((call) => call.endsWith("/uploads")).length, 3);
       }).pipe(Effect.provide(resourceLayer), Effect.provideService(FetchHttpClient.Fetch, fetch));
     }),
   },

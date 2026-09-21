@@ -5,18 +5,35 @@ credential-free and open to fork pull requests, and **Unpaid acceptance** remain
 the only required check. Hosted runs are a separate, manual, default-off
 workflow so that paid execution is always a deliberate maintainer action.
 
-Two guarded commands exist, and they answer different questions:
+Every paid question is one registered check. The registry,
+[`packages/browserbase/examples/hosted/checks.ts`](../packages/browserbase/examples/hosted/checks.ts),
+declares each check's budget, the settings it needs and the single claim a
+successful run supports, and points at the recorded run that established it
+(or `null` while it is outstanding). `tools/hosted-run.sh` is the only entry
+point: it refuses any name the registry does not list and validates every named
+check before the first one allocates. Every check passes through the same gate,
+`examples/hosted/harness.ts`, which owns the opt-in, credentials, account,
+policy budgets, session count and JSON record. Ordinary unpaid CI holds each
+entry to the registry's ceiling (`tools/test/hosted.test.mjs`), so an
+over-budget check fails before anything is spent.
 
-| Command | Question it answers | Bounds |
+| Check | Question | What a passing run supports |
 | --- | --- | --- |
-| `tools/hosted-acceptance.sh` | Does the integration actually work against the real provider? | one session, 180s, 10 actions, 3s capture, ≤512 MiB recording download, zero model calls |
-| `tools/hosted-demo.sh` | What does a real session look like, for the README? | one session, 120s, 10 actions, ≤15s capture, no recording request or download, zero model calls |
+| `acceptance` | — | allocation, connect, navigation, capture, Live View URL retrieval, confirmed release, recording download |
+| `demo` | — | README media only; no correctness claim |
+| `handoff` | — | operator takeover and release through Live View (needs a person at a terminal; never runs in CI) |
+| `context-durability` | H1 | a cookie and localStorage marker survive into a later session on the same context |
+| `keepalive-reconnect` | H4 | a keep-alive session survives detach, and an init script is ready after reconnect |
+| `extension-identity` | H3 | a registered MV3 extension keeps its identity and its content script runs |
+| `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |
+| `replay-delivery` | H7 | the replay playlist validates and a segment downloads; recording delivery is reported as observed |
 
-The demo is documentation evidence and is not a substitute for acceptance. A
-recording proves a session ran; it does not prove Live View authorization,
-operator handoff, persistent-context behavior, reconnection or signed-URL
-expiry. Those remain the separately authorized hosted checks tracked in
-[STATUS.md](STATUS.md).
+Questions refer to the hosted experiments in the
+[implementation plan](research/browserbase-platform-2026-09-20/implementation-plan.md).
+Each check narrows its question rather than answering all of it; the registry's
+`claim` says exactly how far. The demo is documentation evidence and is not a
+substitute for any check. [STATUS.md](STATUS.md) records which claims have a
+run behind them.
 
 ## Why this shape
 
@@ -41,8 +58,9 @@ configured environment controls:
   uses `cancel-in-progress: false`. Manual cancellation, a job timeout, or runner
   loss can still interrupt cleanup; none proves provider termination.
 
-Each guarded command allocates at most one session; `run: both` runs two
-commands and can allocate two. No particular monetary cost is guaranteed.
+Each check allocates at most its registered `sessions` (never more than two),
+and a run allocates at most the sum over the checks it names. No particular
+monetary cost is guaranteed.
 Keep the provider-side budgets and credential scope appropriate to that bound.
 
 ## One-time setup
@@ -58,12 +76,12 @@ Keep the provider-side budgets and credential scope appropriate to that bound.
 
    | Secret | Required for | Value |
    | --- | --- | --- |
-   | `BROWSERBASE_API_KEY` | both commands | an API key with verified minimum provider permissions |
-   | `BROWSERBASE_PROJECT_ID` | both commands | that project's id |
-   | `BROWSERBASE_ARTIFACT_ORIGINS` | `acceptance` only | comma-separated exact HTTPS origins approved for provider recording delivery |
+   | `BROWSERBASE_API_KEY` | every check | an API key with verified minimum provider permissions |
+   | `BROWSERBASE_PROJECT_ID` | every check | that project's id |
+   | `BROWSERBASE_ARTIFACT_ORIGINS` | checks that retrieve provider media (`acceptance`, `replay-delivery`) | comma-separated exact HTTPS origins approved for provider recording delivery |
 
-   The names are checked by the scripts before allocation; a misnamed secret
-   fails the run rather than silently skipping a check.
+   The names are checked before allocation; a misnamed secret fails the run
+   rather than silently skipping a check.
 4. Set repository variable **`BROWSERBASE_LIVE_ENABLED`** to the literal string
    `true` only after reviewing the above.
 
@@ -73,35 +91,33 @@ chat window or an agent session.
 
 ## Running
 
-Dispatch **Hosted Browserbase** from the Actions tab:
+Dispatch **Hosted Browserbase** from the Actions tab and set `checks` to one or
+more space-separated registry names, for example `demo` or
+`acceptance context-durability`. `demo_url` optionally sets the exact HTTPS page
+the demo shows; it defaults to this repository's own GitHub page.
 
-- `run: demo` — records the README media. Optionally set `demo_url` to an exact
-  HTTPS page; it defaults to this repository's own GitHub page.
-- `run: acceptance` — the guarded correctness run.
-- `run: both` — two sessions.
-
-Successful demo runs retain JSON records, encoded video, source commit and
-checksums; acceptance runs retain their JSON records. Requested outputs that
-were actually produced are retained as an Actions artifact for 14 days. To publish the
-recording, follow [docs/media/README.md](media/README.md).
+Each check writes `<check>.jsonl` and any files it produces under its own
+directory, beside the source commit and checksums. A record that allocated past
+its session budget or never completed fails the run. Outputs are retained as an
+Actions artifact for 14 days. To publish a demo recording, follow
+[docs/media/README.md](media/README.md).
 
 ## Running locally instead
 
-Neither command needs GitHub. If you would rather not store a key at all, run
-them from a trusted workstation against a bootstrapped workspace:
+Nothing needs GitHub. If you would rather not store a key at all, run from a
+trusted workstation against a bootstrapped workspace. `handoff` can only run
+this way, because it shows a Live View URL to the person at the terminal:
 
 ```sh
 bash tools/bootstrap.sh
 export EFFECT_AGENT_BROWSERBASE_LIVE=1
 export BROWSERBASE_API_KEY=...        # not BROWSER_BASE_API_KEY
 export BROWSERBASE_PROJECT_ID=...
-bash tools/hosted-demo.sh .work/upstream/tree .work/demo
-
-# Acceptance additionally needs approved provider delivery origins.
+# Only checks that retrieve provider media need approved delivery origins.
 export BROWSERBASE_ARTIFACT_ORIGINS=https://...
-bash tools/hosted-acceptance.sh .work/upstream/tree
+bash tools/hosted-run.sh .work/upstream/tree .work/hosted demo acceptance
 ```
 
-`tools/hosted-demo.sh` needs caller-installed FFmpeg, the same way
+The `demo` check needs caller-installed FFmpeg, the same way
 `examples/record-video.ts` does; encoding is deliberately not a package
 dependency.
