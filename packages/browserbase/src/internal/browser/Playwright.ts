@@ -40,26 +40,9 @@ import type {
   ReadinessState,
 } from "./Driver.ts";
 import { makeNativeBindings } from "./NativeBindings.ts";
+import { closeWithin, failure, safeDecode, sanitize, timeout } from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
 import { PageExecution } from "./PageExecution.ts";
-
-const failure = (
-  operation: string,
-  reason: BrowserError["reason"],
-  outcome?: BrowserError["outcome"],
-) => BrowserError.make({ operation, reason, ...(outcome === undefined ? {} : { outcome }) });
-
-const safeDecode = <A>(
-  codec: Schema.Codec<A, unknown, never, never>,
-  raw: unknown,
-  operation: string,
-): A => {
-  try {
-    return Schema.decodeUnknownSync(codec)(raw);
-  } catch {
-    throw failure(operation, "malformed");
-  }
-};
 
 const TextResult = Schema.Struct({
   text: Schema.String,
@@ -108,29 +91,6 @@ interface CaptureWatcher {
   readonly frameId: string;
   readonly invalidate: (reason: CaptureInvalidation) => void;
 }
-
-/** No raw exception from Playwright is allowed to cross this private boundary. */
-const sanitize = <A>(operation: string, action: () => Promise<A>): Promise<A> =>
-  Promise.resolve()
-    .then(action)
-    .catch((error: unknown) => {
-      throw Schema.is(BrowserError)(error) ? error : failure(operation, "provider");
-    });
-
-const closeWithin = async (action: () => Promise<unknown>, milliseconds = 2000): Promise<void> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  try {
-    await Promise.race([
-      Promise.resolve().then(action),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(failure("native-close", "timeout")), milliseconds);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-};
 
 /**
  * The provider-issued address is accepted only as a credential-free Browserbase WSS URL. Every
@@ -514,13 +474,6 @@ export const makePlaywrightDriver = async (
       throw failure("page-url", "malformed");
 
     return value;
-  };
-
-  // The native timeout is finite as well as Effect's authoritative deadline. It cannot undo dispatch.
-  const timeout = (ticket: Ticket) => {
-    ticket.check();
-
-    return ticket.remainingMillis();
   };
 
   const exactElement = async (
