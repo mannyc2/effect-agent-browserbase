@@ -110,6 +110,19 @@ This scoped path deliberately uses `startNavigation` once for `browser_navigate`
 
 Navigation completion cancels remaining callback work and joins its scoped cleanup before returning. Callback failure or interruption of the Tool/host scope asks that same pending operation to stop before its operation scope closes. A failed stop preserves the native error and owner fencing; it is not treated as confirmed termination. Confirmed stop produces the generic `interrupted` completion and keeps a healthy session usable, without undoing page effects. The existing generic failure schema still reports that completion's `outcome: "unknown"`; acknowledgement of stop does not establish what the page did before it stopped. Default `handlers`, without `makeHost`, retain their earlier navigation/abandonment semantics.
 
+A main-frame loading deadline uses the browser owner's bounded recovery, including through
+`Tools.run`: the model receives `timeout/unknown` after acknowledged stop and can inspect the
+partial page before choosing its next action. Recovery and explicit stop share one coordinator;
+the loading deadline may be followed by up to three seconds of recovery, never beyond the browser
+lifetime. Failed recovery or a pinned child-frame timeout keeps the owner fenced. No failed
+navigation is automatically repeated.
+
+Inspection references come from the actual returned observation. They survive a host's
+selection-only excursion or pinned input on another page, but refuse while the wrong page/frame
+is selected or when the exact document/control changed. Input on their own page, including hover
+and scrolling, still requires reinspection. Reconnect and a new inspection retire older references;
+never construct an ID from an assumed counter.
+
 `onInput` runs after input dispatch. Its failure is therefore not an undispatched input: the model receives `failed/unknown`, and the host retains the original error. In contrast, admission refusal and a call refused because its host is already closed/faulted dispatch nothing. Operation reservations, native fences and browser cleanup remain with the generic owner.
 
 ## Know what authority this grants

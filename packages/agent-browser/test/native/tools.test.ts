@@ -29,6 +29,7 @@ import {
   localAgentBrowser,
   withGenericAgentBrowser,
 } from "../fixtures/AgentBrowser.ts";
+import { inspectionReference } from "../fixtures/Inspection.ts";
 import { settle, toolSite } from "../fixtures/ToolSite.ts";
 
 const Log = Schema.Struct({
@@ -144,6 +145,8 @@ for (const throws of [false, true])
 
               yield* generic.navigate({ url: site.url });
               const seen: string[] = [];
+              const secret = { observationId: "unobserved", elementId: "unobserved" };
+              const name = { observationId: "unobserved", elementId: "unobserved" };
 
               const result = yield* AgentRuntime.run(agent, "inspect and fill").pipe(
                 Effect.provide(
@@ -169,12 +172,14 @@ for (const throws of [false, true])
                         ...call(
                           "browser_fill",
                           {
-                            reference: { observationId: "observation-1", elementId: "element-2" },
+                            reference: secret,
                             value: "denied",
                           },
                           "denied",
                         ),
                         assertRequest: (request) => {
+                          Object.assign(secret, inspectionReference(request, "Secret"));
+                          Object.assign(name, inspectionReference(request, "Name"));
                           const encoded = JSON.stringify(request.prompt);
 
                           expect(encoded).toContain("VISIBLE WORDS");
@@ -188,7 +193,7 @@ for (const throws of [false, true])
                         ...call(
                           "browser_fill",
                           {
-                            reference: { observationId: "observation-1", elementId: "element-1" },
+                            reference: name,
                             value: "Ada",
                           },
                           "admitted",

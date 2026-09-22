@@ -19,6 +19,7 @@ import {
   openAgentBrowser,
   withGenericAgentBrowser,
 } from "../fixtures/AgentBrowser.ts";
+import { inspectionReference } from "../fixtures/Inspection.ts";
 import { Settings, SettingsUnavailable, settingsBootstrap } from "../fixtures/Settings.ts";
 
 const agent = Agent.make("browser-package-acceptance", {
@@ -451,10 +452,6 @@ const call = (id: string, name: string, params: unknown): ScriptedTurnInput => (
   termination: { _tag: "Complete" },
 });
 
-// The fixture's first control, in the session's first observation. A scripted model cannot
-// read a tool result, so it names the reference a real one would have been given.
-const increment = { observationId: "observation-1", elementId: "element-0" };
-
 for (const revalidates of [true, false])
   it.live(
     `real AgentRuntime: a recorder checkpoints and holds between a tool's inspect and its click (revalidates=${revalidates})`,
@@ -468,6 +465,7 @@ for (const revalidates of [true, false])
             Effect.gen(function* () {
               const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy);
               let recorded: string | undefined;
+              const increment = { observationId: "unobserved", elementId: "unobserved" };
 
               // What a recorder does on the same owner while the agent is between tools: passive
               // evidence, an explicit hold and resume, then a check of the exact inspected node.
@@ -502,6 +500,9 @@ for (const revalidates of [true, false])
                         // This stream ends after the inspect ran and before the click does.
                         {
                           ...call("click", "browser_click", increment),
+                          assertRequest: (request) => {
+                            Object.assign(increment, inspectionReference(request, "Increment"));
+                          },
                           onStreamFinalize: recorder,
                         },
                         {

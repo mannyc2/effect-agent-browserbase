@@ -147,6 +147,12 @@ export const localBrowser = Effect.acquireRelease(
 
         return;
       }
+      if (path === "/precommit") {
+        // No headers or bytes: the previous document remains current until navigation is stopped.
+        slow.push(res);
+
+        return;
+      }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       if (path === "/clocks") {
         res.end(`<!doctype html><style>@keyframes clockMotion{to{transform:translateX(100px)}}.clock{width:40px;height:40px;animation:clockMotion 10s linear infinite}#moving{background:red}#paused{background:green;animation-play-state:paused}</style>
@@ -170,7 +176,7 @@ export const localBrowser = Effect.acquireRelease(
           const snap=()=>({ticks,chunks:document.querySelectorAll('.chunk').length});
           document.addEventListener('freeze',()=>freezes.push(snap()));document.addEventListener('resume',()=>resumes.push(snap()));
           window.read=()=>({...snap(),freezes,resumes,state:document.readyState});</script>
-          <p class=chunk>chunk 1</p><button id=act>Act</button>`);
+          <p class=chunk>chunk 1</p><button id=act onclick="this.textContent='clicked'">Act</button>`);
         slow.push(res);
 
         return;

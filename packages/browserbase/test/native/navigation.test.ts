@@ -52,6 +52,183 @@ const evidenceOf = <E>(
     5000,
   );
 
+/** Observe the real owner connection; a lost acknowledgement never prevents the actual send. */
+const countStops = (page: Page, loseAcknowledgement = false) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const context = page.context();
+      const original = context.newCDPSession;
+      let sent = 0;
+
+      context.newCDPSession = async (subject) => {
+        const cdp = await original.call(context, subject);
+        const send = cdp.send.bind(cdp);
+
+        cdp.send = async (method, params) => {
+          if (method === "Page.stopLoading") sent++;
+          const result = await send(method, params);
+
+          if (method === "Page.stopLoading" && loseAcknowledgement)
+            throw new Error("PRIVATE-LOST-STOP-ACKNOWLEDGEMENT");
+
+          return result;
+        };
+
+        return cdp;
+      };
+
+      return {
+        count: () => sent,
+        restore: () => {
+          context.newCDPSession = original;
+        },
+      };
+    }),
+    (probe) => Effect.sync(probe.restore),
+  );
+
+for (const phase of ["streaming", "precommit"] as const)
+  it.live(`real CDP: ${phase} loading timeout sends one stop and preserves a usable page`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* localBrowser;
+
+        yield* withProvider(
+          f,
+          Effect.gen(function* () {
+            const session = yield* BrowserbaseBrowser.open(policy);
+
+            yield* session.navigate({ url: f.url });
+            const [page] = f.nativePages(session.reference.sessionId);
+
+            assert.ok(page);
+            const stops = yield* countStops(page);
+            const path = phase === "streaming" ? "/slow" : "/precommit";
+
+            const result = yield* session
+              .navigate({ url: new URL(path, f.url).href, timeoutMillis: 500 })
+              .pipe(Effect.result);
+
+            expect(result).toMatchObject({
+              _tag: "Failure",
+              failure: { operation: "navigate", reason: { _tag: "Timeout" }, outcome: "unknown" },
+            });
+            expect(stops.count()).toBe(1);
+            expect(f.requests.filter((request) => request === path)).toHaveLength(1);
+            expect(f.connections).toEqual([session.reference.sessionId]);
+
+            if (phase === "streaming") {
+              expect((yield* session.readText({})).text).toContain("chunk 1");
+              yield* session.click({ selector: "#act" });
+              expect((yield* session.readText({ selector: "#act" })).text).toBe("clicked");
+            } else {
+              expect((yield* session.readText({})).text).toContain("Local browser fixture");
+              yield* session.click({ selector: "#increment" });
+              expect((yield* session.readText({ selector: "#count" })).text).toBe("1");
+            }
+
+            yield* session.navigate({ url: `${f.url}next` });
+            expect((yield* session.observe()).text).toContain("next page");
+            expect(stops.count()).toBe(1);
+            const receipt = yield* session.closeChecked;
+
+            expect(receipt.issues).toEqual([]);
+            expect(receipt.remote).toBe("confirmed");
+          }),
+        );
+      }),
+    ),
+  );
+
+it.live("real CDP: a lost recovery stop acknowledgement fences without a second stop", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
+
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const session = yield* BrowserbaseBrowser.open(policy);
+          const [page] = f.nativePages(session.reference.sessionId);
+
+          assert.ok(page);
+          const stops = yield* countStops(page, true);
+
+          const operation = yield* session.startNavigation({
+            url: `${f.url}slow`,
+            timeoutMillis: 500,
+          });
+
+          expect(yield* operation.completed.pipe(Effect.result)).toMatchObject({
+            _tag: "Failure",
+            failure: { reason: { _tag: "Timeout" }, outcome: "unknown" },
+          });
+          // Completion may be awakened by the fence while the stop permit is still unwinding.
+          // Join the recorded stop result before checking terminal admission; nothing is resent.
+          for (let caller = 0; caller < 2; caller++)
+            expect(yield* operation.stop.pipe(Effect.result)).toMatchObject({
+              _tag: "Failure",
+              failure: { outcome: "unknown" },
+            });
+          expect(yield* session.click({ selector: "#act" }).pipe(Effect.result)).toMatchObject({
+            _tag: "Failure",
+            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+          });
+          expect(stops.count()).toBe(1);
+          expect(f.requests.filter((request) => request === "/slow")).toHaveLength(1);
+          yield* session.close;
+          expect(stops.count()).toBe(1);
+        }),
+      );
+    }),
+  ),
+);
+
+it.live("real CDP: a pinned child timeout never sends an automatic page-wide stop", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
+
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const session = yield* BrowserbaseBrowser.open(policy);
+
+          yield* session.navigate({ url: f.url });
+          const [page] = f.nativePages(session.reference.sessionId);
+          const selected = (yield* session.pages).find((candidate) => candidate.selected);
+
+          assert.ok(page);
+          assert.ok(selected);
+
+          const frames = yield* settle(session.framesOf(selected), (listed) =>
+            listed.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
+          );
+
+          const child = frames.find((frame) => frame.name === "child");
+
+          assert.ok(child);
+          const pinned = yield* session.pinFrame(selected, child);
+          const stops = yield* countStops(page);
+
+          expect(
+            yield* pinned.navigate({ url: `${f.url}slow`, timeoutMillis: 500 }).pipe(Effect.result),
+          ).toMatchObject({
+            _tag: "Failure",
+            failure: { reason: { _tag: "Timeout" }, outcome: "unknown" },
+          });
+          expect(stops.count()).toBe(0);
+          expect(yield* session.readText({}).pipe(Effect.result)).toMatchObject({
+            _tag: "Failure",
+            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+          });
+          expect(f.requests.filter((request) => request === "/slow")).toHaveLength(1);
+        }),
+      );
+    }),
+  ),
+);
+
 it.live(
   "real CDP: a slow navigation is observed, held and resumed while it loads, then completes once",
   () =>

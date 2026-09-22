@@ -154,6 +154,7 @@ export const makeActions = (
   context: BrowserContext,
   targets: Targets,
   observation: Observation,
+  isTimeoutError: (error: unknown) => boolean,
 ) => {
   const { current } = targets;
   let downloadSerial = 0;
@@ -189,7 +190,7 @@ export const makeActions = (
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ): Promise<A> => {
-    const { element, kept } = await observation.resolve(
+    const { element, kept, check } = await observation.resolve(
       target,
       ticket,
       policy,
@@ -198,8 +199,10 @@ export const makeActions = (
     );
 
     try {
+      check();
       const admitted = await admit(element);
 
+      check();
       ticket.check();
       // ElementHandle actions do not re-resolve the selector onto a replacement node.
       ticket.dispatch();
@@ -289,6 +292,10 @@ export const makeActions = (
       const settled = sanitize(async () => {
         try {
           await frame.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMillis });
+        } catch (error) {
+          // Preserve the installed engine's exact timeout identity before generic sanitization.
+          if (isTimeoutError(error)) throw failure(Reasons.Timeout.make({}), "unknown");
+          throw error;
         } finally {
           targets.navigating.end(entry.id);
         }
@@ -302,6 +309,7 @@ export const makeActions = (
 
       return {
         pageId: entry.id,
+        mainFrame: frame === entry.page.mainFrame(),
         settled,
         stop: (stopTicket, pending, onDispatch, retainSetup) =>
           sanitize(async () => {

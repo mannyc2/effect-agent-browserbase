@@ -4,6 +4,13 @@ The `0.2.0-beta.0` candidate separates `effect-browser`, `effect-browserbase` an
 
 [Issue #66](https://github.com/mannyc2/effect-agent-browserbase/issues/66) owns the ordered release-gate work. WP0 establishes explicit host peers, registry refusals, stored-workflow inference and dispatch-aware navigation stopping. WP1 replaces the overlapping retained-target APIs with checked `retain`, makes page creation/selection/closure use `PageInfo`, adds tagged host reasons with required dispatch evidence, and keeps model failures separate from bounded host diagnostics. Concrete checked close returns its receipt; capture accounting uses disjoint discarded-frame components. The [migration table](../README.md#api-migration) is the current API reference. These shape changes do not themselves claim the later timeout-recovery, page-scoped retirement, lifecycle/diagnostic, tool-sequencing or observer-isolation behavior assigned to subsequent packages.
 
+WP2 adds bounded main-frame loading-timeout recovery through the existing stop owner and
+page-scoped retirement of the single observation. Selection-only excursions preserve exact-node
+references without changing retained-handle semantics; reconnect cannot reuse an old observation
+ID. Child-frame timeouts and uncertain stop outcomes remain fenced. These are unpaid local-runtime
+changes, not hosted Browserbase equivalence; the exact candidate PR's checks remain the validation
+record.
+
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 
 Current maintenance uses `Library CI` and a separate, manual, default-off npm OIDC workflow. Check the exact current PR/commit's Actions results; the historical acceptance record is not a claim that later changes were tested. Release procedures and required account configuration are in [RELEASING.md](RELEASING.md).

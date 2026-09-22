@@ -15,7 +15,7 @@ import type { InitializationError } from "../../Errors.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
-import type { Invalidation, Ticket } from "./Owner.ts";
+import type { Invalidation, ObservationScope, Ticket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
@@ -50,7 +50,7 @@ export type ReadinessState =
     };
 
 export interface DriverEvents {
-  readonly invalidate: (reason: Invalidation) => void;
+  readonly invalidate: (reason: Invalidation, scope?: ObservationScope) => void;
   readonly disconnected: () => void;
   readonly pause: () => void;
   readonly fault: () => void;
@@ -94,6 +94,8 @@ export interface NativeFrame {
  */
 export interface NativeNavigation {
   readonly pageId: string;
+  /** Only an explicitly identified main frame permits automatic page-wide timeout recovery. */
+  readonly mainFrame?: boolean;
   readonly settled: Promise<string>;
   /**
    * Asks the browser to stop this navigation only while its owner still admits it as current.
@@ -302,7 +304,7 @@ export interface Driver {
   readonly documentReadiness: (ticket: Ticket, target?: DriverTarget) => Promise<ReadinessState>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
   readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
-  readonly invalidateObservation: () => void;
+  readonly invalidateObservation: (scope?: ObservationScope) => void;
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;
   /** Remove this connection's registrations while its native connection is still usable. */

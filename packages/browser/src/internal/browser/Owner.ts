@@ -40,6 +40,9 @@ export type Invalidation =
   | "uncertain"
   | "closed";
 
+/** Observation retirement is independent of the owner's revision and connection fences. */
+export type ObservationScope = "all" | "none" | { readonly pageId: string };
+
 /** One admitted native operation; checks at dispatch also fence late Promise continuations. */
 export interface Ticket {
   readonly signal: AbortSignal;
@@ -76,7 +79,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   const lifetimeDeadline =
     Number(yield* Clock.monotonicTimeNanos) / 1_000_000 + limits.maxElapsedMillis;
 
-  const hooks = new Set<(reason: Invalidation) => void>();
+  const hooks = new Set<(reason: Invalidation, scope: ObservationScope) => void>();
 
   const state = {
     phase: "acquiring" as Phase,
@@ -89,9 +92,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   let active: AbortController | undefined;
   const reservations = new Map<string, AbortController>();
 
-  const invalidate = (reason: Invalidation) => {
+  const invalidate = (reason: Invalidation, scope: ObservationScope = "all") => {
     state.revision++;
-    for (const hook of hooks) hook(reason);
+    for (const hook of hooks) hook(reason, scope);
   };
 
   const fence = (phase: Phase, reason: Invalidation) => {
@@ -132,153 +135,189 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     options: {
       readonly charge?: boolean;
       readonly mutation?: boolean;
+      readonly mutationScope?: () => ObservationScope;
       readonly phases?: ReadonlyArray<Phase>;
       readonly verifyAfter?: boolean;
       readonly preflight?: Effect.Effect<void, BrowserError>;
+      /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
+      readonly waitUntil?: number;
     } = {},
   ): Effect.Effect<A, E | BrowserError, R> =>
-    semaphore
-      .withPermitsIfAvailable(1)(
-        Effect.gen(function* () {
-          if (!(options.phases ?? ["open"]).includes(state.phase)) {
+    Effect.suspend(() => {
+      let admitted: Ticket | undefined;
+
+      const work = Effect.gen(function* () {
+        if (!(options.phases ?? ["open"]).includes(state.phase)) {
+          return yield* BrowserError.make({
+            operation,
+            reason: state.phase === "paused" ? Reasons.Busy.make({}) : Reasons.Closed.make({}),
+            outcome: "undispatched",
+          });
+        }
+        yield* options.preflight ?? Effect.void;
+        const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
+
+        if (now >= lifetimeDeadline) {
+          fence("uncertain", "uncertain");
+
+          return yield* BrowserError.make({
+            operation,
+            reason: Reasons.Expired.make({}),
+            outcome: "undispatched",
+          });
+        }
+
+        const deadline = Math.min(
+          options.waitUntil ?? now + limits.actionTimeoutMillis,
+          lifetimeDeadline,
+        );
+
+        if (now >= deadline)
+          return yield* BrowserError.make({
+            operation,
+            reason: Reasons.Timeout.make({}),
+            outcome: "undispatched",
+          });
+        if (options.charge !== false) {
+          if (state.actions >= limits.maxActions)
             return yield* BrowserError.make({
               operation,
-              reason: state.phase === "paused" ? Reasons.Busy.make({}) : Reasons.Closed.make({}),
+              reason: Reasons.Limit.make({
+                dimension: "actions",
+                maximum: limits.maxActions,
+                observed: state.actions,
+              }),
               outcome: "undispatched",
             });
-          }
-          yield* options.preflight ?? Effect.void;
-          const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
+          state.actions++;
+        }
+        // The lifecycle fence must actively abort admitted native work outside the current fiber.
+        // @effect-diagnostics-next-line abortControllerInEffect:off
+        const controller = new AbortController();
 
-          if (now >= lifetimeDeadline) {
-            fence("uncertain", "uncertain");
+        active = controller;
+        let dispatched = false;
+        const generation = state.generation;
+        const allowed = options.phases ?? ["open"];
 
-            return yield* BrowserError.make({
+        const check = () => {
+          if (
+            controller.signal.aborted ||
+            state.generation !== generation ||
+            !allowed.includes(state.phase)
+          ) {
+            throw BrowserError.make({
               operation,
-              reason: Reasons.Expired.make({}),
-              outcome: "undispatched",
+              reason: Reasons.Stale.make({}),
+              outcome: dispatched ? "unknown" : "undispatched",
             });
           }
-          if (options.charge !== false) {
-            if (state.actions >= limits.maxActions)
-              return yield* BrowserError.make({
-                operation,
-                reason: Reasons.Limit.make({
-                  dimension: "actions",
-                  maximum: limits.maxActions,
-                  observed: state.actions,
-                }),
-                outcome: "undispatched",
-              });
-            state.actions++;
-          }
-          // The lifecycle fence must actively abort admitted native work outside the current fiber.
-          // @effect-diagnostics-next-line abortControllerInEffect:off
-          const controller = new AbortController();
-
-          active = controller;
-          let dispatched = false;
-          const generation = state.generation;
-          const allowed = options.phases ?? ["open"];
-
-          const check = () => {
-            if (
-              controller.signal.aborted ||
-              state.generation !== generation ||
-              !allowed.includes(state.phase)
-            ) {
-              throw BrowserError.make({
-                operation,
-                reason: Reasons.Stale.make({}),
-                outcome: dispatched ? "unknown" : "undispatched",
-              });
-            }
-          };
-
-          const ticket: Ticket = {
-            signal: controller.signal,
-            deadline: Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline),
-            generation,
-            remainingMillis: () =>
-              Math.max(
-                1,
-                Math.min(now + limits.actionTimeoutMillis, lifetimeDeadline) -
-                  Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
-              ),
-            get dispatched() {
-              return dispatched;
-            },
-            check,
-            dispatch() {
-              check();
-              if (!dispatched && options.mutation) invalidate("observation");
-              dispatched = true;
-            },
-          };
-
-          const uncertain = () => {
-            controller.abort();
-            if (dispatched && state.phase !== "closing" && state.phase !== "closed")
-              fence("uncertain", "uncertain");
-          };
-
-          return yield* within(body(ticket), ticket.deadline, () => {
-            uncertain();
-
-            return BrowserError.make({
+          if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline)
+            throw BrowserError.make({
               operation,
               reason: Reasons.Timeout.make({}),
               outcome: dispatched ? "unknown" : "undispatched",
             });
-          }).pipe(
-            Effect.tap(() =>
-              options.verifyAfter === false
-                ? Effect.void
-                : Effect.try({
-                    try: check,
-                    catch: () =>
-                      BrowserError.make({
-                        operation,
-                        reason: Reasons.Stale.make({}),
-                        outcome: dispatched ? "unknown" : "undispatched",
-                      }),
-                  }),
-            ),
-            Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
-              if (dispatched) uncertain();
-              // The permit adds dispatch evidence only to browser-operation errors. Typed
-              // initialization/consumer failures retain their identity and original family.
-              if (!Schema.is(BrowserError)(error)) return Effect.fail(error);
+        };
 
-              return Effect.fail(
-                BrowserError.make({
-                  operation,
-                  reason: error.reason,
-                  outcome: error.outcome,
+        const ticket: Ticket = {
+          signal: controller.signal,
+          deadline,
+          generation,
+          remainingMillis: () =>
+            Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+          get dispatched() {
+            return dispatched;
+          },
+          check,
+          dispatch() {
+            check();
+            if (!dispatched && options.mutation)
+              invalidate("observation", options.mutationScope?.() ?? "all");
+            dispatched = true;
+          },
+        };
+
+        admitted = ticket;
+
+        const uncertain = () => {
+          controller.abort();
+          if (dispatched && state.phase !== "closing" && state.phase !== "closed")
+            fence("uncertain", "uncertain");
+        };
+
+        return yield* within(body(ticket), ticket.deadline, () => {
+          uncertain();
+
+          return BrowserError.make({
+            operation,
+            reason: Reasons.Timeout.make({}),
+            outcome: dispatched ? "unknown" : "undispatched",
+          });
+        }).pipe(
+          Effect.tap(() =>
+            options.verifyAfter === false
+              ? Effect.void
+              : Effect.try({
+                  try: check,
+                  catch: () =>
+                    BrowserError.make({
+                      operation,
+                      reason: Reasons.Stale.make({}),
+                      outcome: dispatched ? "unknown" : "undispatched",
+                    }),
                 }),
-              );
-            }),
-            Effect.onInterrupt(() => Effect.sync(uncertain)),
-            Effect.ensuring(
-              Effect.sync(() => {
-                controller.abort();
-                if (active === controller) active = undefined;
+          ),
+          Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
+            if (dispatched) uncertain();
+            // The permit adds dispatch evidence only to browser-operation errors. Typed
+            // initialization/consumer failures retain their identity and original family.
+            if (!Schema.is(BrowserError)(error)) return Effect.fail(error);
+
+            return Effect.fail(
+              BrowserError.make({
+                operation,
+                reason: error.reason,
+                outcome: error.outcome,
               }),
-            ),
-          );
-        }),
-      )
-      .pipe(
-        Effect.flatMap(
-          Effect.fromOption(() =>
-            BrowserError.make({
-              operation,
-              reason: Reasons.Busy.make({}),
-              outcome: "undispatched",
+            );
+          }),
+          Effect.onInterrupt(() => Effect.sync(uncertain)),
+          Effect.ensuring(
+            Effect.sync(() => {
+              controller.abort();
+              if (active === controller) active = undefined;
             }),
           ),
-        ),
-      );
+        );
+      });
+
+      if (options.waitUntil !== undefined)
+        return within(
+          semaphore.withPermits(1)(work),
+          Math.min(options.waitUntil, lifetimeDeadline),
+          () =>
+            BrowserError.make({
+              operation,
+              reason: Reasons.Timeout.make({}),
+              outcome: admitted?.dispatched === true ? "unknown" : "undispatched",
+            }),
+        );
+
+      return semaphore
+        .withPermitsIfAvailable(1)(work)
+        .pipe(
+          Effect.flatMap(
+            Effect.fromOption(() =>
+              BrowserError.make({
+                operation,
+                reason: Reasons.Busy.make({}),
+                outcome: "undispatched",
+              }),
+            ),
+          ),
+        );
+    });
 
   /** Lifecycle transitions are performed while holding guard's permit; close alone preempts it. */
   return {
@@ -289,7 +328,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     reserved: (key: string): boolean => reservations.has(key),
     invalidate,
     fence,
-    onInvalidate(hook: (reason: Invalidation) => void): () => void {
+    onInvalidate(hook: (reason: Invalidation, scope: ObservationScope) => void): () => void {
       hooks.add(hook);
 
       return () => {
