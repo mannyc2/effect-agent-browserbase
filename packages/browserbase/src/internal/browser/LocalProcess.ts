@@ -177,9 +177,13 @@ export const launch = Effect.fnUntraced(function* (
               catch: () => failure("connect", "transport"),
             });
 
-            if (portFile !== undefined) {
-              const [port, endpointPath] = portFile.trim().split("\n");
-              const endpoint = `ws://127.0.0.1:${port}${endpointPath}`;
+            // Chromium creates DevToolsActivePort before it writes the port and path into it. A
+            // file without both lines is startup still in progress, not an endpoint; only a
+            // complete file that is not a loopback DevTools endpoint is malformed.
+            const lines = portFile === undefined ? [] : portFile.trim().split("\n");
+
+            if (lines.length >= 2) {
+              const endpoint = `ws://127.0.0.1:${lines[0]}${lines[1]}`;
 
               if (!Schema.is(LocalEndpoint)(endpoint))
                 return yield* failure("connect", "malformed");
