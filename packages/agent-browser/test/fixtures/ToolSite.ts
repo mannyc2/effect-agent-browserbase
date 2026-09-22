@@ -79,6 +79,23 @@ export const toolSite = Effect.acquireRelease(
             <p>PARTIAL DOCUMENT</p><button id="act" onclick="this.textContent='clicked'">Act</button>`);
           slow.add(response);
           response.once("close", () => slow.delete(response));
+        } else if (path === "/wait" || path === "/wait-enabled") {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(`<!doctype html><meta charset=utf-8><title>Wait and observe</title>
+            <p>Recorder remains active</p><p id="ready">Connecting</p>
+            <button id="continue" aria-label="Continue" ${path === "/wait" ? "disabled" : ""}>Continue</button>
+            <p id="count">Clicks: 0</p><script>
+              const button = document.querySelector('#continue');
+              let clicks = 0;
+              button.addEventListener('click', () => document.querySelector('#count').textContent = 'Clicks: ' + ++clicks);
+              const source = new EventSource('/events');
+              source.addEventListener('open', () => { const ready = document.querySelector('#ready'); ready.textContent = 'Ready'; ready.dataset.connected = 'yes'; });
+              source.addEventListener('message', event => {
+                if (event.data === 'enable') button.disabled = false;
+                if (event.data === 'hide') button.hidden = true;
+                if (event.data === 'remove') button.remove();
+              });
+            </script>`);
         } else if (path === "/select") {
           response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           response.end(`<!doctype html><meta charset=utf-8><title>Exact option selection</title>
@@ -111,7 +128,7 @@ export const toolSite = Effect.acquireRelease(
       return {
         url: `http://127.0.0.1:${address.port}/`,
         requests,
-        change: (change: "type" | "replace" | "destination") => {
+        change: (change: "type" | "replace" | "destination" | "enable" | "hide" | "remove") => {
           for (const response of events) response.write(`data: ${change}\n\n`);
         },
         complete: () => {

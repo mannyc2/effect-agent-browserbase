@@ -176,6 +176,17 @@ export class ObservedElement extends Schema.Class<ObservedElement>("BrowserObser
   elementId: Identifier,
 }) {}
 
+/** Observe a condition of this exact node. A replacement never satisfies the reference. */
+export class WaitForElementRequest extends Schema.Class<WaitForElementRequest>(
+  "BrowserWaitForElementRequest",
+)({
+  reference: ObservedElement,
+  state: Schema.Literals(["visible", "hidden", "enabled", "disabled"]),
+  timeoutMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 })),
+  ),
+}) {}
+
 /** Issued option element IDs from one observed native select; never values, labels or indices. */
 export const SelectOptions = Schema.Array(Identifier).check(
   Schema.isMinLength(1),

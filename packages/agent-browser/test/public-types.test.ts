@@ -5,6 +5,8 @@ import { interactiveLayer } from "effect-agent-browser/adapter";
 import {
   type keyboardHandlers,
   type selectionHandlers,
+  type waitHandlers,
+  type observedHandlers,
   makeHost,
   run as runTools,
   type BrowserToolFailure,
@@ -75,6 +77,9 @@ const selectionBorrowed: Same<
   LayerRequirements<ReturnType<typeof selectionHandlers>>,
   never
 > = true;
+
+const waitBorrowed: Same<LayerRequirements<ReturnType<typeof waitHandlers>>, never> = true;
+const observedBorrowed: Same<LayerRequirements<ReturnType<typeof observedHandlers>>, never> = true;
 
 const retainedFailure: Same<
   Effect.Error<AdaptedSession<BrowserbaseSession<CallbackFailure>>["browser"]["failure"]>,
@@ -193,6 +198,8 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       typedTools &&
       keyboardBorrowed &&
       selectionBorrowed &&
+      waitBorrowed &&
+      observedBorrowed &&
       retainedFailure &&
       callbackRequirements &&
       callbackErrors &&

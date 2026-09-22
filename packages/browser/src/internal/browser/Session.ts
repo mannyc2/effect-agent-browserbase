@@ -10,6 +10,7 @@ import {
   type SelectOptions,
   Target,
   type Viewport,
+  type WaitForElementRequest,
 } from "../../BrowserData.ts";
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
@@ -34,7 +35,9 @@ import {
   within,
   type Limits,
   type ObservationScope,
+  type OwnedWait,
   type Ticket,
+  type WaitTicket,
 } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
@@ -376,10 +379,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   );
 
   const connectionEvents = (connectionLease: object, generation: number): DriverEvents => ({
+    retired: () => owner.retireWait(connectionLease),
     invalidate: (reason, scope) => {
       if (activeConnection === connectionLease) owner.invalidate(reason, scope);
     },
     disconnected: () => {
+      owner.retireWait(connectionLease);
       if (activeConnection !== connectionLease) return;
       if (
         owner.state.phase !== "closing" &&
@@ -695,7 +700,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           // No selected target: the operation itself reports that, with its own reason.
         }
 
-      return pageId !== undefined && owner.reserved(pageId)
+      return pageId !== undefined && (owner.reserved(pageId) || owner.waitPending(pageId))
         ? Effect.fail(
             BrowserError.make({
               operation,
@@ -706,6 +711,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         : Effect.void;
     });
 
+  const waitFree = (operation: BrowserOperation, pageId?: string) =>
+    Effect.suspend(() =>
+      owner.waitPending(pageId)
+        ? Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
+          )
+        : Effect.void,
+    );
+
   const nativeOperation = <A>(
     operation: BrowserOperation,
     action: (driver: Driver, ticket: Ticket) => Promise<A>,
@@ -715,6 +733,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       /** Opening or closing a tab is independent of the selected page's document. */
       readonly anyPage?: boolean;
       readonly mutationScope?: () => ObservationScope;
+      readonly preflight?: Effect.Effect<void, BrowserError>;
     } = {},
   ) =>
     owner.guard(
@@ -744,11 +763,74 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       {
         ...options,
         mutationScope: options.mutationScope ?? (() => ({ pageId: getDriver().selected().pageId })),
-        ...(options.mutation === true && options.anyPage !== true
-          ? { preflight: unreserved(operation) }
-          : {}),
+        preflight: (options.mutation === true && options.anyPage !== true
+          ? unreserved(operation)
+          : Effect.void
+        ).pipe(Effect.andThen(options.preflight ?? Effect.void)),
       },
     );
+
+  const wait = (
+    start: (driver: Driver, ticket: WaitTicket, target: DriverTarget) => Promise<void>,
+    timeoutMillis?: number,
+  ): Effect.Effect<void, BrowserError> =>
+    Effect.suspend(() => {
+      let owned: OwnedWait | undefined;
+
+      return owner
+        .guard(
+          "wait",
+          (ticket) =>
+            native("wait", ticket, async () => {
+              const driver = getDriver();
+              const connection = activeConnection;
+
+              if (connection === undefined)
+                throw BrowserError.make({
+                  operation: "wait",
+                  reason: Reasons.Closed.make({}),
+                  outcome: "undispatched",
+                });
+              const target = driver.selected();
+              const admitted = owner.beginWait(ticket, target, connection);
+
+              owned = admitted;
+              let started = false;
+
+              try {
+                await driver.pageControl?.checkTarget(target, ticket);
+                ticket.check();
+                await requireReady("wait", ticket, target);
+                ticket.check();
+                admitted.start(() => start(driver, admitted.ticket, target));
+                started = true;
+
+                return admitted;
+              } finally {
+                // Canceled readiness may still be native work: retire only when its raw task exits.
+                if (!started) admitted.ticket.retire();
+              }
+            }),
+          {
+            ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
+            preflight: Effect.suspend(() =>
+              owner.waitAvailable()
+                ? unreserved("wait")
+                : Effect.fail(
+                    BrowserError.make({
+                      operation: "wait",
+                      reason: Reasons.Busy.make({}),
+                      outcome: "undispatched",
+                    }),
+                  ),
+            ),
+          },
+        )
+        .pipe(
+          Effect.flatMap((operation) => operation.completed),
+          Effect.ensuring(Effect.sync(() => owned?.cancel())),
+        );
+    });
 
   /**
    * Direct operations resolve selection under admission. Retained operations capture selection
@@ -1233,10 +1315,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       suspend: (page: PageInfo) =>
         nativeOperation("page-suspend", (_driver, ticket) => execution().suspend(page, ticket), {
           charge: false,
+          preflight: waitFree("page-suspend", page.pageId),
         }),
       resume: (receipt: PageSuspension) =>
         nativeOperation("page-resume", (_driver, ticket) => execution().resume(receipt, ticket), {
           charge: false,
+          preflight: waitFree("page-resume", receipt.pageId),
         }),
     },
     reference: ref,
@@ -1250,8 +1334,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     observe: (reading: Reading = { scope: "document" }) =>
       textBudget("observe", reading.maxTextBytes).pipe(
         Effect.flatMap((bytes) =>
-          owner.guard("observe", (ticket) =>
-            observeInside(ticket, bytes, reading.maxControls ?? 32, true, reading.scope),
+          owner.guard(
+            "observe",
+            (ticket) =>
+              observeInside(ticket, bytes, reading.maxControls ?? 32, true, reading.scope),
+            { preflight: waitFree("observe") },
           ),
         ),
       ),
@@ -1360,7 +1447,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         charge: false,
       }),
     waitFor: (selector: string, state: "visible" | "hidden" | "attached" | "detached") =>
-      nativeOperation("wait", (driver, ticket) => driver.waitFor(selector, state, ticket)),
+      wait((driver, ticket, target) => driver.waitFor(selector, state, ticket, target)),
+    waitForElement: (request: WaitForElementRequest) =>
+      wait(
+        (driver, ticket, target) =>
+          driver.waitForElement(request.reference, request.state, ticket, target),
+        request.timeoutMillis,
+      ),
     clickAndWait: (target: string | ObservedElement) =>
       nativeOperation("click-and-wait", (driver, ticket) => driver.clickAndWait(target, ticket), {
         mutation: true,

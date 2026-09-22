@@ -133,9 +133,72 @@ same compact failure vocabulary and host diagnostics as the existing tools.
 `selectionHandlers(browser, options)` remains available for caller-managed composition. Neither
 the default five-tool toolkit nor the pointer or keyboard toolkits gain selection authority.
 
+## Optional bounded waits
+
+`waitToolkit` adds `browser_wait_for` with `{ reference, state, timeoutMillis? }`. Its reference
+comes from an actual inspection; the state is `visible`, `hidden`, `enabled` or `disabled`, and
+the optional deadline is 1–60,000 ms, shortened by the host's action timeout and remaining
+browser lifetime. No CSS selector, JavaScript or arbitrary sleep is a Tool parameter. Hidden
+includes disappearance of the original node; it never re-finds a replacement. Document or frame
+replacement fails. Success is `{ satisfied: true }`, a sampled condition rather than a guarantee
+about a later action. Reinspect when state has changed before sending input.
+
+The wait occupies the same complete-invocation lane as the host's other tools, while its native
+observation releases the browser permit for direct recorder checkpoints and page reads. Same-page
+input and observation replacement remain excluded. A cancelled wait cannot report late success;
+one unresolved native wait or its handle disposal keeps the finite wait capacity until it settles
+or its connection retires. `host.waitHandlers` supplies the scoped path; `waitHandlers(browser)`
+is caller-managed. No existing toolkit gains the wait tool automatically.
+
+## Optional observation results after input
+
+Choose `observedToolkit` in place of the default toolkit when mutation results should include a
+fresh inspection. It contains the unchanged `browser_inspect` and separately named
+`browser_navigate_and_inspect`, `browser_click_and_inspect`, `browser_fill_and_inspect` and
+`browser_scroll_and_inspect`. `observedNativeToolkit`, `observedKeyboardToolkit` and
+`observedSelectionToolkit` separately offer the corresponding native, keyboard and select
+operations with `_and_inspect` names. Distinct names keep the original Tool success schemas and
+handler identities intact; only the groups explicitly declared by the agent are available.
+
+```ts
+const toolkit = Toolkit.merge(BrowserTools.observedToolkit, BrowserTools.waitToolkit);
+// Declare this toolkit on the agent, then use BrowserTools.run(browser, program, options).
+```
+
+Every successful result contains `action`, the original bounded action/navigation result or
+`{ dispatched: true }` for native input, and a separate `observation`:
+
+```ts
+{ action: { url }, observation: { _tag: "Available", observation: fresh } }
+{ action: { url }, observation: { _tag: "Unavailable", failure: { reason: "limit", outcome: "undispatched" } } }
+```
+
+The nested failure belongs only to the follow-up read. A timeout, ordinary read failure or result
+overflow does not turn successful input into a failed or undispatched action and never causes a
+replay. Original read-failure facts remain in `host.toolFailures`. Failed input performs no follow-up
+read. Cancellation and callback/host failures preserve their existing supervision semantics.
+The lane covers input, callback finalizers and then inspection before admitting the next tool.
+The observation is sampled afterwards through normal selected-target admission, not atomically
+with input; its target and URL identify what was actually inspected.
+
+The extra `observe` spends one additional model-action allowance, and uses the same `maxTextBytes`,
+`maxControls` and `observationScope` limits. `observedResultMaxBytes` bounds the whole encoded
+action-plus-observation result, including JSON and action URL: default 50 KiB, allowed 50 KiB–1 MiB.
+The minimum leaves room for any accepted action result plus an unavailable-observation envelope.
+An invalid host bound is rejected before input. If a successful inspection exceeds the envelope
+bound, only that inspection is replaced with `Unavailable/limit`; the action remains intact.
+Match the agent's `toolResultBounds.maxBytes` to this bound or higher so the framework does not
+truncate the envelope again. Token budgeting and history compaction still belong to the Agent
+policy and selected model; these byte bounds are not a token-count estimate.
+
+`ObservedActionResult`, `ObservedNavigationResult`, `ObservedInputResult` and `FollowUpObservation`
+are exported schemas. `host.observedHandlers` shares the host's lane; `observedHandlers(browser,
+options)` provides the caller-managed variant handlers. The default toolkit and existing result
+formats remain unchanged.
+
 ## Scoped navigation and receipt callbacks
 
-`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
+`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, `waitHandlers`, `observedHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
 
 `onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
 

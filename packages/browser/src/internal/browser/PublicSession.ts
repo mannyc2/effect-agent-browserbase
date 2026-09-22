@@ -29,6 +29,7 @@ import {
   TextResult,
   TypeRequest,
   Viewport,
+  WaitForElementRequest,
   WheelRequest,
   Identifier,
 } from "../../BrowserData.ts";
@@ -326,6 +327,8 @@ export const makeSession = <E>(
       checked(Wait, request, "wait").pipe(
         Effect.flatMap((value) => controls.waitFor(value.selector, value.state)),
       ),
+    waitForElement: (request) =>
+      checked(WaitForElementRequest, request, "wait").pipe(Effect.flatMap(controls.waitForElement)),
     clickAndWait: (request) =>
       checked(ClickRequest, request, "click-and-wait").pipe(
         Effect.flatMap((value) => controls.clickAndWait(value.selector)),

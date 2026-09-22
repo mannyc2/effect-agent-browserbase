@@ -7,7 +7,7 @@ import {
   type BrowserOperation,
   type BrowserReason,
 } from "../../Errors.ts";
-import type { Ticket } from "./Owner.ts";
+import type { ReadTicket } from "./Owner.ts";
 
 /**
  * A native step failed. It names no operation: the owner stamps the one the caller asked for
@@ -83,7 +83,7 @@ export const closeWithin = async (
 };
 
 // The native timeout is finite as well as Effect's authoritative deadline. It cannot undo dispatch.
-export const timeout = (ticket: Ticket) => {
+export const timeout = (ticket: ReadTicket) => {
   ticket.check();
 
   return ticket.remainingMillis();

@@ -71,6 +71,7 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
     closePage: () => unexpected,
     resizeViewport: () => unexpected,
     waitFor: () => unexpected,
+    waitForElement: () => unexpected,
     clickAndWait: () => unexpected,
     ready: unexpected,
     ...overrides,

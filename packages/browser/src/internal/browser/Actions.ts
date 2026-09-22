@@ -14,8 +14,8 @@ import {
   timeout,
 } from "./NativeCalls.ts";
 import type { AdmissionPolicy, Observation } from "./Observation.ts";
-import type { Ticket } from "./Owner.ts";
-import type { Targets } from "./Targets.ts";
+import type { Ticket, WaitTicket } from "./Owner.ts";
+import type { Entry, Targets } from "./Targets.ts";
 
 export const waitEvent = <A>(
   add: (listener: (value: A) => void) => void,
@@ -406,16 +406,120 @@ export const makeActions = (
       return postUrl(target);
     });
 
-  const waitFor: Driver["waitFor"] = (selector, state, ticket) =>
-    sanitize(async () => {
-      const node = await current().frame.waitForSelector(selector, {
-        state,
-        strict: true,
-        timeout: timeout(ticket),
-      });
+  let waitConnectionRetired = false;
 
-      await node?.dispose();
+  let pendingWait:
+    | { readonly entry: Entry; readonly frame: Frame; readonly ticket: WaitTicket }
+    | undefined;
+
+  /** Capture native identity before releasing admission; no later read follows live selection. */
+  const waitOn = (
+    ticket: WaitTicket,
+    target: DriverTarget,
+    acquire: () => {
+      readonly wait: () => Promise<void>;
+      readonly check?: () => void;
+      readonly dispose: () => Promise<void>;
+    },
+  ): Promise<void> => {
+    ticket.check();
+    const { entry, frame } = current(target);
+    const epoch = targets.epochOf(frame);
+    const resource = acquire();
+    const pending = { entry, frame, ticket };
+
+    pendingWait = pending;
+
+    const check = () => {
       ticket.check();
+      const resolved = current(target);
+
+      if (
+        waitConnectionRetired ||
+        resolved.entry !== entry ||
+        resolved.frame !== frame ||
+        targets.epochOf(frame) !== epoch
+      )
+        throw failure(Reasons.Stale.make({}), "undispatched");
+      resource.check?.();
+    };
+
+    return sanitize(async () => {
+      try {
+        try {
+          check();
+          await resource.wait();
+          check();
+        } catch (error) {
+          // Lifecycle/deadline evidence wins over a native cancellation or detached-node error.
+          check();
+          if (isTimeoutError(error)) throw failure(Reasons.Timeout.make({}), "undispatched");
+          throw error;
+        }
+      } finally {
+        try {
+          // This raw release is observed after caller cancellation, without renewing its deadline.
+          await resource.dispose();
+          ticket.retire();
+        } finally {
+          if (pendingWait === pending) pendingWait = undefined;
+        }
+      }
+      check();
+    });
+  };
+
+  const waitFor: Driver["waitFor"] = (selector, state, ticket, target) =>
+    waitOn(ticket, target, () => {
+      const { frame } = current(target);
+      let node: ElementHandle<Element> | null | undefined;
+
+      return {
+        wait: async () => {
+          node = await frame.waitForSelector(selector, {
+            state,
+            strict: true,
+            timeout: timeout(ticket),
+            signal: ticket.signal,
+          });
+        },
+        dispose: async () => {
+          if (!waitConnectionRetired) await node?.dispose();
+        },
+      };
+    });
+
+  const waitForElement: Driver["waitForElement"] = (reference, state, ticket, target) =>
+    waitOn(ticket, target, () => {
+      const leased = observation.lease(reference, ticket);
+
+      const attached = async () => {
+        leased.check();
+
+        const present = await leased.element.evaluate(
+          (node) => node.isConnected && node.ownerDocument === document,
+        );
+
+        leased.check();
+        if (present !== true) throw failure(Reasons.Stale.make({}), "undispatched");
+      };
+
+      return {
+        check: leased.check,
+        wait: async () => {
+          try {
+            await leased.element.waitForElementState(state, {
+              timeout: timeout(ticket),
+              signal: ticket.signal,
+            });
+          } catch (error) {
+            if (state !== "hidden") await attached();
+            throw error;
+          }
+          if (state !== "hidden") await attached();
+        },
+        dispose: leased.release,
+      };
     });
 
   const clickAndWait: Driver["clickAndWait"] = (target, ticket) =>
@@ -531,6 +635,22 @@ export const makeActions = (
     selectOption,
     scroll,
     waitFor,
+    waitForElement,
+    waitChanged: (entry: Entry, frame?: Frame) => {
+      const pending = pendingWait;
+
+      if (
+        pending?.entry === entry &&
+        (frame === undefined || frame === pending.frame || frame === entry.page.mainFrame())
+      )
+        pending.ticket.invalidate();
+    },
+    retireWait: () => {
+      waitConnectionRetired = true;
+      pendingWait?.ticket.invalidate();
+      pendingWait?.ticket.retire();
+      pendingWait = undefined;
+    },
     clickAndWait,
     clickForDownload,
     selectFiles,
