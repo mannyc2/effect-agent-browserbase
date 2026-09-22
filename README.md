@@ -7,7 +7,7 @@
 | `effect-browserbase` | [`packages/browserbase`](packages/browserbase/README.md) | The whole Browserbase surface for an Effect application: one account, session and context resources, one owned browser over Playwright/CDP, real pointer and key input, bounded live capture, page holds, typed page→host bindings, the provider's recordings, replays, uploads and downloads, and the platform APIs outside a session. No Effect Agent dependency. Playwright is an optional peer, loaded only when a browser connects. |
 | `effect-agent-browserbase` | [`packages/agent-browserbase`](packages/agent-browserbase/README.md) | The [Effect Agent](https://github.com/danieljvdm/effect-agent) adapter: the `InteractiveBrowser` implementation and the fixed browser Toolkit an `AgentRuntime` calls. It borrows the generic package's session rather than opening its own, and has no Playwright peer. |
 
-Neither package is published yet; see [Status](#status).
+Both packages are published to npm under the `beta` dist-tag; see [Status](#status).
 
 ## A first look
 
@@ -73,7 +73,7 @@ The [Browserbase guide](packages/browserbase/README.md) is the reference for all
 
 ## Status
 
-**Not yet on npm.** Both packages are built and tested from this repository; publication is a separate, manual, tag-scoped workflow ([RELEASING.md](docs/RELEASING.md)).
+**On npm as a beta.** `effect-browserbase` and `effect-agent-browserbase` are published from this repository under the `beta` dist-tag, through a separate, manual, tag-scoped workflow ([RELEASING.md](docs/RELEASING.md)); each release is a tag on `main`.
 
 **Unpaid acceptance on every pull request.** `Library CI` runs the maintenance tooling tests, both packages' unit suites, the native suites against a local Chromium over real CDP, and three clean consumers installed from the packed tarballs on both Node and Bun. The full profile adds the pinned upstream workspace's own `check` and `build`, and its tests for the workspaces the integration patch reaches. Nothing in it allocates a hosted session or calls a paid model; see [CONTRIBUTING.md](CONTRIBUTING.md#acceptance-profiles).
 
