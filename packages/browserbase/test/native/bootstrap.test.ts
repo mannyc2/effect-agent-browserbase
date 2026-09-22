@@ -24,9 +24,7 @@ const ordered = (origin: string) =>
       origins: [origin],
       content: `
         globalThis.__second = globalThis.__first + 1;
-        globalThis.__granted = navigator.permissions
-          .query({ name: "notifications" })
-          .then((status) => status.state === "granted");
+        globalThis.__granted = Promise.resolve().then(() => Notification.permission === "granted");
         document.addEventListener("DOMContentLoaded", () => {
           const marker = document.createElement("p");
           marker.id = "marker";
@@ -76,7 +74,10 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#marker" }))).text).toBe(
             "bootstrap 2",
           );
-          expect(yield* session.ready).toEqual({ _tag: "Ready" });
+          expect(
+            yield* session.ready,
+            "the main document completed its registered readiness",
+          ).toEqual({ _tag: "Ready" });
 
           // A frame is its own document: the context-level registration reached it, and
           // readiness follows the selected frame rather than the page that contains it.
@@ -92,7 +93,10 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           if (child === undefined || main === undefined)
             throw new Error("The fixture page has a main frame and a child frame");
           yield* session.selectFrame(child.frameId);
-          expect(yield* session.ready).toEqual({ _tag: "Ready" });
+          expect(
+            yield* session.ready,
+            "the selected child completed its own registered readiness",
+          ).toEqual({ _tag: "Ready" });
           expect((yield* session.observe()).text).toContain("frame text");
           // Selecting a frame retires the earlier handle, so the main frame is re-bound.
           yield* session.selectFrame(main.frameId);
