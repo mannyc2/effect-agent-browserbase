@@ -1,4 +1,5 @@
-import { type Effect, type Scope } from "effect";
+import { Effect, type Scope } from "effect";
+import { dual } from "effect/Function";
 
 import type * as Bootstrap from "./Bootstrap.ts";
 import type {
@@ -64,11 +65,13 @@ export interface NavigationOperation {
    * Asks the browser to stop loading and waits for this navigation to settle, after which
    * `completed` fails `interrupted`. Success is a known outcome and the session stays usable:
    * the page holds whatever had loaded. It does not undo anything the page already did.
+   * An already-completed navigation cannot stop a successor. Repeated/concurrent callers share
+   * the same bounded stop attempt, including failure; an uncertain stop is never replayed.
    */
   readonly stop: Effect.Effect<void, BrowserError>;
 }
 
-/** One selected page and frame at one connection generation, never the current DOM. */
+/** Operations against one page and frame at one connection generation, never the current DOM. */
 export interface BoundTarget {
   readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserError>;
   /** `navigate`, left in flight: the same single dispatch, completed by the caller. */
@@ -96,10 +99,23 @@ export interface BoundTarget {
 }
 
 /**
+ * One explicit page/frame target. Selection may move independently; each operation re-resolves
+ * this identity inside the same owner and connection. Closing/detaching it or reconnecting makes
+ * the handle stale before dispatch.
+ */
+export interface PinnedTarget extends BoundTarget {
+  readonly target: Target;
+}
+
+/**
  * Host control over one owned browser. This is not a serializable model value: copying a
  * session object cannot copy its capture, page-control or connection authority.
+ *
+ * The inherited target operations resolve the selected page/frame when their Effect executes.
+ * Use `bind()` to retain the current selection with stale-on-selection-change semantics, or
+ * `pinPage` / `pinFrame` when work must stay on an explicit target while selection moves.
  */
-export interface BrowserSession<E = never> {
+export interface BrowserSession<E = never> extends BoundTarget {
   /** The implementation which owns this live connection. */
   readonly implementation: string;
   /** Close this scope and require its own ownership-specific cleanup evidence. */
@@ -160,6 +176,15 @@ export interface BrowserSession<E = never> {
   ) => Effect.Effect<InputReceipt, BrowserError>;
   readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
+  /** List frames on one exact page without selecting it. */
+  readonly framesOf: (page: PageInfo) => Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
+  /** Pin the page's main frame without changing the session selection. */
+  readonly pinPage: (page: PageInfo) => Effect.Effect<PinnedTarget, BrowserError>;
+  /** Pin one frame that currently belongs to the exact page, without changing selection. */
+  readonly pinFrame: (
+    page: PageInfo,
+    frame: FrameInfo,
+  ) => Effect.Effect<PinnedTarget, BrowserError>;
   readonly selectPage: (pageId: string) => Effect.Effect<BoundTarget, BrowserError>;
   readonly selectFrame: (frameId: string) => Effect.Effect<BoundTarget, BrowserError>;
   /** Create a tab without selecting it. */
@@ -184,3 +209,45 @@ export interface BrowserSession<E = never> {
 export interface OpenOptions<E = never, R = never> {
   readonly bootstrap?: Bootstrap.Plan<E, R>;
 }
+
+/**
+ * Acquire, supervise and close one browser in a fresh scope. The callback keeps the concrete
+ * Chromium or provider session type. Its scoped work is joined before checked browser cleanup,
+ * and cleanup failures remain typed even when the callback has already failed or was cancelled.
+ * Acquisition is evaluated once; an uncertain result is never retried.
+ */
+export const scoped: {
+  <S, E, A, E2, R2>(
+    f: (session: S & BrowserSession<E>) => Effect.Effect<A, E2, R2>,
+  ): <AE, AR>(
+    open: Effect.Effect<S & BrowserSession<E>, AE, AR>,
+  ) => Effect.Effect<
+    A,
+    AE | E | E2 | InitializationError | BrowserError,
+    Exclude<AR | R2, Scope.Scope>
+  >;
+  <S, E, AE, AR, A, E2, R2>(
+    open: Effect.Effect<S & BrowserSession<E>, AE, AR>,
+    f: (session: S & BrowserSession<E>) => Effect.Effect<A, E2, R2>,
+  ): Effect.Effect<
+    A,
+    AE | E | E2 | InitializationError | BrowserError,
+    Exclude<AR | R2, Scope.Scope>
+  >;
+} = dual(
+  2,
+  <S, E, AE, AR, A, E2, R2>(
+    open: Effect.Effect<S & BrowserSession<E>, AE, AR>,
+    f: (session: S & BrowserSession<E>) => Effect.Effect<A, E2, R2>,
+  ) =>
+    Effect.scoped(
+      Effect.flatMap(open, (session) =>
+        Effect.scoped(
+          Effect.raceFirst(
+            session.failure,
+            Effect.suspend(() => f(session)),
+          ),
+        ).pipe(Effect.onExit(() => session.closeChecked)),
+      ),
+    ),
+);

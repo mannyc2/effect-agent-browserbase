@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { Effect, Stream } from "effect";
+import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
@@ -16,16 +17,14 @@ const result = await Effect.runPromise(
   Effect.scoped(
     Effect.gen(function* () {
       const site = yield* localSite;
-      const browser = yield* Chromium;
 
-      return yield* browser.withBrowser(
-        BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
-        {},
+      return yield* Browser.scoped(
+        Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
         (session) =>
           Effect.gen(function* () {
             assert.equal(session.reference.provider, "chromium");
             assert.equal(session.implementation, "chromium-playwright-cdp");
-            yield* session.bind().navigate({ url: site.url });
+            yield* session.navigate({ url: site.url });
             assert.match((yield* session.observe()).text, /ownership fixture/);
 
             const copied = yield* Capture.start({ ...session }).pipe(Effect.result);
@@ -53,8 +52,8 @@ const result = await Effect.runPromise(
 
             assert.equal((yield* PageControl.state(session, page)).state, "suspended");
             yield* PageControl.resume(session, held);
-            yield* session.bind().click({ selector: "#increment" });
-            assert.equal((yield* session.bind().readText({ selector: "#count" })).text, "1");
+            yield* session.click({ selector: "#increment" });
+            assert.equal((yield* session.readText({ selector: "#count" })).text, "1");
             const summary = yield* interval.stop;
 
             assert.equal(summary.nativeStop, "confirmed");

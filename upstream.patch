@@ -1,6 +1,6 @@
 diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
 new file mode 100644
-index 00000000..f3f24470
+index 00000000..c491e138
 --- /dev/null
 +++ b/.changeset/browserbase-interactive.md
 @@ -0,0 +1,7 @@
@@ -10,7 +10,7 @@ index 00000000..f3f24470
 +"effect-agent-browser": minor
 +---
 +
-+Add the shared modeled browser runtime with an isolated Chromium launcher, Browserbase resources and hosted integration, and one provider-independent Effect Agent adapter. Browser package versions form their own fixed release group; the pinned framework stays unchanged.
++Add shared browser automation for Chromium and Browserbase with scoped workflows, pinned targets, lazy capture streams and supervised agent tools. Move Chromium to `effect-browser/chromium` and agent integration to `effect-agent-browser`; tools receive browser sessions directly, and keyboard tools are explicitly opt-in.
 diff --git a/.changeset/config.json b/.changeset/config.json
 index 7db06dca..9d614b7c 100644
 --- a/.changeset/config.json
@@ -172,7 +172,7 @@ index bd0a4a63..7a6c168c 100644
  testing package, and both Cloudflare packages separate runners. The remaining workspace suites
  share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 diff --git a/docs/guide/browser.md b/docs/guide/browser.md
-index efaa1da4..c1b3d3f8 100644
+index efaa1da4..96247de1 100644
 --- a/docs/guide/browser.md
 +++ b/docs/guide/browser.md
 @@ -115,6 +115,47 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
@@ -187,11 +187,11 @@ index efaa1da4..c1b3d3f8 100644
 +optional peer, resolved when a native connection is requested.
 +
 +`effect-browserbase` supplies provider resources and hosted integration for that runtime.
-+`effect-agent-browser` adapts either session to the `InteractiveBrowser` contract and fixed Agent
-+Toolkit through `fromSession(session)`. Application code and model Tools share the existing
-+connection, action budget and capture reservation. The adapter depends on the neutral browser
-+and Effect Agent; hosted integration tests install Browserbase separately. Provider credentials,
-+connection addresses and Live View controls remain host-only.
++`effect-agent-browser` provides `Tools.run(session, program)` over either browser source, with
++handler provisioning and supervision of browser and host callback failures. `fromSession(session)`
++adapts that same owner to `InteractiveBrowser` when needed. The default Toolkit, optional pointer
++Toolkit and separately optional keyboard Toolkit share the connection, action budget and capture
++reservation. Provider credentials, connection addresses and Live View controls remain host-only.
 +
 +Browserbase currently supports only a trusted-host `Unrestricted` network policy in this adapter.
 +`ExactHosts` fails before allocation because Browserbase `allowedDomains` does not prove exact-host
@@ -206,13 +206,13 @@ index efaa1da4..c1b3d3f8 100644
 +or filesystem and does not claim website-audio capture. The Agent adapter exports only its root,
 +`adapter` and `tools`; it does not reexport generic or provider resources.
 +
-+Acquire typed initialization with `browser.withBrowser(policy, { bootstrap }, use)` or explicit
-+`browser.open(policy, { bootstrap })`. `Bootstrap.binding` preserves consumer errors and services,
-+admits finite work before spawning a scoped callback, and checks the native caller's origin and
-+document identity before decoding, before running the handler and before replying. Fail-session
-+callbacks supervise `withBrowser`; page-visible rejections never contain host causes or stacks.
-+Use `fromSession(session)` from the adapter to give the fixed Toolkit that exact generic owner,
-+with the same connection, action budget and capture accounting, rather than opening another one.
++Use `Browser.scoped(Chromium.launch(policy, { bootstrap }), use)` or the same supervisor with
++`BrowserbaseBrowser.open`. Static accessors use the configured services. `Browser.scoped` retains
++typed errors, joins callback resources before checked browser cleanup and checks closure on every
++exit. `Bootstrap.binding` checks the native caller's origin and document identity before decoding,
++before the handler and before replying; page-visible rejections contain no host causes or stacks.
++`Capture.stream(session, options)` owns an interval for each subscription; `Capture.start` exposes
++explicit metadata and stop controls. Neither acquires a second browser or another connection.
 +
 +Host handoff pauses automation before returning temporary Live View material. Resume requires an
 +explicit operator-release decision and obtains a fresh observation while retaining the mutation

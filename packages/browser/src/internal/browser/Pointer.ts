@@ -3,6 +3,7 @@ import type { ElementHandle, Page } from "playwright-core";
 
 import type { ObservedElement } from "../../BrowserData.ts";
 import type { makeActions } from "./Actions.ts";
+import type { DriverTarget } from "./Driver.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
@@ -129,9 +130,9 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
 
   const receipt = (page: Page): NativeInput => ({ position: positions.get(page) ?? null });
 
-  const pointerMove = (point: NativePoint, ticket: Ticket) =>
+  const pointerMove = (point: NativePoint, ticket: Ticket, target?: DriverTarget) =>
     sanitize(async () => {
-      const { page } = current().entry;
+      const { page } = current(target).entry;
 
       ticket.dispatch();
       await moveTo(page, point);
@@ -196,9 +197,14 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     return point;
   };
 
-  const hover = (target: string | ObservedElement, ticket: Ticket, policy?: AdmissionPolicy) =>
+  const hover = (
+    target: string | ObservedElement,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
+    browserTarget?: DriverTarget,
+  ) =>
     sanitize(async () => {
-      const { page } = current().entry;
+      const { page } = current(browserTarget).entry;
 
       await actions.withAdmittedElement(
         target,
@@ -206,15 +212,22 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
         (element) => reachablePoint(page, element),
         (_element, point) => moveTo(page, point),
         policy,
+        browserTarget,
       );
       ticket.check();
 
       return receipt(page);
     });
 
-  const wheel = (deltaX: number, deltaY: number, at: NativePoint | undefined, ticket: Ticket) =>
+  const wheel = (
+    deltaX: number,
+    deltaY: number,
+    at: NativePoint | undefined,
+    ticket: Ticket,
+    target?: DriverTarget,
+  ) =>
     sanitize(async () => {
-      const { page } = current().entry;
+      const { page } = current(target).entry;
 
       ticket.dispatch();
       if (at !== undefined) await moveTo(page, at);

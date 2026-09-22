@@ -3,7 +3,7 @@ import type { ElementHandle, JSHandle } from "playwright-core";
 
 import { ControlFacts, type ObservedElement } from "../../BrowserData.ts";
 import { BrowserError } from "../../Errors.ts";
-import type { DriverEvents, NativeCheckpoint, NativeObservation } from "./Driver.ts";
+import type { DriverEvents, DriverTarget, NativeCheckpoint, NativeObservation } from "./Driver.ts";
 import { pngGeometry } from "./Images.ts";
 import {
   closeWithin,
@@ -72,8 +72,8 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
    * is `target-changed` and `undispatched`, so a caller knows to read again. A read is never a
    * mutation, so reading again is always safe.
    */
-  const reading = async <A>(body: () => Promise<A>): Promise<A> => {
-    const { entry, frame } = current();
+  const reading = async <A>(body: () => Promise<A>, target?: DriverTarget): Promise<A> => {
+    const { entry, frame } = current(target);
     const epoch = targets.epochOf(frame);
 
     try {
@@ -123,10 +123,11 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   const exactElement = async (
     selector: string,
     ticket: Ticket,
+    target?: DriverTarget,
   ): Promise<ElementHandle<Element>> => {
     ticket.check();
 
-    const holder = await current().frame.evaluateHandle((requested) => {
+    const holder = await current(target).frame.evaluateHandle((requested) => {
       try {
         const matches = document.querySelectorAll(requested);
 
@@ -187,8 +188,11 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
    * Read from the exact node, never re-resolved from a selector or a label. It is the same page
    * function an observation uses, told to read one node and traverse nothing.
    */
-  const factsOf = async (element: ElementHandle<Element>): Promise<ControlFacts> => {
-    const holder = await current().frame.evaluateHandle(readPage, {
+  const factsOf = async (
+    element: ElementHandle<Element>,
+    target?: DriverTarget,
+  ): Promise<ControlFacts> => {
+    const holder = await current(target).frame.evaluateHandle(readPage, {
       scope: "document" as const,
       maximumBytes: 0,
       controlLimit: 0,
@@ -220,12 +224,14 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     ticket: Ticket,
     policy?: AdmissionPolicy,
     allowSuspended = false,
+    browserTarget?: DriverTarget,
   ): Promise<{ readonly element: ElementHandle<Element>; readonly kept: boolean }> => {
     const kept = typeof target !== "string";
 
     const node = typeof target === "string" ? undefined : retained(target, allowSuspended);
 
-    const element = typeof target === "string" ? await exactElement(target, ticket) : node?.handle;
+    const element =
+      typeof target === "string" ? await exactElement(target, ticket, browserTarget) : node?.handle;
 
     if (element === undefined) throw failure("stale", "undispatched");
     try {
@@ -242,7 +248,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
       if (attached !== true) throw failure("stale", "undispatched");
       if (node !== undefined || policy !== undefined) {
-        const facts = await factsOf(element);
+        const facts = await factsOf(element, browserTarget);
 
         if (node !== undefined && identityOf(facts) !== node.identity)
           throw failure("stale", "undispatched");
@@ -280,28 +286,35 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       observation?.revalidated.add(target.elementId);
     });
 
-  const readText = (selector: string | undefined, maximumBytes: number, ticket: Ticket) =>
+  const readText = (
+    selector: string | undefined,
+    maximumBytes: number,
+    ticket: Ticket,
+    target?: DriverTarget,
+  ) =>
     sanitize(async () => {
       ticket.check();
 
-      const raw: unknown = await reading(() =>
-        current().frame.evaluate(
-          ({ selector, maximumBytes }) => {
-            const element =
-              selector === undefined ? document.body : document.querySelector(selector);
+      const raw: unknown = await reading(
+        () =>
+          current(target).frame.evaluate(
+            ({ selector, maximumBytes }) => {
+              const element =
+                selector === undefined ? document.body : document.querySelector(selector);
 
-            if (element === null) return { text: "", missing: true, overLimit: false };
+              if (element === null) return { text: "", missing: true, overLimit: false };
 
-            const text =
-              element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
+              const text =
+                element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
 
-            if (new TextEncoder().encode(text).length > maximumBytes)
-              return { text: "", missing: false, overLimit: true };
+              if (new TextEncoder().encode(text).length > maximumBytes)
+                return { text: "", missing: false, overLimit: true };
 
-            return { text, missing: false, overLimit: false };
-          },
-          { selector, maximumBytes },
-        ),
+              return { text, missing: false, overLimit: false };
+            },
+            { selector, maximumBytes },
+          ),
+        target,
       );
 
       ticket.check();
@@ -415,10 +428,15 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       return result;
     });
 
-  const screenshot = (fullPage: boolean, maximumBytes: number, ticket: Ticket) =>
+  const screenshot = (
+    fullPage: boolean,
+    maximumBytes: number,
+    ticket: Ticket,
+    target?: DriverTarget,
+  ) =>
     sanitize(() =>
       reading(async () => {
-        const page = current().entry.page;
+        const page = current(target).entry.page;
 
         ticket.check();
 
@@ -466,7 +484,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         ticket.check();
 
         return new Uint8Array(bytes);
-      }),
+      }, target),
     );
 
   /**

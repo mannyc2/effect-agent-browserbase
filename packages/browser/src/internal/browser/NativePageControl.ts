@@ -166,10 +166,10 @@ export const makePageControl = (
 
         return control.resume(receipt, ticket);
       }),
-    checkSelected: (ticket: Ticket) =>
+    checkTarget: (target, ticket: Ticket) =>
       sanitize(async () => {
         ticket.check();
-        const control = await execution(current().entry);
+        const control = await execution(current(target).entry);
 
         ticket.check();
         control.assertRunning();

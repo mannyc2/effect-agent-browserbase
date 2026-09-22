@@ -1,11 +1,11 @@
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { fromSession } from "effect-agent-browser/adapter";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
+import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
@@ -44,89 +44,85 @@ it.live(
         let navigationCallbacks = 0;
         let callbackFinalizers = 0;
 
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const local = yield* (yield* Chromium).launch(
-              BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
-            );
+        yield* Browser.scoped(
+          Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
+          (local) =>
+            Effect.gen(function* () {
+              expect(local.reference.provider).toBe("chromium");
 
-            const session = fromSession(local);
+              const host = yield* BrowserTools.makeHost(local, {
+                observationScope: "viewport",
+                admission: { admit: (facts) => facts.kind === "button" },
+                onNavigation: ({ toolCallId }) =>
+                  Effect.gen(function* () {
+                    navigationCallbacks++;
+                    expect(toolCallId).toBe("navigate");
+                    yield* Effect.addFinalizer(() =>
+                      Effect.sync(() => {
+                        callbackFinalizers++;
+                      }),
+                    );
 
-            expect(session.browser).toBe(local);
-            expect(session.browser.reference.provider).toBe("chromium");
+                    return yield* Effect.never;
+                  }),
+              });
 
-            const host = yield* BrowserTools.makeHost(session, {
-              observationScope: "viewport",
-              admission: { admit: (facts) => facts.kind === "button" },
-              onNavigation: ({ toolCallId }) =>
-                Effect.gen(function* () {
-                  navigationCallbacks++;
-                  expect(toolCallId).toBe("navigate");
-                  yield* Effect.addFinalizer(() =>
-                    Effect.sync(() => {
-                      callbackFinalizers++;
-                    }),
-                  );
+              const result = yield* host.run(
+                AgentRuntime.run(agent, "navigate, inspect and click").pipe(
+                  Effect.provide(
+                    Layer.mergeAll(
+                      ScriptedModel.layer([
+                        call("navigate", "browser_navigate", { url: site.url }),
+                        call("inspect", "browser_inspect", {}),
+                        call("click", "browser_click", {
+                          observationId: "observation-1",
+                          elementId: "element-0",
+                        }),
+                        {
+                          _tag: "Stream",
+                          parts: [
+                            { type: "text-start", id: "answer" },
+                            { type: "text-delta", id: "answer", delta: '{"done":true}' },
+                            { type: "text-end", id: "answer" },
+                            { type: "finish", reason: "stop", usage },
+                          ],
+                          termination: { _tag: "Complete" },
+                          assertRequest: (request) => {
+                            const encoded = JSON.stringify(request.prompt);
 
-                  return yield* Effect.never;
-                }),
-            });
-
-            const result = yield* AgentRuntime.run(agent, "navigate, inspect and click").pipe(
-              Effect.provide(
-                Layer.mergeAll(
-                  host.handlers,
-                  ScriptedModel.layer([
-                    call("navigate", "browser_navigate", { url: site.url }),
-                    call("inspect", "browser_inspect", {}),
-                    call("click", "browser_click", {
-                      observationId: "observation-1",
-                      elementId: "element-0",
-                    }),
-                    {
-                      _tag: "Stream",
-                      parts: [
-                        { type: "text-start", id: "answer" },
-                        { type: "text-delta", id: "answer", delta: '{"done":true}' },
-                        { type: "text-end", id: "answer" },
-                        { type: "finish", reason: "stop", usage },
-                      ],
-                      termination: { _tag: "Complete" },
-                      assertRequest: (request) => {
-                        const encoded = JSON.stringify(request.prompt);
-
-                        expect(encoded).toContain("VISIBLE WORDS");
-                        expect(encoded).not.toContain("BELOW WORDS");
-                        expect(encoded).not.toContain("PRIVATE-DESTINATION");
-                        expect(encoded).not.toContain("BrowserToolFailure");
-                      },
-                    },
-                  ]),
-                  Layer.succeed(Model.ProviderName, "scripted"),
-                  Layer.succeed(Model.ModelName, "local-tools"),
-                  InMemory.layer,
+                            expect(encoded).toContain("VISIBLE WORDS");
+                            expect(encoded).not.toContain("BELOW WORDS");
+                            expect(encoded).not.toContain("PRIVATE-DESTINATION");
+                            expect(encoded).not.toContain("BrowserToolFailure");
+                          },
+                        },
+                      ]),
+                      Layer.succeed(Model.ProviderName, "scripted"),
+                      Layer.succeed(Model.ModelName, "local-tools"),
+                      InMemory.layer,
+                    ),
+                  ),
                 ),
-              ),
-            );
+              );
 
-            expect(result.output.done).toBe(true);
-            expect(navigationCallbacks).toBe(1);
-            expect(callbackFinalizers).toBe(1);
-            expect((yield* local.bind().readText({ selector: "#log" })).text).toContain(
-              '"clicks":1',
-            );
+              expect(result.output.done).toBe(true);
+              expect(navigationCallbacks).toBe(1);
+              expect(callbackFinalizers).toBe(1);
+              expect((yield* local.bind().readText({ selector: "#log" })).text).toContain(
+                '"clicks":1',
+              );
 
-            const interval = yield* Capture.start(local, {
-              lifetime: "page",
-              maxDurationMillis: 5000,
-            });
+              const interval = yield* Capture.start(local, {
+                lifetime: "page",
+                maxDurationMillis: 5000,
+              });
 
-            const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
+              const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
 
-            expect(frames).toHaveLength(1);
-            expect(frames[0]?.bytes.length).toBeGreaterThan(0);
-            expect((yield* interval.stop).nativeStop).toBe("confirmed");
-          }),
+              expect(frames).toHaveLength(1);
+              expect(frames[0]?.bytes.length).toBeGreaterThan(0);
+              expect((yield* interval.stop).nativeStop).toBe("confirmed");
+            }),
         ).pipe(
           Effect.provide(
             Chromium.layer({

@@ -26,6 +26,42 @@ export const localSite = Effect.acquireRelease(
     const server = createServer((request, response) => {
       requests.push(request.url ?? "/");
       response.writeHead(200, { "content-type": "text/html" });
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+      if (url.pathname === "/pinned-slow") {
+        // Intentionally never reaches DOMContentLoaded. The navigation test stops this request.
+        response.write("<!doctype html><title>Pinned slow</title><main>loading");
+
+        return;
+      }
+      if (url.pathname === "/pinned-delayed") {
+        response.write("<!doctype html><title>Pinned delayed</title><main>");
+        setTimeout(() => {
+          response.end('<span id="delayed">complete</span></main>');
+        }, 100);
+
+        return;
+      }
+      if (url.pathname === "/pinned-frame") {
+        response.end(`<!doctype html><title>Pinned child</title>
+        <strong id=frame-name>${url.searchParams.get("name") ?? "child"}</strong>
+        <button id=frame-increment onclick="frameCount.textContent=Number(frameCount.textContent)+1">Increment frame</button>
+        <span id=frameCount>0</span>`);
+
+        return;
+      }
+      if (url.pathname === "/pinned") {
+        const name = url.searchParams.get("name") ?? "page";
+
+        response.end(`<!doctype html><title>Pinned ${name}</title>
+        <h1 id=page-name>${name}</h1>
+        <button id=increment onclick="count.textContent=Number(count.textContent)+1">Increment</button>
+        <button id=remove-frame onclick="child.remove()">Remove child</button>
+        <span id=count>0</span>
+        <iframe id=child src="/pinned-frame?name=${encodeURIComponent(`${name}-child`)}"></iframe>`);
+
+        return;
+      }
       response.end(`<!doctype html><title>Local ownership</title><style>
       body{margin:0;font:18px sans-serif}button{margin:30px;padding:20px}
       #motion{width:120px;height:80px;background:red;animation:slide 1s linear infinite alternate}

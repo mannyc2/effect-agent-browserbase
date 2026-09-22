@@ -4,7 +4,13 @@ import type { BrowserContext, Disposable, Frame, Page } from "playwright-core";
 import { InitializationError } from "../../Errors.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
-import type { Driver, DriverEvents, DriverOptions, ReadinessState } from "./Driver.ts";
+import type {
+  Driver,
+  DriverEvents,
+  DriverOptions,
+  DriverTarget,
+  ReadinessState,
+} from "./Driver.ts";
 import { makeNativeBindings } from "./NativeBindings.ts";
 import { failure, NativeFailure, sanitize } from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
@@ -165,8 +171,9 @@ export const makeInitialization = (
   const readiness = async (
     bootstrap: CompiledBootstrap,
     ticket: Ticket,
+    target?: DriverTarget,
   ): Promise<ReadinessState> => {
-    const { frame } = current();
+    const { frame } = current(target);
     const epoch = epochOf(frame);
 
     if (readyDocuments.get(frame) === epoch) return { _tag: "Ready" };
@@ -216,13 +223,13 @@ export const makeInitialization = (
     return { _tag: "Ready" };
   };
 
-  const documentReadiness: Driver["documentReadiness"] = (ticket) =>
+  const documentReadiness: Driver["documentReadiness"] = (ticket, target) =>
     sanitize(async () => {
       const bootstrap = options.bootstrap;
 
       return bootstrap === undefined || bootstrap.readiness.length === 0
         ? { _tag: "Ready" as const }
-        : readiness(bootstrap, ticket);
+        : readiness(bootstrap, ticket, target);
     });
 
   return { attach, attachPage, attachFrame, fence, dispose, install, documentReadiness };

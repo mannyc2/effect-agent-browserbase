@@ -71,17 +71,26 @@ export class Chromium extends Context.Service<
       BrowserError | InitializationError | E,
       Scope.Scope | Exclude<R, Scope.Scope>
     >;
-    readonly withBrowser: <E = never, R = never, A = unknown, E2 = never, R2 = never>(
-      policy: BrowserPolicy,
-      request: OpenOptions<E, R>,
-      use: (session: ChromiumSession<E>) => Effect.Effect<A, E2, R2>,
-    ) => Effect.Effect<
-      A,
-      BrowserError | InitializationError | E | E2,
-      Exclude<R | R2, Scope.Scope>
-    >;
   }
 >()("effect-browser/Chromium") {
+  /** Launch through the configured service; compose with Browser.scoped for supervised ownership. */
+  static launch<E = never, R = never>(policy: BrowserPolicy, request?: OpenOptions<E, R>) {
+    return Effect.flatMap(Chromium, (browser) => browser.launch(policy, request));
+  }
+
+  /** Acquire the process lifetime before connecting, using the caller's scope. */
+  static acquire<E = never, R = never>(policy: BrowserPolicy, request?: OpenOptions<E, R>) {
+    return Effect.flatMap(Chromium, (browser) => browser.acquire(policy, request));
+  }
+
+  /** Borrow a concrete loopback endpoint; cleanup never terminates its external process. */
+  static attach<E = never, R = never>(
+    endpoint: Redacted.Redacted<string>,
+    request: ChromiumAttachRequest<E, R>,
+  ) {
+    return Effect.flatMap(Chromium, (browser) => browser.attach(endpoint, request));
+  }
+
   static layer(options: ChromiumOptions = {}): Layer.Layer<Chromium, BrowserError> {
     return Layer.effect(
       Chromium,
@@ -172,11 +181,6 @@ export class Chromium extends Context.Service<
                 ...(request.target === undefined ? {} : { targetId: request.target.targetId }),
               })).connect;
             }),
-          withBrowser: (policy, request, use) =>
-            BrowserRuntime.withBrowser(
-              acquire(policy, request).pipe(Effect.flatMap((acquired) => acquired.connect)),
-              use,
-            ),
         });
       }),
     );

@@ -7,6 +7,7 @@ import {
   Viewport,
   ViewportEvidence,
 } from "../../../packages/browser/src/BrowserData.ts";
+import { BrowserError } from "../../../packages/browser/src/Errors.ts";
 import { fromNativeAttempt } from "../../../packages/browser/src/internal/browser/Binding.ts";
 import type { Bindings } from "../../../packages/browser/src/internal/browser/Bindings.ts";
 import type {
@@ -177,6 +178,17 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
           selected: true,
         }),
       ],
+      resolvePage: async (page, ticket) => {
+        ticket.check();
+        if (page.pageId !== pageId || page.targetId !== "target-1")
+          throw BrowserError.make({
+            operation: "target",
+            reason: "not-found",
+            outcome: "undispatched",
+          });
+
+        return { pageId, frameId: "frame-1" };
+      },
       selectPage: async (id, ticket) => {
         ticket.check();
         pageId = id;
@@ -195,6 +207,17 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
       listFrames: async () => [
         FrameInfo.make({ frameId, parentFrameId: null, url: state.url, name: "main" }),
       ],
+      resolveFrame: async (page, frame, ticket) => {
+        ticket.check();
+        if (page.pageId !== pageId || page.targetId !== "target-1" || frame.frameId !== frameId)
+          throw BrowserError.make({
+            operation: "target",
+            reason: "not-found",
+            outcome: "undispatched",
+          });
+
+        return { pageId, frameId };
+      },
       selectFrame: async (id, ticket) => {
         ticket.check();
         frameId = id;
@@ -209,7 +232,14 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
           options.onNavigate?.(url, pageId) ?? {
             pageId,
             settled: Promise.resolve(url),
-            stop: async () => {},
+            stop: async (stopTicket, pending, onDispatch) => {
+              stopTicket.check();
+              if (!pending()) return "settled" as const;
+              stopTicket.dispatch();
+              onDispatch();
+
+              return "dispatched" as const;
+            },
           }
         );
       },

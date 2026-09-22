@@ -8,7 +8,7 @@ This package has no Browserbase or Effect Agent dependency. Its common entry poi
 
 A `BrowserSession<E>` is the live, host-only capability returned by the supplying implementation. It preserves callback failures and diagnostics of type `E`, one action budget, one native connection and one set of capture/page-control reservations. `implementation` identifies the control implementation. `closeChecked` performs the owner's cleanup and fails if its required cleanup was not confirmed. The concrete Chromium or Browserbase session retains its detailed cleanup receipt and resource identity.
 
-All callers use this exact session. `Capture.start` and `PageControl` authenticate its identity privately; spreading or decoding an object cannot copy authority. An agent adapter borrows it through `Adapter.fromSession` from `effect-agent-browser`. Tools do not allocate another browser.
+All callers use this exact session. `Capture.start`, `Capture.stream` and `PageControl` authenticate its identity privately; spreading or decoding an object cannot copy authority. `Tools.run` from `effect-agent-browser/tools` uses it directly; `Adapter.fromSession` adapts it to the framework's handle when needed. Neither opens another browser.
 
 Mutations are serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation after dispatch has an unknown outcome, fences the owner and is never automatically replayed. `undispatched`, `rejected` and `unknown` remain distinct expected outcomes.
 
@@ -18,15 +18,14 @@ Mutations are serialized. An observed node remains usable only until an invalida
 
 ```ts
 import { Effect } from "effect";
-import { BrowserPolicy, NavigateRequest } from "effect-browser/browser-data";
+import * as Browser from "effect-browser/browser";
+import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 
-const program = Effect.scoped(
+const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
   Effect.gen(function* () {
-    const browser = yield* Chromium;
-    const session = yield* browser.launch(BrowserPolicy.unrestricted());
-    yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com" }));
-    return yield* session.observe({ scope: "viewport" });
+    yield* browser.navigate({ url: "https://example.com" });
+    return yield* browser.observe({ scope: "viewport" });
   }),
 ).pipe(
   Effect.provide(
@@ -39,7 +38,11 @@ const program = Effect.scoped(
 );
 ```
 
-Layer construction validates configuration and starts nothing. The optional `playwright-core` peer is loaded only when needed. `acquire(policy, { bootstrap })` starts one owned Chromium process and registers cleanup before waiting for a connection; its cached `connect` yields one `ChromiumSession<E>`. `launch` combines those steps. Bootstrap consumer errors and services remain in the acquisition signatures, just as for hosted sessions. `withBrowser(policy, request, use)` supervises callback failure and checks local cleanup before returning a normal result.
+Layer construction validates configuration and starts nothing. The optional `playwright-core` peer is loaded only when needed. `Chromium.acquire(policy, { bootstrap })` starts one owned Chromium process and registers cleanup before waiting for a connection; its cached `connect` yields one `ChromiumSession<E>`. `Chromium.launch` combines those steps. These static operations access the configured service, as do `Chromium.attach` and the corresponding `BrowserbaseBrowser` operations. Bootstrap consumer errors and services remain in the acquisition signatures.
+
+`Browser.scoped(open, use)` is the common workflow supervisor for both sources, including borrowed attachment. It runs the acquisition once in its own scope, retains the concrete browser type in `use`, and races workflow completion against typed fail-session callbacks. The workflow has its own child scope: fibers and finalizers finish before `closeChecked` runs, so callback cleanup may still use a healthy browser. Checked closure runs on success, failure, thrown defects and cancellation. A body failure and a cleanup failure both remain in the resulting Effect cause; neither is overwritten. The ownership finalizer still runs if acquisition itself fails. No failed acquisition or action is replayed.
+
+The same combinator supports `open.pipe(Browser.scoped(use))`. It removes the scopes it owns while preserving other required services and error types. Returning a browser, stream or other live capability from `use` does not extend that resource's lifetime. The old provider-specific `withBrowser` methods and `BrowserRuntime.withBrowser` are replaced by this one public operation.
 
 Owned launch currently supports POSIX hosts (Linux and macOS). It uses a fresh temporary profile, an ephemeral loopback debugger port and one maintained CDP connection. The launcher owns those arguments; callers cannot replace them through `args`. `executablePath` selects an installed Chromium explicitly; otherwise the pinned Playwright executable is used. Headless mode and Chromium sandboxing default to enabled. `chromiumSandbox: false` is an explicit host exception, never inferred from `CI`, root execution or a connection failure. Setting the option alone does not prove the operating system's sandbox configuration. Startup waiting is bounded by `startupTimeoutMillis` (15 seconds by default, at most 60 seconds) and the owner's remaining lifetime. Acquisition does not retry a failed launch.
 
@@ -50,6 +53,60 @@ Chromium identity is `{ provider: "chromium", id }`, identifying this ownership 
 `launch.proxy: { server, bypass? }` forwards an existing host-operated proxy to Chromium. With a proxy, the default bypass value is `<-loopback>` so Chromium does not silently exclude loopback destinations; a different bypass is an explicit host choice. Additional reviewed native flags, such as disabling QUIC and non-proxied WebRTC UDP, can be supplied through `launch.args`. This module does not implement a proxy or qualify its transport/DNS coverage. Browser policy remains `Unrestricted`; a local endpoint, URL admission or successful local test never establishes whole-browser egress containment. Preserve and test the selected enforcing proxy independently. The Browserbase integration validates its own provider-issued endpoints separately.
 
 ## Browser operations
+
+### Selected, retained and pinned targets
+
+The session itself is the convenient selected-target API. Its `navigate`, `readText`, `click`,
+`fill`, pointer/key input and screenshot Effects resolve the selected page/frame when the Effect
+actually executes. Constructing an Effect does not freeze the current selection:
+
+```ts
+const navigateScout = session.navigate({ url: scoutUrl });
+yield * session.selectPage(scoutPageId);
+yield * navigateScout; // navigates the scout selected above
+```
+
+`session.bind()` is the deliberate retained-selection form. It remembers the current connection
+generation and selection; selecting another page or frame makes that handle fail `stale` before
+dispatch. This remains useful when a sequence must prove nobody changed the selection between
+steps.
+
+For work that must stay on a page while selection moves elsewhere, pin it explicitly:
+
+```ts
+const stageInfo = (yield * session.pages).find((page) => page.title === "Stage")!;
+const stage = yield * session.pinPage(stageInfo);
+const childInfo = (yield * session.framesOf(stageInfo)).find(
+  (frame) => frame.parentFrameId !== null,
+)!;
+const child = yield * session.pinFrame(stageInfo, childInfo);
+
+yield * session.selectPage(scoutPageId);
+yield * stage.click({ selector: "#advance" });
+const childText = yield * child.readText({ selector: "#status" });
+```
+
+Pinning never changes global selection and opens no second browser connection. A pinned handle
+contains only modeled operations plus its immutable `Target`; every operation re-resolves the
+connection-local page/frame identity through the same owner. Reconnect makes the old generation
+stale, closing its page or detaching its frame makes it unusable, and an in-flight navigation
+reservation or page hold is checked on the pinned page rather than whichever page happens to be
+selected.
+
+`FrameInfo` is connection-local metadata too: reacquire it with `framesOf(page)` after reconnect.
+A surviving page's `PageInfo.targetId` may still identify that same page, but old frame metadata
+never aliases a frame in the rebuilt native connection.
+
+Pinned operations are selector-based. They intentionally do not create another retained
+`Observation` or an exact-node namespace: `session.observe()` and the `*Element` operations keep
+their existing selected-session semantics. A pinned read leaves that retained observation
+alone. A pinned mutation uses the same owner mutation fence as every other mutation and may
+conservatively invalidate the session-wide observation, so inspect again before reusing exact
+nodes after any mutation.
+
+The complete [multi-page example](examples/multi-page.ts) keeps a presentation page pinned while
+the selected scout supplies observations. It reads and captures the presentation page without
+switching selection and returns only data after the shared browser scope closes.
 
 ### A navigation you can watch while it loads
 
@@ -184,6 +241,7 @@ Human handoff pauses automation before returning host-only Live View material. R
 
 ```ts
 import * as Bootstrap from "effect-browser/bootstrap";
+import * as Browser from "effect-browser/browser";
 import { Chromium } from "effect-browser/chromium";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Context, Effect, Schema } from "effect";
@@ -218,17 +276,16 @@ const bootstrap = Bootstrap.combine(
   }),
 );
 
-const run = Effect.gen(function* () {
-  const browser = yield* Chromium;
-  return yield* browser.withBrowser(BrowserPolicy.unrestricted(), { bootstrap }, (session) =>
+const run = Browser.scoped(
+  Chromium.launch(BrowserPolicy.unrestricted(), { bootstrap }),
+  (session) =>
     Effect.gen(function* () {
-      yield* session.bind().navigate({ url: "https://portal.example.com" });
+      yield* session.navigate({ url: "https://portal.example.com" });
       yield* session.ready;
       return yield* session.observe();
     }),
-  );
-});
-// run requires Chromium and ShowSettings. withBrowser discharges both the
+);
+// run requires Chromium and ShowSettings. Browser.scoped discharges both the
 // callback's and the use function's Scope, but neither one's other services or errors.
 ```
 
@@ -240,13 +297,27 @@ Plans admit at most 16 uniquely named bindings. Each binding declares its concur
 
 `reject-call` rejects only the affected invocation and permits subsequent healthy calls. `fail-session` completes `session.failure` with the original typed consumer cause and fences the owner. Pages receive only `BrowserBindingError: Browser binding call rejected`, with no host stack, consumer error payload, credentials or SDK cause. `session.bindingDiagnostics` is a bounded **host-only** snapshot containing per-binding accounting and the latest 32 typed causes; do not serialize it into a Tool response. Callback service reads run independently of a browser mutation, but reentrant browser work never waits behind that mutation's permit: it fails `busy` with `undispatched` instead.
 
-`withBrowser` races the use function against fail-session errors, discharges the scope, and permits normal success only after confirmed owned-session termination and complete local cleanup. Explicit `acquire`/`launch` retain the typed failure signal and detailed cleanup receipt for callers that need to manage that decision themselves. Teardown synchronously closes callback admission, interrupts managed callback fibers, removes this connection's registrations, disconnects locally, and still invokes the supplying lifetime’s release when a prior cleanup step fails. Reconnect installs fresh callable registrations, never replays an old invocation or a consumer init script into an already-running document, and cannot reuse quarantined callback capacity.
+`Browser.scoped` supervises fail-session errors and requires the owner's checked cleanup. Explicit `acquire`/`launch` retain the typed failure signal and detailed cleanup receipt for callers that need to manage that decision themselves. Teardown synchronously closes callback admission, interrupts managed callback fibers, removes this connection's registrations, disconnects locally, and still invokes the supplying lifetime’s release when a prior cleanup step fails. Reconnect installs fresh callable registrations, never replays an old invocation or a consumer init script into an already-running document, and cannot reuse quarantined callback capacity.
 
 Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.ready` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
 
 The reviewed permission subset is exercised against real Chromium. Provider extensions, persistent contexts and provider reconnect evidence belong to the supplying integration; see the [Browserbase guide](../browserbase/README.md).
 
 ## Live capture and presentation
+
+For a frame-processing pipeline, use `Capture.stream(session, options)`. It starts only when consumed and owns one interval per subscription. `Stream.take`, consumer failure and interruption all finish that interval before the stream completes, while the enclosing browser stays open. A new subscription creates a new interval; concurrent subscriptions on the same page still fail `busy` under the existing reservation. Capture bounds and native-stop quarantine rules are unchanged.
+
+```ts
+import { Stream } from "effect";
+import * as Capture from "effect-browser/capture";
+
+const firstFrame = Capture.stream(session, { lifetime: "page" }).pipe(
+  Stream.take(1),
+  Stream.runCollect,
+);
+```
+
+Use `Capture.start` instead when the host needs passive snapshots, an explicit stop acknowledgement or the final loss summary. Stream completion runs cleanup but does not itself assert that Chromium acknowledged the stop; unconfirmed cleanup keeps the page quarantined. Both APIs use the same bounded frame stream and owner.
 
 Live capture frames carry owned JPEG bytes, captured target identity, sequence number, source presentation time, host monotonic receipt time, geometry and explicit drop accounting. Buffers are bounded by frame count and bytes; slow consumers drop old frames instead of creating an unbounded fiber/callback backlog. Buffer dropping is not page-clock backpressure and does not reduce what the browser produced upstream. Holding a capture callback is not a promise that page timers or animations stop.
 

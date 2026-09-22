@@ -2,6 +2,7 @@ import type { ElementHandle, Page } from "playwright-core";
 
 import type { KeyModifier, ObservedElement } from "../../BrowserData.ts";
 import type { makeActions } from "./Actions.ts";
+import type { DriverTarget } from "./Driver.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
@@ -52,13 +53,22 @@ export const makeKeyboard = (
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
     keys: (page: Page) => Promise<void>,
+    browserTarget?: DriverTarget,
   ): Promise<NativeInput> => {
-    const { page } = current().entry;
+    const { page } = current(browserTarget).entry;
 
     if (into === undefined) {
       ticket.dispatch();
       await keys(page);
-    } else await actions.withAdmittedElement(into, ticket, requireFocus, () => keys(page), policy);
+    } else
+      await actions.withAdmittedElement(
+        into,
+        ticket,
+        requireFocus,
+        () => keys(page),
+        policy,
+        browserTarget,
+      );
     ticket.check();
 
     return receipt(page);
@@ -70,10 +80,17 @@ export const makeKeyboard = (
     into: string | ObservedElement | undefined,
     ticket: Ticket,
     policy?: AdmissionPolicy,
+    browserTarget?: DriverTarget,
   ) =>
     sanitize(() =>
       // Both halves are closed vocabularies by now, so the engine's `+` syntax is only ever ours.
-      send(into, ticket, policy, (page) => page.keyboard.press([...modifiers, key].join("+"))),
+      send(
+        into,
+        ticket,
+        policy,
+        (page) => page.keyboard.press([...modifiers, key].join("+")),
+        browserTarget,
+      ),
     );
 
   const type = (
@@ -81,15 +98,22 @@ export const makeKeyboard = (
     into: string | ObservedElement | undefined,
     ticket: Ticket,
     policy?: AdmissionPolicy,
+    browserTarget?: DriverTarget,
   ) =>
     sanitize(() =>
-      send(into, ticket, policy, async (page) => {
-        for (const character of text) {
-          // A fence between characters stops the rest; what was already sent stays unknown.
-          ticket.check();
-          await page.keyboard.type(character);
-        }
-      }),
+      send(
+        into,
+        ticket,
+        policy,
+        async (page) => {
+          for (const character of text) {
+            // A fence between characters stops the rest; what was already sent stays unknown.
+            ticket.check();
+            await page.keyboard.type(character);
+          }
+        },
+        browserTarget,
+      ),
     );
 
   return { press, type };

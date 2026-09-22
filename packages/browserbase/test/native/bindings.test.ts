@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
+import * as Browser from "effect-browser/browser";
 import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserError, InitializationError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
@@ -600,41 +601,39 @@ it.live(
           Effect.gen(function* () {
             const browser = yield* BrowserbaseBrowser;
 
-            return yield* browser
-              .withBrowser(policy, { bootstrap }, (session) =>
-                Effect.gen(function* () {
-                  yield* session.bind().navigate(NavigateRequest.make({ url: fixture.url }));
-                  const page = pageFor(fixture, session.reference.sessionId);
-                  const context = page.context();
-                  const original = context.newCDPSession;
+            return yield* Browser.scoped(browser.open(policy, { bootstrap }), (session) =>
+              Effect.gen(function* () {
+                yield* session.bind().navigate(NavigateRequest.make({ url: fixture.url }));
+                const page = pageFor(fixture, session.reference.sessionId);
+                const context = page.context();
+                const original = context.newCDPSession;
 
-                  // One instance-local transport failpoint, after genuine successful initialization.
-                  // No global Playwright replacement or second connection is involved in this failure.
-                  yield* Effect.acquireRelease(
+                // One instance-local transport failpoint, after genuine successful initialization.
+                // No global Playwright replacement or second connection is involved in this failure.
+                yield* Effect.acquireRelease(
+                  Effect.sync(() => {
+                    context.newCDPSession = async (subject) => {
+                      if ("context" in subject && subject !== page && !failedNativeRegistration) {
+                        failedNativeRegistration = true;
+                        throw new Error("PRIVATE-NATIVE-REGISTRATION-CAUSE");
+                      }
+
+                      return original.call(context, subject);
+                    };
+                  }),
+                  () =>
                     Effect.sync(() => {
-                      context.newCDPSession = async (subject) => {
-                        if ("context" in subject && subject !== page && !failedNativeRegistration) {
-                          failedNativeRegistration = true;
-                          throw new Error("PRIVATE-NATIVE-REGISTRATION-CAUSE");
-                        }
-
-                        return original.call(context, subject);
-                      };
+                      context.newCDPSession = original;
+                      finalized = true;
                     }),
-                    () =>
-                      Effect.sync(() => {
-                        context.newCDPSession = original;
-                        finalized = true;
-                      }),
-                  );
-                  yield* native("open failing popup", () =>
-                    page.evaluate("void window.open('about:blank')"),
-                  );
+                );
+                yield* native("open failing popup", () =>
+                  page.evaluate("void window.open('about:blank')"),
+                );
 
-                  return yield* Effect.never;
-                }),
-              )
-              .pipe(Effect.result, Effect.timeout(5000));
+                return yield* Effect.never;
+              }),
+            ).pipe(Effect.result, Effect.timeout(5000));
           }),
           {
             // The popup pauses action admission synchronously, but it is still this live connection.
@@ -822,7 +821,7 @@ it.live(
 );
 
 it.live(
-  "real CDP: fail-session preserves the consumer error and withBrowser supervises scope cleanup",
+  "real CDP: fail-session preserves the consumer error and Browser.scoped supervises scope cleanup",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -873,16 +872,14 @@ it.live(
             expect((yield* session.observe().pipe(Effect.result))._tag).toBe("Failure");
             yield* session.close;
 
-            const supervised = yield* browser
-              .withBrowser(policy, { bootstrap }, (owned) =>
-                Effect.gen(function* () {
-                  yield* owned.bind().navigate(NavigateRequest.make({ url: fixture.url }));
-                  yield* call(pageFor(fixture, owned.reference.sessionId), "fatalSettings", "null");
+            const supervised = yield* Browser.scoped(browser.open(policy, { bootstrap }), (owned) =>
+              Effect.gen(function* () {
+                yield* owned.bind().navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* call(pageFor(fixture, owned.reference.sessionId), "fatalSettings", "null");
 
-                  return yield* Effect.never;
-                }),
-              )
-              .pipe(Effect.result, Effect.timeout(5000));
+                return yield* Effect.never;
+              }),
+            ).pipe(Effect.result, Effect.timeout(5000));
 
             expect(supervised._tag).toBe("Failure");
             if (supervised._tag === "Failure") expect(supervised.failure).toBe(secret);

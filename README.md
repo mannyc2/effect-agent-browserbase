@@ -14,34 +14,45 @@ This branch prepares the breaking `0.2.0-beta.0` package set. The earlier `0.1.0
 
 ```ts
 import { Effect } from "effect";
+import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 
-const program = Effect.gen(function* () {
-  const browser = yield* Chromium;
-  return yield* browser.withBrowser(BrowserPolicy.unrestricted(), {}, (session) =>
-    Effect.gen(function* () {
-      yield* session.bind().navigate({ url: "https://example.com" });
-      return yield* session.observe({ scope: "viewport" });
-    }),
-  );
-}).pipe(Effect.provide(Chromium.layer()));
+const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
+  Effect.gen(function* () {
+    yield* browser.navigate({ url: "https://example.com" });
+    return yield* browser.observe({ scope: "viewport" });
+  }),
+).pipe(Effect.provide(Chromium.layer()));
 ```
 
-For hosted acquisition, use `BrowserbaseBrowser` with a Browserbase account and launch recipe. Both return the same modeled browser surface; provider references and cleanup facts stay with their concrete owner. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
+For hosted acquisition, supply `BrowserbaseBrowser.open(policy)` with a Browserbase account and launch recipe. `Browser.scoped` supervises either source: it preserves the concrete session and typed callback errors, joins callback resources before closing the browser, and reports checked cleanup failures even when the workflow also fails. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
 
 ## Use the same tools with either source
 
 ```ts
-import * as Adapter from "effect-agent-browser/adapter";
 import * as BrowserTools from "effect-agent-browser/tools";
+import * as AgentRuntime from "effect-agent/agent-runtime";
 
 // The host acquired browser through Chromium or Browserbase, in the active execution scope.
-const session = Adapter.fromSession(browser);
-const handlers = BrowserTools.handlers(session, { observationScope: "viewport" });
+const result = BrowserTools.run(browser, AgentRuntime.run(agent, request), {
+  observationScope: "viewport",
+});
 ```
 
-Every agent turn borrows that session. The adapter creates no browser, copies no capture authority and delegates checked closure to the owner. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition. The host supplies its selected LanguageModel.
+Every agent turn borrows that session. `BrowserTools.run` provides the maintained handlers and supervises both browser and host callback failures; the host still supplies its selected LanguageModel and other Agent services. An agent declares the tools it may see: the original five, optional pointer/wheel tools, and separately optional exact-node keyboard tools. `Adapter.fromSession` remains available for the framework's `InteractiveBrowser` handle. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition.
+
+## API migration
+
+| Previous composition                                               | Current API                                                                                                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Provider-specific `withBrowser(policy, options, use)`              | `Browser.scoped(Chromium.launch(policy, options), use)` or the same combinator with `BrowserbaseBrowser.open`                        |
+| `session.bind().navigate(request)` for ordinary selected-page work | `session.navigate(request)` resolves selection when the Effect runs; retain `bind()` when selection changes must invalidate a handle |
+| Select a page, perform work, then restore selection                | `session.pinPage(page)` or `session.pinFrame(page, frame)` addresses that target without changing selection                          |
+| `Tools.handlers(Adapter.fromSession(session))`                     | `Tools.handlers(session)`; use `Tools.run(session, program, options)` for handler provisioning and failure supervision               |
+| Manually acquire an interval just to consume frames                | `Capture.stream(session, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                 |
+
+Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 
 ## Ownership and boundaries
 
@@ -49,7 +60,7 @@ A browser belongs to its Effect Scope, with one connection, action budget and ca
 
 Actions retain exact observed-node identity and distinguish `undispatched`, `rejected` and `unknown` outcomes. An uncertain mutation is never replayed. Callback errors and services remain typed. Credentials, endpoints, control facts and native diagnostics stay with the host.
 
-Live capture supplies bounded JPEG frames and metadata from the same owner. A caller owns encoding and presentation. Browserbase recording and replay services have independent resource lifetimes. No second debugger connection or raw driver is exposed.
+Live capture supplies bounded JPEG frames and metadata from the same owner. `Capture.stream(browser)` acquires lazily and releases its interval when consumption finishes, fails or is interrupted. `Capture.start` gives hosts the explicit interval, metadata snapshots and final summary. A caller owns encoding and presentation. Browserbase recording and replay services have independent resource lifetimes. No second debugger connection or raw driver is exposed.
 
 The implementation targets trusted Node/Bun hosts and supports only explicit `Unrestricted` network policy. Chromium launch supports Linux/macOS; borrowed attachment currently accepts concrete loopback CDP WebSockets. Native local validation and hosted-provider evidence are distinct; see [Status](docs/STATUS.md).
 

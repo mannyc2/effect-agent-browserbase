@@ -199,18 +199,23 @@ export class BrowserbaseBrowser extends Context.Service<
       AllocationError | BrowserError | ContextError | E | InitializationError,
       Scope.Scope | Exclude<R, Scope.Scope>
     >;
-    /** Race the consumer with typed callback failure and confirm cleanup before normal success. */
-    readonly withBrowser: <E = never, R = never, A = unknown, E2 = never, R2 = never>(
-      policy: BrowserPolicy,
-      request: OpenOptions<E, R>,
-      use: (session: BrowserbaseSession<E>) => Effect.Effect<A, E2, R2>,
-    ) => Effect.Effect<
-      A,
-      AllocationError | BrowserError | ContextError | InitializationError | E | E2,
-      Exclude<R | R2, Scope.Scope>
-    >;
   }
 >()("effect-browserbase/Browser") {
+  /** Open through the configured account and browser service, in the caller's scope. */
+  static open<E = never, R = never>(policy: BrowserPolicy, request?: OpenOptions<E, R>) {
+    return Effect.flatMap(BrowserbaseBrowser, (browser) => browser.open(policy, request));
+  }
+
+  /** Allocate the provider lifetime before connecting, preserving its attempt and cleanup. */
+  static acquire<E = never, R = never>(policy: BrowserPolicy, request?: OpenOptions<E, R>) {
+    return Effect.flatMap(BrowserbaseBrowser, (browser) => browser.acquire(policy, request));
+  }
+
+  /** Borrow a provider session without acquiring release authority over it. */
+  static attach<E = never, R = never>(reference: SessionReference, request: AttachRequest<E, R>) {
+    return Effect.flatMap(BrowserbaseBrowser, (browser) => browser.attach(reference, request));
+  }
+
   static layer(
     options: BrowserOptions,
   ): Layer.Layer<BrowserbaseBrowser, BrowserError, BrowserbaseClient | BrowserbaseSessions> {
@@ -319,11 +324,6 @@ export class BrowserbaseBrowser extends Context.Service<
           attach,
           open: (policy, request) =>
             acquire(policy, request).pipe(Effect.flatMap((acquired) => acquired.connect)),
-          withBrowser: (policy, request, use) =>
-            BrowserRuntime.withBrowser(
-              acquire(policy, request).pipe(Effect.flatMap((acquired) => acquired.connect)),
-              use,
-            ),
         });
       }),
     );

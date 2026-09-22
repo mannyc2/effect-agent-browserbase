@@ -31,13 +31,14 @@ p { margin:0 }
 <div id="nested"><div>Nested scroll target</div></div><p id="below">BELOW WORDS</p>
 <pre id="log"></pre>
 <script>
-const state = { ready:false, mutation:0, clicks:0, fills:0, name:'', moves:[], hovers:[], wheels:[], nested:0, page:0 };
+const state = { ready:false, mutation:0, clicks:0, fills:0, name:'', keys:[], moves:[], hovers:[], wheels:[], nested:0, page:0 };
 const paint = () => document.querySelector('#log').textContent = JSON.stringify(state);
 const button = document.querySelector('#increment');
 button.addEventListener('click', () => { state.clicks++; paint(); });
 button.addEventListener('pointerenter', event => { state.hovers.push(event.isTrusted); paint(); });
 document.addEventListener('pointermove', event => { state.moves.push({ x:event.clientX, y:event.clientY, trusted:event.isTrusted }); paint(); });
 document.addEventListener('input', event => { state.fills++; state.name = document.querySelector('#name').value; paint(); });
+document.addEventListener('keydown', event => { state.keys.push({ key:event.key, trusted:event.isTrusted }); paint(); });
 document.addEventListener('wheel', event => { state.wheels.push({ trusted:event.isTrusted, nested:document.querySelector('#nested').contains(event.target) }); paint(); });
 document.querySelector('#nested').addEventListener('scroll', event => { state.nested=event.target.scrollTop; paint(); });
 window.addEventListener('scroll', () => { state.page=scrollY; paint(); });

@@ -35,6 +35,7 @@ For the simplest post-session video path, opt in to Browserbase recording in the
 
 ```ts
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, NavigateRequest } from "effect-browser/browser-data";
 import { recipe } from "effect-browserbase/launch";
 import { BrowserbaseRecordings } from "effect-browserbase/recordings";
@@ -52,16 +53,13 @@ const layers = Layer.merge(BrowserbaseBrowser.layer({ launch }), BrowserbaseReco
 );
 
 const program = Effect.gen(function* () {
-  const browser = yield* BrowserbaseBrowser;
   const recordings = yield* BrowserbaseRecordings;
 
-  const reference = yield* Effect.scoped(
+  const reference = yield* Browser.scoped(BrowserbaseBrowser.open(policy), (session) =>
     Effect.gen(function* () {
-      const session = yield* browser.open(policy);
+      yield* session.navigate(NavigateRequest.make({ url: "https://example.com" }));
 
-      yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com" }));
-
-      // An AgentRuntime can borrow this same session through the adapter package.
+      // Browser.scoped checks the owner's release before returning this durable identity.
       return session.reference;
     }),
   );

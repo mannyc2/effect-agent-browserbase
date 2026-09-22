@@ -1,10 +1,9 @@
 import { Schema } from "effect";
 import type { Browser, BrowserContext, Dialog, Frame, Page } from "playwright-core";
 
-import { FrameInfo, PageInfo } from "../../BrowserData.ts";
-import { Identifier } from "../../BrowserData.ts";
+import { FrameInfo, PageInfo, Identifier } from "../../BrowserData.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
-import type { DriverEvents, DriverOptions } from "./Driver.ts";
+import type { DriverEvents, DriverOptions, DriverTarget } from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import type { Ticket } from "./Owner.ts";
 import type { PageExecution } from "./PageExecution.ts";
@@ -72,6 +71,9 @@ export const makeTargets = (
   const selection: Selection = {};
   // Pages whose navigation this driver began and has not seen settle.
   const navigating = new Set<string>();
+  // FrameInfo is connection-local public metadata. A new driver after reconnect must never
+  // regenerate an old frame id for a different frame, even when serial order happens to match.
+  const frameNamespace = globalThis.crypto.randomUUID();
 
   let serial = 0,
     frameSerial = 0;
@@ -84,7 +86,7 @@ export const makeTargets = (
     let id = frameIds.get(frame);
 
     if (id === undefined) {
-      id = `frame-${++frameSerial}`;
+      id = `frame-${frameNamespace}-${++frameSerial}`;
       frameIds.set(frame, id);
     }
 
@@ -155,7 +157,7 @@ export const makeTargets = (
     return entry;
   };
 
-  const current = () => {
+  const selectedCurrent = () => {
     if (
       closing() ||
       !browser.isConnected() ||
@@ -168,6 +170,21 @@ export const makeTargets = (
 
     return { entry: selection.entry, frame: selection.frame };
   };
+
+  const explicitCurrent = (target: DriverTarget) => {
+    if (closing() || !browser.isConnected()) throw failure("closed", "undispatched");
+    const entry = entries.get(target.pageId);
+
+    if (entry === undefined || entry.page.isClosed()) throw failure("stale", "undispatched");
+    const frame = entry.page.frames().find((candidate) => frameId(candidate) === target.frameId);
+
+    if (frame === undefined || frame.isDetached()) throw failure("stale", "undispatched");
+
+    return { entry, frame };
+  };
+
+  const current = (target?: DriverTarget) =>
+    target === undefined ? selectedCurrent() : explicitCurrent(target);
 
   const targetId = async (entry: Entry): Promise<string> => {
     if (entry.targetId !== undefined) return entry.targetId;
@@ -186,7 +203,8 @@ export const makeTargets = (
 
   const urlOf = (frame: Frame) => safeDecode(URLText, frame.url());
 
-  const selectedUrl = () => urlOf(current().frame);
+  const selectedUrl = () => urlOf(selectedCurrent().frame);
+  const url = (target?: DriverTarget) => urlOf(current(target).frame);
 
   /**
    * Chooses the connection's first target: a page it opens itself, the one the caller named, or
@@ -249,6 +267,24 @@ export const makeTargets = (
       return output;
     });
 
+  const explicitPage = async (page: PageInfo, ticket: Ticket): Promise<Entry> => {
+    ticket.check();
+    const entry = entries.get(page.pageId);
+
+    if (entry === undefined || entry.page.isClosed()) throw failure("not-found", "undispatched");
+    if ((await targetId(entry)) !== page.targetId) throw failure("stale", "undispatched");
+    ticket.check();
+
+    return entry;
+  };
+
+  const resolvePage = (page: PageInfo, ticket: Ticket) =>
+    sanitize(async () => {
+      const entry = await explicitPage(page, ticket);
+
+      return { pageId: entry.id, frameId: frameId(entry.page.mainFrame()) };
+    });
+
   const selectPage = (id: string, ticket: Ticket) =>
     sanitize(async () => {
       const entry = entries.get(id);
@@ -292,10 +328,11 @@ export const makeTargets = (
       ticket.check();
     });
 
-  const listFrames = (ticket: Ticket) =>
+  const listFrames = (ticket: Ticket, page?: PageInfo) =>
     sanitize(async () => {
       ticket.check();
-      const frames = current().entry.page.frames();
+      const entry = page === undefined ? selectedCurrent().entry : await explicitPage(page, ticket);
+      const frames = entry.page.frames();
 
       if (frames.length > 128) throw failure("limit");
 
@@ -307,6 +344,20 @@ export const makeTargets = (
           name: frame.name().slice(0, 256),
         }),
       );
+    });
+
+  const resolveFrame = (page: PageInfo, requested: FrameInfo, ticket: Ticket) =>
+    sanitize(async () => {
+      const entry = await explicitPage(page, ticket);
+
+      const frame = entry.page
+        .frames()
+        .find((candidate) => frameId(candidate) === requested.frameId);
+
+      if (frame === undefined || frame.isDetached()) throw failure("not-found", "undispatched");
+      ticket.check();
+
+      return { pageId: entry.id, frameId: frameId(frame) };
     });
 
   const selectFrame = (id: string, ticket: Ticket) =>
@@ -339,15 +390,18 @@ export const makeTargets = (
       has: (pageId: string) => navigating.has(pageId),
     },
     selectedUrl,
+    url,
     selectInitial,
     clear,
     selected,
     selectedTargetId,
     listPages,
+    resolvePage,
     selectPage,
     newPage,
     closePage,
     listFrames,
+    resolveFrame,
     selectFrame,
   };
 };

@@ -1,23 +1,22 @@
-import { Cause, Deferred, Effect, Exit, Fiber, type Layer, Schema, Scope } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import {
   BrowserActionResult,
   BrowserNavigationResult,
   BrowserNavigateRequest,
   BrowserScrollRequest,
-  type InteractiveBrowserError,
 } from "effect-agent/interactive-browser";
-import type { ElementAdmission, NavigationOperation } from "effect-browser/browser";
+import type { BrowserSession, ElementAdmission, NavigationOperation } from "effect-browser/browser";
 import {
   type InputReceipt,
+  KeyStroke,
   Observation,
   ObservedElement,
   PointerMoveRequest,
+  TypeRequest,
   WheelRequest,
 } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, type InitializationError } from "effect-browser/errors";
 import { Tool, Toolkit } from "effect/unstable/ai";
-
-import type { AgentSession } from "./Adapter.ts";
 
 /** A declared Tool failure, not a successful payload with an embedded error. */
 export class BrowserToolFailure extends Schema.TaggedError<BrowserToolFailure>()(
@@ -28,26 +27,11 @@ export class BrowserToolFailure extends Schema.TaggedError<BrowserToolFailure>()
   },
 ) {}
 
-const failed = (error: BrowserError | InteractiveBrowserError): BrowserToolFailure => {
-  if (Schema.is(BrowserError)(error))
-    return BrowserToolFailure.make({
-      reason: error.reason,
-      outcome: error.outcome ?? "unknown",
-    });
-  if (error._tag === "InteractiveBrowserBusyError")
-    return BrowserToolFailure.make({ reason: "busy", outcome: "undispatched" });
-  if (error._tag === "InteractiveBrowserPolicyDeniedError")
-    return BrowserToolFailure.make({ reason: "configuration", outcome: "undispatched" });
-  if (error._tag === "InteractiveBrowserUnsupportedError")
-    return BrowserToolFailure.make({ reason: "unsupported", outcome: "undispatched" });
-
-  // The existing provider-neutral error contract does not preserve dispatch classification.
-  // Do not guess it from a message or a raw SDK cause. Observed-element host calls retain it explicitly.
-  return BrowserToolFailure.make({
-    reason: error._tag === "InteractiveBrowserExpiredError" ? "closed" : "provider",
-    outcome: "unknown",
+const failed = (error: BrowserError): BrowserToolFailure =>
+  BrowserToolFailure.make({
+    reason: error.reason,
+    outcome: error.outcome ?? "unknown",
   });
-};
 
 const actionResult = (url: string) =>
   Schema.decodeEffect(BrowserActionResult)({ url }).pipe(
@@ -137,6 +121,39 @@ const Wheel = Tool.make("browser_wheel", {
 /** Optional additions, merged with `toolkit` by the host. `browser_scroll` stays scripted. */
 export const nativeToolkit = Toolkit.make(PointerMove, Hover, Wheel);
 
+const Press = Tool.make("browser_press", {
+  description:
+    "Send one real key stroke to the exact node from the most recent observation, only if it already has focus. Click or otherwise focus it first. Success acknowledges dispatch only; inspect again to observe the result.",
+  parameters: Schema.Struct({
+    reference: ObservedElement,
+    ...KeyStroke.fields,
+  }),
+  success: NativeInputResult,
+  failure: BrowserToolFailure,
+  failureMode: "return",
+});
+
+const Type = Tool.make("browser_type", {
+  description:
+    "Type bounded text as real key input into the exact node from the most recent observation, only if it already has focus. Click or otherwise focus it first. Success acknowledges dispatch only; inspect again to observe the result.",
+  parameters: Schema.Struct({
+    reference: ObservedElement,
+    text: TypeRequest.fields.text,
+  }),
+  success: NativeInputResult,
+  failure: BrowserToolFailure,
+  failureMode: "return",
+});
+
+/** Optional real keyboard input. Kept separate so existing native-tool opt-ins do not gain tools. */
+export const keyboardToolkit = Toolkit.make(Press, Type);
+
+export type ToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof toolkit>>;
+export type NativeToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof nativeToolkit>>;
+export type KeyboardToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof keyboardToolkit>>;
+export type ToolHostServices = ToolHandlers | NativeToolHandlers | KeyboardToolHandlers;
+export type ToolRunRequirements<R> = Exclude<Exclude<R, ToolHostServices>, Scope.Scope>;
+
 export interface HandlerOptions {
   readonly maxTextBytes?: number;
   readonly maxControls?: number;
@@ -161,7 +178,7 @@ interface Hooks {
 
 const direct: Hooks = { run: (effect) => effect };
 
-const makeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions, hooks: Hooks) => {
+const makeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions, hooks: Hooks) => {
   const maxTextBytes = options.maxTextBytes ?? 8192;
   const maxControls = options.maxControls ?? 16;
   const scope = options.observationScope ?? "document";
@@ -173,44 +190,41 @@ const makeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions, hook
     browser_navigate: (request, context) =>
       hooks.run(
         hooks.navigate === undefined
-          ? session.currentHandle.pipe(
+          ? browser.currentTarget.pipe(
               Effect.mapError(failed),
-              Effect.flatMap((handle) => handle.navigate(request).pipe(Effect.mapError(failed))),
+              Effect.flatMap((target) => target.navigate(request).pipe(Effect.mapError(failed))),
             )
           : hooks.navigate(request, context.toolCallId),
       ),
     browser_inspect: () =>
       hooks.run(
-        session.browser.observe({ maxTextBytes, maxControls, scope }).pipe(Effect.mapError(failed)),
+        browser.observe({ maxTextBytes, maxControls, scope }).pipe(Effect.mapError(failed)),
       ),
     browser_click: (reference) =>
       hooks.run(
-        session.browser.clickElement(reference, admission).pipe(
+        browser.clickElement(reference, admission).pipe(
           Effect.mapError(failed),
           Effect.flatMap((result) => actionResult(result.url)),
         ),
       ),
     browser_fill: ({ reference, value }) =>
       hooks.run(
-        session.browser.fillElement(reference, value, admission).pipe(
+        browser.fillElement(reference, value, admission).pipe(
           Effect.mapError(failed),
           Effect.flatMap((result) => actionResult(result.url)),
         ),
       ),
     browser_scroll: (request) =>
       hooks.run(
-        session.currentHandle.pipe(
+        browser.currentTarget.pipe(
           Effect.mapError(failed),
-          Effect.flatMap((handle) => handle.scroll(request).pipe(Effect.mapError(failed))),
+          Effect.flatMap((target) => target.scroll(request).pipe(Effect.mapError(failed))),
         ),
       ),
   });
 };
 
-const makeNativeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions, hooks: Hooks) => {
-  const admission =
-    options.admission === undefined ? undefined : { admit: options.admission.admit };
-
+const inputWith = (hooks: Hooks) => {
   const input = (
     effect: Effect.Effect<InputReceipt, BrowserError>,
     toolCallId: string | undefined,
@@ -223,29 +237,71 @@ const makeNativeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions
       ),
     );
 
+  return input;
+};
+
+const makeNativeHandlers = <E>(
+  browser: BrowserSession<E>,
+  options: HandlerOptions,
+  hooks: Hooks,
+) => {
+  const admission =
+    options.admission === undefined ? undefined : { admit: options.admission.admit };
+
+  const input = inputWith(hooks);
+
   return nativeToolkit.toLayer({
     browser_pointer_move: (request, context) =>
       input(
-        session.browser.currentTarget.pipe(Effect.flatMap((target) => target.pointerMove(request))),
+        browser.currentTarget.pipe(Effect.flatMap((target) => target.pointerMove(request))),
         context.toolCallId,
       ),
     browser_hover: (reference, context) =>
-      input(session.browser.hoverElement(reference, admission), context.toolCallId),
+      input(browser.hoverElement(reference, admission), context.toolCallId),
     browser_wheel: (request, context) =>
       input(
-        session.browser.currentTarget.pipe(Effect.flatMap((target) => target.wheel(request))),
+        browser.currentTarget.pipe(Effect.flatMap((target) => target.wheel(request))),
         context.toolCallId,
       ),
   });
 };
 
+const makeKeyboardHandlers = <E>(
+  browser: BrowserSession<E>,
+  options: HandlerOptions,
+  hooks: Hooks,
+) => {
+  const admission =
+    options.admission === undefined ? undefined : { admit: options.admission.admit };
+
+  const input = inputWith(hooks);
+
+  return keyboardToolkit.toLayer({
+    browser_press: ({ reference, key, modifiers }, context) =>
+      input(
+        browser.pressElement(
+          reference,
+          modifiers === undefined ? { key } : { key, modifiers },
+          admission,
+        ),
+        context.toolCallId,
+      ),
+    browser_type: ({ reference, text }, context) =>
+      input(browser.typeElement(reference, text, admission), context.toolCallId),
+  });
+};
+
 /** Borrow one execution-owned session. These five tools keep their original default behavior. */
-export const handlers = <E>(session: AgentSession<E>, options: HandlerOptions = {}) =>
-  makeHandlers(session, options, direct);
+export const handlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
+  makeHandlers(browser, options, direct);
 
 /** Opt-in native tools using the same session, exact-node policy and input budgets. */
-export const nativeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions = {}) =>
-  makeNativeHandlers(session, options, direct);
+export const nativeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
+  makeNativeHandlers(browser, options, direct);
+
+/** Opt-in real keyboard tools using exact observed nodes and the same admission policy. */
+export const keyboardHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
+  makeKeyboardHandlers(browser, options, direct);
 
 export interface HostOptions<E = never, R = never> extends HandlerOptions {
   /**
@@ -257,33 +313,47 @@ export interface HostOptions<E = never, R = never> extends HandlerOptions {
     readonly operation: NavigationOperation;
     readonly toolCallId: string | undefined;
   }) => Effect.Effect<void, E, R | Scope.Scope>;
-  /** Called after native input, with the unmodified receipt. No receipt enters a model result. */
+  /** Called after real pointer or keyboard input, with the unmodified host-only receipt. */
   readonly onInput?: (event: {
     readonly receipt: InputReceipt;
     readonly toolCallId: string | undefined;
   }) => Effect.Effect<void, E, R | Scope.Scope>;
 }
 
-export interface ToolHost<E = never> {
-  readonly handlers: Layer.Layer<Tool.HandlersFor<Toolkit.Tools<typeof toolkit>>>;
-  readonly nativeHandlers: Layer.Layer<Tool.HandlersFor<Toolkit.Tools<typeof nativeToolkit>>>;
-  /** First callback/cleanup cause, preserving private consumer errors on the host only. */
-  readonly failure: Effect.Effect<never, E | BrowserError>;
+export type ToolHostFailure<OwnerError = never, CallbackError = never> =
+  | OwnerError
+  | CallbackError
+  | InitializationError
+  | BrowserError;
+
+export interface ToolHost<OwnerError = never, CallbackError = never> {
+  readonly handlers: Layer.Layer<ToolHandlers>;
+  readonly nativeHandlers: Layer.Layer<NativeToolHandlers>;
+  readonly keyboardHandlers: Layer.Layer<KeyboardToolHandlers>;
+  /** All Tool handler services. The agent still sees only the Toolkits it explicitly declares. */
+  readonly layer: Layer.Layer<ToolHostServices>;
+  /** First host callback, navigation-cleanup or browser fail-session cause. */
+  readonly failure: Effect.Effect<never, ToolHostFailure<OwnerError, CallbackError>>;
+  /** Provide this host's handlers and supervise the program without closing the borrowed browser. */
+  readonly run: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ToolHostFailure<OwnerError, CallbackError>, ToolRunRequirements<R>>;
 }
 
 /**
  * Scoped host composition over the same maintained handlers. Dependencies are captured here;
  * callback failures are retained on `failure` and only a bounded failure reaches the model.
- * Closing this scope joins its Tool calls without closing the borrowed browser. A cancelled
- * navigation asks its exact operation to stop before the operation scope can fence abandonment.
+ * Closing this scope joins its supervised programs, Tool calls and callbacks without closing the
+ * borrowed browser. A cancelled navigation asks its exact operation to stop before the operation
+ * scope can fence abandonment.
  */
 export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = never>(
-  session: AgentSession<OwnerError>,
+  browser: BrowserSession<OwnerError>,
   options: HostOptions<E, R> = {},
-): Effect.fn.Return<ToolHost<E>, never, Exclude<R, Scope.Scope> | Scope.Scope> {
+): Effect.fn.Return<ToolHost<OwnerError, E>, never, Exclude<R, Scope.Scope> | Scope.Scope> {
   const consumer = yield* Effect.context<Exclude<R, Scope.Scope>>();
   const scope = yield* Scope.make("sequential");
-  const failure = yield* Deferred.make<never, E | BrowserError>();
+  const failure = yield* Deferred.make<never, ToolHostFailure<OwnerError, E>>();
   const { onNavigation, onInput } = options;
   let closed = false;
 
@@ -291,6 +361,13 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     Effect.sync(() => {
       closed = true;
     }).pipe(Effect.andThen(Scope.close(scope, exit))),
+  );
+
+  yield* browser.failure.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause) ? Effect.void : Deferred.failCause(failure, cause),
+    ),
+    Effect.forkIn(scope, { startImmediately: true }),
   );
 
   const callbackFailed = () => BrowserToolFailure.make({ reason: "failed", outcome: "unknown" });
@@ -325,7 +402,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     request,
     toolCallId,
   ) {
-    const target = yield* session.browser.currentTarget.pipe(Effect.mapError(failed));
+    const target = yield* browser.currentTarget.pipe(Effect.mapError(failed));
     const operation = yield* target.startNavigation(request).pipe(Effect.mapError(failed));
     let settled = false;
 
@@ -382,9 +459,51 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         : invoke(Effect.suspend(() => onInput({ receipt, toolCallId }))),
   };
 
+  const handlerLayer = makeHandlers(browser, options, hooks);
+  const nativeHandlerLayer = makeNativeHandlers(browser, options, hooks);
+  const keyboardHandlerLayer = makeKeyboardHandlers(browser, options, hooks);
+  const layer = Layer.mergeAll(handlerLayer, nativeHandlerLayer, keyboardHandlerLayer);
+
+  const supervise: ToolHost<OwnerError, E>["run"] = (effect) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (closed)
+          return yield* BrowserError.make({
+            operation: "close",
+            reason: "closed",
+            outcome: "undispatched",
+          });
+        if (Deferred.isDoneUnsafe(failure)) return yield* Deferred.await(failure);
+
+        const fiber = yield* Effect.forkIn(
+          restore(Effect.scoped(effect.pipe(Effect.provide(layer)))),
+          scope,
+          { startImmediately: true },
+        );
+
+        return yield* restore(Effect.raceFirst(Deferred.await(failure), Fiber.join(fiber))).pipe(
+          Effect.ensuring(Fiber.interrupt(fiber)),
+        );
+      }),
+    );
+
   return {
-    handlers: makeHandlers(session, options, hooks),
-    nativeHandlers: makeNativeHandlers(session, options, hooks),
+    handlers: handlerLayer,
+    nativeHandlers: nativeHandlerLayer,
+    keyboardHandlers: keyboardHandlerLayer,
+    layer,
     failure: Deferred.await(failure),
+    run: supervise,
   };
 });
+
+/** Scope one Tool host and each program run, provide handlers, and supervise without owning the browser. */
+export const run = <OwnerError, A, E2, R2, CallbackError = never, CallbackR = never>(
+  browser: BrowserSession<OwnerError>,
+  effect: Effect.Effect<A, E2, R2>,
+  options: HostOptions<CallbackError, CallbackR> = {},
+): Effect.Effect<
+  A,
+  E2 | ToolHostFailure<OwnerError, CallbackError>,
+  ToolRunRequirements<R2> | Exclude<CallbackR, Scope.Scope>
+> => Effect.scoped(makeHost(browser, options).pipe(Effect.flatMap((host) => host.run(effect))));

@@ -1,6 +1,7 @@
 import { Clock, Deferred, Effect, Exit, Redacted, Schema, Scope } from "effect";
 
 import {
+  type FrameInfo,
   type KeyModifier,
   Observation,
   type ObservedElement,
@@ -15,7 +16,13 @@ import { type CaptureParent } from "./Association.ts";
 import type { BindingImplementation } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import type { ConnectionCleanup, ConnectionState } from "./ConnectionCleanup.ts";
-import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
+import type {
+  Driver,
+  DriverEvents,
+  DriverOptions,
+  DriverTarget,
+  NativeFileSelection,
+} from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import { makeOwner, native, type Limits, type Ticket } from "./Owner.ts";
@@ -30,6 +37,25 @@ export interface Reading {
   readonly maxTextBytes?: number;
   readonly maxControls?: number;
 }
+
+/** One public stop capability: its first Exit, including interruption, is the only native attempt. */
+export const makeNavigationStop = <E, R>(
+  done: () => boolean,
+  attempt: Effect.Effect<"dispatched" | "settled", E, R>,
+  confirmed: () => void,
+) =>
+  Effect.cached(
+    Effect.suspend(() =>
+      done()
+        ? Effect.void
+        : attempt.pipe(
+            Effect.tap((result) =>
+              result === "dispatched" ? Effect.sync(confirmed) : Effect.void,
+            ),
+            Effect.asVoid,
+          ),
+    ),
+  );
 
 export interface SessionOptions<L extends SessionLease, E, R = never> {
   readonly implementation: string;
@@ -327,9 +353,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     "file-chooser",
   ];
 
-  const requireReady = async (operation: BrowserOperation, ticket: Ticket) => {
+  const requireReady = async (
+    operation: BrowserOperation,
+    ticket: Ticket,
+    target?: DriverTarget,
+  ) => {
     if (!dependent.includes(operation)) return;
-    const state = await getDriver().documentReadiness(ticket);
+    const state = await getDriver().documentReadiness(ticket, target);
 
     if (state._tag === "Ready" || state._tag === "NotApplicable") return;
     throw BrowserError.make({
@@ -360,7 +390,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       const revision = owner.state.revision;
 
       return native("observe", ticket, async () => {
-        await getDriver().pageControl?.checkSelected(ticket);
+        await getDriver().pageControl?.checkTarget(undefined, ticket);
         if (dependent) await requireReady("observe", ticket);
 
         return getDriver().observe(scope, maximumBytes, controls, ticket);
@@ -425,15 +455,16 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
    * While a navigation is in flight on the selected page, nothing else may change that page.
    * Reads, checkpoints, holds and every other page proceed.
    */
-  const unreserved = (operation: BrowserOperation) =>
+  const unreserved = (operation: BrowserOperation, target?: DriverTarget) =>
     Effect.suspend(() => {
-      let pageId: string | undefined;
+      let pageId = target?.pageId;
 
-      try {
-        pageId = driver?.selected().pageId;
-      } catch {
-        // No selected target: the operation itself reports that, with its own reason.
-      }
+      if (pageId === undefined)
+        try {
+          pageId = driver?.selected().pageId;
+        } catch {
+          // No selected target: the operation itself reports that, with its own reason.
+        }
 
       return pageId !== undefined && owner.reserved(pageId)
         ? Effect.fail(BrowserError.make({ operation, reason: "busy", outcome: "undispatched" }))
@@ -468,7 +499,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               "revalidate",
             ].includes(operation)
           )
-            await getDriver().pageControl?.checkSelected(ticket);
+            await getDriver().pageControl?.checkTarget(undefined, ticket);
           await requireReady(operation, ticket);
 
           return action(getDriver(), ticket);
@@ -481,13 +512,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       },
     );
 
-  /** A bound handle captures the page selection and connection generation, never the current DOM. */
-  const bind = () => {
+  /**
+   * A selected handle captures selection plus generation. A pinned handle captures only the
+   * connection generation and re-resolves its exact page/frame identity on every operation.
+   */
+  const bind = (browserTarget?: DriverTarget) => {
     const generation = owner.state.generation,
-      selection = owner.state.selection;
+      selection = browserTarget === undefined ? owner.state.selection : undefined;
 
     const check = () => {
-      if (owner.state.generation !== generation || owner.state.selection !== selection) {
+      if (
+        owner.state.generation !== generation ||
+        (selection !== undefined && owner.state.selection !== selection)
+      ) {
         return Effect.fail(
           BrowserError.make({ operation: "handle", reason: "stale", outcome: "undispatched" }),
         );
@@ -505,18 +542,27 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         operation,
         (ticket) =>
           native(operation, ticket, async () => {
-            await getDriver().pageControl?.checkSelected(ticket);
-            await requireReady(operation, ticket);
+            await getDriver().pageControl?.checkTarget(browserTarget, ticket);
+            await requireReady(operation, ticket, browserTarget);
 
             return action(getDriver(), ticket);
           }),
         {
           mutation,
           preflight: mutation
-            ? Effect.suspend(check).pipe(Effect.andThen(unreserved(operation)))
+            ? Effect.suspend(check).pipe(Effect.andThen(unreserved(operation, browserTarget)))
             : Effect.suspend(check),
         },
       );
+
+    const operationTarget = () =>
+      browserTarget === undefined
+        ? capture.target()
+        : Target.make({
+            generation,
+            pageId: browserTarget.pageId,
+            frameId: browserTarget.frameId,
+          });
 
     /**
      * Native input, stamped on the host monotonic clock that stamps captured frames, around
@@ -530,7 +576,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         operation,
         async (driver, ticket) => {
           // What the input is sent to, read first: input may replace the document it reaches.
-          const target = capture.target();
+          const target = operationTarget();
           const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
           const dispatched = await action(driver, ticket);
 
@@ -558,8 +604,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       const begun = yield* run(
         "navigate",
         async (driver, ticket) => {
-          const target = capture.target();
-          const navigation = await driver.beginNavigation(url, timeoutMillis, ticket);
+          const target = operationTarget();
+
+          const navigation = await driver.beginNavigation(
+            url,
+            timeoutMillis,
+            ticket,
+            browserTarget,
+          );
 
           return { target, navigation, reservation: owner.reserve(navigation.pageId) };
         },
@@ -568,6 +620,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
       const { navigation, reservation } = begun;
       const outcome = yield* Deferred.make<string, BrowserError>();
+      let stopDispatched = false;
 
       const failed = (reason: BrowserError["reason"]) =>
         Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
@@ -584,13 +637,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       };
 
       navigation.settled.then(
-        (url) => decide(Effect.succeed(url), true),
+        (url) => {
+          if (!stopDispatched) decide(Effect.succeed(url), true);
+        },
         // Failed after dispatch, and nothing says what the browser did: unknown, as it always was.
-        (error: unknown) =>
-          decide(
-            Effect.fail(publicError(error, "navigate", { reason: "provider", outcome: "unknown" })),
-            false,
-          ),
+        (error: unknown) => {
+          if (!stopDispatched)
+            decide(
+              Effect.fail(
+                publicError(error, "navigate", { reason: "provider", outcome: "unknown" }),
+              ),
+              false,
+            );
+        },
       );
       // A fence already cleared the reservation; this only releases anyone still waiting.
       reservation.signal.addEventListener("abort", () => decide(failed("stale"), true), {
@@ -599,6 +658,31 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       // Left unsettled, nothing knows what the browser did with it.
       yield* Effect.addFinalizer(() => Effect.sync(() => decide(failed("stale"), false)));
 
+      const stop = yield* makeNavigationStop(
+        () => Deferred.isDoneUnsafe(outcome),
+        owner.guard(
+          "navigate-stop",
+          (ticket) =>
+            native("navigate-stop", ticket, () =>
+              navigation.stop(
+                ticket,
+                () => !Deferred.isDoneUnsafe(outcome),
+                () => {
+                  stopDispatched = true;
+                },
+              ),
+            ).pipe(
+              Effect.timeoutOrElse({
+                duration: Math.min(3000, ticket.remainingMillis()),
+                orElse: () =>
+                  Effect.fail(BrowserError.make({ operation: "navigate-stop", reason: "timeout" })),
+              }),
+            ),
+          { mutation: true, charge: false },
+        ),
+        () => decide(failed("interrupted"), true),
+      );
+
       return {
         target: begun.target,
         completed: Deferred.await(outcome),
@@ -606,24 +690,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
          * The browser's acknowledgement is the known outcome. Playwright's own promise is not
          * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
          */
-        stop: Effect.tryPromise({
-          try: () => navigation.stop(),
-          catch: (error) =>
-            publicError(error, "navigate-stop", { reason: "provider", outcome: "unknown" }),
-        }).pipe(
-          Effect.timeoutOrElse({
-            duration: 3000,
-            orElse: () =>
-              Effect.fail(
-                BrowserError.make({
-                  operation: "navigate-stop",
-                  reason: "timeout",
-                  outcome: "unknown",
-                }),
-              ),
-          }),
-          Effect.tap(() => Effect.sync(() => decide(failed("interrupted"), true))),
-        ),
+        stop,
       };
     });
 
@@ -636,31 +703,38 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         ),
       readText: (selector?: string) =>
         run("read-text", (driver, ticket) =>
-          driver.readText(selector, options.maxReturnedBytes, ticket),
+          driver.readText(selector, options.maxReturnedBytes, ticket, browserTarget),
         ),
       click: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
-        run("click", (driver, ticket) => driver.click(target, ticket, policy), true),
+        run("click", (driver, ticket) => driver.click(target, ticket, policy, browserTarget), true),
       fill: (target: string | ObservedElement, value: string, policy?: AdmissionPolicy) =>
-        run("fill", (driver, ticket) => driver.fill(target, value, ticket, policy), true),
+        run(
+          "fill",
+          (driver, ticket) => driver.fill(target, value, ticket, policy, browserTarget),
+          true,
+        ),
       scroll: (x: number, y: number) =>
-        run("scroll", (driver, ticket) => driver.scroll(x, y, ticket), true),
+        run("scroll", (driver, ticket) => driver.scroll(x, y, ticket, browserTarget), true),
       pointerMove: (to: NativePoint) =>
-        input("pointer-move", (driver, ticket) => driver.pointerMove(to, ticket)),
+        input("pointer-move", (driver, ticket) => driver.pointerMove(to, ticket, browserTarget)),
       hover: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
-        input("hover", (driver, ticket) => driver.hover(target, ticket, policy)),
+        input("hover", (driver, ticket) => driver.hover(target, ticket, policy, browserTarget)),
       wheel: (deltaX: number, deltaY: number, at?: NativePoint) =>
-        input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket)),
+        input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket, browserTarget)),
       press: (
         key: string,
         modifiers: ReadonlyArray<KeyModifier>,
         into?: string | ObservedElement,
         policy?: AdmissionPolicy,
-      ) => input("press", (driver, ticket) => driver.press(key, modifiers, into, ticket, policy)),
+      ) =>
+        input("press", (driver, ticket) =>
+          driver.press(key, modifiers, into, ticket, policy, browserTarget),
+        ),
       type: (text: string, into?: string | ObservedElement, policy?: AdmissionPolicy) =>
-        input("type", (driver, ticket) => driver.type(text, into, ticket, policy)),
+        input("type", (driver, ticket) => driver.type(text, into, ticket, policy, browserTarget)),
       screenshot: (full: boolean) =>
         run("screenshot", (driver, ticket) =>
-          driver.screenshot(full, options.maxReturnedBytes, ticket),
+          driver.screenshot(full, options.maxReturnedBytes, ticket, browserTarget),
         ),
     };
   };
@@ -715,6 +789,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     return port;
   };
+
+  const pinned = (target: Effect.Effect<DriverTarget, BrowserError>) =>
+    target.pipe(
+      Effect.map((value) => ({
+        target: Target.make({
+          generation: owner.state.generation,
+          pageId: value.pageId,
+          frameId: value.frameId,
+        }),
+        bound: bind(value),
+      })),
+    );
 
   const controls = {
     implementation: options.implementation,
@@ -795,6 +881,22 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     frames: nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket), {
       charge: false,
     }),
+    framesOf: (page: PageInfo) =>
+      nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket, page), {
+        charge: false,
+      }),
+    pinPage: (page: PageInfo) =>
+      pinned(
+        nativeOperation("target", (driver, ticket) => driver.resolvePage(page, ticket), {
+          charge: false,
+        }),
+      ),
+    pinFrame: (page: PageInfo, frame: FrameInfo) =>
+      pinned(
+        nativeOperation("target", (driver, ticket) => driver.resolveFrame(page, frame, ticket), {
+          charge: false,
+        }),
+      ),
     selectPage: (id: string) =>
       nativeOperation(
         "select-page",

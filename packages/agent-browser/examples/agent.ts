@@ -12,8 +12,8 @@
 // the caller's: provide a LanguageModel layer beside these programs. `test/native/agent.test.ts`
 // runs this same wiring against a local Chromium with a scripted model.
 import { Context, Effect, Layer, Schema } from "effect";
-import { fromSession } from "effect-agent-browser/adapter";
 import * as Bootstrap from "effect-browser/bootstrap";
+import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Account from "effect-browserbase/account";
 import { BrowserbaseBrowser, type LiveView } from "effect-browserbase/browser";
@@ -38,14 +38,13 @@ const host = BrowserbaseBrowser.layer({ launch }).pipe(Layer.provide(account));
 
 /** The execution owns the session, so the host can still look after the agent is done. */
 export const runBrowserAgent = (request: string) =>
-  Effect.scoped(
+  Browser.scoped(BrowserbaseBrowser.open(genericPolicy), (session) =>
     Effect.gen(function* () {
-      const session = fromSession(yield* (yield* BrowserbaseBrowser).open(genericPolicy));
       const run = yield* turns(session, request);
 
       // Through the generic session, with the host-only facts an Observation handed to a model
       // never carries. Leaving the scope releases the browser and reports how that went.
-      const seen = yield* session.browser.observe({ scope: "viewport" });
+      const seen = yield* session.observe({ scope: "viewport" });
 
       return { ...run.output, url: seen.url, turns: run.turns };
     }),
@@ -59,20 +58,19 @@ export const runWithOperator = (
   request: string,
   operator: (view: LiveView) => Effect.Effect<void>,
 ) =>
-  Effect.scoped(
+  Browser.scoped(BrowserbaseBrowser.open(genericPolicy), (session) =>
     Effect.gen(function* () {
-      const session = fromSession(yield* (yield* BrowserbaseBrowser).open(genericPolicy));
       const first = yield* turns(session, request);
 
       if (!first.output.needsOperator) return first.output;
 
       // Automation is paused before the Live View leaves this process. Its URL grants control of
       // the browser: show it to a person, never to the model or a log.
-      const handoff = yield* session.browser.beginHandoff(300);
+      const handoff = yield* session.beginHandoff(300);
 
       yield* operator(handoff.view);
       // The boolean is this host's own decision that the operator has let go. The page cannot say.
-      yield* session.browser.resume(handoff.token, true);
+      yield* session.resume(handoff.token, true);
 
       const second = yield* turns(
         session,
@@ -116,16 +114,12 @@ const bootstrap = Bootstrap.binding({
 });
 
 /**
- * `withBrowser` races the agent against the binding's failure and confirms the release before
- * reporting success. The session it hands over is `BrowserbaseSession<ApprovalUnavailable>` and
- * `fromSession` keeps that type, so `Approvals` is a requirement of this program and
- * `ApprovalUnavailable` one of its failures; the adapter erases neither.
+ * `Browser.scoped` races the agent against the binding's failure and confirms the release before
+ * reporting success. The callback keeps `BrowserbaseSession<ApprovalUnavailable>`, so
+ * `Approvals` remains a requirement of this program and `ApprovalUnavailable` one of its
+ * failures.
  */
 export const runSupervised = (request: string) =>
-  Effect.gen(function* () {
-    const browser = yield* BrowserbaseBrowser;
-
-    return yield* browser.withBrowser(genericPolicy, { bootstrap }, (generic) =>
-      turns(fromSession(generic), request),
-    );
-  }).pipe(Effect.provide(BrowserbaseBrowser.layer({ launch }).pipe(Layer.provide(account))));
+  Browser.scoped(BrowserbaseBrowser.open(genericPolicy, { bootstrap }), (browser) =>
+    turns(browser, request),
+  ).pipe(Effect.provide(BrowserbaseBrowser.layer({ launch }).pipe(Layer.provide(account))));

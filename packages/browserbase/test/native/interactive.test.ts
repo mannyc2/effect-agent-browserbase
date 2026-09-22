@@ -264,6 +264,77 @@ it.live(
 );
 
 it.live(
+  "real CDP: stale frame metadata never aliases a rebuilt frame after keep-alive reconnect",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* localBrowser;
+
+        yield* withProvider(
+          f,
+          Effect.gen(function* () {
+            const session = yield* BrowserbaseBrowser.open(policy);
+
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
+            const page = (yield* session.pages).find((candidate) => candidate.selected)!;
+
+            const oldFrame = (yield* session.framesOf(page)).find(
+              (frame) => frame.parentFrameId !== null,
+            )!;
+
+            expect(
+              (yield* (yield* session.pinFrame(page, oldFrame)).readText(
+                ReadTextRequest.make({ selector: "#inner" }),
+              )).text,
+            ).toBe("Frame action");
+
+            yield* session.detach;
+            yield* Effect.promise(() =>
+              f.human(session.reference.sessionId, async (nativePage) => {
+                const navigated = nativePage.waitForEvent("framenavigated", {
+                  predicate: (frame) =>
+                    frame.name() === "replacement" && frame.url().endsWith("/keyframe"),
+                });
+
+                await nativePage.evaluate(() => {
+                  document.querySelector("iframe")?.remove();
+                  const replacement = document.createElement("iframe");
+
+                  replacement.name = "replacement";
+                  replacement.src = "/keyframe";
+                  document.body.append(replacement);
+                });
+                await navigated;
+              }),
+            );
+            yield* session.reconnect(true);
+
+            const stale = yield* session.pinFrame(page, oldFrame).pipe(Effect.result);
+
+            expect(stale._tag).toBe("Failure");
+            if (stale._tag === "Failure") {
+              expect(stale.failure.reason).toBe("not-found");
+              expect(stale.failure.outcome).toBe("undispatched");
+            }
+
+            const freshFrame = (yield* session.framesOf(page)).find(
+              (frame) => frame.parentFrameId !== null,
+            )!;
+
+            expect(freshFrame.frameId).not.toBe(oldFrame.frameId);
+            expect(
+              (yield* (yield* session.pinFrame(page, freshFrame)).readText(
+                ReadTextRequest.make({ selector: "#inside" }),
+              )).text,
+            ).toBe("");
+          }),
+          { launch: { ...localLaunch, keepAlive: true } },
+        );
+      }),
+    ),
+);
+
+it.live(
   "real CDP: maintained screencast supports interval stop, restart, resize and parent close",
   () =>
     Effect.scoped(

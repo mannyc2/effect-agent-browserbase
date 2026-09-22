@@ -1,13 +1,14 @@
 import { Effect, Schema } from "effect";
 
 import type * as Bootstrap from "../../Bootstrap.ts";
-import type { BrowserSession, BoundTarget } from "../../Browser.ts";
+import type { BrowserSession, BoundTarget, PinnedTarget } from "../../Browser.ts";
 import {
   ActionResult,
   Checkpoint,
   CheckpointOptions,
   ClickRequest,
   FillRequest,
+  FrameInfo,
   HoverRequest,
   InputReceipt,
   KeyStroke,
@@ -15,6 +16,7 @@ import {
   NavigationResult,
   ObservationOptions,
   ObservedElement,
+  PageInfo,
   PointerMoveRequest,
   PressRequest,
   ReadTextRequest,
@@ -22,12 +24,13 @@ import {
   ScreenshotResult,
   ScrollRequest,
   StartNavigationRequest,
+  Target,
   TextResult,
   TypeRequest,
   Viewport,
   WheelRequest,
+  Identifier,
 } from "../../BrowserData.ts";
-import { Identifier } from "../../BrowserData.ts";
 import { BrowserError, type BrowserOperation, InitializationError } from "../../Errors.ts";
 import { associate } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
@@ -140,6 +143,15 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
     ),
 });
 
+const makePinnedTarget = (value: {
+  readonly target: Target;
+  readonly bound: BoundControls;
+}): PinnedTarget =>
+  Object.freeze({
+    ...makeTarget(value.bound),
+    target: Object.freeze(Target.make({ ...value.target })),
+  });
+
 /** A browser-operation failure keeps its meaning when it is reported as an initialization one. */
 const initialization = (reason: BrowserError["reason"]): InitializationError["reason"] =>
   reason === "busy"
@@ -161,6 +173,7 @@ export const makeSession = <E>(
   bindings: Bindings<E>,
 ): BrowserSession<E> => {
   const currentTarget = controls.currentTarget.pipe(Effect.map(() => makeTarget(controls.bind())));
+  const selectedTarget = () => makeTarget(controls.bind());
 
   const Wait = Schema.Struct({
     selector: ClickRequest.fields.selector,
@@ -170,6 +183,18 @@ export const makeSession = <E>(
   const navigate = (url: string) => action({ url });
 
   const session: BrowserSession<E> = {
+    navigate: (request) => Effect.suspend(() => selectedTarget().navigate(request)),
+    startNavigation: (request) => Effect.suspend(() => selectedTarget().startNavigation(request)),
+    readText: (request) => Effect.suspend(() => selectedTarget().readText(request)),
+    click: (request) => Effect.suspend(() => selectedTarget().click(request)),
+    fill: (request) => Effect.suspend(() => selectedTarget().fill(request)),
+    scroll: (request) => Effect.suspend(() => selectedTarget().scroll(request)),
+    pointerMove: (request) => Effect.suspend(() => selectedTarget().pointerMove(request)),
+    hover: (request) => Effect.suspend(() => selectedTarget().hover(request)),
+    wheel: (request) => Effect.suspend(() => selectedTarget().wheel(request)),
+    press: (request) => Effect.suspend(() => selectedTarget().press(request)),
+    type: (request) => Effect.suspend(() => selectedTarget().type(request)),
+    screenshot: (request) => Effect.suspend(() => selectedTarget().screenshot(request)),
     implementation: controls.implementation,
     closeChecked: controls.closeChecked,
     failure: bindings.failure,
@@ -247,6 +272,22 @@ export const makeSession = <E>(
       ),
     pages: controls.pages,
     frames: controls.frames,
+    framesOf: (page) =>
+      checked(PageInfo, page, "list-frames").pipe(Effect.flatMap(controls.framesOf)),
+    pinPage: (page) =>
+      checked(PageInfo, page, "target").pipe(
+        Effect.flatMap(controls.pinPage),
+        Effect.map(makePinnedTarget),
+      ),
+    pinFrame: (page, frame) =>
+      checked(PageInfo, page, "target").pipe(
+        Effect.flatMap((checkedPage) =>
+          checked(FrameInfo, frame, "target").pipe(
+            Effect.flatMap((checkedFrame) => controls.pinFrame(checkedPage, checkedFrame)),
+          ),
+        ),
+        Effect.map(makePinnedTarget),
+      ),
     selectPage: (id) =>
       checked(Identifier, id, "select-page").pipe(
         Effect.flatMap(controls.selectPage),

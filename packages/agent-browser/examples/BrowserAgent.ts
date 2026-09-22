@@ -1,9 +1,9 @@
-import { Layer, Effect, Schema } from "effect";
-import type { AgentSession } from "effect-agent-browser/adapter";
+import { Effect, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
+import type { BrowserSession } from "effect-browser/browser";
 
 export const browserAgent = Agent.make("browser-example", {
   input: Schema.String,
@@ -19,7 +19,8 @@ export const browserAgent = Agent.make("browser-example", {
 });
 
 /** Every turn borrows the session acquired by the host. Supply the caller's LanguageModel. */
-export const turns = <E>(session: AgentSession<E>, request: string) =>
-  AgentRuntime.run(browserAgent, request).pipe(
-    Effect.provide(Layer.merge(BrowserTools.handlers(session), InMemory.layer)),
+export const turns = <E>(browser: BrowserSession<E>, request: string) =>
+  BrowserTools.run(
+    browser,
+    AgentRuntime.run(browserAgent, request).pipe(Effect.provide(InMemory.layer)),
   );

@@ -14,7 +14,6 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { fromSession } from "effect-agent-browser/adapter";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -38,6 +37,7 @@ const Log = Schema.Struct({
   clicks: Schema.Natural,
   fills: Schema.Natural,
   name: Schema.String,
+  keys: Schema.Array(Schema.Struct({ key: Schema.String, trusted: Schema.Boolean })),
   moves: Schema.Array(
     Schema.Struct({ x: Schema.Finite, y: Schema.Finite, trusted: Schema.Boolean }),
   ),
@@ -149,7 +149,7 @@ for (const throws of [false, true])
               const result = yield* AgentRuntime.run(agent, "inspect and fill").pipe(
                 Effect.provide(
                   Layer.mergeAll(
-                    BrowserTools.handlers(fromSession(generic), {
+                    BrowserTools.handlers(generic, {
                       observationScope: "viewport",
                       admission: {
                         admit: (facts) => {
@@ -249,7 +249,7 @@ it.live(
 
               const tools = yield* BrowserTools.toolkit.pipe(
                 Effect.provide(
-                  BrowserTools.handlers(fromSession(generic), {
+                  BrowserTools.handlers(generic, {
                     admission: {
                       admit: () => {
                         admissions++;
@@ -310,7 +310,7 @@ it.live(
 
             const tools = yield* BrowserTools.toolkit.pipe(
               Effect.provide(
-                BrowserTools.handlers(fromSession(generic), {
+                BrowserTools.handlers(generic, {
                   observationScope: "viewport",
                   admission: {
                     admit: (facts) => {
@@ -371,7 +371,7 @@ it.live(
             yield* generic.bind().navigate({ url: site.url });
             const receipts: Array<{ receipt: InputReceipt; toolCallId: string | undefined }> = [];
 
-            const host = yield* BrowserTools.makeHost(fromSession(generic), {
+            const host = yield* BrowserTools.makeHost(generic, {
               observationScope: "viewport",
               onInput: (event) =>
                 Effect.sync(() => {
@@ -457,6 +457,105 @@ it.live(
 );
 
 it.live(
+  "real Toolkit: optional keyboard tools keep exact focus, admission and private keystrokes on one owner",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* localAgentBrowser;
+        const site = yield* toolSite;
+
+        yield* withGenericAgentBrowser(
+          fixture,
+          Effect.gen(function* () {
+            const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy);
+
+            yield* generic.bind().navigate({ url: site.url });
+            const receipts: Array<{ receipt: InputReceipt; toolCallId: string | undefined }> = [];
+
+            const host = yield* BrowserTools.makeHost(generic, {
+              observationScope: "viewport",
+              admission: { admit: (facts) => facts.inputType !== "password" },
+              onInput: (event) =>
+                Effect.sync(() => {
+                  receipts.push(event);
+                }),
+            });
+
+            const tools = yield* Toolkit.merge(
+              BrowserTools.toolkit,
+              BrowserTools.keyboardToolkit,
+            ).pipe(Effect.provide(host.layer));
+
+            const original = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+            const observed = yield* inspect(original);
+            const name = named(observed, "Name");
+
+            yield* Stream.runCollect(yield* tools.handle("browser_click", name, "focus"));
+            const focused = named(yield* inspect(original), "Name");
+
+            const first = yield* Stream.runCollect(
+              yield* tools.handle(
+                "browser_type",
+                { reference: focused, text: "Vienn" },
+                "type-first",
+              ),
+            );
+
+            const afterFirst = named(yield* inspect(original), "Name");
+
+            const deleted = yield* Stream.runCollect(
+              yield* tools.handle(
+                "browser_press",
+                { reference: afterFirst, key: "Backspace" },
+                "press",
+              ),
+            );
+
+            const afterDelete = named(yield* inspect(original), "Name");
+
+            const second = yield* Stream.runCollect(
+              yield* tools.handle(
+                "browser_type",
+                { reference: afterDelete, text: "na" },
+                "type-second",
+              ),
+            );
+
+            expect((yield* read(generic)).name).toBe("Vienna");
+            expect((yield* read(generic)).keys.every((event) => event.trusted)).toBe(true);
+            expect(receipts.map((event) => event.toolCallId)).toEqual([
+              "type-first",
+              "press",
+              "type-second",
+            ]);
+            expect(receipts.map((event) => event.receipt.kind)).toEqual(["type", "press", "type"]);
+            for (const { receipt } of receipts) {
+              expect(receipt).not.toHaveProperty("key");
+              expect(receipt).not.toHaveProperty("text");
+            }
+            for (const results of [first, deleted, second]) {
+              expect(results).toMatchObject([
+                { isFailure: false, encodedResult: { dispatched: true } },
+              ]);
+            }
+
+            const secret = named(yield* inspect(original), "Secret");
+
+            const denied = yield* Stream.runCollect(
+              yield* tools.handle("browser_type", { reference: secret, text: "private" }),
+            );
+
+            expect(denied).toMatchObject([
+              { isFailure: true, result: { reason: "denied", outcome: "undispatched" } },
+            ]);
+            expect(receipts).toHaveLength(3);
+          }),
+        );
+      }),
+    ),
+);
+
+it.live(
   "real Toolkit: navigation completion returns the normal result and joins a running callback",
   () =>
     Effect.scoped(
@@ -471,7 +570,7 @@ it.live(
             const started = yield* Deferred.make<NavigationOperation>();
             let finalized = 0;
 
-            const host = yield* BrowserTools.makeHost(fromSession(generic), {
+            const host = yield* BrowserTools.makeHost(generic, {
               onNavigation: ({ operation }) =>
                 Effect.gen(function* () {
                   yield* Effect.addFinalizer(() =>
@@ -527,7 +626,7 @@ it.live(
             let observations = 0;
             let callId: string | undefined;
 
-            const host = yield* BrowserTools.makeHost(fromSession(generic), {
+            const host = yield* BrowserTools.makeHost(generic, {
               onNavigation: ({ operation, toolCallId }) =>
                 Effect.gen(function* () {
                   callId = toolCallId;
@@ -590,7 +689,7 @@ it.live(
             const expected = RecorderFailure.make({ secret: "PRIVATE-RECEIPT-CAUSE" });
             const receipts: InputReceipt[] = [];
 
-            const host = yield* BrowserTools.makeHost(fromSession(generic), {
+            const host = yield* BrowserTools.makeHost(generic, {
               onInput: ({ receipt }) =>
                 Effect.gen(function* () {
                   receipts.push(receipt);
@@ -649,7 +748,7 @@ it.live(
             const expected = RecorderFailure.make({ secret: "PRIVATE-CALLBACK-CAUSE" });
             let finalized = 0;
 
-            const host = yield* BrowserTools.makeHost(fromSession(generic), {
+            const host = yield* BrowserTools.makeHost(generic, {
               onNavigation: () =>
                 Effect.gen(function* () {
                   yield* Effect.addFinalizer(() =>
@@ -713,7 +812,7 @@ for (const closeHost of [false, true])
               const started = yield* Deferred.make<NavigationOperation>();
               let finalized = 0;
 
-              const host = yield* BrowserTools.makeHost(fromSession(generic), {
+              const host = yield* BrowserTools.makeHost(generic, {
                 onNavigation: ({ operation }) =>
                   Effect.gen(function* () {
                     yield* Effect.addFinalizer(() =>
@@ -757,3 +856,73 @@ for (const closeHost of [false, true])
         }),
       ),
   );
+
+it.live(
+  "ToolHost.run belongs to the host scope, joins program cleanup and never closes the browser",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* localAgentBrowser;
+        const site = yield* toolSite;
+
+        yield* withGenericAgentBrowser(
+          fixture,
+          Effect.gen(function* () {
+            const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy);
+
+            yield* generic.bind().navigate({ url: site.url });
+            const hostScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+            const host = yield* BrowserTools.makeHost(generic).pipe(Scope.provide(hostScope));
+            const started = yield* Deferred.make<void>();
+            let finalized = 0;
+            let completedFinalizers = 0;
+            let afterClosed = 0;
+
+            const completed = yield* host.run(
+              Effect.acquireRelease(Effect.succeed("ready"), () =>
+                Effect.sync(() => {
+                  completedFinalizers++;
+                }),
+              ),
+            );
+
+            expect(completed).toBe("ready");
+            expect(completedFinalizers).toBe(1);
+
+            const running = yield* host
+              .run(
+                Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
+                  Effect.sync(() => {
+                    finalized++;
+                  }),
+                ).pipe(Effect.andThen(Effect.never)),
+              )
+              .pipe(Effect.forkChild);
+
+            yield* Deferred.await(started);
+            yield* Scope.close(hostScope, Exit.void);
+
+            expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true);
+            expect(finalized).toBe(1);
+
+            const refused = yield* host
+              .run(
+                Effect.sync(() => {
+                  afterClosed++;
+                }),
+              )
+              .pipe(Effect.result);
+
+            expect(refused).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: "closed", outcome: "undispatched" },
+            });
+            expect(afterClosed).toBe(0);
+
+            yield* generic.bind().click({ selector: "#increment" });
+            expect((yield* read(generic)).clicks).toBe(1);
+          }),
+        );
+      }),
+    ),
+);

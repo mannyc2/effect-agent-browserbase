@@ -403,27 +403,3 @@ export const make = Effect.fnUntraced(function* (
 
   return { acquire } satisfies Runtime;
 });
-
-/** Race typed callback failure and require this implementation's checked cleanup before success. */
-export const withBrowser = <S, E, AE, AR, A, E2, R2>(
-  open: Effect.Effect<S & BrowserSession<E>, AE, AR>,
-  use: (session: S & BrowserSession<E>) => Effect.Effect<A, E2, R2>,
-): Effect.Effect<
-  A,
-  AE | E | E2 | InitializationError | BrowserError,
-  Exclude<AR | R2, Scope.Scope>
-> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const session = yield* open;
-
-      const result = yield* Effect.raceFirst(
-        session.failure,
-        Effect.suspend(() => use(session)),
-      );
-
-      yield* session.closeChecked;
-
-      return result;
-    }),
-  );

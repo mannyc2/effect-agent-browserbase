@@ -4,6 +4,7 @@ import { Clock, Effect, Fiber, Redacted, Schema, type Scope } from "effect";
 import type { InitializationError } from "effect-browser/errors";
 import { BrowserError } from "effect-browser/errors";
 
+import type { NativeNavigation } from "../../../packages/browser/src/internal/browser/Driver.ts";
 import { makeOwner, native } from "../../../packages/browser/src/internal/browser/Owner.ts";
 import {
   withWriter,
@@ -71,7 +72,7 @@ const inFlight = () => {
     },
     settle: () => resolve(urls.at(-1) ?? ""),
     fail: () => reject(new Error("PRIVATE-NAVIGATION-FAILURE")),
-    script: (url: string, pageId: string) => {
+    script: (url: string, pageId: string): NativeNavigation => {
       urls.push(url);
 
       const settled = new Promise<string>((yes, no) => {
@@ -84,8 +85,14 @@ const inFlight = () => {
       return {
         pageId,
         settled,
-        stop: async () => {
+        stop: async (ticket, pending, onDispatch) => {
+          ticket.check();
+          if (!pending()) return "settled" as const;
+          ticket.dispatch();
+          onDispatch();
           stops++;
+
+          return "dispatched" as const;
         },
       };
     },

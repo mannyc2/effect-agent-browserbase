@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { fromSession } from "effect-agent-browser/adapter";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
+import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
@@ -45,23 +45,20 @@ const result = await Effect.runPromise(
   Effect.scoped(
     Effect.gen(function* () {
       const site = yield* toolSite;
-      const browser = yield* Chromium;
 
-      return yield* browser.withBrowser(
-        BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
-        { bootstrap: settingsBootstrap(new URL(site.url).origin) },
+      return yield* Browser.scoped(
+        Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }), {
+          bootstrap: settingsBootstrap(new URL(site.url).origin),
+        }),
         (original) =>
           Effect.gen(function* () {
-            const session = fromSession(original);
-
             const typed: Same<
-              Effect.Error<typeof session.browser.failure>,
+              Effect.Error<typeof original.failure>,
               SettingsUnavailable | InitializationError
             > = true;
 
             assert.ok(typed);
-            assert.equal(session.browser, original);
-            assert.equal(session.browser.reference.provider, "chromium");
+            assert.equal(original.reference.provider, "chromium");
 
             const turns: ScriptedTurnInput[] = [
               call("browser_navigate", { url: site.url }),
@@ -85,14 +82,16 @@ const result = await Effect.runPromise(
               },
             ];
 
-            const run = yield* AgentRuntime.run(agent, "read the page").pipe(
-              Effect.provide(
-                Layer.mergeAll(
-                  BrowserTools.handlers(session),
-                  InMemory.layer,
-                  ScriptedModel.layer(turns),
-                  Layer.succeed(Model.ProviderName, "scripted"),
-                  Layer.succeed(Model.ModelName, "chromium-consumer"),
+            const run = yield* BrowserTools.run(
+              original,
+              AgentRuntime.run(agent, "read the page").pipe(
+                Effect.provide(
+                  Layer.mergeAll(
+                    InMemory.layer,
+                    ScriptedModel.layer(turns),
+                    Layer.succeed(Model.ProviderName, "scripted"),
+                    Layer.succeed(Model.ModelName, "chromium-consumer"),
+                  ),
                 ),
               ),
             );
@@ -103,13 +102,12 @@ const result = await Effect.runPromise(
             const diagnostics = yield* original.bindingDiagnostics;
 
             assert.equal(diagnostics.bindings[0]?.succeeded, 1);
-            const interval = yield* Capture.start(session.browser, { maxDurationMillis: 5000 });
+            const interval = yield* Capture.start(original, { maxDurationMillis: 5000 });
             const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
 
             assert.equal(frames.length, 1);
             assert.ok(frames[0] !== undefined && frames[0].bytes.length > 0);
             assert.equal((yield* interval.stop).nativeStop, "confirmed");
-            yield* session.handle.close;
 
             return { id: original.reference.id, turns: run.turns, frames: frames.length };
           }),

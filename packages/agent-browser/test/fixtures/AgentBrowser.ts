@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { fromSession } from "effect-agent-browser/adapter";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserError } from "effect-browser/errors";
@@ -250,14 +249,14 @@ const accounts = BrowserbaseSessions.layer.pipe(
   ),
 );
 
-/** The test host selects Browserbase; the production adapter receives the common session. */
+/** The test host selects Browserbase and returns the common browser session directly. */
 export const openAgentBrowser = Effect.fnUntraced(function* (policy: InteractiveBrowserPolicy) {
   const fixed = yield* Schema.decodeUnknownEffect(BrowserPolicy)(policy);
 
-  return fromSession(yield* (yield* BrowserbaseBrowser).open(fixed));
+  return yield* BrowserbaseBrowser.open(fixed);
 });
 
-/** Typed bootstrap acquisition uses this one generic owner, then the adapter borrows it. */
+/** Typed bootstrap acquisition uses this one generic owner. */
 export const withGenericAgentBrowser = <A, E, R>(
   fixture: Effect.Success<typeof localAgentBrowser>,
   effect: Effect.Effect<A, E, R>,

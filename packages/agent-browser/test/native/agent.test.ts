@@ -1,16 +1,11 @@
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
-import { fromSession, type AdaptedSession } from "effect-agent-browser/adapter";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
-import {
-  BrowserClickRequest,
-  BrowserNavigateRequest,
-  BrowserReadTextRequest,
-} from "effect-agent/interactive-browser";
+import * as Browser from "effect-browser/browser";
 import { ObservedElement } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import * as PageControl from "effect-browser/page-control";
@@ -68,141 +63,128 @@ it.live(
             f,
             Effect.scoped(
               Effect.gen(function* () {
-                const browser = yield* BrowserbaseBrowser;
-
-                return yield* browser
-                  .withBrowser(
+                return yield* Browser.scoped(
+                  BrowserbaseBrowser.open(
                     { ...genericAgentPolicy, maxActions: 6 },
                     { bootstrap: settingsBootstrap(new URL(f.url).origin) },
-                    (generic) =>
-                      Effect.gen(function* () {
-                        const session = fromSession(generic);
+                  ),
+                  (generic) =>
+                    Effect.gen(function* () {
+                      references.push(generic.reference.sessionId);
 
-                        expect(session.browser).toBe(generic);
-
-                        references.push(session.browser.reference.sessionId);
-
-                        const script: ScriptedTurnInput[] = [
-                          {
-                            _tag: "Stream",
-                            parts: [
-                              {
-                                type: "tool-call",
-                                id: "navigate",
-                                name: "browser_navigate",
-                                params: { url: f.url },
-                              },
-                              { type: "finish", reason: "tool-calls", usage },
-                            ],
-                            termination: { _tag: "Complete" },
-                          },
-                          {
-                            _tag: "Stream",
-                            parts: [
-                              {
-                                type: "tool-call",
-                                id: "inspect",
-                                name: "browser_inspect",
-                                params: {},
-                              },
-                              { type: "finish", reason: "tool-calls", usage },
-                            ],
-                            termination: { _tag: "Complete" },
-                          },
-                          {
-                            ...final,
-                            assertRequest: (request) => {
-                              const encoded = JSON.stringify(request.prompt);
-
-                              expect(encoded).toContain("Local browser fixture");
-                              expect(encoded).toContain("host settings:7");
-                              expect(encoded).not.toContain("fixture-key-not-a-credential");
-                              expect(encoded).not.toContain("wss://connect.browserbase.com");
-                              expect(f.releaseIds).not.toContain(
-                                session.browser.reference.sessionId,
-                              );
+                      const script: ScriptedTurnInput[] = [
+                        {
+                          _tag: "Stream",
+                          parts: [
+                            {
+                              type: "tool-call",
+                              id: "navigate",
+                              name: "browser_navigate",
+                              params: { url: f.url },
                             },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ],
+                          termination: { _tag: "Complete" },
+                        },
+                        {
+                          _tag: "Stream",
+                          parts: [
+                            {
+                              type: "tool-call",
+                              id: "inspect",
+                              name: "browser_inspect",
+                              params: {},
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ],
+                          termination: { _tag: "Complete" },
+                        },
+                        {
+                          ...final,
+                          assertRequest: (request) => {
+                            const encoded = JSON.stringify(request.prompt);
+
+                            expect(encoded).toContain("Local browser fixture");
+                            expect(encoded).toContain("host settings:7");
+                            expect(encoded).not.toContain("fixture-key-not-a-credential");
+                            expect(encoded).not.toContain("wss://connect.browserbase.com");
+                            expect(f.releaseIds).not.toContain(generic.reference.sessionId);
                           },
-                        ];
+                        },
+                      ];
 
-                        const turns = script.map((turn) => ({
-                          ...turn,
-                          onStreamFinalize: Effect.sync(() => {
-                            modelFinalizers++;
-                          }),
-                        }));
+                      const turns = script.map((turn) => ({
+                        ...turn,
+                        onStreamFinalize: Effect.sync(() => {
+                          modelFinalizers++;
+                        }),
+                      }));
 
-                        const result = yield* AgentRuntime.run(agent, "begin").pipe(
-                          Effect.provide(
-                            Layer.mergeAll(
-                              BrowserTools.handlers(session),
-                              model(turns),
-                              InMemory.layer,
-                            ),
-                          ),
-                        );
+                      const result = yield* BrowserTools.run(
+                        generic,
+                        AgentRuntime.run(agent, "begin").pipe(
+                          Effect.provide(Layer.mergeAll(model(turns), InMemory.layer)),
+                        ),
+                      );
 
-                        expect(result.turns).toBe(3);
-                        expect(result.output.done).toBe(true);
-                        // Per-turn scopes ended, but the explicitly enclosing execution still owns its browser.
-                        expect(f.releaseIds).not.toContain(session.browser.reference.sessionId);
-                        expect(
-                          (yield* session.handle.readText(
-                            BrowserReadTextRequest.make({ selector: "#count" }),
-                          )).text,
-                        ).toBe("0");
-                        const diagnostics = yield* session.browser.bindingDiagnostics;
+                      expect(result.turns).toBe(3);
+                      expect(result.output.done).toBe(true);
+                      // Per-turn scopes ended, but the explicitly enclosing execution still owns its browser.
+                      expect(f.releaseIds).not.toContain(generic.reference.sessionId);
+                      expect((yield* generic.bind().readText({ selector: "#count" })).text).toBe(
+                        "0",
+                      );
+                      const diagnostics = yield* generic.bindingDiagnostics;
 
-                        expect(diagnostics.faulted).toBe(false);
-                        expect(diagnostics.failures).toEqual([]);
-                        expect(diagnostics.bindings[0]?.succeeded).toBe(1);
+                      expect(diagnostics.faulted).toBe(false);
+                      expect(diagnostics.failures).toEqual([]);
+                      expect(diagnostics.bindings[0]?.succeeded).toBe(1);
 
-                        const summary = yield* Effect.scoped(
-                          Effect.gen(function* () {
-                            const interval = yield* Capture.start(session.browser, {
-                              maxFrames: 2,
-                              maxDurationMillis: 5000,
-                            });
+                      const summary = yield* Effect.scoped(
+                        Effect.gen(function* () {
+                          const interval = yield* Capture.start(generic, {
+                            maxFrames: 2,
+                            maxDurationMillis: 5000,
+                          });
 
-                            const frame = yield* Stream.runHead(interval.frames).pipe(
-                              Effect.timeout(3000),
-                            );
+                          const frame = yield* Stream.runHead(interval.frames).pipe(
+                            Effect.timeout(3000),
+                          );
 
-                            expect(Option.isSome(frame) && frame.value.bytes.length > 0).toBe(true);
+                          expect(Option.isSome(frame) && frame.value.bytes.length > 0).toBe(true);
 
-                            return yield* interval.stop;
-                          }),
-                        );
+                          return yield* interval.stop;
+                        }),
+                      );
 
-                        expect(summary.nativeStop).toBe("confirmed");
-                        expect(f.connectionIds).toEqual(references);
+                      expect(summary.nativeStop).toBe("confirmed");
+                      expect(f.connectionIds).toEqual(references);
 
-                        let exhausted = false;
-                        let remainingReads = 0;
+                      let exhausted = false;
+                      let remainingReads = 0;
 
-                        for (let index = 0; index < 4; index++) {
-                          const next = yield* session.browser
-                            .observe({ maxTextBytes: 1024 })
-                            .pipe(Effect.result);
+                      for (let index = 0; index < 4; index++) {
+                        const next = yield* generic
+                          .observe({ maxTextBytes: 1024 })
+                          .pipe(Effect.result);
 
-                          if (next._tag === "Failure") {
-                            expect(next.failure).toMatchObject({
-                              reason: "limit",
-                              outcome: "undispatched",
-                            });
-                            exhausted = true;
-                            break;
-                          }
-                          remainingReads++;
+                        if (next._tag === "Failure") {
+                          expect(next.failure).toMatchObject({
+                            reason: "limit",
+                            outcome: "undispatched",
+                          });
+                          exhausted = true;
+                          break;
                         }
-                        expect(exhausted && remainingReads <= 3).toBe(true);
-                      }),
-                  )
-                  .pipe(
-                    Effect.provideService(Settings, {
-                      read: (revision) => Effect.succeed({ label: "host settings", revision }),
+                        remainingReads++;
+                      }
+                      expect(exhausted && remainingReads <= 3).toBe(true);
                     }),
-                  );
+                ).pipe(
+                  Effect.provideService(Settings, {
+                    read: (revision) => Effect.succeed({ label: "host settings", revision }),
+                  }),
+                );
               }),
             ),
           );
@@ -223,8 +205,7 @@ it.live(
         const f = yield* localAgentBrowser;
         const streaming = yield* Deferred.make<void>();
 
-        const borrowed =
-          yield* Deferred.make<AdaptedSession<BrowserbaseSession<SettingsUnavailable>>>();
+        const borrowed = yield* Deferred.make<BrowserbaseSession<SettingsUnavailable>>();
 
         const expected = SettingsUnavailable.make({ revision: -1 });
         let finalized = 0;
@@ -232,25 +213,20 @@ it.live(
         yield* withGenericAgentBrowser(
           f,
           Effect.gen(function* () {
-            const browser = yield* BrowserbaseBrowser;
+            const workflow = Browser.scoped(
+              BrowserbaseBrowser.open(genericAgentPolicy, {
+                bootstrap: settingsBootstrap(new URL(f.url).origin),
+              }),
+              (generic) =>
+                Effect.gen(function* () {
+                  yield* generic.bind().navigate({ url: f.url });
+                  yield* Deferred.succeed(borrowed, generic);
 
-            const workflow = browser
-              .withBrowser(
-                genericAgentPolicy,
-                {
-                  bootstrap: settingsBootstrap(new URL(f.url).origin),
-                },
-                (generic) =>
-                  Effect.gen(function* () {
-                    const session = fromSession(generic);
-
-                    yield* session.handle.navigate(BrowserNavigateRequest.make({ url: f.url }));
-                    yield* Deferred.succeed(borrowed, session);
-
-                    return yield* AgentRuntime.run(agent, "wait for the host callback").pipe(
+                  return yield* BrowserTools.run(
+                    generic,
+                    AgentRuntime.run(agent, "wait for the host callback").pipe(
                       Effect.provide(
                         Layer.mergeAll(
-                          BrowserTools.handlers(session),
                           InMemory.layer,
                           model([
                             {
@@ -265,26 +241,24 @@ it.live(
                           ]),
                         ),
                       ),
-                    );
-                  }),
-              )
-              .pipe(
-                Effect.provideService(Settings, {
-                  read: (revision) =>
-                    revision === 7
-                      ? Effect.succeed({ label: "host settings", revision })
-                      : Effect.fail(expected),
+                    ),
+                  );
                 }),
-              );
+            ).pipe(
+              Effect.provideService(Settings, {
+                read: (revision) =>
+                  revision === 7
+                    ? Effect.succeed({ label: "host settings", revision })
+                    : Effect.fail(expected),
+              }),
+            );
 
             const running = yield* workflow.pipe(Effect.result, Effect.forkChild);
 
             yield* Deferred.await(streaming).pipe(Effect.timeout(3000));
             const session = yield* Deferred.await(borrowed);
 
-            yield* session.handle
-              .click(BrowserClickRequest.make({ selector: "#unavailable-settings" }))
-              .pipe(Effect.result);
+            yield* session.bind().click({ selector: "#unavailable-settings" }).pipe(Effect.result);
             const result = yield* Fiber.join(running).pipe(Effect.timeout(3000));
 
             expect(result._tag).toBe("Failure");
@@ -294,6 +268,55 @@ it.live(
             expect(f.connectionIds).toEqual(["session-1"]);
             expect(f.releaseIds).toEqual(["session-1"]);
           }),
+        );
+      }),
+    ),
+);
+
+it.live(
+  "ToolHost.run refuses an already-failed owner before starting the program and preserves its cause",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* localAgentBrowser;
+        const expected = SettingsUnavailable.make({ revision: -1 });
+        let started = 0;
+
+        yield* withGenericAgentBrowser(
+          f,
+          Effect.gen(function* () {
+            const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy, {
+              bootstrap: settingsBootstrap(new URL(f.url).origin),
+            });
+
+            yield* generic.bind().navigate({ url: f.url });
+            yield* generic.bind().click({ selector: "#unavailable-settings" }).pipe(Effect.result);
+            const ownerFailure = yield* generic.failure.pipe(Effect.result);
+
+            expect(ownerFailure).toMatchObject({ _tag: "Failure" });
+            if (ownerFailure._tag === "Failure") expect(ownerFailure.failure).toBe(expected);
+
+            const host = yield* BrowserTools.makeHost(generic);
+
+            const result = yield* host
+              .run(
+                Effect.sync(() => {
+                  started++;
+                }),
+              )
+              .pipe(Effect.result);
+
+            expect(result).toMatchObject({ _tag: "Failure" });
+            if (result._tag === "Failure") expect(result.failure).toBe(expected);
+            expect(started).toBe(0);
+          }).pipe(
+            Effect.provideService(Settings, {
+              read: (revision) =>
+                revision === 7
+                  ? Effect.succeed({ label: "host settings", revision })
+                  : Effect.fail(expected),
+            }),
+          ),
         );
       }),
     ),
@@ -311,7 +334,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* openAgentBrowser(agentPolicy);
 
-            yield* session.handle.navigate(BrowserNavigateRequest.make({ url: f.url }));
+            yield* session.bind().navigate({ url: f.url });
 
             const turns: ScriptedTurnInput[] = [
               {
@@ -352,9 +375,10 @@ it.live(
               final,
             ];
 
-            const result = yield* AgentRuntime.run(agent, "exercise failure").pipe(
-              Effect.provide(
-                Layer.mergeAll(BrowserTools.handlers(session), model(turns), InMemory.layer),
+            const result = yield* BrowserTools.run(
+              session,
+              AgentRuntime.run(agent, "exercise failure").pipe(
+                Effect.provide(Layer.mergeAll(model(turns), InMemory.layer)),
               ),
             );
 
@@ -381,14 +405,12 @@ it.live(
             const open = openAgentBrowser;
             const survivor = yield* open(agentPolicy);
 
-            const program = Effect.scoped(
-              Effect.gen(function* () {
-                const session = yield* open(agentPolicy);
-
-                return yield* AgentRuntime.run(agent, "wait").pipe(
+            const program = Browser.scoped(open(agentPolicy), (session) =>
+              BrowserTools.run(
+                session,
+                AgentRuntime.run(agent, "wait").pipe(
                   Effect.provide(
                     Layer.mergeAll(
-                      BrowserTools.handlers(session),
                       InMemory.layer,
                       model([
                         {
@@ -403,8 +425,8 @@ it.live(
                       ]),
                     ),
                   ),
-                );
-              }),
+                ),
+              ),
             );
 
             const fiber = yield* program.pipe(Effect.forkChild);
@@ -413,8 +435,8 @@ it.live(
             yield* Fiber.interrupt(fiber);
             expect(finalized).toBe(1);
             expect(f.releaseIds).toEqual(["session-2"]);
-            yield* survivor.handle.navigate(BrowserNavigateRequest.make({ url: f.url }));
-            expect((yield* survivor.browser.observe()).text).toContain("Local browser fixture");
+            yield* survivor.bind().navigate({ url: f.url });
+            expect((yield* survivor.observe()).text).toContain("Local browser fixture");
           }),
         );
         expect(f.releaseIds).toEqual(["session-2", "session-1"]);
@@ -446,8 +468,7 @@ for (const revalidates of [true, false])
           yield* withGenericAgentBrowser(
             f,
             Effect.gen(function* () {
-              const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
-              const session = fromSession(generic);
+              const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy);
               let recorded: string | undefined;
 
               // What a recorder does on the same owner while the agent is between tools: passive
@@ -472,38 +493,41 @@ for (const revalidates of [true, false])
                 }),
               );
 
-              const result = yield* AgentRuntime.run(agent, "begin").pipe(
-                Effect.provide(
-                  Layer.mergeAll(
-                    BrowserTools.handlers(session),
-                    model([
-                      call("navigate", "browser_navigate", { url: f.url }),
-                      call("inspect", "browser_inspect", {}),
-                      // This stream ends after the inspect ran and before the click does.
-                      { ...call("click", "browser_click", increment), onStreamFinalize: recorder },
-                      {
-                        ...final,
-                        assertRequest: (request) => {
-                          const encoded = JSON.stringify(request.prompt);
-
-                          // Unchecked after a hold, the tool reports a stale reference to the
-                          // model instead of clicking. Nothing is retargeted or replayed.
-                          expect(encoded.includes("stale")).toBe(!revalidates);
+              const result = yield* BrowserTools.run(
+                generic,
+                AgentRuntime.run(agent, "begin").pipe(
+                  Effect.provide(
+                    Layer.mergeAll(
+                      model([
+                        call("navigate", "browser_navigate", { url: f.url }),
+                        call("inspect", "browser_inspect", {}),
+                        // This stream ends after the inspect ran and before the click does.
+                        {
+                          ...call("click", "browser_click", increment),
+                          onStreamFinalize: recorder,
                         },
-                      },
-                    ]),
-                    InMemory.layer,
+                        {
+                          ...final,
+                          assertRequest: (request) => {
+                            const encoded = JSON.stringify(request.prompt);
+
+                            // Unchecked after a hold, the tool reports a stale reference to the
+                            // model instead of clicking. Nothing is retargeted or replayed.
+                            expect(encoded.includes("stale")).toBe(!revalidates);
+                          },
+                        },
+                      ]),
+                      InMemory.layer,
+                    ),
                   ),
                 ),
               );
 
               expect(result.output.done).toBe(true);
               expect(recorded).toBe("true true");
-              expect(
-                (yield* session.handle.readText(
-                  BrowserReadTextRequest.make({ selector: "#count" }),
-                )).text,
-              ).toBe(revalidates ? "1" : "0");
+              expect((yield* generic.bind().readText({ selector: "#count" })).text).toBe(
+                revalidates ? "1" : "0",
+              );
               yield* generic.close;
             }),
             { pageControl: true },

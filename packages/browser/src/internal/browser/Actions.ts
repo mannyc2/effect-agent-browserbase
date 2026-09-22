@@ -3,7 +3,7 @@ import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from
 
 import type { ObservedElement } from "../../BrowserData.ts";
 import { SafeFilename } from "../../BrowserData.ts";
-import type { Driver, NativeFileSelection } from "./Driver.ts";
+import type { Driver, DriverTarget, NativeFileSelection } from "./Driver.ts";
 import {
   closeWithin,
   failure,
@@ -71,6 +71,40 @@ export const waitEvent = <A>(
   return { promise, cancel: abort };
 };
 
+interface NavigationStopPort {
+  readonly stop: () => Promise<void>;
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * Native stop setup may yield while the navigation completes. Recheck its owner immediately
+ * before dispatch, while the caller still holds the browser-owner permit.
+ */
+export const dispatchNavigationStop = async (
+  ticket: Ticket,
+  pending: () => boolean,
+  onDispatch: () => void,
+  open: () => Promise<NavigationStopPort>,
+): Promise<"dispatched" | "settled"> => {
+  ticket.check();
+  const port = await open();
+
+  try {
+    ticket.check();
+    if (!pending()) return "settled";
+    // No await may separate this admission check from dispatch.
+    ticket.check();
+    ticket.dispatch();
+    onDispatch();
+    await port.stop();
+    ticket.check();
+
+    return "dispatched";
+  } finally {
+    await port.close();
+  }
+};
+
 /**
  * In-memory bytes and provider-stored paths reach the page by different mechanisms and are
  * never mixed: the first is streamed from this client, the second is opened by the browser
@@ -132,7 +166,7 @@ export const makeActions = (
     return value;
   };
 
-  const postUrl = () => httpUrl(targets.selectedUrl());
+  const postUrl = (target?: DriverTarget) => httpUrl(targets.url(target));
 
   /**
    * Acts on the exact attached node a target names. The observation seam establishes that it is
@@ -146,8 +180,15 @@ export const makeActions = (
     admit: (element: ElementHandle<Element>) => Promise<Admitted>,
     action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
     policy?: AdmissionPolicy,
+    browserTarget?: DriverTarget,
   ): Promise<A> => {
-    const { element, kept } = await observation.resolve(target, ticket, policy);
+    const { element, kept } = await observation.resolve(
+      target,
+      ticket,
+      policy,
+      false,
+      browserTarget,
+    );
 
     try {
       const admitted = await admit(element);
@@ -167,19 +208,22 @@ export const makeActions = (
     ticket: Ticket,
     action: (element: ElementHandle<Element>) => Promise<A>,
     policy?: AdmissionPolicy,
-  ): Promise<A> => withAdmittedElement(target, ticket, async () => {}, action, policy);
+    browserTarget?: DriverTarget,
+  ): Promise<A> =>
+    withAdmittedElement(target, ticket, async () => {}, action, policy, browserTarget);
 
-  const click = (target: string | ObservedElement, ticket: Ticket, policy?: AdmissionPolicy) =>
+  const click: Driver["click"] = (target, ticket, policy, browserTarget) =>
     sanitize(async () => {
       await withElement(
         target,
         ticket,
         (element) => element.click({ timeout: timeout(ticket) }),
         policy,
+        browserTarget,
       );
       ticket.check();
 
-      return postUrl();
+      return postUrl(browserTarget);
     });
 
   /**
@@ -223,9 +267,9 @@ export const makeActions = (
     }
   };
 
-  const beginNavigation: Driver["beginNavigation"] = (url, timeoutMillis, ticket) =>
+  const beginNavigation: Driver["beginNavigation"] = (url, timeoutMillis, ticket, target) =>
     sanitize(async () => {
-      const { entry, frame } = current();
+      const { entry, frame } = current(target);
 
       ticket.dispatch();
       targets.navigating.begin(entry.id);
@@ -248,35 +292,39 @@ export const makeActions = (
       return {
         pageId: entry.id,
         settled,
-        stop: () =>
+        stop: (stopTicket, pending, onDispatch) =>
           sanitize(async () => {
-            const cdp = await context.newCDPSession(entry.page);
+            return dispatchNavigationStop(stopTicket, pending, onDispatch, async () => {
+              const cdp = await context.newCDPSession(entry.page);
 
-            try {
-              await cdp.send("Page.stopLoading");
-            } finally {
-              await closeWithin(() => cdp.detach()).catch(() => {});
-            }
+              return {
+                stop: async () => {
+                  await cdp.send("Page.stopLoading");
+                },
+                close: () => closeWithin(() => cdp.detach()).catch(() => {}),
+              };
+            });
           }),
       };
     });
 
-  const fill: Driver["fill"] = (target, value, ticket, policy) =>
+  const fill: Driver["fill"] = (target, value, ticket, policy, browserTarget) =>
     sanitize(async () => {
       await withElement(
         target,
         ticket,
         (element) => element.fill(value, { timeout: timeout(ticket) }),
         policy,
+        browserTarget,
       );
       ticket.check();
 
-      return postUrl();
+      return postUrl(browserTarget);
     });
 
-  const scroll: Driver["scroll"] = (deltaX, deltaY, ticket) =>
+  const scroll: Driver["scroll"] = (deltaX, deltaY, ticket, target) =>
     sanitize(async () => {
-      const { frame } = current();
+      const { frame } = current(target);
 
       ticket.dispatch();
       await frame.evaluate(
@@ -285,7 +333,7 @@ export const makeActions = (
       );
       ticket.check();
 
-      return postUrl();
+      return postUrl(target);
     });
 
   const waitFor: Driver["waitFor"] = (selector, state, ticket) =>

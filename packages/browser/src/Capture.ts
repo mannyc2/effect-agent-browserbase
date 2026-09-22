@@ -1,4 +1,4 @@
-import { Effect, Schema, type Scope, type Stream } from "effect";
+import { Effect, Schema, type Scope, Stream } from "effect";
 
 import type { BrowserSession } from "./Browser.ts";
 import { PageInfo } from "./BrowserData.ts";
@@ -65,3 +65,16 @@ export const start = <E>(
       Effect.flatMap((target) => startCapture(parent, { ...options, target })),
     );
   });
+
+/**
+ * A lazy, scoped frame stream. Each subscription acquires one interval and finalizes it when
+ * consumption ends, fails or is interrupted; the browser remains owned by its caller.
+ * Concurrent subscriptions on the same page are refused by the existing capture reservation.
+ * Unconfirmed native cleanup retains the page reservation. Use start when the host needs
+ * explicit stop acknowledgement, interval snapshots and the final capture summary.
+ */
+export const stream = <E>(
+  session: BrowserSession<E>,
+  options: CaptureOptions = {},
+): Stream.Stream<CapturedFrame, BrowserError> =>
+  Stream.unwrap(start(session, options).pipe(Effect.map((interval) => interval.frames)));
