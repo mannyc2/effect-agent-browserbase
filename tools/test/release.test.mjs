@@ -32,7 +32,7 @@ import {
   readPackageSet,
   repositoryUrl,
 } from "../packages.mjs";
-import { packedConsumers } from "../packed-consumers.mjs";
+import { checkConsumerHostPeers, consumerManifest, packedConsumers } from "../packed-consumers.mjs";
 import { publishReleaseSet } from "../publish-release.mjs";
 import { verifyReleaseSet } from "../verify-release.mjs";
 
@@ -383,6 +383,79 @@ test("real offline npm packs three immutable artifacts bound to one independentl
   bytes[bytes.length - 1] ^= 1;
   writeFileSync(file, bytes);
   assert.throws(() => verifyReleaseSet(out, sha, `v${version}`, digest), /successful build/);
+});
+
+test("Bun staging checks actual archive peers and direct hosts before applying substitutions", (t) => {
+  const { tree, out } = workspace(t),
+    receipt = packageReleaseSet(tree, out, sha);
+
+  const catalog = {
+    effect: "4.0.0-rc.115",
+    "@types/node": "26.1.2",
+    typescript: "7.0.2",
+    "vite-plus": "0.3.2",
+    "playwright-core": "1.63.0",
+    "@effect/vitest": "4.0.0-rc.115",
+    "@effect/platform-node": "4.0.0-rc.115",
+    vitest: "4.1.11",
+  };
+
+  for (const profile of consumerProfiles)
+    checkConsumerHostPeers(profile, consumerManifest(profile, receipt, out, catalog), receipt, out);
+
+  const original = consumerManifest("agent", receipt, out, catalog);
+
+  assert.throws(
+    () => checkConsumerHostPeers("agent", original, { ...receipt, version: "0.2.0-beta.1" }, out),
+    /Candidate effect-browser version differs from the release set/,
+  );
+
+  const check = (change, expected) => {
+    const input = structuredClone(original);
+
+    change(input);
+    assert.throws(() => checkConsumerHostPeers("agent", input, receipt, out), expected);
+  };
+
+  check((input) => {
+    input.dependencies["effect-browser"] = "0.2.0-beta.1";
+  }, /Direct effect-browser/);
+  check((input) => {
+    input.overrides["effect-browser"] = "file:/different-browser.tgz";
+  }, /Unexpected candidate substitution/);
+  check((input) => {
+    input.dependencies["effect-agent"] = "0.1.0-beta.103";
+  }, /Direct framework host/);
+  check((input) => {
+    input.overrides["effect-agent"] = frameworkVersion;
+  }, /framework host must not be overridden/);
+
+  // Receipt fields alone cannot prove the requirement inside the actual archive.
+  const stage = join(out, "packed-stage/agent-browser");
+  const candidate = JSON.parse(readFileSync(join(stage, "package.json"), "utf8"));
+
+  for (const [peer, incompatible] of [
+    ["effect-browser", "0.2.0-beta.1"],
+    ["effect-agent", "0.1.0-beta.103"],
+  ]) {
+    const conflicting = structuredClone(candidate);
+
+    conflicting.peerDependencies[peer] = incompatible;
+    writeFileSync(join(stage, "package.json"), JSON.stringify(conflicting));
+    childProcess.execFileSync(
+      "npm",
+      ["pack", "--offline", "--ignore-scripts", "--json", "--pack-destination", out],
+      {
+        cwd: stage,
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    assert.throws(
+      () => checkConsumerHostPeers("agent", original, receipt, out),
+      new RegExp(`Host peer ${peer} does not match`),
+    );
+  }
 });
 
 test("actual npm installs direct host peers and rejects incompatible hosts without overrides", (t) => {

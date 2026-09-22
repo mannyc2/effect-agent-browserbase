@@ -24,7 +24,7 @@ const receipt = {
   packages: packages.map((p) => ({ name: p.name, filename: p.stem + "-0.2.0-beta.0.tgz" })),
 };
 
-test("five clean consumer manifests isolate resources and supply host peers directly", () => {
+test("five clean consumers supply hosts directly and substitute only the browser peer tarball", () => {
   const resources = consumerManifest("resources", receipt, "/tmp/artifacts", catalog);
 
   assert.deepEqual(
@@ -58,7 +58,12 @@ test("five clean consumer manifests isolate resources and supply host peers dire
   assert.equal(hosted.dependencies[packages[1].name], undefined);
   assert.match(hosted.devDependencies[packages[1].name], /^file:/);
   for (const manifest of [resources, browser, generic, agent, hosted]) {
-    for (const name of [...packages.map((item) => item.name), "effect-agent"])
+    assert.equal(
+      manifest.overrides["effect-browser"],
+      manifest === browser ? undefined : manifest.dependencies["effect-browser"],
+      "Bun's peer substitution must select the directly supplied browser archive",
+    );
+    for (const name of ["effect-browserbase", "effect-agent-browser", "effect-agent"])
       assert.equal(
         manifest.overrides[name],
         undefined,

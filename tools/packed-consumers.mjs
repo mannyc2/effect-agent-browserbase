@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { packageReleaseSet, releaseSetDigest } from "./package-release.mjs";
-import { consumerPackageSet, packages, readJson, readPackageSet } from "./packages.mjs";
+import {
+  checkManifest,
+  consumerPackageSet,
+  packages,
+  readJson,
+  readPackageSet,
+} from "./packages.mjs";
 import { stageConsumer } from "./stage-consumer.mjs";
 import { verifyReleaseSet } from "./verify-release.mjs";
 
@@ -91,13 +97,74 @@ export function consumerManifest(mode, receipt, out, catalog) {
     scripts: { check: "tsc --noEmit -p tsconfig.json" },
     dependencies,
     devDependencies,
-    // The host supplies candidate tarballs and the qualified framework directly.
-    // Only the existing Effect/test pins are overridden; host peer conflicts stay visible.
+    // Bun 1.4.2 requests an exact registry peer even when its matching tarball is
+    // supplied directly. Substitute that same archive after checkConsumerHostPeers
+    // proves compatibility; the separate strict npm fixture uses no overrides.
     overrides: {
+      ...(mode === "browser" ? {} : { "effect-browser": dependencies["effect-browser"] }),
       effect: catalog.effect,
       ...(mode === "resources" ? {} : { vitest: catalog.vitest }),
     },
   };
+}
+
+export function checkConsumerHostPeers(mode, manifest, receipt, out) {
+  const direct = { ...manifest.dependencies, ...manifest.devDependencies };
+  const candidates = new Map();
+
+  for (const item of consumerPackageSet(mode)) {
+    const entry = receipt.packages.find((entry) => entry.name === item.name);
+
+    assert.ok(entry, `Missing candidate ${item.name}`);
+    const path = join(resolve(out), entry.filename);
+
+    assert.equal(
+      direct[item.name],
+      `file:${path}`,
+      `Direct ${item.name} must use the verified archive`,
+    );
+    assert.equal(
+      manifest.overrides?.[item.name],
+      item === packages[0] && mode !== "browser" ? direct[item.name] : undefined,
+      `Unexpected candidate substitution for ${item.name}`,
+    );
+
+    const candidate = JSON.parse(
+      execFileSync("tar", ["-xOf", path, "package/package.json"], {
+        encoding: "utf8",
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      }),
+    );
+
+    assert.equal(candidate.name, item.name);
+    assert.equal(
+      candidate.version,
+      receipt.version,
+      `Candidate ${item.name} version differs from the release set`,
+    );
+    candidates.set(item.name, candidate);
+  }
+  assert.equal(
+    manifest.overrides?.["effect-agent"],
+    undefined,
+    "The framework host must not be overridden",
+  );
+  if (mode.startsWith("agent"))
+    assert.equal(
+      direct["effect-agent"],
+      receipt.frameworkVersion,
+      "Direct framework host differs from the qualified version",
+    );
+
+  // The release-set verifier binds these archives to the candidate. Compare their
+  // actual peer contracts to the direct hosts before Bun applies its substitution.
+  for (const candidate of candidates.values())
+    checkManifest(candidate, {
+      built: true,
+      browserVersion: candidates.get("effect-browser").version,
+      frameworkVersion: direct["effect-agent"],
+    });
 }
 
 export function packedConsumers(tree, out, sha) {
@@ -156,11 +223,10 @@ export function packedConsumers(tree, out, sha) {
 
       mkdirSync(directory);
       const profilePackages = consumerPackageSet(mode.name);
+      const manifest = consumerManifest(mode.name, receipt, out, catalog);
 
-      writeFileSync(
-        join(directory, "package.json"),
-        JSON.stringify(consumerManifest(mode.name, receipt, out, catalog), null, 2) + "\n",
-      );
+      checkConsumerHostPeers(mode.name, manifest, receipt, out);
+      writeFileSync(join(directory, "package.json"), JSON.stringify(manifest, null, 2) + "\n");
       const entries = [`${mode.owner.directory}/${mode.entry}`];
 
       if (mode.native) {
