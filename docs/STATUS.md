@@ -14,7 +14,7 @@ The recorded-workflow capabilities added for [#34](https://github.com/mannyc2/ef
 
 `internal/provider/Contract.ts` records the reviewed session-create subset against two authorities, and `node tools/verify-launch-contract.mjs` checks it against both. On 21 September 2026 that check re-derived all nine request fields and fourteen `browserSettings` fields from the pinned SDK revision `fe805b86cd860436eae63a2551b12cf02d708ce1`, whose bytes matched the recorded digest, and from the published OpenAPI specification, which names `timeout` directly and so establishes the SDK's `api_timeout` as a rename rather than a competing contract. `browserSettings.advancedStealth` and `browserSettings.extensionId` remain the only deliberate exclusions, and v2.20.0 was the latest SDK release at that time. The check reads the network and is run deliberately; ordinary acceptance covers its parsing rules offline against synthetic sources, so a provider field added later fails a deliberate check rather than any scheduled one.
 
-[HOSTED.md](HOSTED.md) describes the manual, default-off workflow those checks run under and the separate demo recording that documentation publishes. A demo recording is documentation rather than evidence for any check above; the run records below are the evidence for the two checks they cover. Every hosted question is now a registered check in `packages/browserbase/examples/hosted/checks.ts`, which names the claim each supports and the run record behind it. The narrowed H1, H3, H4, H6 and H7 checks have run once against the provider, recorded below, and operator handoff has run once with the owner at the Live View.
+[HOSTED.md](HOSTED.md) describes the manual, default-off workflow those checks run under and the separate demo recording that documentation publishes. A demo recording is documentation rather than evidence for any check above; the run records below are the evidence for the two checks they cover. Every hosted question is now a registered check in `packages/browserbase/hosted/checks.ts`, which names the claim each supports and the run record behind it. The narrowed H1, H3, H4, H6 and H7 checks have run once against the provider, recorded below, and operator handoff has run once with the owner at the Live View.
 
 ## Hard-cutover callback implementation, 21 September 2026
 
@@ -30,7 +30,7 @@ Borrowed attachment is proved from a separately started process: `test/native/ha
 
 The earlier unexplained native failure was the owned Fixed viewport test, and it was deterministic rather than intermittent: the stage page's `window.outerHeight` reads the native window's outer height (623) and later the emulated height (480) once Chromium applies the device-metrics override, with emulated viewport, inner size, layout, device pixel ratio and native window bounds unchanged throughout. The package sets neither outer value; the test now compares the geometry the owner controls, native bounds included.
 
-The hosted checks for H1, H3, H4, H6 and H7, narrowed, and for operator handoff are registered in `packages/browserbase/examples/hosted/checks.ts`, and their runs are recorded below. Exact-commit acceptance remains the authority for which candidate artifacts and checks passed.
+The hosted checks for H1, H3, H4, H6 and H7, narrowed, and for operator handoff are registered in `packages/browserbase/hosted/checks.ts`, and their runs are recorded below. Exact-commit acceptance remains the authority for which candidate artifacts and checks passed.
 
 ## Maintainer-reported hosted execution
 

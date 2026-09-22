@@ -9,7 +9,7 @@ import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-dat
 import { BrowserbaseExtensions } from "effect-browserbase/extensions";
 import { recipe } from "effect-browserbase/launch";
 
-import { buildZip } from "../../test/fixtures/Zip.ts";
+import { buildZip } from "../test/fixtures/Zip.ts";
 import { hostedCase } from "./harness.ts";
 
 const h = hostedCase("extension-identity");

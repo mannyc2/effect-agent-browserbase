@@ -27,7 +27,7 @@ One scope owns the browser. Agent tools borrow that session across turns. Record
 
 Both root entry points are also public. Production distributions contain ESM JavaScript and `.d.mts` declarations, not test fixtures, recovery archives or development dependencies. Playwright is an optional peer of the generic package only, loaded when a browser connects; install `playwright-core@1.63.0` when using that capability.
 
-Read the [Browserbase guide](packages/browserbase/README.md) for ownership, outcomes, bounds and examples, and the [adapter guide](packages/agent-browserbase/README.md) for the framework integration. The [agent example](packages/agent-browserbase/examples/agent.ts) uses the real `AgentRuntime` and scripted model; the [hosted examples](packages/browserbase/examples/hosted.ts) show application composition but require separately authorized hosted access.
+Read the [Browserbase guide](packages/browserbase/README.md) for ownership, outcomes, bounds and examples, and the [adapter guide](packages/agent-browserbase/README.md) for the framework integration. The [agent example](packages/agent-browserbase/examples/agent.ts) uses the real `AgentRuntime` and scripted model; the [hosted examples](packages/browserbase/examples/workflows.ts) show application composition but require separately authorized hosted access.
 
 ### Demo
 

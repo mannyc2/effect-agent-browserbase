@@ -45,10 +45,10 @@ test("the hosted runner refuses to allocate without an explicit operator opt-in"
   // A check that needs an operator reads the terminal, so the plan must not occupy stdin.
   assert.ok(script.includes("read -r check media <&3") && script.includes('done 3<<< "$PLAN"'));
   // Nothing hosted may be reachable from the unpaid gate.
-  assert.doesNotMatch(read("tools/run-acceptance.sh"), /hosted-run\.sh|hosted-registry|examples\/hosted/);
+  assert.doesNotMatch(read("tools/run-acceptance.sh"), /hosted-run\.sh|hosted-registry|browserbase\/hosted/);
 });
 
-const hostedDirectory = "packages/browserbase/examples/hosted";
+const hostedDirectory = "packages/browserbase/hosted";
 const registry = await loadRegistry(join(root, hostedDirectory, "checks.ts"));
 const knownSettings = new Set(["BROWSERBASE_ARTIFACT_ORIGINS"]);
 
