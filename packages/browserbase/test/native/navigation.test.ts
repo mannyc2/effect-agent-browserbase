@@ -233,6 +233,27 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
             (seen) => seen,
             5000,
           );
+          const live = yield* interval.snapshot;
+
+          expect(live.phase).toBe("capturing");
+          expect(live.reason).toBeNull();
+          expect(live.nativeStop).toBeNull();
+          expect(live.initialUrl).toBe(f.url);
+          expect(live.documentBoundaries.map((boundary) => boundary.url)).toEqual([
+            `${f.url}clocks`,
+          ]);
+
+          const [page] = yield* session.pages;
+
+          assert.ok(page);
+          const held = yield* PageControl.suspend(session, page);
+          const whileHeld = yield* interval.snapshot;
+
+          // This reads metadata already recorded by the capture, without touching the held DOM.
+          expect(whileHeld.phase).toBe("capturing");
+          expect(whileHeld.documentBoundaries).toEqual(live.documentBoundaries);
+          expect((yield* session.checkpoint().pipe(Effect.result))._tag).toBe("Failure");
+          yield* PageControl.resume(session, held);
           const summary = yield* interval.stop;
 
           // One native screencast the whole way: it was never restarted, so this package left no
@@ -247,11 +268,13 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
           expect(summary.documentBoundaries.map((boundary) => boundary.url)).toEqual([
             `${f.url}clocks`,
           ]);
+          expect(summary.documentBoundaries).toEqual(live.documentBoundaries);
           expect(new Set(documents)).toEqual(new Set([0, 1]));
           // Receipt order is kept: no frame of the first document follows one of the second.
           expect(documents).toEqual([...documents].sort());
           yield* session.close;
         }),
+        { pageControl: true },
       );
     }),
   ),

@@ -20,10 +20,97 @@ export interface NativeInput {
 }
 
 const Reach = Schema.Struct({
-  viewportWidth: Schema.Finite,
-  viewportHeight: Schema.Finite,
+  x: Schema.Finite,
+  y: Schema.Finite,
   reachable: Schema.Boolean,
 });
+
+/** Runs in each document on the path to the exact node, including cross-origin frames. */
+const hitPoint = (
+  node: Node,
+  input: NativePoint & { readonly child: boolean },
+): { readonly x: number; readonly y: number; readonly reachable: boolean } => {
+  const refused = { x: input.x, y: input.y, reachable: false };
+
+  if (
+    !(node instanceof Element) ||
+    !node.isConnected ||
+    input.x < 0 ||
+    input.y < 0 ||
+    input.x >= innerWidth ||
+    input.y >= innerHeight
+  )
+    return refused;
+
+  let hit = node.ownerDocument.elementFromPoint(input.x, input.y);
+
+  for (let depth = 0; hit?.shadowRoot; depth++) {
+    if (depth >= 32) return refused;
+    const inner = hit.shadowRoot.elementFromPoint(input.x, input.y);
+
+    if (inner === null || inner === hit) break;
+    hit = inner;
+  }
+  if (hit === null || (hit !== node && !node.contains(hit))) return refused;
+  if (!input.child) return { x: input.x, y: input.y, reachable: true };
+  if (!(node instanceof HTMLElement)) return refused;
+
+  // Mapping a bounding rectangle through rotation/perspective would guess a point. Admit
+  // positive axis-aligned scaling/translation; reject unsupported transforms before input.
+  let ancestor: Element | null = node;
+
+  for (let depth = 0; ancestor !== null; depth++) {
+    if (depth >= 128) return refused;
+    const style = getComputedStyle(ancestor);
+    const rotation = style.getPropertyValue("rotate");
+    const scale = style.getPropertyValue("scale");
+
+    if (
+      (rotation !== "" && rotation !== "none" && rotation !== "0deg") ||
+      (scale !== "" &&
+        scale !== "none" &&
+        scale.split(/\s+/).some((axis) => !(Number.parseFloat(axis) > 0))) ||
+      style.perspective !== "none" ||
+      (style.offsetPath !== "" && style.offsetPath !== "none")
+    )
+      return refused;
+    if (style.transform !== "none") {
+      const matrix = new DOMMatrixReadOnly(style.transform);
+
+      if (!matrix.is2D || matrix.b !== 0 || matrix.c !== 0 || matrix.a <= 0 || matrix.d <= 0)
+        return refused;
+    }
+    const root = ancestor.getRootNode();
+
+    ancestor = ancestor.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+  }
+
+  const rect = node.getBoundingClientRect();
+  const scaleX = rect.width / node.offsetWidth;
+  const scaleY = rect.height / node.offsetHeight;
+
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX <= 0 || scaleY <= 0)
+    return refused;
+  const style = getComputedStyle(node);
+  const left = Number.parseFloat(style.paddingLeft);
+  const top = Number.parseFloat(style.paddingTop);
+  const right = Number.parseFloat(style.paddingRight);
+  const bottom = Number.parseFloat(style.paddingBottom);
+  const x = (input.x - rect.left) / scaleX - node.clientLeft - left;
+  const y = (input.y - rect.top) / scaleY - node.clientTop - top;
+
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    x < 0 ||
+    y < 0 ||
+    x >= node.clientWidth - left - right ||
+    y >= node.clientHeight - top - bottom
+  )
+    return refused;
+
+  return { x, y, reachable: true };
+};
 
 /**
  * Real pointer input to the selected page. Every command is one the browser would receive from
@@ -69,45 +156,42 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       throw failure("not-visible", "undispatched");
     const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 
-    const reach = safeDecode(
-      Reach,
-      await element.evaluate((node) => {
-        const rect = node.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        let hit = node.ownerDocument.elementFromPoint(x, y);
+    const ancestors: Array<ElementHandle<Node>> = [];
 
-        while (hit?.shadowRoot) {
-          const inner = hit.shadowRoot.elementFromPoint(x, y);
+    try {
+      let frame = await element.ownerFrame();
 
-          if (inner === null || inner === hit) break;
-          hit = inner;
-        }
+      if (frame === null || frame.page() !== page) throw failure("stale", "undispatched");
+      while (frame !== page.mainFrame()) {
+        if (ancestors.length >= 32) throw failure("limit", "undispatched");
+        ancestors.push(await frame.frameElement());
+        frame = frame.parentFrame();
+        if (frame === null) throw failure("stale", "undispatched");
+      }
 
-        return {
-          viewportWidth: window.top === window ? window.innerWidth : Number.POSITIVE_INFINITY,
-          viewportHeight: window.top === window ? window.innerHeight : Number.POSITIVE_INFINITY,
-          reachable: hit !== null && (hit === node || node.contains(hit)),
-        };
-      }),
-    );
+      let localPoint = point;
 
-    // A child frame reports no main viewport, so the main frame bounds the point for it.
-    const viewport = Number.isFinite(reach.viewportWidth)
-      ? { width: reach.viewportWidth, height: reach.viewportHeight }
-      : safeDecode(
-          Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
-          await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+      // A visible node in a child can still sit behind an overlay in any ancestor. Check the
+      // actual commanded point from the main viewport down, then hit-test the exact node.
+      for (const ancestor of ancestors.reverse()) {
+        const reached = safeDecode(
+          Reach,
+          await ancestor.evaluate(hitPoint, { ...localPoint, child: true }),
         );
 
-    if (
-      !reach.reachable ||
-      point.x < 0 ||
-      point.y < 0 ||
-      point.x >= viewport.width ||
-      point.y >= viewport.height
-    )
-      throw failure("not-visible", "undispatched");
+        if (!reached.reachable) throw failure("not-visible", "undispatched");
+        localPoint = { x: reached.x, y: reached.y };
+      }
+
+      const reached = safeDecode(
+        Reach,
+        await element.evaluate(hitPoint, { ...localPoint, child: false }),
+      );
+
+      if (!reached.reachable) throw failure("not-visible", "undispatched");
+    } finally {
+      await Promise.all(ancestors.map((ancestor) => ancestor.dispose()));
+    }
 
     return point;
   };

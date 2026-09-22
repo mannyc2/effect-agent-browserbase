@@ -1,13 +1,13 @@
 # Browserbase adapter for Effect Agent
 
-`effect-agent-browserbase` connects [`effect-browserbase`](../browserbase/README.md) to Effect Agent. It contains only the two things that need the framework: the `InteractiveBrowser` implementation and the fixed browser Toolkit an `AgentRuntime` can call.
+`effect-agent-browserbase` connects [`effect-browserbase`](../browserbase/README.md) to Effect Agent. It contains the `InteractiveBrowser` implementation and maintained browser Tools an `AgentRuntime` can call.
 
 Everything else — allocation, the Playwright/CDP connection, live capture, page holds, recordings, replays and downloads — belongs to the generic package. This one has no Playwright peer at all.
 
 ## Public entry points
 
 - `adapter` — `BrowserbaseInteractiveHost`, which acquires one owned browser per execution scope and presents it as an Effect Agent `BrowserHandle`; `fromSession`, which adapts an already-owned generic session without allocating or connecting again; and `browserbaseInteractiveLayer` for providing `InteractiveBrowser` directly.
-- `tools` — bounded model-facing navigation, inspection, exact observed-node click/fill, and scroll.
+- `tools` — bounded model-facing navigation, inspection, exact observed-node click/fill and scripted scroll; opt-in native pointer/hover/wheel tools; host observation/admission options and scoped navigation/receipt callbacks.
 
 ## One session per execution, borrowed by every turn
 
@@ -62,6 +62,52 @@ const program = Effect.scoped(
 
 For typed bootstrap callbacks, acquire through `BrowserbaseBrowser` and pass the result to `fromSession`. The returned `BrowserbaseAgentSession<E>` retains that exact `BrowserbaseSession<E>`: its typed failure signal, callback diagnostics, connection, target selection, action budget and capture reservations are shared. `BrowserTools.handlers(fromSession(session))` installs the same fixed Toolkit; no Tool can select callback code or create another browser. Keep the actual `AgentRuntime.run` inside `browser.withBrowser(policy, { bootstrap }, use)` when fail-session callback errors should supervise the whole agent execution. The maintained packed Agent consumer exercises this composition rather than merely checking its exports.
 
+## Host observation and exact-control policy
+
+`handlers(session, options)` keeps document inspection and the original five Tools by default. The host can select `observationScope: "viewport"` and pass `admission: ElementAdmission`. The same options apply to `nativeHandlers` and `makeHost`:
+
+```ts
+const handlers = BrowserTools.handlers(session, {
+  observationScope: "viewport",
+  maxTextBytes: 8192,
+  maxControls: 16,
+  admission: {
+    admit: (facts) =>
+      facts.inputType !== "password" &&
+      facts.autocomplete !== "current-password" &&
+      facts.formMethod === undefined,
+  },
+});
+```
+
+Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof. Scout consumers can still explicitly use document scope.
+
+The policy runs for maintained `browser_click`, `browser_fill` and `browser_hover` on fresh facts from the exact observed node. The owner first rejects replaced or changed controls, independently of that policy. `admit` is synchronous under the owner's permit; it returns a boolean. False, a thrown exception or a non-boolean result fails `denied/undispatched`, without projecting the exception to the model. Policy and destination/type/autocomplete/form facts are host-only and are never Tool parameters. Asynchronous application checks belong before dispatch and retain their own Effect errors, services and cancellation; they do not replace this final synchronous policy. Native input is still not atomic with DOM validation: page script can run after validation and before input arrives.
+
+Passive `checkpoint` does not replace the observation used by Tools. After a page hold/resume, call `revalidateElement` on the retained exact reference before dispatch; unchanged, admissible controls remain usable, while replacements and changed control facts fail without substitution. The native AgentRuntime regression exercises this composition on the same owner.
+
+## Optional native input
+
+`nativeToolkit` adds `browser_pointer_move`, `browser_hover` and `browser_wheel`. Merge it with `toolkit` using Effect's `Toolkit.merge`, and provide both `handlers(session, options)` and `nativeHandlers(session, options)`. Merely installing these handlers does not expose new Tools to an agent whose declared toolkit still contains only the original five.
+
+Pointer requests use the generic `PointerMoveRequest` and wheel requests use `WheelRequest`: CSS pixels in the main-frame viewport. Hover takes an `ObservedElement` and applies the same exact-node admission as click/fill. It never scrolls an off-screen element into view. A wheel event reaches the nested container or page the browser hit-tests under the pointer. `browser_scroll` remains an instantaneous scripted scroll with no wheel event.
+
+Native model results contain only `{ dispatched: true }`. They do not claim scrolling has settled or that a website action succeeded. Observe again for the result. `makeHost`'s `onInput` receives the unmodified `InputReceipt` and optional tool-call ID, including target, commanded position/delta and host-monotonic interval. Receipt times, private capabilities and callback output never enter the model result. The host owns pacing, easing and drawing; these Tools add none and never replay failed input.
+
+## Scoped navigation and receipt callbacks
+
+`makeHost(session, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers` and `failure`. Its `HostOptions<E, R>` accepts these optional host callbacks:
+
+`onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
+
+The callback service requirements are captured at `makeHost` acquisition; each callback gets its own invocation scope. `failure: Effect<never, E | BrowserError>` retains the first original callback or cleanup cause for the host, including private consumer errors. Run the agent with the returned handler Layers, and race the agent execution with `host.failure` when callback failure should supervise the whole agent run. The host refuses later calls after a callback failure. The model receives only a bounded `BrowserbaseToolFailure`, never the callback cause, its service values or raw operation object.
+
+This scoped path deliberately uses `startNavigation` once for `browser_navigate`. `onNavigation` starts once with that exact operation before completion is raced, including for an already-settled navigation. Returning from the callback does not finish navigation; the Tool still waits for DOMContentLoaded. The callback may checkpoint/capture while the page loads or wait for an application cancellation signal and call `operation.stop`. Waiting on `operation.completed` and cancelling that waiter alone stops nothing. A callback that needs to inspect a failed completion can use `Effect.result` or `Effect.exit` rather than raising it as a callback failure.
+
+Navigation completion cancels remaining callback work and joins its scoped cleanup before returning. Callback failure or interruption of the Tool/host scope asks that same pending operation to stop before its operation scope closes. A failed stop preserves the native error and owner fencing; it is not treated as confirmed termination. Confirmed stop produces the generic `interrupted` completion and keeps a healthy session usable, without undoing page effects. The existing generic failure schema still reports that completion's `outcome: "unknown"`; acknowledgement of stop does not establish what the page did before it stopped. Default `handlers`, without `makeHost`, retain their earlier navigation/abandonment semantics.
+
+`onInput` runs after input dispatch. Its failure is therefore not an undispatched input: the model receives `failed/unknown`, and the host retains the original error. In contrast, admission refusal and a call refused because its host is already closed/faulted dispatch nothing. Closing the `makeHost` scope interrupts and joins its calls but does not close the borrowed browser. Operation reservations, native fences and browser cleanup remain with the generic owner.
+
 ## Know what authority this grants
 
 `browser_click` and `browser_fill` accept only an exact node from the most recent observation, so a model cannot name a target of its own, and a replaced or detached reference fails rather than resolving to something else. `browser_navigate` is different: the URL comes from the model, bounded only by the session's network policy, and the only policy this adapter accepts is `Unrestricted` (see [Network policy](#network-policy)). There is deliberately no per-tool host allowlist, because none is enforceable on this provider: a URL check on the first request says nothing about where it redirects or what the page then loads. A host that needs navigation confined to known hosts must enforce that beneath the browser, at an egress proxy it operates.
@@ -70,11 +116,11 @@ For typed bootstrap callbacks, acquire through `BrowserbaseBrowser` and pass the
 
 `Unrestricted` is supported only when selected by trusted host policy. `ExactHosts` fails before allocation because Browserbase's `allowedDomains` setting does not prove exact-host containment for redirects, frames, subresources, popups and service workers. `PublicWeb` also fails before allocation because request interception cannot establish connection-time public-address containment. These modes are deliberately not weakened to make them appear supported.
 
-The generic guide's [Network policy](../browserbase/README.md#network-policy) section says why this package has no request-admission hook, and which boundary can enforce containment instead: a proxy the host operates, selected for the whole session at launch. A host that uses one still selects `Unrestricted` here, and the containment claim stays the host's own. The model-facing Tools take no admission policy. `controlFacts` and `admit` belong to a host that drives the generic session itself.
+The generic guide's [Network policy](../browserbase/README.md#network-policy) section says why this package has no request-admission hook, and which boundary can enforce containment instead: a proxy the host operates, selected for the whole session at launch. A host that uses one still selects `Unrestricted` here, and the containment claim stays the host's own. The model-facing Tools take no admission policy. Host `admission` options decide whether an exact control may receive input; they do not establish redirect, subresource or connection-time network containment.
 
 ## Error translation
 
-The generic package's `BrowserError` carries a reason and a dispatch outcome. The adapter maps it onto the framework's provider-neutral `InteractiveBrowserError` shapes, and the Toolkit maps it onto a declared `BrowserbaseToolFailure` that keeps `undispatched`, `rejected` and `unknown` distinct. The framework contract does not preserve dispatch classification, so the adapter never guesses it from a message or a raw SDK cause; the observed-element Tools keep it explicitly.
+The generic package's `BrowserError` carries a reason and a dispatch outcome. The adapter maps it onto the framework's provider-neutral `InteractiveBrowserError` shapes, and the Toolkit maps it onto a declared `BrowserbaseToolFailure` that keeps `undispatched`, `rejected` and `unknown` distinct. The framework contract does not preserve dispatch classification, so the adapter never guesses it from a message or a raw SDK cause. Observed-element and native-input Tools, and navigation through `makeHost`, use the generic operation's explicit failure facts. Consumer callback causes stay on the host-only failure signal.
 
 This package intentionally exposes Effect AI Tools over a long-lived, execution-owned Browserbase session. The pinned upstream browser guide describes its own interactive pass as a different, bounded construct and says it cannot become an agent Tool. The generic package's ownership and fencing model explains this extension; it should not be presented as upstream approval of it.
 
@@ -82,6 +128,35 @@ Host controls above core's provider-neutral handle are deliberately per-adapter 
 
 ## Development and evidence
 
-Repository commands use Vite+: `vp run check`, `vp test`, `vp run install:test-browser`, `vp run test:native`, `vp pack`. This package's native suite runs the actual public `AgentRuntime`, Effect AI Toolkit and `@effect-agent/testing/ScriptedModel` against a real local Chromium over CDP, with only provider allocation and status scripted. It never allocates Browserbase and never invokes a paid model. A local CDP pass proves native integration, not provider allocation, Live View authorization or Browserbase network behavior.
+Repository commands use Vite+: `vp run check`, `vp test`, `vp run install:test-browser`, `vp run test:native`, `vp pack`. This package's native suite runs the actual public `AgentRuntime`, Effect AI Toolkit and `@effect-agent/testing/ScriptedModel` against real local Chromium over CDP. Hosted-path fixtures script provider allocation/status; the local-owner composition test uses `LocalBrowser` without account services and rejects any attempted provider HTTP call. No test allocates Browserbase or invokes a paid model. A local CDP pass proves native integration, not provider allocation, Live View authorization or Browserbase network behavior.
 
 This package owns its live-browser fixture rather than borrowing the generic package's: each package is installed on its own, and the workspace's export check rejects any relative import that resolves outside the owning package.
+
+## Borrow a local modeled session
+
+`Adapter.fromSession` also accepts the generic package's `LocalSession<E>`. Its return type is `LocalAgentSession<E>`, preserving the exact local browser object and its callback errors. Both local and hosted adapters satisfy `AgentSession<E>`, the shared input to maintained tools. The adapter opens no second connection and creates no provider reference.
+
+```ts
+import { Effect, Stream } from "effect";
+import * as Adapter from "effect-agent-browserbase/adapter";
+import * as Tools from "effect-agent-browserbase/tools";
+import { BrowserPolicy } from "effect-browserbase/browser-data";
+import { LocalBrowser } from "effect-browserbase/local-browser";
+
+const toolkit = Effect.scoped(
+  Effect.gen(function* () {
+    const session = yield* (yield* LocalBrowser).open(BrowserPolicy.unrestricted());
+    const agent = Adapter.fromSession(session);
+    const handlers = yield* Tools.toolkit.pipe(Effect.provide(Tools.handlers(agent)));
+    const results = yield* handlers.handle(
+      "browser_navigate",
+      { url: "https://example.com" },
+      "local-example",
+    );
+    // Consume inside the owning scope. Capture and PageControl take this same `session`.
+    return yield* Stream.runCollect(results);
+  }),
+).pipe(Effect.provide(LocalBrowser.layer({ pageControl: true })));
+```
+
+Local handle results use the `local-playwright-cdp` implementation identity. Closing that handle checks local connection/process cleanup; it never waits for a Browserbase release. For a borrowed local attachment, successful disconnection with `process: "not-owned"` leaves the external process with its original owner. Provider resources, hosted handoff and provider-confirmed cleanup remain specific to `BrowserbaseAgentSession`. See [independent local Chromium](../browserbase/README.md#independent-local-chromium) for launch, endpoint, sandbox and proxy limits.

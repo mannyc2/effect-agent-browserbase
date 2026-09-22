@@ -17,6 +17,7 @@ import type { Page } from "playwright-core";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 import { decodePng } from "../fixtures/Png.ts";
+import { pointerFrameSite } from "../fixtures/PointerFrames.ts";
 
 const Log = Schema.Struct({
   moves: Schema.Array(
@@ -34,6 +35,147 @@ const read = (page: Page) =>
   Effect.promise<unknown>(() => page.evaluate("window.read()")).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Log)),
   );
+
+const Moves = Schema.Array(
+  Schema.Struct({ x: Schema.Finite, y: Schema.Finite, trusted: Schema.Boolean }),
+);
+
+it.live("real CDP: hover reaches a nested cross-origin frame in main-viewport coordinates", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
+      const site = yield* pointerFrameSite;
+
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const session = yield* (yield* BrowserbaseBrowser).open(policy);
+
+          yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+          const [page] = f.nativePages(session.reference.sessionId);
+
+          assert.ok(page);
+          yield* Effect.promise(() => page.setContent(site.page));
+
+          const frames = yield* settle(session.frames, (listed) =>
+            listed.some((frame) => frame.name === "leaf"),
+          );
+
+          const target = frames.find((frame) => frame.name === "leaf");
+          const leaf = page.frame({ name: "leaf" });
+
+          assert.ok(target);
+          assert.ok(leaf);
+          expect(new URL(leaf.url()).origin).toBe(site.origin);
+          expect(site.origin).not.toBe(new URL(page.url()).origin);
+          const handle = yield* session.selectFrame(target.frameId);
+          const receipt = yield* handle.hover(HoverRequest.make({ selector: "#target" }));
+
+          const events = yield* Effect.promise<unknown>(() => leaf.evaluate("window.moves")).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Moves)),
+          );
+
+          // Main clip offset + each iframe's border/offset + the button's center.
+          expect(receipt.position).toEqual({ x: 137, y: 97 });
+          expect(receipt.target.frameId).toBe(target.frameId);
+          expect(events.at(-1)).toEqual({ x: 70, y: 40, trusted: true });
+          yield* session.close;
+        }),
+      );
+    }),
+  ),
+);
+
+it.live("real CDP: a nested hover refuses clipping and occlusion in every ancestor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
+      const site = yield* pointerFrameSite;
+
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const session = yield* (yield* BrowserbaseBrowser).open(policy);
+
+          yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+          const [page] = f.nativePages(session.reference.sessionId);
+
+          assert.ok(page);
+          yield* Effect.promise(() => page.setContent(site.page));
+
+          const frames = yield* settle(session.frames, (listed) =>
+            listed.some((frame) => frame.name === "leaf"),
+          );
+
+          const target = frames.find((frame) => frame.name === "leaf");
+          const outer = page.frame({ name: "outer" });
+          const leaf = page.frame({ name: "leaf" });
+
+          assert.ok(target);
+          assert.ok(outer);
+          assert.ok(leaf);
+          const handle = yield* session.selectFrame(target.frameId);
+
+          const counts = () =>
+            Effect.promise<unknown>(() =>
+              Promise.all(
+                [page.mainFrame(), outer, leaf].map((frame) =>
+                  frame.evaluate("window.moves.length"),
+                ),
+              ),
+            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Natural))));
+
+          const cases = [
+            {
+              name: "main overlay",
+              setup: () => page.evaluate("document.querySelector('#cover').hidden=false"),
+            },
+            {
+              name: "parent overlay",
+              setup: () => outer.evaluate("document.querySelector('#cover').hidden=false"),
+            },
+            {
+              name: "ancestor clip",
+              setup: () => page.evaluate("document.querySelector('#clip').style.width='80px'"),
+            },
+            {
+              name: "unsupported frame rotation",
+              setup: () =>
+                page.evaluate("document.querySelector('iframe').style.transform='rotate(10deg)'"),
+            },
+          ];
+
+          for (const test of cases) {
+            yield* Effect.promise(() =>
+              page.evaluate(
+                "document.querySelector('#cover').hidden=true;document.querySelector('#clip').style.width='410px';document.querySelector('iframe').style.transform='none'",
+              ),
+            );
+            yield* Effect.promise(() =>
+              outer.evaluate("document.querySelector('#cover').hidden=true"),
+            );
+            yield* handle.pointerMove(PointerMoveRequest.make({ to: { x: 1, y: 1 } }));
+            yield* Effect.promise(test.setup);
+            const before = yield* counts();
+
+            const result = yield* handle
+              .hover(HoverRequest.make({ selector: "#target" }))
+              .pipe(Effect.result);
+
+            expect(result._tag, test.name).toBe("Failure");
+            if (result._tag === "Failure")
+              expect(result.failure, test.name).toMatchObject({
+                reason: "not-visible",
+                outcome: "undispatched",
+              });
+            expect(yield* counts(), test.name).toEqual(before);
+          }
+          yield* session.close;
+        }),
+      );
+    }),
+  ),
+);
 
 it.live(
   "real CDP: pointer moves, hover and wheel are real input the browser hit-tests itself",

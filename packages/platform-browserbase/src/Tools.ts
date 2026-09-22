@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, type Layer, Schema, Scope } from "effect";
 import {
   BrowserActionResult,
   BrowserNavigationResult,
@@ -6,11 +6,18 @@ import {
   BrowserScrollRequest,
   type InteractiveBrowserError,
 } from "effect-agent/interactive-browser";
-import { Observation, ObservedElement } from "effect-browserbase/browser-data";
+import type { ElementAdmission, NavigationOperation } from "effect-browserbase/browser";
+import {
+  type InputReceipt,
+  Observation,
+  ObservedElement,
+  PointerMoveRequest,
+  WheelRequest,
+} from "effect-browserbase/browser-data";
 import { BrowserError } from "effect-browserbase/errors";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-import type { BrowserbaseAgentSession } from "./Adapter.ts";
+import type { AgentSession } from "./Adapter.ts";
 
 /** A declared Tool failure, not a successful payload with an embedded error. */
 export class BrowserbaseToolFailure extends Schema.TaggedError<BrowserbaseToolFailure>()(
@@ -97,36 +104,288 @@ const Scroll = Tool.make("browser_scroll", {
 
 export const toolkit = Toolkit.make(Navigate, Inspect, Click, Fill, Scroll);
 
-/** Borrow one execution-owned session. This Layer never opens or closes a browser per Tool/turn. */
-export const handlers = <E>(
-  session: BrowserbaseAgentSession<E>,
-  options: { readonly maxTextBytes?: number; readonly maxControls?: number } = {},
-) => {
+/** Acknowledges input dispatch only, never completed scrolling or a website outcome. */
+export const NativeInputResult = Schema.Struct({ dispatched: Schema.Literal(true) });
+
+const PointerMove = Tool.make("browser_pointer_move", {
+  description:
+    "Send one real pointer move in main-frame viewport CSS pixels. No easing or automatic scrolling. Inspect again before acting on a control.",
+  parameters: PointerMoveRequest,
+  success: NativeInputResult,
+  failure: BrowserbaseToolFailure,
+  failureMode: "return",
+});
+
+const Hover = Tool.make("browser_hover", {
+  description:
+    "Hover the exact node from the most recent observation once, where it is. A covered or off-screen node is refused without scrolling to it. Inspect again before another exact-node action.",
+  parameters: ObservedElement,
+  success: NativeInputResult,
+  failure: BrowserbaseToolFailure,
+  failureMode: "return",
+});
+
+const Wheel = Tool.make("browser_wheel", {
+  description:
+    "Send one real wheel event at the current pointer, or at the supplied main-frame viewport point. The browser chooses the nested container or page that scrolls. Success acknowledges dispatch only; inspect again to observe the result.",
+  parameters: WheelRequest,
+  success: NativeInputResult,
+  failure: BrowserbaseToolFailure,
+  failureMode: "return",
+});
+
+/** Optional additions, merged with `toolkit` by the host. `browser_scroll` stays scripted. */
+export const nativeToolkit = Toolkit.make(PointerMove, Hover, Wheel);
+
+export interface HandlerOptions {
+  readonly maxTextBytes?: number;
+  readonly maxControls?: number;
+  readonly observationScope?: "document" | "viewport";
+  /** Synchronous, on fresh exact-node facts under the owner's permit. Never a Tool parameter. */
+  readonly admission?: ElementAdmission;
+}
+
+interface Hooks {
+  readonly run: <A>(
+    effect: Effect.Effect<A, BrowserbaseToolFailure>,
+  ) => Effect.Effect<A, BrowserbaseToolFailure>;
+  readonly navigate?: (
+    request: BrowserNavigateRequest,
+    toolCallId: string | undefined,
+  ) => Effect.Effect<BrowserNavigationResult, BrowserbaseToolFailure>;
+  readonly input?: (
+    receipt: InputReceipt,
+    toolCallId: string | undefined,
+  ) => Effect.Effect<void, BrowserbaseToolFailure>;
+}
+
+const direct: Hooks = { run: (effect) => effect };
+
+const makeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions, hooks: Hooks) => {
   const maxTextBytes = options.maxTextBytes ?? 8192;
   const maxControls = options.maxControls ?? 16;
+  const scope = options.observationScope ?? "document";
+
+  const admission =
+    options.admission === undefined ? undefined : { admit: options.admission.admit };
 
   return toolkit.toLayer({
-    browser_navigate: (request) =>
-      session.currentHandle.pipe(
-        Effect.mapError(failed),
-        Effect.flatMap((handle) => handle.navigate(request).pipe(Effect.mapError(failed))),
+    browser_navigate: (request, context) =>
+      hooks.run(
+        hooks.navigate === undefined
+          ? session.currentHandle.pipe(
+              Effect.mapError(failed),
+              Effect.flatMap((handle) => handle.navigate(request).pipe(Effect.mapError(failed))),
+            )
+          : hooks.navigate(request, context.toolCallId),
       ),
     browser_inspect: () =>
-      session.browser.observe({ maxTextBytes, maxControls }).pipe(Effect.mapError(failed)),
+      hooks.run(
+        session.browser.observe({ maxTextBytes, maxControls, scope }).pipe(Effect.mapError(failed)),
+      ),
     browser_click: (reference) =>
-      session.browser.clickElement(reference).pipe(
-        Effect.mapError(failed),
-        Effect.flatMap((result) => actionResult(result.url)),
+      hooks.run(
+        session.browser.clickElement(reference, admission).pipe(
+          Effect.mapError(failed),
+          Effect.flatMap((result) => actionResult(result.url)),
+        ),
       ),
     browser_fill: ({ reference, value }) =>
-      session.browser.fillElement(reference, value).pipe(
-        Effect.mapError(failed),
-        Effect.flatMap((result) => actionResult(result.url)),
+      hooks.run(
+        session.browser.fillElement(reference, value, admission).pipe(
+          Effect.mapError(failed),
+          Effect.flatMap((result) => actionResult(result.url)),
+        ),
       ),
     browser_scroll: (request) =>
-      session.currentHandle.pipe(
-        Effect.mapError(failed),
-        Effect.flatMap((handle) => handle.scroll(request).pipe(Effect.mapError(failed))),
+      hooks.run(
+        session.currentHandle.pipe(
+          Effect.mapError(failed),
+          Effect.flatMap((handle) => handle.scroll(request).pipe(Effect.mapError(failed))),
+        ),
       ),
   });
 };
+
+const makeNativeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions, hooks: Hooks) => {
+  const admission =
+    options.admission === undefined ? undefined : { admit: options.admission.admit };
+
+  const input = (
+    effect: Effect.Effect<InputReceipt, BrowserError>,
+    toolCallId: string | undefined,
+  ) =>
+    hooks.run(
+      effect.pipe(
+        Effect.mapError(failed),
+        Effect.tap((receipt) => hooks.input?.(receipt, toolCallId) ?? Effect.void),
+        Effect.as({ dispatched: true as const }),
+      ),
+    );
+
+  return nativeToolkit.toLayer({
+    browser_pointer_move: (request, context) =>
+      input(
+        session.browser.currentTarget.pipe(Effect.flatMap((target) => target.pointerMove(request))),
+        context.toolCallId,
+      ),
+    browser_hover: (reference, context) =>
+      input(session.browser.hoverElement(reference, admission), context.toolCallId),
+    browser_wheel: (request, context) =>
+      input(
+        session.browser.currentTarget.pipe(Effect.flatMap((target) => target.wheel(request))),
+        context.toolCallId,
+      ),
+  });
+};
+
+/** Borrow one execution-owned session. These five tools keep their original default behavior. */
+export const handlers = <E>(session: AgentSession<E>, options: HandlerOptions = {}) =>
+  makeHandlers(session, options, direct);
+
+/** Opt-in native tools using the same session, exact-node policy and input budgets. */
+export const nativeHandlers = <E>(session: AgentSession<E>, options: HandlerOptions = {}) =>
+  makeNativeHandlers(session, options, direct);
+
+export interface HostOptions<E = never, R = never> extends HandlerOptions {
+  /**
+   * Runs beside completion of the one navigation already dispatched. Returning does not finish
+   * navigation. `operation.stop` explicitly stops it; cancelling a waiter alone does not.
+   * The callback and any scoped work it starts are joined before the Tool returns.
+   */
+  readonly onNavigation?: (event: {
+    readonly operation: NavigationOperation;
+    readonly toolCallId: string | undefined;
+  }) => Effect.Effect<void, E, R | Scope.Scope>;
+  /** Called after native input, with the unmodified receipt. No receipt enters a model result. */
+  readonly onInput?: (event: {
+    readonly receipt: InputReceipt;
+    readonly toolCallId: string | undefined;
+  }) => Effect.Effect<void, E, R | Scope.Scope>;
+}
+
+export interface ToolHost<E = never> {
+  readonly handlers: Layer.Layer<Tool.HandlersFor<Toolkit.Tools<typeof toolkit>>>;
+  readonly nativeHandlers: Layer.Layer<Tool.HandlersFor<Toolkit.Tools<typeof nativeToolkit>>>;
+  /** First callback/cleanup cause, preserving private consumer errors on the host only. */
+  readonly failure: Effect.Effect<never, E | BrowserError>;
+}
+
+/**
+ * Scoped host composition over the same maintained handlers. Dependencies are captured here;
+ * callback failures are retained on `failure` and only a bounded failure reaches the model.
+ * Closing this scope joins its Tool calls without closing the borrowed browser. A cancelled
+ * navigation asks its exact operation to stop before the operation scope can fence abandonment.
+ */
+export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = never>(
+  session: AgentSession<OwnerError>,
+  options: HostOptions<E, R> = {},
+): Effect.fn.Return<ToolHost<E>, never, Exclude<R, Scope.Scope> | Scope.Scope> {
+  const consumer = yield* Effect.context<Exclude<R, Scope.Scope>>();
+  const scope = yield* Scope.make("sequential");
+  const failure = yield* Deferred.make<never, E | BrowserError>();
+  const { onNavigation, onInput } = options;
+  let closed = false;
+
+  yield* Effect.addFinalizer((exit) =>
+    Effect.sync(() => {
+      closed = true;
+    }).pipe(Effect.andThen(Scope.close(scope, exit))),
+  );
+
+  const callbackFailed = () =>
+    BrowserbaseToolFailure.make({ reason: "failed", outcome: "unknown" });
+
+  const invoke = (effect: Effect.Effect<void, E, R | Scope.Scope>) =>
+    Effect.scoped(effect).pipe(
+      Effect.provideContext(consumer),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+
+        return Deferred.failCause(failure, cause).pipe(
+          Effect.andThen(Effect.fail(callbackFailed())),
+        );
+      }),
+    );
+
+  const run: Hooks["run"] = (effect) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (closed)
+          return yield* BrowserbaseToolFailure.make({ reason: "closed", outcome: "undispatched" });
+        if (Deferred.isDoneUnsafe(failure))
+          return yield* BrowserbaseToolFailure.make({ reason: "failed", outcome: "undispatched" });
+
+        const fiber = yield* Effect.forkIn(restore(effect), scope);
+
+        return yield* restore(Fiber.join(fiber)).pipe(Effect.ensuring(Fiber.interrupt(fiber)));
+      }),
+    );
+
+  const navigate: NonNullable<Hooks["navigate"]> = Effect.fnUntraced(function* (
+    request,
+    toolCallId,
+  ) {
+    const target = yield* session.browser.currentTarget.pipe(Effect.mapError(failed));
+    const operation = yield* target.startNavigation(request).pipe(Effect.mapError(failed));
+    let settled = false;
+
+    const completed = operation.completed.pipe(
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          if (Exit.isSuccess(exit) || !Cause.hasInterruptsOnly(exit.cause)) settled = true;
+        }),
+      ),
+      Effect.mapError(failed),
+      Effect.flatMap((result) =>
+        Schema.decodeEffect(BrowserNavigationResult)({ url: result.url }).pipe(
+          Effect.mapError(() =>
+            BrowserbaseToolFailure.make({ reason: "malformed", outcome: "unknown" }),
+          ),
+        ),
+      ),
+    );
+
+    // Start the callback before racing completion, including a navigation already settled.
+    const callback =
+      onNavigation === undefined
+        ? undefined
+        : yield* invoke(Effect.suspend(() => onNavigation({ operation, toolCallId }))).pipe(
+            Effect.forkScoped({ startImmediately: true }),
+          );
+
+    const observed =
+      callback === undefined
+        ? completed
+        : Effect.raceFirst(Fiber.join(callback).pipe(Effect.andThen(Effect.never)), completed).pipe(
+            Effect.ensuring(Fiber.interrupt(callback)),
+            Effect.filterOrFail(() => !Deferred.isDoneUnsafe(failure), callbackFailed),
+          );
+
+    return yield* observed.pipe(
+      Effect.onExit(() =>
+        settled
+          ? Effect.void
+          : operation.stop.pipe(
+              Effect.onError((cause) => Deferred.failCause(failure, cause)),
+              Effect.mapError(failed),
+            ),
+      ),
+    );
+  }, Effect.scoped);
+
+  const hooks: Hooks = {
+    run,
+    navigate,
+    input: (receipt, toolCallId) =>
+      onInput === undefined
+        ? Effect.void
+        : invoke(Effect.suspend(() => onInput({ receipt, toolCallId }))),
+  };
+
+  return {
+    handlers: makeHandlers(session, options, hooks),
+    nativeHandlers: makeNativeHandlers(session, options, hooks),
+    failure: Deferred.await(failure),
+  };
+});

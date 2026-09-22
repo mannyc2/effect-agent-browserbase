@@ -4,7 +4,7 @@ Execution-scoped Browserbase integration built on Effect v4 and Playwright-over-
 
 `effect-browserbase` owns Browserbase: account identity, session and context resources, one owned browser, live capture, page holds, recordings, replays and downloads. It does not depend on [Effect Agent](https://github.com/danieljvdm/effect-agent). `effect-agent-browserbase` is the adapter: it presents that browser to an `AgentRuntime` and supplies the fixed Tool set, and it has no Playwright peer.
 
-One scope owns the browser. Agent tools borrow that session across turns. Recording, replay and download access have independent lifetimes; live capture supplies bounded JPEG frames from selected or explicitly pinned pages without owning an encoder or an audio source.
+One scope owns the browser. Agent tools borrow that session across turns. Recording, replay and download access have independent lifetimes; live capture supplies bounded JPEG frames from selected or explicitly pinned pages without owning an encoder or an audio source. An explicit local Chromium owner uses that same modeled control, capture and page-hold implementation without a Browserbase account; provider resources and provider cleanup remain hosted capabilities.
 
 **Release status:** this repository has not published either package. Publication requires control of both npm names. Local native and framework acceptance is distinct from hosted Browserbase validation; see the status record for the exact scope of separately reported provider evidence.
 
@@ -16,6 +16,7 @@ One scope owns the browser. Agent tools borrow that session across turns. Record
 | `effect-browserbase/sessions` | Passive inspection and explicit release |
 | `effect-browserbase/contexts` | Context resources, with writer settlement in `context-coordination` |
 | `effect-browserbase/browser` | Browser ownership, pages, frames, handoff and explicit reconnect |
+| `effect-browserbase/local-browser` | Owned local Chromium or borrowed loopback attachment, with local identity and cleanup |
 | `effect-browserbase/capture` | Target-pinned video frame streams with source timestamps |
 | `effect-browserbase/page-control` | Opt-in host-owned stage holds and receipt-based resume |
 | `effect-browserbase/recordings` | Provider MP4 assembly, status and bounded retrieval |
@@ -26,6 +27,13 @@ One scope owns the browser. Agent tools borrow that session across turns. Record
 | `effect-agent-browserbase/tools` | Bounded navigation, observation and exact-node actions |
 
 Both root entry points are also public. Production distributions contain ESM JavaScript and `.d.mts` declarations, not test fixtures, recovery archives or development dependencies. Playwright is an optional peer of the generic package only, loaded when a browser connects; install `playwright-core@1.63.0` when using that capability.
+
+The maintained toolkit accepts host-selected viewport inspection and fresh
+exact-control admission. Hosts can opt into native pointer, hover and wheel
+tools, or scoped navigation and input callbacks, while model responses stay
+bounded. A running capture exposes a passive metadata snapshot so hosts can
+read document boundaries and loss accounting without stopping capture or waking
+a held page. The package guides define these choices and their limits.
 
 Read the [Browserbase guide](packages/browserbase/README.md) for ownership, outcomes, bounds and examples, and the [adapter guide](packages/platform-browserbase/README.md) for the framework integration. The [agent example](packages/platform-browserbase/examples/agent.ts) uses the real `AgentRuntime` and scripted model; the [hosted examples](packages/browserbase/examples/hosted.ts) show application composition but require separately authorized hosted access.
 

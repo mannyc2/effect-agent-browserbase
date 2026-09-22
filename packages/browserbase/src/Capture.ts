@@ -1,6 +1,6 @@
 import { Effect, Schema, type Scope } from "effect";
 
-import type { BrowserbaseSession } from "./Browser.ts";
+import type { BrowserSession } from "./Browser.ts";
 import { PageInfo } from "./BrowserData.ts";
 import { BrowserError } from "./Errors.ts";
 import { captureParent } from "./internal/browser/Association.ts";
@@ -11,6 +11,7 @@ export {
   CapturedFrame,
   CaptureOptions,
   CaptureSize,
+  CaptureSnapshot,
   CaptureSummary,
 } from "./internal/capture/CaptureTypes.ts";
 
@@ -27,7 +28,7 @@ export type { CaptureInterval } from "./internal/capture/CaptureTypes.ts";
  * `CaptureInterval` remains a live scoped capability, not a schema or JSON/Tool value.
  */
 export const start = <E>(
-  session: BrowserbaseSession<E>,
+  session: BrowserSession<E>,
   options: CaptureOptions = {},
 ): Effect.Effect<CaptureInterval, BrowserError, Scope.Scope> =>
   Effect.suspend(() => {

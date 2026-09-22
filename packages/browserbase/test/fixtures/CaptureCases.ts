@@ -395,6 +395,125 @@ export const captureCases: ReadonlyArray<Case> = [
         ["https://page-1.example.test/loading", null],
       );
     })),
+  test("live metadata preserves boundaries and loss without consuming or restarting capture", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, { ...options, lifetime: "page" });
+      const initial = yield* interval.snapshot;
+
+      assert.equal(initial.phase, "capturing");
+      assert.equal(initial.reason, null);
+      assert.equal(initial.nativeStop, null);
+      assert.equal(initial.initialUrl, "https://page-1.example.test/");
+      assert.equal(initial.currentDocument, 0);
+
+      f.emit(1000);
+      f.emit(1010);
+      f.navigate("https://page-1.example.test/next");
+      f.emit(1020);
+      f.emit(1015);
+      const active = yield* interval.snapshot;
+
+      assert.equal(active.phase, "capturing");
+      assert.equal(active.delivered, 0);
+      assert.equal(active.dropped, 2);
+      assert.equal(active.late, 1);
+      assert.equal(active.upstreamDrops, "unknown");
+      assert.equal(active.currentDocument, 1);
+      assert.equal(active.documentBoundaries[0]?.afterSequence, 1);
+      assert.equal(active.documentBoundaries[0]?.url, "https://page-1.example.test/next");
+      assert.ok(active.observedMonotonicNanos >= initial.observedMonotonicNanos);
+      assert.deepEqual(f.counts(), { starts: 1, stops: 0 });
+      assert.equal(f.parent.owner.state.actions, 0);
+      assert.equal(initial.documentBoundaries.length, 0);
+
+      // JavaScript consumers cannot change the owner's facts through a returned record.
+      const boundary = active.documentBoundaries[0];
+
+      assert.ok(boundary);
+      Reflect.set(boundary, "url", "https://forged.example/");
+      assert.equal(
+        (yield* interval.snapshot).documentBoundaries[0]?.url,
+        "https://page-1.example.test/next",
+      );
+      yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+      const final = yield* interval.completed;
+      const stopped = yield* interval.snapshot;
+
+      assert.deepEqual(
+        frames.map((frame) => frame.sequence),
+        [1, 2],
+      );
+      assert.equal(stopped.phase, "stopped");
+      assert.equal(stopped.nativeStop, "confirmed");
+      assert.equal(stopped.reason, final.reason);
+      assert.equal(stopped.delivered, final.delivered);
+      assert.equal(stopped.dropped, final.dropped);
+      assert.deepEqual(stopped.documentBoundaries, final.documentBoundaries);
+    })),
+  test("metadata reads report pending cleanup without waiting and retain truncation", () =>
+    Effect.gen(function* () {
+      const entered = gate<void>();
+      const release = gate<void>();
+
+      const f = yield* makeFixture({
+        stop: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+
+      const interval = yield* startCapture(f.parent, { ...options, lifetime: "page" });
+
+      f.navigate(`https://page-1.example.test/${"a".repeat(8192)}`);
+      for (let i = 0; i < 64; i++) f.navigate();
+      const running = yield* interval.snapshot;
+
+      assert.equal(running.currentDocument, 65);
+      assert.equal(running.documentBoundaries.length, 64);
+      assert.equal(running.documentBoundaries[0]?.url, null);
+      assert.equal(running.documentBoundariesTruncated, true);
+      const stopping = yield* interval.stop.pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => entered.promise);
+      const pending = yield* interval.snapshot;
+
+      assert.equal(pending.phase, "stopping");
+      assert.equal(pending.nativeStop, null);
+      assert.equal(pending.reason, "stopped");
+      assert.deepEqual(pending.documentBoundaries, running.documentBoundaries);
+      release.resolve();
+      yield* Fiber.join(stopping);
+      assert.equal((yield* interval.snapshot).nativeStop, "confirmed");
+    })),
+  test("mutating returned failure metadata cannot change the capture's terminal failure", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, options);
+
+      f.emit(1000);
+      f.navigate();
+      const observed = yield* interval.snapshot;
+
+      assert.ok(observed.error);
+      assert.equal(observed.error.reason, "target-changed");
+      Reflect.set(observed.error, "reason", "denied");
+      Reflect.set(observed.error, "operation", "fill");
+      Reflect.set(observed.error, "status", 401);
+      const next = yield* interval.snapshot;
+
+      assert.equal(next.error?.reason, "target-changed");
+      assert.equal(next.error?.operation, "capture");
+      assert.equal(next.error?.status, undefined);
+      yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
+      const final = yield* interval.completed;
+
+      assert.ok(final.error);
+      Reflect.set(final.error, "reason", "configuration");
+      assert.equal((yield* interval.completed).error?.reason, "target-changed");
+      assert.equal((yield* interval.snapshot).error?.reason, "target-changed");
+    })),
   test("an interval that lasts one document still ends when its page navigates", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();

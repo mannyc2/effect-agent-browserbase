@@ -8,6 +8,7 @@ import {
   CaptureDefaults,
   CaptureLimits,
   CaptureSize,
+  CaptureSnapshot,
   CaptureSummary,
   type CaptureInterval,
   type CaptureOptions,
@@ -167,11 +168,23 @@ export const startCapture = Effect.fnUntraced(function* (
       sourceFirstMillis: first ?? null,
       sourceLastMillis: last ?? null,
       initialUrl,
-      documentBoundaries: [...documentBoundaries],
+      documentBoundaries: documentBoundaries.map((boundary) => ({ ...boundary })),
       documentBoundariesTruncated,
       nativeStop,
       upstreamDrops: "unknown",
-      ...(error === undefined ? {} : { error }),
+      ...(error === undefined
+        ? {}
+        : {
+            error: BrowserError.make({
+              operation: error.operation,
+              reason: error.reason,
+              ...(error.outcome === undefined ? {} : { outcome: error.outcome }),
+              ...(error.status === undefined ? {} : { status: error.status }),
+              ...(error.retryAfterMillis === undefined
+                ? {}
+                : { retryAfterMillis: error.retryAfterMillis }),
+            }),
+          }),
     });
   };
 
@@ -459,6 +472,18 @@ export const startCapture = Effect.fnUntraced(function* (
 
   return {
     frames,
+    snapshot: Effect.sync(() => {
+      const { reason, nativeStop, ...metadata } = snapshot();
+
+      return CaptureSnapshot.make({
+        ...metadata,
+        phase: cleanupFinished ? "stopped" : ended ? "stopping" : "capturing",
+        observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+        currentDocument: document,
+        reason: ended ? reason : null,
+        nativeStop: cleanupFinished ? nativeStop : null,
+      });
+    }),
     stop: stopNative,
     completed: Deferred.await(completed).pipe(Effect.map(snapshot)),
   } satisfies CaptureInterval;
