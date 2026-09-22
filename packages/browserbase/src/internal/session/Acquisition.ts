@@ -124,9 +124,13 @@ export const acquireRemote = Effect.fnUntraced(function* (
             );
 
             yield* coordinator.close;
-            if (cleanup !== undefined) yield* reportCleanup(cleanup);
-            if (cleanup !== undefined && options.onCleanup !== undefined)
-              yield* reported(options.onCleanup(cleanup));
+            const result = cleanup;
+            const notify = options.onCleanup;
+
+            if (result !== undefined) {
+              yield* reported(Effect.suspend(() => reportCleanup(result)));
+              if (notify !== undefined) yield* reported(Effect.suspend(() => notify(result)));
+            }
           }),
         ),
       );

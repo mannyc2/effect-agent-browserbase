@@ -53,9 +53,4 @@ export const cleanupStep = <A, E, R>(
 
 /** Bounded host notification; reporting cannot change the cleanup evidence it describes. */
 export const reported = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<void> =>
-  effect.pipe(
-    Effect.interruptible,
-    Effect.timeoutOrElse({ duration: 2000, orElse: () => Effect.void }),
-    Effect.ignore,
-    Effect.asVoid,
-  );
+  cleanupStep(effect, 2000).pipe(Effect.asVoid);

@@ -120,6 +120,15 @@ That split is why an agent can use one browser for many turns while provider art
 
 The shared browser runtime delegates allocation and release to this provider lifetime. It supplies the local half of cleanup — fence, capture stop, initialization teardown, disconnect — and the canonical control plane owns the release request and the terminal status observation. A local disconnect, an accepted provider release request and provider-confirmed termination therefore stay distinct facts in one `CleanupResult`, together with the exact steps that failed.
 
+`onCleanup` runs once after the canonical receipt and any Context-writer settlement are recorded.
+Its construction throws, defects, self-interruption and two-second cooperative timeout are
+contained separately from the built-in diagnostics reporter. A failed reporter cannot suppress
+the sink, and a failed sink cannot change cleanup facts or repeat release. The receipt remains
+readable through `cleanupResult`; `closeChecked` still fails when its actual confirmation predicate
+fails. An outer race can discard that checked error, so keep any required host receipt sink outside
+the raced workflow. The shared guide's [Layer and receipt examples](../browser/README.md#a-long-lived-session-in-a-layer)
+describe sharing one bounded session and the supervision that a Layer alone does not provide.
+
 Mutations are serialized. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome and is never automatically replayed. Unresolved control fences the owner; the shared runtime's main-frame navigation recovery can preserve usability after one acknowledged stop while still reporting `Timeout/unknown`. Recovery is bounded by the loading deadline plus at most three seconds and the existing lifetime. Child-frame timeouts retain the conservative fence. `undispatched` is used only when the package established that native mutation dispatch did not occur.
 
 ## Shared browser operations

@@ -103,7 +103,7 @@ const acquireChromium =
             closing = true;
             const result = yield* cleanup.close;
 
-            if (onCleanup !== undefined) yield* reported(onCleanup(result));
+            if (onCleanup !== undefined) yield* reported(Effect.suspend(() => onCleanup(result)));
 
             return result;
           }).pipe(Effect.uninterruptible),
