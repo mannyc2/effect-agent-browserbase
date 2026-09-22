@@ -15,6 +15,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "@mannyc1/ts-release-npm@0.4.0": "patches/@mannyc1%2Fts-release-npm@0.4.0.patch",
+  },
   "packages": {
     "@gar/promise-retry": ["@gar/promise-retry@1.0.3", "", {}, "sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA=="],
 
