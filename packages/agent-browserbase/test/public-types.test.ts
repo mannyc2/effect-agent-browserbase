@@ -1,14 +1,20 @@
 import { expect, it } from "@effect/vitest";
 import { type Effect, type Layer, type Scope } from "effect";
 import type {
+  AgentSession,
   BrowserbaseAgentSession,
   BrowserbaseInteractiveHost,
   fromSession,
 } from "effect-agent-browserbase/adapter";
-import type { BrowserbaseToolFailure, handlers } from "effect-agent-browserbase/tools";
+import {
+  makeHost,
+  type BrowserbaseToolFailure,
+  type HandlerOptions,
+  type handlers,
+} from "effect-agent-browserbase/tools";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
 import type { BrowserbaseSession } from "effect-browserbase/browser";
-import type { InitializationError } from "effect-browserbase/errors";
+import type { BrowserError, InitializationError } from "effect-browserbase/errors";
 
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -42,12 +48,41 @@ const retainedOwner: Same<
 
 const typedTools: Same<
   Parameters<typeof handlers<CallbackFailure>>[0],
-  BrowserbaseAgentSession<CallbackFailure>
+  AgentSession<CallbackFailure>
 > = true;
 
 const retainedFailure: Same<
   Effect.Error<BrowserbaseAgentSession<CallbackFailure>["browser"]["failure"]>,
   CallbackFailure | InitializationError
+> = true;
+
+interface RecorderService {
+  readonly _tag: "RecorderService";
+}
+
+const callbackHost = (
+  session: BrowserbaseAgentSession,
+  callback: Effect.Effect<void, CallbackFailure, RecorderService | Scope.Scope>,
+) => makeHost(session, { onNavigation: () => callback, onInput: () => callback });
+
+const callbackRequirements: Same<
+  Requirements<ReturnType<typeof callbackHost>>,
+  RecorderService | Scope.Scope
+> = true;
+
+const callbackErrors: Same<
+  Effect.Error<Effect.Success<ReturnType<typeof callbackHost>>["failure"]>,
+  CallbackFailure | BrowserError
+> = true;
+
+const capturedRequirements: Same<
+  LayerRequirements<Effect.Success<ReturnType<typeof callbackHost>>["handlers"]>,
+  never
+> = true;
+
+const synchronousAdmission: Same<
+  ReturnType<NonNullable<HandlerOptions["admission"]>["admit"]>,
+  boolean
 > = true;
 
 it("retains scoped ownership, original handle identity and typed native Tool failures", () => {
@@ -58,7 +93,11 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       explicitOutcome &&
       retainedOwner &&
       typedTools &&
-      retainedFailure,
+      retainedFailure &&
+      callbackRequirements &&
+      callbackErrors &&
+      capturedRequirements &&
+      synchronousAdmission,
   ).toBe(true);
   expect(typeof declaredFrameworkFailure).toBe("function");
 });

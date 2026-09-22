@@ -37,6 +37,7 @@ export default defineConfig({
       "src/Extensions.ts",
       "src/Functions.ts",
       "src/Launch.ts",
+      "src/LocalBrowser.ts",
       "src/PageControl.ts",
       "src/PageFetch.ts",
       "src/Projects.ts",

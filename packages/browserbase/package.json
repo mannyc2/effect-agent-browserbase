@@ -34,6 +34,7 @@
     "./extensions": "./src/Extensions.ts",
     "./functions": "./src/Functions.ts",
     "./launch": "./src/Launch.ts",
+    "./local-browser": "./src/LocalBrowser.ts",
     "./page-control": "./src/PageControl.ts",
     "./page-fetch": "./src/PageFetch.ts",
     "./projects": "./src/Projects.ts",

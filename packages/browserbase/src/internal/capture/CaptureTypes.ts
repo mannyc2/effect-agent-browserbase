@@ -137,10 +137,34 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserbaseCap
   error: Schema.optionalKey(BrowserError),
 }) {}
 
+const { reason: StopReason, nativeStop: NativeStop, ...SnapshotFields } = CaptureSummary.fields;
+
+/**
+ * Host-side metadata at one instant, without reading or waking the page. The boundary prefix
+ * and loss counters are the same facts as the final summary, independent of frame consumption.
+ * `stopped` means native cleanup settled; buffered frames may still be drained afterwards.
+ */
+export class CaptureSnapshot extends Schema.Class<CaptureSnapshot>("BrowserbaseCaptureSnapshot")({
+  ...SnapshotFields,
+  phase: Schema.Literals(["capturing", "stopping", "stopped"]),
+  observedMonotonicNanos: Schema.BigInt,
+  /** Keeps counting when the bounded boundary prefix is truncated. */
+  currentDocument: Schema.Natural,
+  /** No reason is reported while the capture still accepts frames. */
+  reason: Schema.NullOr(StopReason),
+  /** Null until the native cleanup attempt settles; unconfirmed never means stopped remotely. */
+  nativeStop: Schema.NullOr(NativeStop),
+}) {}
+
 /** Live stream/Effect capabilities intentionally have no data schema or serialization contract. */
 export interface CaptureInterval {
   /** Single subscription. Ending or interrupting it stops this interval, not its browser. */
   readonly frames: Stream.Stream<CapturedFrame, BrowserError>;
+  /**
+   * A bounded copy of recorded metadata, available during capture and after cleanup. No native
+   * work, budget charge or subscription. Drain frames, then read `completed` for final accounting.
+   */
+  readonly snapshot: Effect.Effect<CaptureSnapshot>;
   readonly stop: Effect.Effect<CaptureSummary>;
   readonly completed: Effect.Effect<CaptureSummary>;
 }

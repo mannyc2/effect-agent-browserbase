@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect";
 
-import type { BrowserbaseSession } from "./Browser.ts";
+import type { BrowserSession } from "./Browser.ts";
 import { type PageExecutionState, PageInfo, PageSuspension } from "./BrowserData.ts";
 import { BrowserError } from "./Errors.ts";
 import { pageControl } from "./internal/browser/PageControlAssociation.ts";
 export { PageExecutionState, PageSuspension } from "./BrowserData.ts";
 
-const owner = <E>(session: BrowserbaseSession<E>) =>
+const owner = <E>(session: BrowserSession<E>) =>
   Effect.suspend(() => {
     const port = pageControl(session);
 
@@ -30,7 +30,7 @@ const invalid = () =>
 
 /** Last acknowledged state; no remote guarantee survives connection loss or external control. */
 export const state = <E>(
-  session: BrowserbaseSession<E>,
+  session: BrowserSession<E>,
   page: PageInfo,
 ): Effect.Effect<PageExecutionState, BrowserError> =>
   Schema.decodeEffect(PageInfo)(page).pipe(
@@ -41,7 +41,7 @@ export const state = <E>(
 
 /** Explicit host-only hold requiring InteractiveOptions.pageControl; capture ACKs never invoke it. */
 export const suspend = <E>(
-  session: BrowserbaseSession<E>,
+  session: BrowserSession<E>,
   page: PageInfo,
 ): Effect.Effect<PageSuspension, BrowserError> =>
   Schema.decodeEffect(PageInfo)(page).pipe(
@@ -52,7 +52,7 @@ export const suspend = <E>(
 
 /** Consumes the exact live receipt. Activation is intentional; stale receipts never replay commands. */
 export const resume = <E>(
-  session: BrowserbaseSession<E>,
+  session: BrowserSession<E>,
   receipt: PageSuspension,
 ): Effect.Effect<void, BrowserError> =>
   Schema.decodeEffect(PageSuspension)(receipt).pipe(

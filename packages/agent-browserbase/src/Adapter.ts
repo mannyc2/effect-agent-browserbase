@@ -22,17 +22,24 @@ import {
   type BrowserAcquisition,
   type BrowserbaseSession,
   type BrowserOptions,
+  type BrowserSession,
 } from "effect-browserbase/browser";
 import type { CleanupResult } from "effect-browserbase/cleanup";
 import type { BrowserbaseClient } from "effect-browserbase/client";
 import type { AllocationError, ContextError, InitializationError } from "effect-browserbase/errors";
 import { BrowserError } from "effect-browserbase/errors";
+import type { LocalReference, LocalSession } from "effect-browserbase/local-browser";
 import type { AllocationAttempt, SessionReference } from "effect-browserbase/references";
 import type { BrowserbaseSessions } from "effect-browserbase/sessions";
 
 export const browserbaseInteractiveImplementation = SandboxImplementation.make({
   isolation: "isolated",
   identity: "browserbase-playwright-cdp",
+});
+
+export const localInteractiveImplementation = SandboxImplementation.make({
+  isolation: "isolated",
+  identity: "local-playwright-cdp",
 });
 
 /** Agent-facing configuration. The launch recipe and budgets stay the generic package's. */
@@ -43,11 +50,20 @@ export type InteractiveOptions = BrowserOptions;
  * package's session authority — capture and page control are read from that exact object,
  * never from a copy — while `handle` is the framework's bounded action surface.
  */
-export interface BrowserbaseAgentSession<E = never> {
-  readonly reference: SessionReference;
-  readonly browser: BrowserbaseSession<E>;
+export interface AgentSession<E = never> {
+  readonly browser: BrowserSession<E>;
   readonly handle: BrowserHandle;
   readonly currentHandle: Effect.Effect<BrowserHandle, BrowserError>;
+}
+
+export interface BrowserbaseAgentSession<E = never> extends AgentSession<E> {
+  readonly reference: SessionReference;
+  readonly browser: BrowserbaseSession<E>;
+}
+
+export interface LocalAgentSession<E = never> extends AgentSession<E> {
+  readonly reference: LocalReference;
+  readonly browser: LocalSession<E>;
 }
 
 export interface BrowserbaseAgentAcquisition {
@@ -70,9 +86,8 @@ interface Failure {
 const operationError = (
   operation: InteractiveBrowserActionError["operation"],
   error: Failure,
+  implementation: SandboxImplementation = browserbaseInteractiveImplementation,
 ): InteractiveBrowserError => {
-  const implementation = browserbaseInteractiveImplementation;
-
   switch (error.reason) {
     case "busy":
       return InteractiveBrowserBusyError.make({
@@ -116,62 +131,97 @@ const decode = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknow
     Effect.mapError((): Failure => ({ reason: "malformed", outcome: "unknown" })),
   );
 
-const makeHandle = <E>(target: BoundTarget, session: BrowserbaseSession<E>): BrowserHandle => ({
+const makeHandle = (
+  target: BoundTarget,
+  close: Effect.Effect<void, BrowserError>,
+  implementation: SandboxImplementation,
+): BrowserHandle => ({
   navigate: (request) =>
     target.navigate(request).pipe(
       Effect.flatMap((result) => decode(BrowserNavigationResult, { url: result.url })),
-      Effect.mapError((error) => operationError("navigate", error)),
+      Effect.mapError((error) => operationError("navigate", error, implementation)),
     ),
   readText: (request) =>
     target.readText(request).pipe(
       Effect.flatMap((result) => decode(BrowserTextResult, { text: result.text })),
-      Effect.mapError((error) => operationError("read-text", error)),
+      Effect.mapError((error) => operationError("read-text", error, implementation)),
     ),
   click: (request) =>
     target.click(request).pipe(
       Effect.flatMap((result) => decode(BrowserActionResult, { url: result.url })),
-      Effect.mapError((error) => operationError("click", error)),
+      Effect.mapError((error) => operationError("click", error, implementation)),
     ),
   fill: (request) =>
     target.fill(request).pipe(
       Effect.flatMap((result) => decode(BrowserActionResult, { url: result.url })),
-      Effect.mapError((error) => operationError("fill", error)),
+      Effect.mapError((error) => operationError("fill", error, implementation)),
     ),
   scroll: (request) =>
     target.scroll(request).pipe(
       Effect.flatMap((result) => decode(BrowserActionResult, { url: result.url })),
-      Effect.mapError((error) => operationError("scroll", error)),
+      Effect.mapError((error) => operationError("scroll", error, implementation)),
     ),
   screenshot: (request) =>
     target.screenshot(request).pipe(
       Effect.flatMap((result) =>
         decode(PageScreenshotResult, {
-          implementation: browserbaseInteractiveImplementation,
+          implementation,
           mediaType: result.mediaType,
           bytes: result.bytes,
         }),
       ),
-      Effect.mapError((error) => operationError("screenshot", error)),
+      Effect.mapError((error) => operationError("screenshot", error, implementation)),
     ),
-  close: session.close.pipe(
-    Effect.flatMap((result) =>
-      result.remote === "confirmed"
-        ? Effect.void
-        : Effect.fail(
-            BrowserError.make({ operation: "close", reason: "provider", outcome: "unknown" }),
-          ),
-    ),
-    Effect.mapError((error) => operationError("close", error)),
-  ),
+  close: close.pipe(Effect.mapError((error) => operationError("close", error, implementation))),
 });
 
 /** Adapt this exact generic owner, preserving its callback diagnostics, action budget and capture authority. */
-export const fromSession = <E>(browser: BrowserbaseSession<E>): BrowserbaseAgentSession<E> => ({
-  reference: browser.reference,
-  browser,
-  handle: makeHandle(browser.bind(), browser),
-  currentHandle: browser.target.pipe(Effect.map(() => makeHandle(browser.bind(), browser))),
-});
+export function fromSession<E>(browser: LocalSession<E>): LocalAgentSession<E>;
+export function fromSession<E>(browser: BrowserbaseSession<E>): BrowserbaseAgentSession<E>;
+
+export function fromSession<E>(
+  browser: BrowserbaseSession<E> | LocalSession<E>,
+): BrowserbaseAgentSession<E> | LocalAgentSession<E> {
+  if ("liveView" in browser) {
+    const close = browser.close.pipe(
+      Effect.flatMap((result) =>
+        result.remote === "confirmed"
+          ? Effect.void
+          : Effect.fail(
+              BrowserError.make({ operation: "close", reason: "provider", outcome: "unknown" }),
+            ),
+      ),
+    );
+
+    return {
+      reference: browser.reference,
+      browser,
+      handle: makeHandle(browser.bind(), close, browserbaseInteractiveImplementation),
+      currentHandle: browser.target.pipe(
+        Effect.map(() => makeHandle(browser.bind(), close, browserbaseInteractiveImplementation)),
+      ),
+    };
+  }
+
+  const close = browser.close.pipe(
+    Effect.flatMap((result) =>
+      result.connection === "closed" && result.process !== "unknown" && result.issues.length === 0
+        ? Effect.void
+        : Effect.fail(
+            BrowserError.make({ operation: "close", reason: "failed", outcome: "unknown" }),
+          ),
+    ),
+  );
+
+  return {
+    reference: browser.reference,
+    browser,
+    handle: makeHandle(browser.bind(), close, localInteractiveImplementation),
+    currentHandle: browser.target.pipe(
+      Effect.map(() => makeHandle(browser.bind(), close, localInteractiveImplementation)),
+    ),
+  };
+}
 
 /** Credentials, leases, and connection lifetime are fixed here, never selectable by a model. */
 export class BrowserbaseInteractiveHost extends Context.Service<
@@ -232,7 +282,9 @@ export class BrowserbaseInteractiveHost extends Context.Service<
             maxReturnedBytes: fixed.maxReturnedBytes,
           });
 
-          const connected = yield* Effect.cached(acquired.connect.pipe(Effect.map(fromSession)));
+          const connected = yield* Effect.cached(
+            acquired.connect.pipe(Effect.map((session) => fromSession(session))),
+          );
 
           return {
             reference: acquired.reference,

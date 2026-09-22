@@ -27,7 +27,7 @@ import { attachRemote } from "../session/Attachment.ts";
 import type { LocalCleanup } from "../session/Cleanup.ts";
 import type { ContextWriterPermit } from "../session/WriterFacts.ts";
 import { type CaptureParent } from "./Association.ts";
-import { bindingImplementation } from "./Binding.ts";
+import { bindingImplementation, type BindingImplementation } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import type { Driver, DriverEvents, DriverOptions, NativeFileSelection } from "./Driver.ts";
 import { issueLiveView } from "./LiveView.ts";
@@ -41,20 +41,29 @@ import type { NativeInput, NativePoint } from "./Pointer.ts";
  * or borrowed one. Release authority lives behind `release`, so a borrowed lease cannot
  * accidentally expose one: the lease decides what closing means.
  */
-export interface RemoteLease {
-  readonly reference: SessionReference;
-  readonly attempt?: AllocationAttempt;
+export interface SessionLease {
+  readonly reference: unknown;
   readonly connection: (
     timeoutMillis: number,
-  ) => Effect.Effect<Redacted.Redacted<string>, SessionError>;
+  ) => Effect.Effect<Redacted.Redacted<string>, SessionError | BrowserError>;
+  readonly release: Effect.Effect<unknown>;
+  readonly cleanupResult: Effect.Effect<Option.Option<unknown>>;
+  /** Only a provider-backed lease can issue Live View or verify provider reconnect status. */
+  readonly liveView?: (ttl: number) => ReturnType<typeof issueLiveView>;
+  readonly verifyReconnect?: Effect.Effect<void, BrowserError>;
+}
+
+export interface RemoteLease extends SessionLease {
+  readonly reference: SessionReference;
+  readonly attempt?: AllocationAttempt;
   readonly release: Effect.Effect<CleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
 }
 
-export type RemoteSource<L extends RemoteLease, E> = (
+export type RemoteSource<L extends SessionLease, E, R = BrowserbaseClient | BrowserbaseSessions> = (
   local: LocalCleanup,
   lifetimeDeadline: number,
-) => Effect.Effect<L, E, BrowserbaseClient | BrowserbaseSessions | Scope.Scope>;
+) => Effect.Effect<L, E, R | Scope.Scope>;
 
 /** Bounds a reading of the selected document. Already validated at the public boundary. */
 export interface Reading {
@@ -63,8 +72,14 @@ export interface Reading {
   readonly maxControls?: number;
 }
 
-export interface SessionOptions<L extends RemoteLease, E> {
-  readonly remote: RemoteSource<L, E>;
+export interface SessionOptions<
+  L extends SessionLease,
+  E,
+  R = BrowserbaseClient | BrowserbaseSessions,
+> {
+  readonly remote: RemoteSource<L, E, R>;
+  /** Private local acquisition selects the same driver without fabricating a provider binding. */
+  readonly engine?: BindingImplementation;
   /** Only a keep-alive session may detach and reattach inside this owner. */
   readonly keepAlive: boolean;
   readonly driver: DriverOptions;
@@ -91,23 +106,46 @@ export interface OwnedOptions {
 }
 
 /** Allocates the session, and therefore owns releasing it. */
+const providerControls = (
+  client: BrowserbaseClient["Service"],
+  sessions: BrowserbaseSessions["Service"],
+  reference: SessionReference,
+) => ({
+  liveView: (ttl: number) => issueLiveView(client, reference, ttl),
+  verifyReconnect: sessions.retrieve(reference).pipe(
+    Effect.mapError((error) => BrowserError.make({ operation: "reconnect", reason: error.reason })),
+    Effect.flatMap((status) =>
+      status.status === "RUNNING"
+        ? Effect.void
+        : Effect.fail(BrowserError.make({ operation: "reconnect", reason: "expired" })),
+    ),
+  ),
+});
+
 export const ownedRemote =
   (
     options: OwnedOptions,
   ): RemoteSource<OwnedLease, AllocationError | BrowserError | ContextError> =>
   (local, lifetimeDeadline) =>
-    acquireRemote(
-      {
-        launch: options.launch,
-        ...(options.contextWriter === undefined ? {} : { contextWriter: options.contextWriter }),
-        allocationDeadline: lifetimeDeadline,
-        ...(options.onCleanup === undefined ? {} : { onCleanup: options.onCleanup }),
-        ...(options.onAllocationUncertain === undefined
-          ? {}
-          : { onAllocationUncertain: options.onAllocationUncertain }),
-      },
-      local,
-    );
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const sessions = yield* BrowserbaseSessions;
+
+      const acquired = yield* acquireRemote(
+        {
+          launch: options.launch,
+          ...(options.contextWriter === undefined ? {} : { contextWriter: options.contextWriter }),
+          allocationDeadline: lifetimeDeadline,
+          ...(options.onCleanup === undefined ? {} : { onCleanup: options.onCleanup }),
+          ...(options.onAllocationUncertain === undefined
+            ? {}
+            : { onAllocationUncertain: options.onAllocationUncertain }),
+        },
+        local,
+      );
+
+      return { ...acquired, ...providerControls(client, sessions, acquired.reference) };
+    });
 
 /** Borrows a running session: local connection only, and never a release request. */
 export const borrowedRemote =
@@ -117,18 +155,24 @@ export const borrowedRemote =
     readonly onCleanup?: (result: CleanupResult) => Effect.Effect<void>;
   }): RemoteSource<RemoteLease, SessionError> =>
   (local) =>
-    attachRemote(options, local);
+    Effect.gen(function* () {
+      const client = yield* BrowserbaseClient;
+      const sessions = yield* BrowserbaseSessions;
+      const acquired = yield* attachRemote(options, local);
+
+      return { ...acquired, ...providerControls(client, sessions, acquired.reference) };
+    });
 
 /**
  * The one owned browser. Remote allocation, release and terminal observation belong to the
  * canonical control plane; this owner supplies only the local connection's cleanup evidence.
  */
-export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease, E>(
+export const acquireSession = Effect.fnUntraced(function* <L extends SessionLease, E, R>(
   limits: Limits,
-  options: SessionOptions<L, E>,
+  options: SessionOptions<L, E, R>,
 ) {
   // The engine is resolved before anything is allocated, so an unissued binding costs nothing.
-  const engine = bindingImplementation(yield* BrowserbaseBrowserBinding);
+  const engine = options.engine ?? bindingImplementation(yield* BrowserbaseBrowserBinding);
 
   if (engine === undefined)
     return yield* BrowserError.make({
@@ -136,8 +180,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       reason: "configuration",
       outcome: "undispatched",
     });
-  const client = yield* BrowserbaseClient;
-  const sessions = yield* BrowserbaseSessions;
   const parentScope = yield* Scope.Scope;
   // Register the binding lifetime BEFORE the remote cleanup finalizer. On natural Scope
   // shutdown that finalizer must fence the owner before any callback finalizer can reenter it.
@@ -218,6 +260,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
       owner.fence("closing", "closed");
       handoffToken = undefined;
       activeConnection = undefined;
+      Deferred.doneUnsafe(ended, Effect.void);
     }),
     capture: Effect.suspend(() =>
       Effect.forEach([...capture.captureLeases.values()], (lease) => lease.stop, {
@@ -247,7 +290,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
 
   const acquired = yield* options.remote(local, owner.lifetimeDeadline);
 
-  const ref = acquired.reference;
+  const ref: L["reference"] = acquired.reference;
+  const release: L["release"] = acquired.release;
+  const cleanupResult: L["cleanupResult"] = acquired.cleanupResult;
 
   const closeScope = acquired.release.pipe(
     Effect.ensuring(Deferred.succeed(ended, undefined)),
@@ -812,8 +857,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
     capture,
     bind,
     currentTarget: readSelected,
-    cleanupResult: acquired.cleanupResult,
-    close: acquired.release.pipe(Effect.ensuring(Deferred.succeed(ended, undefined))),
+    cleanupResult,
+    close: release,
     observe: (reading: Reading = { scope: "document" }) =>
       textBudget("observe", reading.maxTextBytes).pipe(
         Effect.flatMap((bytes) =>
@@ -933,16 +978,29 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
         { mutation: true },
       ),
     liveView: (ttl: number) =>
-      owner.guard("live-view", () => issueLiveView(client, ref, ttl), {
-        charge: false,
-        phases: ["open", "paused"],
-      }),
+      owner.guard(
+        "live-view",
+        () =>
+          acquired.liveView === undefined
+            ? Effect.fail(
+                BrowserError.make({
+                  operation: "live-view",
+                  reason: "unsupported",
+                  outcome: "undispatched",
+                }),
+              )
+            : acquired.liveView(ttl),
+        {
+          charge: false,
+          phases: ["open", "paused"],
+        },
+      ),
     beginHandoff: (ttl: number) =>
       owner.guard(
         "handoff",
         () =>
           Effect.gen(function* () {
-            if (options.driver.pageControl)
+            if (options.driver.pageControl || acquired.liveView === undefined)
               return yield* BrowserError.make({
                 operation: "handoff",
                 reason: "unsupported",
@@ -951,7 +1009,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
             if (owner.state.phase === "open") owner.fence("paused", "paused");
             handoffToken ??= globalThis.crypto.randomUUID();
             // Failure to mint a view leaves automation paused; there is no finally/resume pair.
-            const view = yield* issueLiveView(client, ref, ttl);
+            const view = yield* acquired.liveView(ttl);
 
             return { token: Redacted.make(handoffToken), view };
           }),
@@ -1023,7 +1081,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
           "reconnect",
           (ticket) =>
             Effect.gen(function* () {
-              if (!options.keepAlive || reconnectTarget === undefined || !operatorReleasedControl) {
+              if (
+                !options.keepAlive ||
+                reconnectTarget === undefined ||
+                !operatorReleasedControl ||
+                acquired.verifyReconnect === undefined
+              ) {
                 return yield* BrowserError.make({
                   operation: "reconnect",
                   reason: "unsupported",
@@ -1031,16 +1094,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
                 });
               }
 
-              const status = yield* sessions
-                .retrieve(ref)
-                .pipe(
-                  Effect.mapError((error) =>
-                    BrowserError.make({ operation: "reconnect", reason: error.reason }),
-                  ),
-                );
-
-              if (status.status !== "RUNNING")
-                return yield* BrowserError.make({ operation: "reconnect", reason: "expired" });
+              yield* acquired.verifyReconnect;
               owner.state.phase = "acquiring";
               const endpoint = yield* connectionUrl("reconnect");
 
@@ -1100,8 +1154,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends RemoteLease
   };
 });
 
-export type SessionControls =
-  Effect.Success<ReturnType<typeof acquireSession>> extends {
+export type SessionControls<L extends SessionLease = RemoteLease> =
+  Effect.Success<ReturnType<typeof acquireSession<L, never, never>>> extends {
     connect: Effect.Effect<infer A, infer _E, infer _R>;
   }
     ? A

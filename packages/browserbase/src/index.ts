@@ -15,6 +15,7 @@ export * as Errors from "./Errors.ts";
 export * as Extensions from "./Extensions.ts";
 export * as Functions from "./Functions.ts";
 export * as Launch from "./Launch.ts";
+export * as LocalBrowser from "./LocalBrowser.ts";
 export * as PageControl from "./PageControl.ts";
 export * as PageFetch from "./PageFetch.ts";
 export * as Projects from "./Projects.ts";

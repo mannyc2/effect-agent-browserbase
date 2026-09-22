@@ -210,6 +210,15 @@ Coordinates are CSS pixels in the main frame's viewport. Each call is one native
 
 `hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`session.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
 
+For a child-frame element, hover checks the commanded point through each ancestor
+frame and then the exact node, including cross-origin documents. The receipt
+still uses main-viewport CSS coordinates. An overlay or clipping ancestor refuses
+input. Frame traversal is bounded at 32 levels, with bounded shadow/DOM ancestry
+checks. Axis-aligned translation and positive scaling are supported; rotation,
+perspective and other unsupported frame mappings are refused rather than guessed.
+These reads and native input are separate operations in the browser: page script
+can still change geometry between validation and dispatch.
+
 An `InputReceipt` carries the target it was sent to, the position this owner commanded (null until it has placed the pointer on that page), and an interval on the same host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`. Input and pixels share one timeline, so a compositor can place the pointer on the frame that shows it. A wheel event is dispatched, not awaited: the receipt does not claim the page finished scrolling or that any frame shows it.
 
 ### Real key input
@@ -412,6 +421,34 @@ Live capture frames carry owned JPEG bytes, captured target identity, sequence n
 
 Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. `Capture.start(session, { lifetime: "page" })` instead follows a page's main frame across documents: start it before a navigation and it covers the loading in between. The native screencast is never restarted for a navigation, so a boundary is not a gap this package introduced. Each frame carries the `document` it was received during (0, then one more per navigation), and the summary's bounded `documentBoundaries` give the last sequence before each one and the address it committed, with `initialUrl` for document 0. That is attribution by receipt order, not proof of whose pixels a frame shows: one received just after a navigation can still show the document before it. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined. A definitively closed page releases its capture reservation. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in `examples/record-video.ts`; the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence. Filming across a navigation with one page-lifetime interval, resampled onto a constant-rate reel with the address of each document reported, is demonstrated in `examples/realistic-footage`.
 
+### Read metadata while capture is running
+
+```ts
+const interval = yield * Capture.start(session, { lifetime: "page" });
+const current = yield * interval.snapshot;
+// current.phase is "capturing"; initialUrl and recorded documentBoundaries are available now.
+```
+
+`snapshot` copies the bounded metadata already recorded in host memory. It does
+no browser work, consumes no frames, charges no action, and works while the page
+is held. Repeated reads neither stop nor restart capture. `observedMonotonicNanos`
+stamps the read; each boundary retains its own commit observation time. The
+prefix holds at most 64 boundaries; `documentBoundariesTruncated` reports overflow
+and `currentDocument` continues counting. Addresses longer than the existing
+bound remain `null`. The model should not receive these host-only addresses by
+accident merely because it can inspect the page.
+
+While capturing, `reason` and `nativeStop` are `null`. `phase: "stopping"` means
+capture has stopped accepting frames but native cleanup is pending. `"stopped"`
+means that cleanup attempt settled; only `nativeStop: "confirmed"` confirms the
+native stop. All snapshots are observations of accounting so far: buffered frames
+can still be drained after stop. For final accounting, stop or await capture
+termination, finish draining `frames`, then read `completed` to obtain the terminal
+summary with final delivery counts. Preserve the terminal error and loss counters
+when reconciling earlier snapshots. `late` remains included in `dropped`, and
+`upstreamDrops` remains `"unknown"`; live metadata adds no stronger pixel or loss
+guarantee.
+
 ### What a compositor is given, and what it owns
 
 Footage from `capture` is the page surface. It has no pointer, no tab strip and no address bar, so on its own it reads as the inside of a tab rather than as a browser. Drawing those is the application's, exactly as cursor artwork, easing and encoding are: this package has no window-compositing API and will not grow one. What it owes a compositor is the evidence only it can see, on one timeline:
@@ -436,6 +473,43 @@ Partial native failures fence the session as uncertain; there is no success rece
 
 ## Development and evidence
 
-Repository commands use Vite+: `vp run check`, `vp test`, `vp run install:test-browser`, `vp run test:native`, `vp pack`. Native tests use Playwright 1.63.0 Chromium against loopback HTTP fixtures over the real CDP boundary. Unit tests use Effect TestClock and a provider scripted through `fetch` behind the real Client. Those local boundaries remain distinct from hosted Browserbase evidence: a local CDP pass proves native integration, not provider allocation, Live View authorization, provider recording/audio behavior, recording coexistence, or Browserbase network behavior.
+Repository commands use Vite+: `vp run check`, `vp test`, `vp run install:test-browser`, `vp run test:native`, `vp pack`. Native tests use Playwright 1.63.0 Chromium against loopback HTTP fixtures over the real CDP boundary. Hosted-path fixtures script provider allocation/status behind the real Client; the independent local-owner tests use no account service or provider responses. Unit tests use Effect TestClock, with real-process lifecycle tests explicitly using the live clock. These local boundaries remain distinct from hosted Browserbase evidence: a local CDP pass proves native integration, not provider allocation, Live View authorization, provider recording/audio behavior, recording coexistence, or Browserbase network behavior.
 
 `tools/packed-consumer.sh` installs the emitted npm tarballs into separate consumers with exact public dependency versions, checks NodeNext declarations, and runs the unchanged native suites without workspace aliases. It also runs real programs directly on Node and Bun: `test/consumer/resources.ts` with no Playwright and no framework installed, and `test/consumer/native.ts` against a real local Chromium.
+
+## Independent local Chromium
+
+`effect-browserbase/local-browser` provides `LocalBrowser`. It uses the same modeled browser owner, native driver, exact-node observations, bootstrap bindings, capture and page control as a hosted session. It requires no Browserbase client, project, key, allocation response or provider endpoint. `BrowserSession<E>` is their shared modeled capability; `BrowserbaseSession<E>` retains the separate provider reference, artifacts, Live View, handoff and release contracts.
+
+```ts
+import { Effect } from "effect";
+import { BrowserPolicy, NavigateRequest } from "effect-browserbase/browser-data";
+import { LocalBrowser } from "effect-browserbase/local-browser";
+
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    const browser = yield* LocalBrowser;
+    const session = yield* browser.open(BrowserPolicy.unrestricted());
+    yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com" }));
+    return yield* session.observe({ scope: "viewport" });
+  }),
+).pipe(
+  Effect.provide(
+    LocalBrowser.layer({
+      viewport: { width: 1280, height: 720 },
+      pageControl: true,
+      launch: { headless: true, chromiumSandbox: true },
+    }),
+  ),
+);
+```
+
+Layer construction validates configuration and starts nothing. The optional `playwright-core` peer is loaded only when needed. `acquire(policy, { bootstrap })` starts one owned Chromium process and registers cleanup before waiting for a connection; its cached `connect` yields one `LocalSession<E>`. `open` combines those steps. Bootstrap consumer errors and services remain in the acquisition signatures, just as for hosted sessions. `withBrowser(policy, request, use)` supervises callback failure and checks local cleanup before returning a normal result.
+
+Owned launch currently supports POSIX hosts (Linux and macOS). It uses a fresh temporary profile, an ephemeral loopback debugger port and one maintained CDP connection. The launcher owns those arguments; callers cannot replace them through `args`. `executablePath` selects an installed Chromium explicitly; otherwise the pinned Playwright executable is used. Headless mode and Chromium sandboxing default to enabled. `chromiumSandbox: false` is an explicit host exception, never inferred from `CI`, root execution or a connection failure. Setting the option alone does not prove the operating system's sandbox configuration. Startup waiting is bounded by `startupTimeoutMillis` (15 seconds by default, at most 60 seconds) and the owner's remaining lifetime. Acquisition does not retry a failed launch.
+
+For an externally owned Chromium, use `browser.attach(endpoint, { policy, target?, bootstrap? })`. `endpoint` is a `Redacted<string>` containing the exact `ws://127.0.0.1:PORT/devtools/browser/ID` or IPv6-loopback equivalent advertised by that browser. HTTP discovery URLs, non-loopback hosts, credentials, queries and fragments are refused. This validates the control endpoint's shape; it does not authenticate the host running it. A supplied `target.targetId` must identify an existing page. Without one, several candidate pages are an explicit ambiguity error. Attachment preserves the existing viewport and does not replay the layer's launch arguments or create a replacement browser. Coordinate any independent controllers yourself, especially when enabling page control.
+
+Local identity is `{ provider: "local", id }`, identifying this ownership lifetime. It is not a Browserbase session reference, a PID or an attachment credential. `close` and `cleanupResult` retain `connection` and `process` facts separately. Owned cleanup fences operations, stops capture, disposes initialization, disconnects and terminates its process group; only observed termination permits removing the temporary profile. Failure or timeout remains in `issues` and leaves `process: "unknown"` when exit was not established. Borrowed cleanup disconnects its own client and reports `process: "not-owned"`; it never terminates the external process. Repeated close calls share one result. No local result has a provider `remote: "confirmed"` field. `onCleanup` receives these bounded, host-only facts even when connection setup fails after launch.
+
+`launch.proxy: { server, bypass? }` forwards an existing host-operated proxy to Chromium. With a proxy, the default bypass value is `<-loopback>` so Chromium does not silently exclude loopback destinations; a different bypass is an explicit host choice. Additional reviewed native flags, such as disabling QUIC and non-proxied WebRTC UDP, can be supplied through `launch.args`. This module does not implement a proxy or qualify its transport/DNS coverage. Browser policy remains `Unrestricted`; a local endpoint, URL admission or successful local test never establishes whole-browser egress containment. Preserve and test the selected enforcing proxy independently. Hosted endpoint validation and network policy are unchanged.
