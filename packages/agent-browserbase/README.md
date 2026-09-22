@@ -56,7 +56,7 @@ const program = Effect.scoped(
 ).pipe(Effect.provide(host));
 ```
 
-`examples/agent.ts` shows the complete `AgentRuntime` wiring. Provider credentials, CDP URLs, context choices, Live View controls and recording configuration are host decisions and are never Tool parameters.
+[`examples/agent.ts`](examples/agent.ts) is the complete composition, three ways: the host opens a session and reads what the agent left on screen; a person takes the same session through Live View between two agent runs; and a typed page→host binding whose failure ends the run. The model is the caller's — provide a `LanguageModel` layer beside those programs; `test/native/agent.test.ts` runs the same wiring against a local Chromium with a scripted one. Provider credentials, CDP URLs, context choices, Live View controls and recording configuration are host decisions and are never Tool parameters.
 
 `BrowserbaseAgentSession` carries three things: the durable `reference`, the framework `handle`, and `browser`, which is the generic package's session. Capture and page control read authority from that exact object, so pass `session.browser` to `Capture.start` and `PageControl.suspend` rather than a copy.
 

@@ -55,10 +55,7 @@
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "install:test-browser": "playwright-core install --with-deps chromium",
-    "test:native": "vp test --config vite.native.config.ts --run",
-    "example:capture-evidence": "bun examples/capture-evidence.ts",
-    "example:hosted": "bun examples/hosted.ts",
-    "example:record-video": "bun examples/record-video.ts"
+    "test:native": "vp test --config vite.native.config.ts --run"
   },
   "devDependencies": {
     "@effect/platform-bun": "catalog:",

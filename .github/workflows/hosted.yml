@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       checks:
-        description: Space-separated hosted checks from packages/browserbase/examples/hosted/checks.ts
+        description: Space-separated hosted checks from packages/browserbase/hosted/checks.ts
         required: true
         default: demo
         type: string

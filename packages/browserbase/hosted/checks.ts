@@ -6,8 +6,7 @@
 // not listed here, and `tools/test/hosted.test.mjs` holds every entry to the ceilings below in
 // ordinary unpaid CI, before anything is spent.
 //
-// `question` names the hosted experiment in
-// docs/research/browserbase-platform-2026-09-20/implementation-plan.md that the check narrows.
+// `question` names the hosted question the check narrows; docs/HOSTED.md defines the codes.
 // A check narrows its question; it does not answer all of it, and `claim` says exactly how much.
 // `evidence` points at the recorded run that established the claim, or is null while the claim
 // is outstanding.

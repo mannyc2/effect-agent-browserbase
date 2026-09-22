@@ -76,6 +76,12 @@ export function packedConsumers(tree, out, sha) {
         const examples = walk(join(tree, mode.owner.directory, "examples")).filter((p) => p.endsWith(".ts") || p.endsWith(".mts"));
         assert.ok(examples.length > 0, `No migrated public examples for ${mode.name}`);
         entries.push(...examples.map((p) => `${mode.owner.directory}/examples/${p}`));
+        if (mode.owner === packages[0]) {
+          // The paid hosted checks compile against the packed package here; nothing runs them.
+          const hosted = walk(join(tree, mode.owner.directory, "hosted")).filter((p) => p.endsWith(".ts"));
+          assert.ok(hosted.length > 0, "No hosted checks to compile");
+          entries.push(...hosted.map((p) => `${mode.owner.directory}/hosted/${p}`));
+        }
       }
       const files = stageConsumer(tree, join(directory, "fixtures"), entries);
       writeFileSync(join(directory, "staged-files.json"), JSON.stringify(files, null, 2) + "\n");

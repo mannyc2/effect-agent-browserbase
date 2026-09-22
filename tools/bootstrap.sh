@@ -23,7 +23,7 @@ from pathlib import Path
 import shutil, subprocess, sys
 root, tree = map(Path, sys.argv[1:])
 for name in subprocess.check_output([
-    'git', '-C', str(root), 'ls-files', '-z', '--', 'packages/browserbase', 'packages/platform-browserbase'
+    'git', '-C', str(root), 'ls-files', '-z', '--', 'packages/browserbase', 'packages/agent-browserbase'
 ]).decode().split('\0'):
     if not name:
         continue

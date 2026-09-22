@@ -6,13 +6,13 @@ the only required check. Hosted runs are a separate, manual, default-off
 workflow so that paid execution is always a deliberate maintainer action.
 
 Every paid question is one registered check. The registry,
-[`packages/browserbase/examples/hosted/checks.ts`](../packages/browserbase/examples/hosted/checks.ts),
+[`packages/browserbase/hosted/checks.ts`](../packages/browserbase/hosted/checks.ts),
 declares each check's budget, the settings it needs and the single claim a
 successful run supports, and points at the recorded run that established it
 (or `null` while it is outstanding). `tools/hosted-run.sh` is the only entry
 point: it refuses any name the registry does not list and validates every named
 check before the first one allocates. Every check passes through the same gate,
-`examples/hosted/harness.ts`, which owns the opt-in, credentials, account,
+`hosted/harness.ts`, which owns the opt-in, credentials, account,
 policy budgets, session count and JSON record. Ordinary unpaid CI holds each
 entry to the registry's ceiling (`tools/test/hosted.test.mjs`), so an
 over-budget check fails before anything is spent.
@@ -28,10 +28,13 @@ over-budget check fails before anything is spent.
 | `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |
 | `replay-delivery` | H7 | the replay playlist validates and a segment downloads; recording delivery is reported as observed |
 
-Questions refer to the hosted experiments in the
-[implementation plan](research/browserbase-platform-2026-09-20/implementation-plan.md).
-Each check narrows its question rather than answering all of it; the registry's
-`claim` says exactly how far. The demo is documentation evidence and is not a
+The question codes come from the design research that preceded the checks
+(retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1
+persistence visibility, H2 context overlap and deletion, H3 extension and
+profile identity, H4 reconnect and cleanup, H5 multi-page evidence, H6 files
+and network routing, H7 observability and retention. H2 and H5 have no
+registered check. Each check narrows its question rather than answering all of
+it; the registry's `claim` says exactly how far. The demo is documentation evidence and is not a
 substitute for any check. [STATUS.md](STATUS.md) records which claims have a
 run behind them.
 

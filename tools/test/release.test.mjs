@@ -177,7 +177,10 @@ for (const declarationExit of [0, 1]) {
       } }));
       for (const item of packages) {
         const pkg = join(tree, item.directory);
-        for (const file of ["test/consumer/resources.ts", "test/consumer/native.ts", "test/consumer/agent.ts", "test/native/fixture.test.ts", "examples/fixture.ts", "vite.native.config.ts"]) {
+        const files = ["test/consumer/resources.ts", "test/consumer/native.ts", "test/consumer/agent.ts", "test/native/fixture.test.ts", "examples/fixture.ts", "vite.native.config.ts"];
+        // Only the generic package carries the hosted checks that the generic consumer compiles.
+        if (item === packages[0]) files.push("hosted/fixture.ts");
+        for (const file of files) {
           const target = join(pkg, file);
           mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, "export {};\n");
         }

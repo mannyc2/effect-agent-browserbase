@@ -5,5 +5,5 @@
     "types": ["node"],
     "skipLibCheck": false
   },
-  "include": ["src", "test", "examples", "vite.config.ts"]
+  "include": ["src", "test", "examples", "hosted", "vite.config.ts"]
 }

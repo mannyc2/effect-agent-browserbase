@@ -41,7 +41,7 @@ bash tools/bootstrap.sh
 
 cd .work/upstream/tree
 ./node_modules/.bin/vp run -F effect-agent-browserbase check
-cd packages/platform-browserbase
+cd packages/agent-browserbase
 # Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
 # hand-formatting to satisfy that gate does not reproduce this output.
 ../../node_modules/.bin/vp fmt
@@ -55,7 +55,7 @@ cd packages/platform-browserbase
 
 Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
 
-Make edits in this repository's `packages/browserbase` and `packages/platform-browserbase`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
+Make edits in this repository's `packages/browserbase` and `packages/agent-browserbase`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
 
 ## Acceptance profiles
 
@@ -73,9 +73,9 @@ Every profile rejects dirty source and reused output directories, asserts the sa
 
 | Profile | Required checks | Selection |
 | --- | --- | --- |
-| `docs` | Tooling tests, immutable checkpoint integrity, source-bound diff revalidation, whitespace and clean source | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed |
+| `docs` | Tooling tests, source-bound diff revalidation, whitespace and clean source | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed |
 | `library` | Tooling, Node/Bun boundary harness, frozen bootstrap, early canonical format/lint and both package types, both unit suites/builds, exports/purity, both candidate tarballs, all three strict consumers and every generic/Agent native test from those tarballs, release identity and the two-package dry-run | Owned package, tooling, workflow and media changes |
-| `full` | All library checks plus separate source-native suites, the complete pinned-upstream `vp run ready`, and upstream release dry-run | Integration/pin/bootstrap changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
+| `full` | All library checks plus separate source-native suites, the pinned upstream workspace's whole `check` and `build`, its `test` for the workspaces the patch reaches (both owned packages and `@effect-agent/testing`, whose toolchain audit reads every manifest), and the upstream release dry-run | Integration/pin/bootstrap changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
 
 The library profile runs the **same complete native test files** in clean installed-package consumers rather than repeating them against source, packed output and the unrelated upstream task graph on every PR. All maintained examples are still compiled, all public exports are checked, Node and Bun both execute the resource, generic and actual AgentRuntime workflows, and every declaration command must return raw zero with `skipLibCheck:false`. No test is retried or skipped to obtain a pass. Native worker concurrency and assertions are unchanged.
 
@@ -91,11 +91,11 @@ Routine library feedback targets a few minutes. Use `timings.tsv` and the job su
 
 Successful evidence retains the two immutable tarballs, source/review archives, logs, video, receipts, checksums, consumer configs and exact lockfiles. Tested consumer fixtures are archived with their modes; installed `node_modules` are left outside the upload instead of repeatedly transferring hundreds of megabytes of reproducible inputs. Failed or interrupted runs retain their complete installed consumer workspaces, including broken dependency declarations. No existing failure artifacts are pruned. Artifact compression is low, and all files named by the checksum inventory, including hidden diagnostic files, are retained.
 
-Results, downloaded videos, build directories and archives remain ignored and belong in Actions artifacts, not commits. The exception is declared-budget demo media under `docs/media/`, checked by the tooling suite. `checkpoints/` is immutable provenance, not a bootstrap dependency.
+Results, downloaded videos, build directories and archives remain ignored and belong in Actions artifacts, not commits. The exception is declared-budget demo media under `docs/media/`, checked by the tooling suite.
 
 This design avoids parallel browser workers and never caches browser binaries: Playwright [does not generally recommend it](https://playwright.dev/docs/ci#caching-browsers), and an old success cannot restore an external installation. Removing unrelated work and duplicate executions came first.
 
-The full profile does transfer upstream's Vite Task cache, for `ready` and the upstream release dry-run only, because Vite+ [asks for a measured restore/save cost and stable fingerprints](https://viteplus.dev/guide/github-actions-cache) and this one has both. It is seeded only after every stage with effects outside the workspace (browser and media installation, both native suites and the packed consumers), so those always execute for real on the candidate, and Vite Task replays a result only when that task's own inputs match. Upstream's `ready` measured about 16 seconds warm against about 15 minutes cold. Every full run records its seed, export and hit/miss counts in `task-cache.txt`, so the gain stays measured instead of assumed. The scheduled run discards what it restored and runs cold: the daily integration result is always a real execution on that day's runner image, and it refreshes the cache. Focused profiles use no cache.
+The full profile does transfer upstream's Vite Task cache, for the three upstream stages and the release dry-run only, because Vite+ [asks for a measured restore/save cost and stable fingerprints](https://viteplus.dev/guide/github-actions-cache) and this one has both. It is seeded only after every stage with effects outside the workspace (browser and media installation, both native suites and the packed consumers), so those always execute for real on the candidate, and Vite Task replays a result only when that task's own inputs match. Upstream's complete `ready` measured about 16 seconds warm against about 15 minutes cold. Every full run records its seed, export and hit/miss counts in `task-cache.txt`, so the gain stays measured instead of assumed. The scheduled run discards what it restored and runs cold, and it alone runs every upstream suite (`BROWSERBASE_UPSTREAM_TESTS=all`, recorded in `upstream-tests.txt`): the daily integration result is always a real execution of the whole workspace on that day's runner image, and it refreshes the cache. Candidates do not pay for suites of upstream code the patch cannot reach, whose timing assertions have failed on a shared runner for reasons no change here can cause. Focused profiles use no cache.
 
 Repository settings are separate from files in this PR. Require PRs and the acceptance check on `main`, prevent force pushes/deletion, and protect `v*` tags from unauthorized creation or updates. Set review requirements appropriate to your maintainer team; CODEOWNERS alone does not enforce reviews. Dependency-update PRs are review-only and not auto-merged.
 
