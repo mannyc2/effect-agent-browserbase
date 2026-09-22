@@ -205,7 +205,6 @@ export const makePlaywrightDriver = async (
     actions.retireWait();
     observation.retireConnection();
     events.retired?.();
-    browser.off("disconnected", onDisconnected);
   };
 
   const onDisconnected = () => {
@@ -310,6 +309,10 @@ export const makePlaywrightDriver = async (
         callbacks.stop();
         observation.invalidate();
         context.off("page", onPage);
+        // Explicit cleanup owns its close result. Preserve the established ordering by removing
+        // the ordinary disconnect listener first; positive retirement is recorded only after the
+        // close below actually settles. Natural disconnects still retire through onDisconnected.
+        browser.off("disconnected", onDisconnected);
         for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
         // Retained dialogs share their one dismissal with explicit resume. A timed-out dismissal
         // stays in the pool and is never sent a second time by connection cleanup.
@@ -326,11 +329,8 @@ export const makePlaywrightDriver = async (
         await closeWithin(() => callbacks.settle()).catch(() => {});
         await closeWithin(() => pageControl.dispose()).catch(() => {});
         await closeWithin(() => browserCdp?.detach() ?? Promise.resolve()).catch(() => {});
-        // Keep retirement observed even when the bounded cleanup waiter times out first.
-        await closeWithin(async () => {
-          await browser.close();
-          retired();
-        });
+        await closeWithin(() => browser.close());
+        retired();
         targets.clear();
       }),
   };
