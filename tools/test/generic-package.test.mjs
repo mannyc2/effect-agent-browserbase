@@ -41,6 +41,30 @@ test(`every ${manifest.name} public entry has a real module and declaration buil
   }
   assert.equal(JSON.parse(read(`packages/${directory}/tsconfig.json`)).compilerOptions.skipLibCheck, false);
 });
+
+test(`${manifest.name} keeps declaration helpers private while retaining explicit chunk exports`, async () => {
+  // The hook is plain JavaScript; isolate it from Vite's configuration loader here.
+  // The emitted declarations are separately checked by the pinned compiler in acceptance.
+  const source = read(`packages/${directory}/vite.config.ts`).replace(
+    'import { defineConfig } from "vite-plus";',
+    'const defineConfig = (config) => config;',
+  );
+  const { default: configuration } = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+  const hook = configuration.pack.plugins.find((plugin) => plugin.name === "public-entry-namespaces").renderChunk;
+  assert.equal(hook.order, "post", "Declaration export context must follow declaration rendering");
+  for (const [fileName, code] of [
+    ["CaptureData.d.mts", 'declare const Private_base: object;\nexport declare const Public: typeof Private_base;'],
+    ["CaptureData-12345678.d.mts", 'declare const Private_base: object;\nexport { Private_base as t };'],
+    ["Browser.d.mts", 'export interface BrowserSession { readonly close: () => void; }'],
+  ]) {
+    const rendered = hook.handler(code, { fileName });
+    assert.equal(rendered.code, `${code}\nexport {};`, "All explicit declarations and exports must be retained");
+    assert.equal(rendered.map, null, "Appending an unmapped marker leaves existing mappings unchanged");
+  }
+  for (const fileName of ["index.mjs", "CaptureData-12345678.mjs", "CaptureData.d.mts.map"]) {
+    assert.equal(hook.handler('export const Public = {};', { fileName }), undefined, `${fileName} must remain unchanged`);
+  }
+});
 }
 
 test("unpaid acceptance cannot silently omit the generic package", () => {

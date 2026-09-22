@@ -121,6 +121,10 @@ export function packedConsumers(tree, out, sha) {
       // A consumer can live beneath another checkout. Task discovery may select that
       // ancestor's `check`; execute this consumer's compiler and project explicitly.
       run(mode.name, "declarations", vp, ["exec", join(directory, "node_modules/.bin/tsc"), "--noEmit", "--project", join(directory, "tsconfig.json")], directory);
+      // TypeScript declaration files can accidentally expose ambient helpers even while
+      // strict consumers compile cleanly. Compare the installed declaration namespace to
+      // each source entry with the consumer's pinned TypeScript 7 native compiler API.
+      run(mode.name, "declaration-exports", "node", [join(tools, "verify-declaration-exports.mjs"), tree, directory, mode.name], directory);
       for (const runtime of ["node", "bun"]) {
         if (!run(mode.name, `${runtime}-identity`, runtime, [join(tools, "verify-consumer.mjs"), directory, out, mode.name], directory)) continue;
         const evidence = join(out, `video-${mode.name}-${runtime}`); mkdirSync(evidence);

@@ -193,7 +193,12 @@ for (const declarationExit of [0, 1]) {
     // Only the external command boundary is substituted. Real packing, fixture staging,
     // strict configuration and receipt aggregation run; no installs or browsers run here.
     const commands = t.mock.method(childProcess, "spawnSync", (_command, args, options) => {
-      const failing = options.cwd === join(out, "consumers/agent") && args[0] === "run" && args[1] === "check";
+      const failing = options.cwd === join(out, "consumers/agent")
+        && args[0] === "exec"
+        && args[1] === join(options.cwd, "node_modules/.bin/tsc")
+        && args[2] === "--noEmit"
+        && args[3] === "--project"
+        && args[4] === join(options.cwd, "tsconfig.json");
       return { status: failing ? declarationExit : 0, signal: null, stdout: failing && declarationExit !== 0 ? diagnostic : "", stderr: "" };
     });
     syncBuiltinESMExports();

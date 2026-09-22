@@ -47,8 +47,9 @@ export const localSite = Effect.acquireRelease(
       requests,
       close: () =>
         new Promise<void>((resolve, reject) => {
-          server.closeAllConnections();
+          // Register listener closure before forcing socket teardown on Node and Bun.
           server.close((error) => (error === undefined ? resolve() : reject(error)));
+          server.closeAllConnections();
         }),
     };
   }),

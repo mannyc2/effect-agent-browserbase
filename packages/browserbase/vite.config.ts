@@ -59,6 +59,15 @@ export default defineConfig({
             }
           },
         },
+        // Keep ambient declaration helpers private without changing explicit exports.
+        renderChunk: {
+          order: "post",
+          handler(code, chunk) {
+            if (chunk.fileName.endsWith(".d.mts")) {
+              return { code: code + "\nexport {};", map: null };
+            }
+          },
+        },
       },
     ],
     dts: true,

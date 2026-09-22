@@ -13,4 +13,4 @@ only through `tools/hosted-run.sh`.
 | [`realistic-footage/`](realistic-footage/README.md) | A storyboard filmed with a drawn pointer, real keys at a typist's cadence and eased scrolling, resampled onto a constant-rate reel. The film in `docs/media/` came from it.                                                                                                                  |
 
 For model-driven control of the same session, see the adapter package's
-[`examples/agent.ts`](../../agent-browserbase/examples/agent.ts).
+[`examples/agent.ts`](../../agent-browser/examples/agent.ts).

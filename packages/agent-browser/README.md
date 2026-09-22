@@ -29,7 +29,7 @@ const program = Effect.scoped(
 ).pipe(Effect.provide(Chromium.layer()));
 ```
 
-For Browserbase, acquire with `BrowserbaseBrowser.open` from `effect-browserbase/browser`, supplying its account and launch configuration, then pass that session to the same `Adapter.fromSession` and `BrowserTools` functions. Nothing in the tool implementation branches on the provider. The model does not choose the account, browser source, credentials, endpoint, launch options or capture settings.
+For Browserbase, acquire with `(yield* BrowserbaseBrowser).open(...)` from `effect-browserbase/browser`, supplying its account and launch configuration, then pass that session to the same `Adapter.fromSession` and `BrowserTools` functions. Nothing in the tool implementation branches on the provider. The model does not choose the account, browser source, credentials, endpoint, launch options or capture settings.
 
 [`examples/chromium.ts`](examples/chromium.ts) and [`examples/agent.ts`](examples/agent.ts) use the same [`BrowserAgent.ts`](examples/BrowserAgent.ts) definition. The hosted example also shows human handoff and typed page-to-host callbacks. Both leave the model choice to the caller.
 

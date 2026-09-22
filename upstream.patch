@@ -273,7 +273,7 @@ index 183913dc..9059bd7a 100644
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
 diff --git a/packages/testing/test/toolchain.test.ts b/packages/testing/test/toolchain.test.ts
-index 0b337058..1be0eb9c 100644
+index 0b337058..40d026bd 100644
 --- a/packages/testing/test/toolchain.test.ts
 +++ b/packages/testing/test/toolchain.test.ts
 @@ -98,6 +98,9 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
@@ -316,13 +316,14 @@ index 0b337058..1be0eb9c 100644
    "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
    "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
    "pr-review": ["effect-agent"],
-@@ -601,12 +613,90 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
+@@ -601,12 +613,92 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
          }
        }
  
 -      expect(config.fixed).toHaveLength(1);
 -      expect([...(config.fixed[0] ?? [])].sort()).toEqual(publicPackageNames.sort());
 +      const browserPackages = ["effect-browser", "effect-browserbase", "effect-agent-browser"];
++
 +      const frameworkPackages = publicPackageNames.filter(
 +        (name) => !browserPackages.includes(name),
 +      );
@@ -339,6 +340,7 @@ index 0b337058..1be0eb9c 100644
 +    Effect.gen(function* () {
 +      const fs = yield* FileSystem.FileSystem;
 +      const root = yield* fs.makeTempDirectoryScoped({ prefix: "browser-purity-test-" });
++
 +      const entries = [
 +        ["browser", "effect-browser"],
 +        ["browserbase", "effect-browserbase"],
@@ -409,7 +411,7 @@ index 0b337058..1be0eb9c 100644
    it.effect("validates package manifest fields before publishing", () =>
      Effect.gen(function* () {
        const decoded = yield* Schema.decodeEffect(PublishManifest)({
-@@ -1378,6 +1468,9 @@ esac
+@@ -1378,6 +1470,9 @@ esac
        const workspaceTarget = (name: string, specifier: string): string | undefined => {
          const target = npmAliasTarget(specifier) ?? name;
  
@@ -419,7 +421,7 @@ index 0b337058..1be0eb9c 100644
          if (target === "effect-agent") {
            return target;
          }
-@@ -1403,9 +1496,14 @@ esac
+@@ -1403,9 +1498,14 @@ esac
              edges.filter((edge) => !allowed.includes(edge)),
              `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
            ).toEqual([]);
@@ -435,7 +437,7 @@ index 0b337058..1be0eb9c 100644
            if (section !== "devDependencies") {
              expect(
                edges,
-@@ -1576,15 +1674,20 @@ esac
+@@ -1576,15 +1676,20 @@ esac
  
            // No production package ever SHIPS depending on the testing package.
            expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
