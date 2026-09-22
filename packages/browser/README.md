@@ -10,7 +10,7 @@ A `BrowserSession<E>` is the live, host-only capability returned by the supplyin
 
 All callers use this exact session. `Capture.start`, `Capture.stream` and `PageControl` authenticate its identity privately; spreading or decoding an object cannot copy authority. A session or binding absent from the receiving runtime's private registry fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered session with page control disabled still fails `Unsupported`. `Tools.run` from `effect-agent-browser/tools` uses the original session directly; `yield* Adapter.fromSession(session, { selection: "current" | "retained" })` adapts it to the framework's handle with an explicit target policy. Neither opens another browser.
 
-Mutations are serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation after dispatch has an unknown outcome, fences the owner and is never automatically replayed. `undispatched`, `rejected` and `unknown` remain distinct expected outcomes.
+Mutations are serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation after dispatch has an unknown outcome and is never automatically replayed. Unresolved control fences the owner; a main-frame loading timeout can instead retire control through one acknowledged stop, as described below. `undispatched`, `rejected` and `unknown` remain distinct expected outcomes.
 
 ## Self-managed Chromium
 
@@ -122,11 +122,21 @@ mean ambiguous. Never fall back to order, local serial, URL or title. Then reacq
 local metadata or handles current again.
 
 Pinned operations are selector-based. They intentionally do not create another retained
-`Observation` or an exact-node namespace: `session.observe()` and the `*Element` operations keep
-their existing selected-session semantics. A pinned read leaves that retained observation
-alone. A pinned mutation uses the same owner mutation fence as every other mutation and may
-conservatively invalidate the session-wide observation, so inspect again before reusing exact
-nodes after any mutation.
+`Observation` or an exact-node namespace. There is still one observation: a new `observe` replaces
+it. A pinned read or mutation on another page leaves that observation intact, as does selecting
+away and back without observing another document. Exact-node work refuses `Stale/undispatched`
+while another page or frame is selected; it never redirects the reference to that selection.
+Returning to the original page/frame can use the original reference only if its document and
+exact control are still valid. This does not revive a retained-selection handle: `retain` still
+becomes stale after every selection change, including away and back.
+
+Dispatched input on the observation's own page still retires its references, including `hover`,
+`pointerMove`, `wheel` and `scroll`. Hover then click therefore deliberately needs a new inspection.
+Page scripts can replace nodes or change relevant state in response to any input; no verb is
+assumed harmless. Navigation or closure on that page and reconnect also retire its observation,
+even while another page is selected. IDs are opaque and connection-specific; consume the actual
+inspection result rather than predicting serials. Attachment, identity and fresh-state checks at
+dispatch remain necessary even when the last input targeted a different page.
 
 The complete [multi-page example](examples/multi-page.ts) keeps a presentation page pinned while
 the selected scout supplies observations. It reads and captures the presentation page without
@@ -159,7 +169,10 @@ retain the originals in the bounded, host-only `ToolHost.toolFailures` snapshot.
 Both accept optional `timeoutMillis` from 1 to 600000, capped by the remaining session lifetime.
 Omitting it uses the configured action timeout. Direct, retained and pinned calls share the
 same navigator; the maintained model `browser_navigate` tool still accepts only its upstream URL
-request. This field is the loading deadline, not a promise of rollback on timeout.
+request. This field is the loading deadline, not a promise of rollback on timeout. On a main-frame
+timeout from the pinned engine, up to 3000 ms of recovery may follow that deadline. One absolute
+recovery deadline includes owner-permit waiting, native setup and acknowledgement, and is capped
+by the remaining session lifetime. It is never renewed and cannot extend that lifetime.
 
 ```ts
 const operation =
@@ -175,7 +188,9 @@ The owner's permit is released as soon as the navigation is dispatched. While it
 
 - `completed` belongs to that one navigation: a successor reaching the same URL fails it instead of completing it, and its URL is the page that navigated, not whichever page is selected by then. **Interrupting a waiter stops nothing.** The browser keeps loading and nothing is dispatched again.
 - `stop` asks the browser to stop loading. Its acknowledgement is a known outcome: `completed` then fails `interrupted`, the page holds whatever had loaded, and the session stays usable. It does not undo anything the page already did. Concurrent callers share their active stop attempt. A busy refusal or cancellation before dispatch allows a later request only after native setup and its port retire; pending or unconfirmed retirement keeps setup capacity occupied. Once a stop is dispatched, every later caller receives that attempt's recorded result, including failure or interruption, without sending it again. A completed navigation cannot stop its successor.
-- Leaving the operation's scope unsettled, or a navigation that fails after dispatch, fences the session as uncertain, exactly as an interrupted mutation always has. Nothing knows what the browser did, so nothing more is sent, and it is never replayed.
+- A main-frame loading timeout asks the same stop coordinator to retire that exact navigation. Acknowledged stop completes it with `Timeout/unknown` and leaves the owner open: partial content remains inspectable and deliberate subsequent input is allowed. An explicit stop racing recovery shares its attempt; a completed predecessor cannot stop a successor. The `unknown` outcome still says nothing about page effects before cancellation.
+- A failed or unacknowledged recovery, replacement navigation, detached frame or other native rejection keeps the conservative fence. Pinned child-frame timeout also fences: `Page.stopLoading` acts on the whole page, so automatic frame-local cancellation is not claimed. Explicit stop retains its page-wide meaning.
+- Leaving the operation's scope unsettled fences it as unknown. Neither navigation nor a dispatched stop is replayed, and no timeout or acknowledgement promises rollback, an unchanged DOM, or termination of every page timer or worker.
 
 A read is ordered against the document being replaced by failing: if the document it was reading was replaced underneath it, or a navigation is still in flight on its page, the error is `target-changed` and `undispatched`, which means read again. A read is never a mutation, so that is always safe. A held page is not read at all; take the checkpoint before the hold and keep it.
 

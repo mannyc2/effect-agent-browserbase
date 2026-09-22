@@ -6,7 +6,7 @@ import { Reasons } from "../../Errors.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type { DriverEvents, DriverOptions, DriverTarget } from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
-import type { Ticket } from "./Owner.ts";
+import type { ObservationScope, Ticket } from "./Owner.ts";
 import type { PageExecution } from "./PageExecution.ts";
 
 const TargetInfo = Schema.Struct({
@@ -46,9 +46,8 @@ export interface TargetHooks {
   /** A frame navigated or detached, before any consequence for the selection. */
   readonly frameChanged: (entry: Entry, frame: Frame) => void;
   readonly dialog: (dialog: Dialog) => void;
-  /** Retained observation is released before a selection is replaced. */
-  readonly release: () => Promise<void>;
-  readonly changed: (reason: "target-changed") => void;
+  /** Selection changes notify the owner without retiring another page's retained nodes. */
+  readonly changed: (reason: "target-changed", scope: ObservationScope) => void;
 }
 
 /**
@@ -117,7 +116,7 @@ export const makeTargets = (
       if (selection.entry === entry) {
         selection.entry = undefined;
         selection.frame = undefined;
-        hooks.changed("target-changed");
+        hooks.changed("target-changed", { pageId: entry.id });
       }
     };
 
@@ -128,14 +127,14 @@ export const makeTargets = (
       frameId(frame);
       hooks.frameChanged(entry, frame);
       if (selection.entry === entry && (selection.frame === frame || frame === page.mainFrame()))
-        hooks.changed("target-changed");
+        hooks.changed("target-changed", { pageId: entry.id });
     };
 
     const onDetached = (frame: Frame) => {
       hooks.frameChanged(entry, frame);
       if (selection.frame === frame) {
         selection.frame = undefined;
-        hooks.changed("target-changed");
+        hooks.changed("target-changed", { pageId: entry.id });
       }
     };
 
@@ -305,13 +304,12 @@ export const makeTargets = (
     sanitize(async () => {
       const entry = await explicitPage(page, ticket);
 
-      await hooks.release();
       ticket.check();
       if (entries.get(entry.id) !== entry || entry.page.isClosed())
         throw failure(Reasons.Stale.make({}), "undispatched");
       selection.entry = entry;
       selection.frame = entry.page.mainFrame();
-      hooks.changed("target-changed");
+      hooks.changed("target-changed", "none");
     });
 
   const newPage = (ticket: Ticket) =>
@@ -400,10 +398,9 @@ export const makeTargets = (
 
       if (frame === undefined || frame.isDetached())
         throw failure(Reasons.NotFound.make({}), "undispatched");
-      await hooks.release();
       ticket.check();
       selection.frame = frame;
-      hooks.changed("target-changed");
+      hooks.changed("target-changed", "none");
     });
 
   return {

@@ -122,6 +122,16 @@ it.live(
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
             yield* session.navigate(NavigateRequest.make({ url: f.url }));
+            // This test needs a stable original document, not a read racing the child's commit.
+            const childUrl = new URL("/frame", f.url).href;
+
+            const frames = yield* settle(session.frames, (listed) =>
+              listed.some((frame) => frame.name === "child" && frame.url === childUrl),
+            );
+
+            expect(frames.some((frame) => frame.name === "child" && frame.url === childUrl)).toBe(
+              true,
+            );
             const observation = yield* session.observe();
             const control = observation.controls.find((c) => c.label === "Increment")!;
 

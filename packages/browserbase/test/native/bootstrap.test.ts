@@ -109,6 +109,15 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
             NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }),
           );
           expect(yield* session.ready).toEqual({ _tag: "NotApplicable" });
+          const childUrl = new URL("/frame", f.url.replace("127.0.0.1", "localhost")).href;
+
+          const outsideFrames = yield* settle(session.frames, (listed) =>
+            listed.some((frame) => frame.name === "child" && frame.url === childUrl),
+          );
+
+          expect(
+            outsideFrames.some((frame) => frame.name === "child" && frame.url === childUrl),
+          ).toBe(true);
           expect((yield* session.observe()).url).toContain("localhost");
         }),
       );

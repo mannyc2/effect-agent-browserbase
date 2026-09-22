@@ -68,6 +68,8 @@ export const makePlaywrightDriver = async (
   options: DriverOptions,
   events: DriverEvents,
 ): Promise<Driver> => {
+  // This constructor is reached only after native acquisition, including in driver tests.
+  const { errors } = await import("playwright-core");
   const contexts = browser.contexts();
 
   if (contexts.length !== 1) throw failure(Reasons.Ambiguous.make({}));
@@ -93,6 +95,7 @@ export const makePlaywrightDriver = async (
       }
     },
     closed: (entry) => {
+      observation.invalidate({ pageId: entry.id });
       pageControl.closed(entry);
       captures.invalidate(entry, "target-changed");
       captures.forget(entry);
@@ -102,6 +105,7 @@ export const makePlaywrightDriver = async (
       if (initialized) initialization.attachFrame(frame, entry.page);
     },
     frameChanged: (entry, frame) => {
+      observation.invalidate({ pageId: entry.id });
       captures.invalidate(entry, "target-changed", frame);
     },
     dialog: (dialog) => {
@@ -116,8 +120,7 @@ export const makePlaywrightDriver = async (
         events.pause();
       }
     },
-    release: () => observation.dispose(),
-    changed: (reason) => observation.changed(reason),
+    changed: (reason, scope) => observation.changed(reason, scope),
   });
 
   const { current, entries, register } = targets;
@@ -132,7 +135,14 @@ export const makePlaywrightDriver = async (
   );
 
   const observation = makeObservation(targets, events);
-  const actions = makeActions(context, targets, observation);
+
+  const actions = makeActions(
+    context,
+    targets,
+    observation,
+    (error) => error instanceof errors.TimeoutError,
+  );
+
   const pointer = makePointer(targets, actions);
   const keyboard = makeKeyboard(targets, actions, pointer.receipt);
   const captures = makeCaptureSources(targets);
@@ -213,7 +223,7 @@ export const makePlaywrightDriver = async (
 
         ticket.dispatch();
         captures.invalidate(entry, "resized");
-        observation.changed("resized");
+        observation.changed("resized", { pageId: entry.id });
         await page.setViewportSize(viewport);
         ticket.check();
       }),

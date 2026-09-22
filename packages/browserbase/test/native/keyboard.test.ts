@@ -219,6 +219,15 @@ it.live("real CDP: real typing keeps the exactness and admission an observed nod
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
+          const childUrl = new URL("/keyframe", f.url).href;
+
+          const frames = yield* settle(session.frames, (listed) =>
+            listed.some((frame) => frame.name === "child" && frame.url === childUrl),
+          );
+
+          expect(frames.some((frame) => frame.name === "child" && frame.url === childUrl)).toBe(
+            true,
+          );
           const observation = yield* session.observe();
 
           const named = (label: string) => {

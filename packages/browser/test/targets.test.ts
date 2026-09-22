@@ -6,7 +6,7 @@ import type { Browser, BrowserContext, Frame, Page } from "playwright-core";
 
 import { CallbackTasks } from "../src/internal/browser/CallbackTasks.ts";
 import { makeOwner, native, type Ticket } from "../src/internal/browser/Owner.ts";
-import { makeTargets } from "../src/internal/browser/Targets.ts";
+import { makeTargets, type TargetHooks } from "../src/internal/browser/Targets.ts";
 
 const ticket = (): Ticket => {
   let dispatched = false;
@@ -33,6 +33,7 @@ const registry = (
   let serial = 0;
   const identities = new WeakMap<Page, string>();
   const calls = { created: 0, closed: 0, detached: 0, titles: [] as number[] };
+  const changes: Array<Parameters<TargetHooks["changed"]>> = [];
 
   const page = () => {
     const index = ++serial;
@@ -101,8 +102,9 @@ const registry = (
       navigated: () => {},
       frameChanged: () => {},
       dialog: () => {},
-      release: async () => {},
-      changed: () => {},
+      changed: (...change) => {
+        changes.push(change);
+      },
     },
   );
 
@@ -111,7 +113,7 @@ const registry = (
   targets.selection.entry = initial;
   targets.selection.frame = initial.page.mainFrame();
 
-  return { targets, calls };
+  return { targets, calls, changes };
 };
 
 it("independent registries refuse foreign page metadata and mismatched native target IDs before close", async () => {
@@ -202,4 +204,23 @@ it("page capacity reports its actual count and configured maximum without dispat
   });
   expect(admission.dispatched).toBe(false);
   expect(f.calls.created).toBe(0);
+});
+
+it("selection notifications preserve retained nodes while a selected page close retires its own page", async () => {
+  const f = registry();
+  const page = await f.targets.newPage(ticket());
+  const admission = ticket();
+
+  await f.targets.selectPage(page, admission);
+  const [frame] = await f.targets.listFrames(ticket());
+
+  await f.targets.selectFrame(frame!.frameId, admission);
+  expect(admission.dispatched).toBe(false);
+  expect(f.changes).toEqual([
+    ["target-changed", "none"],
+    ["target-changed", "none"],
+  ]);
+  await f.targets.closePage(page, ticket());
+  expect(f.changes[2]).toEqual(["target-changed", { pageId: page.pageId }]);
+  expect(f.calls.closed).toBe(1);
 });
