@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Ref, Schedule } from "effect";
+import { ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { ReadTextRequest } from "effect-browserbase/browser-data";
 
 import { Broadcast } from "../../examples/realistic-footage/Broadcast.ts";
 import { Director } from "../../examples/realistic-footage/Director.ts";

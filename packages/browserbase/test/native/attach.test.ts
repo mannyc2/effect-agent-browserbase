@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
+import { ClickRequest, NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { ClickRequest, NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 import type { SessionReference } from "effect-browserbase/references";
 
 import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
@@ -45,12 +45,15 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
               if (unsupported._tag === "Failure")
                 expect(unsupported.failure.reason).toBe("unsupported");
 
+              // Checked closure accepts borrowed disconnection without requiring a remote release.
+              yield* borrowed.closeChecked;
               const report = yield* borrowed.close;
 
               expect(report.ownership).toBe("borrowed");
               expect(report.remote).toBe("not-owned");
               expect(report.releaseRequested).toBe(false);
               expect(report.local).toBe("closed");
+              expect(report.issues).toEqual([]);
             }),
           );
 

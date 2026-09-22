@@ -7,28 +7,28 @@ import { dirname, join, sep } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { verifyConsumer } from "../verify-consumer.mjs";
-import { packages } from "../packages.mjs";
+import { consumerPackageSet, packages } from "../packages.mjs";
 
-const version = "0.1.0-beta.102";
+const version = "0.2.0-beta.0";
 const write = (path, content) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); };
 const json = (path, value) => write(path, JSON.stringify(value) + "\n");
 
 // Real on-disk packages and tar archives exercise the verifier, not browser behavior.
-function fixture(t, { profile = "resources", source = "export const owner = {};\n" } = {}) {
+function fixture(t, { profile = "resources", source = "export const owner = {};\n", browserModules = { index: source } } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "browserbase-consumer-isolation-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const root = join(directory, "consumer"), artifacts = join(directory, "artifacts");
   mkdirSync(artifacts); json(join(root, "package.json"), { private: true, type: "module" });
   const entries = [];
-  for (const item of profile === "agent" ? packages : [packages[0]]) {
+  for (const item of consumerPackageSet(profile)) {
     const stage = join(directory, item.stem), content = join(stage, "package");
-    const stems = item === packages[0] ? ["index"] : ["index", "Adapter", "Tools"];
-    const subpaths = item === packages[0] ? ["."] : [".", "./adapter", "./tools"];
+    const stems = item === packages[0] ? Object.keys(browserModules) : item === packages[1] ? ["index"] : ["index", "Adapter", "Tools"];
+    const subpaths = stems.map((stem) => stem === "index" ? "." : "./" + stem.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase());
     const exports = Object.fromEntries(stems.map((stem, i) => [subpaths[i], { types: `./dist/${stem}.d.mts`, default: `./dist/${stem}.mjs` }]));
     json(join(content, "package.json"), { name: item.name, version, type: "module", exports });
     const members = ["package/package.json"];
     for (const stem of stems) {
-      write(join(content, "dist", stem + ".mjs"), item === packages[0] ? source : `export { owner } from "${packages[0].name}";\n`);
+      write(join(content, "dist", stem + ".mjs"), item === packages[0] ? browserModules[stem] : `export { owner } from "${packages[0].name}";\n`);
       write(join(content, "dist", stem + ".d.mts"), "export declare const owner: object;\n");
       members.push(`package/dist/${stem}.mjs`, `package/dist/${stem}.d.mts`);
     }
@@ -148,6 +148,45 @@ test("agent profile retains canonical shared-owner and retired-export checks", a
   install(join(f.root, "node_modules", "playwright-core"), "playwright-core");
   assert.equal((await f.verify()).profile, "agent");
   const generic = await import(pathToFileURL(join(f.generic, "dist/index.mjs")).href);
-  const adapter = await import(pathToFileURL(join(f.root, "node_modules", packages[1].name, "dist/Adapter.mjs")).href);
+  const adapter = await import(pathToFileURL(join(f.root, "node_modules", packages[2].name, "dist/Adapter.mjs")).href);
   assert.equal(adapter.owner, generic.owner);
 });
+
+for (const profile of ["browser", "agent"]) {
+  test(`${profile} refuses Browserbase under a nested alias`, async (t) => {
+    const f = fixture(t, { profile });
+    assert.equal((await f.verify()).profile, profile);
+    install(join(f.generic, "node_modules", "provider-alias"), "effect-browserbase", { exports: { "./hidden": "./index.mjs" } });
+    await assert.rejects(f.verify(), /Forbidden installed dependency: effect-browserbase/);
+  });
+}
+
+test("hosted Agent integration keeps all three packages on the same browser owner", async (t) => {
+  const f = fixture(t, { profile: "agent-hosted" });
+  const result = await f.verify();
+  assert.deepEqual(result.packages, packages.map((item) => item.name));
+  const browser = await import(pathToFileURL(join(f.generic, "dist/index.mjs")).href);
+  for (const item of packages.slice(1)) {
+    const consumer = await import(pathToFileURL(join(f.root, "node_modules", item.name, "dist/index.mjs")).href);
+    assert.equal(consumer.owner, browser.owner);
+  }
+});
+
+test("duplicate neutral packages fail even when hidden beneath an alias", async (t) => {
+  const f = fixture(t, { profile: "agent" });
+  install(join(f.generic, "node_modules", "neutral-alias"), "effect-browser");
+  await assert.rejects(f.verify(), /Multiple installed effect-browser registries/);
+});
+
+for (const duplicate of [false, true]) {
+  test(`neutral root and subpath ${duplicate ? "reject duplicate" : "share identical"} registry exports`, async (t) => {
+    const f = fixture(t, { profile: "browser", browserModules: {
+      index: duplicate
+        ? 'export const Capture = { owner: {} }; export { owner } from "./Capture.mjs";\n'
+        : 'export * as Capture from "./Capture.mjs"; export { owner } from "./Capture.mjs";\n',
+      Capture: "export const owner = {};\n",
+    } });
+    if (duplicate) await assert.rejects(f.verify(), /Browser root and \.\/capture duplicate owner/);
+    else assert.equal((await f.verify()).profile, "browser");
+  });
+}

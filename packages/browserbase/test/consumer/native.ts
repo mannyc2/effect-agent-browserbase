@@ -4,11 +4,11 @@ import { Context, Effect, Schema, Stream } from "effect";
 // It runs as an ordinary program on the pinned Node and Bun against a local
 // Chromium process over real CDP, using only the installed package's public
 // exports. The provider control plane is scripted; the browser is not.
-import * as Bootstrap from "effect-browserbase/bootstrap";
+import * as Bootstrap from "effect-browser/bootstrap";
+import { InlineFile, NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import type { InitializationError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { InlineFile, NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
-import type { InitializationError } from "effect-browserbase/errors";
 
 import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
 

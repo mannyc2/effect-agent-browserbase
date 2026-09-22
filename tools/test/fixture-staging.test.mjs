@@ -8,11 +8,11 @@ import { consumerManifest } from "../packed-consumers.mjs";
 import { packages } from "../packages.mjs";
 
 const catalog = { effect: "4.0.0-rc.115", "@types/node": "26.1.2", typescript: "7.0.2", "vite-plus": "0.3.2", "playwright-core": "1.63.0", "@effect/vitest": "4.0.0-rc.115", "@effect/platform-node": "4.0.0-rc.115", vitest: "4.1.11" };
-const receipt = { frameworkVersion: "0.1.0-beta.102", packages: packages.map((p) => ({ filename: p.stem + "-0.1.0-beta.102.tgz" })) };
+const receipt = { frameworkVersion: "0.1.0-beta.102", packages: packages.map((p) => ({ name: p.name, filename: p.stem + "-0.2.0-beta.0.tgz" })) };
 
-test("three clean consumer manifests isolate resources and substitute only the private consumer's artifact resolution", () => {
+test("five clean consumer manifests isolate resources and substitute only the private consumer's artifact resolution", () => {
   const resources = consumerManifest("resources", receipt, "/tmp/artifacts", catalog);
-  assert.deepEqual(Object.keys(resources.dependencies).sort(), [packages[0].name, "effect"].sort());
+  assert.deepEqual(Object.keys(resources.dependencies).sort(), [packages[0].name, packages[1].name, "effect"].sort());
   assert.equal(resources.devDependencies["@effect-agent/testing"], undefined);
   assert.equal(resources.dependencies["playwright-core"], undefined);
   const generic = consumerManifest("generic", receipt, "/tmp/artifacts", catalog);
@@ -23,14 +23,23 @@ test("three clean consumer manifests isolate resources and substitute only the p
   const agent = consumerManifest("agent", receipt, "/tmp/artifacts", catalog);
   assert.equal(agent.dependencies["effect-agent"], receipt.frameworkVersion);
   assert.equal(agent.overrides[packages[0].name], agent.dependencies[packages[0].name]);
-  assert.match(agent.dependencies[packages[1].name], /^file:/);
+  assert.match(agent.dependencies[packages[2].name], /^file:/);
+  assert.equal(agent.dependencies[packages[1].name], undefined);
+  assert.equal(agent.devDependencies[packages[1].name], undefined);
+  const browser = consumerManifest("browser", receipt, "/tmp/artifacts", catalog);
+  assert.deepEqual(Object.keys(browser.dependencies).sort(), [packages[0].name, "effect", "playwright-core"].sort());
+  assert.equal(browser.devDependencies["@effect-agent/testing"], undefined);
+  const hosted = consumerManifest("agent-hosted", receipt, "/tmp/artifacts", catalog);
+  assert.equal(hosted.dependencies[packages[1].name], undefined);
+  assert.match(hosted.devDependencies[packages[1].name], /^file:/);
+  assert.equal(hosted.overrides[packages[1].name], hosted.devDependencies[packages[1].name]);
 });
 
 test("native fixture closure may share generic test-only helpers but cannot traverse a symlink", (t) => {
   const root = mkdtempSync(join(tmpdir(), "browserbase-fixture-test-")); t.after(() => rmSync(root, { recursive: true, force: true }));
   const tree = join(root, "tree"), out = join(root, "out"); mkdirSync(tree); mkdirSync(out);
   const write = (path, content) => { mkdirSync(dirname(join(tree, path)), { recursive: true }); writeFileSync(join(tree, path), content); };
-  const entry = "packages/agent-browserbase/test/native/agent.test.ts";
+  const entry = "packages/agent-browser/test/native/agent.test.ts";
   const dependency = "packages/browserbase/test/fixtures/local.ts";
   write(entry, 'import "../../../browserbase/test/fixtures/local.ts";\n');
   write(dependency, "export const sentinel = 1;\n");

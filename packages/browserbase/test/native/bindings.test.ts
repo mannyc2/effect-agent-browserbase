@@ -1,10 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
-import * as Bootstrap from "effect-browserbase/bootstrap";
+import * as Bootstrap from "effect-browser/bootstrap";
+import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
+import { BrowserError, InitializationError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 import type { CleanupResult } from "effect-browserbase/cleanup";
-import { BrowserError, InitializationError } from "effect-browserbase/errors";
 import type { Frame, Page } from "playwright-core";
 
 import {
@@ -27,7 +27,7 @@ const CallResult = Schema.Union([
 
 const rejected = {
   _tag: "Rejected",
-  name: "BrowserbaseBindingError",
+  name: "BrowserBindingError",
   message: "Browser binding call rejected",
   stack: "",
 };

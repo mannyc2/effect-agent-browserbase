@@ -1,9 +1,9 @@
 import { expect, it } from "@effect/vitest";
 import { Schema } from "effect";
-import { Target } from "effect-browserbase/browser-data";
-import type { CapturedFrame } from "effect-browserbase/capture";
-import { CaptureSummary } from "effect-browserbase/capture";
-import { BrowserError } from "effect-browserbase/errors";
+import { Target } from "effect-browser/browser-data";
+import type { CapturedFrame } from "effect-browser/capture";
+import { CaptureSummary } from "effect-browser/capture";
+import { BrowserError } from "effect-browser/errors";
 
 import { CaptureEvidence, captureEvidence } from "../examples/capture-evidence.ts";
 

@@ -18,7 +18,7 @@ test("bootstrap uses a single current patch and frozen installs, not historical 
   assert.equal((bootstrap.match(/--frozen-lockfile/g) ?? []).length, 2);
   assert.ok(bootstrap.includes('apply --check "$ROOT/upstream.patch"'));
   // The patch integrates the packages into upstream; their source arrives by copy, never by diff.
-  for (const owned of ["browserbase", "agent-browserbase"]) {
+  for (const owned of ["browser", "browserbase", "agent-browser"]) {
     assert.ok(!read("upstream.patch").includes(`diff --git a/packages/${owned}/`));
   }
   assert.ok(!existsSync(join(root, "tools/canonicalize-candidate.sh")));
@@ -93,7 +93,7 @@ test("full acceptance runs upstream's check and build whole, and tests only what
   const acceptance = read("tools/run-acceptance.sh");
   const upstream = acceptance.slice(acceptance.indexOf('UPSTREAM_TESTS="${BROWSERBASE_UPSTREAM_TESTS'), acceptance.indexOf("run release-dry-run"));
 
-  assert.ok(upstream.includes("reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browserbase -F effect-agent-browserbase -F @effect-agent/testing test)"));
+  assert.ok(upstream.includes("reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser -F @effect-agent/testing test)"));
   // The canary spelling is upstream's own root script, recursion included, not a filter.
   assert.ok(upstream.includes("all) TEST_ARGS=(test)"));
   assert.ok(upstream.includes("run upstream-check timeout 900s ./node_modules/.bin/vp run -v check"));

@@ -28,10 +28,10 @@ function repository() {
 for (const path of ["README.md", "CONTRIBUTING.md", "docs/history/example.md", "docs/HOSTED.md"]) {
   test(`plain documentation selects only documented checks: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "docs"));
 }
-for (const path of ["packages/browserbase/src/Browser.ts", "packages/browserbase/README.md", "packages/agent-browserbase/test/native/agent.test.ts", "tools/ci-plan.mjs", ".github/workflows/ci.yml", "docs/media/demo.mp4"]) {
-  test(`owned change retains all three artifact consumers: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "library"));
+for (const path of ["packages/browser/src/Browser.ts", "packages/browserbase/src/Browser.ts", "packages/browserbase/README.md", "packages/agent-browser/test/native/agent.test.ts", "tools/ci-plan.mjs", ".github/workflows/ci.yml", "docs/media/demo.mp4"]) {
+  test(`owned change retains all five artifact consumers: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "library"));
 }
-for (const path of ["upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh", "new-runtime/index.ts", ".gitignore", "docs/../hidden.md", "docs/line\nbreak.md"]) {
+for (const path of ["test/integration/ownership.test.ts", "test/unknown.ts", "test/vite.config.ts", "upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh", "new-runtime/index.ts", ".gitignore", "docs/../hidden.md", "docs/line\nbreak.md"]) {
   test(`integration or unknown paths require full validation: ${JSON.stringify(path)}`, () => assert.equal(classifyChanges([change(path)]).profile, "full"));
 }
 test("empty diffs, symlinks and submodules cannot become docs passes", () => {
@@ -140,8 +140,10 @@ function runnerFixture() {
   write(join(dir, ".node-version"), process.versions.node + "\n");
   write(join(dir, "tools/test/fixture.test.mjs"), 'import { after, test } from "node:test"; test("substitute", () => {});\n');
   write(join(dir, "tools/run-boundary-suite.sh"), '#!/bin/sh\necho "fixture boundary"\n');
+  write(join(dir, "packages/browser/index.ts"), "export {};\n");
+  write(join(dir, "test/integration/fixture.test.ts"), "export {};\n");
   write(join(dir, "packages/browserbase/index.ts"), "export {};\n");
-  write(join(dir, "packages/agent-browserbase/index.ts"), "export {};\n");
+  write(join(dir, "packages/agent-browser/index.ts"), "export {};\n");
   write(join(bin, "bun"), '#!/bin/sh\necho "1.4.2"\n', 0o755);
   // An extension-less script takes its module type from the nearest package.json. Without
   // this, a TMPDIR inside a "type": "module" checkout parses the CommonJS stub as ESM.
@@ -156,7 +158,7 @@ process.exit(r.status ?? 1);
 `, 0o755);
   const vp = `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs');
-const a=process.argv.slice(2), pkg=process.cwd().endsWith('/browserbase')?'generic':'agent';
+const a=process.argv.slice(2), pkg=process.cwd().endsWith('/browserbase')?'generic':process.cwd().endsWith('/browser')?'browser':'agent';
 appendFileSync(process.env.CI_FIXTURE_COMMANDS, JSON.stringify({pkg,args:a})+'\\n');
 const task=a[0]==='fmt'?'format':a.includes('--config')?pkg+'-native':'other';
 process.exit(task===process.env.CI_FIXTURE_FAIL?7:0);
@@ -166,7 +168,7 @@ process.exit(task===process.env.CI_FIXTURE_FAIL?7:0);
 set -eu
 TREE="$1/tree"
 mkdir -p "$TREE/node_modules/.bin" "$TREE/.changeset" "$TREE/docs/guide"
-cp -r packages "$TREE/"
+cp -r packages test "$TREE/"
 cp tools/vp-fixture.mjs "$TREE/node_modules/.bin/vp"
 chmod +x "$TREE/node_modules/.bin/vp"
 printf 'node_modules/\\n' > "$TREE/.gitignore"
@@ -207,6 +209,8 @@ for (const profile of ["docs", "library", "full"]) {
     assert.equal(stages.has("upstream-test"), profile === "full");
     if (profile === "full") assert.equal(text(join(out, "upstream-tests.txt")), "reachable\n");
     assert.equal(stages.has("generic-native"), profile === "full");
+    assert.equal(stages.has("browser-native"), profile === "full");
+    assert.equal(stages.has("integration-unit"), profile !== "docs");
     assert.equal(stages.has("packed-consumer"), profile !== "docs");
     assert.equal(text(join(out, "acceptance-exit.txt")), "0\n");
     assert.match(text(join(out, "timings.tsv")), /^stage\texit_code\tduration_ms\n/);

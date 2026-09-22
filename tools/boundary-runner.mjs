@@ -1,11 +1,12 @@
 import { writeFileSync } from 'node:fs';
 import { Effect } from 'effect';
-const root = '../overlay/packages/browserbase/test/fixtures/';
+const root = '../overlay/test/integration/fixtures/';
+const artifacts = '../overlay/packages/browserbase/test/fixtures/';
 const selection = process.argv[2] ?? 'all';
 const suites = selection === 'regressions' ? ['RecoveryCases'] : ['OwnershipCases', 'ArtifactCases', 'CaptureCases', 'RecoveryCases'];
 const rows = [];
 for (const suite of suites) {
-  const mod = await import(new URL(`${root}${suite}.ts`, import.meta.url));
+  const mod = await import(new URL(`${suite === "ArtifactCases" ? artifacts : root}${suite}.ts`, import.meta.url));
   const tests = Object.values(mod).find(Array.isArray);
   for (const test of tests) {
     const before = performance.now();

@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
+import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
-import { BrowserPolicy } from "effect-browserbase/browser-data";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import type { LaunchRecipe } from "effect-browserbase/launch";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";

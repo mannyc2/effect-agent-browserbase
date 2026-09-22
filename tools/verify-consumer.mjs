@@ -4,17 +4,19 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "n
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { packages, readJson } from "./packages.mjs";
+import { consumerPackageSet, consumerProfiles, packages, readJson } from "./packages.mjs";
 
 // Check installation identity, not just root resolution: nested dependencies and
 // npm aliases can be invisible at the root, and exports can hide package.json.
 // Traverse package directories and supported local stores, never package code.
 function checkInstalledDependencies(root, profile) {
   const forbidden = (name) =>
-    (profile !== "agent" && (name === "@browserbasehq/sdk" || name === "effect-agent" ||
-      name.startsWith("@effect-agent/") || name === packages[1].name)) ||
+    name === "@browserbasehq/sdk" || name === "effect-agent-browserbase" ||
+    (!profile.startsWith("agent") && (name === "effect-agent" ||
+      name.startsWith("@effect-agent/") || name === packages[2].name)) ||
+    (["browser", "agent"].includes(profile) && name === packages[1].name) ||
     (profile === "resources" && ["playwright", "playwright-core", "@playwright/test"].includes(name));
-  const pending = [], seen = new Set();
+  const pending = [], seen = new Set(), browserDirectories = new Set();
   let admitted = 0;
   const enqueue = (kind, path, name = "") => {
     // This is a finite installation audit, not an unbounded filesystem crawler.
@@ -37,6 +39,10 @@ function checkInstalledDependencies(root, profile) {
         const manifest = readJson(manifestPath);
         assert.equal(typeof manifest.name, "string", "Installed package must identify itself");
         assert.ok(!forbidden(manifest.name), `Forbidden installed dependency: ${manifest.name}`);
+        if (manifest.name === packages[0].name) {
+          browserDirectories.add(directory);
+          assert.equal(browserDirectories.size, 1, "Multiple installed effect-browser registries");
+        }
       }
       const nested = join(directory, "node_modules");
       if (existsSync(nested)) enqueue("modules", nested);
@@ -62,7 +68,7 @@ function checkInstalledDependencies(root, profile) {
 }
 
 export async function verifyConsumer(directory, artifactDirectory, profile) {
-  assert.ok(["resources", "generic", "agent"].includes(profile));
+  assert.ok(consumerProfiles.includes(profile));
   const root = realpathSync(directory), require = createRequire(join(root, "package.json"));
   checkInstalledDependencies(root, profile);
   // Resolution walks the consumer's ancestors, so an unrelated `node_modules` above a
@@ -80,12 +86,12 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
     assert.ok(!realpathSync(resolved).startsWith(root + sep), message);
     ambient.push({ specifier, resolved });
   };
-  for (const forbidden of profile === "agent" ? [] : ["effect-agent", "effect-agent-browserbase", "@effect-agent/testing", "@browserbasehq/sdk"])
+  for (const forbidden of ["@browserbasehq/sdk", "effect-agent-browserbase", ...(!profile.startsWith("agent") ? ["effect-agent", "effect-agent-browser", "@effect-agent/testing"] : []), ...(["browser", "agent"].includes(profile) ? ["effect-browserbase"] : [])])
     refuse(forbidden, `Forbidden dependency is installed: ${forbidden}`);
   if (profile === "resources") refuse("playwright-core", "Resources-only installed Playwright");
   const receipt = JSON.parse(readFileSync(join(artifactDirectory, "release-set.json"), "utf8"));
-  const expected = profile === "agent" ? packages : [packages[0]];
-  const installed = new Map();
+  const expected = consumerPackageSet(profile);
+  const installed = new Map(), browserModules = new Map();
   for (const item of expected) {
     const entry = receipt.packages.find((entry) => entry.name === item.name);
     assert.ok(entry);
@@ -107,17 +113,33 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
       const specifier = item.name + (subpath === "." ? "" : subpath.slice(1));
       const file = realpathSync(require.resolve(specifier));
       assert.equal(file, realpathSync(join(packageRoot, target.default)));
-      await import(pathToFileURL(file).href);
+      const module = await import(pathToFileURL(file).href);
+      if (item === packages[0]) browserModules.set(subpath, { module, stem: basename(target.default, ".mjs") });
     }
   }
-  if (profile === "agent") {
-    const adapterRequire = createRequire(join(installed.get(packages[1].name), "dist/index.mjs"));
-    assert.equal(realpathSync(adapterRequire.resolve(packages[0].name)), realpathSync(require.resolve(packages[0].name)), "Adapter and consumer do not share the same candidate generic package");
+  const browserRoot = browserModules.get(".").module;
+  assert.equal(browserRoot.Chromium, undefined, "Chromium must remain an isolated subpath");
+  for (const [subpath, { module, stem }] of browserModules) {
+    if (subpath === "." || !Object.hasOwn(browserRoot, stem)) continue;
+    const namespace = browserRoot[stem];
+    assert.deepEqual(Object.keys(namespace).sort(), Object.keys(module).sort(), `Browser root and ${subpath} expose different members`);
+    for (const [name, value] of Object.entries(module)) {
+      assert.equal(namespace[name], value, `Browser root and ${subpath} duplicate ${name}`);
+    }
+  }
+  for (const item of expected.filter((item) => item !== packages[0])) {
+    const dependentRequire = createRequire(join(installed.get(item.name), "dist/index.mjs"));
+    for (const subpath of browserModules.keys()) {
+      const specifier = packages[0].name + (subpath === "." ? "" : subpath.slice(1));
+      assert.equal(realpathSync(dependentRequire.resolve(specifier)), realpathSync(require.resolve(specifier)), `${item.name} and consumer do not share the same candidate browser export: ${specifier}`);
+    }
+  }
+  if (profile.startsWith("agent")) {
     // Node reports a blocked subpath as ERR_PACKAGE_PATH_NOT_EXPORTED; Bun raises an
     // ordinary resolution failure. Both mean the retired subpath is gone, and neither
     // may be satisfied by an unrelated throw, so the specifier itself must be named.
     for (const old of ["interactive-browser", "types", "recordings", "replays", "downloads", "capture", "page-control"]) {
-      const specifier = `${packages[1].name}/${old}`;
+      const specifier = `${packages[2].name}/${old}`;
       assert.throws(() => require.resolve(specifier), (error) => error.code === "ERR_PACKAGE_PATH_NOT_EXPORTED" || ((error.code === "MODULE_NOT_FOUND" || error.code === "ERR_MODULE_NOT_FOUND") && String(error.message).includes(specifier)), `Superseded export still resolves: ${old}`);
     }
   }

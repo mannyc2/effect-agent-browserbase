@@ -6,21 +6,22 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { checkTag, distTag, packages, readPackageSet, repositoryUrl } from "../packages.mjs";
+import { checkTag, consumerProfiles, distTag, packages, readPackageSet, repositoryUrl } from "../packages.mjs";
 import { checkPackagePaths, distributionFiles, packageReleaseSet, publicationManifest, releaseSetDigest } from "../package-release.mjs";
 import { packedConsumers } from "../packed-consumers.mjs";
 import { publishReleaseSet } from "../publish-release.mjs";
 import { verifyReleaseSet } from "../verify-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const version = "0.1.0-beta.102";
+const version = "0.2.0-beta.0";
+const frameworkVersion = "0.1.0-beta.102";
 const sha = "1234567890abcdef1234567890abcdef12345678";
-const versions = { [packages[0].name]: version, "effect-agent": version };
+const versions = { ...Object.fromEntries(packages.map((item) => [item.name, version])), "effect-agent": frameworkVersion };
 const source = (index) => ({
   name: packages[index].name, version, license: "MIT", type: "module", sideEffects: [],
   repository: { type: "git", url: repositoryUrl, directory: packages[index].directory },
-  exports: index === 0 ? { ".": "./src/index.ts", "./client": "./src/Client.ts" } : { ".": "./src/index.ts", "./adapter": "./src/Adapter.ts", "./tools": "./src/Tools.ts" },
-  dependencies: index === 0 ? {} : { [packages[0].name]: "workspace:*", "effect-agent": "workspace:*" },
+  exports: index < 2 ? { ".": "./src/index.ts", "./client": "./src/Client.ts" } : { ".": "./src/index.ts", "./adapter": "./src/Adapter.ts", "./tools": "./src/Tools.ts" },
+  dependencies: index === 0 ? {} : { [packages[0].name]: "workspace:*", ...(index === 2 ? { "effect-agent": "workspace:*" } : {}) },
   peerDependencies: { effect: "^4.0.0-rc.115", ...(index === 0 ? { "playwright-core": "1.63.0" } : {}) },
   ...(index === 0 ? { peerDependenciesMeta: { "playwright-core": { optional: true } } } : {}),
   devDependencies: { typescript: "catalog:" }, scripts: { build: "vp pack" }, files: ["dist", "src"],
@@ -36,7 +37,7 @@ function workspace(t, modify) {
   const directory = temporary(t), tree = join(directory, "tree"), out = join(directory, "output");
   mkdirSync(join(tree, "packages/effect-agent"), { recursive: true }); mkdirSync(out);
   writeFileSync(join(tree, "package.json"), JSON.stringify({ catalog: {} }));
-  writeFileSync(join(tree, "packages/effect-agent/package.json"), JSON.stringify({ version }));
+  writeFileSync(join(tree, "packages/effect-agent/package.json"), JSON.stringify({ version: frameworkVersion }));
   for (const [index, item] of packages.entries()) {
     const pkg = join(tree, item.directory);
     mkdirSync(join(pkg, "dist"), { recursive: true });
@@ -53,16 +54,16 @@ function workspace(t, modify) {
 }
 
 // These fixtures exercise real npm packing/receipt inspection, not a substitute
-// for the three production tarball consumers required by packed-consumer.sh.
-test("only the two canonical packages may enter the dependency-ordered release set", () => {
-  assert.deepEqual(packages.map((p) => p.name), ["effect-browserbase", "effect-agent-browserbase"]);
+// for the five production tarball consumers required by packed-consumer.sh.
+test("only the three canonical packages may enter the dependency-ordered release set", () => {
+  assert.deepEqual(packages.map((p) => p.name), ["effect-browser", "effect-browserbase", "effect-agent-browser"]);
   assert.equal(manifest(0).repository.url, repositoryUrl);
   assert.throws(() => publicationManifest({ ...source(0), name: "effect-agent" }, {}, versions), /Only this repository/);
   assert.throws(() => publicationManifest({ ...source(0), repository: { ...source(0).repository, url: "https://elsewhere.invalid" } }, {}, versions), /OIDC identity/);
 });
 
 test("normalization strips dev/source/scripts without mutating inputs, and resolves exact workspace edges", () => {
-  for (const index of [0, 1]) {
+  for (const index of [0, 1, 2]) {
     const input = source(index), original = JSON.stringify(input);
     const output = publicationManifest(input, {}, versions);
     assert.deepEqual(output.files, ["dist"]); assert.equal(output.scripts, undefined); assert.equal(output.devDependencies, undefined);
@@ -70,7 +71,8 @@ test("normalization strips dev/source/scripts without mutating inputs, and resol
     output.repository.url = "wrong"; assert.equal(JSON.stringify(input), original);
   }
   assert.deepEqual(manifest(0).dependencies, {});
-  assert.deepEqual(manifest(1).dependencies, versions);
+  assert.deepEqual(manifest(1).dependencies, { [packages[0].name]: version });
+  assert.deepEqual(manifest(2).dependencies, { [packages[0].name]: version, "effect-agent": frameworkVersion });
   assert.equal(manifest(1).peerDependencies["playwright-core"], undefined);
 });
 
@@ -78,13 +80,13 @@ test("framework leakage, native peer on adapter, private packages and unexpected
   assert.throws(() => publicationManifest({ ...source(0), private: true }, {}, versions), /private/);
   assert.throws(() => publicationManifest({ ...source(0), devDependencies: { "@effect-agent/testing": "workspace:*" } }, {}, versions), /Generic package/);
   assert.throws(() => publicationManifest({ ...source(0), dependencies: { "effect-agent": version } }, {}, versions), /regular dependency/);
-  assert.throws(() => publicationManifest({ ...source(1), peerDependencies: { ...source(1).peerDependencies, "playwright-core": "1.63.0" } }, {}, versions), /peer dependency/);
+  assert.throws(() => publicationManifest({ ...source(2), peerDependencies: { ...source(2).peerDependencies, "playwright-core": "1.63.0" } }, {}, versions), /peer dependency/);
   assert.throws(() => publicationManifest(source(1), {}, {}), /Unresolved/);
   assert.throws(() => publicationManifest({ ...source(1), dependencies: { ...source(1).dependencies, other: "workspace:*" } }, {}, versions), /regular dependency/);
 });
 
 test("legacy exports, wildcard/private paths and duplicate aliases cannot enter the adapter", () => {
-  assert.throws(() => publicationManifest({ ...source(1), exports: { ...source(1).exports, "./interactive-browser": "./src/InteractiveBrowser.ts" } }, {}, versions), /only the canonical/);
+  assert.throws(() => publicationManifest({ ...source(2), exports: { ...source(2).exports, "./interactive-browser": "./src/InteractiveBrowser.ts" } }, {}, versions), /only the canonical/);
   for (const exports of [
     { ".": "./src/../secret.ts" }, { ".": "./src/index.ts", "./internal": "./src/Internal.ts" },
     { ".": "./src/index.ts", "./alias": "./src/index.ts" }, { ".": "./src/index.ts", "./*": "./src/index.ts" },
@@ -99,7 +101,7 @@ test("legacy exports, wildcard/private paths and duplicate aliases cannot enter 
 
 test("coordinated package versions and Effect peer contracts are checked before packing", (t) => {
   const { tree } = workspace(t);
-  assert.equal(readPackageSet(tree).length, 2);
+  assert.equal(readPackageSet(tree).length, 3);
   const path = join(tree, packages[1].directory, "package.json");
   writeFileSync(path, JSON.stringify({ ...source(1), version: "0.1.0-beta.103" }));
   assert.throws(() => readPackageSet(tree), /coordinated version/);
@@ -121,10 +123,10 @@ test("unexpected files and symlinks cannot be packed", (t) => {
   rmSync(join(dir, ".env")); symlinkSync(join(dir, "index.mjs"), join(dir, "outside.mjs")); assert.throws(() => distributionFiles(dir), /Symlinks/);
 });
 
-test("real offline npm packs two immutable artifacts bound to one independently checked receipt", (t) => {
+test("real offline npm packs three immutable artifacts bound to one independently checked receipt", (t) => {
   const { tree, out } = workspace(t);
   const receipt = packageReleaseSet(tree, out, sha), digest = releaseSetDigest(out);
-  assert.equal(receipt.packages.length, 2); assert.equal(receipt.schemaVersion, 2);
+  assert.equal(receipt.packages.length, 3); assert.equal(receipt.schemaVersion, 2);
   assert.deepEqual(verifyReleaseSet(out, sha, `v${version}`, digest), receipt);
   assert.throws(() => verifyReleaseSet(out, "f".repeat(40), `v${version}`, digest), /another source/);
   assert.throws(() => verifyReleaseSet(out, sha, `v${version}`, "0".repeat(64)), /successful build/);
@@ -136,7 +138,7 @@ test("real offline npm packs two immutable artifacts bound to one independently 
 
 test("missing, reordered, extra or mixed-version receipt entries fail even with a supplied matching receipt digest", (t) => {
   const { tree, out } = workspace(t), receipt = packageReleaseSet(tree, out, sha);
-  for (const entries of [[receipt.packages[0]], [...receipt.packages].reverse(), [...receipt.packages, receipt.packages[0]], [receipt.packages[0], { ...receipt.packages[1], version: "0.1.0-beta.103" }]]) {
+  for (const entries of [[receipt.packages[0]], [...receipt.packages].reverse(), [...receipt.packages, receipt.packages[0]], receipt.packages.map((entry, index) => index === 2 ? { ...entry, version: "0.2.0-beta.1" } : entry)]) {
     writeFileSync(join(out, "release-set.json"), JSON.stringify({ ...receipt, packages: entries }));
     assert.throws(() => verifyReleaseSet(out, sha, `v${version}`, releaseSetDigest(out)));
   }
@@ -161,7 +163,7 @@ test("acceptance retains dependency-ordered lifecycle-free npm dry-runs", (t) =>
   const { tree, out } = workspace(t), receipt = packageReleaseSet(tree, out, sha), digest = releaseSetDigest(out);
   const calls = [];
   const results = publishReleaseSet(out, sha, `v${version}`, digest, { run: (args) => { calls.push(args); return "{}"; } });
-  assert.deepEqual(results.map((result) => result.state), ["dry-run", "dry-run"]);
+  assert.deepEqual(results.map((result) => result.state), ["dry-run", "dry-run", "dry-run"]);
   assert.deepEqual(calls.map((args) => args[1]), receipt.packages.map((entry) => join(out, entry.filename)));
   assert.ok(calls.every((args) => args[0] === "publish" && args.includes("--dry-run") && args.includes("--ignore-scripts") && args.includes("--provenance=false")));
   assert.deepEqual(readFileSync(join(out, "publication-dry-run.ndjson"), "utf8").trim().split("\n").map(JSON.parse), results);
@@ -177,9 +179,10 @@ for (const declarationExit of [0, 1]) {
       } }));
       for (const item of packages) {
         const pkg = join(tree, item.directory);
-        const files = ["test/consumer/resources.ts", "test/consumer/native.ts", "test/consumer/agent.ts", "test/native/fixture.test.ts", "examples/fixture.ts", "vite.native.config.ts"];
+        const files = ["test/consumer/resources.ts", "test/consumer/native.ts", "test/consumer/agent.ts", "test/consumer/chromium.ts", "test/native/fixture.test.ts", "examples/fixture.ts", "vite.native.config.ts"];
+        if (item === packages[2]) files.push("test/native/adapter.test.ts", "test/native/chromium-tools.test.ts", "examples/chromium.ts");
         // Only the generic package carries the hosted checks that the generic consumer compiles.
-        if (item === packages[0]) files.push("hosted/fixture.ts");
+        if (item === packages[1]) files.push("hosted/fixture.ts");
         for (const file of files) {
           const target = join(pkg, file);
           mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, "export {};\n");
@@ -204,16 +207,38 @@ for (const declarationExit of [0, 1]) {
     const records = readFileSync(join(out, "consumer-statuses.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     assert.deepEqual(records.filter((record) => record.step === "declarations"), [
       { profile: "resources", step: "declarations", exitCode: 0, signal: null, passed: true },
+      { profile: "browser", step: "declarations", exitCode: 0, signal: null, passed: true },
       { profile: "generic", step: "declarations", exitCode: 0, signal: null, passed: true },
       { profile: "agent", step: "declarations", exitCode: declarationExit, signal: null, passed: declarationExit === 0 },
+      { profile: "agent-hosted", step: "declarations", exitCode: 0, signal: null, passed: true },
     ]);
+    const staged = (profile) => JSON.parse(readFileSync(join(out, "consumers", profile, "staged-files.json"), "utf8"));
+    for (const profile of ["browser", "agent"]) {
+      assert.ok(staged(profile).every((file) => !file.startsWith(packages[1].directory + "/")), `${profile} unexpectedly stages provider examples or fixtures`);
+    }
+    const nativeAgent = staged("agent").filter((file) => file.includes("/native/") && file.endsWith(".test.ts"));
+    const hostedAgent = staged("agent-hosted").filter((file) => file.includes("/native/") && file.endsWith(".test.ts"));
+    assert.equal(new Set([...nativeAgent, ...hostedAgent]).size, nativeAgent.length + hostedAgent.length);
+    assert.equal(nativeAgent.length + hostedAgent.length, 3);
     assert.equal(records.every((record) => record.passed), declarationExit === 0);
     assert.equal(readFileSync(join(out, "consumer-agent-declarations.log"), "utf8"), declarationExit === 0 ? "" : diagnostic);
-    assert.equal(records.filter((record) => record.step.endsWith("-workflow")).length, 6);
-    for (const profile of ["resources", "generic", "agent"]) {
+    assert.equal(records.filter((record) => record.step.endsWith("-workflow")).length, 10);
+    for (const profile of consumerProfiles) {
       const config = JSON.parse(readFileSync(join(out, "consumers", profile, "tsconfig.json"), "utf8"));
       assert.equal(config.compilerOptions.strict, true);
       assert.equal(config.compilerOptions.skipLibCheck, false);
     }
   });
 }
+
+test("generic and Agent boundaries reject provider and framework declaration leaks", (t) => {
+  for (const [index, dependency, message] of [
+    [0, "effect-browserbase", /Neutral declaration imports/],
+    [1, "effect-agent", /Generic declaration imports/],
+    [2, "effect-browserbase", /Agent declaration imports/],
+  ]) {
+    const { tree, out } = workspace(t, (tree) => writeFileSync(join(tree, packages[index].directory, "dist/Hidden.d.mts"), `export type { Hidden } from "${dependency}";\n`));
+    packageReleaseSet(tree, out, sha);
+    assert.throws(() => verifyReleaseSet(out, sha, `v${version}`, releaseSetDigest(out)), message);
+  }
+});

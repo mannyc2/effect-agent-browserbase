@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
-import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import {
   HoverRequest,
   NavigateRequest,
@@ -11,8 +10,9 @@ import {
   ScreenshotRequest,
   ScrollRequest,
   WheelRequest,
-} from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
+} from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { Page } from "playwright-core";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";

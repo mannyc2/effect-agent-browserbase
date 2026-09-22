@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the verified two-package set (false performs acceptance and dry-run only)
+        description: Publish the verified three-package set (false performs acceptance and dry-run only)
         required: true
         default: false
         type: boolean

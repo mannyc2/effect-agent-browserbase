@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 import type { SessionReference } from "effect-browserbase/references";
 
 // Type-only, so nothing runs here; it keeps the child program beside this suite wherever the

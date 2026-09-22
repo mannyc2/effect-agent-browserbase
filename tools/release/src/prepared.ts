@@ -42,7 +42,7 @@ export interface ReleaseReceipt {
   readonly version: string;
   readonly frameworkVersion: string;
   readonly distTag: string;
-  readonly packages: readonly [ReleasePackage, ReleasePackage];
+  readonly packages: readonly [ReleasePackage, ReleasePackage, ReleasePackage];
 }
 
 export interface PrepareInput {
@@ -142,7 +142,7 @@ const requireFile = (bundle: Bundle, logicalName: string): File => {
   return artifact;
 };
 
-/** Only the receipt, two canonical tarballs and their provenance enter this Bundle. */
+/** Only the receipt, three canonical tarballs and their provenance enter this Bundle. */
 const checkBundle = (bundle: Bundle, version: string): readonly string[] => {
   distTag(version);
   const filenames = packages.map(({ stem }) => `${stem}-${version}.tgz`);
@@ -220,7 +220,7 @@ const authorOperations = Effect.fn("browserbaseRelease.authorOperations")(functi
         mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
       }),
     });
-    // The adapter can dispatch only after the generic package is satisfied.
+    // Preserve serial publication: each package waits for the preceding members.
     const prerequisites = operations.map((operation) => operation.operationId);
     operations.push(yield* Npm.publish(intent, prerequisites));
     authorizations.push({ authorization, packageName: entry.name });
@@ -306,7 +306,7 @@ export const restorePrepared = Effect.fn("release.restorePrepared")(function* (
     const bundleBytes = snapshot.get("bundle.json");
     const planBytes = snapshot.get("plan.json");
     assert.ok(bundleBytes && planBytes, "Prepared state must contain a Bundle and Plan");
-    assert.ok(snapshot.size <= 7, "Prepared state has unexpected files");
+    assert.ok(snapshot.size <= 3 + 2 * packages.length, "Prepared state has unexpected files");
     return { bundleBytes, planBytes };
   });
   const owner = fileContentOwner(join(directory, "content"));

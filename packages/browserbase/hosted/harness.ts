@@ -6,13 +6,10 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { Effect, Redacted } from "effect";
+import { type OpenOptions } from "effect-browser/browser";
+import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Account from "effect-browserbase/account";
-import {
-  BrowserbaseBrowser,
-  type BrowserOptions,
-  type OpenOptions,
-} from "effect-browserbase/browser";
-import { BrowserPolicy } from "effect-browserbase/browser-data";
+import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
 
 import { ceiling, checks, type CheckName } from "./checks.ts";
 

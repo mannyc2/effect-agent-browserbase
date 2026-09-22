@@ -1,77 +1,34 @@
-import { Context, Effect, Layer, type Option, type Redacted, Scope } from "effect";
-
-import * as Bootstrap from "./Bootstrap.ts";
-import { BrowserbaseBrowserBinding } from "./BrowserBinding.ts";
+import { Context, Effect, Layer, type Option, type Redacted, Schema, type Scope } from "effect";
+import type { BrowserSession, OpenOptions } from "effect-browser/browser";
 import type {
-  Checkpoint,
-  CheckpointOptions,
-  FillRequest,
-  HoverRequest,
-  InputReceipt,
-  KeyStroke,
-  NavigateRequest,
-  NavigationResult,
-  ObservationOptions,
-  ObservedElement,
-  PointerMoveRequest,
-  PressRequest,
-  ReadTextRequest,
-  ScreenshotRequest,
-  ScreenshotResult,
-  ScrollRequest,
-  StartNavigationRequest,
-  TextResult,
-  TypeRequest,
-  WheelRequest,
-} from "./BrowserData.ts";
-import {
-  type ControlFacts,
   ActionResult,
   AutomationOptions,
   BrowserPolicy,
   ClickRequest,
-  type FrameInfo,
-  InlineFiles,
-  type Observation,
-  type PageInfo,
-  type SelectFilesRequest,
-  Selector,
-  type Target,
-  Viewport,
-} from "./BrowserData.ts";
-import type { CleanupResult } from "./Cleanup.ts";
-import { BrowserbaseClient } from "./Client.ts";
-import type { InitializationError } from "./Errors.ts";
+  Observation,
+} from "effect-browser/browser-data";
+import * as BrowserRuntime from "effect-browser/browser-runtime";
 import {
-  type AllocationError,
   BrowserError,
   type BrowserOperation,
-  type ContextError,
-  type SessionError,
-} from "./Errors.ts";
-import { makeBindings, preparePlan, type Bindings } from "./internal/browser/Bindings.ts";
-import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
-import type { NativeFileSelection } from "./internal/browser/Driver.ts";
+  type InitializationError,
+} from "effect-browser/errors";
+
+import { BrowserbaseBrowserBinding } from "./BrowserBinding.ts";
+import type { CleanupResult } from "./Cleanup.ts";
+import { BrowserbaseClient } from "./Client.ts";
+import type { AllocationError, ContextError, SessionError } from "./Errors.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
-import {
-  checked,
-  decoded,
-  makeSession as makeBrowserSession,
-} from "./internal/browser/PublicSession.ts";
-import {
-  acquireSession,
-  borrowedRemote,
-  ownedRemote,
-  type SessionControls,
-} from "./internal/browser/Session.ts";
+import { borrowedRemote, ownedRemote, type RemoteLease } from "./internal/session/Browser.ts";
 import type { ContextWriterPermit } from "./internal/session/WriterFacts.ts";
 import { issuedUpload } from "./internal/upload/Issued.ts";
 import type { LaunchRecipe } from "./Launch.ts";
-import { Identifier, type AllocationAttempt, type SessionReference } from "./References.ts";
+import type { AllocationAttempt, SessionReference } from "./References.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
-import { DownloadObservation } from "./Transfers.ts";
+import { DownloadObservation, type SelectFilesRequest } from "./Transfers.ts";
 
 export type { LiveView } from "./internal/browser/LiveView.ts";
+export type { FileSelection, SelectFilesRequest } from "./Transfers.ts";
 
 /** Host configuration. Credentials live in the Client; a model never selects these values. */
 export interface BrowserOptions extends AutomationOptions {
@@ -85,149 +42,6 @@ export interface BrowserOptions extends AutomationOptions {
 export interface Handoff {
   readonly token: Redacted.Redacted<string>;
   readonly view: LiveView;
-}
-
-/**
- * A host's decision about one control, made on facts read from the exact node immediately
- * before input. Returning anything but `true`, or throwing, sends nothing and fails `denied`.
- * It is a plain synchronous function on purpose: it runs while the owner's permit is held, where
- * waiting on a model or a network call would stall every other operation. It is not an atomic
- * check-and-input transaction, because page script can still run before the native input lands.
- */
-export interface ElementAdmission {
-  readonly admit: (facts: ControlFacts) => boolean;
-}
-
-/**
- * A navigation the browser is still performing. The owner's permit was released when it was
- * dispatched, so while it loads a host may read, `checkpoint`, hold and resume this page, and
- * use any other page. Anything that would change this page fails `busy` until it settles.
- *
- * Leaving its scope unsettled fences the session, exactly as an interrupted mutation does,
- * because nothing then knows what the browser did. It is never replayed.
- */
-export interface NavigationOperation {
-  /** What was navigated, read before dispatch. */
-  readonly target: Target;
-  /**
-   * The document reached DOMContentLoaded. It belongs to this one navigation: a successor that
-   * reaches the same URL fails it instead. Interrupting a waiter stops nothing in the browser.
-   */
-  readonly completed: Effect.Effect<NavigationResult, BrowserError>;
-  /**
-   * Asks the browser to stop loading and waits for this navigation to settle, after which
-   * `completed` fails `interrupted`. Success is a known outcome and the session stays usable:
-   * the page holds whatever had loaded. It does not undo anything the page already did.
-   */
-  readonly stop: Effect.Effect<void, BrowserError>;
-}
-
-/** One selected page and frame at one connection generation, never the current DOM. */
-export interface BoundTarget {
-  readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserError>;
-  /** `navigate`, left in flight: the same single dispatch, completed by the caller. */
-  readonly startNavigation: (
-    request: StartNavigationRequest,
-  ) => Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>;
-  readonly readText: (request: ReadTextRequest) => Effect.Effect<TextResult, BrowserError>;
-  readonly click: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserError>;
-  readonly fill: (request: FillRequest) => Effect.Effect<ActionResult, BrowserError>;
-  /** Script in the page: instantaneous, and it raises no wheel event. */
-  readonly scroll: (request: ScrollRequest) => Effect.Effect<ActionResult, BrowserError>;
-  /** One real pointer move, in main-frame viewport pixels. */
-  readonly pointerMove: (request: PointerMoveRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** Places the pointer on one exact element where it is, or fails `not-visible` unsent. */
-  readonly hover: (request: HoverRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** One real wheel event; the browser decides what under the pointer scrolls. */
-  readonly wheel: (request: WheelRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** One real key stroke to whatever has focus, or fails `not-focused` unsent if `into` lacks it. */
-  readonly press: (request: PressRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** Text as the real key strokes that produce it, under the same focus rule as `press`. */
-  readonly type: (request: TypeRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  readonly screenshot: (
-    request: ScreenshotRequest,
-  ) => Effect.Effect<ScreenshotResult, BrowserError>;
-}
-
-/**
- * Host control over one owned browser. This is not a serializable model value: copying a
- * session object cannot copy its capture, page-control or connection authority.
- */
-export interface BrowserSession<E = never> {
-  /** First fail-session callback cause, preserving the consumer's error type on the host. */
-  readonly failure: Effect.Effect<never, E | InitializationError>;
-  /** Bounded host-only evidence; consumer causes are never projected into a page reply. */
-  readonly bindingDiagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
-  readonly bind: () => BoundTarget;
-  /** Re-reads the live selection first, so a stale generation fails before any dispatch. */
-  readonly currentTarget: Effect.Effect<BoundTarget, BrowserError>;
-  readonly target: Effect.Effect<Target, BrowserError>;
-  /**
-   * The one observation whose nodes later actions may name. `scope: "viewport"` keeps only text
-   * and controls that are on screen and reachable; the default reads the whole document. It is
-   * safe to show a model: it carries no destination, form or field value.
-   */
-  readonly observe: (options?: ObservationOptions) => Effect.Effect<Observation, BrowserError>;
-  /**
-   * Passive evidence for a recorder, with a picture when asked. It issues no references and
-   * leaves the observation above exactly as it was. Host-only: it carries control facts.
-   */
-  readonly checkpoint: (options?: CheckpointOptions) => Effect.Effect<Checkpoint, BrowserError>;
-  /** Host-only facts about one observed control, read from that exact node just now. */
-  readonly controlFacts: (reference: ObservedElement) => Effect.Effect<ControlFacts, BrowserError>;
-  /**
-   * After a page hold, nothing observed on that page may be acted on unchecked. This checks one
-   * reference: still attached, and still the control that was inspected. It never searches by
-   * selector or label for a substitute, and it sends nothing.
-   */
-  readonly revalidateElement: (
-    reference: ObservedElement,
-  ) => Effect.Effect<ObservedElement, BrowserError>;
-  readonly clickElement: (
-    reference: ObservedElement,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly fillElement: (
-    reference: ObservedElement,
-    value: string,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly hoverElement: (
-    reference: ObservedElement,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<InputReceipt, BrowserError>;
-  /** A key stroke sent only if the exact node an observation named already has focus. */
-  readonly pressElement: (
-    reference: ObservedElement,
-    stroke: KeyStroke,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<InputReceipt, BrowserError>;
-  /** Real typing with `fillElement`'s exactness: that node must already have focus. */
-  readonly typeElement: (
-    reference: ObservedElement,
-    text: string,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<InputReceipt, BrowserError>;
-  readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
-  readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
-  readonly selectPage: (pageId: string) => Effect.Effect<BoundTarget, BrowserError>;
-  readonly selectFrame: (frameId: string) => Effect.Effect<BoundTarget, BrowserError>;
-  /** Create a tab without selecting it. */
-  readonly createPage: Effect.Effect<string, BrowserError>;
-  readonly closePage: (pageId: string) => Effect.Effect<void, BrowserError>;
-  readonly resizeViewport: (viewport: Viewport) => Effect.Effect<void, BrowserError>;
-  readonly waitFor: (request: {
-    readonly selector: string;
-    readonly state: "visible" | "hidden" | "attached" | "detached";
-  }) => Effect.Effect<void, BrowserError>;
-  /** Navigation observation is registered before the single click dispatch. */
-  readonly clickAndWait: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserError>;
-  /**
-   * Readiness of the current document only. Dependent operations wait for it themselves;
-   * this reports it without charging an action, so a caller can decide what to do about a
-   * document that predates the registrations.
-   */
-  readonly ready: Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
 }
 
 /** Browserbase identity, remote artifacts and provider cleanup remain hosted capabilities. */
@@ -259,11 +73,6 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
 }
 
-/** Dependencies are captured at acquisition, not erased into an environment-free service Layer. */
-export interface OpenOptions<E = never, R = never> {
-  readonly bootstrap?: Bootstrap.Plan<E, R>;
-}
-
 export interface AttachRequest<E = never, R = never> extends OpenOptions<E, R> {
   readonly policy: BrowserPolicy;
   /** The exact page to resume; without it the session must have exactly one page. */
@@ -280,114 +89,88 @@ export interface BrowserAcquisition<E = never> {
   readonly close: Effect.Effect<CleanupResult, BrowserError>;
 }
 
-/**
- * Uploaded selection is admitted by the identity of a receipt this package issued for this
- * exact session, never by a path read off the caller's value. A fabricated receipt has no
- * issuance record, so an arbitrary server pathname can never become an attached file.
- */
+/** Only receipts issued for this exact provider session may resolve to stored paths. */
 const selection = (
   request: SelectFilesRequest,
   reference: SessionReference,
   operation: BrowserOperation,
-): Effect.Effect<ReadonlyArray<NativeFileSelection>, BrowserError> =>
+): Effect.Effect<BrowserRuntime.ResolvedFileSelection, BrowserError> =>
   Effect.suspend(() => {
-    const invalid = BrowserError.make({
-      operation,
-      reason: "configuration",
-      outcome: "undispatched",
-    });
-
-    if (request.selection._tag === "Inline") {
-      return checked(InlineFiles, request.selection.files, operation).pipe(
-        Effect.map((files) =>
-          files.map((file) => ({
-            _tag: "Inline" as const,
-            name: file.name,
-            mediaType: file.mediaType,
-            // The dispatched bytes cannot change after they were validated.
-            bytes: new Uint8Array(file.bytes),
-          })),
-        ),
-      );
-    }
+    if (request.selection._tag === "Inline")
+      return Effect.succeed<BrowserRuntime.ResolvedFileSelection>({
+        _tag: "Inline",
+        files: request.selection.files,
+      });
 
     const uploads = request.selection.uploads;
 
     if (!Array.isArray(uploads) || uploads.length < 1 || uploads.length > 8)
-      return Effect.fail(invalid);
-    const files: NativeFileSelection[] = [];
+      return Effect.fail(
+        BrowserError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+      );
+    const paths: string[] = [];
 
     for (const receipt of uploads) {
       const issued = issuedUpload(receipt);
 
-      if (issued === undefined)
-        return Effect.fail(
-          BrowserError.make({ operation, reason: "authorization", outcome: "undispatched" }),
-        );
       if (
+        issued === undefined ||
         issued.reference.projectId !== reference.projectId ||
         issued.reference.sessionId !== reference.sessionId
       )
         return Effect.fail(
           BrowserError.make({ operation, reason: "authorization", outcome: "undispatched" }),
         );
-      files.push({ _tag: "Remote", path: issued.remotePath });
+      paths.push(issued.remotePath);
     }
 
-    return Effect.succeed(files);
+    return Effect.succeed<BrowserRuntime.ResolvedFileSelection>({ _tag: "Stored", paths });
   });
 
 const makeSession = <E>(
-  controls: SessionControls,
-  bindings: Bindings<E>,
+  connection: BrowserRuntime.Connection<SessionReference, E>,
+  lifetime: RemoteLease,
 ): BrowserbaseSession<E> => {
-  const session = makeBrowserSession(controls, bindings);
-  const navigate = (url: string) => decoded(ActionResult, "action-result")({ url });
+  const { session, operations } = connection;
 
+  // Decorating the same object preserves its private capture and page-control associations.
   return Object.assign(session, {
-    reference: controls.reference,
+    reference: lifetime.reference,
     clickForDownload: (request) =>
-      checked(ClickRequest, request, "download-action").pipe(
-        Effect.flatMap((value) => controls.clickForDownload(value.selector)),
-        Effect.flatMap((raw) =>
-          decoded(
-            DownloadObservation,
-            "download-action",
-          )({ ...raw, reference: controls.reference }),
+      operations.clickForDownload(request).pipe(
+        Effect.flatMap((event) =>
+          Schema.decodeEffect(DownloadObservation)({
+            ...event,
+            reference: lifetime.reference,
+          }).pipe(
+            Effect.mapError(() =>
+              BrowserError.make({ operation: "download-action", reason: "malformed" }),
+            ),
+          ),
         ),
       ),
     selectFiles: (request) =>
-      checked(Selector, request.selector, "select-files").pipe(
-        Effect.flatMap((selector) =>
-          selection(request, controls.reference, "select-files").pipe(
-            Effect.flatMap((files) => controls.selectFiles(selector, files)),
-          ),
+      selection(request, lifetime.reference, "select-files").pipe(
+        Effect.flatMap((files) =>
+          operations.selectFiles({ selector: request.selector, selection: files }),
         ),
-        Effect.flatMap(navigate),
       ),
     clickForFileSelection: (request) =>
-      checked(Selector, request.selector, "file-chooser").pipe(
-        Effect.flatMap((selector) =>
-          selection(request, controls.reference, "file-chooser").pipe(
-            Effect.flatMap((files) => controls.clickForFileSelection(selector, files)),
-          ),
+      selection(request, lifetime.reference, "file-chooser").pipe(
+        Effect.flatMap((files) =>
+          operations.clickForFileSelection({ selector: request.selector, selection: files }),
         ),
-        Effect.flatMap(navigate),
       ),
-    liveView: (ttl = 60) => controls.liveView(ttl),
-    beginHandoff: (ttl = 60) => controls.beginHandoff(ttl),
-    resume: (token, released) => controls.resume(token, released),
-    detach: controls.detach,
-    reconnect: (released) => controls.reconnect(released),
-    close: controls.close,
-    cleanupResult: controls.cleanupResult,
+    liveView: (ttl = 60) => operations.liveView(lifetime.liveView(ttl)),
+    beginHandoff: (ttl = 60) => operations.beginHandoff(lifetime.liveView(ttl)),
+    resume: operations.resume,
+    detach: operations.detach,
+    reconnect: operations.reconnect,
+    close: lifetime.release,
+    cleanupResult: lifetime.cleanupResult,
   } satisfies Omit<BrowserbaseSession<E>, keyof BrowserSession<E>>);
 };
 
-/**
- * Credentials, budgets and connection lifetime are fixed when this Layer is built. Building it
- * allocates nothing and loads no native peer; every acquisition is scoped by its caller.
- */
 export class BrowserbaseBrowser extends Context.Service<
   BrowserbaseBrowser,
   {
@@ -417,7 +200,7 @@ export class BrowserbaseBrowser extends Context.Service<
       Scope.Scope | Exclude<R, Scope.Scope>
     >;
     /** Race the consumer with typed callback failure and confirm cleanup before normal success. */
-    readonly withBrowser: <E, R, A, E2, R2>(
+    readonly withBrowser: <E = never, R = never, A = unknown, E2 = never, R2 = never>(
       policy: BrowserPolicy,
       request: OpenOptions<E, R>,
       use: (session: BrowserbaseSession<E>) => Effect.Effect<A, E2, R2>,
@@ -436,38 +219,10 @@ export class BrowserbaseBrowser extends Context.Service<
       Effect.gen(function* () {
         const client = yield* BrowserbaseClient;
         const sessions = yield* BrowserbaseSessions;
-        // The engine is fixed where the Layer is built, like the account it connects for.
         const binding = yield* BrowserbaseBrowserBinding;
-        const automation = yield* checked(AutomationOptions, projected(options), "configure");
-
-        const viewport = yield* checked(
-          Viewport,
-          options.launch.viewport._tag === "Fixed"
-            ? { width: options.launch.viewport.width, height: options.launch.viewport.height }
-            : { width: 1280, height: 720 },
-          "configure",
-        );
-
-        const actionTimeoutMillis = automation.actionTimeoutMillis ?? 10_000;
-        const maxPages = automation.maxPages ?? 10;
-        const pageControl = automation.pageControl ?? false;
-        const popupPolicy = automation.popupPolicy ?? "retain";
-        const dialogPolicy = automation.dialogPolicy ?? "dismiss";
-
-        if (
-          pageControl &&
-          (options.launch.keepAlive === true || popupPolicy === "pause" || dialogPolicy === "pause")
-        )
-          return yield* BrowserError.make({
-            operation: "configure",
-            reason: "unsupported",
-            outcome: "undispatched",
-          });
 
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
           return yield* BrowserError.make({ operation: "configure", reason: "context-lease" });
-
-        // A retired layer-level bootstrap must not be silently discarded for JavaScript callers.
         if (Object.prototype.hasOwnProperty.call(options, "bootstrap"))
           return yield* BrowserError.make({
             operation: "configure",
@@ -475,40 +230,36 @@ export class BrowserbaseBrowser extends Context.Service<
             outcome: "undispatched",
           });
 
-        const driver = {
-          pageControl,
-          viewport,
-          maxPages,
-          popupPolicy,
-          dialogPolicy,
+        const runtime = yield* BrowserRuntime.make({
+          implementation: "browserbase-playwright-cdp",
+          binding,
+          automation: projected(options),
+          viewport:
+            options.launch.viewport._tag === "Fixed"
+              ? { width: options.launch.viewport.width, height: options.launch.viewport.height }
+              : { width: 1280, height: 720 },
           preserveViewport: options.launch.viewport._tag !== "Fixed",
-          ...(automation.initialPage === undefined
-            ? {}
-            : "targetId" in automation.initialPage
-              ? { initialTargetId: automation.initialPage.targetId }
-              : { newPage: true }),
-        };
+          keepAlive: options.launch.keepAlive === true,
+        });
+
+        const source =
+          <L extends BrowserRuntime.Lifetime, E>(
+            remote: BrowserRuntime.Source<L, E, BrowserbaseClient | BrowserbaseSessions>,
+          ): BrowserRuntime.Source<L, E> =>
+          (cleanup, deadline) =>
+            remote(cleanup, deadline).pipe(
+              Effect.provideService(BrowserbaseClient, client),
+              Effect.provideService(BrowserbaseSessions, sessions),
+            );
 
         const acquire = Effect.fnUntraced(function* <E = never, R = never>(
           policy: BrowserPolicy,
           request: OpenOptions<E, R> = {},
         ) {
-          const fixed = yield* checked(BrowserPolicy, policy, "configure");
-          const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
-          // The sequential child keeps remote cleanup ahead of callback-scope finalization even
-          // when a consumer deliberately gives its outer Scope parallel finalizers.
-          const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-          const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
-          const bootstrap = compileBootstrap(plan);
-
-          const acquired = yield* acquireSession(
-            {
-              maxActions: fixed.maxActions,
-              maxElapsedMillis: fixed.maxElapsedMillis,
-              actionTimeoutMillis,
-            },
-            {
-              remote: ownedRemote({
+          const acquired = yield* runtime.acquire(
+            policy,
+            source(
+              ownedRemote({
                 launch: options.launch,
                 ...(options.contextWriter === undefined
                   ? {}
@@ -518,95 +269,49 @@ export class BrowserbaseBrowser extends Context.Service<
                   ? {}
                   : { onAllocationUncertain: options.onAllocationUncertain }),
               }),
-              keepAlive: options.launch.keepAlive === true,
-              driver: { ...driver, ...(bootstrap === undefined ? {} : { bootstrap }) },
-              connectBindings: bindings.connect,
-              maxReturnedBytes: fixed.maxReturnedBytes,
-            },
-          ).pipe(
-            // The Layer owns the one account and resource service; acquisition never re-resolves them.
-            Effect.provideService(BrowserbaseClient, client),
-            Effect.provideService(BrowserbaseSessions, sessions),
-            Effect.provideService(BrowserbaseBrowserBinding, binding),
-            Scope.provide(scope),
+            ),
+            request,
           );
 
-          // One public session object is shared by repeated connect calls in this scope.
           const connected = yield* Effect.cached(
-            acquired.connect.pipe(Effect.map((controls) => makeSession(controls, bindings))),
+            acquired.connect.pipe(
+              Effect.map((connection) => makeSession(connection, acquired.lifetime)),
+            ),
           );
 
           return {
             reference: acquired.reference,
-            attempt: acquired.lease.attempt,
-            failure: bindings.failure,
+            attempt: acquired.lifetime.attempt,
+            failure: acquired.failure,
             close: acquired.close,
-            connect: Effect.raceFirst(
-              bindings.failure,
-              acquired.connect.pipe(Effect.andThen(connected)),
-            ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid))),
+            connect: acquired.connect.pipe(Effect.andThen(connected)),
           } satisfies BrowserAcquisition<E>;
         });
 
-        /**
-         * Borrowing a session another process allocated. The launch recipe is not replayed and
-         * no allocation is attempted: the requested target is resolved explicitly, credentials
-         * are fetched fresh because expiry races the caller's own status read, and this scope
-         * disconnects locally without ever requesting release. Detaching and reattaching inside
-         * a borrowed scope is deliberately absent; attaching again is the cross-process path,
-         * and it revalidates the session instead of assuming it is still there.
-         */
         const attach = Effect.fnUntraced(function* <E = never, R = never>(
           reference: SessionReference,
           request: AttachRequest<E, R>,
         ) {
-          const fixed = yield* checked(BrowserPolicy, request.policy, "configure");
-          const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
-          const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-          const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
-          const bootstrap = compileBootstrap(plan);
-
-          const targetId =
-            request.target === undefined
-              ? undefined
-              : yield* checked(Identifier, request.target.targetId, "configure");
-
-          const acquired = yield* acquireSession(
-            {
-              maxActions: fixed.maxActions,
-              maxElapsedMillis: fixed.maxElapsedMillis,
-              actionTimeoutMillis,
-            },
-            {
-              remote: borrowedRemote({
+          const acquired = yield* runtime.acquire(
+            request.policy,
+            source(
+              borrowedRemote({
                 reference,
                 ...(request.pendingWaitMillis === undefined
                   ? {}
                   : { pendingWaitMillis: request.pendingWaitMillis }),
                 ...(options.onCleanup === undefined ? {} : { onCleanup: options.onCleanup }),
               }),
-              keepAlive: false,
-              driver: {
-                ...driver,
-                ...(bootstrap === undefined ? {} : { bootstrap }),
-                newPage: false,
-                preserveViewport: true,
-                ...(targetId === undefined ? {} : { initialTargetId: targetId }),
-              },
-              maxReturnedBytes: fixed.maxReturnedBytes,
-              connectBindings: bindings.connect,
+            ),
+            {
+              ...(request.bootstrap === undefined ? {} : { bootstrap: request.bootstrap }),
+              existingTarget: request.target ?? {},
             },
-          ).pipe(
-            Effect.provideService(BrowserbaseClient, client),
-            Effect.provideService(BrowserbaseSessions, sessions),
-            Effect.provideService(BrowserbaseBrowserBinding, binding),
-            Scope.provide(scope),
           );
 
-          return yield* Effect.raceFirst(
-            bindings.failure,
-            acquired.connect.pipe(Effect.map((controls) => makeSession(controls, bindings))),
-          ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid)));
+          return yield* acquired.connect.pipe(
+            Effect.map((connection) => makeSession(connection, acquired.lifetime)),
+          );
         });
 
         return BrowserbaseBrowser.of({
@@ -615,31 +320,9 @@ export class BrowserbaseBrowser extends Context.Service<
           open: (policy, request) =>
             acquire(policy, request).pipe(Effect.flatMap((acquired) => acquired.connect)),
           withBrowser: (policy, request, use) =>
-            Effect.scoped(
-              Effect.gen(function* () {
-                const acquired = yield* acquire(policy, request);
-                const session = yield* acquired.connect;
-
-                const result = yield* Effect.raceFirst(
-                  session.failure,
-                  Effect.suspend(() => use(session)),
-                );
-
-                const cleanup = yield* session.close;
-
-                if (
-                  cleanup.remote !== "confirmed" ||
-                  cleanup.local !== "closed" ||
-                  cleanup.issues.length > 0
-                )
-                  return yield* BrowserError.make({
-                    operation: "close",
-                    reason: "provider",
-                    outcome: "unknown",
-                  });
-
-                return result;
-              }),
+            BrowserRuntime.withBrowser(
+              acquire(policy, request).pipe(Effect.flatMap((acquired) => acquired.connect)),
+              use,
             ),
         });
       }),

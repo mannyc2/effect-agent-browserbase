@@ -84,9 +84,10 @@ function fixture() {
   const sources = packages.map((item) => readJson(join(root, item.directory, "package.json")));
   const version = sources[0].version;
   const tag = `v${version}`;
-  const versions = { [packages[0].name]: version, "effect-agent": version };
+  const frameworkVersion = "0.1.0-beta.102";
+  const versions = { ...Object.fromEntries(packages.map((item) => [item.name, version])), "effect-agent": frameworkVersion };
   writeJson(join(tree, "package.json"), { catalog: {} });
-  writeJson(join(tree, "packages/effect-agent/package.json"), { version });
+  writeJson(join(tree, "packages/effect-agent/package.json"), { version: frameworkVersion });
   for (const [index, item] of packages.entries()) {
     const pkg = join(tree, item.directory);
     mkdirSync(join(pkg, "dist"), { recursive: true });
@@ -132,17 +133,19 @@ function fixture() {
   return { directory, out, receipt, tag, source, options, dependencies };
 }
 
-test("preparation adopts both tested tarballs into a native trusted-publishing dependency plan", async () => {
+test("preparation adopts all three tested tarballs into a native trusted-publishing dependency plan", async () => {
   const f = fixture();
   const prepared = await Effect.runPromise(prepare(f.options));
-  assert.equal(prepared.plan.operations.length, 2);
+  assert.equal(prepared.plan.operations.length, 3);
   const byName = new Map(
     prepared.plan.operations.map((operation) => [operation.intent.name, operation]),
   );
   const generic = byName.get(packages[0].name);
-  const adapter = byName.get(packages[1].name);
+  const provider = byName.get(packages[1].name);
+  const adapter = byName.get(packages[2].name);
   assert.deepEqual(generic.dependsOn, []);
-  assert.deepEqual(adapter.dependsOn, [generic.operationId]);
+  assert.deepEqual(provider.dependsOn, [generic.operationId]);
+  assert.deepEqual(adapter.dependsOn, [generic.operationId, provider.operationId].sort());
   for (const operation of byName.values()) {
     assert.equal(operation.intent.authorization._tag, "TrustedAuthorization");
     assert.equal(operation.intent.provenance._tag, "GitHubActionsProvenance");
@@ -162,10 +165,10 @@ test("preparation adopts both tested tarballs into a native trusted-publishing d
     }),
   );
   assert.equal(loaded.plan.planId, prepared.plan.planId);
-  assert.equal(verifications, 2);
+  assert.equal(verifications, 3);
 });
 
-test("a corrupt complete-set receipt fails before requesting either attestation", async () => {
+test("a corrupt complete-set receipt fails before requesting any attestation", async () => {
   const f = fixture();
   writeJson(join(f.out, "release-set.json"), { ...f.receipt, packages: [f.receipt.packages[0]] });
   let attestations = 0;
@@ -198,7 +201,7 @@ test("reloading refuses altered source, receipt, bundle content, plan edges and 
       ...f.dependencies,
       verifyProvenance: () => {
         checkedSignatures++;
-        return checkedSignatures === 2
+        return checkedSignatures === 3
           ? Effect.fail(
               new ReleaseError({ code: "fixture-untrusted", message: "Signature trust rejected" }),
             )
@@ -209,8 +212,8 @@ test("reloading refuses altered source, receipt, bundle content, plan edges and 
   );
   assert.equal(
     checkedSignatures,
-    2,
-    "the second signature must be admitted before a host can dispatch the first package",
+    3,
+    "the third signature must be admitted before a host can dispatch the first package",
   );
   const receiptPath = join(f.out, "release-set.json");
   const originalReceipt = readFileSync(receiptPath);
@@ -220,7 +223,7 @@ test("reloading refuses altered source, receipt, bundle content, plan edges and 
   const planPath = join(f.out, "plan.json");
   const originalPlan = readFileSync(planPath);
   const plan = readJson(planPath);
-  plan.operations.find((operation) => operation.intent.name === packages[1].name).dependsOn = [];
+  plan.operations.find((operation) => operation.intent.name === packages[2].name).dependsOn = [];
   writeJson(planPath, plan);
   await assert.rejects(load());
   writeFileSync(planPath, originalPlan);
@@ -244,6 +247,7 @@ test("an uncertain native npm PUT stays fenced after reopening the Git journal; 
     ref: `refs/heads/ts-release-prepared/${sourceSha}`,
   };
   const snapshot = await Effect.runPromise(snapshotPrepared(prepared));
+  assert.equal(snapshot.size, 9, "The complete three-package preparation is retained");
   await Effect.runPromise(Effect.scoped(persistState(state, snapshot)));
   rmSync(f.out, { recursive: true, force: true });
   const observed = new Map();
@@ -361,7 +365,7 @@ test("an uncertain native npm PUT stays fenced after reopening the Git journal; 
   assert.ok(complete.report.operations.every((operation) => operation.status === "Satisfied"));
   assert.equal(
     complete.journal.events.filter((event) => event.body._tag === "DispatchStarted").length,
-    2,
+    3,
   );
   assert.ok(!JSON.stringify(complete.journal).includes("do-not-retain"));
 }, 30_000);
@@ -370,6 +374,7 @@ test("restoration rejects extra content, mismatched digests and noncanonical Bun
   const f = fixture();
   const prepared = await Effect.runPromise(prepare(f.options));
   const snapshot = await Effect.runPromise(snapshotPrepared(prepared));
+  assert.equal(snapshot.size, 9, "The complete three-package preparation is retained");
   const restore = (input, name) =>
     Effect.runPromise(restorePrepared(join(f.directory, name), input));
   const extra = new Map(snapshot);

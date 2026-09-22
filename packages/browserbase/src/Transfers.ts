@@ -1,8 +1,9 @@
 import { Schema } from "effect";
+import { type InlineFile, SafeFilename } from "effect-browser/browser-data";
+
+export { PositiveInt, SafeFilename } from "effect-browser/browser-data";
 
 import { Identifier, SessionReference } from "./References.ts";
-
-export const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
 
 /** Shared caller-owned transfer bounds. Omitted timeout retains the 60-second default. */
 export const ArtifactTransferPolicy = Schema.Struct({
@@ -13,21 +14,6 @@ export const ArtifactTransferPolicy = Schema.Struct({
 });
 
 export type ArtifactTransferPolicy = typeof ArtifactTransferPolicy.Type;
-
-/** Portable basename only; never a local or remote filesystem path. */
-export const SafeFilename = Schema.NonEmptyString.check(
-  Schema.isMaxLength(240),
-  Schema.makeFilter(
-    (value) =>
-      value !== "." &&
-      value !== ".." &&
-      !/[\x00-\x1f\x7f/\\:]/.test(value) &&
-      !/[. ]$/.test(value) &&
-      !/^\s/.test(value) &&
-      !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value),
-    { title: "a portable, non-path download filename" },
-  ),
-);
 
 /**
  * A path the provider reported for a file it already holds. It is only ever decoded from a
@@ -105,3 +91,17 @@ export class ReplayPage extends Schema.Class<ReplayPage>("BrowserbaseReplayPage"
   startTimeMs: Schema.Finite,
   endTimeMs: Schema.Finite,
 }) {}
+
+/**
+ * The uploaded branch carries receipts, not paths. Attachment authority is the identity of a
+ * receipt this package issued for this exact session, so decoding one back into a new value
+ * would discard the very evidence being checked.
+ */
+export type FileSelection =
+  | { readonly _tag: "Inline"; readonly files: ReadonlyArray<InlineFile> }
+  | { readonly _tag: "Uploaded"; readonly uploads: ReadonlyArray<UploadReceipt> };
+
+export interface SelectFilesRequest {
+  readonly selector: string;
+  readonly selection: FileSelection;
+}

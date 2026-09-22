@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Effect, Schema, Stream } from "effect";
-import type { BrowserbaseSession } from "effect-browserbase/browser";
-import * as Capture from "effect-browserbase/capture";
+import type { BrowserSession } from "effect-browser/browser";
+import * as Capture from "effect-browser/capture";
 
 import { CaptureEvidence, captureEvidence } from "./capture-evidence.ts";
 
@@ -63,7 +63,7 @@ const processResult = (command: string, args: ReadonlyArray<string>, cwd?: strin
  * rendered JPEG frames but no website-audio source.
  */
 export const recordInterval = (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   outputPath: string,
   durationMillis = 5_000,
 ) =>

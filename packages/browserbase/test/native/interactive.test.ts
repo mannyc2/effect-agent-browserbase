@@ -3,7 +3,6 @@ import { join } from "node:path";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema, Stream } from "effect";
-import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import {
   ObservedElement,
   Viewport,
@@ -13,8 +12,9 @@ import {
   ReadTextRequest,
   ScreenshotRequest,
   ScrollRequest,
-} from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
+} from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 
 import {
   localBrowser,
@@ -345,7 +345,7 @@ type Same<A, B> =
 
 const expectedCaptureError: Same<
   Effect.Error<ReturnType<typeof Capture.start>>,
-  typeof import("effect-browserbase/errors").BrowserError.Type
+  typeof import("effect-browser/errors").BrowserError.Type
 > = true;
 
 const encodedObservation = Schema.toCodecJson(ObservedElement);

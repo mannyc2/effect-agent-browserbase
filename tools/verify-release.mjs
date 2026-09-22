@@ -23,7 +23,7 @@ export function verifyReleaseSet(directory, sourceSha, tag, expectedDigest) {
   distTag(receipt.frameworkVersion);
   assert.equal(receipt.distTag, distTag(receipt.version));
   assert.ok(Array.isArray(receipt.packages));
-  assert.deepEqual(receipt.packages.map((entry) => entry.name), packages.map((item) => item.name), "Expected the complete dependency-ordered two-package set");
+  assert.deepEqual(receipt.packages.map((entry) => entry.name), packages.map((item) => item.name), "Expected the complete dependency-ordered three-package set");
   let effectPeer;
   for (const [index, entry] of receipt.packages.entries()) {
     const item = packages[index];
@@ -45,7 +45,7 @@ export function verifyReleaseSet(directory, sourceSha, tag, expectedDigest) {
     const manifest = JSON.parse(tar(["-xOf", path, "package/package.json"]));
     assert.equal(manifest.name, item.name);
     assert.equal(manifest.version, receipt.version);
-    checkManifest(manifest, { built: true, genericVersion: receipt.version, frameworkVersion: receipt.frameworkVersion });
+    checkManifest(manifest, { built: true, browserVersion: receipt.version, frameworkVersion: receipt.frameworkVersion });
     assert.equal(manifest.scripts, undefined);
     assert.equal(manifest.devDependencies, undefined);
     assert.equal(manifest.overrides, undefined);
@@ -56,12 +56,17 @@ export function verifyReleaseSet(directory, sourceSha, tag, expectedDigest) {
     if (effectPeer === undefined) effectPeer = manifest.peerDependencies.effect;
     else assert.equal(manifest.peerDependencies.effect, effectPeer, "Effect contracts differ within release set");
     checkPackagePaths(paths, manifest);
-    if (index === 0) {
+    if (index < 2) {
       // Check every emitted declaration, not just public barrels. The real consumer
       // additionally typechecks this graph with both optional/native/framework absent.
       const declarations = paths.filter((name) => name.endsWith(".d.mts"));
       const text = tar(["-xOf", path, ...declarations]);
-      assert.doesNotMatch(text, /["'](?:effect-agent|effect-agent-browserbase|@effect-agent\/testing|playwright(?:-core)?|@browserbasehq\/sdk)(?:[/'"])/, "Generic declaration imports a forbidden dependency");
+      assert.doesNotMatch(text, /["'](?:effect-agent(?:-browser(?:base)?)?|@effect-agent\/[^/'"]+|playwright(?:-core)?|@browserbasehq\/sdk)(?:[/'"])/, "Generic declaration imports a forbidden dependency");
+      if (index === 0) assert.doesNotMatch(text, /["']effect-browserbase(?:[/'"])/, "Neutral declaration imports Browserbase");
+    } else {
+      const declarations = paths.filter((name) => name.endsWith(".d.mts"));
+      const text = tar(["-xOf", path, ...declarations]);
+      assert.doesNotMatch(text, /["'](?:effect-browserbase|effect-agent-browserbase|@browserbasehq\/sdk)(?:[/'"])/, "Agent declaration imports Browserbase");
     }
   }
   return receipt;

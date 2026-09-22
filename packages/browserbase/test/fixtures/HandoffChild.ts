@@ -1,13 +1,13 @@
 import { Effect, Layer, Redacted, Schema } from "effect";
+import { BrowserPolicy, ClickRequest, ReadTextRequest } from "effect-browser/browser-data";
+import { BrowserError } from "effect-browser/errors";
 // A consumer started as its own process. Only the durable session reference, a target identifier
 // and the fixture's addresses cross from the allocating process, as JSON in the environment; no
 // closure, Scope, Layer or native object does. It borrows the session through the public API,
 // changes the page, closes as a borrower and prints one JSON line.
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import * as BrowserBinding from "effect-browserbase/browser-binding";
-import { BrowserPolicy, ClickRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 import { BrowserbaseClient } from "effect-browserbase/client";
-import { BrowserError } from "effect-browserbase/errors";
 import { recipe } from "effect-browserbase/launch";
 import { SessionReference } from "effect-browserbase/references";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";

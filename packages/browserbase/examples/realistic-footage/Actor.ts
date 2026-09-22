@@ -1,12 +1,12 @@
 import { Duration, Effect } from "effect";
-import type { BrowserbaseSession } from "effect-browserbase/browser";
+import type { BrowserSession } from "effect-browser/browser";
 import {
   ClickRequest,
   type InputReceipt,
   PointerMoveRequest,
   PressRequest,
   TypeRequest,
-} from "effect-browserbase/browser-data";
+} from "effect-browser/browser-data";
 
 import { type Answer, Report } from "./Cues.ts";
 import { type CueRequest, Director } from "./Director.ts";
@@ -86,7 +86,7 @@ const bringIntoView = Effect.fn("Actor.bringIntoView")(function* (selector: stri
  * Sending every sample of the path as its own native move would film the
  * round trip instead of the motion.
  */
-const glideOnto = Effect.fnUntraced(function* (session: BrowserbaseSession, found: Located) {
+const glideOnto = Effect.fnUntraced(function* (session: BrowserSession, found: Located) {
   const aim = yield* Humanize.aimPoint(found.box);
 
   const path = yield* Humanize.pointerPath(
@@ -109,7 +109,7 @@ const glideOnto = Effect.fnUntraced(function* (session: BrowserbaseSession, foun
 export const scrollTo = (selector: string) => Effect.asVoid(bringIntoView(selector));
 
 export const moveTo = Effect.fn("Actor.moveTo")(function* (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   selector: string,
 ) {
   yield* glideOnto(session, yield* bringIntoView(selector));
@@ -117,7 +117,7 @@ export const moveTo = Effect.fn("Actor.moveTo")(function* (
 
 /** Arrive, settle, then let the session press: the ripple is drawn from its real event. */
 const press = <A, E, R>(
-  session: BrowserbaseSession,
+  session: BrowserSession,
   selector: string,
   action: Effect.Effect<A, E, R>,
 ) =>
@@ -132,7 +132,7 @@ const press = <A, E, R>(
   });
 
 export const click = Effect.fn("Actor.click")(function* (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   selector: string,
 ) {
   const target = yield* session.currentTarget;
@@ -150,7 +150,7 @@ export const click = Effect.fn("Actor.click")(function* (
  * reports ready.
  */
 export const follow = Effect.fn("Actor.follow")(function* (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   selector: string,
 ) {
   const result = yield* press(
@@ -174,7 +174,7 @@ export const follow = Effect.fn("Actor.follow")(function* (
  * action against the policy's budget.
  */
 export const type = Effect.fn("Actor.type")(function* (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   selector: string,
   text: string,
 ) {

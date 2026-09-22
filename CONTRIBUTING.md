@@ -4,15 +4,15 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 
 ## Toolchain
 
-| Input | Pin |
-| --- | --- |
-| Node | 24.14.1 (`.node-version`) |
-| Bun | 1.4.2 |
-| Upstream | `danieljvdm/effect-agent@ea53ea6671a94eb44b8019e942cc2c9468786723` |
-| Effect family | 4.0.0-rc.115 |
-| effect-agent / testing | 0.1.0-beta.102 |
-| Playwright | playwright-core 1.63.0 |
-| TypeScript / Vite+ | 7.0.2 / 0.3.2 |
+| Input                  | Pin                                                                |
+| ---------------------- | ------------------------------------------------------------------ |
+| Node                   | 24.14.1 (`.node-version`)                                          |
+| Bun                    | 1.4.2                                                              |
+| Upstream               | `danieljvdm/effect-agent@ea53ea6671a94eb44b8019e942cc2c9468786723` |
+| Effect family          | 4.0.0-rc.115                                                       |
+| effect-agent / testing | 0.1.0-beta.102                                                     |
+| Playwright             | playwright-core 1.63.0                                             |
+| TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
 
 These are the verified acceptance targets, not a promise that every version allowed by the inherited engine/peer ranges has been tested. Dependency changes belong in a coordinated catalog/lockfile update, not an unreviewed install-time re-resolution.
 
@@ -40,8 +40,8 @@ npm_config_offline=true node --test tools/test/*.test.mjs
 bash tools/bootstrap.sh
 
 cd .work/upstream/tree
-./node_modules/.bin/vp run -F effect-agent-browserbase check
-cd packages/agent-browserbase
+./node_modules/.bin/vp run -F effect-agent-browser check
+cd packages/agent-browser
 # Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
 # hand-formatting to satisfy that gate does not reproduce this output.
 ../../node_modules/.bin/vp fmt
@@ -55,7 +55,15 @@ cd packages/agent-browserbase
 
 Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
 
-Make edits in this repository's `packages/browserbase` and `packages/agent-browserbase`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
+Make edits in this repository's `packages/browser`, `packages/browserbase` and `packages/agent-browser`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
+
+## Source and package integration
+
+The owned packages use the coordinated `0.2.0-beta.0` candidate version in a fixed release group separate from the unchanged upstream framework group. Shared runtime changes require both Chromium and Browserbase composition checks; adapter changes exercise the same tools with each source.
+
+`test/integration` contains only source regressions that combine private browser ownership with provider allocation/cleanup. `vp run check:integration` typechecks them strictly and `vp run test:integration` uses the existing Vite+ test runner. Bootstrap copies these tracked tests with package source, and every library/full acceptance runs both stages. Production and package test imports still obey each package's public export boundary.
+
+Installed consumers are `resources` (provider resources, no Playwright/framework), `browser` (Chromium, no Browserbase/framework), `generic` (hosted browser integration), `agent` (Chromium plus the common Agent adapter, no Browserbase), and `agent-hosted` (Browserbase plus the same adapter). Each checks actual tarballs on Node and Bun; every native suite belongs to exactly one native consumer profile. Root source tests are never substituted for installed-package validation.
 
 ## Acceptance profiles
 
@@ -71,13 +79,13 @@ bash tools/run-acceptance.sh full
 
 Every profile rejects dirty source and reused output directories, asserts the same Node/Bun pins, records the source SHA, and retains raw command exits and monotonic stage durations. The profile is written to `acceptance-profile.txt` and the Actions summary. A focused pass is not a full-integration pass.
 
-| Profile | Required checks | Selection |
-| --- | --- | --- |
-| `docs` | Tooling tests, source-bound diff revalidation, whitespace and clean source | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed |
-| `library` | Tooling, Node/Bun boundary harness, frozen bootstrap, early canonical format/lint and both package types, both unit suites/builds, exports/purity, both candidate tarballs, all three strict consumers and every generic/Agent native test from those tarballs, release identity and the two-package dry-run | Owned package, tooling, workflow and media changes |
-| `full` | All library checks plus separate source-native suites, the pinned upstream workspace's whole `check` and `build`, its `test` for the workspaces the patch reaches (both owned packages and `@effect-agent/testing`, whose toolchain audit reads every manifest), and the upstream release dry-run | Integration/pin/bootstrap changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
+| Profile   | Required checks                                                                                                                                                                                                                                                                                                                                              | Selection                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `docs`    | Tooling tests, source-bound diff revalidation, whitespace and clean source                                                                                                                                                                                                                                                                                   | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed                                               |
+| `library` | Tooling, Node/Bun boundary harness, frozen bootstrap, early canonical format/lint and all three package types, all package and cross-package integration unit suites/builds, exports/purity, all three candidate tarballs, all five strict consumers and every generic/Agent native test from those tarballs, release identity and the three-package dry-run | Owned package, tooling, workflow and media changes                                                                                         |
+| `full`    | All library checks plus separate source-native suites, the pinned upstream workspace's whole `check` and `build`, its `test` for the workspaces the patch reaches (both owned packages and `@effect-agent/testing`, whose toolchain audit reads every manifest), and the upstream release dry-run                                                            | Integration/pin/bootstrap changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
 
-The library profile runs the **same complete native test files** in clean installed-package consumers rather than repeating them against source, packed output and the unrelated upstream task graph on every PR. All maintained examples are still compiled, all public exports are checked, Node and Bun both execute the resource, generic and actual AgentRuntime workflows, and every declaration command must return raw zero with `skipLibCheck:false`. No test is retried or skipped to obtain a pass. Native worker concurrency and assertions are unchanged.
+The library profile runs the **complete native test files** in clean installed-package consumers rather than repeating them against source, packed output and the unrelated upstream task graph on every PR. All maintained examples are still compiled, all public exports are checked, Node and Bun both execute the resource, generic and actual AgentRuntime workflows, and every declaration command must return raw zero with `skipLibCheck:false`. No test is retried or skipped to obtain a pass. Native worker concurrency and assertions are unchanged.
 
 Format/lint/types are checked before browser installation. Focused profiles stop after prerequisite failures while retaining partial evidence; full acceptance continues independent checks as before. Browser installation explicitly disables task-result caching because an old success cannot restore an external browser installation. FFmpeg/ffprobe are installed only when absent and their versions are always recorded. These scripts install Linux native dependencies, not a portable macOS/Windows toolchain.
 
@@ -95,7 +103,7 @@ Results, downloaded videos, build directories and archives remain ignored and be
 
 This design avoids parallel browser workers and never caches browser binaries: Playwright [does not generally recommend it](https://playwright.dev/docs/ci#caching-browsers), and an old success cannot restore an external installation. Removing unrelated work and duplicate executions came first.
 
-The full profile does transfer upstream's Vite Task cache, for the three upstream stages and the release dry-run only, because Vite+ [asks for a measured restore/save cost and stable fingerprints](https://viteplus.dev/guide/github-actions-cache) and this one has both. It is seeded only after every stage with effects outside the workspace (browser and media installation, both native suites and the packed consumers), so those always execute for real on the candidate, and Vite Task replays a result only when that task's own inputs match. Upstream's complete `ready` measured about 16 seconds warm against about 15 minutes cold. Every full run records its seed, export and hit/miss counts in `task-cache.txt`, so the gain stays measured instead of assumed. The scheduled run discards what it restored and runs cold, and it alone runs every upstream suite (`BROWSERBASE_UPSTREAM_TESTS=all`, recorded in `upstream-tests.txt`): the daily integration result is always a real execution of the whole workspace on that day's runner image, and it refreshes the cache. Candidates do not pay for suites of upstream code the patch cannot reach, whose timing assertions have failed on a shared runner for reasons no change here can cause. Focused profiles use no cache.
+The full profile does transfer upstream's Vite Task cache, for the three upstream stages and the release dry-run only, because Vite+ [asks for a measured restore/save cost and stable fingerprints](https://viteplus.dev/guide/github-actions-cache) and this one has both. It is seeded only after every stage with effects outside the workspace (browser and media installation, all owned native suites and the packed consumers), so those always execute for real on the candidate, and Vite Task replays a result only when that task's own inputs match. Upstream's complete `ready` measured about 16 seconds warm against about 15 minutes cold. Every full run records its seed, export and hit/miss counts in `task-cache.txt`, so the gain stays measured instead of assumed. The scheduled run discards what it restored and runs cold, and it alone runs every upstream suite (`BROWSERBASE_UPSTREAM_TESTS=all`, recorded in `upstream-tests.txt`): the daily integration result is always a real execution of the whole workspace on that day's runner image, and it refreshes the cache. Candidates do not pay for suites of upstream code the patch cannot reach, whose timing assertions have failed on a shared runner for reasons no change here can cause. Focused profiles use no cache.
 
 Repository settings are separate from files in this PR. Require PRs and the acceptance check on `main`, prevent force pushes/deletion, and protect `v*` tags from unauthorized creation or updates. Set review requirements appropriate to your maintainer team; CODEOWNERS alone does not enforce reviews. Dependency-update PRs are review-only and not auto-merged.
 

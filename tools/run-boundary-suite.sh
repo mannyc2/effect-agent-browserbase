@@ -15,12 +15,17 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$OUTDIR" "$STAGE/overlay/packages" "$STAGE/probes"
-cp -r "$REPO_ROOT/packages/browserbase" "$STAGE/overlay/packages/"
+cp -r "$REPO_ROOT/packages/browser" "$REPO_ROOT/packages/browserbase" "$STAGE/overlay/packages/"
+cp -r "$REPO_ROOT/test" "$STAGE/overlay/test"
 cp "$REPO_ROOT/tools/boundary-runner.mjs" "$STAGE/probes/run.mjs"
 printf '{"name":"boundary-harness","private":true,"type":"module"}\n' > "$STAGE/package.json"
 
 echo "==> installing effect@4.0.0-rc.115"
 ( cd "$STAGE" && npm install --ignore-scripts --no-audit --no-fund --silent effect@4.0.0-rc.115 )
+
+# Source-only independent boundary harness: resolve the one neutral owner through its public exports.
+ln -s ../overlay/packages/browser "$STAGE/node_modules/effect-browser"
+ln -s ../overlay/packages/browserbase "$STAGE/node_modules/effect-browserbase"
 
 status=0
 for runtime in node bun; do

@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import * as Bootstrap from "effect-browserbase/bootstrap";
+import * as Bootstrap from "effect-browser/bootstrap";
 
 import { Call, PollMillis, Reply } from "./Cues.ts";
 import { Director } from "./Director.ts";

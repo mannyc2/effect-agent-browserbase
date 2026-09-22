@@ -1,4 +1,5 @@
 import { Effect, Redacted, Schema } from "effect";
+import { BrowserError } from "effect-browser/errors";
 
 import type { BrowserbaseClient } from "../../Client.ts";
 import { SessionError } from "../../Errors.ts";
@@ -33,12 +34,29 @@ export const connectionUrl = Schema.String.check(
   }),
 );
 
+/** The provider endpoint is validated before any custom routing gets to observe it. */
+export const validateConnection = (connection: unknown): string => {
+  if (typeof connection !== "string" || connection.length > 16384)
+    throw BrowserError.make({ operation: "connect", reason: "malformed" });
+  try {
+    new URL(connection);
+  } catch {
+    throw BrowserError.make({ operation: "connect", reason: "malformed" });
+  }
+  if (!Schema.is(connectionUrl)(connection))
+    throw BrowserError.make({ operation: "connect", reason: "unsafe-url" });
+
+  return connection;
+};
+
 export const connectionAddress = Effect.fnUntraced(function* (
   client: BrowserbaseClient["Service"],
   sessions: BrowserbaseSessions["Service"],
   reference: SessionReference,
-  timeoutMillis: number,
+  remainingMillis: number,
 ) {
+  const timeoutMillis = Math.min(600_000, remainingMillis);
+
   const fail = (reason: SessionError["reason"]) =>
     SessionError.make({ operation: "session-connect", reason });
 

@@ -1,0 +1,53 @@
+{
+  "name": "effect-agent-browser",
+  "version": "0.2.0-beta.0",
+  "description": "Effect Agent adapter and Tools for shared modeled browser sessions.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+    "directory": "packages/agent-browser"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapter": "./src/Adapter.ts",
+    "./tools": "./src/Tools.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "install:test-browser": "playwright-core install --with-deps chromium",
+    "test:native": "vp test --config vite.native.config.ts --run"
+  },
+  "dependencies": {
+    "effect-agent": "workspace:*",
+    "effect-browser": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect-agent/testing": "workspace:*",
+    "@effect/platform-bun": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "effect-browserbase": "workspace:*",
+    "playwright-core": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0-rc.115"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
+}

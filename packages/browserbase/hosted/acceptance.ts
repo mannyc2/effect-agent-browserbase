@@ -2,8 +2,8 @@ import { Effect, Stream } from "effect";
 // The guarded correctness run: one session through allocation, navigation, capture, Live View
 // retrieval and confirmed release, then the provider recording retrieved after the browser
 // scope has ended.
-import { NavigateRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
+import { NavigateRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
 import { recipe } from "effect-browserbase/launch";
 import { BrowserbaseRecordings } from "effect-browserbase/recordings";
 import { RecordingPageReference } from "effect-browserbase/transfers";

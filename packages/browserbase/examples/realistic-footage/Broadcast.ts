@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
 import { Context, Effect, Layer, PubSub, Ref, Stream } from "effect";
-import type { CapturedFrame } from "effect-browserbase/capture";
+import type { CapturedFrame } from "effect-browser/capture";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 
 import { Metrics, Telemetry } from "./Telemetry.ts";

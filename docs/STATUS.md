@@ -1,10 +1,12 @@
 # Project status
 
+The `0.2.0-beta.0` candidate separates `effect-browser`, `effect-browserbase` and `effect-agent-browser`. Self-managed Chromium is supplied by `effect-browser/chromium`; both Chromium and Browserbase use the same scoped runtime and Agent tools. This is a new package graph, not a claim that the new names have been published. Current validation belongs to the candidate PR and its exact source revision; the records below retain the evidence and package identities of their original releases.
+
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 
 Current maintenance uses `Library CI` and a separate, manual, default-off npm OIDC workflow. Check the exact current PR/commit's Actions results; the historical acceptance record is not a claim that later changes were tested. Release procedures and required account configuration are in [RELEASING.md](RELEASING.md).
 
-Both packages were published to npm as `0.1.0-beta.102` on 22 September 2026 from tag `v0.1.0-beta.102` (`c2afec83`) with a direct `npm publish` rather than the repository's `npm release` workflow, so that version carries no provenance. `0.1.0-beta.103` is the first version released through the workflow. Live View *authorization* and actual operator handoff, persistent-context behavior, provider keep-alive reconnection, and replays remain separately authorized hosted checks. Local CDP/video and scripted-provider results are not substituted for those guarantees. Provider recording assembly and signed-URL download were covered by the 2026-09-20 run below; Live View issuance was exercised there too, but issuing a URL is not the same as proving an operator takeover.
+Both packages were published to npm as `0.1.0-beta.102` on 22 September 2026 from tag `v0.1.0-beta.102` (`c2afec83`) with a direct `npm publish` rather than the repository's `npm release` workflow, so that version carries no provenance. `0.1.0-beta.103` is the first version released through the workflow. Live View _authorization_ and actual operator handoff, persistent-context behavior, provider keep-alive reconnection, and replays remain separately authorized hosted checks. Local CDP/video and scripted-provider results are not substituted for those guarantees. Provider recording assembly and signed-URL download were covered by the 2026-09-20 run below; Live View issuance was exercised there too, but issuing a URL is not the same as proving an operator takeover.
 
 The capabilities added after that merge — extension provisioning and launch selection, session uploads with modeled file selection, the bootstrap plan with per-document readiness, and borrowed attachment — are covered by unpaid acceptance only. Extension load and storage identity, provider upload identity and routing, and registration retention across a provider reconnect are hosted questions that no local run answers.
 
@@ -36,11 +38,11 @@ The hosted checks for H1, H3, H4, H6 and H7, narrowed, and for operator handoff 
 
 The PR #16 author reported hosted allocation and cleanup on 2026-09-19, against source `d5892f2f7e1bdaf06c99f210891af6d7b0750a05`, producing the recording committed under [`media/`](media/README.md). Three sessions ran for 37.8s of total browser lifetime:
 
-| Session | Runtime | Outcome | Lifetime |
-| --- | --- | --- | --- |
-| `1fcd0607-cffb-4c48-918a-bf1d999fd332` | Bun 1.4.2 | complete | 11.2s |
-| `73727a3d-a2b3-4c71-8961-4b7e6658fb7d` | Node 22.22.0 | complete | 11.5s |
-| `eff029fb-16fe-4d33-a000-0ee8b224ea1c` | Bun 1.3.14 | `connect` / `timeout`, undispatched | 15.1s |
+| Session                                | Runtime      | Outcome                             | Lifetime |
+| -------------------------------------- | ------------ | ----------------------------------- | -------- |
+| `1fcd0607-cffb-4c48-918a-bf1d999fd332` | Bun 1.4.2    | complete                            | 11.2s    |
+| `73727a3d-a2b3-4c71-8961-4b7e6658fb7d` | Node 22.22.0 | complete                            | 11.5s    |
+| `eff029fb-16fe-4d33-a000-0ee8b224ea1c` | Bun 1.3.14   | `connect` / `timeout`, undispatched | 15.1s    |
 
 Both complete runs allocated a session, connected over CDP, navigated, dispatched four bounded scrolls and captured 31 frames with `dropped: 0`, `duplicates: 0`, `nativeStop: "confirmed"` and `reason: "duration-limit"`, then released with `releaseRequested: true`, `remote: "confirmed"`, `local: "closed"` and provider status `COMPLETED`. The third allocated and then timed out inside `chromium.connectOverCDP`; its scope finalizer released the session anyway, which exercises cleanup after failed attachment to a known allocation, not an unknown allocation outcome. No session was left running.
 
@@ -74,14 +76,14 @@ This run does not establish operator takeover and release, persistent-context du
 
 The repository owner supplied credentials and authorized paid execution of the registered checks. `tools/hosted-run.sh` ran `acceptance`, `context-durability`, `keepalive-reconnect`, `extension-identity`, `upload-routing` and `replay-delivery` once each, from a bootstrapped workspace at `f78c96c`, and every one exited 0 with its claim established. Seven sessions were allocated, every one released with `remote: "confirmed"`, provider status `COMPLETED` and no cleanup issues, and none was left running; the probe context and extension were deleted. No model was invoked. Account, project, session and resource identifiers are omitted, as above.
 
-| Check | Observed |
-| --- | --- |
-| `acceptance` | Same outcome as the earlier run: navigation, 129 text bytes, screenshot, capture to its limit with `nativeStop: "confirmed"`, one Live View page, and a 1,604,098-byte recording downloaded through the approved origin. |
-| `context-durability` (H1) | A cookie and a localStorage marker written by a persisting session were both read by a later non-persisting session on the same context, 10 s after the writer ended. The readback ran as the writer's verification, so the writer settled as released with `consumer-readback` evidence. |
-| `keepalive-reconnect` (H4) | After detach and reconnect the same target was selected, and an init script registered before detach reported `Ready` on a fresh document afterwards, as it had before. |
-| `extension-identity` (H3) | A registered two-file MV3 archive retrieved under the same identity, and when selected at launch its content script rendered its marker in the page. |
-| `upload-routing` (H6) | Uploaded bytes arrived intact at `/tmp/.uploads/<filename>`, with the same name, size and content. Selected immediately after the upload reply, the file was not yet readable (`NotFoundError`, size 0); selected into a fresh input 5 s later it was. |
-| `replay-delivery` (H7) | The recording reported `delivery: "download"`, the replay playlist validated with two media URIs, and its first segment downloaded through the approved origin. This project is not BYOS, so BYOS delivery was not exercised. |
+| Check                      | Observed                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acceptance`               | Same outcome as the earlier run: navigation, 129 text bytes, screenshot, capture to its limit with `nativeStop: "confirmed"`, one Live View page, and a 1,604,098-byte recording downloaded through the approved origin.                                                                  |
+| `context-durability` (H1)  | A cookie and a localStorage marker written by a persisting session were both read by a later non-persisting session on the same context, 10 s after the writer ended. The readback ran as the writer's verification, so the writer settled as released with `consumer-readback` evidence. |
+| `keepalive-reconnect` (H4) | After detach and reconnect the same target was selected, and an init script registered before detach reported `Ready` on a fresh document afterwards, as it had before.                                                                                                                   |
+| `extension-identity` (H3)  | A registered two-file MV3 archive retrieved under the same identity, and when selected at launch its content script rendered its marker in the page.                                                                                                                                      |
+| `upload-routing` (H6)      | Uploaded bytes arrived intact at `/tmp/.uploads/<filename>`, with the same name, size and content. Selected immediately after the upload reply, the file was not yet readable (`NotFoundError`, size 0); selected into a fresh input 5 s later it was.                                    |
+| `replay-delivery` (H7)     | The recording reported `delivery: "download"`, the replay playlist validated with two media URIs, and its first segment downloaded through the approved origin. This project is not BYOS, so BYOS delivery was not exercised.                                                             |
 
 Two findings changed source before this run. The provider's upload reply carries only a message and never a path, so `Uploads.create` never issued an attachable receipt; it now names the documented upload location. And the reply precedes the file becoming readable, which the check rides out by retrying; `selectFiles` itself still attaches whatever the browser sees at that moment, so a caller selecting straight after an upload can attach an empty file.
 

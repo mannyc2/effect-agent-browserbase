@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Schema, Stream } from "effect";
+import { PageSuspension, ClickRequest, NavigateRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import * as PageControl from "effect-browser/page-control";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { PageSuspension, ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
-import * as PageControl from "effect-browserbase/page-control";
 import type { Page } from "playwright-core";
 
 import {
