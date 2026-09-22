@@ -474,9 +474,9 @@ export const ownershipCases: ReadonlyArray<Case> = [
       }
       assert.deepEqual(f.state.input, ["type page-1 6", "press page-1 Control+Shift+a"]);
     })),
-  test("a checkpoint is a charged read that leaves the observation and its revision alone", () =>
+  test("a checkpoint charges only its host allowance and leaves the observation and revision alone", () =>
     Effect.gen(function* () {
-      const f = yield* fixture({ maxActions: 2 });
+      const f = yield* fixture({ maxActions: 2, maxHostReads: 1 });
       const session = yield* (yield* f.acquisition).connect;
       const observed = yield* session.observe();
       const sampled = yield* session.checkpoint({ picture: true });
@@ -491,8 +491,22 @@ export const ownershipCases: ReadonlyArray<Case> = [
         (yield* session.checkpoint({ picture: false }).pipe(Effect.result))._tag,
         "Failure",
       );
-      // Bounded native work is charged like any other read, so it cannot be unbounded.
-      yield* expectReason(session.checkpoint({ picture: false }), "Limit");
+      const exhausted = yield* session.checkpoint({ picture: false }).pipe(Effect.result);
+
+      assert.equal(exhausted._tag, "Failure");
+      if (exhausted._tag !== "Failure") throw new Error("Host reads must remain bounded");
+      assert.deepEqual(exhausted.failure.reason, {
+        _tag: "Limit",
+        dimension: "host-reads",
+        maximum: 1,
+        observed: 1,
+      });
+      assert.equal(exhausted.failure.outcome, "undispatched");
+      // The model's second allowance is independent of the exhausted host sampling budget.
+      yield* session.operations.click("#act");
+      assert.equal(f.state.clicks, 1);
+      yield* expectReason(session.operations.click("#act"), "Limit");
+      assert.equal((yield* session.status).phase, "open");
     })),
   test("a reading may narrow the policy's text bound and never widen it", () =>
     Effect.gen(function* () {
@@ -620,7 +634,9 @@ export const ownershipCases: ReadonlyArray<Case> = [
 
       yield* advance(80);
       yield* session.close;
-      yield* expectReason(session.operations.readText(), "Closed");
+      yield* expectReason(session.operations.readText(), "Expired");
+      assert.equal((yield* session.status).reason, "expired");
+      assert.equal((yield* session.status).unresolvedDispatch, false);
       assert.equal(f.state.localCloses, 1);
     })),
   test("a persistent writer settles with the exact attempt's provider cleanup facts", () =>
@@ -663,6 +679,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const owner = yield* makeOwner({
         maxActions: 2,
+        maxHostReads: 10_000,
         maxElapsedMillis: 1000,
         actionTimeoutMillis: 100,
       });
@@ -710,6 +727,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
       yield* Effect.gen(function* () {
         const owner = yield* makeOwner({
           maxActions: 2,
+          maxHostReads: 10_000,
           maxElapsedMillis: 1000,
           actionTimeoutMillis: 100,
         });

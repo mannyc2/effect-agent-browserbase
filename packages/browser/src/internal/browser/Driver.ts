@@ -49,11 +49,30 @@ export type ReadinessState =
       readonly reason: "timeout" | "failed" | "stale";
     };
 
+/** Private source evidence; tokens identify one cleanup and never enter host diagnostics. */
+export type DriverFault =
+  | {
+      readonly source: "binding";
+      readonly reason: "callback-failure";
+      readonly disposition: "known";
+    }
+  | {
+      readonly source: "native";
+      readonly reason: "connection" | "registration" | "callback" | "page-control";
+      readonly disposition: "not-dispatched" | "unknown";
+    }
+  | {
+      readonly source: "policy";
+      readonly reason: "popup-overflow" | "dialog-overflow";
+      readonly token: object;
+      readonly disposition: "pending" | "dispatched" | "confirmed" | "not-dispatched" | "unknown";
+    };
+
 export interface DriverEvents {
   readonly invalidate: (reason: Invalidation, scope?: ObservationScope) => void;
   readonly disconnected: () => void;
-  readonly pause: () => void;
-  readonly fault: () => void;
+  readonly pause: (reason?: "popup" | "dialog") => void;
+  readonly fault: (event: DriverFault) => void;
 }
 
 export interface NativeObservation {
@@ -85,6 +104,12 @@ export interface NativeFrame {
   readonly timestamp: number;
   readonly viewportWidth: number;
   readonly viewportHeight: number;
+}
+
+/** Session-issued arrival hook. A captured dismissal can settle only this navigation. */
+export interface NavigationControl {
+  readonly identity: object;
+  readonly beforeUnload: () => { readonly dismissed: (confirmed: boolean) => void };
 }
 
 /**
@@ -190,6 +215,7 @@ export interface Driver {
     timeoutMillis: number,
     ticket: Ticket,
     target?: DriverTarget,
+    control?: NavigationControl,
   ) => Promise<NativeNavigation>;
   readonly readText: (
     selector: string | undefined,

@@ -1,4 +1,4 @@
-import { Effect, type Option, type Redacted } from "effect";
+import { Effect, Option, type Redacted } from "effect";
 import type { Lifetime, Source } from "effect-browser/browser-runtime";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
@@ -53,6 +53,7 @@ const withConnection = <
       timeoutMillis: number,
     ) => Effect.Effect<Redacted.Redacted<string>, SessionError>;
     readonly release: Effect.Effect<CleanupResult>;
+    readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
   },
 >(
   acquired: A,
@@ -63,6 +64,14 @@ const withConnection = <
       .connection(timeoutMillis)
       .pipe(Effect.mapError((error) => browserRequestFailure("connect", error))),
   closeChecked: checkedCleanup(acquired.release),
+  controlRetired: acquired.cleanupResult.pipe(
+    Effect.map(
+      (result) =>
+        Option.isSome(result) &&
+        result.value.ownership === "owned" &&
+        result.value.remote === "confirmed",
+    ),
+  ),
 });
 
 export interface OwnedLease extends RemoteLease {

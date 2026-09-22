@@ -108,6 +108,11 @@ export interface Lifetime {
   readonly release: Effect.Effect<unknown>;
   readonly cleanupResult: Effect.Effect<Option.Option<unknown>>;
   readonly closeChecked: Effect.Effect<void, BrowserError>;
+  /**
+   * Memory-only evidence that canonical owned cleanup terminated native browser control.
+   * Omission is unknown. Borrowed disconnection alone never establishes this fact.
+   */
+  readonly controlRetired?: Effect.Effect<boolean>;
   readonly verifyReconnect?: Effect.Effect<void, BrowserError>;
 }
 
@@ -342,6 +347,7 @@ export const make = Effect.fnUntraced(function* (
         maxActions: fixed.maxActions,
         maxElapsedMillis: fixed.maxElapsedMillis,
         actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
+        maxHostReads: automation.maxHostReads ?? 10_000,
       },
       {
         implementation,

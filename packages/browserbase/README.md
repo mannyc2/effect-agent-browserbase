@@ -126,6 +126,14 @@ Mutations are serialized. An observation identifies retained native nodes only u
 
 Navigation, observation, native input, typed bootstrap bindings, live capture and page holds are implemented by [`effect-browser`](../browser/README.md). Import their contracts from that package and use them with the exact `BrowserbaseSession` returned here. The [`effect-agent-browser`](../agent-browser/README.md) adapter and maintained tools accept both this session and self-managed Chromium without a second connection.
 
+The shared session also provides passive `status` and bounded `diagnostics`, including after
+closure. Known expiry, callback failure and policy pressure are not automatically labeled
+uncertain; unresolved native dispatch remains a separate fact. Owned provider termination can
+retire native control, whereas borrowed disconnection alone cannot. These snapshots do not replace
+the provider's canonical cleanup receipt or make business outcomes known. `maxHostReads` is a
+browser Layer option (default 10,000, maximum 1,000,000) for checkpoint/control-facts sampling;
+it is independent of model action accounting and never a tool parameter.
+
 ## Files in and out
 
 Small selection needs no provisioning: `session.selectFiles` attaches in-memory bytes the caller already holds, and `session.clickForFileSelection` registers the chooser observation before the single click that opens it and attaches exactly once.

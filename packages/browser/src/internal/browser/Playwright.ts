@@ -12,6 +12,7 @@ import { closeWithin, failure, NativeFailure, safeDecode, sanitize } from "./Nat
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
 import { makePointer } from "./Pointer.ts";
+import { PolicyCleanup } from "./PolicyCleanup.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
@@ -74,27 +75,56 @@ export const makePlaywrightDriver = async (
 
   if (contexts.length !== 1) throw failure(Reasons.Ambiguous.make({}));
   const context: BrowserContext = contexts[0];
-  const dialogs = new Set<Dialog>();
-  const callbacks = new CallbackTasks(32, () => events.fault());
+
+  const dialogs = new Map<
+    Dialog,
+    { readonly dismissed: (confirmed: boolean) => void } | undefined
+  >();
+
+  const callbacks = new CallbackTasks(32, (disposition) =>
+    events.fault({ source: "native", reason: "callback", disposition }),
+  );
+
+  const policyCleanup = new PolicyCleanup(events);
+  const blockedPopup = {};
 
   let closing = false;
   let initialized = false;
   let browserCdp: CDPSession | undefined;
 
-  const targets = makeTargets(browser, context, options, callbacks, events, () => closing, {
+  const targets = makeTargets(browser, context, options, () => closing, {
     opened: (entry, created) => {
+      if (initialized && !created && options.popupPolicy === "close") {
+        void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
+
+        return;
+      }
       if (initialized && options.pageControl)
         callbacks.submit(async () => {
           await pageControl.execution(entry);
         });
       if (initialized) initialization.attachPage(entry.page);
-      if (initialized && !created) {
-        if (options.popupPolicy === "close")
-          callbacks.submit(() => closeWithin(() => entry.page.close()));
-        else if (options.popupPolicy === "pause") events.pause();
-      }
+      if (initialized && !created && options.popupPolicy === "pause") events.pause("popup");
+    },
+    overflow: (entry) => {
+      if (options.popupPolicy === "close")
+        void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }), {
+          overflow: "popup-overflow",
+        });
+      else
+        events.fault({
+          source: "policy",
+          reason: "popup-overflow",
+          token: blockedPopup,
+          disposition: "not-dispatched",
+        });
     },
     closed: (entry) => {
+      for (const [dialog, beforeUnload] of dialogs)
+        if (dialog.page() === entry.page) {
+          beforeUnload?.dismissed(false);
+          dialogs.delete(dialog);
+        }
       observation.invalidate({ pageId: entry.id });
       pageControl.closed(entry);
       captures.invalidate(entry, "target-changed");
@@ -108,16 +138,22 @@ export const makePlaywrightDriver = async (
       observation.invalidate({ pageId: entry.id });
       captures.invalidate(entry, "target-changed", frame);
     },
-    dialog: (dialog) => {
-      if (options.dialogPolicy === "dismiss")
-        callbacks.submit(() => closeWithin(() => dialog.dismiss()));
-      else if (dialogs.size >= 8) {
-        events.fault();
-        callbacks.submit(() => closeWithin(() => dialog.dismiss()));
-      } else {
-        dialogs.add(dialog);
+    dialog: (entry, dialog) => {
+      // Capture the exact navigation now. A page lookup after acknowledgement could name its successor.
+      const beforeUnload =
+        dialog.type() === "beforeunload" ? actions.beforeUnload(entry.id) : undefined;
+
+      const overflow = dialogs.size >= 8;
+
+      if (options.dialogPolicy === "dismiss" || overflow)
+        void policyCleanup.run(dialog, () => dialog.dismiss(), {
+          ...(overflow ? { overflow: "dialog-overflow" } : {}),
+          settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
+        });
+      else {
+        dialogs.set(dialog, beforeUnload);
         observation.invalidate();
-        events.pause();
+        events.pause("dialog");
       }
     },
     changed: (reason, scope) => observation.changed(reason, scope),
@@ -163,6 +199,7 @@ export const makePlaywrightDriver = async (
   };
 
   const onDisconnected = () => {
+    policyCleanup.retired();
     if (!closing) {
       observation.invalidate();
       events.disconnected();
@@ -235,9 +272,18 @@ export const makePlaywrightDriver = async (
     documentReadiness: initialization.documentReadiness,
     dismissDialogs: (ticket) =>
       sanitize(async () => {
-        for (const dialog of [...dialogs]) {
-          ticket.dispatch();
-          await dialog.dismiss();
+        for (const [dialog, beforeUnload] of dialogs) {
+          const disposition = await policyCleanup.run(dialog, () => dialog.dismiss(), {
+            dispatch: () => ticket.dispatch(),
+            settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
+          });
+
+          ticket.check();
+          if (disposition !== "confirmed")
+            throw failure(
+              disposition === "not-dispatched" ? Reasons.Busy.make({}) : Reasons.Provider.make({}),
+              disposition === "not-dispatched" ? "undispatched" : "unknown",
+            );
           dialogs.delete(dialog);
         }
       }),
@@ -254,17 +300,23 @@ export const makePlaywrightDriver = async (
         context.off("page", onPage);
         browser.off("disconnected", onDisconnected);
         for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
+        // Retained dialogs share their one dismissal with explicit resume. A timed-out dismissal
+        // stays in the pool and is never sent a second time by connection cleanup.
+        for (const [dialog, beforeUnload] of dialogs)
+          void policyCleanup.run(dialog, () => dialog.dismiss(), {
+            settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
+          });
         captures.clear();
         await closeWithin(initialization.dispose).catch(() => {});
         await observation.dispose().catch(() => {});
-        await closeWithin(() =>
-          Promise.allSettled([...dialogs].map((dialog) => dialog.dismiss())),
-        ).catch(() => {});
+        await closeWithin(() => policyCleanup.settle()).catch(() => {});
+        policyCleanup.stop();
         dialogs.clear();
         await closeWithin(() => callbacks.settle()).catch(() => {});
         await closeWithin(() => pageControl.dispose()).catch(() => {});
         await closeWithin(() => browserCdp?.detach() ?? Promise.resolve()).catch(() => {});
         await closeWithin(() => browser.close());
+        policyCleanup.retired();
         targets.clear();
       }),
   };

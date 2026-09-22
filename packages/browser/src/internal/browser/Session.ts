@@ -15,13 +15,15 @@ import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import { type CaptureParent } from "./Association.ts";
 import type { BindingImplementation } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
-import type { ConnectionCleanup, ConnectionState } from "./ConnectionCleanup.ts";
+import { cleanupStep, type ConnectionCleanup, type ConnectionState } from "./ConnectionCleanup.ts";
 import type {
   Driver,
   DriverEvents,
+  DriverFault,
   DriverOptions,
   DriverTarget,
   NativeFileSelection,
+  NavigationControl,
 } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
@@ -189,7 +191,7 @@ export interface SessionOptions<L extends SessionLease, E, R = never> {
   readonly maxReturnedBytes: number;
   /** Consumer E/R stays with the typed public supervisor; this installs its captured runtime. */
   readonly connectBindings?: (
-    onFault: () => void,
+    onFault: (event: DriverFault) => void,
     isActive: () => boolean,
     isCurrent: () => boolean,
   ) => Effect.Effect<ConnectionBindings, never, Scope.Scope>;
@@ -336,24 +338,43 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
-          owner.state.phase = "closed";
+          owner.transition("closed");
         }),
       ),
     ),
   };
 
+  // Registered before the source so natural scope closure observes its completed release first.
+  let retireControl: Effect.Effect<void> = Effect.void;
+
+  yield* Effect.addFinalizer(() => Effect.suspend(() => retireControl));
+
   const acquired = yield* options.remote(local, owner.lifetimeDeadline);
 
+  retireControl = cleanupStep(
+    Effect.suspend(() => acquired.controlRetired ?? Effect.succeed(false)),
+    2000,
+  ).pipe(
+    Effect.tap((result) =>
+      result._tag === "Success" && result.value ? Effect.sync(owner.retireControl) : Effect.void,
+    ),
+    Effect.asVoid,
+    Effect.ignoreCause,
+  );
+
   const ref: L["reference"] = acquired.reference;
-  const release: L["release"] = acquired.release;
+  // Effect.tap preserves the exact supplying lifetime's success; the generic constraint alone
+  // would infer unknown here. No receipt value is decoded, constructed or coerced by this owner.
+  const release = acquired.release as Effect.Effect<Effect.Success<L["release"]>>;
   const cleanupResult: L["cleanupResult"] = acquired.cleanupResult;
 
   const closeScope = acquired.release.pipe(
+    Effect.tap(() => retireControl),
     Effect.ensuring(Deferred.succeed(ended, undefined)),
     Effect.asVoid,
   );
 
-  const connectionEvents = (connectionLease: object): DriverEvents => ({
+  const connectionEvents = (connectionLease: object, generation: number): DriverEvents => ({
     invalidate: (reason, scope) => {
       if (activeConnection === connectionLease) owner.invalidate(reason, scope);
     },
@@ -364,20 +385,40 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         owner.state.phase !== "closed" &&
         owner.state.phase !== "detached"
       ) {
-        owner.fence("uncertain", "disconnected");
+        owner.terminate("disconnected", "unknown", generation);
       }
     },
-    pause: () => {
+    pause: (reason = "dialog") => {
       if (activeConnection !== connectionLease) return;
-      if (owner.state.phase === "open") owner.fence("paused", "paused");
+      const trigger = reason === "popup" ? "popup-policy" : "dialog-policy";
+
+      owner.record(trigger, "confirmed", generation);
+      if (owner.state.phase === "open") owner.fence("paused", "paused", trigger);
       // An unsolicited popup/dialog during setup cannot be silently admitted by
       // the later connect commit. No usable handle has been exposed: fail closed.
-      else if (owner.state.phase === "acquiring") owner.fence("uncertain", "uncertain");
+      else if (owner.state.phase === "acquiring") owner.terminate(trigger, "known", generation);
     },
-    fault: () => {
+    fault: (event) => {
       if (activeConnection !== connectionLease) return;
-      if (owner.state.phase !== "closing" && owner.state.phase !== "closed")
-        owner.fence("uncertain", "uncertain");
+      if (event.source === "policy") {
+        owner.policy(event, generation);
+
+        return;
+      }
+      if (owner.state.phase === "closing" || owner.state.phase === "closed") return;
+      owner.terminate(
+        event.source === "binding"
+          ? "callback-failure"
+          : event.disposition === "not-dispatched"
+            ? "cleanup-capacity"
+            : event.reason === "registration"
+              ? "registration-failure"
+              : event.reason === "connection"
+                ? "disconnected"
+                : "native-failure",
+        event.disposition,
+        generation,
+      );
     },
   });
 
@@ -388,7 +429,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
         activeConnection = connectionLease;
         connectPending = true;
-        const events = connectionEvents(connectionLease);
+        const events = connectionEvents(connectionLease, owner.state.generation);
 
         const bindings =
           options.connectBindings === undefined
@@ -409,7 +450,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
         const retired = () =>
           activeConnection !== connectionLease ||
-          ["closing", "closed", "uncertain"].includes(owner.state.phase);
+          ["closing", "closed", "uncertain", "faulted"].includes(owner.state.phase);
 
         if (retired()) {
           bindings?.close();
@@ -447,7 +488,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           activeConnection !== connectionLease ||
           owner.state.phase === "closed" ||
           owner.state.phase === "closing" ||
-          owner.state.phase === "uncertain"
+          owner.state.phase === "uncertain" ||
+          owner.state.phase === "faulted"
         ) {
           yield* Effect.tryPromise({
             try: () => acquired.disconnect(),
@@ -668,7 +710,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     action: (driver: Driver, ticket: Ticket) => Promise<A>,
     options: {
       readonly mutation?: boolean;
-      readonly charge?: boolean;
+      readonly charge?: boolean | "host-read";
       /** Opening or closing a tab is independent of the selected page's document. */
       readonly anyPage?: boolean;
       readonly mutationScope?: () => ObservationScope;
@@ -804,6 +846,39 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       url: string,
       timeoutMillis = limits.actionTimeoutMillis,
     ) {
+      let active = true;
+      let dismissals = 0;
+      let beforeUnload = false;
+      let dismissalUnknown = false;
+      let rejected: BrowserError | undefined;
+      let reconsider = () => {};
+
+      const control: NavigationControl = {
+        identity: {},
+        beforeUnload: () => {
+          if (!active) return { dismissed: () => {} };
+          beforeUnload = true;
+          dismissals++;
+          let settled = false;
+
+          return {
+            dismissed: (confirmed) => {
+              if (settled || !active) return;
+              settled = true;
+              dismissals--;
+              if (!confirmed) dismissalUnknown = true;
+              reconsider();
+            },
+          };
+        },
+      };
+
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          active = false;
+        }),
+      );
+
       const begun = yield* run(
         "navigate",
         async (driver, ticket) => {
@@ -826,6 +901,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             loadingTimeout,
             ticket,
             browserTarget,
+            control,
           );
 
           return {
@@ -859,10 +935,27 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
         if (deciding || Deferred.isDoneUnsafe(outcome)) return;
         deciding = true;
+        active = false;
         reservation.settle(known ? "known" : "unknown");
         Deferred.doneUnsafe(outcome, result);
         Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
         deciding = false;
+      };
+
+      reconsider = () => {
+        if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
+        if (beforeUnload) {
+          // Both facts are required: this goto rejected and its exact dialog was dismissed.
+          decide(
+            dismissalUnknown ? Effect.fail(rejected) : failed(Reasons.Interrupted.make({})),
+            !dismissalUnknown,
+          );
+        } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
+          timedOut = true;
+          Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
+        } else {
+          decide(Effect.fail(rejected), false);
+        }
       };
 
       navigation.settled.then(
@@ -872,18 +965,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         (error: unknown) => {
           if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
 
-          const failure = publicError(error, "navigate", {
+          rejected = publicError(error, "navigate", {
             reason: Reasons.Provider.make({}),
             outcome: "unknown",
           });
-
-          if (navigation.mainFrame === true && failure.reason._tag === "Timeout") {
-            timedOut = true;
-            Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
-          } else {
-            // Replacement, transport loss and child-frame timeout still lack controller retirement.
-            decide(Effect.fail(failure), false);
-          }
+          reconsider();
         },
       );
 
@@ -1070,7 +1156,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
             Effect.tap(() =>
               Effect.sync(() => {
-                owner.state.phase = "open";
+                owner.transition("open");
               }),
             ),
           ),
@@ -1135,6 +1221,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const controls = {
     implementation: options.implementation,
+    status: owner.status,
+    diagnostics: owner.diagnostics,
     pageControl: {
       state: (page: PageInfo) =>
         nativeOperation("page-state", (_driver, ticket) => execution().state(page, ticket), {
@@ -1155,8 +1243,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     retain,
     target: readSelected,
     cleanupResult,
-    close: release,
-    closeChecked: acquired.closeChecked,
+    close: release.pipe(Effect.tap(() => retireControl)),
+    closeChecked: acquired.closeChecked.pipe(Effect.onExit(() => retireControl)),
     observe: (reading: Reading = { scope: "document" }) =>
       textBudget("observe", reading.maxTextBytes).pipe(
         Effect.flatMap((bytes) =>
@@ -1172,30 +1260,36 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     checkpoint: (reading: Omit<Reading, "scope"> & { readonly picture: boolean }) =>
       textBudget("checkpoint", reading.maxTextBytes).pipe(
         Effect.flatMap((bytes) =>
-          nativeOperation("checkpoint", async (driver, ticket) => {
-            const target = capture.target();
-            const revision = owner.state.revision;
-            const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+          nativeOperation(
+            "checkpoint",
+            async (driver, ticket) => {
+              const target = capture.target();
+              const revision = owner.state.revision;
+              const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
 
-            const sampled = await driver.checkpoint(
-              bytes,
-              reading.maxControls ?? 32,
-              reading.picture ? options.maxReturnedBytes : undefined,
-              ticket,
-            );
+              const sampled = await driver.checkpoint(
+                bytes,
+                reading.maxControls ?? 32,
+                reading.picture ? options.maxReturnedBytes : undefined,
+                ticket,
+              );
 
-            return {
-              ...sampled,
-              target,
-              revision,
-              startedMonotonicNanos,
-              completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
-            };
-          }),
+              return {
+                ...sampled,
+                target,
+                revision,
+                startedMonotonicNanos,
+                completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+              };
+            },
+            { charge: "host-read" },
+          ),
         ),
       ),
     controlFacts: (reference: ObservedElement) =>
-      nativeOperation("control-facts", (driver, ticket) => driver.controlFacts(reference, ticket)),
+      nativeOperation("control-facts", (driver, ticket) => driver.controlFacts(reference, ticket), {
+        charge: "host-read",
+      }),
     /** Not charged: it sends no input and reads one node the caller was already given. */
     revalidate: (reference: ObservedElement) =>
       nativeOperation("revalidate", (driver, ticket) => driver.revalidate(reference, ticket), {
@@ -1297,7 +1391,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 reason: Reasons.Unsupported.make({}),
                 outcome: "undispatched",
               });
-            if (owner.state.phase === "open") owner.fence("paused", "paused");
+            if (owner.state.phase === "open") owner.fence("paused", "paused", "handoff");
             handoffToken ??= globalThis.crypto.randomUUID();
             // A refused authorization leaves automation paused until explicit operator release.
             const view = yield* issue;
@@ -1326,7 +1420,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             const observation = yield* observeInside(ticket, undefined, undefined, false);
 
             // This synchronous commit remains under the same permit as the fresh observation.
-            owner.state.phase = "open";
+            owner.transition("open");
             handoffToken = undefined;
 
             return observation;
@@ -1348,7 +1442,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             const attached = getDriver();
 
             activeConnection = undefined;
-            owner.fence("detached", "disconnected");
+            owner.fence("detached", "disconnected", "detached");
             const initialization = yield* Effect.exit(disposeBindings);
 
             const disconnected = yield* Effect.tryPromise({
@@ -1391,7 +1485,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               }
 
               yield* acquired.verifyReconnect;
-              owner.state.phase = "acquiring";
+              owner.transition("acquiring");
               const endpoint = yield* connectionUrl("reconnect");
 
               yield* connectNative(endpoint, {
@@ -1402,7 +1496,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               });
               const observation = yield* observeInside(ticket, undefined, undefined, false);
 
-              owner.state.phase = "open";
+              owner.transition("open");
 
               return observation;
             }),
@@ -1427,7 +1521,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     Effect.sleep(remaining).pipe(Effect.as(true)),
     Deferred.await(ended).pipe(Effect.as(false)),
   ).pipe(
-    Effect.flatMap((expired) => (expired ? closeScope : Effect.void)),
+    Effect.flatMap((expired) =>
+      expired ? Effect.sync(owner.expire).pipe(Effect.andThen(closeScope)) : Effect.void,
+    ),
     Effect.forkIn(parentScope),
   );
 

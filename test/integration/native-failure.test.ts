@@ -26,7 +26,12 @@ import { makeOwner, native } from "../../packages/browser/src/internal/browser/O
 import { BrowserbaseClient } from "../../packages/browserbase/src/Client.ts";
 import { elapse } from "./fixtures/Time.ts";
 
-const limits = { maxActions: 10, maxElapsedMillis: 60_000, actionTimeoutMillis: 1000 };
+const limits = {
+  maxActions: 10,
+  maxHostReads: 10_000,
+  maxElapsedMillis: 60_000,
+  actionTimeoutMillis: 1000,
+};
 
 it("an operation is a closed vocabulary, so a misspelling is refused rather than merely compiled", () => {
   expect(Schema.is(BrowserOperation)("navigate")).toBe(true);

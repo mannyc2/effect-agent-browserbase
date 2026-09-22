@@ -3,8 +3,7 @@ import type { Browser, BrowserContext, Dialog, Frame, Page } from "playwright-co
 
 import { FrameInfo, PageInfo, Identifier } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
-import type { CallbackTasks } from "./CallbackTasks.ts";
-import type { DriverEvents, DriverOptions, DriverTarget } from "./Driver.ts";
+import type { DriverOptions, DriverTarget } from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import type { ObservationScope, Ticket } from "./Owner.ts";
 import type { PageExecution } from "./PageExecution.ts";
@@ -37,6 +36,8 @@ export interface Selection {
 export interface TargetHooks {
   /** A tracked page was registered; `created` while this driver is opening the page itself. */
   readonly opened: (entry: Entry, created: boolean) => void;
+  /** An excess page is never admitted to this registry; its configured policy owns cleanup. */
+  readonly overflow: (entry: Entry) => void;
   /** Before a closed page leaves the registry. */
   readonly closed: (entry: Entry) => void;
   /** Before a navigated frame's document epoch advances. */
@@ -45,21 +46,19 @@ export interface TargetHooks {
   readonly navigated: (entry: Entry, frame: Frame) => void;
   /** A frame navigated or detached, before any consequence for the selection. */
   readonly frameChanged: (entry: Entry, frame: Frame) => void;
-  readonly dialog: (dialog: Dialog) => void;
+  readonly dialog: (entry: Entry, dialog: Dialog) => void;
   /** Selection changes notify the owner without retiring another page's retained nodes. */
   readonly changed: (reason: "target-changed", scope: ObservationScope) => void;
 }
 
 /**
  * The connection's pages, frames and document epochs, and the one selected target every other
- * seam acts on. A page beyond the configured bound is closed and faulted, never tracked.
+ * seam acts on. A page beyond the configured bound is handed to policy recovery, never tracked.
  */
 export const makeTargets = (
   browser: Browser,
   context: BrowserContext,
   options: DriverOptions,
-  callbacks: CallbackTasks,
-  events: DriverEvents,
   closing: () => boolean,
   hooks: TargetHooks,
 ) => {
@@ -101,8 +100,7 @@ export const makeTargets = (
 
     byPage.set(page, entry);
     if (entries.size >= options.maxPages) {
-      callbacks.submit(() => closeWithin(() => page.close()));
-      events.fault();
+      hooks.overflow(entry);
 
       return entry;
     }
@@ -139,7 +137,7 @@ export const makeTargets = (
     };
 
     const onDialog = (dialog: Dialog) => {
-      hooks.dialog(dialog);
+      hooks.dialog(entry, dialog);
     };
 
     page.on("close", onClose);

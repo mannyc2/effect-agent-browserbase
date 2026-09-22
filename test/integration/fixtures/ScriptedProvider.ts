@@ -63,6 +63,7 @@ export interface ScriptOptions {
   readonly lifetimeMillis?: number;
   readonly actionMillis?: number;
   readonly maxActions?: number;
+  readonly maxHostReads?: number;
   readonly onDisconnect?: () => void;
   readonly onClick?: (ticket: Ticket) => Promise<string>;
   /** Script a navigation that stays in flight: the test settles or stops it. */
@@ -421,6 +422,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
   const acquisition = acquireSession(
     {
       maxActions: options.maxActions ?? 20,
+      maxHostReads: options.maxHostReads ?? 10_000,
       maxElapsedMillis: lifetimeMillis,
       actionTimeoutMillis: options.actionMillis ?? 1000,
     },

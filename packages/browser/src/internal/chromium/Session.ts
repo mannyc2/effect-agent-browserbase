@@ -155,6 +155,14 @@ const acquireChromium =
             ),
           ),
           cleanupResult: cleanup.result,
+          controlRetired: cleanup.result.pipe(
+            Effect.map(
+              (result) =>
+                Option.isSome(result) &&
+                result.value.ownership === "owned" &&
+                result.value.process === "terminated",
+            ),
+          ),
         } satisfies ChromiumLease;
       }),
     );

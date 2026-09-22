@@ -187,7 +187,10 @@ it.effect.each(["recovery", "lifetime"] as const)(
         expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 0, closes: 1 });
         expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+          failure: {
+            reason: { _tag: bound === "lifetime" ? "Expired" : "Closed" },
+            outcome: "undispatched",
+          },
         });
         expect(f.state.clicks).toBe(0);
       }),

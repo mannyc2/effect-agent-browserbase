@@ -4,6 +4,12 @@ The `0.2.0-beta.0` candidate separates `effect-browser`, `effect-browserbase` an
 
 [Issue #66](https://github.com/mannyc2/effect-agent-browserbase/issues/66) owns the ordered release-gate work. WP0 establishes explicit host peers, registry refusals, stored-workflow inference and dispatch-aware navigation stopping. WP1 replaces the overlapping retained-target APIs with checked `retain`, makes page creation/selection/closure use `PageInfo`, adds tagged host reasons with required dispatch evidence, and keeps model failures separate from bounded host diagnostics. Concrete checked close returns its receipt; capture accounting uses disjoint discarded-frame components. The [migration table](../README.md#api-migration) is the current API reference. These shape changes do not themselves claim the later timeout-recovery, page-scoped retirement, lifecycle/diagnostic, tool-sequencing or observer-isolation behavior assigned to subsequent packages.
 
+WP3 adds passive owner status and bounded native/policy diagnostics, separates known terminal
+triggers from unresolved native work, and accounts for checkpoint/control-facts reads through a
+separate finite host allowance. Popup/dialog policy cleanup has bounded native capacity that is
+retained through lost acknowledgement; confirmed overflow cleanup can preserve the original page.
+These changes remain unpaid local-runtime work and do not establish hosted-provider equivalence.
+
 WP2 adds bounded main-frame loading-timeout recovery through the existing stop owner and
 page-scoped retirement of the single observation. Selection-only excursions preserve exact-node
 references without changing retained-handle semantics; reconnect cannot reuse an old observation

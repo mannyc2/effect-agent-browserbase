@@ -1,6 +1,14 @@
 import { Clock, Duration, Effect, Schema, Semaphore } from "effect";
 
+import {
+  BrowserDiagnostic,
+  BrowserDiagnostics,
+  SessionStatus,
+  type SessionReason,
+  type SessionPhase,
+} from "../../BrowserData.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
+import type { DriverFault } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
@@ -22,14 +30,7 @@ export const within = <A, E, R>(
         );
   });
 
-export type Phase =
-  | "acquiring"
-  | "open"
-  | "paused"
-  | "detached"
-  | "uncertain"
-  | "closing"
-  | "closed";
+export type Phase = SessionPhase;
 
 export type Invalidation =
   | "observation"
@@ -68,6 +69,7 @@ export interface Reservation {
 
 export interface Limits {
   readonly maxActions: number;
+  readonly maxHostReads: number;
   readonly maxElapsedMillis: number;
   readonly actionTimeoutMillis: number;
 }
@@ -87,28 +89,129 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     revision: 0,
     selection: 0,
     actions: 0,
+    hostReads: 0,
   };
 
   let active: AbortController | undefined;
+  let holdingPermit = false;
   const reservations = new Map<string, AbortController>();
+  // These facts outlive the tickets which produced them. Aborting admission is not retirement.
+  const unresolved = new Set<object>();
+  let nativeUncertainty = false;
+  let terminalReason: SessionReason | null = null;
+  let pauseReason: SessionReason | null = null;
+  const policies = new Map<object, Extract<DriverFault, { readonly source: "policy" }>>();
+  const records: Array<BrowserDiagnostics["records"][number]> = [];
+  let total = 0;
+  let dropped = 0;
+
+  const record = (
+    reason: SessionReason,
+    disposition: BrowserDiagnostics["records"][number]["disposition"],
+    generation = state.generation,
+  ) => {
+    total = Math.min(Number.MAX_SAFE_INTEGER, total + 1);
+    if (records.length === 32) {
+      records.shift();
+      dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1);
+    }
+    records.push(
+      Object.freeze(
+        BrowserDiagnostic.make({
+          reason,
+          disposition,
+          generation,
+          monotonicNanos: clock.monotonicTimeNanosUnsafe(),
+        }),
+      ),
+    );
+  };
+
+  const transition = (phase: Phase) => {
+    if (
+      (terminalReason !== null || state.phase === "closed" || state.phase === "closing") &&
+      phase !== "closing" &&
+      phase !== "closed"
+    )
+      return;
+    state.phase = phase;
+    if (phase === "open") pauseReason = null;
+  };
 
   const invalidate = (reason: Invalidation, scope: ObservationScope = "all") => {
     state.revision++;
     for (const hook of hooks) hook(reason, scope);
   };
 
-  const fence = (phase: Phase, reason: Invalidation) => {
+  const fence = (phase: Phase, reason: Invalidation, trigger?: SessionReason) => {
     if (
       state.phase === "closed" ||
       (state.phase === "closing" && phase !== "closed" && phase !== "closing")
     )
       return;
-    state.phase = phase;
+    if (phase === "uncertain" || phase === "faulted" || phase === "closing" || phase === "closed")
+      terminalReason ??= trigger ?? (phase === "uncertain" ? "native-failure" : "closed");
+    else if (trigger !== undefined) pauseReason = trigger;
+    // A known trigger is retained even when the abort below interrupts dispatched work.
+    if (!(state.phase === "faulted" && phase === "uncertain")) state.phase = phase;
     state.generation++;
-    active?.abort();
-    for (const reservation of reservations.values()) reservation.abort();
+    const pending = [...reservations.values()];
+
     reservations.clear();
+    active?.abort();
+    for (const reservation of pending) reservation.abort();
     invalidate(reason);
+  };
+
+  const terminate = (
+    reason: SessionReason,
+    disposition: "known" | "not-dispatched" | "unknown",
+    generation = state.generation,
+  ) => {
+    if (disposition === "unknown") nativeUncertainty = true;
+    record(reason, disposition === "known" ? "confirmed" : disposition, generation);
+    fence(
+      disposition === "unknown" ? "uncertain" : "faulted",
+      disposition === "unknown" ? "uncertain" : "closed",
+      reason,
+    );
+  };
+
+  const expire = () => {
+    if (terminalReason !== null || state.phase === "closing" || state.phase === "closed") return;
+    terminate("expired", "known");
+  };
+
+  /** Quarantine changes admission only; an originating click keeps its own valid ticket. */
+  const policy = (
+    event: Extract<DriverFault, { readonly source: "policy" }>,
+    generation: number,
+  ) => {
+    if (event.disposition !== "dispatched") record(event.reason, event.disposition, generation);
+    const previous = policies.get(event.token);
+
+    switch (event.disposition) {
+      case "pending":
+        if (previous === undefined && terminalReason === null) policies.set(event.token, event);
+        break;
+      case "dispatched":
+        unresolved.add(event.token);
+        if (previous !== undefined) policies.set(event.token, event);
+        break;
+      case "confirmed":
+        unresolved.delete(event.token);
+        policies.delete(event.token);
+        break;
+      case "unknown":
+        // Keep the token so a late acknowledgement may retire it, but never reopen admission.
+        unresolved.add(event.token);
+        fence("uncertain", "uncertain", event.reason);
+        break;
+      case "not-dispatched":
+        policies.delete(event.token);
+        fence("faulted", "closed", event.reason);
+        break;
+    }
   };
 
   /** Taken under the permit that dispatched the work, so nothing can interleave before it. */
@@ -117,6 +220,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     const controller = new AbortController();
 
     reservations.set(key, controller);
+    unresolved.add(controller);
 
     return {
       signal: controller.signal,
@@ -124,7 +228,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         // A fence already cleared it, and decided the outcome for everything it aborted.
         if (reservations.get(key) !== controller) return;
         reservations.delete(key);
-        if (outcome === "unknown") fence("uncertain", "uncertain");
+        if (outcome === "known") unresolved.delete(controller);
+        else fence("uncertain", "uncertain");
       },
     };
   };
@@ -133,7 +238,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     operation: BrowserOperation,
     body: (ticket: Ticket) => Effect.Effect<A, E, R>,
     options: {
-      readonly charge?: boolean;
+      readonly charge?: boolean | "host-read";
       readonly mutation?: boolean;
       readonly mutationScope?: () => ObservationScope;
       readonly phases?: ReadonlyArray<Phase>;
@@ -147,10 +252,16 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       let admitted: Ticket | undefined;
 
       const work = Effect.gen(function* () {
-        if (!(options.phases ?? ["open"]).includes(state.phase)) {
+        holdingPermit = true;
+        if (!(options.phases ?? ["open"]).includes(state.phase) || policies.size > 0) {
           return yield* BrowserError.make({
             operation,
-            reason: state.phase === "paused" ? Reasons.Busy.make({}) : Reasons.Closed.make({}),
+            reason:
+              terminalReason === "expired"
+                ? Reasons.Expired.make({})
+                : state.phase === "paused" || (terminalReason === null && policies.size > 0)
+                  ? Reasons.Busy.make({})
+                  : Reasons.Closed.make({}),
             outcome: "undispatched",
           });
         }
@@ -158,7 +269,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
         if (now >= lifetimeDeadline) {
-          fence("uncertain", "uncertain");
+          expire();
 
           return yield* BrowserError.make({
             operation,
@@ -179,17 +290,22 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             outcome: "undispatched",
           });
         if (options.charge !== false) {
-          if (state.actions >= limits.maxActions)
+          const hostRead = options.charge === "host-read";
+          const maximum = hostRead ? limits.maxHostReads : limits.maxActions;
+          const observed = hostRead ? state.hostReads : state.actions;
+
+          if (observed >= maximum)
             return yield* BrowserError.make({
               operation,
               reason: Reasons.Limit.make({
-                dimension: "actions",
-                maximum: limits.maxActions,
-                observed: state.actions,
+                dimension: hostRead ? "host-reads" : "actions",
+                maximum,
+                observed,
               }),
               outcome: "undispatched",
             });
-          state.actions++;
+          if (hostRead) state.hostReads++;
+          else state.actions++;
         }
         // The lifecycle fence must actively abort admitted native work outside the current fiber.
         // @effect-diagnostics-next-line abortControllerInEffect:off
@@ -201,6 +317,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         const allowed = options.phases ?? ["open"];
 
         const check = () => {
+          if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
           if (
             controller.signal.aborted ||
             state.generation !== generation ||
@@ -235,14 +352,19 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             if (!dispatched && options.mutation)
               invalidate("observation", options.mutationScope?.() ?? "all");
             dispatched = true;
+            unresolved.add(controller);
           },
         };
 
         admitted = ticket;
 
         const uncertain = () => {
+          // The action timer can win the same instant as the independent lifetime timer.
+          if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
+          const fenced = controller.signal.aborted;
+
           controller.abort();
-          if (dispatched && state.phase !== "closing" && state.phase !== "closed")
+          if (dispatched && !fenced && state.phase !== "closing" && state.phase !== "closed")
             fence("uncertain", "uncertain");
         };
 
@@ -283,6 +405,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             );
           }),
           Effect.onInterrupt(() => Effect.sync(uncertain)),
+          Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
           Effect.ensuring(
             Effect.sync(() => {
               controller.abort();
@@ -290,7 +413,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             }),
           ),
         );
-      });
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            holdingPermit = false;
+          }),
+        ),
+      );
 
       if (options.waitUntil !== undefined)
         return within(
@@ -328,6 +457,42 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     reserved: (key: string): boolean => reservations.has(key),
     invalidate,
     fence,
+    transition,
+    expire,
+    terminate,
+    policy,
+    record,
+    /** Only positive lifetime-source evidence may retire control lost to a connection fence. */
+    retireControl: () => {
+      unresolved.clear();
+      nativeUncertainty = false;
+      policies.clear();
+    },
+    status: Effect.sync(() =>
+      Object.freeze(
+        SessionStatus.make({
+          phase: state.phase,
+          reason: terminalReason ?? pauseReason ?? policies.values().next().value?.reason ?? null,
+          generation: state.generation,
+          busy: holdingPermit || policies.size > 0,
+          unresolvedDispatch: nativeUncertainty || unresolved.size > 0,
+        }),
+      ),
+    ),
+    diagnostics: Effect.sync(() => {
+      const snapshot = BrowserDiagnostics.make({
+        records: [...records],
+        total,
+        dropped,
+        truncated: dropped > 0,
+      });
+
+      // Schema construction owns its array; freeze the produced snapshot, not merely its input.
+      for (const record of snapshot.records) Object.freeze(record);
+      Object.freeze(snapshot.records);
+
+      return Object.freeze(snapshot);
+    }),
     onInvalidate(hook: (reason: Invalidation, scope: ObservationScope) => void): () => void {
       hooks.add(hook);
 

@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Exit, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import type { BrowserSession } from "effect-browser/browser";
-import { InputReceipt, Observation, Target } from "effect-browser/browser-data";
+import { InputReceipt, Observation, SessionStatus, Target } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -27,6 +27,77 @@ const allTools = Toolkit.merge(
   BrowserTools.toolkit,
   BrowserTools.nativeToolkit,
   BrowserTools.keyboardToolkit,
+);
+
+it.effect(
+  "tool diagnostics read current owner usability without changing recorded model failures",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let state = SessionStatus.make({
+          phase: "open",
+          reason: null,
+          generation: 1,
+          busy: false,
+          unresolvedDispatch: false,
+        });
+
+        let reads = 0;
+        let actions = 0;
+
+        const browser = scriptedSession({
+          status: Effect.sync(() => {
+            reads++;
+
+            return Object.freeze(SessionStatus.make({ ...state }));
+          }),
+          observe: () =>
+            Effect.suspend(() => {
+              actions++;
+
+              return Effect.fail(
+                BrowserError.make({
+                  operation: "observe",
+                  reason: Reasons.Timeout.make({}),
+                  outcome: "unknown",
+                }),
+              );
+            }),
+        });
+
+        const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+        const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
+        const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+        const result = yield* Stream.runCollect(
+          yield* tools.handle("browser_inspect", {}, "one-timeout"),
+        );
+
+        expect(result).toMatchObject([
+          { isFailure: true, encodedResult: { reason: "timeout", outcome: "unknown" } },
+        ]);
+        expect(JSON.stringify(result)).not.toContain("unresolvedDispatch");
+        const recovered = yield* host.toolFailures;
+
+        expect(recovered.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+        state = SessionStatus.make({
+          phase: "closed",
+          reason: "expired",
+          generation: 2,
+          busy: false,
+          unresolvedDispatch: true,
+        });
+        yield* Scope.close(scope, Exit.void);
+        const closed = yield* host.toolFailures;
+
+        expect(closed.status).toEqual(state);
+        expect(closed.failures).toEqual(recovered.failures);
+        expect(recovered.status.phase).toBe("open");
+        expect(Object.isFrozen(closed.status)).toBe(true);
+        expect(reads).toBe(2);
+        expect(actions).toBe(1);
+      }),
+    ),
 );
 
 it.effect(

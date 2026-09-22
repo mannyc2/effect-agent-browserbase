@@ -1,6 +1,7 @@
 import { Effect, Exit, FiberSet, Scope } from "effect";
 
 import type { CallbackFailureMode } from "./CallbackTasks.ts";
+import type { DriverFault } from "./Driver.ts";
 
 export type BindingRejection = "closed" | "capacity";
 
@@ -16,13 +17,15 @@ export type BindingAdmission<A, E> =
 export interface BindingRunner<I, A, E> {
   /** Fence new callbacks synchronously; the owning Scope still owns accepted work. */
   readonly close: () => void;
+  /** Native owner faults request cancellation immediately; the Scope still joins every fiber. */
+  readonly interrupt: () => void;
   readonly submit: (input: I, failureMode?: CallbackFailureMode) => BindingAdmission<A, E>;
 }
 
 export const makeBindingRunner = <I, A, E, R>(
   capacity: number,
   handle: (input: I) => Effect.Effect<A, E, R>,
-  onFault: () => void,
+  onFault: (event: Extract<DriverFault, { readonly source: "binding" }>) => void,
 ): Effect.Effect<BindingRunner<I, A, E>, never, R | Scope.Scope> => {
   if (!Number.isSafeInteger(capacity) || capacity < 1)
     throw new RangeError("Invalid binding callback capacity");
@@ -33,9 +36,8 @@ export const makeBindingRunner = <I, A, E, R>(
     // One private sequential child owns both FiberSet and the admission fence.
     const runtimeScope = yield* Scope.fork(parent, "sequential");
 
-    const run = yield* FiberSet.makeRuntimePromise<R, Exit.Exit<A, E>, never>().pipe(
-      Scope.provide(runtimeScope),
-    );
+    const fibers = yield* FiberSet.make<Exit.Exit<A, E>, never>().pipe(Scope.provide(runtimeScope));
+    const run = yield* FiberSet.runtimePromise(fibers)<R>();
 
     let accepting = true;
     let faulted = false;
@@ -45,10 +47,16 @@ export const makeBindingRunner = <I, A, E, R>(
       accepting = false;
     };
 
+    const interrupt = () => {
+      close();
+      // Called synchronously by native owner fencing; scoped FiberSet cleanup performs the join.
+      for (const fiber of fibers) fiber.interruptUnsafe();
+    };
+
     const fault = () => {
       if (!accepting || faulted) return;
       faulted = true;
-      onFault();
+      onFault({ source: "binding", reason: "callback-failure", disposition: "known" });
     };
 
     // FiberSet registered its child-scope finalizer first. Sequential reverse registration
@@ -94,6 +102,6 @@ export const makeBindingRunner = <I, A, E, R>(
       return { _tag: "Accepted", result };
     };
 
-    return { close, submit };
+    return { close, interrupt, submit };
   });
 };

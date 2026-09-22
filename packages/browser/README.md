@@ -52,6 +52,46 @@ Chromium identity is `{ provider: "chromium", id }`, identifying this ownership 
 
 `launch.proxy: { server, bypass? }` forwards an existing host-operated proxy to Chromium. With a proxy, the default bypass value is `<-loopback>` so Chromium does not silently exclude loopback destinations; a different bypass is an explicit host choice. Additional reviewed native flags, such as disabling QUIC and non-proxied WebRTC UDP, can be supplied through `launch.args`. This module does not implement a proxy or qualify its transport/DNS coverage. Browser policy remains `Unrestricted`; a local endpoint, URL admission or successful local test never establishes whole-browser egress containment. Preserve and test the selected enforcing proxy independently. The Browserbase integration validates its own provider-issued endpoints separately.
 
+## Passive status and native diagnostics
+
+```ts
+const status = yield * session.status;
+const diagnostics = yield * session.diagnostics;
+// status: { phase, reason, generation, busy, unresolvedDispatch }
+// diagnostics: { records, total, dropped, truncated }
+```
+
+Both reads copy host memory, acquire no browser permit, charge no action and remain available
+while busy, faulted or closed. A snapshot is not an admission token: the next operation still
+checks its ticket. `phase` describes admission/lifecycle, not remote cleanup confirmation. Its
+closed vocabulary includes `faulted` for a known terminal trigger, alongside `acquiring`, `open`,
+`paused`, `detached`, `uncertain`, `closing` and `closed`; exhaustive host matches must include the
+new case. `reason` retains the original terminal trigger through later cleanup. `busy` reports
+active admission or pending policy cleanup. Action-count or host-read exhaustion leaves the owner
+open and is not a terminal failure.
+
+`unresolvedDispatch` is separate from the trigger. Idle expiry records `expired` without inventing
+an unknown dispatch. Expiry or a fail-session callback overlapping native work retains both the
+known trigger and unresolved control. A fence or borrowed disconnection is not acknowledgement
+that the browser stopped. Positive owned termination evidence can retire that control indication;
+it does not reconcile earlier business effects or change their `unknown` outcomes. The concrete
+cleanup receipt remains the authority for process termination or provider release confirmation.
+
+Diagnostics retain the latest 32 records, oldest first, with a closed reason, disposition,
+connection generation and host monotonic timestamp. Counters saturate at `Number.MAX_SAFE_INTEGER`;
+`truncated` and `dropped` disclose eviction. Records contain no URL, title, message, native object
+or consumer cause. Typed callback errors remain in `failure` and `bindingDiagnostics`.
+
+Under popup-close policy, a popup beyond `maxPages` is quarantined and closed once. Its originating
+click can finish, while new browser work is refused until cleanup is confirmed. Confirmed closure
+preserves the original page's usability. The native cleanup pool is bounded at 32 operations;
+the two-second acknowledgement deadline does not free an unresolved native promise's slot.
+Lost acknowledgement fences control without replay; a late acknowledgement cannot reopen it.
+Capacity refusal before dispatch is a known block rather than fabricated uncertainty. Dialog-cap
+overflow follows the same bounded dismissal rules. An acknowledged before-unload dismissal can
+retire only the exact navigation captured when its dialog arrived and subsequently rejected.
+Existing popup/dialog pause policies still require their explicit host recovery path.
+
 ## Browser operations
 
 ### Selected, retained and pinned targets
@@ -246,7 +286,16 @@ Anything but `true`, or a policy that throws, sends nothing and fails `denied`. 
 const checkpoint = yield * session.checkpoint({ picture: true });
 ```
 
-It issues no references, is not a mutation, and leaves the action observation and the selection exactly as they were, so inspect, checkpoint, then act on the inspected node all compose. It is host-only, because it carries control facts. Text and picture are read one after the other, never atomically: the interval is on the host monotonic clock, and `documentChanged` says the document was replaced in between. A checkpoint is charged as one action, like any other bounded read. A held page is refused `busy` rather than woken to be read: take the checkpoint before the hold and keep it.
+It issues no references, is not a mutation, and leaves the action observation and the selection exactly as they were, so inspect, checkpoint, then act on the inspected node all compose. It is host-only, because it carries control facts. Text and picture are read one after the other, never atomically: the interval is on the host monotonic clock, and `documentChanged` says the document was replaced in between. A held page is refused `busy` rather than woken to be read: take the checkpoint before the hold and keep it.
+
+`checkpoint` and `controlFacts` each consume one separate host-read allowance, configured by
+`Chromium.layer({ maxHostReads })` or the corresponding provider Layer. The default is 10,000,
+with an explicit integer bound of 1–1,000,000; invalid values are refused rather than clamped.
+Exhaustion reports `Limit { dimension: "host-reads", maximum, observed } / undispatched` while the
+owner stays open. These operations still obey the same lifetime, bytes, deadline and fail-fast
+concurrency bounds: a checkpoint can execute page script and is not unlimited free work.
+`observe`, `readText`, `screenshot` and `waitFor` continue consuming the model-reachable action
+allowance. Neither budget is a tool parameter, and `maxActions` has not become mutations-only.
 
 ### Real pointer and wheel input
 

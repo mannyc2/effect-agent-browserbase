@@ -121,6 +121,7 @@ export class Chromium extends Context.Service<
               ? {}
               : { actionTimeoutMillis: options.actionTimeoutMillis }),
             ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
+            ...(options.maxHostReads === undefined ? {} : { maxHostReads: options.maxHostReads }),
             ...(options.initialPage === undefined ? {} : { initialPage: options.initialPage }),
             ...(options.popupPolicy === undefined ? {} : { popupPolicy: options.popupPolicy }),
             ...(options.dialogPolicy === undefined ? {} : { dialogPolicy: options.dialogPolicy }),
@@ -154,7 +155,9 @@ export class Chromium extends Context.Service<
               Effect.map(({ session }): ChromiumSession<E> =>
                 Object.assign(session, {
                   reference: acquired.reference,
-                  closeChecked: acquired.lifetime.closeChecked,
+                  closeChecked: session.closeChecked.pipe(
+                    Effect.andThen(acquired.lifetime.closeChecked),
+                  ),
                   close: acquired.close,
                   cleanupResult: acquired.lifetime.cleanupResult,
                 }),

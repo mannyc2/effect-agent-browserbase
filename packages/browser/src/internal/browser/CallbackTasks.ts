@@ -1,5 +1,7 @@
 export type CallbackFailureMode = "reject-call" | "fail-session";
 
+export type CallbackDisposition = "not-dispatched" | "unknown";
+
 /** Native callbacks cannot await a Semaphore. Reserve a bounded slot synchronously
  * before starting native work; never construct an already-running Promise first.
  * Fail-session pressure/failure fences the connection once. Reject-call pressure or
@@ -12,19 +14,19 @@ export class CallbackTasks {
   private faulted = false;
 
   private readonly capacity: number;
-  private readonly onFault: () => void;
+  private readonly onFault: (disposition: CallbackDisposition) => void;
 
-  constructor(capacity: number, onFault: () => void) {
+  constructor(capacity: number, onFault: (disposition: CallbackDisposition) => void) {
     if (!Number.isSafeInteger(capacity) || capacity < 1)
       throw new RangeError("Invalid callback capacity");
     this.capacity = capacity;
     this.onFault = onFault;
   }
 
-  private fault(): void {
+  private fault(disposition: CallbackDisposition): void {
     if (this.stopped || this.faulted) return;
     this.faulted = true;
-    this.onFault();
+    this.onFault(disposition);
   }
 
   submit(
@@ -33,7 +35,7 @@ export class CallbackTasks {
   ): boolean {
     if (this.stopped || this.faulted) return false;
     if (this.pending.size >= this.capacity) {
-      if (failureMode === "fail-session") this.fault();
+      if (failureMode === "fail-session") this.fault("not-dispatched");
 
       return false;
     }
@@ -43,7 +45,7 @@ export class CallbackTasks {
       .then(
         () => {},
         () => {
-          if (failureMode === "fail-session") this.fault();
+          if (failureMode === "fail-session") this.fault("unknown");
         },
       )
       .finally(() => this.pending.delete(task));

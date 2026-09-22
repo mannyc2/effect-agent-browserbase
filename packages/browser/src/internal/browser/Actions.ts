@@ -4,7 +4,7 @@ import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from
 import type { ObservedElement } from "../../BrowserData.ts";
 import { SafeFilename } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
-import type { Driver, DriverTarget, NativeFileSelection } from "./Driver.ts";
+import type { Driver, DriverTarget, NativeFileSelection, NavigationControl } from "./Driver.ts";
 import {
   closeWithin,
   failure,
@@ -157,6 +157,15 @@ export const makeActions = (
   isTimeoutError: (error: unknown) => boolean,
 ) => {
   const { current } = targets;
+
+  const navigationControls = new Map<
+    string,
+    {
+      readonly control: NavigationControl | undefined;
+      readonly mainFrame: boolean;
+    }
+  >();
+
   let downloadSerial = 0;
 
   /** A result URL is only ever an http(s) address without credentials. */
@@ -281,11 +290,19 @@ export const makeActions = (
     }
   };
 
-  const beginNavigation: Driver["beginNavigation"] = (url, timeoutMillis, ticket, target) =>
+  const beginNavigation: Driver["beginNavigation"] = (
+    url,
+    timeoutMillis,
+    ticket,
+    target,
+    control,
+  ) =>
     sanitize(async () => {
       const { entry, frame } = current(target);
+      const active = { control, mainFrame: frame === entry.page.mainFrame() };
 
       ticket.dispatch();
+      navigationControls.set(entry.id, active);
       targets.navigating.begin(entry.id);
 
       // Not awaited here: the permit that dispatched it is released while the browser loads.
@@ -297,7 +314,11 @@ export const makeActions = (
           if (isTimeoutError(error)) throw failure(Reasons.Timeout.make({}), "unknown");
           throw error;
         } finally {
-          targets.navigating.end(entry.id);
+          // A stop may have admitted a successor before this old goto finally rejects.
+          if (navigationControls.get(entry.id) === active) {
+            navigationControls.delete(entry.id);
+            targets.navigating.end(entry.id);
+          }
         }
 
         // The frame that navigated, not whatever is selected by the time it finishes.
@@ -309,7 +330,7 @@ export const makeActions = (
 
       return {
         pageId: entry.id,
-        mainFrame: frame === entry.page.mainFrame(),
+        mainFrame: active.mainFrame,
         settled,
         stop: (stopTicket, pending, onDispatch, retainSetup) =>
           sanitize(async () => {
@@ -475,6 +496,12 @@ export const makeActions = (
   return {
     withAdmittedElement,
     beginNavigation,
+    /** Capture the exact navigation at dialog arrival; acknowledgement never looks it up again. */
+    beforeUnload: (pageId: string) => {
+      const active = navigationControls.get(pageId);
+
+      return active?.mainFrame === true ? active.control?.beforeUnload() : undefined;
+    },
     click,
     fill,
     scroll,
