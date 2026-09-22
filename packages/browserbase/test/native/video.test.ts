@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
+import { NavigateRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { NavigateRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
 
 import { recordInterval } from "../../examples/record-video.ts";
 import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";

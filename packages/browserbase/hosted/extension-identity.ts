@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect } from "effect";
-import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserbaseExtensions } from "effect-browserbase/extensions";
 import { recipe } from "effect-browserbase/launch";
 

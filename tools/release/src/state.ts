@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Effect, Redacted, Schema, type Scope } from "effect";
+import { packages } from "../../packages.mjs";
 import { remote as productionRemote } from "./config.js";
 
 export interface StateOptions {
@@ -42,7 +43,8 @@ interface Repository {
 const preparedRefPrefix = "refs/heads/ts-release-prepared/";
 const maximumBytes = 512 * 1024 * 1024;
 const maximumBlobBytes = 128 * 1024 * 1024;
-const maximumFiles = 7;
+// Bundle and Plan, one receipt, then a tarball and provenance for every member.
+const maximumFiles = 3 + 2 * packages.length;
 const maximumListingBytes = 64 * 1024;
 const failure = (message: string) => new PreparedStateError({ message });
 const requireState = (condition: unknown, message: string) =>
@@ -66,7 +68,7 @@ const checkInventory = (files: ReadonlyMap<string, unknown>) =>
       files.has("plan.json") &&
       files.size <= maximumFiles &&
       [...files.keys()].every(validName),
-    "Prepared state requires bundle.json, plan.json and at most five flat content digests",
+    `Prepared state requires bundle.json, plan.json and at most ${maximumFiles - 2} flat content digests`,
   );
 
 const gitEnvironment = Effect.fn("preparedState.gitEnvironment")(function* (

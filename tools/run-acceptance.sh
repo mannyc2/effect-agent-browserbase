@@ -74,7 +74,7 @@ fast_reject() { if [ "$PROFILE" != full ] && [ "$FAILED" != 0 ]; then exit 1; fi
 install_native() {
   cd "$TREE"
   # This external installation always executes, never replays a task-cache success.
-  run install-browser timeout 300s ./node_modules/.bin/vp run --no-cache -F effect-browserbase install:test-browser
+  run install-browser timeout 300s ./node_modules/.bin/vp run --no-cache -F effect-browser install:test-browser
   run install-media-tools timeout 300s bash -lc 'if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg; fi; ffmpeg -version && ffprobe -version'
 }
 cd "$SOURCE_ROOT"
@@ -94,20 +94,29 @@ if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
   # Fail a spacing/type regression before downloading Chromium or starting a browser.
-  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browserbase packages/agent-browserbase
-  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browserbase packages/agent-browserbase
+  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browser packages/browserbase packages/agent-browser test
+  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browser packages/browserbase packages/agent-browser test
   fast_reject
+  run integration-typecheck timeout 180s ./node_modules/.bin/vp run check:integration
+  run browser-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browser check
   run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browserbase check
-  run typecheck timeout 180s ./node_modules/.bin/vp run -F effect-agent-browserbase check
+  run typecheck timeout 180s ./node_modules/.bin/vp run -F effect-agent-browser check
   fast_reject
+  run integration-unit timeout 180s ./node_modules/.bin/vp run test:integration
   if [ "$PROFILE" = full ]; then install_native; fi
+  cd "$TREE/packages/browser"
+  run browser-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
+  if [ "$PROFILE" = full ]; then
+    run browser-native timeout 600s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-browser" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+  fi
+  run browser-build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE/packages/browserbase"
   run generic-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
   if [ "$PROFILE" = full ]; then
     run generic-native timeout 600s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-generic" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   fi
   run generic-build timeout 180s ../../node_modules/.bin/vp pack
-  cd "$TREE/packages/agent-browserbase"
+  cd "$TREE/packages/agent-browser"
   run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
   if [ "$PROFILE" = full ]; then
     run native timeout 300s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
@@ -119,8 +128,8 @@ if [ "$LAST_CODE" = 0 ]; then
   fast_reject
   if [ "$PROFILE" = library ]; then install_native; fast_reject; fi
   cd "$SOURCE_ROOT"
-  # All three clean consumers, raw-zero declarations, Node/Bun workflows, and the
-  # complete generic + Agent native suites. No test filtering or cached results.
+  # All five clean consumers, raw-zero declarations, Node/Bun workflows, and the
+  # complete browser, provider and Agent native suites, partitioned across the profiles.
   run packed-consumer timeout 900s bash tools/packed-consumer.sh "$TREE" "$OUT"
   if [ "$LAST_CODE" = 0 ]; then
     VERSION="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$OUT/release-set.json")"
@@ -153,7 +162,7 @@ if [ "$LAST_CODE" = 0 ]; then
     # Upstream's `ready` is `check && test && build`. Check and build still cover the whole
     # workspace: the patch touches root manifests, the lockfile, docs and a testing-package
     # suite that every package feeds, and the release dry-run below packs every workspace.
-    # Tests run for the workspaces the patch can reach — the two owned packages and the
+    # Tests run for the workspaces the patch can reach — the three owned packages and the
     # testing package, whose toolchain audit reads every manifest in the tree. The other
     # suites (workerd actors, the travel planner, storage engines) exercise upstream code this
     # patch does not change, and their timing assertions fail on a shared runner for reasons no
@@ -164,7 +173,7 @@ if [ "$LAST_CODE" = 0 ]; then
     # renewals; both spellings keep this single runner's test graph serial, as the patched root
     # script does. `all` is that root script itself.
     case "$UPSTREAM_TESTS" in
-      reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browserbase -F effect-agent-browserbase -F @effect-agent/testing test) ;;
+      reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser -F @effect-agent/testing test) ;;
       all) TEST_ARGS=(test) ;;
       *) echo "Unknown BROWSERBASE_UPSTREAM_TESTS: $UPSTREAM_TESTS" >&2; exit 2 ;;
     esac
@@ -189,12 +198,12 @@ if [ "$LAST_CODE" = 0 ]; then
   fi
   # Only candidate source files belong in the review patch. Native CDP can leave
   # generated downloads below the package; a directory-wide add would include them.
-  git -C "$SOURCE_ROOT" ls-files -z -- packages/browserbase packages/agent-browserbase | \
+  git -C "$SOURCE_ROOT" ls-files -z -- packages/browser packages/browserbase packages/agent-browser test | \
     git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
   git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
   run review-check git diff --check
 
   git diff --binary > "$OUT/review.patch"
-  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browserbase packages/agent-browserbase
+  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browser packages/browserbase packages/agent-browser test
 fi
 exit "$FAILED"

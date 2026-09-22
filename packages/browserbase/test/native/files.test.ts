@@ -1,12 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
-import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import {
   ClickRequest,
   InlineFile,
   NavigateRequest,
   ReadTextRequest,
-} from "effect-browserbase/browser-data";
+} from "effect-browser/browser-data";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import { UploadReceipt } from "effect-browserbase/transfers";
 import { BrowserbaseUploads } from "effect-browserbase/uploads";
 

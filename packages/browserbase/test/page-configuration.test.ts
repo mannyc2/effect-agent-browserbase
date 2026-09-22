@@ -1,7 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
+import * as Bootstrap from "effect-browser/bootstrap";
+import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
-import { BrowserPolicy } from "effect-browserbase/browser-data";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import type { LaunchRecipe } from "effect-browserbase/launch";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
@@ -37,6 +38,39 @@ const cases: ReadonlyArray<{
   { name: "popup pause", options: { popupPolicy: "pause" } },
   { name: "dialog pause", options: { dialogPolicy: "pause" } },
 ];
+
+it.effect(
+  "a misplaced layer bootstrap is rejected before allocation, including an own undefined property",
+  () =>
+    Effect.gen(function* () {
+      let requests = 0;
+
+      for (const bootstrap of [Bootstrap.empty, undefined]) {
+        const misplaced = { launch, bootstrap };
+
+        const result = yield* BrowserbaseBrowser.open(policy).pipe(
+          Effect.provide(BrowserbaseBrowser.layer(misplaced).pipe(Layer.provide(account))),
+          Effect.provideService(FetchHttpClient.Fetch, async () => {
+            requests++;
+
+            return new Response("unexpected provider request", { status: 500 });
+          }),
+          Effect.scoped,
+          Effect.result,
+        );
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            operation: "configure",
+            reason: "configuration",
+            outcome: "undispatched",
+          });
+        }
+      }
+      expect(requests).toBe(0);
+    }),
+);
 
 for (const { name, options } of cases) {
   it.effect(`page control rejects ${name} before provider allocation`, () =>

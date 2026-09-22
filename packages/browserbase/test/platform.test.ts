@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Exit, Layer, Redacted, Schema } from "effect";
+import { BrowserPolicy } from "effect-browser/browser-data";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseAgents } from "../src/Agents.ts";
-import { BrowserPolicy } from "../src/BrowserData.ts";
 import { BrowserbaseCertificates } from "../src/Certificates.ts";
 import { BrowserbaseClient } from "../src/Client.ts";
 import { BrowserbaseDownloads } from "../src/Downloads.ts";

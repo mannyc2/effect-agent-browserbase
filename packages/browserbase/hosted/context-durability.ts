@@ -5,8 +5,8 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect } from "effect";
-import * as Bootstrap from "effect-browserbase/bootstrap";
-import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
+import * as Bootstrap from "effect-browser/bootstrap";
+import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import {
   type ContextWriterBackend,
   withWriter,

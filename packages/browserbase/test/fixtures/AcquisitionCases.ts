@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 
 import { Deferred, Effect, Fiber, Layer, Redacted } from "effect";
+import { BrowserError } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 
 import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { withWriter, type WriterSettlementFacts } from "../../src/ContextCoordination.ts";
 import type { ClientError, ContextError, SessionError } from "../../src/Errors.ts";
-import { AllocationError, BrowserError } from "../../src/Errors.ts";
+import { AllocationError } from "../../src/Errors.ts";
 import { acquireRemote } from "../../src/internal/session/Acquisition.ts";
 import { attachRemote } from "../../src/internal/session/Attachment.ts";
 import { makeCleanup, type LocalCleanup } from "../../src/internal/session/Cleanup.ts";

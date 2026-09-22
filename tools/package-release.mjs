@@ -29,7 +29,7 @@ export function publicationManifest(source, catalog, workspaceVersions) {
     }
   }
   manifest.publishConfig = { access: "public", registry: "https://registry.npmjs.org/", tag: distTag(source.version) };
-  checkManifest(manifest, { built: true, genericVersion: workspaceVersions[packages[0].name], frameworkVersion: workspaceVersions["effect-agent"] });
+  checkManifest(manifest, { built: true, browserVersion: workspaceVersions[packages[0].name], frameworkVersion: workspaceVersions["effect-agent"] });
   return manifest;
 }
 
@@ -73,7 +73,7 @@ export function releaseSetDigest(directory) {
   return digest(readFileSync(path));
 }
 
-/** Both immutable tarballs are written before the single source-bound receipt. */
+/** All immutable tarballs are written before the single source-bound receipt. */
 export function packageReleaseSet(tree, out, sourceSha) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/, "Expected immutable source commit");
   const sources = readPackageSet(tree);
@@ -81,7 +81,7 @@ export function packageReleaseSet(tree, out, sourceSha) {
   const frameworkVersion = readJson(join(tree, "packages/effect-agent/package.json")).version;
   distTag(frameworkVersion);
   const version = sources[0].version;
-  const workspaceVersions = { [packages[0].name]: version, "effect-agent": frameworkVersion };
+  const workspaceVersions = { ...Object.fromEntries(sources.map((source) => [source.name, source.version])), "effect-agent": frameworkVersion };
   const manifests = sources.map((source) => publicationManifest(source, catalog, workspaceVersions));
   const stageRoot = join(out, "packed-stage");
   assert.ok(!existsSync(stageRoot) && !existsSync(join(out, "release-set.json")) && !existsSync(join(out, "release.json")), "Refusing an existing package stage or receipt");

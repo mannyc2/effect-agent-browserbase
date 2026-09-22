@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Option, Schema, Stream } from "effect";
-import { BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
 import {
   ClickRequest,
   NavigateRequest,
   ReadTextRequest,
   StartNavigationRequest,
-} from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
-import * as PageControl from "effect-browserbase/page-control";
+} from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import * as PageControl from "effect-browser/page-control";
+import { BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
 import type { Page } from "playwright-core";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";

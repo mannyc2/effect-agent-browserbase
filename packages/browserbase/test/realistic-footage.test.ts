@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Random, Schema } from "effect";
-import { InputReceipt, Target } from "effect-browserbase/browser-data";
-import { type CapturedFrame, CaptureSummary } from "effect-browserbase/capture";
+import { InputReceipt, Target } from "effect-browser/browser-data";
+import { type CapturedFrame, CaptureSummary } from "effect-browser/capture";
 import { TestClock } from "effect/testing";
 
 import { Cue, PollMillis, type Stage } from "../examples/realistic-footage/Cues.ts";

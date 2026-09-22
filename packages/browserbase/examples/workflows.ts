@@ -1,6 +1,6 @@
 import { Effect, Layer, Redacted, Stream } from "effect";
+import { BrowserPolicy, ClickRequest, NavigateRequest } from "effect-browser/browser-data";
 import { BrowserbaseBrowser, type BrowserOptions, type LiveView } from "effect-browserbase/browser";
-import { BrowserPolicy, ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import { withWriter, type ContextWriterBackend } from "effect-browserbase/context-coordination";
 import { BrowserbaseDownloads } from "effect-browserbase/downloads";

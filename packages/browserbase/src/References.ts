@@ -1,9 +1,7 @@
 import { Schema } from "effect";
+import { Identifier } from "effect-browser/browser-data";
 
-export const Identifier = Schema.NonEmptyString.check(
-  Schema.isMaxLength(256),
-  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
-);
+export { Identifier } from "effect-browser/browser-data";
 
 export class SessionReference extends Schema.Class<SessionReference>("BrowserbaseSessionReference")(
   {

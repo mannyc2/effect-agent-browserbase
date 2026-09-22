@@ -1,7 +1,7 @@
 {
   "name": "effect-browserbase",
-  "version": "0.1.0-beta.104",
-  "description": "Effect-based Browserbase resources, owned browser control and independent browser artifacts.",
+  "version": "0.2.0-beta.0",
+  "description": "Effect-based Browserbase resources and hosted integration for effect-browser.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,11 +19,8 @@
     "./account": "./src/Account.ts",
     "./agents": "./src/Agents.ts",
     "./allocation": "./src/Allocation.ts",
-    "./bootstrap": "./src/Bootstrap.ts",
     "./browser": "./src/Browser.ts",
     "./browser-binding": "./src/BrowserBinding.ts",
-    "./browser-data": "./src/BrowserData.ts",
-    "./capture": "./src/Capture.ts",
     "./certificates": "./src/Certificates.ts",
     "./cleanup": "./src/Cleanup.ts",
     "./client": "./src/Client.ts",
@@ -34,8 +31,6 @@
     "./extensions": "./src/Extensions.ts",
     "./functions": "./src/Functions.ts",
     "./launch": "./src/Launch.ts",
-    "./local-browser": "./src/LocalBrowser.ts",
-    "./page-control": "./src/PageControl.ts",
     "./page-fetch": "./src/PageFetch.ts",
     "./projects": "./src/Projects.ts",
     "./recordings": "./src/Recordings.ts",
@@ -63,18 +58,14 @@
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
+    "effect-browser": "workspace:*",
     "playwright-core": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
     "effect": "^4.0.0-rc.115",
-    "playwright-core": "1.63.0"
-  },
-  "peerDependenciesMeta": {
-    "playwright-core": {
-      "optional": true
-    }
+    "effect-browser": "workspace:*"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

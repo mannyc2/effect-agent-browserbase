@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Effect, Layer, Redacted, Schema } from "effect";
+import { BrowserPolicy } from "effect-browser/browser-data";
+import { BrowserError } from "effect-browser/errors";
 import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
 import * as BrowserBinding from "effect-browserbase/browser-binding";
-import { BrowserPolicy } from "effect-browserbase/browser-data";
 import { BrowserbaseClient, type ClientOptions } from "effect-browserbase/client";
-import { BrowserError } from "effect-browserbase/errors";
 import type { LaunchRecipe } from "effect-browserbase/launch";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { FetchHttpClient } from "effect/unstable/http";

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
+import { ClickRequest, NavigateRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 

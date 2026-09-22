@@ -4,11 +4,12 @@ import { Context, Effect, Schema, Stream } from "effect";
 // It runs as an ordinary program on the pinned Node and Bun against a local
 // Chromium process over real CDP, using only the installed package's public
 // exports. The provider control plane is scripted; the browser is not.
-import * as Bootstrap from "effect-browserbase/bootstrap";
+import * as Bootstrap from "effect-browser/bootstrap";
+import * as Browser from "effect-browser/browser";
+import { InlineFile, NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import type { InitializationError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { InlineFile, NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
-import type { InitializationError } from "effect-browserbase/errors";
 
 import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";
 
@@ -87,9 +88,8 @@ const program = Effect.scoped(
       Effect.gen(function* () {
         const browser = yield* BrowserbaseBrowser;
 
-        const workflow = browser.withBrowser(
-          policy,
-          { bootstrap: bootstrap(new URL(fixture.url).origin) },
+        const workflow = Browser.scoped(
+          browser.open(policy, { bootstrap: bootstrap(new URL(fixture.url).origin) }),
           (session) =>
             Effect.gen(function* () {
               const failureType: Same<
@@ -229,7 +229,10 @@ const program = Effect.scoped(
           SettingsUnavailable
         > = true;
 
-        expect(requirements && errors, "withBrowser preserves consumer E/R and discharges Scope");
+        expect(
+          requirements && errors,
+          "Browser.scoped preserves consumer E/R and discharges Scope",
+        );
 
         return yield* workflow.pipe(
           Effect.provideService(ConsumerSettings, {

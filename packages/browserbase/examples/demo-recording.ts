@@ -1,7 +1,7 @@
 import { Effect, Fiber } from "effect";
-import type { BrowserbaseSession } from "effect-browserbase/browser";
-import { NavigateRequest, ScrollRequest } from "effect-browserbase/browser-data";
-import type { BrowserError } from "effect-browserbase/errors";
+import type { BrowserSession } from "effect-browser/browser";
+import { NavigateRequest, ScrollRequest } from "effect-browser/browser-data";
+import type { BrowserError } from "effect-browser/errors";
 
 import { recordInterval } from "./record-video.ts";
 
@@ -37,7 +37,7 @@ type DemoRecordingError = Effect.Error<ReturnType<typeof recordInterval>> | Brow
  * hosted run is not spent discovering them.
  */
 export const recordDemo = (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   url: string,
   outputPath: string,
   options: DemoOptions = {},

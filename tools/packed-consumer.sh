@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Three clean consumers share the two exact candidate tarballs, never source aliases.
+# Five clean consumers use the three exact candidate tarballs, never source aliases.
 set -euo pipefail
 TREE="${1:?effect-agent worktree required}"
 OUT="${2:?output directory required}"

@@ -33,7 +33,7 @@ on:
         description: Full-acceptance artifact only; focused results cannot authorize release
         value: ${{ jobs.acceptance.outputs.artifact_id }}
       release_set_sha256:
-        description: Hash of the source-bound two-package release-set receipt
+        description: Hash of the source-bound three-package release-set receipt
         value: ${{ jobs.acceptance.outputs.release_set_sha256 }}
       release_tooling_artifact_id:
         description: Immutable tested ts-release host and frozen dependencies

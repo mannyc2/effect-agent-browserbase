@@ -1,6 +1,6 @@
 import { Clock, Context, Effect, Layer, Ref, Schema } from "effect";
-import type { InputReceipt } from "effect-browserbase/browser-data";
-import type { CapturedFrame, CaptureSummary } from "effect-browserbase/capture";
+import type { InputReceipt } from "effect-browser/browser-data";
+import type { CapturedFrame, CaptureSummary } from "effect-browser/capture";
 
 /**
  * What this layer of a recording or a livestream is answerable for.

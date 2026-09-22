@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import * as Bootstrap from "effect-browserbase/bootstrap";
+import * as Bootstrap from "effect-browser/bootstrap";
+import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { NavigateRequest, ReadTextRequest } from "effect-browserbase/browser-data";
 
 import {
   localBrowser,

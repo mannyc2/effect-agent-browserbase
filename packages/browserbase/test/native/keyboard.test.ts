@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import {
   ClickRequest,
   NavigateRequest,
   ObservedElement,
   PressRequest,
   TypeRequest,
-} from "effect-browserbase/browser-data";
-import * as PageControl from "effect-browserbase/page-control";
+} from "effect-browser/browser-data";
+import * as PageControl from "effect-browser/page-control";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { Page } from "playwright-core";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
@@ -97,8 +97,9 @@ it.live("real CDP: keys are real input, delivered to whatever the browser says h
             true,
           );
 
-          // A held modifier makes a chord, not a character: the page sees it and nothing is typed.
-          yield* handle.press(PressRequest.make({ key: "k", modifiers: ["Control"] }));
+          // Control+K alone is a native delete command on macOS. This chord has no
+          // editing command in the pinned engine, while still delivering real modifiers.
+          yield* handle.press(PressRequest.make({ key: "k", modifiers: ["Control", "Shift"] }));
           const afterChord = yield* read(native);
 
           expect(afterChord.keys.some((event) => event.key === "k" && event.ctrl)).toBe(true);
@@ -106,7 +107,8 @@ it.live("real CDP: keys are real input, delivered to whatever the browser says h
 
           // A page that reads the modifier needs Shift really held, and the key is spelled as
           // the page will see it: the capital. Spelled "a", the engine sends "a" with Shift down.
-          yield* handle.press(PressRequest.make({ key: "End" }));
+          // ArrowRight collapses the selected field text to its end on both host platforms.
+          yield* handle.press(PressRequest.make({ key: "ArrowRight" }));
           yield* handle.press(PressRequest.make({ key: "A", modifiers: ["Shift"] }));
           const afterShift = yield* read(native);
 
@@ -116,7 +118,12 @@ it.live("real CDP: keys are real input, delivered to whatever the browser says h
           // Select-all is the browser's own chord, so what is typed next replaces the selection.
           // The character is one no US key produces. It is committed as text, the way an input
           // method commits it: the field changes and no key event says so.
-          yield* handle.press(PressRequest.make({ key: "a", modifiers: ["Control"] }));
+          yield* handle.press(
+            PressRequest.make({
+              key: "a",
+              modifiers: [process.platform === "darwin" ? "Meta" : "Control"],
+            }),
+          );
           const strokesBefore = (yield* read(native)).keys.length;
 
           yield* handle.type(TypeRequest.make({ text: "é" }));

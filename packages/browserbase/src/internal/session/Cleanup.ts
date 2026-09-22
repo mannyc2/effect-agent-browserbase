@@ -1,33 +1,15 @@
-import { Cause, Effect, Exit, Option } from "effect";
+import { Effect, Option } from "effect";
+import { cleanupStep, noConnection, type ConnectionCleanup } from "effect-browser/browser-runtime";
+
+export { reported } from "effect-browser/browser-runtime";
+export type { ConnectionCleanup as LocalCleanup } from "effect-browser/browser-runtime";
 
 import { CleanupIssue, CleanupResult } from "../../Cleanup.ts";
-import type { BrowserError, InitializationError } from "../../Errors.ts";
 import type { SessionReference } from "../../References.ts";
 import type { SessionStatus } from "../../SessionData.ts";
 import type { BrowserbaseSessions } from "../../Sessions.ts";
 
-/** All effects are captured by the owning connection; no native value is exported. */
-export interface LocalCleanup {
-  readonly fence: Effect.Effect<void>;
-  readonly capture: Effect.Effect<void, BrowserError>;
-  readonly initialization: Effect.Effect<void, BrowserError | InitializationError>;
-  readonly disconnect: Effect.Effect<CleanupResult["local"], BrowserError>;
-}
-
-export const noLocalConnection: LocalCleanup = {
-  fence: Effect.void,
-  capture: Effect.void,
-  initialization: Effect.void,
-  disconnect: Effect.succeed("not-connected"),
-};
-
-/** Bounded host notification of canonical facts. Reporting never changes them. */
-export const reported = <A, E>(effect: Effect.Effect<A, E>) =>
-  effect.pipe(
-    Effect.interruptible,
-    Effect.timeoutOrElse({ duration: 2000, orElse: () => Effect.void }),
-    Effect.ignore,
-  );
+export const noLocalConnection = noConnection;
 
 /** Internal limits, also injectable by deterministic failure tests. */
 export interface CleanupLimits {
@@ -51,7 +33,7 @@ export const makeCleanup = Effect.fnUntraced(function* (
   reference: SessionReference,
   ownership: CleanupResult["ownership"],
   sessions: BrowserbaseSessions["Service"],
-  local: LocalCleanup,
+  local: ConnectionCleanup,
   report: (result: CleanupResult) => void,
   limits: CleanupLimits = defaultCleanupLimits,
 ) {
@@ -67,29 +49,11 @@ export const makeCleanup = Effect.fnUntraced(function* (
           action: Effect.Effect<A, E>,
           milliseconds: number,
         ) =>
-          action.pipe(
-            Effect.interruptible,
-            Effect.timeoutOrElse({
-              duration: milliseconds,
-              orElse: () => Effect.fail(CleanupIssue.make({ step: name, reason: "timeout" })),
-            }),
-            Effect.exit,
-            Effect.tap((exit) =>
+          cleanupStep(action, milliseconds).pipe(
+            Effect.tap((result) =>
               Effect.sync(() => {
-                if (Exit.isSuccess(exit)) return;
-                const reason = Cause.findErrorOption(exit.cause);
-
-                issues.push(
-                  CleanupIssue.make({
-                    step: name,
-                    reason:
-                      Option.isSome(reason) && reason.value instanceof CleanupIssue
-                        ? reason.value.reason
-                        : Cause.hasInterrupts(exit.cause)
-                          ? "interrupted"
-                          : "failed",
-                  }),
-                );
+                if (result._tag === "Failure")
+                  issues.push(CleanupIssue.make({ step: name, reason: result.reason }));
               }),
             ),
           );
@@ -99,7 +63,7 @@ export const makeCleanup = Effect.fnUntraced(function* (
         yield* step("capture", local.capture, limits.localStepMillis);
         yield* step("initialization", local.initialization, limits.localStepMillis);
         const disconnected = yield* step("disconnect", local.disconnect, limits.localStepMillis);
-        const localState = Exit.isSuccess(disconnected) ? disconnected.value : "failed";
+        const localState = disconnected._tag === "Success" ? disconnected.value : "failed";
 
         let releaseRequested = false;
         let remote: CleanupResult["remote"] = ownership === "borrowed" ? "not-owned" : "unknown";
@@ -112,7 +76,7 @@ export const makeCleanup = Effect.fnUntraced(function* (
             limits.releaseMillis,
           );
 
-          releaseRequested = Exit.isSuccess(requested);
+          releaseRequested = requested._tag === "Success";
 
           // A POST response is never substituted for a passive terminal-state observation.
           const terminal = yield* step(
@@ -121,10 +85,10 @@ export const makeCleanup = Effect.fnUntraced(function* (
             limits.terminalMillis,
           );
 
-          if (Exit.isSuccess(terminal)) {
+          if (terminal._tag === "Success") {
             remote = "confirmed";
             observedStatus = terminal.value.status;
-          } else if (Exit.isSuccess(requested)) {
+          } else if (requested._tag === "Success") {
             remote = "pending";
           }
         }

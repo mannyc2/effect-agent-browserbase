@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import { NavigateRequest, Observation, ObservedElement } from "effect-browser/browser-data";
+import * as PageControl from "effect-browser/page-control";
 import { BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
-import { NavigateRequest, Observation, ObservedElement } from "effect-browserbase/browser-data";
-import * as PageControl from "effect-browserbase/page-control";
 import type { Page } from "playwright-core";
 
 import { localBrowser, policy, withProvider } from "../fixtures/LocalBrowser.ts";

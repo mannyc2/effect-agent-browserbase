@@ -1,7 +1,7 @@
 import { Effect, Redacted, Schema } from "effect";
+import { Viewport } from "effect-browser/browser-data";
+import { BrowserError } from "effect-browser/errors";
 
-import { Viewport } from "../../BrowserData.ts";
-import { BrowserError } from "../../Errors.ts";
 import { LaunchRecipe, type ProxyRule } from "../../Launch.ts";
 import { AllocationAttempt } from "../../References.ts";
 

@@ -1,6 +1,6 @@
 import { Clock, Deferred, Effect, Fiber, Schema, Stream } from "effect";
-import type { BrowserbaseSession } from "effect-browserbase/browser";
-import * as Capture from "effect-browserbase/capture";
+import type { BrowserSession } from "effect-browser/browser";
+import * as Capture from "effect-browser/capture";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { Broadcast } from "./Broadcast.ts";
@@ -87,7 +87,7 @@ interface Signals {
  * rather than silently holding its last picture to the end.
  */
 const footage = (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   options: Required<FilmOptions>,
   telemetry: Telemetry["Service"],
 ) =>
@@ -123,7 +123,7 @@ const footage = (
  * reel of JPEG bytes for the encoder, until the cut.
  */
 const reel = (
-  session: BrowserbaseSession,
+  session: BrowserSession,
   options: Required<FilmOptions>,
   signals: Signals,
   telemetry: Telemetry["Service"],
@@ -181,9 +181,11 @@ const encoderArguments = (options: Required<FilmOptions>, outputPath: string) =>
   "mjpeg",
   "-i",
   "pipe:0",
-  // 4:2:0 needs even dimensions, and every common player needs 4:2:0.
+  // Convert JPEG's full-range samples as well as its pixel layout. FFmpeg 8.1 can
+  // preserve full-range signaling after format=yuv420p alone, yielding yuvj420p.
+  // https://ffmpeg.org/ffmpeg-filters.html#scale (out_range)
   "-vf",
-  "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p",
+  "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos:out_range=tv,format=yuv420p",
   "-c:v",
   "libx264",
   // Encoding keeps pace with capture; a slower preset would push back into the frame buffer.
@@ -233,7 +235,7 @@ const probe = Effect.fnUntraced(function* (outputPath: string) {
  * the scope, and its error is the one reported.
  */
 export const film = Effect.fn("Camera.film")(function* <A, E, R>(
-  session: BrowserbaseSession,
+  session: BrowserSession,
   outputPath: string,
   performance: Effect.Effect<A, E, R>,
   overrides: FilmOptions = {},

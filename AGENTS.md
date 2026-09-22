@@ -1,6 +1,6 @@
 # Repository guide
 
-This repository owns two packages, `packages/browserbase` (`effect-browserbase`) and `packages/agent-browserbase` (`effect-agent-browserbase`), and ships them into a pinned upstream Effect Agent workspace. Upstream is a compatibility harness, not something to change. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
+This repository owns three packages, `packages/browser` (`effect-browser`), `packages/browserbase` (`effect-browserbase`) and `packages/agent-browser` (`effect-agent-browser`), and ships them into a pinned upstream Effect Agent workspace. Upstream is a compatibility harness, not something to change. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
 
 ## Contracts
 
@@ -9,6 +9,13 @@ This repository owns two packages, `packages/browserbase` (`effect-browserbase`)
 - Keep public exports deliberate. Provider credentials and native SDK values are not durable or model-facing values.
 - Never replay an unresolved mutation, and never weaken the unsupported network policies to make them appear supported.
 - Use the coordinated pins in `.node-version`, `package.json`, `upstream.patch` and `CONTRIBUTING.md`. A version upgrade needs source review and fresh acceptance.
+
+## Package boundaries
+
+- `effect-browser` owns the shared runtime, browser data, bindings, capture and page control. Its root must not import the Chromium process implementation; launch and borrowed loopback attachment live at `/chromium`.
+- Browserbase supplies provider lifetimes through the supported `/browser-runtime` constructor. Provider resources, receipt authorization and release/status facts remain in `effect-browserbase`.
+- `effect-agent-browser` adapts either exact session through the same tools. It calls the owner's checked cleanup and keeps typed errors and references on the original browser; it never parses provider receipts or opens another connection.
+- Package unit/native tests stay in their owning `test/`. Source-only tests combining private provider and browser implementations live at repository `test/integration`, with strict checks and the same Vite+ runner. They are never exports, native consumer inputs or published files.
 
 ## Working
 

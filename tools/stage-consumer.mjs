@@ -3,7 +3,7 @@ import { copyFileSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "
 import { dirname, relative, resolve, sep } from "node:path";
 import { regularFile } from "./packages.mjs";
 
-const approved = /^packages\/(?:browserbase|agent-browserbase)\/(?:(?:test|examples|hosted)\/[^\\\n]+|vite\.native\.config\.ts)$/;
+const approved = /^packages\/(?:browser|browserbase|agent-browser)\/(?:(?:test|examples|hosted)\/[^\\\n]+|vite\.native\.config\.ts)$/;
 const extension = /\.(?:ts|mts|js|mjs|json|html)$/;
 const literalImports = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s*)(["'])([^"']+)\1/g;
 

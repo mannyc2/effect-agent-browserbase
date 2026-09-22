@@ -1,7 +1,8 @@
 import { Effect, Redacted, Schema } from "effect";
+import { BrowserError } from "effect-browser/errors";
 
 import type { BrowserbaseClient } from "../../Client.ts";
-import { BrowserError, ClientError } from "../../Errors.ts";
+import { ClientError } from "../../Errors.ts";
 import { Identifier, type SessionReference } from "../../References.ts";
 
 const LiveUrl = Schema.String.check(

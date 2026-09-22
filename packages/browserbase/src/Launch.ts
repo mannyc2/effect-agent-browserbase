@@ -1,6 +1,6 @@
 import { Schema } from "effect";
+import { Viewport } from "effect-browser/browser-data";
 
-import { Viewport } from "./BrowserData.ts";
 import { ContextReference, ExtensionReference, Identifier } from "./References.ts";
 
 const BoundedString = Schema.NonEmptyString.check(Schema.isMaxLength(1024));

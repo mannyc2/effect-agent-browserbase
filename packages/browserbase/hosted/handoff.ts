@@ -3,7 +3,7 @@ import { Effect, Redacted } from "effect";
 // session, hands its Live View to the operator at this terminal, waits for them to act and
 // say so, then resumes and reports what the page looks like afterwards. The Live View URL
 // grants control, so it goes to the terminal only and never into the JSON record.
-import { NavigateRequest } from "effect-browserbase/browser-data";
+import { NavigateRequest } from "effect-browser/browser-data";
 import { recipe } from "effect-browserbase/launch";
 
 import { hostedCase } from "./harness.ts";

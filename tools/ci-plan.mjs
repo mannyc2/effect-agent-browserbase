@@ -8,7 +8,7 @@ const sha = /^[a-f0-9]{40}$/;
 const integration = new Set(["upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh"]);
 const rootDocs = new Set(["README.md", "CONTRIBUTING.md", "AGENTS.md", "SECURITY.md", "CHANGELOG.md"]);
 const documentation = (path) => rootDocs.has(path) || /^docs\/.*\.md$/.test(path);
-const owned = (path) => /^(?:packages\/(?:browserbase|agent-browserbase)\/|tools\/|\.github\/|docs\/)/.test(path);
+const owned = (path) => /^(?:packages\/(?:browser|browserbase|agent-browser)\/|tools\/|\.github\/|docs\/)/.test(path);
 const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
 
 /** NUL records and --no-renames keep both sides of a rename in the decision. */

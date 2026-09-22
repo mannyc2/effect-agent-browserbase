@@ -3,7 +3,7 @@ import { Effect, Stream } from "effect";
 // how is its recording delivered? The playlist is validated and one media segment is fetched.
 // Whatever delivery the provider reports is recorded as observed, so a BYOS project reads as
 // BYOS rather than as a failed download. Logging, retention and expiry stay open.
-import { NavigateRequest } from "effect-browserbase/browser-data";
+import { NavigateRequest } from "effect-browser/browser-data";
 import { recipe } from "effect-browserbase/launch";
 import { BrowserbaseRecordings } from "effect-browserbase/recordings";
 import { BrowserbaseReplays } from "effect-browserbase/replays";

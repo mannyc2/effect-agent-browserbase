@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, Stream } from "effect";
+import { Viewport, ClickRequest, NavigateRequest } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { Viewport, ClickRequest, NavigateRequest } from "effect-browserbase/browser-data";
-import * as Capture from "effect-browserbase/capture";
 
 import { localBrowser, policy, settle, withProvider } from "../fixtures/LocalBrowser.ts";
 
@@ -42,7 +42,11 @@ it.live(
             );
 
             expect(denied._tag).toBe("Failure");
-            if (denied._tag === "Failure") expect(denied.failure.reason).toBe("closed");
+            if (denied._tag === "Failure")
+              expect(denied.failure).toMatchObject({
+                reason: "unregistered-session",
+                outcome: "undispatched",
+              });
 
             const stage = yield* Capture.start(session, {
               target: stagePage,
