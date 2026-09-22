@@ -1,41 +1,31 @@
-# Repository maintenance
+# Repository guide
 
-Read `README.md`, `CONTRIBUTING.md`, the relevant package guide and neighboring tests before editing. This repository owns `packages/platform-browserbase`; the pinned upstream workspace is a compatibility harness, not an invitation to change unrelated applications.
+This repository owns two packages, `packages/browserbase` (`effect-browserbase`) and `packages/agent-browserbase` (`effect-agent-browserbase`), and ships them into a pinned upstream Effect Agent workspace. Upstream is a compatibility harness, not something to change. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
 
 ## Contracts
 
 - Preserve Effect `E`/`R`, scoped resource ownership, bounded work and typed outcomes.
-- Keep the actual Effect/AgentRuntime/Playwright integration. Do not substitute contracts or native engines to satisfy tests.
-- Keep public exports deliberate. Provider credentials and native SDK values are not durable/model-facing values.
-- Do not replay unresolved mutations or weaken unsupported network policies.
-- Use the coordinated pins in `.node-version`, `package.json`, `upstream.patch` and `CONTRIBUTING.md`. Version upgrades require source review and fresh acceptance.
+- Keep the actual Effect, AgentRuntime and Playwright integration. Do not substitute contracts or native engines to satisfy tests.
+- Keep public exports deliberate. Provider credentials and native SDK values are not durable or model-facing values.
+- Never replay an unresolved mutation, and never weaken the unsupported network policies to make them appear supported.
+- Use the coordinated pins in `.node-version`, `package.json`, `upstream.patch` and `CONTRIBUTING.md`. A version upgrade needs source review and fresh acceptance.
 
-## Commands and source
+## Working
 
-`bash tools/bootstrap.sh` creates `.work/upstream/tree` from clean pinned upstream, one integration patch and tracked current package files. Follow that workspace's `AGENTS.md` and `docs/TOOLCHAIN.md`; use Vite+ commands. Read `node_modules/effect/AGENTS.md` completely before writing Effect code.
-
-The repository wrapper uses dependency-free Node maintenance scripts. Test them with `node --test tools/test/*.test.mjs`. The isolated `tools/release` application pins ts-release and its native npm provider; install it with `bun install --frozen-lockfile --ignore-scripts` and test with `bun test` from that directory. The OIDC job consumes the tested, hashed tooling artifact and installs nothing. These are host-only tools, not public runtime APIs.
-
-Commit the candidate before `bash tools/run-acceptance.sh`; that Ubuntu acceptance command rejects dirty source and reusing an output directory. Read actual command exit records and current Actions results. A saved result is historical evidence, not a new execution. Preserve source-only review patches and keep generated artifacts ignored and in Actions artifacts.
-
-Routine PR feedback uses the explicit `library` profile; it still executes every owned native test against the two candidate tarballs and all three strict Node/Bun consumers. Documentation-only checks, focused library checks and `full` pinned-upstream integration are distinct evidence, never interchangeable passes. Full remains the command default and release prerequisite. Preserve the classifier, raw-exit stage inventory, failure artifacts and `timings.tsv`; see `CONTRIBUTING.md`. Never cache browser installation as though a task result restored its external side effects.
-
-`checkpoints/` is immutable provenance. Do not edit it or use it to reconstruct current source. Old transfer instructions and session logs are historical, not active operating instructions. Keep rationale and current results in PRs rather than adding planning documents or committed transient logs.
-
-## Maintenance sessions
-
-A session often starts on a host whose Node and Bun differ from the pins, where `tools/bootstrap.sh` and `tools/run-acceptance.sh` refuse to run at all. Install the pinned runtimes first with `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions instead.
-
-Formatting is decided by the Oxfmt that Vite+ already carries; nothing needs to be fetched separately. Bootstrap, run `vp fmt` in that workspace, and bring the result back. Do not hand-write formatting to satisfy `vp run ready`. Use the frozen workspace as the formatter source of truth rather than guessing whitespace or selecting a separate formatter build.
-
-Run experiments in the bootstrapped workspace. Ordinary CI is the fixed acceptance program, not a scratchpad: do not add a disposable workflow to run an experiment or to back up, restore or delete a branch. Use `git` for normal repository changes rather than full-file contents replacements. When the host cannot reach publishers or GitHub, report the concrete prerequisite failure; do not generalize another host's connectivity or silently change the workflow.
-
-Keep the branch list short. Delete a branch once its work is merged or abandoned, and do not leave a pull request in draft over a formatting-only failure that one `vp fmt` resolves.
+- A session often starts on a host whose Node and Bun differ from the pins, where bootstrap and acceptance refuse to run. Install the pinned runtimes first: `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions.
+- `bash tools/bootstrap.sh <new directory>` builds the pinned workspace from clean upstream, `upstream.patch` and the tracked package files; stage new files first, because only tracked paths are copied. Work in that workspace with Vite+ commands, follow its `AGENTS.md` and `docs/TOOLCHAIN.md`, and read `node_modules/effect/AGENTS.md` completely before writing Effect code. Edit this repository's `packages/`, never only the disposable tree.
+- Formatting comes from the workspace's own Oxfmt: `vp fmt` for whitespace, and `vp lint <file> --fix` for the error-severity stylistic rules that `fmt` leaves alone. Scope `--fix` to the files you touched; the upstream baseline carries warnings that are not yours. Do not hand-write formatting to satisfy a gate.
+- The maintenance tools are dependency-free Node scripts: `npm_config_offline=true node --test tools/test/*.test.mjs`. `tools/release` is an isolated ts-release application: `bun install --frozen-lockfile --ignore-scripts`, then `bun test`. Both are host-only tools, not public runtime APIs.
+- Commit the candidate, then `bash tools/run-acceptance.sh library` (or `full`); acceptance rejects dirty source and reused output directories. Read the actual exit records and the current Actions results; a saved result is historical evidence, not a new execution. The documentation, library and full profiles are distinct evidence, never interchangeable passes. Keep the classifier, the stage inventory, failure artifacts and `timings.tsv`, and never cache a browser installation as though a task result restored it.
+- The paid hosted checks live in `packages/browserbase/hosted/` and run only through `tools/hosted-run.sh` behind an explicit opt-in. Ordinary CI cannot reach them, and no maintenance request authorizes a hosted session, paid inference, deployment, provisioning or publication.
+- Generated output stays ignored and in Actions artifacts; `docs/media/` is the one budgeted exception. Rationale and results belong in PRs, not in committed planning documents or transient logs. Historical material lives in Git history, and `docs/STATUS.md` records where to find it.
+- Ordinary CI is the fixed acceptance program, not a scratchpad: no disposable workflow to run an experiment or to back up, restore or delete a branch. Use `git` for ordinary changes rather than whole-file replacements. When a host cannot reach GitHub or the publishers, report that prerequisite failure; do not generalize another host's connectivity or silently change the workflow.
+- Keep the branch list short. Delete a branch once its work is merged or abandoned, and do not leave a pull request in draft over a formatting-only failure that one `vp fmt` resolves.
 
 ## Safety and release
 
-Ordinary CI remains read-only, without `pull_request_target`, auto-writing formatters, hosted browser/model credentials or publication. No hosted Browserbase session, paid inference, deployment, service provisioning or npm publication is authorized merely by a maintenance request.
+Ordinary CI is read-only: no `pull_request_target`, no auto-writing formatters, no hosted browser or model credentials, no publication.
 
-`docs/RELEASING.md` describes a separately enabled, tag-scoped npm OIDC workflow. Preparing or testing it does not authorize running its publishing job, registering a package, changing account permissions, or creating release tags. Preserve commit/checkpoint history; use normal commits, never force-push or rewrite accepted history.
+`docs/RELEASING.md` describes a separately enabled, tag-scoped npm OIDC workflow. Preparing or testing it does not authorize running its publishing job, registering a package, changing account permissions or creating release tags. Preserve commit history; use normal commits, never force-push or rewrite accepted history.
 
 Retain `ts-release-prepared/*` and `ts-release-journal/*` branches for release recovery. Prepared branches are immutable; journal branches append history. Never delete or replace them to retry an uncertain publication. Their guarded create/append operations are release storage, not permission to rewrite source branches.

@@ -30,7 +30,7 @@ test("native fixture closure may share generic test-only helpers but cannot trav
   const root = mkdtempSync(join(tmpdir(), "browserbase-fixture-test-")); t.after(() => rmSync(root, { recursive: true, force: true }));
   const tree = join(root, "tree"), out = join(root, "out"); mkdirSync(tree); mkdirSync(out);
   const write = (path, content) => { mkdirSync(dirname(join(tree, path)), { recursive: true }); writeFileSync(join(tree, path), content); };
-  const entry = "packages/platform-browserbase/test/native/agent.test.ts";
+  const entry = "packages/agent-browserbase/test/native/agent.test.ts";
   const dependency = "packages/browserbase/test/fixtures/local.ts";
   write(entry, 'import "../../../browserbase/test/fixtures/local.ts";\n');
   write(dependency, "export const sentinel = 1;\n");

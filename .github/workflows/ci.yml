@@ -156,6 +156,8 @@ jobs:
         env:
           ACCEPTANCE_PROFILE: ${{ steps.plan.outputs.profile }}
           BROWSERBASE_TASK_CACHE: ${{ steps.plan.outputs.profile == 'full' && format('{0}/browserbase-task-cache', runner.temp) || '' }}
+          # The nightly canary runs every upstream suite; candidates run the ones the patch reaches.
+          BROWSERBASE_UPSTREAM_TESTS: ${{ github.event_name == 'schedule' && 'all' || 'reachable' }}
         # This is a watchdog, not a performance claim. Normal library feedback targets 3–5 minutes.
         timeout-minutes: ${{ steps.plan.outputs.profile == 'full' && 55 || 8 }}
         run: bash tools/run-acceptance.sh "$ACCEPTANCE_PROFILE"

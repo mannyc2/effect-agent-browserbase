@@ -26,6 +26,13 @@ test("staging retains complete transitive examples and their unchanged public-pa
   assert.throws(() => stageConsumer(f.tree, f.out, [entry]), /ENOENT/);
 });
 
+test("a hosted check is staged with the example it builds on", (t) => {
+  const f = fixture(t), entry = "packages/browserbase/hosted/demo.ts";
+  f.write(entry, 'import { recordDemo } from "../examples/demo-recording.ts";\n');
+  f.write("packages/browserbase/examples/demo-recording.ts", "export const recordDemo = 1;\n");
+  assert.deepEqual(stageConsumer(f.tree, f.out, [entry]), ["packages/browserbase/examples/demo-recording.ts", entry]);
+});
+
 test("a maintained example cannot smuggle production code or local module aliases into a packed consumer", (t) => {
   const f = fixture(t), entry = "packages/browserbase/examples/demo.ts";
   for (const specifier of ["../src/Browser.ts", "/tmp/browser.ts", "file:/tmp/browser.mjs", "#workspace-browser"]) {

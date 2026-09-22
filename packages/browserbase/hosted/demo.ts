@@ -4,7 +4,7 @@
 // recording is requested or downloaded here; the video is encoded by the caller from the same
 // live-page frame stream that `record-video.ts` demonstrates.
 //
-// The recording itself lives in `demo-recording.ts` so that `test/native/demo.test.ts` can
+// The recording itself lives in `examples/demo-recording.ts` so that `test/native/demo.test.ts` can
 // prove the pacing and encoding against a local Chromium over real CDP. A hosted session is
 // spent publishing the result, not discovering those.
 import { mkdir } from "node:fs/promises";
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { recipe } from "effect-browserbase/launch";
 
-import { recordDemo } from "../demo-recording.ts";
+import { recordDemo } from "../examples/demo-recording.ts";
 import { hostedCase } from "./harness.ts";
 
 const h = hostedCase("demo");

@@ -25,10 +25,10 @@ function repository() {
   return dir;
 }
 
-for (const path of ["README.md", "CONTRIBUTING.md", "docs/research/example.md", "docs/HOSTED.md"]) {
+for (const path of ["README.md", "CONTRIBUTING.md", "docs/history/example.md", "docs/HOSTED.md"]) {
   test(`plain documentation selects only documented checks: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "docs"));
 }
-for (const path of ["packages/browserbase/src/Browser.ts", "packages/browserbase/README.md", "packages/platform-browserbase/test/native/agent.test.ts", "tools/ci-plan.mjs", ".github/workflows/ci.yml", "docs/media/demo.mp4"]) {
+for (const path of ["packages/browserbase/src/Browser.ts", "packages/browserbase/README.md", "packages/agent-browserbase/test/native/agent.test.ts", "tools/ci-plan.mjs", ".github/workflows/ci.yml", "docs/media/demo.mp4"]) {
   test(`owned change retains all three artifact consumers: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "library"));
 }
 for (const path of ["upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh", "new-runtime/index.ts", ".gitignore", "docs/../hidden.md", "docs/line\nbreak.md"]) {
@@ -98,7 +98,7 @@ function evidence(profile, alteration = (rows) => rows) {
 test("full evidence requires every stage and raw zero; a library receipt is not full", () => {
   const { out } = evidence("full"); verifyStages(out, "full");
   assert.throws(() => verifyStages(evidence("library").out, "full"), /Wrong/);
-  assert.throws(() => verifyStages(evidence("full", (rows) => rows.filter((row) => !row.startsWith("ready "))).out, "full"), /Missing/);
+  assert.throws(() => verifyStages(evidence("full", (rows) => rows.filter((row) => !row.startsWith("upstream-test "))).out, "full"), /Missing/);
   assert.throws(() => verifyStages(evidence("full", (rows) => rows.map((row) => row === "packed-consumer 0" ? "packed-consumer 1" : row)).out, "full"), /failed/);
   assert.throws(() => parseStatuses("unit 0\nunit 0\n"), /duplicate/);
   assert.throws(() => parseStatuses(""), /Malformed/);
@@ -139,10 +139,9 @@ function runnerFixture() {
   }
   write(join(dir, ".node-version"), process.versions.node + "\n");
   write(join(dir, "tools/test/fixture.test.mjs"), 'import { after, test } from "node:test"; test("substitute", () => {});\n');
-  write(join(dir, "tools/verify-checkpoint.py"), 'print("fixture checkpoint")\n');
   write(join(dir, "tools/run-boundary-suite.sh"), '#!/bin/sh\necho "fixture boundary"\n');
   write(join(dir, "packages/browserbase/index.ts"), "export {};\n");
-  write(join(dir, "packages/platform-browserbase/index.ts"), "export {};\n");
+  write(join(dir, "packages/agent-browserbase/index.ts"), "export {};\n");
   write(join(bin, "bun"), '#!/bin/sh\necho "1.4.2"\n', 0o755);
   // An extension-less script takes its module type from the nearest package.json. Without
   // this, a TMPDIR inside a "type": "module" checkout parses the CommonJS stub as ESM.
@@ -205,7 +204,8 @@ for (const profile of ["docs", "library", "full"]) {
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const out = join(work, "results"); verifyStages(out, profile);
     const stages = parseStatuses(text(join(out, "statuses.txt")));
-    assert.equal(stages.has("ready"), profile === "full");
+    assert.equal(stages.has("upstream-test"), profile === "full");
+    if (profile === "full") assert.equal(text(join(out, "upstream-tests.txt")), "reachable\n");
     assert.equal(stages.has("generic-native"), profile === "full");
     assert.equal(stages.has("packed-consumer"), profile !== "docs");
     assert.equal(text(join(out, "acceptance-exit.txt")), "0\n");
@@ -230,7 +230,7 @@ test("full acceptance preserves an early native failure while independent checks
   assert.equal(result.status, 1, result.stdout + result.stderr);
   const out = join(work, "results"), stages = parseStatuses(text(join(out, "statuses.txt")));
   assert.equal(stages.get("generic-native"), 7);
-  assert.equal(stages.get("ready"), 0);
+  assert.equal(stages.get("upstream-test"), 0);
   assert.equal(stages.get("release-dry-run"), 0);
   assert.ok(existsSync(join(out, "consumers/agent/node_modules/fixture.d.mts")));
   assert.equal(existsSync(join(out, "consumer-fixtures.tar.gz")), false);

@@ -6,7 +6,7 @@ import { join, posix } from "node:path";
 export const repositoryUrl = "git+https://github.com/mannyc2/effect-agent-browserbase.git";
 export const packages = Object.freeze([
   Object.freeze({ name: "effect-browserbase", directory: "packages/browserbase", stem: "effect-browserbase" }),
-  Object.freeze({ name: "effect-agent-browserbase", directory: "packages/platform-browserbase", stem: "effect-agent-browserbase" }),
+  Object.freeze({ name: "effect-agent-browserbase", directory: "packages/agent-browserbase", stem: "effect-agent-browserbase" }),
 ]);
 const adapterExports = [".", "./adapter", "./tools"];
 const versionPattern = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(alpha|beta|rc)\.(?:0|[1-9][0-9]*))?$/;

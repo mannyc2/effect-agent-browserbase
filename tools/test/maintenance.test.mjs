@@ -15,10 +15,12 @@ test("all maintained shell entry points parse without executing any commands", (
 
 test("bootstrap uses a single current patch and frozen installs, not historical inputs", () => {
   const bootstrap = read("tools/bootstrap.sh");
-  assert.ok(!bootstrap.includes("checkpoints/"));
   assert.equal((bootstrap.match(/--frozen-lockfile/g) ?? []).length, 2);
   assert.ok(bootstrap.includes('apply --check "$ROOT/upstream.patch"'));
-  assert.ok(!read("upstream.patch").includes("diff --git a/packages/platform-browserbase/"));
+  // The patch integrates the packages into upstream; their source arrives by copy, never by diff.
+  for (const owned of ["browserbase", "agent-browserbase"]) {
+    assert.ok(!read("upstream.patch").includes(`diff --git a/packages/${owned}/`));
+  }
   assert.ok(!existsSync(join(root, "tools/canonicalize-candidate.sh")));
   assert.ok(!existsSync(join(root, "tools/fetch-inputs.py")));
   assert.equal(JSON.parse(read("package.json")).private, true);
@@ -87,6 +89,22 @@ test("the step that marks a run as full release evidence exists and is full-only
   assert.match(step.slice(0, 200), /if: \$\{\{ success\(\) && steps\.plan\.outputs\.profile == 'full' \}\}/);
 });
 
+test("full acceptance runs upstream's check and build whole, and tests only what the patch reaches", () => {
+  const acceptance = read("tools/run-acceptance.sh");
+  const upstream = acceptance.slice(acceptance.indexOf('UPSTREAM_TESTS="${BROWSERBASE_UPSTREAM_TESTS'), acceptance.indexOf("run release-dry-run"));
+
+  assert.ok(upstream.includes("reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browserbase -F effect-agent-browserbase -F @effect-agent/testing test)"));
+  // The canary spelling is upstream's own root script, recursion included, not a filter.
+  assert.ok(upstream.includes("all) TEST_ARGS=(test)"));
+  assert.ok(upstream.includes("run upstream-check timeout 900s ./node_modules/.bin/vp run -v check"));
+  assert.ok(upstream.includes("run upstream-build timeout 900s ./node_modules/.bin/vp run -v build"));
+  assert.ok(upstream.includes('"$OUT/upstream-tests.txt"'));
+  // Only the scheduled drift canary pays for upstream's unrelated suites.
+  const ci = read(".github/workflows/ci.yml");
+
+  assert.match(ci, /BROWSERBASE_UPSTREAM_TESTS: \$\{\{ github\.event_name == 'schedule' && 'all' \|\| 'reachable' \}\}/);
+});
+
 test("the upstream task cache is seeded only after every stage with external effects", () => {
   const acceptance = read("tools/run-acceptance.sh");
   const seed = acceptance.indexOf('cp -a "$SEED/." "$TASK_CACHE/"');
@@ -94,7 +112,7 @@ test("the upstream task cache is seeded only after every stage with external eff
   assert.ok(seed > acceptance.indexOf("run packed-consumer"));
   assert.ok(seed > acceptance.indexOf("run package-dry-run"));
   assert.ok(seed > acceptance.lastIndexOf("install_native"));
-  assert.ok(seed < acceptance.indexOf("run ready"));
+  assert.ok(seed < acceptance.indexOf("run upstream-check"));
   assert.ok(acceptance.indexOf('cp -a "$TASK_CACHE/." "$SEED/"') > acceptance.indexOf("run release-dry-run"));
   const ci = read(".github/workflows/ci.yml");
 

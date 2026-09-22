@@ -15,7 +15,7 @@ test("generic installation contracts do not acquire the framework or framework t
     }
   }
   assert.equal(generic.peerDependenciesMeta["playwright-core"].optional, true);
-  const adapter = JSON.parse(read("packages/platform-browserbase/package.json"));
+  const adapter = JSON.parse(read("packages/agent-browserbase/package.json"));
   assert.equal(generic.version, adapter.version);
   assert.equal(generic.peerDependencies.effect, adapter.peerDependencies.effect);
 });
@@ -35,17 +35,17 @@ test("every generic public entry has a real module and declaration build entry",
 });
 
 test("unpaid acceptance cannot silently omit the generic package", () => {
-  assert.match(read("tools/bootstrap.sh"), /'packages\/browserbase', 'packages\/platform-browserbase'/);
+  assert.match(read("tools/bootstrap.sh"), /'packages\/browserbase', 'packages\/agent-browserbase'/);
   const acceptance = read("tools/run-acceptance.sh");
   for (const gate of ["generic-typecheck", "generic-unit", "generic-build"]) {
     assert.match(acceptance, new RegExp(`run ${gate} timeout`));
   }
-  assert.match(acceptance, /ls-files -z -- packages\/browserbase packages\/platform-browserbase/);
+  assert.match(acceptance, /ls-files -z -- packages\/browserbase packages\/agent-browserbase/);
 });
 
 test("bootstrap's lock and guide describe the canonical adapter rather than retired reexports", () => {
   const patch = read("upstream.patch");
-  const start = patch.indexOf('+    "packages/platform-browserbase": {');
+  const start = patch.indexOf('+    "packages/agent-browserbase": {');
   const end = patch.indexOf('     "packages/platform-cloudflare": {', start);
   assert.ok(start > 0 && end > start, "the pinned patch contains the adapter workspace inventory");
   const workspace = patch.slice(start, end).replace(/^\+/gm, "");

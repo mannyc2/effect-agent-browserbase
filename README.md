@@ -1,78 +1,115 @@
 # Effect Agent Browserbase
 
-Execution-scoped Browserbase integration built on Effect v4 and Playwright-over-CDP for trusted Node and Bun hosts, in two packages.
+[Browserbase](https://www.browserbase.com) for [Effect](https://effect.website) v4, in two packages that share one owned browser.
 
-`effect-browserbase` owns Browserbase: account identity, session and context resources, one owned browser, live capture, page holds, recordings, replays and downloads. It does not depend on [Effect Agent](https://github.com/danieljvdm/effect-agent). `effect-agent-browserbase` is the adapter: it presents that browser to an `AgentRuntime` and supplies the fixed Tool set, and it has no Playwright peer.
+| Package | Folder | What it is |
+| --- | --- | --- |
+| `effect-browserbase` | [`packages/browserbase`](packages/browserbase/README.md) | The whole Browserbase surface for an Effect application: one account, session and context resources, one owned browser over Playwright/CDP, real pointer and key input, bounded live capture, page holds, typed page→host bindings, the provider's recordings, replays, uploads and downloads, and the platform APIs outside a session. No Effect Agent dependency. Playwright is an optional peer, loaded only when a browser connects. |
+| `effect-agent-browserbase` | [`packages/agent-browserbase`](packages/agent-browserbase/README.md) | The [Effect Agent](https://github.com/danieljvdm/effect-agent) adapter: the `InteractiveBrowser` implementation and the fixed browser Toolkit an `AgentRuntime` calls. It borrows the generic package's session rather than opening its own, and has no Playwright peer. |
 
-One scope owns the browser. Agent tools borrow that session across turns. Recording, replay and download access have independent lifetimes; live capture supplies bounded JPEG frames from selected or explicitly pinned pages without owning an encoder or an audio source.
+Neither package is published yet; see [Status](#status).
 
-**Release status:** this repository has not published either package. Publication requires control of both npm names. Local native and framework acceptance is distinct from hosted Browserbase validation; see the status record for the exact scope of separately reported provider evidence.
+## A first look
 
-## API
+One account, one owned browser, bounded actions with typed outcomes:
 
-| Import | Purpose |
-| --- | --- |
-| `effect-browserbase/client` | One immutable account, transport and approved artifact origins |
-| `effect-browserbase/sessions` | Passive inspection and explicit release |
-| `effect-browserbase/contexts` | Context resources, with writer settlement in `context-coordination` |
-| `effect-browserbase/browser` | Browser ownership, pages, frames, handoff and explicit reconnect |
-| `effect-browserbase/capture` | Target-pinned video frame streams with source timestamps |
-| `effect-browserbase/page-control` | Opt-in host-owned stage holds and receipt-based resume |
-| `effect-browserbase/recordings` | Provider MP4 assembly, status and bounded retrieval |
-| `effect-browserbase/replays` | Validated replay playlists and media access |
-| `effect-browserbase/downloads` | Website download identity and bounded streams |
-| `effect-browserbase/launch` and the data modules | Credential-free schemas and typed errors |
-| `effect-agent-browserbase/adapter` | The Effect Agent `InteractiveBrowser` implementation |
-| `effect-agent-browserbase/tools` | Bounded navigation, observation and exact-node actions |
+```ts
+import * as Account from "effect-browserbase/account";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { BrowserPolicy, NavigateRequest } from "effect-browserbase/browser-data";
+import { recipe } from "effect-browserbase/launch";
+import { Effect, Layer } from "effect";
 
-Both root entry points are also public. Production distributions contain ESM JavaScript and `.d.mts` declarations, not test fixtures, recovery archives or development dependencies. Playwright is an optional peer of the generic package only, loaded when a browser connects; install `playwright-core@1.63.0` when using that capability.
+// BROWSERBASE_PROJECT_ID and BROWSERBASE_API_KEY are read from the ConfigProvider.
+const browser = BrowserbaseBrowser.layer({ launch: recipe() }).pipe(
+  Layer.provide(Account.layerConfig()),
+);
 
-Read the [Browserbase guide](packages/browserbase/README.md) for ownership, outcomes, bounds and examples, and the [adapter guide](packages/platform-browserbase/README.md) for the framework integration. The [agent example](packages/platform-browserbase/examples/agent.ts) uses the real `AgentRuntime` and scripted model; the [hosted examples](packages/browserbase/examples/hosted.ts) show application composition but require separately authorized hosted access.
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    // The scope owns the session. Leaving it releases the browser and reports how that went.
+    const session = yield* (yield* BrowserbaseBrowser).open(BrowserPolicy.unrestricted());
+
+    yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com" }));
+
+    return yield* session.observe({ scope: "viewport" });
+  }),
+).pipe(Effect.provide(browser));
+```
+
+Hand the same kind of session to an agent and every model turn borrows it:
+
+```ts
+import { BrowserbaseInteractiveHost } from "effect-agent-browserbase/adapter";
+import * as BrowserTools from "effect-agent-browserbase/tools";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+
+const run = Effect.scoped(
+  Effect.gen(function* () {
+    const session = yield* (yield* BrowserbaseInteractiveHost).open(policy);
+
+    // The Tools navigate, inspect, click, fill and scroll this session; none opens or closes one.
+    return yield* AgentRuntime.run(agent, "find the pricing page").pipe(
+      Effect.provide(Layer.merge(BrowserTools.handlers(session), InMemory.layer)),
+    );
+  }),
+);
+```
+
+[`packages/agent-browserbase/examples/agent.ts`](packages/agent-browserbase/examples/agent.ts) is the complete version, including an operator taking the session over through Live View between two agent runs, and a typed page→host binding whose failure ends the run. [`packages/browserbase/examples/`](packages/browserbase/examples/README.md) covers the generic side: caller-encoded video from live capture, and a storyboard filmed with a drawn pointer and real keys.
+
+## What the packages promise
+
+- **One owner.** A `BrowserbaseSession` belongs to the Effect `Scope` that opened it and owns the single CDP connection; nothing else drives that browser. A `SessionReference` is the durable, credential-free identity that outlives the scope and names recordings, replays and cleanup afterwards.
+- **Bounded work, typed outcomes.** Every operation is charged against a policy of actions, elapsed time and returned bytes. Every failure says which operation, why, and whether it was sent: `undispatched` is safe to retry, `rejected` was refused, `unknown` may have happened and is never replayed for you.
+- **Exact targets.** Actions name the exact node an observation returned. A replaced, detached or changed node fails instead of resolving to something similar; nothing is ever re-found by selector or label.
+- **Host authority stays with the host.** Credentials, CDP addresses, Live View URLs, control facts and callback diagnostics never reach a model. Page→host bindings are admitted by the calling document's execution-context identity, not by a URL the page reports.
+- **Evidence a recorder can trust.** Pointer, wheel and key input are the events hardware would send, with receipts on the same monotonic clock as captured frames. Capture reports every dropped frame and every document boundary, and claims no audio, because the screencast has none.
+- **What it refuses.** Only the trusted-host `Unrestricted` network policy is supported; `ExactHosts` and `PublicWeb` fail before allocation rather than claiming a containment the provider cannot prove. There is no second CDP client, no raw protocol seam, and no recording enabled after the fact.
+
+The [Browserbase guide](packages/browserbase/README.md) is the reference for all of this; the [adapter guide](packages/agent-browserbase/README.md) covers the framework contract, error translation and what authority each Tool grants.
+
+## Status
+
+**Not yet on npm.** Both packages are built and tested from this repository; publication is a separate, manual, tag-scoped workflow ([RELEASING.md](docs/RELEASING.md)).
+
+**Unpaid acceptance on every pull request.** `Library CI` runs the maintenance tooling tests, both packages' unit suites, the native suites against a local Chromium over real CDP, and three clean consumers installed from the packed tarballs on both Node and Bun. The full profile adds the pinned upstream workspace's own `check` and `build`, and its tests for the workspaces the integration patch reaches. Nothing in it allocates a hosted session or calls a paid model; see [CONTRIBUTING.md](CONTRIBUTING.md#acceptance-profiles).
+
+**Hosted evidence is separate and recorded.** Every paid question is a registered check in [`packages/browserbase/hosted/`](packages/browserbase/hosted/checks.ts), run only through a manual, default-off workflow ([HOSTED.md](docs/HOSTED.md)). [STATUS.md](docs/STATUS.md) records which claims have a run behind them — allocation, capture, Live View, confirmed release, recording and replay delivery, persistent contexts, keep-alive reconnect, extension identity, uploads and one operator handoff — and which remain open. A local pass is never presented as hosted evidence.
 
 ### Demo
 
-The demo recording published under [`docs/media/`](docs/media/README.md) is one real hosted session navigating and scrolling under Effect Agent control, encoded by the caller from the same live frame stream `packages/browserbase/examples/record-video.ts` demonstrates. The MP4 is caller-encoded capture output; the GIF is a derived, downsampled preview, not lossless frame or timing evidence.
+A real hosted session navigating and scrolling under Effect Agent control, encoded by the caller from the live frame stream ([provenance](docs/media/README.md)):
 
 ![A hosted Browserbase session navigating and scrolling under Effect Agent control](docs/media/hosted-demo.gif)
 
 [Higher-quality MP4](docs/media/hosted-demo.mp4)
 
-For footage meant to be watched rather than audited, [`examples/realistic-footage`](packages/browserbase/examples/realistic-footage/README.md) films a storyboard with a drawn pointer, paced typing, eased scrolling and a constant-frame-rate encode, using only the session's ordinary bounded actions. This one was filmed against a local Chromium, not a hosted session:
+And footage meant to be watched: a storyboard performed with a drawn pointer, paced typing and eased scrolling by [`examples/realistic-footage`](packages/browserbase/examples/realistic-footage/README.md), filmed against a local Chromium:
 
 ![A drawn pointer types a destination, follows a route, scrolls its stops and holds a berth on a fictional sleeper-train site](docs/media/realistic-footage.gif)
 
 [Higher-quality MP4](docs/media/realistic-footage.mp4)
-
-Ordinary CI cannot allocate a session, so a recording only ever comes from a deliberate maintainer run. The exact source commit, session id, runtime and capture summary behind the committed file are recorded in [docs/media/README.md](docs/media/README.md) and [status](docs/STATUS.md). A recording shows that a session ran. It is not a substitute for the hosted acceptance checks listed in [status](docs/STATUS.md).
-
-### Important boundaries
-
-Only trusted-host `Unrestricted` network policy is supported. `ExactHosts` and `PublicWeb` fail before allocation rather than claiming containment the provider cannot prove. A timed-out mutation after dispatch has an unknown outcome and is not automatically retried. Credentials and Live View bearer URLs must stay outside model inputs and durable records. Live capture is video-only. `src/internal/` is private: there is no consumer CDP seam and no lower-level binding Layer, and host controls above core's provider-neutral handle are deliberately per-adapter rather than portable across adapters.
 
 ## Development
 
 ```sh
 git clone https://github.com/mannyc2/effect-agent-browserbase.git
 cd effect-agent-browserbase
-# Install Node 24.14.1 and Bun 1.4.2 first.
-bash tools/bootstrap.sh
+toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"   # Node 24.14.1, Bun 1.4.2
+bash tools/bootstrap.sh                          # clean pinned upstream + upstream.patch + these packages
 cd .work/upstream/tree
 ./node_modules/.bin/vp run -F effect-browserbase check
 ./node_modules/.bin/vp run -F effect-agent-browserbase check
 ```
 
-These remain integration packages for the pinned upstream workspace, not a second copy of the framework. `bootstrap.sh` applies one current integration patch to clean upstream and copies only tracked package files. It does not execute or apply historical checkpoint code.
+The packages are developed inside a pinned [effect-agent](https://github.com/danieljvdm/effect-agent) workspace that `tools/bootstrap.sh` reproduces; edit `packages/` here, not the disposable tree. [CONTRIBUTING.md](CONTRIBUTING.md) has the toolchain pins, the local loop and the acceptance profiles; [AGENTS.md](AGENTS.md) the rules for automated maintenance; [SECURITY.md](SECURITY.md) the trust boundary.
 
-[Contributing](CONTRIBUTING.md) covers local commands and the complete Ubuntu acceptance run. [Releasing](docs/RELEASING.md) describes the manual, default-off npm trusted-publishing workflow. [Security](SECURITY.md) documents the host trust boundary.
+| Document | Holds |
+| --- | --- |
+| [`docs/STATUS.md`](docs/STATUS.md) | Current state and every hosted run record |
+| [`docs/HOSTED.md`](docs/HOSTED.md) | The registered paid checks and how to run them |
+| [`docs/RELEASING.md`](docs/RELEASING.md) | The manual npm trusted-publishing workflow |
+| [`docs/media/`](docs/media/README.md) | The committed recordings and their provenance |
 
-## CI and maintenance
-
-`Library CI` reports **Unpaid acceptance** on every pull request, including forks and stacked PRs, and on `main` and merge groups. Routine library feedback checks both packages, all three strict Node/Bun consumers and the complete native suites against the real candidate tarballs. Documentation-only changes receive explicitly labelled documentation/tooling checks. Full pinned-upstream `vp run ready` and upstream release dry-runs run for integration changes, daily integration, deliberate full requests and reusable release validation; a focused pass is not a full pass. Every profile retains source identity, raw exits, stage timings and failure evidence. See [acceptance profiles](CONTRIBUTING.md#acceptance-profiles). CI remains read-only, without hosted/model credentials.
-
-`Hosted Browserbase` is the only workflow intended to allocate provider sessions. It is manual and default-off; configure its branch-restricted protected environment before enabling it. It never runs on a pull request, so fork contributors are never blocked on a credential they cannot have. See [hosted runs](docs/HOSTED.md).
-
-The npm job is separate: it receives OIDC permission only after fresh acceptance and an explicit maintainer opt-in. An isolated [ts-release 0.4.0 application](tools/release/) publishes the two tested tarballs through native npm trusted publishing and provenance. It retains the signed bundle and plan in Git and uses a durable dispatch journal to resume partial releases without blindly resending an uncertain upload. The publishing job installs nothing and runs no package lifecycle scripts; its tested tooling arrives as a hashed build artifact.
-
-Historical acceptance is linked from [status](docs/STATUS.md). Checkpoints are immutable provenance under `checkpoints/`, not build inputs. Obsolete recovery scripts and transient run logs remain accessible in Git history, not on the active maintenance path.
-
-MIT licensed. No hosted sessions, paid inference, publication, deployment or provisioning are part of ordinary CI.
+MIT licensed. Ordinary CI never allocates a hosted session, performs paid inference, publishes or deploys.
