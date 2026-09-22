@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const common = ["tooling", "checkpoint", "source-cleanliness"];
+const common = ["tooling", "source-cleanliness"];
 const library = ["boundary", "bootstrap", "format", "lint", "generic-typecheck", "typecheck", "generic-unit", "unit", "generic-build", "build", "exports", "purity", "install-browser", "install-media-tools", "packed-consumer", "release-identity", "package-dry-run", "review-check"];
 export function requiredStages(profile) {
   assert.ok(["docs", "library", "full"].includes(profile), "Unknown acceptance profile");

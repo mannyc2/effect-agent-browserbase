@@ -15,7 +15,6 @@ test("all maintained shell entry points parse without executing any commands", (
 
 test("bootstrap uses a single current patch and frozen installs, not historical inputs", () => {
   const bootstrap = read("tools/bootstrap.sh");
-  assert.ok(!bootstrap.includes("checkpoints/"));
   assert.equal((bootstrap.match(/--frozen-lockfile/g) ?? []).length, 2);
   assert.ok(bootstrap.includes('apply --check "$ROOT/upstream.patch"'));
   // The patch integrates the packages into upstream; their source arrives by copy, never by diff.

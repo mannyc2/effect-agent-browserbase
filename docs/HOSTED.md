@@ -28,10 +28,13 @@ over-budget check fails before anything is spent.
 | `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |
 | `replay-delivery` | H7 | the replay playlist validates and a segment downloads; recording delivery is reported as observed |
 
-Questions refer to the hosted experiments in the
-[implementation plan](research/browserbase-platform-2026-09-20/implementation-plan.md).
-Each check narrows its question rather than answering all of it; the registry's
-`claim` says exactly how far. The demo is documentation evidence and is not a
+The question codes come from the design research that preceded the checks
+(retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1
+persistence visibility, H2 context overlap and deletion, H3 extension and
+profile identity, H4 reconnect and cleanup, H5 multi-page evidence, H6 files
+and network routing, H7 observability and retention. H2 and H5 have no
+registered check. Each check narrows its question rather than answering all of
+it; the registry's `claim` says exactly how far. The demo is documentation evidence and is not a
 substitute for any check. [STATUS.md](STATUS.md) records which claims have a
 run behind them.
 

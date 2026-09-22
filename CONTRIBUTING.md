@@ -73,7 +73,7 @@ Every profile rejects dirty source and reused output directories, asserts the sa
 
 | Profile | Required checks | Selection |
 | --- | --- | --- |
-| `docs` | Tooling tests, immutable checkpoint integrity, source-bound diff revalidation, whitespace and clean source | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed |
+| `docs` | Tooling tests, source-bound diff revalidation, whitespace and clean source | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed |
 | `library` | Tooling, Node/Bun boundary harness, frozen bootstrap, early canonical format/lint and both package types, both unit suites/builds, exports/purity, both candidate tarballs, all three strict consumers and every generic/Agent native test from those tarballs, release identity and the two-package dry-run | Owned package, tooling, workflow and media changes |
 | `full` | All library checks plus separate source-native suites, the complete pinned-upstream `vp run ready`, and upstream release dry-run | Integration/pin/bootstrap changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
 
@@ -91,7 +91,7 @@ Routine library feedback targets a few minutes. Use `timings.tsv` and the job su
 
 Successful evidence retains the two immutable tarballs, source/review archives, logs, video, receipts, checksums, consumer configs and exact lockfiles. Tested consumer fixtures are archived with their modes; installed `node_modules` are left outside the upload instead of repeatedly transferring hundreds of megabytes of reproducible inputs. Failed or interrupted runs retain their complete installed consumer workspaces, including broken dependency declarations. No existing failure artifacts are pruned. Artifact compression is low, and all files named by the checksum inventory, including hidden diagnostic files, are retained.
 
-Results, downloaded videos, build directories and archives remain ignored and belong in Actions artifacts, not commits. The exception is declared-budget demo media under `docs/media/`, checked by the tooling suite. `checkpoints/` is immutable provenance, not a bootstrap dependency.
+Results, downloaded videos, build directories and archives remain ignored and belong in Actions artifacts, not commits. The exception is declared-budget demo media under `docs/media/`, checked by the tooling suite.
 
 This design avoids parallel browser workers and never caches browser binaries: Playwright [does not generally recommend it](https://playwright.dev/docs/ci#caching-browsers), and an old success cannot restore an external installation. Removing unrelated work and duplicate executions came first.
 

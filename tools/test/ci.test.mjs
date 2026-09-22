@@ -25,7 +25,7 @@ function repository() {
   return dir;
 }
 
-for (const path of ["README.md", "CONTRIBUTING.md", "docs/research/example.md", "docs/HOSTED.md"]) {
+for (const path of ["README.md", "CONTRIBUTING.md", "docs/history/example.md", "docs/HOSTED.md"]) {
   test(`plain documentation selects only documented checks: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "docs"));
 }
 for (const path of ["packages/browserbase/src/Browser.ts", "packages/browserbase/README.md", "packages/agent-browserbase/test/native/agent.test.ts", "tools/ci-plan.mjs", ".github/workflows/ci.yml", "docs/media/demo.mp4"]) {
@@ -139,7 +139,6 @@ function runnerFixture() {
   }
   write(join(dir, ".node-version"), process.versions.node + "\n");
   write(join(dir, "tools/test/fixture.test.mjs"), 'import { after, test } from "node:test"; test("substitute", () => {});\n');
-  write(join(dir, "tools/verify-checkpoint.py"), 'print("fixture checkpoint")\n');
   write(join(dir, "tools/run-boundary-suite.sh"), '#!/bin/sh\necho "fixture boundary"\n');
   write(join(dir, "packages/browserbase/index.ts"), "export {};\n");
   write(join(dir, "packages/agent-browserbase/index.ts"), "export {};\n");

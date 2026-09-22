@@ -91,7 +91,16 @@ Each check narrows its question. Other storage kinds and flush timing (H1), reco
 
 ## Historical material
 
-`checkpoints/` is preserved byte-for-byte as provenance and is not needed to bootstrap current source. The old transfer handoff, canonical-input fetcher and transient development logs were retired from active paths. Their original bytes remain available at merge commit `e61e3d75c15cbd467e196170fce5c064c13d4bb0` in Git history:
+Nothing in the tree is needed to reconstruct current source except the tracked packages, `upstream.patch` and the pins; everything historical lives in Git history rather than beside the code.
+
+The preserved transfer checkpoint (`checkpoints/`: the checkpoint-04 archive, its manifest, patches, probe harness, run logs and access records, together with `tools/verify-checkpoint.py`) and the September 2026 design research (`docs/research/browserbase-platform-2026-09-20/`, whose proposals were implemented or superseded by #31–#54) were retired on 22 September 2026. Both are intact at `c2afec83a7b47f96bf0da20b0c01ee94e3ee1d45`:
+
+```sh
+git show c2afec83a7b47f96bf0da20b0c01ee94e3ee1d45:checkpoints/README.md
+git ls-tree -r c2afec83a7b47f96bf0da20b0c01ee94e3ee1d45 docs/research/
+```
+
+The older transfer handoff, canonical-input fetcher and transient development logs were retired earlier and remain at merge commit `e61e3d75c15cbd467e196170fce5c064c13d4bb0`:
 
 ```sh
 git show e61e3d75c15cbd467e196170fce5c064c13d4bb0:docs/handoff.md

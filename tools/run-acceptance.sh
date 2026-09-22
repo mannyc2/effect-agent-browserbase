@@ -79,7 +79,6 @@ install_native() {
 }
 cd "$SOURCE_ROOT"
 run tooling timeout 120s env npm_config_offline=true node --test tools/test/*.test.mjs
-run checkpoint python3 tools/verify-checkpoint.py checkpoints/browserbase-continuation-04.zip
 fast_reject
 if [ "$PROFILE" = docs ]; then
   run docs-plan node tools/ci-plan.mjs assert-docs "$WORK_ROOT/ci-plan.json"

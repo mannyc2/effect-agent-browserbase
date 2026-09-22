@@ -1,6 +1,4 @@
-# Preserved checkpoint archives, published media and patches must survive
-# round-trips untouched.
-*.zip binary
+# Published media and patches must survive round-trips untouched.
 *.gif binary
 *.mp4 binary
 *.patch -text
