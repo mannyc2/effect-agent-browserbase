@@ -7,6 +7,7 @@ import type {
   PageExecutionState,
   PageInfo,
   PageSuspension,
+  SelectOptions,
   Viewport,
   ViewportEvidence,
 } from "../../BrowserData.ts";
@@ -252,6 +253,12 @@ export interface Driver {
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
+  ) => Promise<string>;
+  readonly selectOption: (
+    target: ObservedElement,
+    options: SelectOptions,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
   ) => Promise<string>;
   /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (

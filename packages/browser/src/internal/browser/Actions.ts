@@ -368,6 +368,30 @@ export const makeActions = (
       return postUrl(browserTarget);
     });
 
+  const selectOption: Driver["selectOption"] = (target, options, ticket, policy) =>
+    sanitize(async () => {
+      await withAdmittedElement(
+        target,
+        ticket,
+        (element) => observation.selectOptions(target, options, element, ticket),
+        async (element, admitted) => {
+          // Only issued native nodes reach this command. Its returned values stay private.
+          const values = await element.selectOption(admitted.handles, { timeout: timeout(ticket) });
+          const expected = [...admitted.values].sort();
+
+          if (
+            values.length !== expected.length ||
+            values.sort().some((value, i) => value !== expected[i])
+          )
+            throw failure(Reasons.Stale.make({}), "unknown");
+        },
+        policy,
+      );
+      ticket.check();
+
+      return postUrl();
+    });
+
   const scroll: Driver["scroll"] = (deltaX, deltaY, ticket, target) =>
     sanitize(async () => {
       const { frame } = current(target);
@@ -504,6 +528,7 @@ export const makeActions = (
     },
     click,
     fill,
+    selectOption,
     scroll,
     waitFor,
     clickAndWait,

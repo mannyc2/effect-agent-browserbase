@@ -20,6 +20,7 @@ import type {
   ScreenshotRequest,
   ScreenshotResult,
   ScrollRequest,
+  SelectOptions,
   SessionStatus,
   StartNavigationRequest,
   TextResult,
@@ -140,8 +141,8 @@ export interface BrowserSession<E = never> extends TargetOperations {
   readonly target: Effect.Effect<Target, BrowserError>;
   /**
    * The one observation whose nodes later actions may name. `scope: "viewport"` keeps only text
-   * and controls that are on screen and reachable; the default reads the whole document. It is
-   * safe to show a model: it carries no destination, form or field value.
+   * and controls that are on screen and reachable, plus bounded choices of visible native
+   * selects; the default reads the whole document. It carries no destination, form or field value.
    */
   readonly observe: (options?: ObservationOptions) => Effect.Effect<Observation, BrowserError>;
   /**
@@ -166,6 +167,12 @@ export interface BrowserSession<E = never> extends TargetOperations {
   readonly fillElement: (
     reference: ObservedElement,
     value: string,
+    admission?: ElementAdmission,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  /** One selection using this exact select and its issued option element IDs, with fresh checks. */
+  readonly selectOption: (
+    reference: ObservedElement,
+    options: SelectOptions,
     admission?: ElementAdmission,
   ) => Effect.Effect<ActionResult, BrowserError>;
   readonly hoverElement: (

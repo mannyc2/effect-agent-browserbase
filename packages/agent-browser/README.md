@@ -4,7 +4,7 @@
 
 ## Public entry points
 
-`tools` exports the maintained Toolkit, direct `BrowserSession` handlers, supervised host composition and separate pointer/wheel and keyboard opt-ins. `adapter` exports `fromSession` and `interactiveLayer` for code that specifically needs Effect Agent's provider-neutral `InteractiveBrowser` contract. The root exports those two namespaces.
+`tools` exports the maintained Toolkit, direct `BrowserSession` handlers, supervised host composition and separate pointer/wheel, keyboard and option-selection opt-ins. `adapter` exports `fromSession` and `interactiveLayer` for code that specifically needs Effect Agent's provider-neutral `InteractiveBrowser` contract. The root exports those two namespaces.
 
 ## One session, chosen by the host
 
@@ -64,7 +64,7 @@ There is one `AdaptedSession<S>` type containing `browser` and `handle`. Reacqui
 
 ## Host observation and exact-control policy
 
-`handlers(browser, options)` keeps document inspection and the original five Tools by default. The host can select `observationScope: "viewport"` and pass `admission: ElementAdmission`. The same options apply to `nativeHandlers`, `keyboardHandlers`, `makeHost` and `run`:
+`handlers(browser, options)` keeps document inspection and the original five Tools by default. The host can select `observationScope: "viewport"` and pass `admission: ElementAdmission`. The same options apply to `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, `makeHost` and `run`:
 
 ```ts
 const handlers = BrowserTools.handlers(browser, {
@@ -96,13 +96,50 @@ Keyboard Tools also take an exact `ObservedElement`. That node must already have
 
 Real-input model results contain only `{ dispatched: true }`. They do not claim scrolling, focus-driven page work or a website action has settled. Observe again for the result. `makeHost`'s `onInput` receives the unmodified `InputReceipt` and optional tool-call ID, including target, commanded position/delta and host-monotonic interval. A receipt never includes the key or typed text. Receipt times, private capabilities and callback output never enter the model result. The host owns pacing, easing and drawing; these Tools add none and never replay failed input.
 
+## Optional exact option selection
+
+Merge `selectionToolkit` when an agent may operate native dropdowns:
+
+```ts
+import { Toolkit } from "effect/unstable/ai";
+import * as BrowserTools from "effect-agent-browser/tools";
+
+const tools = Toolkit.merge(BrowserTools.toolkit, BrowserTools.selectionToolkit);
+// Declare tools on the agent; BrowserTools.run provides the matching handler services.
+```
+
+`browser_select_option` accepts `{ reference, options }`. `reference` identifies the inspected
+native `<select>`; `options` is a nonempty set of at most 64 unique option `elementId`s from that
+same observation. Each option's `selectElementId` names its parent control. `multiple` on the
+select determines whether several choices are allowed; `optionsTruncated` says some choices did
+not fit the shared control budget. A viewport inspection includes choices belonging to a visible
+select even while its popup menu is collapsed. This is option metadata, not a claim that every
+option row has visible pixels. Increase the host's `maxControls` deliberately when needed, up to
+the browser's existing bound of 64 total retained controls and options.
+
+Only options carrying `selectElementId` are eligible. Options whose private submitted values
+exceed the native identity bound are left unissued and reported through `optionsTruncated`.
+After a host page hold, both the select and each chosen option need explicit revalidation.
+
+Labels can repeat; only issued IDs identify choices. The tool accepts no value, label lookup,
+selector or page identifier. The browser rechecks the original select and option nodes, their
+membership, enabled/multiple state and private value identity under its existing owner before
+one selection dispatch. It never searches for replacement nodes. Fresh host `admission` applies
+to the select. Success returns the bounded action result, without submitted values, and retires
+that page's observation; inspect again for new references and selected state. Rejections use the
+same compact failure vocabulary and host diagnostics as the existing tools.
+
+`host.selectionHandlers` shares the complete-invocation lane with the other host handler Layers.
+`selectionHandlers(browser, options)` remains available for caller-managed composition. Neither
+the default five-tool toolkit nor the pointer or keyboard toolkits gain selection authority.
+
 ## Scoped navigation and receipt callbacks
 
-`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
+`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
 
 `onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
 
-The callback service requirements are captured at `makeHost` acquisition; each callback gets its own invocation scope. `failure` retains the first original host callback/navigation-cleanup cause or the browser's original fail-session cause, including the browser's typed bootstrap error. `host.run(effect)` provides all three handler Layers and races the whole program against that failure. `BrowserTools.run(browser, effect, options)` is the scoped convenience form. Program requirements unrelated to Tool handlers stay in `R`; callback requirements also stay visible and are captured before handlers are provided.
+The callback service requirements are captured at `makeHost` acquisition; each callback gets its own invocation scope. `failure` retains the first original host callback/navigation-cleanup cause or the browser's original fail-session cause, including the browser's typed bootstrap error. `host.run(effect)` provides every maintained handler Layer and races the whole program against that failure. `BrowserTools.run(browser, effect, options)` is the scoped convenience form. Program requirements unrelated to Tool handlers stay in `R`; callback requirements also stay visible and are captured before handlers are provided.
 
 The host refuses a run that begins after its browser has already failed. Closing the host scope interrupts and joins `host.run` itself, its in-flight Tool calls and callback scopes. None of those operations closes the browser: ownership and checked cleanup remain with `Browser.scoped` or the caller's enclosing browser scope. The model receives only a bounded `BrowserToolFailure`, never a callback cause, its service values or a raw operation object.
 
@@ -127,7 +164,7 @@ never construct an ID from an assumed counter.
 
 ### Concurrent tool calls
 
-Every `makeHost` owns one blocking invocation lane shared by its three handler Layers and all
+Every `makeHost` owns one blocking invocation lane shared by its handler Layers and all
 programs run through that host. Concurrent calls, including Effect Agent's default concurrency
 of four, wait for their first execution. The lane stays held until the complete tool finishes:
 navigation completion, callback finalizers and required stop cleanup all precede the next call.
@@ -150,7 +187,7 @@ enclosing marker. Captured callback services and per-call services keep their ex
 
 Direct browser reads, capture and page control are outside the tool lane and retain the browser
 owner's fail-fast native permit. They can still report `Busy` while a native operation holds that
-permit. Module-level `handlers`, `nativeHandlers` and `keyboardHandlers` are the unsupervised,
+permit. Module-level `handlers`, `nativeHandlers`, `keyboardHandlers` and `selectionHandlers` are the unsupervised,
 caller-managed path: they do not add this lane. Use `makeHost` or `Tools.run` for the maintained
 sequencing and supervision lifecycle.
 

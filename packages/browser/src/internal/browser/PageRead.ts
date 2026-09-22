@@ -2,6 +2,8 @@ import { Schema } from "effect";
 
 import { ControlFacts, ObservedControl } from "../../BrowserData.ts";
 
+const ControlIndex = Schema.Natural.check(Schema.isLessThanOrEqualTo(63));
+
 /**
  * What the page reader returns. It is decoded on the host, so a page that tampers with its own
  * prototypes can make a read fail but cannot make it return something unbounded or untyped.
@@ -11,6 +13,26 @@ export const PageReadResult = Schema.Struct({
   textTruncated: Schema.Boolean,
   controlsTruncated: Schema.Boolean,
   controls: Schema.Array(ControlFacts).check(Schema.isMaxLength(64)),
+  /** Private selection identity, separate from every public control-facts projection. */
+  selects: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        index: ControlIndex,
+        optionsTruncated: Schema.Boolean,
+        options: Schema.Array(
+          Schema.Struct({
+            index: ControlIndex,
+            value: Schema.String.check(Schema.isMaxLength(65536)),
+          }),
+        ).check(Schema.isMaxLength(64)),
+      }),
+    ).check(
+      Schema.isMaxLength(64),
+      Schema.makeFilter(
+        (selects) => selects.reduce((size, select) => size + select.options.length, 0) <= 64,
+      ),
+    ),
+  ),
   viewport: Schema.Struct({
     width: Schema.Finite,
     height: Schema.Finite,
@@ -32,6 +54,10 @@ export interface PageReadRequest {
   readonly nodeBudget: number;
   /** When set, only this exact node's facts are read and nothing is traversed. */
   readonly only?: Element;
+  /** Action observations issue a visible select's choices even while its dropdown is closed. */
+  readonly choices?: boolean;
+  /** Fresh membership and identity checks for already retained options; values stay private. */
+  readonly options?: ReadonlyArray<{ readonly node: Element; readonly value: string }>;
 }
 
 /** What makes a control the one that was inspected. Geometry is excluded: scrolling moves it. */
@@ -43,6 +69,7 @@ export const identityOf = (facts: ControlFacts): string =>
     facts.checked ?? null,
     facts.selected ?? null,
     facts.required ?? null,
+    facts.multiple ?? null,
     facts.editable,
     facts.inputType ?? null,
     facts.autocomplete ?? null,
@@ -51,7 +78,11 @@ export const identityOf = (facts: ControlFacts): string =>
   ]);
 
 /** The model-facing projection: no destination, form or geometry ever leaves through it. */
-export const observedControl = (facts: ControlFacts, elementId: string): ObservedControl =>
+export const observedControl = (
+  facts: ControlFacts,
+  elementId: string,
+  selection: { readonly selectElementId?: string; readonly optionsTruncated?: boolean } = {},
+): ObservedControl =>
   ObservedControl.make({
     elementId,
     kind: facts.kind,
@@ -61,6 +92,8 @@ export const observedControl = (facts: ControlFacts, elementId: string): Observe
     ...(facts.selected === undefined ? {} : { selected: facts.selected }),
     ...(facts.inputType === undefined ? {} : { inputType: facts.inputType }),
     ...(facts.required === undefined ? {} : { required: facts.required }),
+    ...(facts.multiple === undefined ? {} : { multiple: facts.multiple }),
+    ...selection,
   });
 
 /**
@@ -259,13 +292,18 @@ export const readPage = (
       label: (
         node.getAttribute("aria-label") ??
         node.getAttribute("placeholder") ??
-        (node instanceof HTMLInputElement ? node.labels?.[0]?.textContent : node.textContent) ??
+        (node instanceof HTMLInputElement
+          ? node.labels?.[0]?.textContent
+          : node instanceof HTMLOptionElement
+            ? node.label
+            : node.textContent) ??
         ""
       ).slice(0, 256),
       disabled,
       ...(checked === undefined ? {} : { checked }),
       ...(selected === undefined ? {} : { selected }),
       ...(required === undefined ? {} : { required }),
+      ...(node instanceof HTMLSelectElement ? { multiple: node.multiple } : {}),
       editable:
         !disabled &&
         (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
@@ -287,10 +325,33 @@ export const readPage = (
     };
   };
 
-  if (only !== undefined) return { nodes: [only], data: { facts: factsOf(only) } };
+  if (only !== undefined)
+    return {
+      nodes: [only],
+      data: {
+        facts: factsOf(only),
+        ...(request.options === undefined
+          ? {}
+          : {
+              attached: only.isConnected && only.ownerDocument === document,
+              options: request.options.map(({ node, value }) => ({
+                facts: factsOf(node),
+                member:
+                  only instanceof HTMLSelectElement &&
+                  node instanceof HTMLOptionElement &&
+                  node.isConnected &&
+                  node.ownerDocument === document &&
+                  node.closest("select") === only &&
+                  only.options.item(node.index) === node,
+                valueMatches: node instanceof HTMLOptionElement && node.value === value,
+              })),
+            }),
+      },
+    };
 
   const nodes: Array<Element> = [];
   const controls: Array<ReturnType<typeof factsOf>> = [];
+  const selectIndices = new Map<HTMLSelectElement, number>();
 
   const candidates = document.querySelectorAll(
     "a[href],button,input,select,textarea,option,[role=button],[role=checkbox],[role=radio],[role=switch],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=tab],[role=treeitem],[role=row],[role=gridcell],[role=textbox],[role=combobox],[role=listbox],[role=radiogroup],[role=spinbutton],[role=tree]",
@@ -309,8 +370,14 @@ export const readPage = (
     if (node === undefined) continue;
     const facts = factsOf(node);
 
-    // Filter first, then apply the limit: a limit applied first would spend it off screen.
-    if (scope === "viewport" && facts.hitTest !== "self") {
+    const parentSelect = node instanceof HTMLOptionElement ? node.closest("select") : null;
+
+    const choice =
+      request.choices === true && parentSelect !== null && selectIndices.has(parentSelect);
+
+    // Choices of a visible native select are metadata, not evidence of visible dropdown rows.
+    // Filter before applying the shared limit so offscreen controls cannot spend it first.
+    if (scope === "viewport" && !choice && facts.hitTest !== "self") {
       if (facts.placement !== "outside") evidence.unreachableControls++;
       continue;
     }
@@ -320,7 +387,29 @@ export const readPage = (
     }
     nodes.push(node);
     controls.push(facts);
+    if (node instanceof HTMLSelectElement) selectIndices.set(node, nodes.length - 1);
   }
+
+  const selects =
+    request.choices === true
+      ? [...selectIndices].map(([select, index]) => {
+          const options: Array<{ readonly index: number; readonly value: string }> = [];
+
+          nodes.forEach((node, optionIndex) => {
+            if (
+              node instanceof HTMLOptionElement &&
+              node.closest("select") === select &&
+              select.options.item(node.index) === node
+            ) {
+              const value = node.value;
+
+              if (value.length <= 65536) options.push({ index: optionIndex, value });
+            }
+          });
+
+          return { index, options, optionsTruncated: options.length !== select.options.length };
+        })
+      : undefined;
 
   const encoder = new TextEncoder();
   let text = "";
@@ -426,5 +515,15 @@ export const readPage = (
     }
   }
 
-  return { nodes, data: { text, textTruncated, controlsTruncated, controls, viewport: evidence } };
+  return {
+    nodes,
+    data: {
+      text,
+      textTruncated,
+      controlsTruncated,
+      controls,
+      viewport: evidence,
+      ...(selects === undefined ? {} : { selects }),
+    },
+  };
 };

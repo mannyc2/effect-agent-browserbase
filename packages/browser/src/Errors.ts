@@ -41,6 +41,7 @@ export const BrowserOperation = Schema.Literals([
   "navigate-stop",
   "click",
   "fill",
+  "select-option",
   "scroll",
   "click-and-wait",
   "download-action",

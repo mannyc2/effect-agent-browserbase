@@ -79,6 +79,21 @@ export const toolSite = Effect.acquireRelease(
             <p>PARTIAL DOCUMENT</p><button id="act" onclick="this.textContent='clicked'">Act</button>`);
           slow.add(response);
           response.once("close", () => slow.delete(response));
+        } else if (path === "/select") {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(`<!doctype html><meta charset=utf-8><title>Exact option selection</title>
+            <select id="route" aria-label="Route">
+              <option value="PRIVATE-INITIAL">Initial</option>
+              <option value="PRIVATE-FIRST">Duplicate</option>
+              <option value="PRIVATE-SECOND">Duplicate</option>
+            </select><p id="changes">0</p><p id="selection">0</p>
+            <script>
+              document.querySelector('#route').addEventListener('change', event => {
+                const count = document.querySelector('#changes');
+                count.textContent = String(Number(count.textContent) + 1);
+                document.querySelector('#selection').textContent = String(event.target.selectedIndex);
+              });
+            </script>`);
         } else {
           response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           response.end(page);

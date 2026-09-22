@@ -12,6 +12,7 @@ const allTools = Toolkit.merge(
   BrowserTools.toolkit,
   BrowserTools.nativeToolkit,
   BrowserTools.keyboardToolkit,
+  BrowserTools.selectionToolkit,
 );
 
 type Ready = Toolkit.WithHandler<Toolkit.Tools<typeof allTools>>;
@@ -44,7 +45,7 @@ const press = (tools: Ready, id = "press") =>
     .handle("browser_press", { reference, key: "Enter" }, id)
     .pipe(Effect.flatMap(Stream.runCollect));
 
-it.effect("one host sequences all three handler layers across independent programs", () =>
+it.effect("one host sequences all four handler layers across independent programs", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
@@ -75,6 +76,7 @@ it.effect("one host sequences all three handler layers across independent progra
         scroll: () => operation("scroll", result),
         pointerMove: () => operation("pointer", receipt("pointer-move")),
         pressElement: () => operation("press", receipt("press")),
+        selectOption: () => operation("select-option", result),
       });
 
       const host = yield* BrowserTools.makeHost(browser);
@@ -85,13 +87,18 @@ it.effect("one host sequences all three handler layers across independent progra
       const second = yield* pointer(tools).pipe(Effect.forkScoped);
       const third = yield* host.run(press(tools)).pipe(Effect.forkScoped);
 
+      const fourth = yield* tools
+        .handle("browser_select_option", { reference, options: ["option-1"] }, "select")
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.forkScoped);
+
       yield* TestClock.adjust(1);
       expect(calls).toEqual(["scroll"]);
       yield* Deferred.succeed(release, undefined);
       expect(yield* Fiber.join(first)).toMatchObject([{ isFailure: false }]);
       expect(yield* Fiber.join(second)).toMatchObject([{ isFailure: false }]);
       expect(yield* Fiber.join(third)).toMatchObject([{ isFailure: false }]);
-      expect(calls.slice().sort()).toEqual(["pointer", "press", "scroll"]);
+      expect(yield* Fiber.join(fourth)).toMatchObject([{ isFailure: false }]);
+      expect(calls.slice().sort()).toEqual(["pointer", "press", "scroll", "select-option"]);
       expect(peak).toBe(1);
       expect(active).toBe(0);
     }),
@@ -676,6 +683,7 @@ it.effect("plain handler layers remain caller-managed and unsequenced", () =>
             BrowserTools.handlers(browser),
             BrowserTools.nativeHandlers(browser),
             BrowserTools.keyboardHandlers(browser),
+            BrowserTools.selectionHandlers(browser),
           ),
         ),
       );

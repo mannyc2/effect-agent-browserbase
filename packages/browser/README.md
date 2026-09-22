@@ -350,6 +350,33 @@ yield *
 
 Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the owner's permit is held, where waiting on a model or a network call would stall every other operation. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
 
+### Exact native option selection
+
+`selectOption(reference, options, admission?)` selects once on the native `<select>` named by
+an `ObservedElement`. The options are a nonempty array of at most 64 unique option `elementId`s
+from the same observation. No label, value or selector is a substitute for an issued ID.
+
+An observed native select has `multiple` and `optionsTruncated` metadata. Its retained option
+controls carry `selectElementId`, `selected`, `disabled` and a bounded label. Choices of a visible
+select are available in viewport observations even when its menu is collapsed; they consume the
+same `maxControls` allowance as other controls. Truncation is explicit, and an option outside the
+retained set cannot be selected by guessing its position or value.
+
+The private value comparison is bounded to 65,536 UTF-16 units per option. A longer value is not
+issued for selection: its legacy control state may remain visible, but `selectElementId` is
+absent and the parent reports `optionsTruncated`. After a page hold, revalidate the select and
+each requested option through `revalidateElement`; revalidating only the select does not approve
+its option nodes.
+
+The owner validates the same select and option nodes, document, current membership, multiple and
+enabled state before dispatch. It also compares the submitted value privately without returning
+that value in the observation or action result. Duplicate labels remain distinguishable through
+their IDs. Changed or replaced controls are refused before input; unknown outcomes after dispatch
+are never replayed. Selection emits ordinary native select input/change events through the
+maintained engine, returns `ActionResult` and retires the observation on that page. It does not
+claim the website finished work triggered by those events. The same synchronous host `admission`
+used for exact-node input applies to the selected control.
+
 ### Passive checkpoints for a recorder
 
 `observe()` replaces the one observation whose nodes later actions may name, so a recorder calling it would retire the references an agent is about to use. `session.checkpoint()` is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.

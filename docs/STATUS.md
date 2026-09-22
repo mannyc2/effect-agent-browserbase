@@ -27,7 +27,11 @@ native suites, release identities and dry-runs. This is unpaid acceptance only a
 or tag the packages. Hosted timeout recovery, before-unload/popup policy behavior, page holds,
 provider reconnect/registration retention and Context persistence remain separate qualification
 questions; earlier narrowly scoped hosted records below do not qualify this changed runtime.
-WP6/WP7 remain explicitly post-publication work in issue #66.
+The maintainer authorized WP6/WP7 before publication. WP6 adds native selection through exact
+observed option IDs and an opt-in Agent toolkit; option metadata and retained handles share the
+existing finite control budget. WP7 follows it separately for owned waits and opt-in observation
+results. Publishing, hosted qualification and the issue's evidence-dependent deferrals remain
+separate actions.
 
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 

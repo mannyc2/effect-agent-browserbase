@@ -21,12 +21,14 @@ const requests = [
   ["browser_wheel", { deltaX: 0, deltaY: 1 }, "wheel"],
   ["browser_press", { reference, key: "Enter" }, "press"],
   ["browser_type", { reference, text: "PRIVATE-TEXT" }, "type"],
+  ["browser_select_option", { reference, options: ["option-1"] }, "select-option"],
 ] as const;
 
 const allTools = Toolkit.merge(
   BrowserTools.toolkit,
   BrowserTools.nativeToolkit,
   BrowserTools.keyboardToolkit,
+  BrowserTools.selectionToolkit,
 );
 
 it.effect(
@@ -101,7 +103,7 @@ it.effect(
 );
 
 it.effect(
-  "all ten host handlers retain ordinary error facts and call IDs before compact projection",
+  "all eleven host handlers retain ordinary error facts and call IDs before compact projection",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -131,6 +133,7 @@ it.effect(
           wheel: refuse("wheel"),
           pressElement: refuse("press"),
           typeElement: refuse("type"),
+          selectOption: refuse("select-option"),
         });
 
         const host = yield* BrowserTools.makeHost(browser);
@@ -160,7 +163,7 @@ it.effect(
           });
           expect(yield* host.run(Effect.succeed("usable"))).toBe("usable");
         }
-        expect(originals).toHaveLength(10);
+        expect(originals).toHaveLength(11);
         expect((yield* host.toolFailures).dropped).toBe(0);
       }),
     ),
@@ -382,6 +385,7 @@ it.effect(
           wheel: invalidInput,
           pressElement: invalidInput,
           typeElement: invalidInput,
+          selectOption: invalidAction,
         });
 
         const host = yield* BrowserTools.makeHost(browser, {
@@ -404,7 +408,7 @@ it.effect(
         }
         const snapshot = yield* host.toolFailures;
 
-        expect(snapshot.failures).toHaveLength(10);
+        expect(snapshot.failures).toHaveLength(11);
         expect(snapshot.failures.map((entry) => entry.toolCallId)).toEqual(
           requests.map(([name]) => name),
         );
@@ -466,6 +470,58 @@ it.effect(
           toolCallId: "completed",
         });
         expect(stops).toBe(0);
+      }),
+    ),
+);
+
+it.effect(
+  "option selection rejects label/value lookups and invalid sets before entering the browser",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let calls = 0;
+
+        const browser = scriptedSession({
+          selectOption: (selected, options) =>
+            Effect.sync(() => {
+              calls++;
+              expect(selected).toEqual(reference);
+              expect(options).toEqual(["option-1"]);
+
+              return { url: "https://example.test/" };
+            }),
+        });
+
+        const host = yield* BrowserTools.makeHost(browser);
+
+        const tools = yield* BrowserTools.selectionToolkit.pipe(
+          Effect.provide(host.selectionHandlers),
+        );
+
+        expect(BrowserTools.toolkit.tools).not.toHaveProperty("browser_select_option");
+        for (const options of [
+          [],
+          ["option-1", "option-1"],
+          [{ label: "Duplicate" }],
+          [{ value: "PRIVATE" }],
+          Array.from({ length: 65 }, (_, index) => `option-${index}`),
+        ]) {
+          const results = yield* Stream.runCollect(
+            // @ts-expect-error Exercise invalid model parameters at the actual decoding boundary.
+            yield* tools.handle("browser_select_option", { reference, options }),
+          );
+
+          expect(results).toHaveLength(1);
+          expect(results[0]?.isFailure).toBe(true);
+        }
+        expect(calls).toBe(0);
+        expect((yield* host.toolFailures).failures).toEqual([]);
+        expect(
+          yield* Stream.runCollect(
+            yield* tools.handle("browser_select_option", { reference, options: ["option-1"] }),
+          ),
+        ).toMatchObject([{ isFailure: false }]);
+        expect(calls).toBe(1);
       }),
     ),
 );

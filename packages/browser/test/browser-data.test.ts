@@ -97,9 +97,16 @@ it("what a model is shown has no field that could carry a destination or a value
   // Every host-only fact, by name. Adding one to the model-facing schema must fail here.
   for (const hostOnly of Object.keys(ControlFacts.fields).filter(
     (field) =>
-      !["kind", "label", "disabled", "checked", "selected", "inputType", "required"].includes(
-        field,
-      ),
+      ![
+        "kind",
+        "label",
+        "disabled",
+        "checked",
+        "selected",
+        "inputType",
+        "required",
+        "multiple",
+      ].includes(field),
   ))
     expect(shown.has(hostOnly), hostOnly).toBe(false);
   expect([...shown]).not.toContain("value");

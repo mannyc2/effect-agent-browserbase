@@ -24,6 +24,7 @@ import {
   Observation,
   ObservedElement,
   PointerMoveRequest,
+  SelectOptions,
   TypeRequest,
   WheelRequest,
   type SessionStatus,
@@ -223,10 +224,29 @@ const Type = Tool.make("browser_type", {
 /** Optional real keyboard input. Kept separate so existing native-tool opt-ins do not gain tools. */
 export const keyboardToolkit = Toolkit.make(Press, Type);
 
+const SelectOption = Tool.make("browser_select_option", {
+  description:
+    "Select exact option IDs from the same observation as the native select control. Read selectElementId to identify its options and multiple to determine whether several may be selected. Labels and values are not lookup keys. This dispatches once; inspect again to see the result and never replay an unknown outcome.",
+  parameters: Schema.Struct({ reference: ObservedElement, options: SelectOptions }),
+  success: BrowserActionResult,
+  failure: BrowserToolFailure,
+  failureMode: "return",
+});
+
+/** Optional native option selection; the default five tools grant no new input authority. */
+export const selectionToolkit = Toolkit.make(SelectOption);
+
 export type ToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof toolkit>>;
 export type NativeToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof nativeToolkit>>;
 export type KeyboardToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof keyboardToolkit>>;
-export type ToolHostServices = ToolHandlers | NativeToolHandlers | KeyboardToolHandlers;
+export type SelectionToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof selectionToolkit>>;
+
+export type ToolHostServices =
+  | ToolHandlers
+  | NativeToolHandlers
+  | KeyboardToolHandlers
+  | SelectionToolHandlers;
+
 export type ToolRunRequirements<R> = Exclude<Exclude<R, ToolHostServices>, Scope.Scope>;
 
 export interface HandlerOptions {
@@ -390,6 +410,25 @@ const makeKeyboardHandlers = <E>(
   });
 };
 
+const makeSelectionHandlers = <E>(
+  browser: BrowserSession<E>,
+  options: HandlerOptions,
+  hooks: Hooks,
+) => {
+  const admission =
+    options.admission === undefined ? undefined : { admit: options.admission.admit };
+
+  return selectionToolkit.toLayer({
+    browser_select_option: ({ reference, options: selected }, context) =>
+      hooks.run(
+        browser.selectOption(reference, selected, admission).pipe(
+          Effect.flatMap((result) => actionResult(result.url)),
+          Effect.mapError(failureWith(hooks, context.toolCallId)),
+        ),
+      ),
+  });
+};
+
 /** Borrow one execution-owned session. These five tools keep their original default behavior. */
 export const handlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
   makeHandlers(browser, options, direct);
@@ -401,6 +440,10 @@ export const nativeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOp
 /** Opt-in real keyboard tools using exact observed nodes and the same admission policy. */
 export const keyboardHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
   makeKeyboardHandlers(browser, options, direct);
+
+/** Opt-in exact option selection with caller-managed sequencing and lifetime. */
+export const selectionHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
+  makeSelectionHandlers(browser, options, direct);
 
 export interface HostOptions<E = never, R = never> extends HandlerOptions {
   /**
@@ -464,6 +507,7 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly handlers: Layer.Layer<ToolHandlers>;
   readonly nativeHandlers: Layer.Layer<NativeToolHandlers>;
   readonly keyboardHandlers: Layer.Layer<KeyboardToolHandlers>;
+  readonly selectionHandlers: Layer.Layer<SelectionToolHandlers>;
   /** All Tool handler services. The agent still sees only the Toolkits it explicitly declares. */
   readonly layer: Layer.Layer<ToolHostServices>;
   /** First host callback, navigation-cleanup or browser fail-session cause. */
@@ -685,7 +729,14 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const handlerLayer = makeHandlers(browser, options, hooks);
   const nativeHandlerLayer = makeNativeHandlers(browser, options, hooks);
   const keyboardHandlerLayer = makeKeyboardHandlers(browser, options, hooks);
-  const layer = Layer.mergeAll(handlerLayer, nativeHandlerLayer, keyboardHandlerLayer);
+  const selectionHandlerLayer = makeSelectionHandlers(browser, options, hooks);
+
+  const layer = Layer.mergeAll(
+    handlerLayer,
+    nativeHandlerLayer,
+    keyboardHandlerLayer,
+    selectionHandlerLayer,
+  );
 
   const supervise: ToolHost<OwnerError, E>["run"] = (effect) =>
     Effect.uninterruptibleMask((restore) =>
@@ -714,6 +765,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     handlers: handlerLayer,
     nativeHandlers: nativeHandlerLayer,
     keyboardHandlers: keyboardHandlerLayer,
+    selectionHandlers: selectionHandlerLayer,
     layer,
     failure: Deferred.await(failure),
     toolFailures: Effect.gen(function* () {
