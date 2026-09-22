@@ -10,6 +10,8 @@ Three packages share one scoped browser owner:
 
 This branch prepares the breaking `0.2.0-beta.0` package set. The earlier `0.1.0-beta.103` release used `effect-browserbase` and `effect-agent-browserbase`; it does not establish publication or ownership of the new package names. Publication is a separate maintainer action.
 
+Install the shared host runtimes explicitly. Browserbase requires `effect-browser@0.2.0-beta.0` as a peer; the Agent adapter requires that same browser peer and `effect-agent@0.1.0-beta.102`. Those exact prerelease relationships keep the qualified package set coordinated. The existing Effect peer range remains `^4.0.0-rc.115`, with rc.115 as the tested version. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. Peer declarations cannot prevent every duplicate bundle or module evaluation: all callers must still use the same live runtime and session identity.
+
 ## Start a browser
 
 ```ts
@@ -26,7 +28,7 @@ const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (b
 ).pipe(Effect.provide(Chromium.layer()));
 ```
 
-For hosted acquisition, supply `BrowserbaseBrowser.open(policy)` with a Browserbase account and launch recipe. `Browser.scoped` supervises either source: it preserves the concrete session and typed callback errors, joins callback resources before closing the browser, and reports checked cleanup failures even when the workflow also fails. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
+For hosted acquisition, supply `BrowserbaseBrowser.open(policy)` with a Browserbase account and launch recipe. `Browser.scoped` supervises either source: it preserves the concrete session and typed callback errors, joins callback resources before closing the browser, and retains checked cleanup failures in the workflow's own final cause even when its body fails. An outer race can discard that cause; use the provider's `onCleanup` with a host-owned sink to retain receipt evidence outside the race. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
 
 ## Use the same tools with either source
 

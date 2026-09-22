@@ -128,7 +128,7 @@ it.effect("a binding the package did not issue is refused before any provider re
     );
 
     assert.ok(Schema.is(BrowserError)(error));
-    assert.equal(error.reason, "configuration");
+    assert.equal(error.reason, "unregistered-session");
     assert.equal(error.outcome, "undispatched");
     assert.equal(requests, 0);
   }),

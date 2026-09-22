@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
+import * as Bootstrap from "effect-browser/bootstrap";
 import { BrowserError } from "effect-browser/errors";
 
 import { BrowserPolicy } from "../src/BrowserData.ts";
@@ -142,6 +143,16 @@ it.effect(
           if (error._tag === "BrowserError") expect(error.outcome).toBe("undispatched");
         }
         expect(reports).toEqual([]);
+        for (const bootstrap of [Bootstrap.empty, undefined]) {
+          const misplaced = { launch: {}, bootstrap };
+          const error = yield* Layer.build(Chromium.layer(misplaced)).pipe(Effect.flip);
+
+          expect(error).toMatchObject({
+            operation: "configure",
+            reason: "configuration",
+            outcome: "undispatched",
+          });
+        }
         for (const arg of [
           "--no-sandbox",
           "--remote-debugging-port=9222",

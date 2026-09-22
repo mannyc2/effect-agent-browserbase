@@ -28,10 +28,6 @@
     "install:test-browser": "playwright-core install --with-deps chromium",
     "test:native": "vp test --config vite.native.config.ts --run"
   },
-  "dependencies": {
-    "effect-agent": "workspace:*",
-    "effect-browser": "workspace:*"
-  },
   "devDependencies": {
     "@effect-agent/testing": "workspace:*",
     "@effect/platform-bun": "catalog:",
@@ -39,13 +35,17 @@
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
+    "effect-agent": "workspace:*",
+    "effect-browser": "workspace:*",
     "effect-browserbase": "workspace:*",
     "playwright-core": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.115"
+    "effect": "^4.0.0-rc.115",
+    "effect-agent": "workspace:*",
+    "effect-browser": "workspace:*"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"

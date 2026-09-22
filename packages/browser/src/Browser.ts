@@ -65,8 +65,10 @@ export interface NavigationOperation {
    * Asks the browser to stop loading and waits for this navigation to settle, after which
    * `completed` fails `interrupted`. Success is a known outcome and the session stays usable:
    * the page holds whatever had loaded. It does not undo anything the page already did.
-   * An already-completed navigation cannot stop a successor. Repeated/concurrent callers share
-   * the same bounded stop attempt, including failure; an uncertain stop is never replayed.
+   * An already-completed navigation cannot stop a successor. Concurrent callers share their
+   * active attempt. Before dispatch, cancellation or a busy refusal permits a later request
+   * once native setup has retired. A dispatched attempt's outcome, including failure or
+   * interruption, is retained permanently; an uncertain stop is never replayed.
    */
   readonly stop: Effect.Effect<void, BrowserError>;
 }
@@ -217,9 +219,9 @@ export interface OpenOptions<E = never, R = never> {
  * Acquisition is evaluated once; an uncertain result is never retried.
  */
 export const scoped: {
-  <S, E, A, E2, R2>(
-    f: (session: S & BrowserSession<E>) => Effect.Effect<A, E2, R2>,
-  ): <AE, AR>(
+  <S extends BrowserSession<unknown>, A, E2, R2>(
+    f: (session: S) => Effect.Effect<A, E2, R2>,
+  ): <E, AE, AR>(
     open: Effect.Effect<S & BrowserSession<E>, AE, AR>,
   ) => Effect.Effect<
     A,

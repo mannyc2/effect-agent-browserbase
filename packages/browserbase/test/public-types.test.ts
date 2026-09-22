@@ -11,7 +11,12 @@ import type {
 import type * as Capture from "effect-browser/capture";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
 import type * as PageControl from "effect-browser/page-control";
-import { type BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
+import {
+  type BrowserAcquisition,
+  type BrowserbaseBrowser,
+  type BrowserbaseSession,
+} from "effect-browserbase/browser";
+import type { CleanupResult } from "effect-browserbase/cleanup";
 import type { AllocationError, ContextError } from "effect-browserbase/errors";
 
 type Same<A, B> =
@@ -34,6 +39,14 @@ const hostErrors: Same<
 const operationErrors: Same<
   Effect.Error<ReturnType<BrowserbaseSession["clickElement"]>>,
   BrowserError
+> = true;
+
+const receiptClose: Same<BrowserbaseSession["close"], Effect.Effect<CleanupResult>> = true;
+const acquisitionClose: Same<BrowserAcquisition["close"], Effect.Effect<CleanupResult>> = true;
+
+const checkedClose: Same<
+  BrowserbaseSession["closeChecked"],
+  Effect.Effect<void, BrowserError>
 > = true;
 
 const boundTarget: Same<ReturnType<BrowserbaseSession["bind"]>, BoundTarget> = true;
@@ -100,6 +113,9 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
     scoped &&
       hostErrors &&
       operationErrors &&
+      receiptClose &&
+      acquisitionClose &&
+      checkedClose &&
       boundTarget &&
       inputEffect &&
       hoverElementEffect &&

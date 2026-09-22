@@ -14,7 +14,7 @@ const owner = <E>(session: BrowserSession<E>) =>
       ? Effect.fail(
           BrowserError.make({
             operation: "page-control",
-            reason: "unsupported",
+            reason: "unregistered-session",
             outcome: "undispatched",
           }),
         )

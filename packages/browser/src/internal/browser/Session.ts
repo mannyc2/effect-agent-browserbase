@@ -38,24 +38,84 @@ export interface Reading {
   readonly maxControls?: number;
 }
 
-/** One public stop capability: its first Exit, including interruption, is the only native attempt. */
+interface NavigationStopAttempt<E> {
+  readonly result: Deferred.Deferred<void, E>;
+  running: boolean;
+  committed: boolean;
+  setupPending: boolean;
+}
+
+/**
+ * Callers share the active attempt. Its owner may cancel it, but a committed Exit is permanent.
+ * Before commitment, retry waits for actual native setup and port retirement, not the waiter.
+ */
 export const makeNavigationStop = <E, R>(
   done: () => boolean,
-  attempt: Effect.Effect<"dispatched" | "settled", E, R>,
+  attempt: (
+    onDispatch: () => void,
+    retainSetup: () => () => void,
+  ) => Effect.Effect<"dispatched" | "settled", E, R>,
   confirmed: () => void,
 ) =>
-  Effect.cached(
-    Effect.suspend(() =>
-      done()
-        ? Effect.void
-        : attempt.pipe(
-            Effect.tap((result) =>
-              result === "dispatched" ? Effect.sync(confirmed) : Effect.void,
+  Effect.sync(() => {
+    let current: NavigationStopAttempt<E | BrowserError> | undefined;
+
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        // Fencing may complete the navigation while a committed stop is still failing.
+        if (current !== undefined && (current.running || current.committed))
+          return restore(Deferred.await(current.result));
+        if (done()) return Effect.void;
+        if (current !== undefined)
+          return Effect.fail(
+            BrowserError.make({
+              operation: "navigate-stop",
+              reason: "busy",
+              outcome: "undispatched",
+            }),
+          );
+
+        const active: NavigationStopAttempt<E | BrowserError> = {
+          result: Deferred.makeUnsafe(),
+          running: true,
+          committed: false,
+          setupPending: false,
+        };
+
+        current = active;
+
+        const retire = () => {
+          active.setupPending = false;
+          if (!active.running && !active.committed && current === active) current = undefined;
+        };
+
+        return restore(
+          Effect.suspend(() =>
+            attempt(
+              () => {
+                active.committed = true;
+              },
+              () => {
+                active.setupPending = true;
+
+                return retire;
+              },
             ),
-            Effect.asVoid,
           ),
-    ),
-  );
+        ).pipe(
+          Effect.tap((result) => (result === "dispatched" ? Effect.sync(confirmed) : Effect.void)),
+          Effect.asVoid,
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              active.running = false;
+              if (!active.committed && !active.setupPending) current = undefined;
+              Deferred.doneUnsafe(active.result, exit);
+            }),
+          ),
+        );
+      }),
+    );
+  });
 
 export interface SessionOptions<L extends SessionLease, E, R = never> {
   readonly implementation: string;
@@ -107,6 +167,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   let handoffToken: string | undefined;
   let reconnectTarget: string | undefined;
   let activeBindings: ConnectionBindings | undefined;
+  // A canceled setup may outlive its operation and connection. Keep one slot across the owner
+  // until that native setup and its port actually retire; a new operation cannot evade the bound.
+  let stopSetupPending = false;
 
   const fenceBindings = () => {
     activeBindings?.close();
@@ -660,26 +723,45 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
       const stop = yield* makeNavigationStop(
         () => Deferred.isDoneUnsafe(outcome),
-        owner.guard(
-          "navigate-stop",
-          (ticket) =>
-            native("navigate-stop", ticket, () =>
-              navigation.stop(
-                ticket,
-                () => !Deferred.isDoneUnsafe(outcome),
-                () => {
-                  stopDispatched = true;
-                },
+        (onDispatch, retainSetup) =>
+          owner.guard(
+            "navigate-stop",
+            (ticket) =>
+              native("navigate-stop", ticket, () =>
+                navigation.stop(
+                  ticket,
+                  () => !Deferred.isDoneUnsafe(outcome),
+                  () => {
+                    onDispatch();
+                    stopDispatched = true;
+                  },
+                  () => {
+                    if (stopSetupPending)
+                      throw BrowserError.make({
+                        operation: "navigate-stop",
+                        reason: "busy",
+                        outcome: "undispatched",
+                      });
+                    stopSetupPending = true;
+                    const retired = retainSetup();
+
+                    return () => {
+                      stopSetupPending = false;
+                      retired();
+                    };
+                  },
+                ),
+              ).pipe(
+                Effect.timeoutOrElse({
+                  duration: Math.min(3000, ticket.remainingMillis()),
+                  orElse: () =>
+                    Effect.fail(
+                      BrowserError.make({ operation: "navigate-stop", reason: "timeout" }),
+                    ),
+                }),
               ),
-            ).pipe(
-              Effect.timeoutOrElse({
-                duration: Math.min(3000, ticket.remainingMillis()),
-                orElse: () =>
-                  Effect.fail(BrowserError.make({ operation: "navigate-stop", reason: "timeout" })),
-              }),
-            ),
-          { mutation: true, charge: false },
-        ),
+            { mutation: true, charge: false },
+          ),
         () => decide(failed("interrupted"), true),
       );
 

@@ -266,7 +266,7 @@ export const make = Effect.fnUntraced(function* (
   if (engine === undefined)
     return yield* BrowserError.make({
       operation: "connect",
-      reason: "configuration",
+      reason: "unregistered-session",
       outcome: "undispatched",
     });
 

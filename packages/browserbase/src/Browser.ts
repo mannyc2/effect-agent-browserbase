@@ -69,7 +69,7 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly reconnect: (
     operatorReleasedControl: boolean,
   ) => Effect.Effect<Observation, BrowserError | InitializationError>;
-  readonly close: Effect.Effect<CleanupResult, BrowserError>;
+  readonly close: Effect.Effect<CleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
 }
 
@@ -86,7 +86,7 @@ export interface BrowserAcquisition<E = never> {
   readonly attempt: AllocationAttempt;
   readonly failure: Effect.Effect<never, E | InitializationError>;
   readonly connect: Effect.Effect<BrowserbaseSession<E>, BrowserError | E | InitializationError>;
-  readonly close: Effect.Effect<CleanupResult, BrowserError>;
+  readonly close: Effect.Effect<CleanupResult>;
 }
 
 /** Only receipts issued for this exact provider session may resolve to stored paths. */

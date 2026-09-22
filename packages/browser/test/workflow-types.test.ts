@@ -12,6 +12,27 @@ type CallbackError = { readonly _tag: "CallbackError" };
 type CallbackService = { readonly _tag: "CallbackService" };
 type TaskError = { readonly _tag: "TaskError" };
 type TaskService = { readonly _tag: "TaskService" };
+type AcquireError = { readonly _tag: "AcquireError" };
+type AcquireService = { readonly _tag: "AcquireService" };
+
+const standalone = (
+  open: Effect.Effect<ChromiumSession<CallbackError>, AcquireError, AcquireService | Scope.Scope>,
+  task: Effect.Effect<string, TaskError, TaskService | Scope.Scope>,
+) => {
+  const use = Browser.scoped((browser) => Effect.andThen(browser.observe(), task));
+
+  return open.pipe(use);
+};
+
+const standaloneErrors: Same<
+  Effect.Error<ReturnType<typeof standalone>>,
+  AcquireError | CallbackError | TaskError | BrowserError | InitializationError
+> = true;
+
+const standaloneServices: Same<
+  Effect.Services<ReturnType<typeof standalone>>,
+  AcquireService | TaskService
+> = true;
 
 const workflow = (
   policy: BrowserPolicy,
@@ -56,5 +77,13 @@ const inferredFailures: Same<
 > = true;
 
 it("Browser.scoped preserves the concrete owner, callback errors and unrelated services in both forms", () => {
-  expect(failures && services && pipeSignature && inferredResult && inferredFailures).toBe(true);
+  expect(
+    failures &&
+      services &&
+      pipeSignature &&
+      inferredResult &&
+      inferredFailures &&
+      standaloneErrors &&
+      standaloneServices,
+  ).toBe(true);
 });

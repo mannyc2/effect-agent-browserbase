@@ -51,7 +51,13 @@ export const start = <E>(
     const parent = captureParent(session);
 
     if (parent === undefined)
-      return Effect.fail(BrowserError.make({ operation: "capture", reason: "closed" }));
+      return Effect.fail(
+        BrowserError.make({
+          operation: "capture",
+          reason: "unregistered-session",
+          outcome: "undispatched",
+        }),
+      );
     if (options.target === undefined) return startCapture(parent, options);
 
     return Schema.decodeEffect(PageInfo)(options.target, { onExcessProperty: "error" }).pipe(

@@ -5,6 +5,16 @@ import { dispatchNavigationStop } from "../src/internal/browser/Actions.ts";
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 import { makeNavigationStop } from "../src/internal/browser/Session.ts";
 
+const gate = () => {
+  let resolve: () => void = () => {};
+
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+
+  return { promise, resolve };
+};
+
 const ticket = () => {
   let dispatched = false;
 
@@ -59,6 +69,7 @@ it("rechecks navigation ownership after asynchronous stop setup before dispatch"
         close: async () => {},
       };
     },
+    () => () => {},
   );
 
   await opening;
@@ -71,7 +82,7 @@ it("rechecks navigation ownership after asynchronous stop setup before dispatch"
   expect(stopCalls).toBe(0);
 });
 
-it.effect("shares one cached stop attempt across concurrent and repeated callers", () =>
+it.effect("shares one committed stop attempt across concurrent and repeated callers", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
@@ -88,7 +99,7 @@ it.effect("shares one cached stop attempt across concurrent and repeated callers
 
     const stop = yield* makeNavigationStop<never, never>(
       () => false,
-      attempt,
+      (onDispatch) => Effect.sync(onDispatch).pipe(Effect.andThen(attempt)),
       () => {
         confirms++;
       },
@@ -115,11 +126,12 @@ it.effect("completed navigation stop is a no-op without entering native ownershi
 
     const stop = yield* makeNavigationStop<never, never>(
       () => true,
-      Effect.sync(() => {
-        attempts++;
+      () =>
+        Effect.sync(() => {
+          attempts++;
 
-        return "dispatched" as const;
-      }),
+          return "dispatched" as const;
+        }),
       () => {},
     );
 
@@ -128,3 +140,85 @@ it.effect("completed navigation stop is a no-op without entering native ownershi
     expect(attempts).toBe(0);
   }),
 );
+
+it("retains setup capacity until actual port close, and never retires a failed close", async () => {
+  const closing = gate();
+  const closed = gate();
+  let retired = 0;
+
+  const stopping = dispatchNavigationStop(
+    ticket().value,
+    () => false,
+    () => {},
+    async () => ({
+      stop: async () => {},
+      close: async () => {
+        closing.resolve();
+        await closed.promise;
+      },
+    }),
+    () => () => {
+      retired++;
+    },
+  );
+
+  await closing.promise;
+  expect(retired).toBe(0);
+  closed.resolve();
+  await expect(stopping).resolves.toBe("settled");
+  expect(retired).toBe(1);
+
+  await expect(
+    dispatchNavigationStop(
+      ticket().value,
+      () => false,
+      () => {},
+      async () => ({
+        stop: async () => {},
+        close: async () => {
+          throw new Error("detach failed");
+        },
+      }),
+      () => () => {
+        retired++;
+      },
+    ),
+  ).rejects.toThrow("detach failed");
+  expect(retired).toBe(1);
+});
+
+it("failed setup with no port retires, while refused capacity opens nothing", async () => {
+  let opens = 0;
+  let retired = 0;
+
+  const open = async () => {
+    opens++;
+    throw new Error("setup failed");
+  };
+
+  await expect(
+    dispatchNavigationStop(
+      ticket().value,
+      () => true,
+      () => {},
+      open,
+      () => () => {
+        retired++;
+      },
+    ),
+  ).rejects.toThrow("setup failed");
+  expect(retired).toBe(1);
+  await expect(
+    dispatchNavigationStop(
+      ticket().value,
+      () => true,
+      () => {},
+      open,
+      () => {
+        throw new Error("busy");
+      },
+    ),
+  ).rejects.toThrow("busy");
+  expect(opens).toBe(1);
+  expect(retired).toBe(1);
+});

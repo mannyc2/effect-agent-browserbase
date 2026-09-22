@@ -85,11 +85,14 @@ export const dispatchNavigationStop = async (
   pending: () => boolean,
   onDispatch: () => void,
   open: () => Promise<NavigationStopPort>,
+  retainSetup: () => () => void,
 ): Promise<"dispatched" | "settled"> => {
   ticket.check();
-  const port = await open();
+  const retired = retainSetup();
+  let port: NavigationStopPort | undefined;
 
   try {
+    port = await open();
     ticket.check();
     if (!pending()) return "settled";
     // No await may separate this admission check from dispatch.
@@ -101,7 +104,10 @@ export const dispatchNavigationStop = async (
 
     return "dispatched";
   } finally {
-    await port.close();
+    // The owner's Effect bounds the caller's wait. A timeout or rejection of native detach
+    // does not prove retirement and must not allow another setup to consume this slot.
+    if (port !== undefined) await port.close();
+    retired();
   }
 };
 
@@ -292,18 +298,24 @@ export const makeActions = (
       return {
         pageId: entry.id,
         settled,
-        stop: (stopTicket, pending, onDispatch) =>
+        stop: (stopTicket, pending, onDispatch, retainSetup) =>
           sanitize(async () => {
-            return dispatchNavigationStop(stopTicket, pending, onDispatch, async () => {
-              const cdp = await context.newCDPSession(entry.page);
+            return dispatchNavigationStop(
+              stopTicket,
+              pending,
+              onDispatch,
+              async () => {
+                const cdp = await context.newCDPSession(entry.page);
 
-              return {
-                stop: async () => {
-                  await cdp.send("Page.stopLoading");
-                },
-                close: () => closeWithin(() => cdp.detach()).catch(() => {}),
-              };
-            });
+                return {
+                  stop: async () => {
+                    await cdp.send("Page.stopLoading");
+                  },
+                  close: () => cdp.detach(),
+                };
+              },
+              retainSetup,
+            );
           }),
       };
     });

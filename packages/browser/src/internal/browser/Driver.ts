@@ -98,11 +98,14 @@ export interface NativeNavigation {
   /**
    * Asks the browser to stop this navigation only while its owner still admits it as current.
    * The driver rechecks `pending` after native setup and immediately before dispatch.
+   * Setup reserves capacity synchronously before opening a port. Its retirement callback runs
+   * only when setup failed without a port or the actual port close succeeded, never on timeout.
    */
   readonly stop: (
     ticket: Ticket,
     pending: () => boolean,
     onDispatch: () => void,
+    retainSetup: () => () => void,
   ) => Promise<"dispatched" | "settled">;
 }
 

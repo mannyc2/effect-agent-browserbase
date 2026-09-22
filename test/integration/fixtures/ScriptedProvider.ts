@@ -445,7 +445,11 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
           ),
         );
 
-        return { ...acquired, connect: acquired.connect.pipe(Effect.andThen(connected)) };
+        return {
+          ...acquired,
+          rawConnect: acquired.connect,
+          connect: acquired.connect.pipe(Effect.andThen(connected)),
+        };
       }),
     ),
     Effect.provide(

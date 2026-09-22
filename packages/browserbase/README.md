@@ -2,7 +2,7 @@
 
 `effect-browserbase` supplies Browserbase resources and hosted lifetimes to the shared browser runtime: account identity and transport, session, context and extension resources, one owned browser over Playwright/CDP — allocated or borrowed — with trusted registrations, modeled file selection, bounded live capture, explicit page holds, the provider's recordings, replays, uploads and website downloads, and the platform APIs outside a browser session (projects, certificates, Search, Fetch, Agents, Functions and webhooks).
 
-It depends on `effect-browser` and has no Effect Agent dependency. Playwright is an optional peer of the shared runtime and is loaded only when a browser connects; artifact-only consumers do not need it. The package targets trusted Node and Bun hosts. It is an unpublished maintainer-review candidate: hosted provider behavior requires separate validation, and ordinary tests never create a paid Browserbase session or invoke a paid model.
+Its host supplies the required `effect-browser` peer, at the same coordinated `0.2.0-beta.0` version for this candidate; it has no Effect Agent dependency. Install both packages explicitly so the provider and application share one runtime instance. Playwright is an optional peer of the shared runtime and is loaded only when a browser connects; artifact-only consumers do not need it. The existing Effect peer range remains `^4.0.0-rc.115`, with only rc.115 qualified by this candidate. The package targets trusted Node and Bun hosts. It is an unpublished maintainer-review candidate: hosted provider behavior requires separate validation, and ordinary tests never create a paid Browserbase session or invoke a paid model.
 
 ## One account, then resources
 

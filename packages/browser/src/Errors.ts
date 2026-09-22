@@ -72,6 +72,7 @@ export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserErr
   operation: BrowserOperation,
   reason: Schema.Literals([
     "configuration",
+    "unregistered-session",
     "unsupported",
     "busy",
     "closed",

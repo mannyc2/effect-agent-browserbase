@@ -42,7 +42,11 @@ it.live(
             );
 
             expect(denied._tag).toBe("Failure");
-            if (denied._tag === "Failure") expect(denied.failure.reason).toBe("closed");
+            if (denied._tag === "Failure")
+              expect(denied.failure).toMatchObject({
+                reason: "unregistered-session",
+                outcome: "undispatched",
+              });
 
             const stage = yield* Capture.start(session, {
               target: stagePage,
