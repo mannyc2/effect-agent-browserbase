@@ -43,7 +43,7 @@ it.live(
             expect(yield* acquired.connect).toBe(session);
             expect(session.reference.provider).toBe("chromium");
             expect("sessionId" in session.reference).toBe(false);
-            yield* session.bind().navigate(NavigateRequest.make({ url: site.url }));
+            yield* session.navigate(NavigateRequest.make({ url: site.url }));
 
             const capture = yield* Capture.start(session, {
               lifetime: "page",
@@ -58,9 +58,9 @@ it.live(
 
             expect((yield* PageControl.state(session, page)).state).toBe("suspended");
             yield* PageControl.resume(session, held);
-            yield* session.bind().click(ClickRequest.make({ selector: "#increment" }));
+            yield* session.click(ClickRequest.make({ selector: "#increment" }));
             expect(
-              (yield* session.bind().readText(ReadTextRequest.make({ selector: "#count" }))).text,
+              (yield* session.readText(ReadTextRequest.make({ selector: "#count" }))).text,
             ).toBe("1");
             expect((yield* capture.stop).nativeStop).toBe("confirmed");
           }),
@@ -100,9 +100,13 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* Chromium).attach(host.endpoint, { policy });
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: site.url }));
-            yield* session.bind().click(ClickRequest.make({ selector: "#increment" }));
+            yield* session.navigate(NavigateRequest.make({ url: site.url }));
+            yield* session.click(ClickRequest.make({ selector: "#increment" }));
             yield* session.closeChecked;
+            expect(yield* Effect.result(session.retain)).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+            });
           }),
         ).pipe(
           Effect.provide(
@@ -128,8 +132,10 @@ it.live(
           }),
         ).pipe(Effect.provide(Chromium.layer()), Effect.result);
 
-        expect(failed._tag).toBe("Failure");
-        if (failed._tag === "Failure") expect(failed.failure.reason).toBe("not-found");
+        expect(failed).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "BrowserError", reason: { _tag: "NotFound" } },
+        });
         expect(host.running()).toBe(true);
         // An independent controller observes the work after both library connections have closed.
         yield* Effect.promise(async () => {
@@ -163,7 +169,7 @@ it.live(
 
             yield* session.navigate(NavigateRequest.make({ url: stageUrl }));
             const stageInfo = (yield* session.pages).find((page) => page.selected)!;
-            const selectedStage = session.bind();
+            const selectedStage = yield* session.retain;
             const stage = yield* session.pinPage(stageInfo);
 
             const childInfo = (yield* session.framesOf(stageInfo)).find(
@@ -182,11 +188,13 @@ it.live(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frame-name" }))).text,
             ).toBe("stage-child");
 
-            const scoutId = yield* session.createPage;
+            const scoutInfo = yield* session.createPage;
+
+            expect(scoutInfo.selected).toBe(false);
             // Resolve selection when this Effect runs, not when it is constructed.
             const navigateScout = session.navigate(NavigateRequest.make({ url: scoutUrl }));
 
-            yield* session.selectPage(scoutId);
+            expect(yield* session.selectPage(scoutInfo)).toBeUndefined();
             const scoutTarget = yield* session.target;
 
             yield* navigateScout;
@@ -200,7 +208,16 @@ it.live(
 
             expect(staleSelected._tag).toBe("Failure");
             if (staleSelected._tag === "Failure")
-              expect(staleSelected.failure.reason).toBe("stale");
+              expect(staleSelected.failure.reason._tag).toBe("Stale");
+
+            const retainedScout = yield* session.retain;
+
+            yield* session.selectPage(stageInfo);
+            yield* session.selectPage(scoutInfo);
+            expect(yield* Effect.result(retainedScout.readText({}))).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+            });
 
             expect(
               (yield* stage.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
@@ -246,7 +263,7 @@ it.live(
               .pipe(Effect.result);
 
             expect(heldRead._tag).toBe("Failure");
-            if (heldRead._tag === "Failure") expect(heldRead.failure.reason).toBe("busy");
+            if (heldRead._tag === "Failure") expect(heldRead.failure.reason._tag).toBe("Busy");
             expect(
               (yield* session.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
             ).toBe("scout");
@@ -266,26 +283,25 @@ it.live(
 
             expect(detached._tag).toBe("Failure");
             if (detached._tag === "Failure") {
-              expect(detached.failure.reason).toBe("stale");
+              expect(detached.failure.reason._tag).toBe("Stale");
               expect(detached.failure.outcome).toBe("undispatched");
             }
             const detachedPin = yield* session.pinFrame(stageInfo, childInfo).pipe(Effect.result);
 
             expect(detachedPin._tag).toBe("Failure");
             if (detachedPin._tag === "Failure") {
-              expect(detachedPin.failure.reason).toBe("not-found");
+              expect(detachedPin.failure.reason._tag).toBe("NotFound");
               expect(detachedPin.failure.outcome).toBe("undispatched");
             }
 
-            const closedId = yield* session.createPage;
-            const closedInfo = (yield* session.pages).find((page) => page.pageId === closedId)!;
+            const closedInfo = yield* session.createPage;
 
-            yield* session.closePage(closedId);
+            yield* session.closePage(closedInfo);
             const closedPin = yield* session.pinPage(closedInfo).pipe(Effect.result);
 
             expect(closedPin._tag).toBe("Failure");
             if (closedPin._tag === "Failure") {
-              expect(closedPin.failure.reason).toBe("not-found");
+              expect(closedPin.failure.reason._tag).toBe("NotFound");
               expect(closedPin.failure.outcome).toBe("undispatched");
             }
 
@@ -321,7 +337,7 @@ it.live(
 
             expect(reserved._tag).toBe("Failure");
             if (reserved._tag === "Failure") {
-              expect(reserved.failure.reason).toBe("busy");
+              expect(reserved.failure.reason._tag).toBe("Busy");
               expect(reserved.failure.outcome).toBe("undispatched");
             }
 
@@ -339,7 +355,7 @@ it.live(
 
             expect(completion._tag).toBe("Failure");
             if (completion._tag === "Failure")
-              expect(completion.failure.reason).toBe("interrupted");
+              expect(completion.failure.reason._tag).toBe("Interrupted");
             expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
           }),
         ).pipe(

@@ -503,40 +503,48 @@ it.effect(
     ),
 );
 
-it.effect("reject-call retains the original typed consumer failure and accepts later work", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const expected = { _tag: "ConsumerError" as const, secret: "host-only" };
-      let faults = 0;
+it.effect(
+  "default reject-call retains the original typed consumer failure and accepts later work",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const expected = { _tag: "ConsumerError" as const, secret: "host-only" };
+        let faults = 0;
 
-      const owner = yield* acquire(
-        numeric((value) => (value < 0 ? Effect.fail(expected) : Effect.succeed(value))),
-      );
+        const owner = yield* acquire(
+          Bootstrap.binding({
+            name: metadata.name,
+            origins: metadata.origins,
+            input: Schema.Finite,
+            output: Schema.Finite,
+            handle: (value) => (value < 0 ? Effect.fail(expected) : Effect.succeed(value)),
+          }),
+        );
 
-      const connection = yield* owner.connect(
-        () => {
-          faults++;
-        },
-        () => true,
-      );
+        const connection = yield* owner.connect(
+          () => {
+            faults++;
+          },
+          () => true,
+        );
 
-      const binding = connection.bindings[0];
+        const binding = connection.bindings[0];
 
-      assert.ok(binding);
-      yield* rejection(binding.invoke(native("-1").call));
-      yield* Effect.yieldNow;
-      const snapshot = yield* owner.diagnostics;
-      const record = snapshot.failures[0];
+        assert.ok(binding);
+        yield* rejection(binding.invoke(native("-1").call));
+        yield* Effect.yieldNow;
+        const snapshot = yield* owner.diagnostics;
+        const record = snapshot.failures[0];
 
-      assert.ok(record);
-      assert.equal(Option.getOrUndefined(Cause.findErrorOption(record.cause)), expected);
-      assert.equal(snapshot.faulted, false);
-      assert.equal(faults, 0);
-      assert.equal(yield* Effect.promise(() => binding.invoke(native().call)), "7");
-      assert.equal(snapshot.bindings[0]?.succeeded, 0);
-      assert.equal((yield* owner.diagnostics).bindings[0]?.succeeded, 1);
-    }),
-  ),
+        assert.ok(record);
+        assert.equal(Option.getOrUndefined(Cause.findErrorOption(record.cause)), expected);
+        assert.equal(snapshot.faulted, false);
+        assert.equal(faults, 0);
+        assert.equal(yield* Effect.promise(() => binding.invoke(native().call)), "7");
+        assert.equal(snapshot.bindings[0]?.succeeded, 0);
+        assert.equal((yield* owner.diagnostics).bindings[0]?.succeeded, 1);
+      }),
+    ),
 );
 
 it.effect("completes the typed fail-session signal before invoking the owner fence", () =>

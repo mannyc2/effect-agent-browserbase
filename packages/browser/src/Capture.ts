@@ -8,7 +8,7 @@ import type {
   CaptureSnapshot,
   CaptureSummary,
 } from "./CaptureData.ts";
-import { BrowserError } from "./Errors.ts";
+import { BrowserError, Reasons } from "./Errors.ts";
 import { captureParent } from "./internal/browser/Association.ts";
 import { startCapture } from "./internal/capture/Capture.ts";
 
@@ -54,7 +54,7 @@ export const start = <E>(
       return Effect.fail(
         BrowserError.make({
           operation: "capture",
-          reason: "unregistered-session",
+          reason: Reasons.UnregisteredSession.make({}),
           outcome: "undispatched",
         }),
       );
@@ -64,7 +64,7 @@ export const start = <E>(
       Effect.mapError(() =>
         BrowserError.make({
           operation: "capture",
-          reason: "configuration",
+          reason: Reasons.Configuration.make({}),
           outcome: "undispatched",
         }),
       ),

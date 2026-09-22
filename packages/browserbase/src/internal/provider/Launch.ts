@@ -1,6 +1,6 @@
 import { Effect, Redacted, Schema } from "effect";
 import { Viewport } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { LaunchRecipe, type ProxyRule } from "../../Launch.ts";
 import { AllocationAttempt } from "../../References.ts";
@@ -43,7 +43,11 @@ export const compileLaunch = Effect.fnUntraced(function* (
     onExcessProperty: "error",
   }).pipe(
     Effect.mapError(() =>
-      BrowserError.make({ operation: "launch", reason: "configuration", outcome: "undispatched" }),
+      BrowserError.make({
+        operation: "launch",
+        reason: Reasons.Configuration.make({}),
+        outcome: "undispatched",
+      }),
     ),
   );
 
@@ -54,7 +58,11 @@ export const compileLaunch = Effect.fnUntraced(function* (
   const settings = recipe.provider.browserSettings ?? {};
 
   const fail = () =>
-    BrowserError.make({ operation: "launch", reason: "configuration", outcome: "undispatched" });
+    BrowserError.make({
+      operation: "launch",
+      reason: Reasons.Configuration.make({}),
+      outcome: "undispatched",
+    });
 
   // The qualified reference is the only extension spelling, so a foreign project cannot
   // reach POST and there is no second alias whose precedence would have to be invented.

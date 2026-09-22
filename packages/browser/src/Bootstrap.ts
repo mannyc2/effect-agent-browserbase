@@ -89,11 +89,16 @@ export interface BindingOptions<I, IEncoded, O, OEncoded, E, R> {
   readonly origins: ReadonlyArray<Origin>;
   readonly input: Schema.ConstraintCodec<I, IEncoded, never, never>;
   readonly output: Schema.ConstraintCodec<O, OEncoded, never, never>;
-  readonly maxConcurrent: number;
-  readonly maxInputBytes: number;
-  readonly maxOutputBytes: number;
-  readonly timeoutMillis: number;
-  readonly failureMode: BindingFailureMode;
+  /** Defaults to one concurrent invocation. Explicit values still pass the bounded schema. */
+  readonly maxConcurrent?: number;
+  /** Defaults to 64 KiB. */
+  readonly maxInputBytes?: number;
+  /** Defaults to 64 KiB. */
+  readonly maxOutputBytes?: number;
+  /** Defaults to 10 seconds for the complete invocation. */
+  readonly timeoutMillis?: number;
+  /** Defaults to rejecting this invocation without terminating the session. */
+  readonly failureMode?: BindingFailureMode;
   readonly handle: (input: I) => Effect.Effect<O, E, R>;
 }
 

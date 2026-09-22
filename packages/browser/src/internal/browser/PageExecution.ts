@@ -1,5 +1,5 @@
 import { PageExecutionState, PageSuspension } from "../../BrowserData.ts";
-import { BrowserError } from "../../Errors.ts";
+import { Reasons, BrowserError } from "../../Errors.ts";
 import type { Ticket } from "./Owner.ts";
 
 export interface PageExecutionNative {
@@ -41,7 +41,7 @@ export class PageExecution {
     this.freshId = freshId;
   }
   state(): PageExecutionState {
-    if (this.disposed || this.port.closed()) throw fail("closed");
+    if (this.disposed || this.port.closed()) throw fail(Reasons.Closed.make({}));
 
     return PageExecutionState.make({
       pageId: this.pageId,
@@ -51,8 +51,8 @@ export class PageExecution {
     });
   }
   assertRunning(): void {
-    if (this.disposed || this.port.closed()) throw fail("closed");
-    if (this.phase !== "running") throw fail("busy");
+    if (this.disposed || this.port.closed()) throw fail(Reasons.Closed.make({}));
+    if (this.phase !== "running") throw fail(Reasons.Busy.make({}));
   }
   invalidate(): boolean {
     const held = this.phase !== "running";
@@ -67,8 +67,8 @@ export class PageExecution {
     ticket.check();
     const outcome = ticket.dispatched ? "unknown" : "undispatched";
 
-    if (this.disposed || this.port.closed()) throw fail("closed", outcome);
-    if (this.revision !== revision) throw fail("stale", outcome);
+    if (this.disposed || this.port.closed()) throw fail(Reasons.Closed.make({}), outcome);
+    if (this.revision !== revision) throw fail(Reasons.Stale.make({}), outcome);
   }
   private async write(
     ticket: Ticket,
@@ -88,7 +88,7 @@ export class PageExecution {
     const rate = await this.port.readRate();
 
     this.check(ticket, revision);
-    if (!Number.isFinite(rate)) throw fail("malformed");
+    if (!Number.isFinite(rate)) throw fail(Reasons.Malformed.make({}));
     this.phase = "unknown";
     this.priorRate = rate;
     await this.write(ticket, revision, () => this.port.rate(0));
@@ -119,7 +119,7 @@ export class PageExecution {
       receipt.suspensionId !== this.receipt.suspensionId ||
       this.priorRate === undefined
     )
-      throw fail("stale");
+      throw fail(Reasons.Stale.make({}));
     const revision = this.revision;
     const rate = this.priorRate;
 

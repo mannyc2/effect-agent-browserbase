@@ -18,8 +18,8 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
-            yield* session.bind().click(ClickRequest.make({ selector: "#popup" }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.click(ClickRequest.make({ selector: "#popup" }));
             // A dispatched click is not a registered target: the popup reaches this
             // session only once Chromium reports it and the owner registers it.
             // Reading the list immediately failed once in 30 loaded rounds with the
@@ -27,9 +27,10 @@ it.live(
             const initial = yield* settle(session.pages, (open) => open.length === 2);
             const original = initial.find((page) => page.selected)!;
             const popup = initial.find((page) => !page.selected)!;
-            const scout = yield* session.selectPage(popup.pageId);
 
-            yield* scout.navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.selectPage(popup);
+
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
             yield* session.resizeViewport(Viewport.make({ width: 640, height: 480 }));
             const pages = yield* session.pages;
             const stagePage = pages.find((page) => page.pageId === original.pageId)!;
@@ -44,7 +45,7 @@ it.live(
             expect(denied._tag).toBe("Failure");
             if (denied._tag === "Failure")
               expect(denied.failure).toMatchObject({
-                reason: "unregistered-session",
+                reason: { _tag: "UnregisteredSession" },
                 outcome: "undispatched",
               });
 

@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession } from "effect-browser/browser";
 import { Selector, TypeRequest } from "effect-browser/browser-data";
 
 import * as Actor from "./Actor.ts";
@@ -30,7 +30,7 @@ export const Storyboard = Schema.Array(Scene).check(Schema.isMinLength(1), Schem
 
 export type Storyboard = typeof Storyboard.Type;
 
-export const perform = (session: BrowserSession, storyboard: Storyboard) =>
+export const perform = (session: AnySession, storyboard: Storyboard) =>
   Effect.forEach(
     storyboard,
     Scene.match({

@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, type Layer, type Scope } from "effect";
-import type { AgentSession, AdaptedSession, fromSession } from "effect-agent-browser/adapter";
+import type { AdaptedSession, fromSession, SelectionOptions } from "effect-agent-browser/adapter";
 import { interactiveLayer } from "effect-agent-browser/adapter";
 import {
   type keyboardHandlers,
@@ -10,6 +10,7 @@ import {
   type HandlerOptions,
   type handlers,
   type ToolHostServices,
+  type ToolFailureSnapshot,
 } from "effect-agent-browser/tools";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
 import type { BrowserSession } from "effect-browser/browser";
@@ -24,7 +25,7 @@ type Requirements<T> = T extends Effect.Effect<infer _A, infer _E, infer R> ? R 
 type LayerRequirements<T> = T extends Layer.Layer<infer _A, infer _E, infer R> ? R : never;
 
 /** The framework contract is preserved exactly; the adapter adds no parallel handle type. */
-const originalContract: Same<AgentSession["handle"], BrowserHandle> = true;
+const originalContract: Same<AdaptedSession<BrowserSession>["handle"], BrowserHandle> = true;
 
 const declaredFrameworkFailure = (error: InteractiveBrowserError): string => error._tag;
 
@@ -39,14 +40,28 @@ const explicitOutcome: Same<
 type CallbackFailure = { readonly _tag: "SettingsUnavailable" };
 
 const retainedOwner: Same<
-  ReturnType<typeof fromSession<BrowserbaseSession<CallbackFailure>>>["browser"],
+  Effect.Success<ReturnType<typeof fromSession<BrowserbaseSession<CallbackFailure>>>>["browser"],
   BrowserbaseSession<CallbackFailure>
 > = true;
 
 const retainedChromium: Same<
-  ReturnType<typeof fromSession<ChromiumSession<CallbackFailure>>>["browser"],
+  Effect.Success<ReturnType<typeof fromSession<ChromiumSession<CallbackFailure>>>>["browser"],
   ChromiumSession<CallbackFailure>
 > = true;
+
+const adaptationError: Same<
+  Effect.Error<ReturnType<typeof fromSession<ChromiumSession<CallbackFailure>>>>,
+  BrowserError
+> = true;
+
+const adaptationServices: Same<
+  Effect.Services<ReturnType<typeof fromSession<ChromiumSession<CallbackFailure>>>>,
+  never
+> = true;
+
+const explicitSelection: Same<Parameters<typeof fromSession>[1], SelectionOptions> = true;
+
+const singleHandle: Same<keyof AdaptedSession<BrowserSession>, "browser" | "handle"> = true;
 
 const typedTools: Same<
   Parameters<typeof handlers<CallbackFailure>>[0],
@@ -89,6 +104,11 @@ const callbackErrors: Same<
 const capturedRequirements: Same<
   LayerRequirements<Effect.Success<ReturnType<typeof callbackHost>>["handlers"]>,
   never
+> = true;
+
+const diagnosticSnapshot: Same<
+  Effect.Success<ReturnType<typeof callbackHost>>["toolFailures"],
+  Effect.Effect<ToolFailureSnapshot>
 > = true;
 
 const supervised = (
@@ -159,6 +179,10 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       explicitOutcome &&
       retainedOwner &&
       retainedChromium &&
+      adaptationError &&
+      adaptationServices &&
+      explicitSelection &&
+      singleHandle &&
       openerRequirements &&
       typedTools &&
       keyboardBorrowed &&
@@ -166,6 +190,7 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       callbackRequirements &&
       callbackErrors &&
       capturedRequirements &&
+      diagnosticSnapshot &&
       supervisedRequirements &&
       supervisedErrors &&
       scopedRequirements &&

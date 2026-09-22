@@ -48,6 +48,14 @@ const secondary = Bootstrap.binding({
   handle: () => Effect.fail("secondary-failure" as const),
 });
 
+const defaulted = Bootstrap.binding({
+  name: "getDefaultSettings",
+  origins: ["https://portal.example.com"],
+  input: Schema.Struct({ version: Schema.Literal(3) }),
+  output: PublicSettings,
+  handle: () => Effect.flatMap(ShowSettings, (settings) => settings.read),
+});
+
 const combined = Bootstrap.combine(
   Bootstrap.init({ id: "marker", content: "globalThis.__marker = true;" }),
   settings,
@@ -56,6 +64,12 @@ const combined = Bootstrap.combine(
 
 const settingsError: Same<Bootstrap.PlanError<typeof settings>, "settings-unavailable"> = true;
 const settingsRequirements: Same<Bootstrap.PlanRequirements<typeof settings>, ShowSettings> = true;
+const defaultedError: Same<Bootstrap.PlanError<typeof defaulted>, "settings-unavailable"> = true;
+
+const defaultedRequirements: Same<
+  Bootstrap.PlanRequirements<typeof defaulted>,
+  ShowSettings
+> = true;
 
 const combinedError: Same<
   Bootstrap.PlanError<typeof combined>,
@@ -81,6 +95,46 @@ it("keeps binding metadata bounded and preserves callback E/R through compositio
     "getShowSettings",
     "secondary",
   ]);
+});
+
+it("omitted binding controls become validated defaults without erasing the callback E/R", () => {
+  expect(defaultedError && defaultedRequirements).toBe(true);
+  expect(defaulted.bindings?.[0]).toMatchObject({
+    name: "getDefaultSettings",
+    origins: ["https://portal.example.com"],
+    maxConcurrent: 1,
+    maxInputBytes: 65536,
+    maxOutputBytes: 65536,
+    timeoutMillis: 10000,
+    failureMode: "reject-call",
+  });
+  expect(Object.isFrozen(defaulted.bindings?.[0])).toBe(true);
+  expect(Schema.decodeSync(Bootstrap.Plan)(defaulted).bindings?.[0]).toBe(defaulted.bindings?.[0]);
+});
+
+it("explicit zero and null binding controls are rejected without substituting defaults", () => {
+  for (const field of [
+    "maxConcurrent",
+    "maxInputBytes",
+    "maxOutputBytes",
+    "timeoutMillis",
+    "failureMode",
+  ] as const) {
+    for (const value of [0, null]) {
+      expect(
+        () =>
+          Bootstrap.binding({
+            name: "invalidControl",
+            origins: ["https://portal.example.com"],
+            input: Schema.String,
+            output: Schema.String,
+            handle: Effect.succeed,
+            [field]: value,
+          }),
+        `${field}=${value}`,
+      ).toThrow(Error);
+    }
+  }
 });
 
 it("keeps static-only plans serializable and refuses invalid binding admission bounds", () => {
@@ -113,15 +167,15 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const decoded = Schema.decodeSync(Bootstrap.Plan)(settings);
+        const decoded = Schema.decodeSync(Bootstrap.Plan)(defaulted);
 
-        expect(decoded.bindings?.[0]).toBe(settings.bindings?.[0]);
+        expect(decoded.bindings?.[0]).toBe(defaulted.bindings?.[0]);
 
         // Static compilation and live executable preparation share one typed acquisition. Live
         // codecs/closures are not copied into a native serializable configuration object.
         const plan = yield* preparePlan(
           Bootstrap.combine(
-            settings,
+            defaulted,
             Bootstrap.init({ id: "marker", content: "globalThis.__marker = true;" }),
           ),
         );
@@ -141,7 +195,7 @@ it.effect(
 
         const binding = connection.bindings[0];
 
-        expect(binding?.name).toBe("getShowSettings");
+        expect(binding?.name).toBe("getDefaultSettings");
         if (binding === undefined) throw new Error("Expected the compiled connection binding");
 
         const reply = yield* Effect.promise(() =>

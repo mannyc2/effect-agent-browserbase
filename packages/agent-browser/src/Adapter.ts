@@ -7,6 +7,7 @@ import {
   InteractiveBrowserActionError,
   InteractiveBrowserBusyError,
   InteractiveBrowserExpiredError,
+  InteractiveBrowserLimitError,
   InteractiveBrowserPolicy,
   InteractiveBrowserPolicyDeniedError,
   InteractiveBrowserProtocolError,
@@ -16,31 +17,23 @@ import {
 } from "effect-agent/interactive-browser";
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
-import type { BoundTarget, BrowserSession } from "effect-browser/browser";
+import type { AnySession, BrowserSession, TargetOperations } from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 /**
  * One owned browser presented to the Effect Agent runtime. `browser` keeps the generic
  * package's session authority — capture and page control are read from that exact object,
  * never from a copy — while `handle` is the framework's bounded action surface.
  */
-export interface AgentSession<E = never> {
-  readonly browser: BrowserSession<E>;
-  readonly handle: BrowserHandle;
-  readonly currentHandle: Effect.Effect<BrowserHandle, BrowserError>;
-}
-
-/** Retains the concrete owner's reference, capabilities and callback errors. */
-export interface AdaptedSession<S extends BrowserSession<unknown>> {
+export interface AdaptedSession<S extends AnySession> {
   readonly browser: S;
   readonly handle: BrowserHandle;
-  readonly currentHandle: Effect.Effect<BrowserHandle, BrowserError>;
 }
 
 interface Failure {
   readonly reason: BrowserError["reason"];
-  readonly outcome?: BrowserError["outcome"];
+  readonly outcome: BrowserError["outcome"];
 }
 
 const operationError = (
@@ -48,51 +41,93 @@ const operationError = (
   error: Failure,
   implementation: SandboxImplementation,
 ): InteractiveBrowserError => {
-  switch (error.reason) {
-    case "busy":
+  switch (error.reason._tag) {
+    case "Busy":
       return InteractiveBrowserBusyError.make({
         implementation,
         message: "Browser control is busy or handed to an operator",
       });
-    case "closed":
-    case "expired":
-    case "disconnected":
-    case "stale":
+    case "Closed":
+    case "Expired":
+    case "Disconnected":
+    case "Stale":
       return InteractiveBrowserExpiredError.make({
         implementation,
         message: "This browser handle or target is no longer usable",
       });
-    case "configuration":
+    case "Configuration":
       return InteractiveBrowserPolicyDeniedError.make({
         implementation,
         message: "The browser request is malformed",
       });
-    case "malformed":
+    case "Malformed":
       return InteractiveBrowserProtocolError.make({
         implementation,
         message: "The browser returned an invalid bounded result",
       });
-    default:
-      return InteractiveBrowserActionError.make({
-        implementation,
-        operation,
-        message:
-          error.outcome === "undispatched"
-            ? "The browser action was not dispatched"
-            : error.outcome === "rejected"
-              ? "The browser action was rejected"
-              : "The browser action failed; its outcome may be unknown",
-      });
+    case "Limit": {
+      const { dimension, maximum, observed } = error.reason;
+
+      if (
+        (dimension === "actions" || dimension === "elapsed" || dimension === "returned-bytes") &&
+        Number.isInteger(maximum) &&
+        maximum > 0 &&
+        Number.isInteger(observed) &&
+        observed >= 0
+      )
+        return InteractiveBrowserLimitError.make({
+          implementation,
+          limit: dimension,
+          maximum,
+          observed,
+          message: "The browser exceeded its configured operation limit",
+        });
+      break;
+    }
+    case "Active":
+    case "Ambiguous":
+    case "Authorization":
+    case "ContentType":
+    case "ContextLease":
+    case "Denied":
+    case "Disabled":
+    case "Failed":
+    case "Interrupted":
+    case "NotFocused":
+    case "NotFound":
+    case "NotVisible":
+    case "Provider":
+    case "RateLimited":
+    case "Resized":
+    case "TargetChanged":
+    case "Timeout":
+    case "Timestamp":
+    case "Transport":
+    case "UnregisteredSession":
+    case "UnsafeUrl":
+    case "Unsupported":
+      break;
   }
+
+  return InteractiveBrowserActionError.make({
+    implementation,
+    operation,
+    message:
+      error.outcome === "undispatched"
+        ? "The browser action was not dispatched"
+        : error.outcome === "rejected"
+          ? "The browser action was rejected"
+          : "The browser action failed; its outcome may be unknown",
+  });
 };
 
 const decode = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknown) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
-    Effect.mapError((): Failure => ({ reason: "malformed", outcome: "unknown" })),
+    Effect.mapError((): Failure => ({ reason: Reasons.Malformed.make({}), outcome: "unknown" })),
   );
 
 const makeHandle = (
-  target: BoundTarget,
+  target: TargetOperations,
   close: Effect.Effect<void, BrowserError>,
   implementation: SandboxImplementation,
 ): BrowserHandle => ({
@@ -132,24 +167,46 @@ const makeHandle = (
       ),
       Effect.mapError((error) => operationError("screenshot", error, implementation)),
     ),
-  close: close.pipe(Effect.mapError((error) => operationError("close", error, implementation))),
+  close: close.pipe(
+    Effect.asVoid,
+    Effect.mapError((error) => operationError("close", error, implementation)),
+  ),
 });
 
-/** Adapt the exact owner; no acquisition, connection, receipt interpretation or session copying. */
-export const fromSession = <S extends BrowserSession<unknown>>(browser: S): AdaptedSession<S> => {
+/** Choose follow-selection operations or a checked selection retained when adaptation executes. */
+export interface SelectionOptions {
+  readonly selection: "current" | "retained";
+}
+
+const selectionOptions = Schema.Struct({ selection: Schema.Literals(["current", "retained"]) });
+
+/** Adapt the exact owner. Retention is checked lazily; neither mode opens another browser. */
+export const fromSession = Effect.fnUntraced(function* <S extends AnySession>(
+  browser: S,
+  options: SelectionOptions,
+): Effect.fn.Return<AdaptedSession<S>, BrowserError> {
+  const fixed = yield* Schema.decodeEffect(selectionOptions)(options).pipe(
+    Effect.mapError(() =>
+      BrowserError.make({
+        operation: "configure",
+        reason: Reasons.Configuration.make({ path: "selection" }),
+        outcome: "undispatched",
+      }),
+    ),
+  );
+
   const implementation = SandboxImplementation.make({
     isolation: "isolated",
     identity: browser.implementation,
   });
 
+  const target = fixed.selection === "retained" ? yield* browser.retain : browser;
+
   return {
     browser,
-    handle: makeHandle(browser.bind(), browser.closeChecked, implementation),
-    currentHandle: browser.currentTarget.pipe(
-      Effect.map((target) => makeHandle(target, browser.closeChecked, implementation)),
-    ),
+    handle: makeHandle(target, browser.closeChecked, implementation),
   };
-};
+});
 
 /** The host selects acquisition; the same framework implementation supports every browser owner. */
 export interface InteractiveOptions<E = never, R = never> {
@@ -223,7 +280,11 @@ export const interactiveLayer = <E, R>(
               ),
             );
 
-            return fromSession(browser).handle;
+            const adapted = yield* fromSession(browser, { selection: "retained" }).pipe(
+              Effect.mapError((error) => operationError("navigate", error, implementation)),
+            );
+
+            return adapted.handle;
           }),
       });
     }),

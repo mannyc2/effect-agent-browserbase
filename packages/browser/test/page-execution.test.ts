@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { PageSuspension } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 import { PageExecution, type PageExecutionNative } from "../src/internal/browser/PageExecution.ts";
@@ -21,7 +21,12 @@ const fixture = (overrides: Partial<PageExecutionNative> = {}) => {
     },
     remainingMillis: () => 1000,
     check: () => {
-      if (aborted) throw BrowserError.make({ operation: "page-control", reason: "stale" });
+      if (aborted)
+        throw BrowserError.make({
+          operation: "page-control",
+          reason: Reasons.Stale.make({}),
+          outcome: dispatched ? "unknown" : "undispatched",
+        });
     },
     dispatch: () => {
       dispatched = true;
@@ -86,17 +91,19 @@ it("duplicate suspend and stale or foreign receipts do not dispatch native work"
     before = f.calls.slice();
 
   await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({
-    reason: "busy",
+    reason: { _tag: "Busy" },
     outcome: "undispatched",
   });
   await expect(
     f.control.resume(PageSuspension.make({ ...receipt, suspensionId: "foreign" }), f.ticket),
-  ).rejects.toMatchObject({ reason: "stale" });
+  ).rejects.toMatchObject({ reason: { _tag: "Stale" } });
   expect(f.calls).toEqual(before);
   await f.control.resume(receipt, f.ticket);
   const after = f.calls.slice();
 
-  await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({ reason: "stale" });
+  await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({
+    reason: { _tag: "Stale" },
+  });
   expect(f.calls).toEqual(after);
 });
 it("a partial hold failure stays unknown without rollback or a successful receipt", async () => {
@@ -126,13 +133,17 @@ it("a failed resume barrier cannot restore playback or be replayed", async () =>
   expect(f.calls).not.toContain("rate:0.5");
   const before = f.calls.slice();
 
-  await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({ reason: "stale" });
+  await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({
+    reason: { _tag: "Stale" },
+  });
   expect(f.calls).toEqual(before);
 });
 it("invalid prior native rate fails before any mutation", async () => {
   const f = fixture({ readRate: async () => Number.NaN });
 
-  await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({ reason: "malformed" });
+  await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({
+    reason: { _tag: "Malformed" },
+  });
   expect(f.ticket.dispatched).toBe(false);
   expect(f.control.state().state).toBe("running");
   expect(f.calls).toEqual([]);
@@ -150,7 +161,7 @@ it("late completion after cancellation cannot send subsequent native commands", 
   await Promise.resolve();
   f.abort();
   release?.();
-  await expect(hold).rejects.toMatchObject({ reason: "stale" });
+  await expect(hold).rejects.toMatchObject({ reason: { _tag: "Stale" } });
   expect(f.calls).toEqual(["read"]);
   expect(f.control.state().state).toBe("unknown");
 });
@@ -163,7 +174,9 @@ it("external invalidation fences held receipts but running navigation stays runn
 
   expect(f.control.invalidate()).toBe(true);
   expect(f.control.state().state).toBe("unknown");
-  await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({ reason: "stale" });
+  await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({
+    reason: { _tag: "Stale" },
+  });
 });
 it("cleanup detaches once without an implicit lifecycle resume or rate restoration", async () => {
   const f = fixture();

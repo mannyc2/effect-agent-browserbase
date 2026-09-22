@@ -1,5 +1,6 @@
 import type { Frame } from "playwright-core";
 
+import { Reasons } from "../../Errors.ts";
 import type {
   CaptureBinding,
   CaptureInvalidation,
@@ -75,9 +76,9 @@ export const makeCaptureSources = (targets: Targets) => {
         const requested = entries.get(target.pageId);
 
         if (requested === undefined || requested.page.isClosed())
-          throw failure("not-found", "undispatched");
+          throw failure(Reasons.NotFound.make({}), "undispatched");
         if ((await targets.targetId(requested)) !== target.targetId)
-          throw failure("stale", "undispatched");
+          throw failure(Reasons.Stale.make({}), "undispatched");
         entry = requested;
         captureFrame = entry.page.mainFrame();
       }
@@ -86,7 +87,7 @@ export const makeCaptureSources = (targets: Targets) => {
       const watchedFrameId = frameId(captureFrame);
 
       // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
-      if (page.screencast === undefined) throw failure("unsupported");
+      if (page.screencast === undefined) throw failure(Reasons.Unsupported.make({}));
       let watcherSet: Set<CaptureWatcher> | undefined;
       let watcher: CaptureWatcher | undefined;
 

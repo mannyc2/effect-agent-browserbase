@@ -55,7 +55,7 @@ export const inspectPage = (credentials: Credentials, url: string) =>
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-      yield* session.bind().navigate(NavigateRequest.make({ url }));
+      yield* session.navigate(NavigateRequest.make({ url }));
 
       return yield* session.observe({ maxTextBytes: 16 * 1024, maxControls: 32 });
     }).pipe(Effect.provide(browser().pipe(Layer.provide(account(credentials))))),
@@ -71,7 +71,7 @@ export const cooperativeHandoff = (
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-      yield* session.bind().navigate(NavigateRequest.make({ url }));
+      yield* session.navigate(NavigateRequest.make({ url }));
       const handoff = yield* session.beginHandoff(120);
 
       yield* operator(handoff.view);
@@ -102,7 +102,7 @@ export const persistentReconnect = <LeaseE, LeaseR>(
       Effect.gen(function* () {
         const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-        yield* session.bind().navigate(NavigateRequest.make({ url }));
+        yield* session.navigate(NavigateRequest.make({ url }));
         const detached = yield* session.detach;
         // A later controller must explicitly establish operator release before reconnecting.
         const observation = yield* session.reconnect(true);
@@ -132,7 +132,7 @@ export const downloadFile = (credentials: Credentials, url: string) => {
       const downloads = yield* BrowserbaseDownloads;
       const session = yield* host.open(policy);
 
-      yield* session.bind().navigate(NavigateRequest.make({ url }));
+      yield* session.navigate(NavigateRequest.make({ url }));
       const before = yield* downloads.list(session.reference);
 
       yield* session.clickForDownload(ClickRequest.make({ selector: "#download" }));

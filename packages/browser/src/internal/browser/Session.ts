@@ -11,7 +11,7 @@ import {
   type Viewport,
 } from "../../BrowserData.ts";
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
-import { BrowserError, type BrowserOperation } from "../../Errors.ts";
+import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import { type CaptureParent } from "./Association.ts";
 import type { BindingImplementation } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
@@ -70,7 +70,7 @@ export const makeNavigationStop = <E, R>(
           return Effect.fail(
             BrowserError.make({
               operation: "navigate-stop",
-              reason: "busy",
+              reason: Reasons.Busy.make({}),
               outcome: "undispatched",
             }),
           );
@@ -148,7 +148,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   if (engine === undefined)
     return yield* BrowserError.make({
       operation: "connect",
-      reason: "configuration",
+      reason: Reasons.Configuration.make({}),
       outcome: "undispatched",
     });
   const parentScope = yield* Scope.Scope;
@@ -184,7 +184,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     const registrations = yield* Effect.tryPromise({
       try: () => driver?.disposeInitialization?.() ?? Promise.resolve(),
-      catch: () => BrowserError.make({ operation: "close", reason: "provider" }),
+      catch: () =>
+        BrowserError.make({
+          operation: "close",
+          reason: Reasons.Provider.make({}),
+          outcome: "unknown",
+        }),
     }).pipe(Effect.exit);
 
     if (Exit.isFailure(callbacks)) return yield* Effect.failCause(callbacks.cause);
@@ -194,14 +199,23 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const capture: CaptureParent = {
     owner,
     target: () => {
-      if (driver === undefined) throw BrowserError.make({ operation: "target", reason: "closed" });
+      if (driver === undefined)
+        throw BrowserError.make({
+          operation: "target",
+          reason: Reasons.Closed.make({}),
+          outcome: "undispatched",
+        });
 
       return Target.make({ generation: owner.state.generation, ...driver.selected() });
     },
     resolve: (ticket, requested) =>
       native("capture-start", ticket, async () => {
         if (driver === undefined)
-          throw BrowserError.make({ operation: "capture", reason: "closed" });
+          throw BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Closed.make({}),
+            outcome: "undispatched",
+          });
         const binding = await driver.capture(requested);
 
         return {
@@ -251,7 +265,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
       return Effect.tryPromise({
         try: () => acquired.disconnect(),
-        catch: () => BrowserError.make({ operation: "disconnect", reason: "provider" }),
+        catch: () =>
+          BrowserError.make({
+            operation: "disconnect",
+            reason: Reasons.Provider.make({}),
+            outcome: "unknown",
+          }),
       }).pipe(Effect.as<ConnectionState>("closed"));
     }).pipe(
       Effect.ensuring(
@@ -335,7 +354,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           bindings?.close();
           yield* bindings?.dispose ?? Effect.void;
 
-          return yield* BrowserError.make({ operation: "connect", reason: "closed" });
+          return yield* BrowserError.make({
+            operation: "connect",
+            reason: Reasons.Closed.make({}),
+            outcome: "undispatched",
+          });
         }
 
         const acquired = yield* restore(
@@ -367,11 +390,20 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         ) {
           yield* Effect.tryPromise({
             try: () => acquired.disconnect(),
-            catch: () => BrowserError.make({ operation: "connect", reason: "provider" }),
+            catch: () =>
+              BrowserError.make({
+                operation: "connect",
+                reason: Reasons.Provider.make({}),
+                outcome: "unknown",
+              }),
           }).pipe(Effect.ignore);
           driver = undefined;
 
-          return yield* BrowserError.make({ operation: "connect", reason: "closed" });
+          return yield* BrowserError.make({
+            operation: "connect",
+            reason: Reasons.Closed.make({}),
+            outcome: "unknown",
+          });
         }
 
         return acquired;
@@ -382,7 +414,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     if (driver === undefined)
       throw BrowserError.make({
         operation: "target",
-        reason: "closed",
+        reason: Reasons.Closed.make({}),
         outcome: "undispatched",
       });
 
@@ -429,10 +461,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       operation,
       reason:
         state._tag === "RequiresNavigation" || state.reason === "stale"
-          ? "stale"
+          ? Reasons.Stale.make({})
           : state.reason === "timeout"
-            ? "timeout"
-            : "failed",
+            ? Reasons.Timeout.make({})
+            : Reasons.Failed.make({}),
       outcome: "undispatched",
     });
   };
@@ -461,23 +493,45 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         Effect.flatMap((raw) =>
           Effect.gen(function* () {
             if (owner.state.revision !== revision)
-              return yield* BrowserError.make({ operation: "observe", reason: "stale" });
+              return yield* BrowserError.make({
+                operation: "observe",
+                reason: Reasons.Stale.make({}),
+                outcome: "undispatched",
+              });
 
             const result = yield* Effect.try({
               try: () => Observation.make({ ...raw, target: capture.target(), revision }),
-              catch: (error) => publicError(error, "observe", { reason: "malformed" }),
+              catch: (error) =>
+                publicError(error, "observe", {
+                  reason: Reasons.Malformed.make({}),
+                  outcome: "undispatched",
+                }),
             });
 
             const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Observation))(
               result,
             ).pipe(
               Effect.mapError(() =>
-                BrowserError.make({ operation: "observe", reason: "malformed" }),
+                BrowserError.make({
+                  operation: "observe",
+                  reason: Reasons.Malformed.make({}),
+                  outcome: "undispatched",
+                }),
               ),
             );
 
-            if (new TextEncoder().encode(encoded).length > options.maxReturnedBytes) {
-              return yield* BrowserError.make({ operation: "observe", reason: "limit" });
+            const bytes = new TextEncoder().encode(encoded).length;
+
+            if (bytes > options.maxReturnedBytes) {
+              return yield* BrowserError.make({
+                operation: "observe",
+                reason: Reasons.Limit.make({
+                  dimension: "returned-bytes",
+                  maximum: options.maxReturnedBytes,
+                  observed: bytes,
+                }),
+                outcome: "undispatched",
+              });
             }
 
             return result;
@@ -495,7 +549,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     return bytes > options.maxReturnedBytes
       ? Effect.fail(
-          BrowserError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+          BrowserError.make({
+            operation,
+            reason: Reasons.Configuration.make({ path: "maxTextBytes" }),
+            outcome: "undispatched",
+          }),
         )
       : Effect.succeed(bytes);
   };
@@ -509,7 +567,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       Effect.try({
         try: capture.target,
         catch: () =>
-          BrowserError.make({ operation: "target", reason: "closed", outcome: "undispatched" }),
+          BrowserError.make({
+            operation: "target",
+            reason: Reasons.Closed.make({}),
+            outcome: "undispatched",
+          }),
       }),
     { charge: false },
   );
@@ -530,7 +592,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         }
 
       return pageId !== undefined && owner.reserved(pageId)
-        ? Effect.fail(BrowserError.make({ operation, reason: "busy", outcome: "undispatched" }))
+        ? Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
+          )
         : Effect.void;
     });
 
@@ -576,20 +644,28 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     );
 
   /**
-   * A selected handle captures selection plus generation. A pinned handle captures only the
-   * connection generation and re-resolves its exact page/frame identity on every operation.
+   * Direct operations resolve selection under admission. Retained operations capture selection
+   * and generation; pinned operations capture generation and their explicit page/frame only.
    */
-  const bind = (browserTarget?: DriverTarget) => {
-    const generation = owner.state.generation,
-      selection = browserTarget === undefined ? owner.state.selection : undefined;
+  const makeOperations = (retained?: {
+    readonly generation: number;
+    readonly selection?: number;
+    readonly target?: DriverTarget;
+  }) => {
+    const browserTarget = retained?.target;
 
     const check = () => {
       if (
-        owner.state.generation !== generation ||
-        (selection !== undefined && owner.state.selection !== selection)
+        retained !== undefined &&
+        (owner.state.generation !== retained.generation ||
+          (retained.selection !== undefined && owner.state.selection !== retained.selection))
       ) {
         return Effect.fail(
-          BrowserError.make({ operation: "handle", reason: "stale", outcome: "undispatched" }),
+          BrowserError.make({
+            operation: "handle",
+            reason: Reasons.Stale.make({}),
+            outcome: "undispatched",
+          }),
         );
       }
 
@@ -619,12 +695,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       );
 
     const operationTarget = () =>
-      browserTarget === undefined
+      retained?.target === undefined
         ? capture.target()
         : Target.make({
-            generation,
-            pageId: browserTarget.pageId,
-            frameId: browserTarget.frameId,
+            generation: retained.generation,
+            pageId: retained.target.pageId,
+            frameId: retained.target.frameId,
           });
 
     /**
@@ -669,9 +745,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         async (driver, ticket) => {
           const target = operationTarget();
 
+          const remainingLifetime =
+            owner.lifetimeDeadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+
+          if (remainingLifetime <= 0)
+            throw BrowserError.make({
+              operation: "navigate",
+              reason: Reasons.Expired.make({}),
+              outcome: "undispatched",
+            });
+
           const navigation = await driver.beginNavigation(
             url,
-            timeoutMillis,
+            Math.min(timeoutMillis, remainingLifetime),
             ticket,
             browserTarget,
           );
@@ -708,18 +794,27 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           if (!stopDispatched)
             decide(
               Effect.fail(
-                publicError(error, "navigate", { reason: "provider", outcome: "unknown" }),
+                publicError(error, "navigate", {
+                  reason: Reasons.Provider.make({}),
+                  outcome: "unknown",
+                }),
               ),
               false,
             );
         },
       );
       // A fence already cleared the reservation; this only releases anyone still waiting.
-      reservation.signal.addEventListener("abort", () => decide(failed("stale"), true), {
-        once: true,
-      });
+      reservation.signal.addEventListener(
+        "abort",
+        () => decide(failed(Reasons.Stale.make({})), true),
+        {
+          once: true,
+        },
+      );
       // Left unsettled, nothing knows what the browser did with it.
-      yield* Effect.addFinalizer(() => Effect.sync(() => decide(failed("stale"), false)));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => decide(failed(Reasons.Stale.make({})), false)),
+      );
 
       const stop = yield* makeNavigationStop(
         () => Deferred.isDoneUnsafe(outcome),
@@ -739,7 +834,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     if (stopSetupPending)
                       throw BrowserError.make({
                         operation: "navigate-stop",
-                        reason: "busy",
+                        reason: Reasons.Busy.make({}),
                         outcome: "undispatched",
                       });
                     stopSetupPending = true;
@@ -756,13 +851,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   duration: Math.min(3000, ticket.remainingMillis()),
                   orElse: () =>
                     Effect.fail(
-                      BrowserError.make({ operation: "navigate-stop", reason: "timeout" }),
+                      BrowserError.make({
+                        operation: "navigate-stop",
+                        reason: Reasons.Timeout.make({}),
+                        outcome: ticket.dispatched ? "unknown" : "undispatched",
+                      }),
                     ),
                 }),
               ),
             { mutation: true, charge: false },
           ),
-        () => decide(failed("interrupted"), true),
+        () => decide(failed(Reasons.Interrupted.make({})), true),
       );
 
       return {
@@ -779,9 +878,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return {
       startNavigation,
       // The same machinery, scoped to the call: leaving it unsettled fences, as it always has.
-      navigate: (url: string) =>
+      navigate: (url: string, timeoutMillis?: number) =>
         Effect.scoped(
-          startNavigation(url).pipe(Effect.flatMap((operation) => operation.completed)),
+          startNavigation(url, timeoutMillis).pipe(
+            Effect.flatMap((operation) => operation.completed),
+          ),
         ),
       readText: (selector?: string) =>
         run("read-text", (driver, ticket) =>
@@ -830,7 +931,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const connectionUrl = (operation: BrowserOperation) =>
     Effect.suspend(() => acquired.connection(remainingMillis())).pipe(
-      Effect.mapError((error) => BrowserError.make({ operation, reason: error.reason })),
+      Effect.mapError((error) =>
+        BrowserError.make({ operation, reason: error.reason, outcome: error.outcome }),
+      ),
     );
 
   const connected = yield* Effect.cached(
@@ -865,24 +968,50 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     if (port === undefined)
       throw BrowserError.make({
         operation: "page-control",
-        reason: "unsupported",
+        reason: Reasons.Unsupported.make({}),
         outcome: "undispatched",
       });
 
     return port;
   };
 
-  const pinned = (target: Effect.Effect<DriverTarget, BrowserError>) =>
-    target.pipe(
-      Effect.map((value) => ({
-        target: Target.make({
-          generation: owner.state.generation,
-          pageId: value.pageId,
-          frameId: value.frameId,
+  const pinned = (resolve: (driver: Driver, ticket: Ticket) => Promise<DriverTarget>) =>
+    owner.guard(
+      "target",
+      (ticket) =>
+        native("target", ticket, async () => {
+          const value = await resolve(getDriver(), ticket);
+
+          ticket.check();
+
+          return {
+            target: Target.make({ generation: ticket.generation, ...value }),
+            operations: makeOperations({ generation: ticket.generation, target: value }),
+          };
         }),
-        bound: bind(value),
-      })),
+      { charge: false },
     );
+
+  const retain = owner.guard(
+    "target",
+    () =>
+      Effect.try({
+        try: () => {
+          const target = capture.target();
+
+          return makeOperations({
+            generation: target.generation,
+            selection: owner.state.selection,
+          });
+        },
+        catch: (error) =>
+          publicError(error, "target", {
+            reason: Reasons.Closed.make({}),
+            outcome: "undispatched",
+          }),
+      }),
+    { charge: false },
+  );
 
   const controls = {
     implementation: options.implementation,
@@ -902,8 +1031,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     },
     reference: ref,
     capture,
-    bind,
-    currentTarget: readSelected,
+    operations: makeOperations(),
+    retain,
+    target: readSelected,
     cleanupResult,
     close: release,
     closeChecked: acquired.closeChecked,
@@ -967,23 +1097,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket, page), {
         charge: false,
       }),
-    pinPage: (page: PageInfo) =>
-      pinned(
-        nativeOperation("target", (driver, ticket) => driver.resolvePage(page, ticket), {
-          charge: false,
-        }),
-      ),
+    pinPage: (page: PageInfo) => pinned((driver, ticket) => driver.resolvePage(page, ticket)),
     pinFrame: (page: PageInfo, frame: FrameInfo) =>
-      pinned(
-        nativeOperation("target", (driver, ticket) => driver.resolveFrame(page, frame, ticket), {
-          charge: false,
-        }),
-      ),
-    selectPage: (id: string) =>
+      pinned((driver, ticket) => driver.resolveFrame(page, frame, ticket)),
+    selectPage: (page: PageInfo) =>
       nativeOperation(
         "select-page",
         async (driver, ticket) => {
-          await driver.selectPage(id, ticket);
+          await driver.selectPage(page, ticket);
           owner.state.selection++;
         },
         { charge: false },
@@ -1003,8 +1124,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         charge: false,
         anyPage: true,
       }),
-    closePage: (id: string) =>
-      nativeOperation("close-page", (driver, ticket) => driver.closePage(id, ticket), {
+    closePage: (page: PageInfo) =>
+      nativeOperation("close-page", (driver, ticket) => driver.closePage(page, ticket), {
         mutation: true,
         charge: false,
         anyPage: true,
@@ -1051,7 +1172,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             if (options.driver.pageControl)
               return yield* BrowserError.make({
                 operation: "handoff",
-                reason: "unsupported",
+                reason: Reasons.Unsupported.make({}),
                 outcome: "undispatched",
               });
             if (owner.state.phase === "open") owner.fence("paused", "paused");
@@ -1075,7 +1196,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ) {
               return yield* BrowserError.make({
                 operation: "resume",
-                reason: "authorization",
+                reason: Reasons.Authorization.make({}),
                 outcome: "undispatched",
               });
             }
@@ -1098,7 +1219,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             if (!options.keepAlive)
               return yield* BrowserError.make({
                 operation: "detach",
-                reason: "unsupported",
+                reason: Reasons.Unsupported.make({}),
                 outcome: "undispatched",
               });
             reconnectTarget = yield* native("detach", ticket, () => getDriver().selectedTargetId());
@@ -1110,7 +1231,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
             const disconnected = yield* Effect.tryPromise({
               try: () => attached.disconnect(),
-              catch: () => BrowserError.make({ operation: "detach", reason: "disconnected" }),
+              catch: () =>
+                BrowserError.make({
+                  operation: "detach",
+                  reason: Reasons.Disconnected.make({}),
+                  outcome: "unknown",
+                }),
             }).pipe(Effect.exit);
 
             driver = undefined;
@@ -1137,7 +1263,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               ) {
                 return yield* BrowserError.make({
                   operation: "reconnect",
-                  reason: "unsupported",
+                  reason: Reasons.Unsupported.make({}),
                   outcome: "undispatched",
                 });
               }
@@ -1193,7 +1319,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         ? Effect.fail(
             BrowserError.make({
               operation: "connect",
-              reason: "closed",
+              reason: Reasons.Closed.make({}),
               outcome: "undispatched",
             }),
           )
@@ -1209,4 +1335,4 @@ export type SessionControls<L extends SessionLease = SessionLease> =
     ? A
     : never;
 
-export type BoundControls = ReturnType<SessionControls["bind"]>;
+export type TargetControls = SessionControls["operations"];

@@ -42,7 +42,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
 
             // Spend Chromium's screencast startup outside the measured interval.
             // Pinned Playwright's Screencast.addClient calls _startScreencast

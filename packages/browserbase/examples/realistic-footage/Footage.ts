@@ -1,5 +1,5 @@
 import { Effect, Random } from "effect";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession } from "effect-browser/browser";
 import { NavigateRequest } from "effect-browser/browser-data";
 
 import * as Camera from "./Camera.ts";
@@ -22,10 +22,10 @@ export interface FootageRequest {
  * film never starts on a blank page or on text reflowing into its web font.
  */
 export const record = Effect.fn("Footage.record")(function* (
-  session: BrowserSession,
+  session: AnySession,
   request: FootageRequest,
 ) {
-  yield* session.bind().navigate(NavigateRequest.make({ url: request.url }));
+  yield* session.navigate(NavigateRequest.make({ url: request.url }));
   yield* session.ready;
 
   return yield* Camera.film(

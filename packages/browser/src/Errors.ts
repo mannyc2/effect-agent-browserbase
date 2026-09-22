@@ -68,46 +68,81 @@ export const BrowserOperation = Schema.Literals([
 
 export type BrowserOperation = typeof BrowserOperation.Type;
 
+/** Dispatch evidence belongs to the operation, independently of its failure reason. */
+export const BrowserOutcome = Schema.Literals(["undispatched", "rejected", "unknown"]);
+
+export type BrowserOutcome = typeof BrowserOutcome.Type;
+
+/** Limits report measured producer facts; an unavailable measurement is never invented. */
+export const LimitDimension = Schema.Literals([
+  "actions",
+  "elapsed",
+  "returned-bytes",
+  "pages",
+  "frames",
+  "frame-depth",
+  "buffered-frames",
+  "buffered-bytes",
+  "host-reads",
+  "controls",
+  "text",
+  "captures",
+  "frame-bytes",
+  "width",
+  "height",
+  "pixels",
+]);
+
+const SchemaPath = Schema.String.check(Schema.isMaxLength(512));
+
+/** Validated constructors for host reasons. The model receives a separate bounded projection. */
+export const Reasons = {
+  Configuration: Schema.TaggedStruct("Configuration", { path: Schema.optionalKey(SchemaPath) }),
+  UnregisteredSession: Schema.TaggedStruct("UnregisteredSession", {}),
+  Unsupported: Schema.TaggedStruct("Unsupported", {}),
+  Busy: Schema.TaggedStruct("Busy", {}),
+  Closed: Schema.TaggedStruct("Closed", {}),
+  Stale: Schema.TaggedStruct("Stale", {}),
+  NotFound: Schema.TaggedStruct("NotFound", {}),
+  Ambiguous: Schema.TaggedStruct("Ambiguous", {}),
+  Malformed: Schema.TaggedStruct("Malformed", { path: Schema.optionalKey(SchemaPath) }),
+  Limit: Schema.TaggedStruct("Limit", {
+    dimension: LimitDimension,
+    maximum: Schema.Natural,
+    observed: Schema.Natural,
+  }),
+  Timeout: Schema.TaggedStruct("Timeout", {}),
+  Transport: Schema.TaggedStruct("Transport", { status: Schema.optionalKey(Schema.Int) }),
+  Provider: Schema.TaggedStruct("Provider", { status: Schema.optionalKey(Schema.Int) }),
+  Authorization: Schema.TaggedStruct("Authorization", {}),
+  RateLimited: Schema.TaggedStruct("RateLimited", {
+    retryAfterMillis: Schema.optionalKey(Schema.Natural),
+  }),
+  Disconnected: Schema.TaggedStruct("Disconnected", {}),
+  Active: Schema.TaggedStruct("Active", {}),
+  Disabled: Schema.TaggedStruct("Disabled", {}),
+  Expired: Schema.TaggedStruct("Expired", {}),
+  Failed: Schema.TaggedStruct("Failed", {}),
+  UnsafeUrl: Schema.TaggedStruct("UnsafeUrl", {}),
+  ContentType: Schema.TaggedStruct("ContentType", {}),
+  Timestamp: Schema.TaggedStruct("Timestamp", {}),
+  Resized: Schema.TaggedStruct("Resized", {}),
+  TargetChanged: Schema.TaggedStruct("TargetChanged", {}),
+  Interrupted: Schema.TaggedStruct("Interrupted", {}),
+  ContextLease: Schema.TaggedStruct("ContextLease", {}),
+  NotVisible: Schema.TaggedStruct("NotVisible", {}),
+  Denied: Schema.TaggedStruct("Denied", {}),
+  NotFocused: Schema.TaggedStruct("NotFocused", {}),
+} as const;
+
+export const BrowserReason = Schema.Union(Object.values(Reasons));
+
+export type BrowserReason = typeof BrowserReason.Type;
+
 export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserError", {
   operation: BrowserOperation,
-  reason: Schema.Literals([
-    "configuration",
-    "unregistered-session",
-    "unsupported",
-    "busy",
-    "closed",
-    "stale",
-    "not-found",
-    "ambiguous",
-    "malformed",
-    "limit",
-    "timeout",
-    "transport",
-    "provider",
-    "authorization",
-    "rate-limited",
-    "disconnected",
-    "active",
-    "disabled",
-    "expired",
-    "failed",
-    "unsafe-url",
-    "content-type",
-    "timestamp",
-    "resized",
-    "target-changed",
-    "interrupted",
-    "context-lease",
-    // The pointer cannot be placed on it: outside the viewport, without area, or covered.
-    "not-visible",
-    // The host's own admission policy refused it, on facts read just before any input.
-    "denied",
-    // Keys would not reach it: neither it nor anything inside it has focus.
-    "not-focused",
-  ]),
-  outcome: Schema.optionalKey(Schema.Literals(["undispatched", "rejected", "unknown"])),
-  status: Schema.optionalKey(Schema.Int),
-  retryAfterMillis: Schema.optionalKey(Schema.Natural),
+  reason: BrowserReason,
+  outcome: BrowserOutcome,
 }) {}
 
 export class InitializationError extends Schema.TaggedError<InitializationError>()(

@@ -16,7 +16,7 @@ import type {
   ContextError,
 } from "../../../packages/browserbase/src/Errors.ts";
 import { ContextReference } from "../../../packages/browserbase/src/References.ts";
-import { fixture, gate } from "./ScriptedProvider.ts";
+import { fixture, gate, scriptedPage } from "./ScriptedProvider.ts";
 import { advance, elapse, timed } from "./Time.ts";
 
 /** Acquisition keeps its own declared channel; local browser operations stay BrowserError. */
@@ -46,15 +46,25 @@ const expectUncertainAllocation = <A, R>(
     }),
   );
 
-const expectReason = <A, E extends { readonly reason: string }, R>(
+const expectReason = <A, E extends { readonly reason: string | { readonly _tag: string } }, R>(
   effect: Effect.Effect<A, E, R>,
-  reason: E["reason"],
+  reason: E["reason"] extends infer Reason
+    ? Reason extends { readonly _tag: infer Tag }
+      ? Tag
+      : Reason
+    : never,
 ) =>
   effect.pipe(
     Effect.result,
     Effect.map((result) => {
       assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") assert.equal(result.failure.reason, reason);
+      if (result._tag === "Failure")
+        assert.equal(
+          typeof result.failure.reason === "string"
+            ? result.failure.reason
+            : result.failure.reason._tag,
+          reason,
+        );
     }),
   );
 
@@ -115,7 +125,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const f = yield* fixture();
       const acquired = yield* f.acquisition;
       const session = yield* acquired.connect;
-      const handle = session.bind();
+      const handle = yield* session.retain;
 
       yield* handle.navigate("https://example.test/next");
       assert.equal(yield* handle.readText(), "initial");
@@ -135,10 +145,10 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const acquired = yield* f.acquisition;
 
       assert.equal(acquired.reference.sessionId, "session-1");
-      yield* expectReason(acquired.connect, "provider");
+      yield* expectReason(acquired.connect, "Provider");
       assert.equal(f.state.releases, 1);
       assert.equal(f.state.connects, 1);
-      yield* expectReason(acquired.connect, "closed");
+      yield* expectReason(acquired.connect, "Closed");
       assert.equal(f.state.connects, 1);
     })),
   test("lost create reply is not retried and reports an allocation nonce", () =>
@@ -189,7 +199,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const f = yield* fixture({ lifetimeMillis: 900_000 });
       const session = yield* (yield* f.acquisition).connect;
 
-      assert.equal(yield* session.bind().readText(), "initial");
+      assert.equal(yield* session.operations.readText(), "initial");
       assert.equal((yield* session.close).remote, "confirmed");
     })),
   test("checked close rejects failed disconnection even when the provider confirms termination", () =>
@@ -201,7 +211,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
 
       assert.equal(outcome._tag, "Failure");
       if (outcome._tag === "Failure") {
-        assert.equal(outcome.failure.reason, "provider");
+        assert.equal(outcome.failure.reason._tag, "Provider");
         assert.equal(outcome.failure.outcome, "unknown");
       }
       assert.equal(report.remote, "confirmed");
@@ -217,7 +227,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
 
       // The endpoint belongs to the exact allocated session; a foreign identity is
       // refused before CDP attachment, and no read of it can confirm a release.
-      yield* expectReason(acquired.connect, "malformed");
+      yield* expectReason(acquired.connect, "Malformed");
       const report = yield* elapse(acquired.close, 12_000);
 
       assert.equal(report.remote, "unknown");
@@ -248,14 +258,14 @@ export const ownershipCases: ReadonlyArray<Case> = [
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const fiber = yield* session.bind().click("#button").pipe(Effect.forkChild);
+      const fiber = yield* session.operations.click("#button").pipe(Effect.forkChild);
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(fiber);
       queried.resolve();
       yield* Effect.promise(() => settled.promise);
       assert.equal(dispatches, 0);
-      assert.equal(yield* session.bind().readText(), "initial");
+      assert.equal(yield* session.operations.readText(), "initial");
     })),
   test("interruption after dispatch expires automation without replay", () =>
     Effect.gen(function* () {
@@ -276,11 +286,11 @@ export const ownershipCases: ReadonlyArray<Case> = [
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const fiber = yield* session.bind().click("#button").pipe(Effect.forkChild);
+      const fiber = yield* session.operations.click("#button").pipe(Effect.forkChild);
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(fiber);
-      yield* expectReason(session.bind().readText(), "closed");
+      yield* expectReason(session.operations.readText(), "Closed");
       done.resolve();
       assert.equal(dispatches, 1);
     })),
@@ -299,7 +309,10 @@ export const ownershipCases: ReadonlyArray<Case> = [
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const fiber = yield* session.bind().click("#button").pipe(Effect.result, Effect.forkChild);
+
+      const fiber = yield* session.operations
+        .click("#button")
+        .pipe(Effect.result, Effect.forkChild);
 
       yield* Effect.promise(() => entered.promise);
       yield* Effect.all([session.close, session.close], { concurrency: 2 });
@@ -348,17 +361,17 @@ export const ownershipCases: ReadonlyArray<Case> = [
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const old = session.bind();
+      const old = yield* session.retain;
       const handoff = yield* session.beginHandoff(60);
 
       f.state.text = "human changed this";
       const resumed = yield* session.resume(handoff.token, true).pipe(Effect.forkChild);
 
       yield* Effect.promise(() => entered.promise);
-      yield* expectReason(session.bind().click("#button"), "busy");
+      yield* expectReason(session.operations.click("#button"), "Busy");
       observed.resolve();
       assert.equal((yield* Fiber.join(resumed)).text, "human changed this");
-      yield* expectReason(old.readText(), "stale");
+      yield* expectReason(old.readText(), "Stale");
       assert.equal(f.state.clicks, 0);
     })),
   test("failed Live View acquisition does not automatically resume", () =>
@@ -366,8 +379,8 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const f = yield* fixture({ liveViewFails: true });
       const session = yield* (yield* f.acquisition).connect;
 
-      yield* expectReason(session.beginHandoff(60), "authorization");
-      yield* expectReason(session.bind().click("#button"), "busy");
+      yield* expectReason(session.beginHandoff(60), "Authorization");
+      yield* expectReason(session.operations.click("#button"), "Busy");
     })),
   test("resume requires the operator acknowledgement and matching token", () =>
     Effect.gen(function* () {
@@ -375,43 +388,43 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const session = yield* (yield* f.acquisition).connect;
       const handoff = yield* session.beginHandoff(60);
 
-      yield* expectReason(session.resume(handoff.token, false), "authorization");
-      yield* expectReason(session.resume(Redacted.make("wrong"), true), "authorization");
-      yield* expectReason(session.bind().click("#button"), "busy");
+      yield* expectReason(session.resume(handoff.token, false), "Authorization");
+      yield* expectReason(session.resume(Redacted.make("wrong"), true), "Authorization");
+      yield* expectReason(session.operations.click("#button"), "Busy");
     })),
   test("selecting a tab invalidates old handles without spending an action", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ maxActions: 1 });
       const session = yield* (yield* f.acquisition).connect;
-      const old = session.bind();
+      const old = yield* session.retain;
 
-      yield* session.selectPage("page-2");
-      yield* expectReason(old.readText(), "stale");
-      assert.equal((yield* session.currentTarget).pageId, "page-2");
-      assert.equal(yield* session.bind().readText(), "initial");
+      yield* session.selectPage(scriptedPage("page-2"));
+      yield* expectReason(old.readText(), "Stale");
+      assert.equal((yield* session.target).pageId, "page-2");
+      assert.equal(yield* session.operations.readText(), "initial");
     })),
   test("native input through a handle that no longer selects its page is never sent", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
       const session = yield* (yield* f.acquisition).connect;
-      const old = session.bind();
+      const old = yield* session.retain;
 
-      yield* session.selectPage("page-2");
-      yield* expectReason(old.pointerMove({ x: 1, y: 2 }), "stale");
-      yield* expectReason(old.hover("#target"), "stale");
-      yield* expectReason(old.wheel(0, 120), "stale");
-      yield* expectReason(old.press("Enter", []), "stale");
-      yield* expectReason(old.type("typed"), "stale");
+      yield* session.selectPage(scriptedPage("page-2"));
+      yield* expectReason(old.pointerMove({ x: 1, y: 2 }), "Stale");
+      yield* expectReason(old.hover("#target"), "Stale");
+      yield* expectReason(old.wheel(0, 120), "Stale");
+      yield* expectReason(old.press("Enter", []), "Stale");
+      yield* expectReason(old.type("typed"), "Stale");
       // Refused before dispatch: the page now selected received nothing meant for the old one.
       assert.deepEqual(f.state.input, []);
-      yield* session.bind().pointerMove({ x: 1, y: 2 });
+      yield* session.operations.pointerMove({ x: 1, y: 2 });
       assert.deepEqual(f.state.input, ["move page-2 1,2"]);
     })),
   test("native input is charged as an action and stamped on the owner's monotonic clock", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ maxActions: 2 });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = session.bind();
+      const handle = yield* session.retain;
       const moved = yield* handle.pointerMove({ x: 12.5, y: 40 });
 
       assert.deepEqual(moved.position, { x: 12.5, y: 40 });
@@ -424,7 +437,12 @@ export const ownershipCases: ReadonlyArray<Case> = [
       assert.equal(refused._tag, "Failure");
       if (refused._tag === "Failure") {
         assert.equal(refused.failure.operation, "hover");
-        assert.equal(refused.failure.reason, "limit");
+        assert.deepEqual(refused.failure.reason, {
+          _tag: "Limit",
+          dimension: "actions",
+          maximum: 2,
+          observed: 2,
+        });
         assert.equal(refused.failure.outcome, "undispatched");
       }
       assert.deepEqual(f.state.input, ["move page-1 12.5,40", "wheel page-1 0,120"]);
@@ -433,7 +451,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* fixture({ maxActions: 2 });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = session.bind();
+      const handle = yield* session.retain;
       const typed = yield* handle.type("six ch");
 
       assert.equal(typed.target.pageId, "page-1");
@@ -446,7 +464,12 @@ export const ownershipCases: ReadonlyArray<Case> = [
       assert.equal(refused._tag, "Failure");
       if (refused._tag === "Failure") {
         assert.equal(refused.failure.operation, "press");
-        assert.equal(refused.failure.reason, "limit");
+        assert.deepEqual(refused.failure.reason, {
+          _tag: "Limit",
+          dimension: "actions",
+          maximum: 2,
+          observed: 2,
+        });
         assert.equal(refused.failure.outcome, "undispatched");
       }
       assert.deepEqual(f.state.input, ["type page-1 6", "press page-1 Control+Shift+a"]);
@@ -469,7 +492,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
         "Failure",
       );
       // Bounded native work is charged like any other read, so it cannot be unbounded.
-      yield* expectReason(session.checkpoint({ picture: false }), "limit");
+      yield* expectReason(session.checkpoint({ picture: false }), "Limit");
     })),
   test("a reading may narrow the policy's text bound and never widen it", () =>
     Effect.gen(function* () {
@@ -479,11 +502,11 @@ export const ownershipCases: ReadonlyArray<Case> = [
       // The fixture's policy returns at most 65536 bytes.
       yield* expectReason(
         session.observe({ scope: "viewport", maxTextBytes: 65537 }),
-        "configuration",
+        "Configuration",
       );
       yield* expectReason(
         session.checkpoint({ picture: false, maxTextBytes: 65537 }),
-        "configuration",
+        "Configuration",
       );
       assert.equal(f.state.observations, 0);
       assert.equal((yield* session.observe({ scope: "viewport" })).scope, "viewport");
@@ -493,16 +516,16 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const flight = inFlight();
       const f = yield* fixture({ onNavigate: flight.script });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = session.bind();
+      const handle = yield* session.retain;
       const operation = yield* handle.startNavigation("https://example.test/slow");
 
       // Dispatched exactly once, and the permit is free again while the browser loads.
       assert.deepEqual(flight.urls, ["https://example.test/slow"]);
-      yield* expectReason(handle.click("#act"), "busy");
-      yield* expectReason(handle.navigate("https://example.test/other"), "busy");
-      yield* expectReason(handle.pointerMove({ x: 1, y: 1 }), "busy");
-      yield* expectReason(handle.press("Enter", []), "busy");
-      yield* expectReason(handle.type("typed"), "busy");
+      yield* expectReason(handle.click("#act"), "Busy");
+      yield* expectReason(handle.navigate("https://example.test/other"), "Busy");
+      yield* expectReason(handle.pointerMove({ x: 1, y: 1 }), "Busy");
+      yield* expectReason(handle.press("Enter", []), "Busy");
+      yield* expectReason(handle.type("typed"), "Busy");
       assert.equal(f.state.clicks, 0);
       assert.deepEqual(f.state.input, []);
       // Reads and passive evidence are admitted while it loads.
@@ -517,15 +540,15 @@ export const ownershipCases: ReadonlyArray<Case> = [
       assert.equal(flight.stops, 0);
 
       // Another page is not this page.
-      yield* session.selectPage("page-2");
-      yield* session.bind().click("#act");
+      yield* session.selectPage(scriptedPage("page-2"));
+      yield* session.operations.click("#act");
       assert.equal(f.state.clicks, 1);
 
       flight.settle();
       assert.equal(yield* operation.completed, "https://example.test/slow");
       // Settled is a known outcome: the page it loaded takes input again.
-      yield* session.selectPage("page-1");
-      yield* session.bind().click("#act");
+      yield* session.selectPage(scriptedPage("page-1"));
+      yield* session.operations.click("#act");
       assert.equal(f.state.clicks, 2);
     })),
   test("stopping a navigation is a known outcome and the session stays usable", () =>
@@ -533,13 +556,13 @@ export const ownershipCases: ReadonlyArray<Case> = [
       const flight = inFlight();
       const f = yield* fixture({ onNavigate: flight.script });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = session.bind();
+      const handle = yield* session.retain;
       const operation = yield* handle.startNavigation("https://example.test/slow");
 
       yield* operation.stop;
       assert.equal(flight.stops, 1);
       // Decided by the browser's acknowledgement; the native promise never settled.
-      yield* expectReason(operation.completed, "interrupted");
+      yield* expectReason(operation.completed, "Interrupted");
       yield* handle.click("#act");
       assert.equal(f.state.clicks, 1);
       // The native promise rejecting later, as Playwright's does at its timeout, changes nothing.
@@ -553,7 +576,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
         const flight = inFlight();
         const f = yield* fixture({ onNavigate: flight.script });
         const session = yield* (yield* f.acquisition).connect;
-        const handle = session.bind();
+        const handle = yield* session.retain;
 
         if (abandon) {
           // Its scope closes while the browser is still loading.
@@ -580,7 +603,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* fixture({ keepAlive: true });
       const session = yield* (yield* f.acquisition).connect;
-      const old = session.bind();
+      const old = yield* session.retain;
 
       yield* session.detach;
       f.state.text = "changed while detached";
@@ -588,7 +611,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
 
       assert.equal(fresh.text, "changed while detached");
       assert.equal(f.state.connects, 2);
-      yield* expectReason(old.readText(), "stale");
+      yield* expectReason(old.readText(), "Stale");
     })),
   test("elapsed expiry closes an idle browser while the outer scope stays open", () =>
     Effect.gen(function* () {
@@ -597,7 +620,7 @@ export const ownershipCases: ReadonlyArray<Case> = [
 
       yield* advance(80);
       yield* session.close;
-      yield* expectReason(session.bind().readText(), "closed");
+      yield* expectReason(session.operations.readText(), "Closed");
       assert.equal(f.state.localCloses, 1);
     })),
   test("a persistent writer settles with the exact attempt's provider cleanup facts", () =>

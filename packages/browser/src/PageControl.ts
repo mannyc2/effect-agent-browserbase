@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect";
 
 import type { BrowserSession } from "./Browser.ts";
 import { type PageExecutionState, PageInfo, PageSuspension } from "./BrowserData.ts";
-import { BrowserError } from "./Errors.ts";
+import { BrowserError, Reasons } from "./Errors.ts";
 import { pageControl } from "./internal/browser/PageControlAssociation.ts";
 export { PageExecutionState, PageSuspension } from "./BrowserData.ts";
 
@@ -14,7 +14,7 @@ const owner = <E>(session: BrowserSession<E>) =>
       ? Effect.fail(
           BrowserError.make({
             operation: "page-control",
-            reason: "unregistered-session",
+            reason: Reasons.UnregisteredSession.make({}),
             outcome: "undispatched",
           }),
         )
@@ -24,7 +24,7 @@ const owner = <E>(session: BrowserSession<E>) =>
 const invalid = () =>
   BrowserError.make({
     operation: "page-control",
-    reason: "configuration",
+    reason: Reasons.Configuration.make({}),
     outcome: "undispatched",
   });
 

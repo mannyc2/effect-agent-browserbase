@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Redacted, Schema } from "effect";
-import { BrowserError, BrowserOperation } from "effect-browser/errors";
+import { BrowserError, BrowserOperation, Reasons } from "effect-browser/errors";
 import {
   ArtifactError,
   CertificateError,
@@ -36,30 +36,48 @@ it("an operation is a closed vocabulary, so a misspelling is refused rather than
     Schema.decodeUnknownSync(BrowserError)({
       _tag: "BrowserError",
       operation: "target-count",
-      reason: "malformed",
+      reason: Reasons.Malformed.make({}),
+      outcome: "undispatched",
     }),
   ).toThrow();
 });
 
 it("a native failure keeps its reason and outcome and takes the caller's operation", () => {
-  const fallback = { reason: "provider", outcome: "unknown" } as const;
+  const fallback = { reason: Reasons.Provider.make({}), outcome: "unknown" } as const;
 
-  expect(publicError(failure("not-found", "undispatched"), "click", fallback)).toMatchObject({
+  expect(
+    publicError(failure(Reasons.NotFound.make({}), "undispatched"), "click", fallback),
+  ).toMatchObject({
     _tag: "BrowserError",
     operation: "click",
-    reason: "not-found",
+    reason: { _tag: "NotFound" },
     outcome: "undispatched",
   });
-  // A step that does not know its outcome leaves it for the owner's guard to decide.
-  expect(publicError(failure("limit"), "observe", fallback).outcome).toBeUndefined();
+
+  // The native reason keeps its measured fields and takes required outcome evidence from the owner.
+  const limited = publicError(
+    failure(Reasons.Limit.make({ dimension: "returned-bytes", maximum: 10, observed: 11 })),
+    "observe",
+    fallback,
+  );
+
+  expect(limited).toMatchObject({
+    reason: { _tag: "Limit", dimension: "returned-bytes", maximum: 10, observed: 11 },
+    outcome: "unknown",
+  });
+
   // A fenced ticket already speaks publicly, and keeps the operation the owner gave it.
-  const fenced = BrowserError.make({ operation: "fill", reason: "stale", outcome: "unknown" });
+  const fenced = BrowserError.make({
+    operation: "fill",
+    reason: Reasons.Stale.make({}),
+    outcome: "unknown",
+  });
 
   expect(publicError(fenced, "click", fallback)).toBe(fenced);
   // Anything else, a raw native exception included, is only ever the caller's fallback.
   expect(publicError(new Error("PRIVATE-NATIVE-TEXT"), "navigate", fallback)).toMatchObject({
     operation: "navigate",
-    reason: "provider",
+    reason: { _tag: "Provider" },
     outcome: "unknown",
   });
 });
@@ -67,15 +85,20 @@ it("a native failure keeps its reason and outcome and takes the caller's operati
 it("no raw native exception crosses the private boundary, and a typed one passes unchanged", async () => {
   await expect(sanitize(() => Promise.reject(new Error("PRIVATE")))).rejects.toMatchObject({
     _tag: "NativeFailure",
-    reason: "provider",
+    reason: { _tag: "Provider" },
   });
-  const typed = failure("ambiguous", "undispatched");
-  const fenced = BrowserError.make({ operation: "wait", reason: "stale" });
+  const typed = failure(Reasons.Ambiguous.make({}), "undispatched");
+
+  const fenced = BrowserError.make({
+    operation: "wait",
+    reason: Reasons.Stale.make({}),
+    outcome: "undispatched",
+  });
 
   await expect(sanitize(() => Promise.reject(typed))).rejects.toBe(typed);
   await expect(sanitize(() => Promise.reject(fenced))).rejects.toBe(fenced);
   expect(() => safeDecode(Schema.Natural, -1)).toThrow(
-    expect.objectContaining({ _tag: "NativeFailure", reason: "malformed" }),
+    expect.objectContaining({ _tag: "NativeFailure", reason: { _tag: "Malformed" } }),
   );
 });
 
@@ -88,7 +111,7 @@ it.effect("the owner stamps the admitted operation on whatever the native step r
     const refused = yield* owner
       .guard("select-files", (ticket) =>
         native("select-files", ticket, () =>
-          Promise.reject(failure("unsupported", "undispatched")),
+          Promise.reject(failure(Reasons.Unsupported.make({}), "undispatched")),
         ),
       )
       .pipe(Effect.flip);
@@ -96,7 +119,7 @@ it.effect("the owner stamps the admitted operation on whatever the native step r
     expect(refused).toMatchObject({
       _tag: "BrowserError",
       operation: "select-files",
-      reason: "unsupported",
+      reason: { _tag: "Unsupported" },
       outcome: "undispatched",
     });
 
@@ -116,7 +139,7 @@ it.effect("the owner stamps the admitted operation on whatever the native step r
 
     expect(lost).toMatchObject({
       operation: "navigate",
-      reason: "provider",
+      reason: { _tag: "Provider" },
       outcome: "unknown",
     });
   }),
@@ -143,14 +166,14 @@ it.effect("a refused connection keeps the reason the native attempt gave", () =>
         .pipe(Effect.flip);
 
     // Two pages where one was required is "ambiguous", never a generic provider failure.
-    expect(yield* attempt(failure("ambiguous"))).toMatchObject({
+    expect(yield* attempt(failure(Reasons.Ambiguous.make({})))).toMatchObject({
       _tag: "BrowserError",
       operation: "connect",
-      reason: "ambiguous",
+      reason: { _tag: "Ambiguous" },
     });
     expect(yield* attempt(new Error("PRIVATE"))).toMatchObject({
       operation: "connect",
-      reason: "provider",
+      reason: { _tag: "Provider" },
     });
   }),
 );

@@ -3,7 +3,7 @@ import { Context, Effect, Layer, type Option, Redacted, type Scope } from "effec
 import type { BrowserSession, OpenOptions } from "./Browser.ts";
 import type { AutomationOptions, BrowserPolicy, Viewport } from "./BrowserData.ts";
 import * as BrowserRuntime from "./BrowserRuntime.ts";
-import { BrowserError, type InitializationError } from "./Errors.ts";
+import { BrowserError, Reasons, type InitializationError } from "./Errors.ts";
 import { checked } from "./internal/browser/PublicSession.ts";
 import {
   ChromiumEndpoint,
@@ -30,6 +30,7 @@ export interface ChromiumOptions extends AutomationOptions {
 /** An owned or borrowed Chromium lifetime with one modeled browser connection. */
 export interface ChromiumSession<E = never> extends BrowserSession<E> {
   readonly reference: ChromiumReference;
+  readonly closeChecked: Effect.Effect<ChromiumCleanupResult, BrowserError>;
   readonly close: Effect.Effect<ChromiumCleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<ChromiumCleanupResult>>;
 }
@@ -108,7 +109,7 @@ export class Chromium extends Context.Service<
         if (Object.prototype.hasOwnProperty.call(options, "bootstrap"))
           return yield* BrowserError.make({
             operation: "configure",
-            reason: "configuration",
+            reason: Reasons.Configuration.make({}),
             outcome: "undispatched",
           });
 
@@ -153,6 +154,7 @@ export class Chromium extends Context.Service<
               Effect.map(({ session }): ChromiumSession<E> =>
                 Object.assign(session, {
                   reference: acquired.reference,
+                  closeChecked: acquired.lifetime.closeChecked,
                   close: acquired.close,
                   cleanupResult: acquired.lifetime.cleanupResult,
                 }),

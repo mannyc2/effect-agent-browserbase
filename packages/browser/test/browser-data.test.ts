@@ -96,8 +96,32 @@ it("what a model is shown has no field that could carry a destination or a value
 
   // Every host-only fact, by name. Adding one to the model-facing schema must fail here.
   for (const hostOnly of Object.keys(ControlFacts.fields).filter(
-    (field) => !["kind", "label", "disabled"].includes(field),
+    (field) =>
+      !["kind", "label", "disabled", "checked", "selected", "inputType", "required"].includes(
+        field,
+      ),
   ))
     expect(shown.has(hostOnly), hostOnly).toBe(false);
   expect([...shown]).not.toContain("value");
+});
+
+it("observed state stays optional, preserves false, and accepts only bounded typed fields", () => {
+  const control = {
+    elementId: "element-1",
+    kind: "input" as const,
+    label: "Consent",
+    disabled: false,
+  };
+
+  expect(accepts(ObservedControl, control)).toBe(true);
+  const checkbox = { ...control, checked: false, required: true, inputType: "checkbox" };
+
+  expect(Schema.decodeSync(ObservedControl)(checkbox)).toMatchObject(checkbox);
+  expect(accepts(ObservedControl, { ...control, selected: false })).toBe(true);
+  for (const field of ["checked", "selected", "required"] as const) {
+    expect(accepts(ObservedControl, { ...control, [field]: "false" })).toBe(false);
+    expect(accepts(ObservedControl, { ...control, [field]: null })).toBe(false);
+  }
+  expect(accepts(ObservedControl, { ...control, inputType: "x".repeat(33) })).toBe(false);
+  expect(accepts(ObservedControl, { ...checkbox, value: "private" })).toBe(false);
 });

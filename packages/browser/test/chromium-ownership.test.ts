@@ -1,14 +1,19 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Option, Redacted } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { BrowserPolicy } from "../src/BrowserData.ts";
 import { Chromium, ChromiumReference, type ChromiumCleanupResult } from "../src/Chromium.ts";
-import { makeChromiumCleanup } from "../src/internal/chromium/Session.ts";
+import { borrowedChromium, makeChromiumCleanup } from "../src/internal/chromium/Session.ts";
 
 const reference = ChromiumReference.make({ provider: "chromium", id: "one-local-lifetime" });
-const failed = BrowserError.make({ operation: "close", reason: "failed", outcome: "unknown" });
+
+const failed = BrowserError.make({
+  operation: "close",
+  reason: Reasons.Failed.make({}),
+  outcome: "unknown",
+});
 
 it.effect(
   "local cleanup continues to process termination after capture and disconnect fail, once",
@@ -87,26 +92,103 @@ it.effect(
     }),
 );
 
-it.effect("a borrowed cleanup reports connection facts without any process release authority", () =>
-  Effect.gen(function* () {
-    const cleanup = yield* makeChromiumCleanup(
-      reference,
-      {
-        fence: Effect.void,
-        capture: Effect.void,
-        initialization: Effect.void,
-        disconnect: Effect.succeed("pending"),
-      },
-      undefined,
-    );
+it.effect(
+  "checked borrowed cleanup returns the canonical receipt once, including scope finalization",
+  () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const reports: ChromiumCleanupResult[] = [];
 
-    const result = yield* cleanup.close;
+      const mark = (step: string) =>
+        Effect.sync(() => {
+          calls.push(step);
+        });
 
-    expect(result.ownership).toBe("borrowed");
-    expect(result.process).toBe("not-owned");
-    expect(result.connection).toBe("pending");
-    expect(result.issues).toEqual([]);
-  }),
+      const receipt = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lease = yield* borrowedChromium(
+            Redacted.make("ws://127.0.0.1:9222/devtools/browser/borrowed-fixture"),
+            (result) =>
+              Effect.sync(() => {
+                reports.push(result);
+              }),
+          )(
+            {
+              fence: mark("fence"),
+              capture: mark("capture"),
+              initialization: mark("initialization"),
+              disconnect: mark("disconnect").pipe(Effect.as("closed" as const)),
+            },
+            1000,
+          );
+
+          expect(Option.isNone(yield* lease.cleanupResult)).toBe(true);
+
+          const [first, repeated, released] = yield* Effect.all(
+            [lease.closeChecked, lease.closeChecked, lease.release],
+            { concurrency: 3 },
+          );
+
+          expect(repeated).toBe(first);
+          expect(released).toBe(first);
+          expect(Option.getOrUndefined(yield* lease.cleanupResult)).toBe(first);
+          expect(first).toMatchObject({
+            reference: lease.reference,
+            ownership: "borrowed",
+            connection: "closed",
+            process: "not-owned",
+            issues: [],
+          });
+          expect(Object.isFrozen(first)).toBe(true);
+          expect(Object.isFrozen(first.issues)).toBe(true);
+          expect("remote" in first).toBe(false);
+
+          return first;
+        }),
+      );
+
+      expect(calls).toEqual(["fence", "capture", "initialization", "disconnect"]);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toBe(receipt);
+    }),
+);
+
+it.effect(
+  "a borrowed cleanup reports pending connection facts without claiming checked success",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cleanup = yield* borrowedChromium(
+          Redacted.make("ws://127.0.0.1:9222/devtools/browser/borrowed-fixture"),
+        )(
+          {
+            fence: Effect.void,
+            capture: Effect.void,
+            initialization: Effect.void,
+            disconnect: Effect.succeed("pending"),
+          },
+          1000,
+        );
+
+        const result = yield* cleanup.release;
+
+        expect(result.ownership).toBe("borrowed");
+        expect(result.process).toBe("not-owned");
+        expect(result.connection).toBe("pending");
+        expect(result.issues).toEqual([]);
+        expect(yield* Effect.result(cleanup.closeChecked)).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            _tag: "BrowserError",
+            operation: "close",
+            reason: { _tag: "Failed" },
+            outcome: "unknown",
+          },
+        });
+        expect(yield* cleanup.release).toBe(result);
+        expect(Option.getOrUndefined(yield* cleanup.cleanupResult)).toBe(result);
+      }),
+    ),
 );
 
 it.effect(
@@ -138,9 +220,11 @@ it.effect(
             });
           }).pipe(Effect.provide(context), Effect.flip);
 
-          expect(error.reason).toBe("configuration");
-          expect(error._tag).toBe("BrowserError");
-          if (error._tag === "BrowserError") expect(error.outcome).toBe("undispatched");
+          expect(error).toMatchObject({
+            _tag: "BrowserError",
+            reason: { _tag: "Configuration" },
+            outcome: "undispatched",
+          });
         }
         expect(reports).toEqual([]);
         for (const bootstrap of [Bootstrap.empty, undefined]) {
@@ -149,7 +233,7 @@ it.effect(
 
           expect(error).toMatchObject({
             operation: "configure",
-            reason: "configuration",
+            reason: { _tag: "Configuration" },
             outcome: "undispatched",
           });
         }
@@ -163,7 +247,7 @@ it.effect(
             Effect.flip,
           );
 
-          expect(error.reason).toBe("configuration");
+          expect(error.reason._tag).toBe("Configuration");
         }
       }),
     ),

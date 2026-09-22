@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 
 import { Clock, Duration, Effect, Exit, Path, Redacted, Schema } from "effect";
 
-import { BrowserError } from "../../Errors.ts";
+import { Reasons, BrowserError } from "../../Errors.ts";
 import { ChromiumEndpoint, type ChromiumLaunch } from "./Data.ts";
 
 export interface ChromiumProcess {
@@ -78,11 +78,14 @@ const terminate = Effect.fnUntraced(function* (
 ): Effect.fn.Return<void, BrowserError> {
   const stopped = Effect.try({
     try: () => exited(child) && !alive(pid),
-    catch: () => failure("close", "failed"),
+    catch: () => failure("close", Reasons.Failed.make({})),
   });
 
   const signal = (value: NodeJS.Signals) =>
-    Effect.try({ try: () => signalGroup(pid, value), catch: () => failure("close", "failed") });
+    Effect.try({
+      try: () => signalGroup(pid, value),
+      catch: () => failure("close", Reasons.Failed.make({})),
+    });
 
   const pause = clock.sleep(Duration.millis(20));
 
@@ -95,14 +98,14 @@ const terminate = Effect.fnUntraced(function* (
   const forced = clock.monotonicTimeNanosUnsafe() + 1_000_000_000n;
 
   while (!(yield* stopped) && clock.monotonicTimeNanosUnsafe() < forced) yield* pause;
-  if (!(yield* stopped)) return yield* failure("close", "timeout");
+  if (!(yield* stopped)) return yield* failure("close", Reasons.Timeout.make({}));
 });
 
 /** Start only Chromium's process. The shared owner later opens its sole CDP connection. */
 export const launch = Effect.fnUntraced(function* (
   options: ChromiumLaunch,
 ): Effect.fn.Return<ChromiumProcess, BrowserError> {
-  if (process.platform === "win32") return yield* failure("launch", "unsupported");
+  if (process.platform === "win32") return yield* failure("launch", Reasons.Unsupported.make({}));
   const path = yield* Path.Path.pipe(Effect.provide(Path.layer));
   const clock = yield* Clock.Clock;
 
@@ -110,17 +113,17 @@ export const launch = Effect.fnUntraced(function* (
     options.executablePath ??
     (yield* Effect.tryPromise({
       try: async () => (await import("playwright-core")).chromium.executablePath(),
-      catch: () => failure("launch", "failed"),
+      catch: () => failure("launch", Reasons.Failed.make({})),
     }));
 
   const directory = yield* Effect.tryPromise({
     try: () => mkdtemp(path.join(tmpdir(), "effect-browser-chromium-")),
-    catch: () => failure("launch", "failed"),
+    catch: () => failure("launch", Reasons.Failed.make({})),
   });
 
   const removeProfile = Effect.tryPromise({
     try: () => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
-    catch: () => failure("close", "failed"),
+    catch: () => failure("close", Reasons.Failed.make({})),
   });
 
   let child: ChildProcess | undefined;
@@ -141,12 +144,12 @@ export const launch = Effect.fnUntraced(function* (
           spawned.once("error", reject);
         });
       },
-      catch: () => failure("launch", "failed"),
+      catch: () => failure("launch", Reasons.Failed.make({})),
     });
 
     const pid = launched.pid;
 
-    if (pid === undefined) return yield* failure("launch", "failed");
+    if (pid === undefined) return yield* failure("launch", Reasons.Failed.make({}));
 
     // One termination continues to its own bounded group-exit decision even if a waiter cancels.
     const closing = yield* Effect.cached(
@@ -162,7 +165,7 @@ export const launch = Effect.fnUntraced(function* (
               1_000_000n;
 
           while (clock.monotonicTimeNanosUnsafe() < deadline) {
-            if (exited(launched)) return yield* failure("connect", "closed");
+            if (exited(launched)) return yield* failure("connect", Reasons.Closed.make({}));
 
             const portFile = yield* Effect.tryPromise({
               try: (signal) =>
@@ -174,7 +177,7 @@ export const launch = Effect.fnUntraced(function* (
                     return undefined;
                   throw error;
                 }),
-              catch: () => failure("connect", "transport"),
+              catch: () => failure("connect", Reasons.Transport.make({})),
             });
 
             // Chromium creates DevToolsActivePort before it writes the port and path into it. A
@@ -186,14 +189,14 @@ export const launch = Effect.fnUntraced(function* (
               const endpoint = `ws://127.0.0.1:${lines[0]}${lines[1]}`;
 
               if (!Schema.is(ChromiumEndpoint)(endpoint))
-                return yield* failure("connect", "malformed");
+                return yield* failure("connect", Reasons.Malformed.make({}));
 
               return Redacted.make(endpoint);
             }
             yield* clock.sleep(Duration.millis(20));
           }
 
-          return yield* failure("connect", "timeout");
+          return yield* failure("connect", Reasons.Timeout.make({}));
         }),
       terminate: closing,
       removeProfile,

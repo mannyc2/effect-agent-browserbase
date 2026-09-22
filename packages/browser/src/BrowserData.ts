@@ -61,6 +61,10 @@ export class ObservedControl extends Schema.Class<ObservedControl>("BrowserObser
   kind: Schema.Literals(["link", "button", "input", "select", "textarea", "other"]),
   label: Schema.String.check(Schema.isMaxLength(256)),
   disabled: Schema.Boolean,
+  checked: Schema.optionalKey(Schema.Boolean),
+  selected: Schema.optionalKey(Schema.Boolean),
+  inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(32))),
+  required: Schema.optionalKey(Schema.Boolean),
 }) {}
 
 /**
@@ -171,6 +175,9 @@ export const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
 
 export class NavigateRequest extends Schema.Class<NavigateRequest>("BrowserNavigateRequest")({
   url: TargetUrl,
+  timeoutMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600000 })),
+  ),
 }) {}
 
 /**
@@ -230,6 +237,9 @@ export class ControlFacts extends Schema.Class<ControlFacts>("BrowserControlFact
   kind: ObservedControl.fields.kind,
   label: ObservedControl.fields.label,
   disabled: Schema.Boolean,
+  checked: Schema.optionalKey(Schema.Boolean),
+  selected: Schema.optionalKey(Schema.Boolean),
+  required: Schema.optionalKey(Schema.Boolean),
   editable: Schema.Boolean,
   inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(32))),
   autocomplete: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),

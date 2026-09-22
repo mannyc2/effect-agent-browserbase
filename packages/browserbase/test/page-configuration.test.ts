@@ -63,7 +63,7 @@ it.effect(
         if (result._tag === "Failure") {
           expect(result.failure).toMatchObject({
             operation: "configure",
-            reason: "configuration",
+            reason: { _tag: "Configuration" },
             outcome: "undispatched",
           });
         }
@@ -103,7 +103,7 @@ for (const { name, options } of cases) {
       if (result._tag === "Failure") {
         expect(result.failure).toMatchObject({
           operation: "configure",
-          reason: "unsupported",
+          reason: { _tag: "Unsupported" },
           outcome: "undispatched",
         });
       }

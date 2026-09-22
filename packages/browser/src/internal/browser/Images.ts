@@ -1,6 +1,7 @@
+import { Reasons } from "../../Errors.ts";
 import { failure } from "./NativeCalls.ts";
 
-const malformed = () => failure("malformed");
+const malformed = () => failure(Reasons.Malformed.make({}));
 
 /** Parse framing only; a caller decoding media must still validate its complete bitstream. */
 export const pngGeometry = (bytes: Uint8Array): { width: number; height: number } => {

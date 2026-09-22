@@ -65,7 +65,7 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
             bootstrap: ordered(origin),
           });
 
-          const h = session.bind();
+          const h = yield* session.retain;
 
           // The page this connection attached to was already open, so it never ran the
           // bundle. That is reported rather than hidden by an automatic reload.
@@ -101,9 +101,9 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           );
 
           // A different origin is outside the registration, and says so rather than waiting.
-          yield* session
-            .bind()
-            .navigate(NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }));
+          yield* session.navigate(
+            NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }),
+          );
           expect(yield* session.ready).toEqual({ _tag: "NotApplicable" });
           expect((yield* session.observe()).url).toContain("localhost");
         }),
@@ -126,7 +126,7 @@ it.live(
               bootstrap: always,
             });
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
             expect(yield* session.ready).toEqual({ _tag: "Ready" });
             yield* session.detach;
 
@@ -138,22 +138,21 @@ it.live(
             expect(yield* session.ready).toEqual({ _tag: "RequiresNavigation" });
 
             const refused = yield* session
-              .bind()
               .readText(ReadTextRequest.make({ selector: "h1" }))
               .pipe(Effect.result);
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") {
-              expect(refused.failure.reason).toBe("stale");
+              expect(refused.failure.reason._tag).toBe("Stale");
               expect(refused.failure.outcome).toBe("undispatched");
             }
 
             // Deliberate navigation is what initializes it, and is never gated.
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
             expect(yield* session.ready).toEqual({ _tag: "Ready" });
-            expect(
-              (yield* session.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
-            ).toBe("Local browser fixture");
+            expect((yield* session.readText(ReadTextRequest.make({ selector: "h1" }))).text).toBe(
+              "Local browser fixture",
+            );
           }),
           { launch: { ...localLaunch, keepAlive: true } },
         );
@@ -184,15 +183,15 @@ it.live("real CDP: an accepted running document admits dependent work after reat
             bootstrap: accepting,
           });
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.navigate(NavigateRequest.make({ url: f.url }));
           yield* session.detach;
           yield* session.reconnect(true);
 
           // The same document still satisfies the requirement, so it is verified, not assumed.
           expect(yield* session.ready).toEqual({ _tag: "Ready" });
-          expect(
-            (yield* session.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
-          ).toBe("Local browser fixture");
+          expect((yield* session.readText(ReadTextRequest.make({ selector: "h1" }))).text).toBe(
+            "Local browser fixture",
+          );
         }),
         { launch: { ...localLaunch, keepAlive: true } },
       );

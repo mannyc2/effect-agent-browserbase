@@ -28,7 +28,7 @@ await h.run(
     Effect.gen(function* () {
       const session = yield* h.open({ bootstrap: plan });
 
-      yield* session.bind().navigate(NavigateRequest.make({ url: `${origin}/?phase=before` }));
+      yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=before` }));
       const before = yield* session.ready;
       const detached = yield* session.detach;
 
@@ -37,7 +37,7 @@ await h.run(
       const reconnected = yield* session.reconnect(true);
       const selected = (yield* session.pages).find((page) => page.selected);
 
-      yield* session.bind().navigate(NavigateRequest.make({ url: `${origin}/?phase=after` }));
+      yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=after` }));
       const after = yield* session.ready;
       const cleanup = yield* session.close;
 

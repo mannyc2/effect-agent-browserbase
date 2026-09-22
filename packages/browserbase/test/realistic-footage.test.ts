@@ -324,7 +324,9 @@ it.effect("each document gets the library's address and commit, and this layer's
         reason: "stopped",
         received: 3,
         delivered: 3,
-        dropped: 0,
+        discarded: 0,
+        overflow: 0,
+        rejected: 0,
         duplicates: 0,
         late: 0,
         peakBufferedFrames: 1,
@@ -356,6 +358,12 @@ it.effect("each document gets the library's address and commit, and this layer's
     expect(after.documents[0]?.committedAtMillis).toBeNull();
     expect(after.documents[1]?.committedAtMillis).not.toBeNull();
     expect(after.documents[1]?.heldMillis).toBe(170);
-    expect(after.capture.interval).toMatchObject({ reason: "stopped", dropped: 0, late: 0 });
+    expect(after.capture.interval).toMatchObject({
+      reason: "stopped",
+      discarded: 0,
+      overflow: 0,
+      rejected: 0,
+      late: 0,
+    });
   }).pipe(Effect.provide(Telemetry.layer)),
 );

@@ -169,7 +169,7 @@ const program = Effect.scoped(
 
                 if (next._tag === "Failure") {
                   expect(
-                    next.failure.reason === "limit" && next.failure.outcome === "undispatched",
+                    next.failure.reason._tag === "Limit" && next.failure.outcome === "undispatched",
                     "the shared action budget refuses undispatched work",
                   );
                   exhausted = true;

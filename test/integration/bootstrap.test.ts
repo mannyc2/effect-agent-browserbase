@@ -109,7 +109,7 @@ it.effect("a document that predates the registrations cannot admit dependent wor
     Effect.gen(function* () {
       const f = yield* fixture({ readiness: () => ({ _tag: "RequiresNavigation" }) });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = session.bind();
+      const handle = yield* session.retain;
 
       // Navigation is what produces an initialized document: it is never gated.
       yield* handle.navigate("https://example.test/next");
@@ -127,7 +127,7 @@ it.effect("a document that predates the registrations cannot admit dependent wor
 
         assert.equal(result._tag, "Failure");
         if (result._tag === "Failure") {
-          assert.equal(result.failure.reason, "stale");
+          assert.equal(result.failure.reason._tag, "Stale");
           assert.equal(result.failure.outcome, "undispatched");
         }
       }
@@ -147,11 +147,11 @@ it.effect("an unmet readiness deadline stops dependent work without a dispatch",
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const failed = yield* session.bind().click("#action").pipe(Effect.result);
+      const failed = yield* session.operations.click("#action").pipe(Effect.result);
 
       assert.equal(failed._tag, "Failure");
       if (failed._tag === "Failure") {
-        assert.equal(failed.failure.reason, "timeout");
+        assert.equal(failed.failure.reason._tag, "Timeout");
         assert.equal(failed.failure.outcome, "undispatched");
       }
       assert.equal(f.state.clicks, 0);

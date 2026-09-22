@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 
-import { BrowserError, InitializationError } from "../../Errors.ts";
+import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 
@@ -38,7 +38,11 @@ export const fromNativeAttempt = (attempt: NativeAttempt): BindingImplementation
             request.onAbandoned();
             driver.fenceInitialization?.();
             await driver.disconnect().catch(() => {});
-            throw BrowserError.make({ operation: "connect", reason: "interrupted" });
+            throw BrowserError.make({
+              operation: "connect",
+              reason: Reasons.Interrupted.make({}),
+              outcome: "unknown",
+            });
           }
 
           return driver;
@@ -51,7 +55,10 @@ export const fromNativeAttempt = (attempt: NativeAttempt): BindingImplementation
       catch: (error) =>
         Schema.is(InitializationError)(error)
           ? error
-          : publicError(error, "connect", { reason: "provider" }),
+          : publicError(error, "connect", {
+              reason: Reasons.Provider.make({}),
+              outcome: "unknown",
+            }),
     }),
 });
 

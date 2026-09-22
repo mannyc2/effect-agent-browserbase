@@ -18,7 +18,7 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
-import type { NavigationOperation } from "effect-browser/browser";
+import type { AnySession, NavigationOperation } from "effect-browser/browser";
 import { type InputReceipt, Observation, ObservedElement } from "effect-browser/browser-data";
 import * as PageControl from "effect-browser/page-control";
 import { BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
@@ -47,11 +47,10 @@ const Log = Schema.Struct({
   page: Schema.Finite,
 });
 
-const read = <E>(session: BrowserbaseSession<E>) =>
-  session.currentTarget.pipe(
-    Effect.flatMap((target) => target.readText({ selector: "#log" })),
-    Effect.flatMap((result) => Schema.decodeEffect(Schema.fromJsonString(Log))(result.text)),
-  );
+const read = (session: AnySession) =>
+  session
+    .readText({ selector: "#log" })
+    .pipe(Effect.flatMap((result) => Schema.decodeEffect(Schema.fromJsonString(Log))(result.text)));
 
 const named = (observation: Observation, label: string) => {
   const control = observation.controls.find((candidate) => candidate.label === label);
@@ -80,7 +79,7 @@ const partial = Effect.fnUntraced(function* <E>(session: BrowserbaseSession<E>, 
   const checkpoint = yield* settle(
     session.checkpoint({ picture }).pipe(
       Effect.catchIf(
-        (error) => error.reason === "target-changed" && error.outcome === "undispatched",
+        (error) => error.reason._tag === "TargetChanged" && error.outcome === "undispatched",
         () => Effect.void,
       ),
     ),
@@ -143,7 +142,7 @@ for (const throws of [false, true])
             Effect.gen(function* () {
               const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
 
-              yield* generic.bind().navigate({ url: site.url });
+              yield* generic.navigate({ url: site.url });
               const seen: string[] = [];
 
               const result = yield* AgentRuntime.run(agent, "inspect and fill").pipe(
@@ -230,6 +229,83 @@ for (const throws of [false, true])
   );
 
 it.live(
+  "real Toolkit: a handler already invoked follows selection when its browser Effect dispatches",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* localAgentBrowser;
+        const site = yield* toolSite;
+
+        yield* withGenericAgentBrowser(
+          fixture,
+          Effect.gen(function* () {
+            const browser = yield* BrowserbaseBrowser.open(genericAgentPolicy);
+
+            yield* browser.navigate({ url: site.url });
+            const first = (yield* browser.pages).find((page) => page.selected)!;
+            const second = yield* browser.createPage;
+
+            yield* browser.selectPage(second);
+            yield* browser.navigate({ url: `${site.url}#second` });
+            yield* browser.selectPage(first);
+
+            const entered = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            const scroll = browser.scroll;
+            let invocations = 0;
+
+            // Gate the real operation on this exact session after the maintained handler calls it.
+            // Its Effect is constructed while A is selected; it executes only after B is selected.
+            const gated: AnySession["scroll"] = (request) => {
+              const operation = scroll(request);
+
+              invocations++;
+
+              return Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(operation),
+              );
+            };
+
+            yield* Effect.acquireRelease(
+              Effect.sync(() => Object.assign(browser, { scroll: gated })),
+              () => Effect.sync(() => Object.assign(browser, { scroll })),
+            );
+            const host = yield* BrowserTools.makeHost(browser);
+            const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+            const running = yield* tools
+              .handle("browser_scroll", { deltaX: 0, deltaY: 180 }, "selection-between")
+              .pipe(Effect.flatMap(Stream.runCollect), Effect.forkScoped);
+
+            yield* Deferred.await(entered).pipe(Effect.timeout(5000));
+            expect(invocations).toBe(1);
+            expect((yield* browser.target).pageId).toBe(first.pageId);
+            expect((yield* read(browser)).page).toBe(0);
+
+            yield* browser.selectPage(second);
+            expect((yield* browser.target).pageId).toBe(second.pageId);
+            expect((yield* read(browser)).page).toBe(0);
+            yield* Deferred.succeed(release, undefined);
+
+            const results = yield* Fiber.join(running);
+
+            expect(results).toMatchObject([
+              { isFailure: false, encodedResult: { url: `${site.url}#second` } },
+            ]);
+            expect((yield* settle(read(browser), (log) => log.page === 180)).page).toBe(180);
+            yield* browser.selectPage(first);
+            expect((yield* read(browser)).page).toBe(0);
+            expect(invocations).toBe(1);
+            expect((yield* host.toolFailures).failures).toEqual([]);
+            expect(fixture.connectionIds).toEqual([browser.reference.sessionId]);
+          }),
+        );
+      }),
+    ),
+);
+
+it.live(
   "real Toolkit: document remains the default; changed and replaced controls cannot bypass host admission",
   () =>
     Effect.scoped(
@@ -243,7 +319,7 @@ it.live(
             const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
 
             for (const change of ["type", "replace", "destination"] as const) {
-              yield* generic.bind().navigate({ url: site.url });
+              yield* generic.navigate({ url: site.url });
               yield* settle(read(generic), (log) => log.ready);
               let admissions = 0;
 
@@ -305,7 +381,7 @@ it.live(
           Effect.gen(function* () {
             const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
 
-            yield* generic.bind().navigate({ url: site.url });
+            yield* generic.navigate({ url: site.url });
             let admitted = 0;
 
             const tools = yield* BrowserTools.toolkit.pipe(
@@ -368,7 +444,7 @@ it.live(
           Effect.gen(function* () {
             const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
 
-            yield* generic.bind().navigate({ url: site.url });
+            yield* generic.navigate({ url: site.url });
             const receipts: Array<{ receipt: InputReceipt; toolCallId: string | undefined }> = [];
 
             const host = yield* BrowserTools.makeHost(generic, {
@@ -437,9 +513,10 @@ it.live(
             expect(receipts).toHaveLength(3);
 
             // A reference from the first page cannot move the pointer on a newly selected page.
-            const other = yield* generic.selectPage(yield* generic.createPage);
+            const other = yield* generic.createPage;
 
-            yield* other.navigate({ url: site.url });
+            yield* generic.selectPage(other);
+            yield* generic.navigate({ url: site.url });
 
             const stale = yield* Stream.runCollect(
               yield* tools.handle("browser_hover", named(observed, "Increment")),
@@ -469,7 +546,7 @@ it.live(
           Effect.gen(function* () {
             const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy);
 
-            yield* generic.bind().navigate({ url: site.url });
+            yield* generic.navigate({ url: site.url });
             const receipts: Array<{ receipt: InputReceipt; toolCallId: string | undefined }> = [];
 
             const host = yield* BrowserTools.makeHost(generic, {
@@ -604,7 +681,7 @@ it.live(
             ]);
             expect(finalized).toBe(1);
             expect(site.requests.filter((path) => path === "/slow")).toHaveLength(1);
-            yield* generic.bind().click({ selector: "#act" });
+            yield* generic.click({ selector: "#act" });
           }),
         );
       }),
@@ -652,12 +729,12 @@ it.live(
             expect(callId).toBe("one-navigation");
             expect(observations).toBe(1);
             expect(results).toMatchObject([
-              { isFailure: true, result: { reason: "interrupted", outcome: "unknown" } },
+              { isFailure: true, result: { reason: "stale", outcome: "unknown" } },
             ]);
             expect(site.requests.filter((path) => path === "/slow")).toHaveLength(1);
             expect(Option.isNone(yield* host.failure.pipe(Effect.timeoutOption(20)))).toBe(true);
-            yield* generic.bind().click({ selector: "#act" });
-            expect((yield* generic.bind().readText({ selector: "#act" })).text).toBe("clicked");
+            yield* generic.click({ selector: "#act" });
+            expect((yield* generic.readText({ selector: "#act" })).text).toBe("clicked");
           }),
         );
       }),
@@ -685,7 +762,7 @@ it.live(
           Effect.gen(function* () {
             const generic = yield* (yield* BrowserbaseBrowser).open(genericAgentPolicy);
 
-            yield* generic.bind().navigate({ url: site.url });
+            yield* generic.navigate({ url: site.url });
             const expected = RecorderFailure.make({ secret: "PRIVATE-RECEIPT-CAUSE" });
             const receipts: InputReceipt[] = [];
 
@@ -779,7 +856,7 @@ it.live(
             );
             expect(finalized).toBe(1);
             expect(site.requests.filter((path) => path === "/slow")).toHaveLength(1);
-            yield* generic.bind().click({ selector: "#act" });
+            yield* generic.click({ selector: "#act" });
 
             const refused = yield* Stream.runCollect(
               yield* tools.handle("browser_navigate", { url: site.url }),
@@ -841,10 +918,11 @@ for (const closeHost of [false, true])
               const outcome = yield* operation.completed.pipe(Effect.result);
 
               expect(outcome._tag).toBe("Failure");
-              if (outcome._tag === "Failure") expect(outcome.failure.reason).toBe("interrupted");
+              if (outcome._tag === "Failure")
+                expect(outcome.failure.reason._tag).toBe("Interrupted");
               expect(finalized).toBe(1);
               expect(site.requests.filter((path) => path === "/slow")).toHaveLength(1);
-              yield* generic.bind().click({ selector: "#act" });
+              yield* generic.click({ selector: "#act" });
               yield* Scope.close(hostScope, Exit.void);
               const refused = yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}));
 
@@ -870,7 +948,7 @@ it.live(
           Effect.gen(function* () {
             const generic = yield* BrowserbaseBrowser.open(genericAgentPolicy);
 
-            yield* generic.bind().navigate({ url: site.url });
+            yield* generic.navigate({ url: site.url });
             const hostScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
             const host = yield* BrowserTools.makeHost(generic).pipe(Scope.provide(hostScope));
             const started = yield* Deferred.make<void>();
@@ -915,11 +993,11 @@ it.live(
 
             expect(refused).toMatchObject({
               _tag: "Failure",
-              failure: { reason: "closed", outcome: "undispatched" },
+              failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
             });
             expect(afterClosed).toBe(0);
 
-            yield* generic.bind().click({ selector: "#increment" });
+            yield* generic.click({ selector: "#increment" });
             expect((yield* read(generic)).clicks).toBe(1);
           }),
         );

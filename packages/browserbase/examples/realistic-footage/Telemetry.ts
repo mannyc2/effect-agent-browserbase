@@ -67,10 +67,12 @@ export const Metrics = Schema.Struct({
         reason: Schema.String,
         received: Schema.Int,
         delivered: Schema.Int,
-        /** Frames this host discarded. What the browser or the network dropped upstream is unknown. */
-        dropped: Schema.Int,
+        /** Frames this host discarded. What the browser or the network discarded upstream is unknown. */
+        discarded: Schema.Int,
+        overflow: Schema.Int,
+        rejected: Schema.Int,
         /**
-         * Counted within `dropped`: frames that arrived behind a newer one. Chromium encodes up
+         * Counted within `discarded`: frames that arrived behind a newer one. Chromium encodes up
          * to three frames at once, so two stamped close together can complete in either order
          * on a busy host; the later-stamped one is presented and the earlier one discarded. It
          * is not a buffer overflow, and it says nothing about the encoder keeping pace.
@@ -275,7 +277,9 @@ export const summarize = (records: Records): Metrics => {
               reason: records.interval.reason,
               received: records.interval.received,
               delivered: records.interval.delivered,
-              dropped: records.interval.dropped,
+              discarded: records.interval.discarded,
+              overflow: records.interval.overflow,
+              rejected: records.interval.rejected,
               late: records.interval.late,
               duplicates: records.interval.duplicates,
               peakBufferedFrames: records.interval.peakBufferedFrames,

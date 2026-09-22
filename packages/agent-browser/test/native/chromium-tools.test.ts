@@ -108,9 +108,7 @@ it.live(
               expect(result.output.done).toBe(true);
               expect(navigationCallbacks).toBe(1);
               expect(callbackFinalizers).toBe(1);
-              expect((yield* local.bind().readText({ selector: "#log" })).text).toContain(
-                '"clicks":1',
-              );
+              expect((yield* local.readText({ selector: "#log" })).text).toContain('"clicks":1');
 
               const interval = yield* Capture.start(local, {
                 lifetime: "page",

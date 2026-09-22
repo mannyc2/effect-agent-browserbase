@@ -1,7 +1,7 @@
 import { Effect, Option, Redacted } from "effect";
 
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, Reasons } from "../../Errors.ts";
 import { cleanupStep, reported, type ConnectionCleanup } from "../browser/ConnectionCleanup.ts";
 import { checked } from "../browser/PublicSession.ts";
 import {
@@ -15,6 +15,7 @@ import { launch, type ChromiumProcess } from "./Process.ts";
 
 export interface ChromiumLease extends Lifetime {
   readonly reference: ChromiumReference;
+  readonly closeChecked: Effect.Effect<ChromiumCleanupResult, BrowserError>;
   readonly release: Effect.Effect<ChromiumCleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<ChromiumCleanupResult>>;
 }
@@ -118,7 +119,7 @@ const acquireChromium =
                 return Effect.fail(
                   BrowserError.make({
                     operation: "connect",
-                    reason: "closed",
+                    reason: Reasons.Closed.make({}),
                     outcome: "undispatched",
                   }),
                 );
@@ -128,7 +129,7 @@ const acquireChromium =
                 ? Effect.fail(
                     BrowserError.make({
                       operation: "connect",
-                      reason: "configuration",
+                      reason: Reasons.Configuration.make({}),
                       outcome: "undispatched",
                     }),
                   )
@@ -138,16 +139,19 @@ const acquireChromium =
             }),
           release,
           closeChecked: release.pipe(
-            Effect.flatMap((result) =>
-              result.connection === "closed" &&
-              result.issues.length === 0 &&
-              (result.ownership === "borrowed"
-                ? result.process === "not-owned"
-                : result.process === "terminated")
-                ? Effect.void
-                : Effect.fail(
-                    BrowserError.make({ operation: "close", reason: "failed", outcome: "unknown" }),
-                  ),
+            Effect.filterOrFail(
+              (result) =>
+                result.connection === "closed" &&
+                result.issues.length === 0 &&
+                (result.ownership === "borrowed"
+                  ? result.process === "not-owned"
+                  : result.process === "terminated"),
+              () =>
+                BrowserError.make({
+                  operation: "close",
+                  reason: Reasons.Failed.make({}),
+                  outcome: "unknown",
+                }),
             ),
           ),
           cleanupResult: cleanup.result,

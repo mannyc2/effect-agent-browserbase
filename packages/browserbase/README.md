@@ -136,7 +136,35 @@ Larger files use `BrowserbaseUploads.create`, which places bytes for the exact r
 
 `BrowserbaseBrowser.attach(reference, { policy, target })` takes control of a session this process did not allocate. It reads status first, so project authority is checked before anything is borrowed; a terminal session is refused because that needs a fresh allocation rather than a reattachment, and a starting session is admitted only within a bounded `pendingWaitMillis`. The requested target is resolved explicitly — there is no positional first-tab fallback — and connection credentials are fetched fresh, because expiry races the caller's own status read.
 
-`session.closeChecked` accepts confirmed owned cleanup or complete borrowed disconnection according to the actual ownership. A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `remote: "not-owned"`. It never requests release and never claims Context-writer authority: whoever allocated the session keeps both. It also does not detach and reattach inside itself; attaching again is the cross-process path, and it revalidates the session instead of assuming it is still there. A prior uncertain business mutation is still yours to reconcile before the next one; nothing is replayed automatically.
+`session.closeChecked` accepts confirmed owned cleanup or complete borrowed disconnection according to the actual ownership, then returns the same frozen `CleanupResult` cached by `close`. The concrete success value replaces the former `undefined`; failed confirmation remains a typed `BrowserError`. A borrowed scope disconnects locally and reports `ownership: "borrowed"` with `remote: "not-owned"`. It never requests release and never claims Context-writer authority: whoever allocated the session keeps both. It also does not detach and reattach inside itself; attaching again is the cross-process path, and it revalidates the session instead of assuming it is still there. A prior uncertain business mutation is still yours to reconcile before the next one; nothing is replayed automatically.
+
+## Shared API migration
+
+| Before                                                         | Now                                                                                                                                                             |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session.bind()` or `yield* session.currentTarget`             | Ordinary calls use `session` directly; `yield* session.retain` explicitly obtains checked stale-on-selection semantics                                          |
+| Bare page IDs in selection/closure, selection returns a handle | Pass `PageInfo` to `selectPage`/`closePage`; selection returns `void`, and `createPage` returns the exact created record                                        |
+| Reuse old page/frame metadata after reconnect                  | In the same known browser lifetime, read fresh pages and match exactly one saved `targetId`; then read fresh frames. No fallback to order, old ID, URL or title |
+| `Adapter.fromSession(session)` or `currentHandle`              | Await the Effect with explicit `{ selection: "current" }` or `{ selection: "retained" }`; its browser is the original concrete session                          |
+| `BrowserError.reason` string and optional outcome              | Tagged reason and required outcome. Use `Effect.catchReason`; factual limit/status/retry fields belong to their reason                                          |
+| All host reason names reach model output                       | A compact eleven-reason tool failure; original structured fields and bounded call IDs remain in `ToolHost.toolFailures`                                         |
+| `closeChecked` success is `undefined`                          | Concrete receipt success after the existing ownership check; `close` and `cleanupResult` remain available                                                       |
+| Capture `dropped`                                              | `discarded = overflow + late + duplicates + rejected`; no change to default capacity or unknown upstream loss                                                   |
+| Non-supervising helper takes default `BrowserSession`          | Use `AnySession`; keep supervising helpers generic in callback error or concrete session                                                                        |
+
+Binding omission defaults are one concurrent call, 64 KiB each direction, 10 seconds and
+`reject-call`; explicit values remain validated. Combined readiness uses the most conservative
+`existingDocuments` policy. Common navigation now accepts optional `timeoutMillis` with the same
+bounds as `startNavigation`; direct, retained and pinned operations share it. Observations add
+bounded checked/selected/inputType/required state without field values or destinations. These
+contracts live in the [common browser guide](../browser/README.md).
+
+Explicit generic applications of curried `Browser.scoped` use four outer parameters and three
+returned parameters; ordinary inferred syntax is unchanged. Provider resource errors such as
+`SessionError` keep their independent reason schemas. When a control-plane read becomes a browser
+operation failure, the bridge preserves available facts; a resource limit with no measured bound
+becomes `Provider` rather than fabricating `Limit` values. A native connection whose setup fails
+after connection work began carries `unknown` outcome.
 
 `test/native/handoff-process.test.ts` exercises that path with a real second process: it starts a fresh runtime that receives only the reference, a target id and fixture addresses, attaches, changes the page and closes as a borrower, and the allocating process then drives the same page and releases it. That is local CDP evidence, not a hosted handoff.
 

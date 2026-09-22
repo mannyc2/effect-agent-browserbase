@@ -27,7 +27,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
 
         const state: {
           connection?: ConnectionBindings;
-          controls?: Pick<SessionControls, "bind">;
+          controls?: Pick<SessionControls, "operations">;
           finalizerError?: BrowserError;
           finalizerSucceeded: boolean;
         } = { finalizerSucceeded: false };
@@ -50,8 +50,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
                     order.push("callback-finalizer");
                     assert.ok(state.controls);
 
-                    const result = yield* state.controls
-                      .bind()
+                    const result = yield* state.controls.operations
                       .click("#button")
                       .pipe(Effect.result);
 
@@ -117,7 +116,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
         yield* Scope.close(parent, Exit.void);
         assert.equal(yield* Effect.promise(() => reply), "rejected");
         assert.equal(state.finalizerSucceeded, false);
-        assert.equal(state.finalizerError?.reason, "closed");
+        assert.equal(state.finalizerError?.reason._tag, "Closed");
         assert.equal(state.finalizerError?.outcome, "undispatched");
         assert.equal(scripted.state.clicks, 0);
         assert.ok(order.indexOf("fence") < order.indexOf("callback-finalizer"));

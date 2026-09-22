@@ -1,6 +1,12 @@
 import { Schema } from "effect";
 
-import { BrowserError, type BrowserOperation } from "../../Errors.ts";
+import {
+  BrowserError,
+  BrowserOutcome,
+  Reasons,
+  type BrowserOperation,
+  type BrowserReason,
+} from "../../Errors.ts";
 import type { Ticket } from "./Owner.ts";
 
 /**
@@ -9,7 +15,8 @@ import type { Ticket } from "./Owner.ts";
  */
 export class NativeFailure extends Schema.TaggedError<NativeFailure>()("NativeFailure", {
   reason: BrowserError.fields.reason,
-  outcome: BrowserError.fields.outcome,
+  // Some native helpers run both before and after dispatch. Only their owner has that evidence.
+  outcome: Schema.optionalKey(BrowserOutcome),
 }) {}
 
 /**
@@ -28,19 +35,19 @@ export const publicError = (
   return BrowserError.make({
     operation,
     reason: known.reason,
-    ...(known.outcome === undefined ? {} : { outcome: known.outcome }),
+    outcome: known.outcome ?? fallback.outcome,
   });
 };
 
 /** Shared by the Playwright driver's seams, so every native call fails in the same vocabulary. */
-export const failure = (reason: BrowserError["reason"], outcome?: BrowserError["outcome"]) =>
+export const failure = (reason: BrowserReason, outcome?: BrowserOutcome) =>
   NativeFailure.make({ reason, ...(outcome === undefined ? {} : { outcome }) });
 
 export const safeDecode = <A>(codec: Schema.Codec<A, unknown, never, never>, raw: unknown): A => {
   try {
     return Schema.decodeUnknownSync(codec)(raw);
   } catch {
-    throw failure("malformed");
+    throw failure(Reasons.Malformed.make({}));
   }
 };
 
@@ -54,7 +61,7 @@ export const sanitize = <A>(action: () => Promise<A>): Promise<A> =>
     .catch((error: unknown) => {
       throw Schema.is(BrowserError)(error) || Schema.is(NativeFailure)(error)
         ? error
-        : failure("provider");
+        : failure(Reasons.Provider.make({}));
     });
 
 export const closeWithin = async (
@@ -67,7 +74,7 @@ export const closeWithin = async (
     await Promise.race([
       Promise.resolve().then(action),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(failure("timeout")), milliseconds);
+        timer = setTimeout(() => reject(failure(Reasons.Timeout.make({}))), milliseconds);
       }),
     ]);
   } finally {

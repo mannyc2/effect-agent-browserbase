@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 import { PageExecution } from "../src/internal/browser/PageExecution.ts";
@@ -27,7 +27,7 @@ const fixture = () => {
       if (aborted)
         throw BrowserError.make({
           operation: "page-control",
-          reason: "stale",
+          reason: Reasons.Stale.make({}),
           outcome: dispatched ? "unknown" : "undispatched",
         });
     },
@@ -102,7 +102,7 @@ for (const [index, phase] of resume.entries()) {
     expect(f.control.state().suspensionId).toBeUndefined();
     f.resetAdmission();
     await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({
-      reason: "stale",
+      reason: { _tag: "Stale" },
       outcome: "undispatched",
     });
     expect(f.ticket.dispatched).toBe(false);
@@ -116,7 +116,7 @@ for (const [index, phase] of hold.entries()) {
 
     f.abortAfter(phase);
     await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({
-      reason: "stale",
+      reason: { _tag: "Stale" },
       outcome: index === 0 ? "undispatched" : "unknown",
     });
     expect(f.calls).toEqual(hold.slice(0, index + 1));
@@ -133,7 +133,7 @@ for (const [index, phase] of resume.entries()) {
     f.resetAdmission();
     f.abortAfter(phase);
     await expect(f.control.resume(receipt, f.ticket)).rejects.toMatchObject({
-      reason: "stale",
+      reason: { _tag: "Stale" },
       outcome: "unknown",
     });
     expect(f.calls).toEqual(resume.slice(0, index + 1));

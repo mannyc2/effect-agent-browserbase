@@ -96,7 +96,7 @@ it.live("real CDP: ProviderManaged keeps the native viewport through passive obs
           const body = yield* Schema.decodeUnknownEffect(CreateBody)(fixture.createBodies[0]);
 
           expect(body.browserSettings).not.toHaveProperty("viewport");
-          yield* session.bind().navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
+          yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
           const before = yield* geometry(page);
 
           expect(before.js.innerWidth).toBeGreaterThan(0);
@@ -123,7 +123,7 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
+          yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
           const stage = (yield* session.pages).find((page) => page.selected);
           const stageNative = fixture.nativePages(session.reference.sessionId)[0];
 
@@ -138,10 +138,10 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
 
           expect(body.browserSettings.viewport).toEqual(dimensions);
 
-          const scoutId = yield* session.createPage;
-          const scout = yield* session.selectPage(scoutId);
+          const scout = yield* session.createPage;
 
-          yield* scout.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
+          yield* session.selectPage(scout);
+          yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
 
           const scoutNative = fixture
             .nativePages(session.reference.sessionId)
@@ -195,7 +195,7 @@ it.live(
           Effect.gen(function* () {
             const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* owner.bind().navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
+            yield* owner.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
             const target = (yield* owner.pages).find((page) => page.selected);
             const ownerNative = fixture.nativePages(owner.reference.sessionId)[0];
 

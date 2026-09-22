@@ -3,7 +3,7 @@ import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium } from "effect-browser/chromium";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 /** Inspect a scout tab while reading and capturing the pinned presentation page. */
 export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
@@ -16,7 +16,7 @@ export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
         if (stageInfo === undefined)
           return yield* BrowserError.make({
             operation: "target",
-            reason: "not-found",
+            reason: Reasons.NotFound.make({}),
             outcome: "undispatched",
           });
 

@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import type { ElementHandle, JSHandle } from "playwright-core";
 
 import { ControlFacts, type ObservedElement } from "../../BrowserData.ts";
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, Reasons } from "../../Errors.ts";
 import type { DriverEvents, DriverTarget, NativeCheckpoint, NativeObservation } from "./Driver.ts";
 import { pngGeometry } from "./Images.ts";
 import {
@@ -20,10 +20,29 @@ import type { Targets } from "./Targets.ts";
 const TextResult = Schema.Struct({
   text: Schema.String,
   missing: Schema.Boolean,
-  overLimit: Schema.Boolean,
+  byteLength: Schema.Natural,
 });
 
 const Geometry = Schema.Struct({ width: Schema.Natural, height: Schema.Natural });
+
+const checkScreenshotGeometry = (geometry: typeof Geometry.Type) => {
+  if (geometry.width < 1) throw failure(Reasons.Malformed.make({ path: "screenshot.width" }));
+  if (geometry.height < 1) throw failure(Reasons.Malformed.make({ path: "screenshot.height" }));
+  if (geometry.width > 16384)
+    throw failure(
+      Reasons.Limit.make({ dimension: "width", maximum: 16384, observed: geometry.width }),
+    );
+  if (geometry.height > 16384)
+    throw failure(
+      Reasons.Limit.make({ dimension: "height", maximum: 16384, observed: geometry.height }),
+    );
+  const pixels = geometry.width * geometry.height;
+
+  if (pixels > 33_554_432)
+    throw failure(
+      Reasons.Limit.make({ dimension: "pixels", maximum: 33_554_432, observed: pixels }),
+    );
+};
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
 
@@ -83,10 +102,10 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       // unexplained native error is explained by the document having gone.
       const unexplained =
         !Schema.is(BrowserError)(error) &&
-        (!Schema.is(NativeFailure)(error) || error.reason === "provider");
+        (!Schema.is(NativeFailure)(error) || error.reason._tag === "Provider");
 
       if (unexplained && (targets.epochOf(frame) !== epoch || targets.navigating.has(entry.id)))
-        throw failure("target-changed", "undispatched");
+        throw failure(Reasons.TargetChanged.make({}), "undispatched");
       throw error;
     }
   };
@@ -149,11 +168,15 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         await countHandle.dispose();
       }
       ticket.check();
-      if (count !== 1) throw failure(count === 0 ? "not-found" : "ambiguous", "undispatched");
+      if (count !== 1)
+        throw failure(
+          count === 0 ? Reasons.NotFound.make({}) : Reasons.Ambiguous.make({}),
+          "undispatched",
+        );
       node = await holder.getProperty("node");
       const element = node.asElement();
 
-      if (element === null) throw failure("not-found", "undispatched");
+      if (element === null) throw failure(Reasons.NotFound.make({}), "undispatched");
       ticket.check();
 
       return element;
@@ -170,7 +193,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     const snapshot = observation;
 
     if (snapshot === undefined || snapshot.id !== target.observationId)
-      throw failure("stale", "undispatched");
+      throw failure(Reasons.Stale.make({}), "undispatched");
 
     const usable =
       snapshot.validity === "valid" ||
@@ -179,7 +202,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
     const node = snapshot.nodes.get(target.elementId);
 
-    if (!usable || node === undefined) throw failure("stale", "undispatched");
+    if (!usable || node === undefined) throw failure(Reasons.Stale.make({}), "undispatched");
 
     return node;
   };
@@ -233,7 +256,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     const element =
       typeof target === "string" ? await exactElement(target, ticket, browserTarget) : node?.handle;
 
-    if (element === undefined) throw failure("stale", "undispatched");
+    if (element === undefined) throw failure(Reasons.Stale.make({}), "undispatched");
     try {
       const attached: unknown = await element.evaluate(
         (candidate, selector) => {
@@ -246,12 +269,12 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         typeof target === "string" ? target : undefined,
       );
 
-      if (attached !== true) throw failure("stale", "undispatched");
+      if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
       if (node !== undefined || policy !== undefined) {
         const facts = await factsOf(element, browserTarget);
 
         if (node !== undefined && identityOf(facts) !== node.identity)
-          throw failure("stale", "undispatched");
+          throw failure(Reasons.Stale.make({}), "undispatched");
         if (policy !== undefined) {
           let admitted = false;
 
@@ -260,7 +283,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
           } catch {
             admitted = false;
           }
-          if (!admitted) throw failure("denied", "undispatched");
+          if (!admitted) throw failure(Reasons.Denied.make({}), "undispatched");
         }
       }
       ticket.check();
@@ -302,15 +325,14 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
               const element =
                 selector === undefined ? document.body : document.querySelector(selector);
 
-              if (element === null) return { text: "", missing: true, overLimit: false };
+              if (element === null) return { text: "", missing: true, byteLength: 0 };
 
               const text =
                 element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
 
-              if (new TextEncoder().encode(text).length > maximumBytes)
-                return { text: "", missing: false, overLimit: true };
+              const byteLength = new TextEncoder().encode(text).length;
 
-              return { text, missing: false, overLimit: false };
+              return { text: byteLength > maximumBytes ? "" : text, missing: false, byteLength };
             },
             { selector, maximumBytes },
           ),
@@ -320,9 +342,13 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       ticket.check();
       const value = safeDecode(TextResult, raw);
 
-      if (value.missing) throw failure("not-found");
-      if (value.overLimit || new TextEncoder().encode(value.text).length > maximumBytes)
-        throw failure("limit");
+      if (value.missing) throw failure(Reasons.NotFound.make({}));
+      const observedBytes = Math.max(value.byteLength, new TextEncoder().encode(value.text).length);
+
+      if (observedBytes > maximumBytes)
+        throw failure(
+          Reasons.Limit.make({ dimension: "text", maximum: maximumBytes, observed: observedBytes }),
+        );
 
       return value.text;
     });
@@ -354,11 +380,20 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       } finally {
         await dataHandle.dispose();
       }
-      if (
-        new TextEncoder().encode(data.text).length > maximumBytes ||
-        data.controls.length > controlLimit
-      )
-        throw failure("limit");
+      const textBytes = new TextEncoder().encode(data.text).length;
+
+      if (textBytes > maximumBytes)
+        throw failure(
+          Reasons.Limit.make({ dimension: "text", maximum: maximumBytes, observed: textBytes }),
+        );
+      if (data.controls.length > controlLimit)
+        throw failure(
+          Reasons.Limit.make({
+            dimension: "controls",
+            maximum: controlLimit,
+            observed: data.controls.length,
+          }),
+        );
       if (keepNodes) {
         nodesHandle = await holder.getProperty("nodes");
         for (let i = 0; i < data.controls.length; i++) {
@@ -367,7 +402,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
           if (element === null) {
             await node.dispose();
-            throw failure("malformed");
+            throw failure(Reasons.Malformed.make({}));
           }
           handles.push(element);
         }
@@ -410,7 +445,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       });
       if (nodes.size !== data.controls.length) {
         await Promise.allSettled(handles.map((handle) => handle.dispose()));
-        throw failure("malformed");
+        throw failure(Reasons.Malformed.make({}));
       }
       observation = { id, pageId, validity: "valid", nodes, revalidated: new Set() };
 
@@ -454,14 +489,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
         const geometry = safeDecode(Geometry, raw);
 
-        if (
-          geometry.width < 1 ||
-          geometry.height < 1 ||
-          geometry.width > 16384 ||
-          geometry.height > 16384 ||
-          geometry.width * geometry.height > 33_554_432
-        )
-          throw failure("limit");
+        checkScreenshotGeometry(geometry);
         ticket.check();
 
         const bytes: unknown = await page.screenshot({
@@ -471,16 +499,18 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
           timeout: timeout(ticket),
         });
 
-        if (!(bytes instanceof Uint8Array)) throw failure("malformed");
-        if (bytes.length > maximumBytes) throw failure("limit");
+        if (!(bytes instanceof Uint8Array)) throw failure(Reasons.Malformed.make({}));
+        if (bytes.length > maximumBytes)
+          throw failure(
+            Reasons.Limit.make({
+              dimension: "returned-bytes",
+              maximum: maximumBytes,
+              observed: bytes.length,
+            }),
+          );
         const actual = pngGeometry(bytes);
 
-        if (
-          actual.width > 16384 ||
-          actual.height > 16384 ||
-          actual.width * actual.height > 33_554_432
-        )
-          throw failure("limit");
+        checkScreenshotGeometry(actual);
         ticket.check();
 
         return new Uint8Array(bytes);

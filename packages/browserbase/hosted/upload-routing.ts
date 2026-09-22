@@ -62,7 +62,7 @@ await h.run(
     Effect.gen(function* () {
       const session = yield* h.open({ bootstrap: chooser });
 
-      yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com/" }));
+      yield* session.navigate(NavigateRequest.make({ url: "https://example.com/" }));
 
       const receipt = yield* (yield* BrowserbaseUploads).create(session.reference, {
         filename,
@@ -88,7 +88,7 @@ await h.run(
         yield* Effect.sleep(1_000);
 
         const { text } = yield* session
-          .bind()
+
           .readText(ReadTextRequest.make({ selector: `#effect-agent-file-out-${index}` }));
 
         const seen = text === "" ? null : (JSON.parse(text) as Seen);

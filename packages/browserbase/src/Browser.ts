@@ -10,6 +10,7 @@ import type {
 import * as BrowserRuntime from "effect-browser/browser-runtime";
 import {
   BrowserError,
+  Reasons,
   type BrowserOperation,
   type InitializationError,
 } from "effect-browser/errors";
@@ -47,6 +48,7 @@ export interface Handoff {
 /** Browserbase identity, remote artifacts and provider cleanup remain hosted capabilities. */
 export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly reference: SessionReference;
+  readonly closeChecked: Effect.Effect<CleanupResult, BrowserError>;
   readonly clickForDownload: (
     request: ClickRequest,
   ) => Effect.Effect<DownloadObservation, BrowserError>;
@@ -106,7 +108,11 @@ const selection = (
 
     if (!Array.isArray(uploads) || uploads.length < 1 || uploads.length > 8)
       return Effect.fail(
-        BrowserError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+        BrowserError.make({
+          operation,
+          reason: Reasons.Configuration.make({}),
+          outcome: "undispatched",
+        }),
       );
     const paths: string[] = [];
 
@@ -119,7 +125,11 @@ const selection = (
         issued.reference.sessionId !== reference.sessionId
       )
         return Effect.fail(
-          BrowserError.make({ operation, reason: "authorization", outcome: "undispatched" }),
+          BrowserError.make({
+            operation,
+            reason: Reasons.Authorization.make({}),
+            outcome: "undispatched",
+          }),
         );
       paths.push(issued.remotePath);
     }
@@ -136,6 +146,7 @@ const makeSession = <E>(
   // Decorating the same object preserves its private capture and page-control associations.
   return Object.assign(session, {
     reference: lifetime.reference,
+    closeChecked: lifetime.closeChecked,
     clickForDownload: (request) =>
       operations.clickForDownload(request).pipe(
         Effect.flatMap((event) =>
@@ -144,7 +155,11 @@ const makeSession = <E>(
             reference: lifetime.reference,
           }).pipe(
             Effect.mapError(() =>
-              BrowserError.make({ operation: "download-action", reason: "malformed" }),
+              BrowserError.make({
+                operation: "download-action",
+                reason: Reasons.Malformed.make({}),
+                outcome: "unknown",
+              }),
             ),
           ),
         ),
@@ -168,7 +183,7 @@ const makeSession = <E>(
     reconnect: operations.reconnect,
     close: lifetime.release,
     cleanupResult: lifetime.cleanupResult,
-  } satisfies Omit<BrowserbaseSession<E>, keyof BrowserSession<E>>);
+  } satisfies Omit<BrowserbaseSession<E>, Exclude<keyof BrowserSession<E>, "closeChecked">>);
 };
 
 export class BrowserbaseBrowser extends Context.Service<
@@ -227,11 +242,15 @@ export class BrowserbaseBrowser extends Context.Service<
         const binding = yield* BrowserbaseBrowserBinding;
 
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
-          return yield* BrowserError.make({ operation: "configure", reason: "context-lease" });
+          return yield* BrowserError.make({
+            operation: "configure",
+            reason: Reasons.ContextLease.make({}),
+            outcome: "undispatched",
+          });
         if (Object.prototype.hasOwnProperty.call(options, "bootstrap"))
           return yield* BrowserError.make({
             operation: "configure",
-            reason: "configuration",
+            reason: Reasons.Configuration.make({}),
             outcome: "undispatched",
           });
 

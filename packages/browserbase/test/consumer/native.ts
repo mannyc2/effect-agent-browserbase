@@ -99,7 +99,7 @@ const program = Effect.scoped(
 
               expect(failureType, "the session failure channel retains the consumer error type");
 
-              yield* session.bind().navigate(NavigateRequest.make({ url: fixture.url }));
+              yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
               const observation = yield* session.observe({ maxTextBytes: 4096, maxControls: 8 });
 
               expect(
@@ -128,7 +128,7 @@ const program = Effect.scoped(
                 }),
               );
 
-              expect(captured.dropped === 0, "no frame is dropped inside the bounded window");
+              expect(captured.discarded === 0, "no frame is dropped inside the bounded window");
               expect(captured.duplicates === 0, "no frame is delivered twice");
 
               // The registered bundle ran on the document this consumer navigated to.
@@ -136,8 +136,8 @@ const program = Effect.scoped(
 
               expect(ready._tag === "Ready", "the current document satisfied its readiness");
               expect(
-                (yield* session.bind().readText(ReadTextRequest.make({ selector: "#marker" })))
-                  .text === "installed by the consumer",
+                (yield* session.readText(ReadTextRequest.make({ selector: "#marker" }))).text ===
+                  "installed by the consumer",
                 "the init bundle reached the page before the consumer read it",
               );
 
@@ -173,8 +173,8 @@ const program = Effect.scoped(
               });
 
               expect(
-                (yield* session.bind().readText(ReadTextRequest.make({ selector: "#chosen" })))
-                  .text === "notes.txt:14",
+                (yield* session.readText(ReadTextRequest.make({ selector: "#chosen" }))).text ===
+                  "notes.txt:14",
                 "the page received the selected file",
               );
 
