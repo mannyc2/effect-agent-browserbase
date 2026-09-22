@@ -4,25 +4,30 @@ The `0.2.0-beta.0` candidate separates `effect-browser`, `effect-browserbase` an
 
 [Issue #66](https://github.com/mannyc2/effect-agent-browserbase/issues/66) owns the ordered release-gate work. WP0 establishes explicit host peers, registry refusals, stored-workflow inference and dispatch-aware navigation stopping. WP1 replaces the overlapping retained-target APIs with checked `retain`, makes page creation/selection/closure use `PageInfo`, adds tagged host reasons with required dispatch evidence, and keeps model failures separate from bounded host diagnostics. Concrete checked close returns its receipt; capture accounting uses disjoint discarded-frame components. The [migration table](../README.md#api-migration) is the current API reference. These shape changes do not themselves claim the later timeout-recovery, page-scoped retirement, lifecycle/diagnostic, tool-sequencing or observer-isolation behavior assigned to subsequent packages.
 
-WP3 adds passive owner status and bounded native/policy diagnostics, separates known terminal
-triggers from unresolved native work, and accounts for checkpoint/control-facts reads through a
-separate finite host allowance. Popup/dialog policy cleanup has bounded native capacity that is
-retained through lost acknowledgement; confirmed overflow cleanup can preserve the original page.
-These changes remain unpaid local-runtime work and do not establish hosted-provider equivalence.
-
-WP4 sequences complete tool invocations within each ToolHost, including callback finalizers and
-navigation stop cleanup. The fixed admission policy is 32 outstanding calls and 30 seconds of
-queue wait; native browser admission stays fail-fast. Same-host callback reentry is refused,
-while independent callers queue and retain their own cancellation and service context. Plain
-handler Layers remain caller-managed. Exact-source acceptance and installed-consumer evidence
-belong to the WP's PR.
-
 WP2 adds bounded main-frame loading-timeout recovery through the existing stop owner and
 page-scoped retirement of the single observation. Selection-only excursions preserve exact-node
 references without changing retained-handle semantics; reconnect cannot reuse an old observation
 ID. Child-frame timeouts and uncertain stop outcomes remain fenced. These are unpaid local-runtime
 changes, not hosted Browserbase equivalence; the exact candidate PR's checks remain the validation
 record.
+
+WP3 adds passive owner status and bounded native/policy diagnostics, separates known terminal
+triggers from unresolved native work, and accounts for checkpoint/control-facts reads through a
+separate finite host allowance. Popup/dialog policy cleanup has bounded native capacity that is
+retained through lost acknowledgement; confirmed overflow cleanup can preserve the original page.
+WP4 sequences complete tool invocations, including callback finalizers and navigation stop cleanup,
+with 32 outstanding calls and a 30-second queue deadline. Native admission stays fail-fast and
+same-host reentry is refused. Plain handler Layers remain caller-managed.
+
+WP5 contains optional cleanup-notification failures independently of canonical receipt storage,
+writer settlement and checked closure, with explicit guidance for Layer-held sessions and receipts
+outside races. Qualification of the `0.2.0-beta.0` publication-gate candidate is the clean WP5 full
+acceptance run linked from its PR: five packed consumers, declaration parity, Node/Bun execution,
+native suites, release identities and dry-runs. This is unpaid acceptance only and does not publish
+or tag the packages. Hosted timeout recovery, before-unload/popup policy behavior, page holds,
+provider reconnect/registration retention and Context persistence remain separate qualification
+questions; earlier narrowly scoped hosted records below do not qualify this changed runtime.
+WP6/WP7 remain explicitly post-publication work in issue #66.
 
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 

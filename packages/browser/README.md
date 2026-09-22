@@ -44,6 +44,78 @@ Layer construction validates configuration and starts nothing. The optional `pla
 
 The same combinator supports `open.pipe(Browser.scoped(use))`, including a reusable `const use = Browser.scoped((browser) => browser.observe())` stored before choosing the provider. That unannotated callback sees common browser operations; use an annotated callback or the data-first form for provider-specific members or typed binding diagnostics. The returned function infers the supplying session's callback error independently of its acquisition error. Explicit generic applications must follow the curried overload's revised parameter lists: four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`). It removes the scopes it owns while preserving other required services and error types. Returning a browser, stream or other live capability from `use` does not extend that resource's lifetime. The old provider-specific `withBrowser` methods and `BrowserRuntime.withBrowser` are replaced by this one public operation.
 
+### A long-lived session in a Layer
+
+An application can share one acquired session through a Layer for its finite application scope:
+
+```ts
+import { Context, Effect, Layer } from "effect";
+import { Chromium, type ChromiumSession } from "effect-browser/chromium";
+import { BrowserPolicy } from "effect-browser/browser-data";
+
+class SharedBrowser extends Context.Service<SharedBrowser, ChromiumSession>()(
+  "app/SharedBrowser",
+) {}
+
+const shared = Layer.effect(
+  SharedBrowser,
+  Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 300_000 })),
+).pipe(Layer.provide(Chromium.layer({ onCleanup: recordReceipt })));
+
+const program = Effect.gen(function* () {
+  const browser = yield* SharedBrowser;
+  return yield* browser.observe({ scope: "viewport" });
+}).pipe(Effect.provide(shared));
+```
+
+Here `recordReceipt` is the host's bounded receipt sink. Consumers of the same Layer build share
+selection, budgets, native admission and lifetime; the Layer does not reset an expired session or
+make concurrent operations independent. Its acquisition finalizer performs unchecked release and
+stores the receipt. It does not supervise `browser.failure`, and does not turn incomplete cleanup
+into a checked-close error for every consumer. The application must choose that supervision and
+explicit checked closure, or use `Browser.scoped` for a bounded workflow that owns those decisions.
+Calling `Browser.scoped` on the shared live session would close it for every consumer, so it is not
+a per-request wrapper for this pattern.
+
+### Receipts outside a race
+
+An outer timeout may return `None` while discarding the losing workflow's checked-close error.
+Place the receipt sink outside that race when those facts must remain observable:
+
+```ts
+let receipt: ChromiumCleanupResult | undefined;
+const result =
+  yield *
+  Browser.scoped(Chromium.launch(policy), (browser) => browser.navigate({ url })).pipe(
+    Effect.timeoutOption("30 seconds"),
+    Effect.provide(
+      Chromium.layer({
+        onCleanup: (value) =>
+          Effect.sync(() => {
+            receipt = value;
+          }),
+      }),
+    ),
+  );
+// result can be None; receipt still records the completed cleanup attempt's actual facts.
+```
+
+The sink above retains one host-only receipt; it is not durable storage. A direct path can return
+`yield* browser.closeChecked` from the callback to obtain the concrete receipt, with typed failure
+when the owner's required cleanup was unconfirmed. Repeated checked closure and scope finalization
+reuse the same cleanup attempt. Body failure and direct or explicitly awaited interruption retain
+checked-close errors in that workflow's own cause; a racing parent chooses which result survives.
+The [complete compiled example](examples/shared-session.ts) shows all three compositions.
+
+Cleanup notification is attempted once after canonical evidence has been stored. Callback
+construction throws, defects, self-interruption and a two-second cooperative timeout are contained.
+Browserbase's built-in diagnostic reporter and the optional `onCleanup` sink are contained
+independently, so a broken reporter cannot suppress the sink. A failed sink does not confirm
+cleanup, alter the stored receipt, or retry teardown. `cleanupResult` remains the canonical local
+record. Notification timeout relies on cooperative interruption and cannot preempt synchronous
+host code that never yields. Receipt storage, Context-writer settlement and `closeChecked` validation
+are outside this optional-notification boundary.
+
 Owned launch currently supports POSIX hosts (Linux and macOS). It uses a fresh temporary profile, an ephemeral loopback debugger port and one maintained CDP connection. The launcher owns those arguments; callers cannot replace them through `args`. `executablePath` selects an installed Chromium explicitly; otherwise the pinned Playwright executable is used. Headless mode and Chromium sandboxing default to enabled. `chromiumSandbox: false` is an explicit host exception, never inferred from `CI`, root execution or a connection failure. Setting the option alone does not prove the operating system's sandbox configuration. Startup waiting is bounded by `startupTimeoutMillis` (15 seconds by default, at most 60 seconds) and the owner's remaining lifetime. Acquisition does not retry a failed launch.
 
 For an externally owned Chromium, use `browser.attach(endpoint, { policy, target?, bootstrap? })`. `endpoint` is a `Redacted<string>` containing the exact `ws://127.0.0.1:PORT/devtools/browser/ID` or IPv6-loopback equivalent advertised by that browser. HTTP discovery URLs, non-loopback hosts, credentials, queries and fragments are refused. This validates the control endpoint's shape; it does not authenticate the host running it. A supplied `target.targetId` must identify an existing page. Without one, several candidate pages are an explicit ambiguity error. Attachment preserves the existing viewport and does not replay the layer's launch arguments or create a replacement browser. Coordinate any independent controllers yourself, especially when enabling page control.
