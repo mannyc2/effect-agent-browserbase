@@ -1,6 +1,7 @@
 import type { ElementHandle, Page } from "playwright-core";
 
 import type { KeyModifier, ObservedElement } from "../../BrowserData.ts";
+import { Reasons } from "../../Errors.ts";
 import type { makeActions } from "./Actions.ts";
 import type { DriverTarget } from "./Driver.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
@@ -44,7 +45,7 @@ export const makeKeyboard = (
       return false;
     });
 
-    if (focused !== true) throw failure("not-focused", "undispatched");
+    if (focused !== true) throw failure(Reasons.NotFocused.make({}), "undispatched");
   };
 
   /** Sends under one dispatch, either to whatever has focus or to the one element that must. */

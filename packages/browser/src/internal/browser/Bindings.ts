@@ -1,7 +1,7 @@
 import { Cause, Deferred, Effect, Exit, Schema, Scope } from "effect";
 
 import * as Bootstrap from "../../Bootstrap.ts";
-import { BrowserError, InitializationError } from "../../Errors.ts";
+import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
 import * as Registration from "./BindingRegistration.ts";
 import { makeBindingRunner } from "./BindingRunner.ts";
 import { duplicateStep } from "./Bootstrap.ts";
@@ -45,7 +45,11 @@ export interface Bindings<E> {
 }
 
 const invalidPlan = () =>
-  BrowserError.make({ operation: "configure", reason: "configuration", outcome: "undispatched" });
+  BrowserError.make({
+    operation: "configure",
+    reason: Reasons.Configuration.make({}),
+    outcome: "undispatched",
+  });
 
 const AdmissionPlan = Schema.Struct({
   ...Bootstrap.Plan.fields,

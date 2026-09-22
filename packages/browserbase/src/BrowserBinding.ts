@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Redacted } from "effect";
 import * as BrowserRuntime from "effect-browser/browser-runtime";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { validateConnection } from "./internal/provider/Connection.ts";
 
@@ -19,7 +19,11 @@ export const playwright = (options: PlaywrightOptions = {}): BrowserBinding => {
           catch: (error) =>
             error instanceof BrowserError
               ? error
-              : BrowserError.make({ operation: "connect", reason: "malformed" }),
+              : BrowserError.make({
+                  operation: "connect",
+                  reason: Reasons.Malformed.make({}),
+                  outcome: "undispatched",
+                }),
         });
 
         return yield* resolveEndpoint === undefined

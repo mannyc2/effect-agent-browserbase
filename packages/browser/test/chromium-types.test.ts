@@ -3,7 +3,7 @@ import { type Effect, type Redacted, type Scope } from "effect";
 import type * as Bootstrap from "effect-browser/bootstrap";
 import type { BrowserSession } from "effect-browser/browser";
 import type { BrowserPolicy } from "effect-browser/browser-data";
-import type { Chromium, ChromiumSession } from "effect-browser/chromium";
+import type { Chromium, ChromiumCleanupResult, ChromiumSession } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
 
 type Same<A, B> =
@@ -36,7 +36,32 @@ const exact: Same<Effect.Success<ReturnType<typeof attach>>, ChromiumSession<Fai
 const shared = (session: ChromiumSession<Failure>): BrowserSession<Failure> => session;
 const identity: Same<ChromiumSession["reference"]["provider"], "chromium"> = true;
 
+const checkedReceipt: Same<
+  Effect.Success<ChromiumSession<Failure>["closeChecked"]>,
+  ChromiumCleanupResult
+> = true;
+
+const checkedFailure: Same<
+  Effect.Error<ChromiumSession<Failure>["closeChecked"]>,
+  BrowserError
+> = true;
+
+const checkedRequirements: Same<
+  Effect.Services<ChromiumSession<Failure>["closeChecked"]>,
+  never
+> = true;
+
+const genericChecked: Same<Effect.Success<BrowserSession<Failure>["closeChecked"]>, void> = true;
+
+const genericClose = (session: ChromiumSession<Failure>): Effect.Effect<void, BrowserError> =>
+  session.closeChecked;
+
 it("local acquisition keeps consumer errors and services while its reference stays local", () => {
   expect(environment && failures && exact && identity).toBe(true);
   expect(typeof shared).toBe("function");
+});
+
+it("concrete checked closure returns its receipt and remains usable through the generic void contract", () => {
+  expect(checkedReceipt && checkedFailure && checkedRequirements && genericChecked).toBe(true);
+  expect(typeof genericClose).toBe("function");
 });

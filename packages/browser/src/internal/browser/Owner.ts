@@ -1,30 +1,23 @@
 import { Clock, Duration, Effect, Schema, Semaphore } from "effect";
 
-import { BrowserError, type BrowserOperation } from "../../Errors.ts";
+import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import { publicError } from "./NativeCalls.ts";
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   deadline: number,
-  operation: BrowserOperation,
-  onTimeout?: () => void,
+  onTimeout: () => BrowserError,
 ): Effect.Effect<A, E | BrowserError, R> =>
   Effect.gen(function* () {
     const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
-    const timeout = () => {
-      onTimeout?.();
-
-      return BrowserError.make({ operation, reason: "timeout" });
-    };
-
     return yield* deadline <= now
-      ? Effect.fail(timeout())
+      ? Effect.fail(onTimeout())
       : effect.pipe(
           Effect.timeoutOrElse({
             duration: Duration.millis(deadline - now),
-            orElse: () => Effect.fail(timeout()),
+            orElse: () => Effect.fail(onTimeout()),
           }),
         );
   });
@@ -150,7 +143,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           if (!(options.phases ?? ["open"]).includes(state.phase)) {
             return yield* BrowserError.make({
               operation,
-              reason: state.phase === "paused" ? "busy" : "closed",
+              reason: state.phase === "paused" ? Reasons.Busy.make({}) : Reasons.Closed.make({}),
               outcome: "undispatched",
             });
           }
@@ -162,7 +155,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
             return yield* BrowserError.make({
               operation,
-              reason: "timeout",
+              reason: Reasons.Expired.make({}),
               outcome: "undispatched",
             });
           }
@@ -170,7 +163,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             if (state.actions >= limits.maxActions)
               return yield* BrowserError.make({
                 operation,
-                reason: "limit",
+                reason: Reasons.Limit.make({
+                  dimension: "actions",
+                  maximum: limits.maxActions,
+                  observed: state.actions,
+                }),
                 outcome: "undispatched",
               });
             state.actions++;
@@ -192,7 +189,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             ) {
               throw BrowserError.make({
                 operation,
-                reason: "stale",
+                reason: Reasons.Stale.make({}),
                 outcome: dispatched ? "unknown" : "undispatched",
               });
             }
@@ -225,8 +222,16 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               fence("uncertain", "uncertain");
           };
 
-          return yield* within(body(ticket), ticket.deadline, operation, uncertain).pipe(
-            Effect.tap((_) =>
+          return yield* within(body(ticket), ticket.deadline, () => {
+            uncertain();
+
+            return BrowserError.make({
+              operation,
+              reason: Reasons.Timeout.make({}),
+              outcome: dispatched ? "unknown" : "undispatched",
+            });
+          }).pipe(
+            Effect.tap(() =>
               options.verifyAfter === false
                 ? Effect.void
                 : Effect.try({
@@ -234,7 +239,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                     catch: () =>
                       BrowserError.make({
                         operation,
-                        reason: "stale",
+                        reason: Reasons.Stale.make({}),
                         outcome: dispatched ? "unknown" : "undispatched",
                       }),
                   }),
@@ -249,11 +254,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                 BrowserError.make({
                   operation,
                   reason: error.reason,
-                  outcome: error.outcome ?? (dispatched ? "unknown" : "undispatched"),
-                  ...(error.status === undefined ? {} : { status: error.status }),
-                  ...(error.retryAfterMillis === undefined
-                    ? {}
-                    : { retryAfterMillis: error.retryAfterMillis }),
+                  outcome: error.outcome,
                 }),
               );
             }),
@@ -270,7 +271,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       .pipe(
         Effect.flatMap(
           Effect.fromOption(() =>
-            BrowserError.make({ operation, reason: "busy", outcome: "undispatched" }),
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
           ),
         ),
       );
@@ -298,7 +303,7 @@ export type Owner = Effect.Success<ReturnType<typeof makeOwner>>;
 
 /** Without a native answer, whether the step was sent is all the owner knows about it. */
 const unsettled = (ticket: Ticket): Pick<BrowserError, "reason" | "outcome"> => ({
-  reason: "provider",
+  reason: Reasons.Provider.make({}),
   outcome: ticket.dispatched ? "unknown" : "undispatched",
 });
 
@@ -322,7 +327,7 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
         Effect.fail(
           BrowserError.make({
             operation,
-            reason: "stale",
+            reason: Reasons.Stale.make({}),
             outcome: ticket.dispatched ? "unknown" : "undispatched",
           }),
         ),

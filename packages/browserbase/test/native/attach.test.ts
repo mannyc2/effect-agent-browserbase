@@ -16,7 +16,7 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
         Effect.gen(function* () {
           const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* owner.bind().navigate(NavigateRequest.make({ url: f.url }));
+          yield* owner.navigate(NavigateRequest.make({ url: f.url }));
           const pages = yield* owner.pages;
           const selected = pages.find((page) => page.selected);
 
@@ -34,16 +34,16 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
               });
 
               expect(
-                (yield* borrowed.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
+                (yield* borrowed.readText(ReadTextRequest.make({ selector: "h1" }))).text,
               ).toBe("Local browser fixture");
-              yield* borrowed.bind().click(ClickRequest.make({ selector: "#increment" }));
+              yield* borrowed.click(ClickRequest.make({ selector: "#increment" }));
 
               // Detaching and reattaching inside a borrowed scope is deliberately absent.
               const unsupported = yield* borrowed.detach.pipe(Effect.result);
 
               expect(unsupported._tag).toBe("Failure");
               if (unsupported._tag === "Failure")
-                expect(unsupported.failure.reason).toBe("unsupported");
+                expect(unsupported.failure.reason._tag).toBe("Unsupported");
 
               // Checked closure accepts borrowed disconnection without requiring a remote release.
               yield* borrowed.closeChecked;
@@ -58,9 +58,9 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
           );
 
           // The allocating owner still holds the same live session, and sees the work done.
-          expect(
-            (yield* owner.bind().readText(ReadTextRequest.make({ selector: "#count" }))).text,
-          ).toBe("1");
+          expect((yield* owner.readText(ReadTextRequest.make({ selector: "#count" }))).text).toBe(
+            "1",
+          );
           expect(f.releaseIds).toEqual([]);
         }),
         { launch: { ...localLaunch, keepAlive: true } },
@@ -84,7 +84,7 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
           const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
           reference = owner.reference;
-          yield* owner.bind().navigate(NavigateRequest.make({ url: f.url }));
+          yield* owner.navigate(NavigateRequest.make({ url: f.url }));
           yield* owner.createPage;
 
           yield* withProvider(
@@ -96,7 +96,15 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
                 .pipe(Effect.result);
 
               expect(missing._tag).toBe("Failure");
-              if (missing._tag === "Failure") expect(missing.failure.reason).toBe("not-found");
+              // Native connection precedes target resolution, so a refused attachment keeps
+              // the connection boundary's conservative outcome rather than claiming no dispatch.
+              if (missing._tag === "Failure")
+                expect(missing.failure).toMatchObject({
+                  _tag: "BrowserError",
+                  operation: "connect",
+                  reason: { _tag: "NotFound" },
+                  outcome: "unknown",
+                });
 
               // Nor does an unnamed target quietly pick one of several open pages.
               const ambiguous = yield* (yield* BrowserbaseBrowser)
@@ -104,7 +112,13 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
                 .pipe(Effect.result);
 
               expect(ambiguous._tag).toBe("Failure");
-              if (ambiguous._tag === "Failure") expect(ambiguous.failure.reason).toBe("ambiguous");
+              if (ambiguous._tag === "Failure")
+                expect(ambiguous.failure).toMatchObject({
+                  _tag: "BrowserError",
+                  operation: "connect",
+                  reason: { _tag: "Ambiguous" },
+                  outcome: "unknown",
+                });
             }),
           );
           yield* owner.close;

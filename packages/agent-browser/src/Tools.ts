@@ -7,7 +7,7 @@ import {
 } from "effect-agent/interactive-browser";
 import type { BrowserSession, ElementAdmission, NavigationOperation } from "effect-browser/browser";
 import {
-  type InputReceipt,
+  InputReceipt,
   KeyStroke,
   Observation,
   ObservedElement,
@@ -15,27 +15,89 @@ import {
   TypeRequest,
   WheelRequest,
 } from "effect-browser/browser-data";
-import { BrowserError, type InitializationError } from "effect-browser/errors";
+import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 /** A declared Tool failure, not a successful payload with an embedded error. */
 export class BrowserToolFailure extends Schema.TaggedError<BrowserToolFailure>()(
   "BrowserToolFailure",
   {
-    reason: BrowserError.fields.reason,
+    reason: Schema.Literals([
+      "stale",
+      "busy",
+      "denied",
+      "not-found",
+      "ambiguous",
+      "not-visible",
+      "not-focused",
+      "limit",
+      "timeout",
+      "closed",
+      "failed",
+    ]),
     outcome: Schema.Literals(["undispatched", "rejected", "unknown"]),
   },
 ) {}
 
+const toolReasons = {
+  Stale: "stale",
+  TargetChanged: "stale",
+  Resized: "stale",
+  Interrupted: "stale",
+  Busy: "busy",
+  Active: "busy",
+  RateLimited: "busy",
+  Denied: "denied",
+  Authorization: "denied",
+  UnsafeUrl: "denied",
+  NotFound: "not-found",
+  Ambiguous: "ambiguous",
+  NotVisible: "not-visible",
+  NotFocused: "not-focused",
+  Limit: "limit",
+  Timeout: "timeout",
+  Closed: "closed",
+  Expired: "closed",
+  Disconnected: "closed",
+  UnregisteredSession: "closed",
+  Configuration: "failed",
+  Unsupported: "failed",
+  Malformed: "failed",
+  Transport: "failed",
+  Provider: "failed",
+  Disabled: "failed",
+  Failed: "failed",
+  ContentType: "failed",
+  Timestamp: "failed",
+  ContextLease: "failed",
+} as const satisfies Record<BrowserError["reason"]["_tag"], BrowserToolFailure["reason"]>;
+
 const failed = (error: BrowserError): BrowserToolFailure =>
   BrowserToolFailure.make({
-    reason: error.reason,
-    outcome: error.outcome ?? "unknown",
+    reason: toolReasons[error.reason._tag],
+    outcome: error.outcome,
   });
 
 const actionResult = (url: string) =>
   Schema.decodeEffect(BrowserActionResult)({ url }).pipe(
-    Effect.mapError(() => BrowserToolFailure.make({ reason: "malformed", outcome: "unknown" })),
+    Effect.mapError(() =>
+      BrowserError.make({
+        operation: "action-result",
+        reason: Reasons.Malformed.make({}),
+        outcome: "unknown",
+      }),
+    ),
+  );
+
+const navigationResult = (url: string) =>
+  Schema.decodeEffect(BrowserNavigationResult)({ url }).pipe(
+    Effect.mapError(() =>
+      BrowserError.make({
+        operation: "navigate",
+        reason: Reasons.Malformed.make({}),
+        outcome: "unknown",
+      }),
+    ),
   );
 
 const Navigate = Tool.make("browser_navigate", {
@@ -174,9 +236,16 @@ interface Hooks {
     receipt: InputReceipt,
     toolCallId: string | undefined,
   ) => Effect.Effect<void, BrowserToolFailure>;
+  readonly failure?: (error: BrowserError, toolCallId: string | undefined) => void;
 }
 
 const direct: Hooks = { run: (effect) => effect };
+
+const failureWith = (hooks: Hooks, toolCallId: string | undefined) => (error: BrowserError) => {
+  hooks.failure?.(error, toolCallId);
+
+  return failed(error);
+};
 
 const makeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions, hooks: Hooks) => {
   const maxTextBytes = options.maxTextBytes ?? 8192;
@@ -190,35 +259,48 @@ const makeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions, ho
     browser_navigate: (request, context) =>
       hooks.run(
         hooks.navigate === undefined
-          ? browser.currentTarget.pipe(
-              Effect.mapError(failed),
-              Effect.flatMap((target) => target.navigate(request).pipe(Effect.mapError(failed))),
+          ? browser.navigate(request).pipe(
+              Effect.flatMap((result) => navigationResult(result.url)),
+              Effect.mapError(failureWith(hooks, context.toolCallId)),
             )
           : hooks.navigate(request, context.toolCallId),
       ),
-    browser_inspect: () =>
+    browser_inspect: (_request, context) =>
       hooks.run(
-        browser.observe({ maxTextBytes, maxControls, scope }).pipe(Effect.mapError(failed)),
+        browser.observe({ maxTextBytes, maxControls, scope }).pipe(
+          Effect.flatMap((result) =>
+            Schema.decodeEffect(Observation)(result).pipe(
+              Effect.mapError(() =>
+                BrowserError.make({
+                  operation: "observe",
+                  reason: Reasons.Malformed.make({}),
+                  outcome: "unknown",
+                }),
+              ),
+            ),
+          ),
+          Effect.mapError(failureWith(hooks, context.toolCallId)),
+        ),
       ),
-    browser_click: (reference) =>
+    browser_click: (reference, context) =>
       hooks.run(
         browser.clickElement(reference, admission).pipe(
-          Effect.mapError(failed),
           Effect.flatMap((result) => actionResult(result.url)),
+          Effect.mapError(failureWith(hooks, context.toolCallId)),
         ),
       ),
-    browser_fill: ({ reference, value }) =>
+    browser_fill: ({ reference, value }, context) =>
       hooks.run(
         browser.fillElement(reference, value, admission).pipe(
-          Effect.mapError(failed),
           Effect.flatMap((result) => actionResult(result.url)),
+          Effect.mapError(failureWith(hooks, context.toolCallId)),
         ),
       ),
-    browser_scroll: (request) =>
+    browser_scroll: (request, context) =>
       hooks.run(
-        browser.currentTarget.pipe(
-          Effect.mapError(failed),
-          Effect.flatMap((target) => target.scroll(request).pipe(Effect.mapError(failed))),
+        browser.scroll(request).pipe(
+          Effect.flatMap((result) => actionResult(result.url)),
+          Effect.mapError(failureWith(hooks, context.toolCallId)),
         ),
       ),
   });
@@ -231,7 +313,18 @@ const inputWith = (hooks: Hooks) => {
   ) =>
     hooks.run(
       effect.pipe(
-        Effect.mapError(failed),
+        Effect.tap((receipt) =>
+          Schema.decodeEffect(InputReceipt)(receipt).pipe(
+            Effect.mapError(() =>
+              BrowserError.make({
+                operation: "action-result",
+                reason: Reasons.Malformed.make({}),
+                outcome: "unknown",
+              }),
+            ),
+          ),
+        ),
+        Effect.mapError(failureWith(hooks, toolCallId)),
         Effect.tap((receipt) => hooks.input?.(receipt, toolCallId) ?? Effect.void),
         Effect.as({ dispatched: true as const }),
       ),
@@ -252,17 +345,10 @@ const makeNativeHandlers = <E>(
 
   return nativeToolkit.toLayer({
     browser_pointer_move: (request, context) =>
-      input(
-        browser.currentTarget.pipe(Effect.flatMap((target) => target.pointerMove(request))),
-        context.toolCallId,
-      ),
+      input(browser.pointerMove(request), context.toolCallId),
     browser_hover: (reference, context) =>
       input(browser.hoverElement(reference, admission), context.toolCallId),
-    browser_wheel: (request, context) =>
-      input(
-        browser.currentTarget.pipe(Effect.flatMap((target) => target.wheel(request))),
-        context.toolCallId,
-      ),
+    browser_wheel: (request, context) => input(browser.wheel(request), context.toolCallId),
   });
 };
 
@@ -326,6 +412,23 @@ export type ToolHostFailure<OwnerError = never, CallbackError = never> =
   | InitializationError
   | BrowserError;
 
+/** Original bounded browser error fields, copied before the model-facing projection. */
+export interface ToolFailureDiagnostic {
+  readonly error: Pick<BrowserError, "_tag" | "operation" | "reason" | "outcome">;
+  /** IDs longer than 256 UTF-16 code units are omitted, never shortened into a different ID. */
+  readonly toolCallId: string | undefined;
+  readonly toolCallIdOmitted: boolean;
+}
+
+/** A memory-only snapshot of the latest 32 ordinary browser failures, oldest first. */
+export interface ToolFailureSnapshot {
+  readonly failures: ReadonlyArray<ToolFailureDiagnostic>;
+  /** Entries evicted from the bounded window; saturates at Number.MAX_SAFE_INTEGER. */
+  readonly dropped: number;
+}
+
+const encodeBrowserError = Schema.encodeSync(BrowserError);
+
 export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly handlers: Layer.Layer<ToolHandlers>;
   readonly nativeHandlers: Layer.Layer<NativeToolHandlers>;
@@ -334,6 +437,8 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly layer: Layer.Layer<ToolHostServices>;
   /** First host callback, navigation-cleanup or browser fail-session cause. */
   readonly failure: Effect.Effect<never, ToolHostFailure<OwnerError, CallbackError>>;
+  /** Original ordinary action errors. Reading never enters browser admission and works after close. */
+  readonly toolFailures: Effect.Effect<ToolFailureSnapshot>;
   /** Provide this host's handlers and supervise the program without closing the borrowed browser. */
   readonly run: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -355,7 +460,26 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const scope = yield* Scope.make("sequential");
   const failure = yield* Deferred.make<never, ToolHostFailure<OwnerError, E>>();
   const { onNavigation, onInput } = options;
+  const toolFailures: ToolFailureDiagnostic[] = [];
+  let dropped = 0;
   let closed = false;
+
+  const recordFailure = (error: BrowserError, toolCallId: string | undefined) => {
+    const encoded = encodeBrowserError(error);
+    const toolCallIdOmitted = toolCallId !== undefined && toolCallId.length > 256;
+
+    if (toolFailures.length === 32) {
+      toolFailures.shift();
+      dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1);
+    }
+    toolFailures.push(
+      Object.freeze({
+        error: Object.freeze({ ...encoded, reason: Object.freeze({ ...encoded.reason }) }),
+        toolCallId: toolCallIdOmitted ? undefined : toolCallId,
+        toolCallIdOmitted,
+      }),
+    );
+  };
 
   yield* Effect.addFinalizer((exit) =>
     Effect.sync(() => {
@@ -402,8 +526,8 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     request,
     toolCallId,
   ) {
-    const target = yield* browser.currentTarget.pipe(Effect.mapError(failed));
-    const operation = yield* target.startNavigation(request).pipe(Effect.mapError(failed));
+    const onFailure = failureWith({ run, failure: recordFailure }, toolCallId);
+    const operation = yield* browser.startNavigation(request).pipe(Effect.mapError(onFailure));
     let settled = false;
 
     const completed = operation.completed.pipe(
@@ -412,14 +536,8 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
           if (Exit.isSuccess(exit) || !Cause.hasInterruptsOnly(exit.cause)) settled = true;
         }),
       ),
-      Effect.mapError(failed),
-      Effect.flatMap((result) =>
-        Schema.decodeEffect(BrowserNavigationResult)({ url: result.url }).pipe(
-          Effect.mapError(() =>
-            BrowserToolFailure.make({ reason: "malformed", outcome: "unknown" }),
-          ),
-        ),
-      ),
+      Effect.flatMap((result) => navigationResult(result.url)),
+      Effect.mapError(onFailure),
     );
 
     // Start the callback before racing completion, including a navigation already settled.
@@ -444,7 +562,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
           ? Effect.void
           : operation.stop.pipe(
               Effect.onError((cause) => Deferred.failCause(failure, cause)),
-              Effect.mapError(failed),
+              Effect.mapError(onFailure),
             ),
       ),
     );
@@ -453,6 +571,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const hooks: Hooks = {
     run,
     navigate,
+    failure: recordFailure,
     input: (receipt, toolCallId) =>
       onInput === undefined
         ? Effect.void
@@ -470,7 +589,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         if (closed)
           return yield* BrowserError.make({
             operation: "close",
-            reason: "closed",
+            reason: Reasons.Closed.make({}),
             outcome: "undispatched",
           });
         if (Deferred.isDoneUnsafe(failure)) return yield* Deferred.await(failure);
@@ -493,6 +612,12 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     keyboardHandlers: keyboardHandlerLayer,
     layer,
     failure: Deferred.await(failure),
+    toolFailures: Effect.sync(() =>
+      Object.freeze({
+        failures: Object.freeze([...toolFailures]),
+        dropped,
+      }),
+    ),
     run: supervise,
   };
 });

@@ -44,7 +44,7 @@ const evidenceOf = <E>(
   settle(
     session.checkpoint(options).pipe(
       Effect.catchIf(
-        (error) => error.reason === "target-changed" && error.outcome === "undispatched",
+        (error) => error.reason._tag === "TargetChanged" && error.outcome === "undispatched",
         () => Effect.succeed(undefined),
       ),
     ),
@@ -63,7 +63,7 @@ it.live(
           f,
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
-            const handle = session.bind();
+            const handle = session;
             const [stage] = yield* session.pages;
 
             assert.ok(stage);
@@ -104,15 +104,18 @@ it.live(
 
               expect(refused._tag).toBe("Failure");
               if (refused._tag === "Failure")
-                expect(refused.failure).toMatchObject({ reason: "busy", outcome: "undispatched" });
+                expect(refused.failure).toMatchObject({
+                  reason: { _tag: "Busy" },
+                  outcome: "undispatched",
+                });
             }
 
             // Another page is independent: it navigates and reads while the first still loads.
-            const scout = yield* session.selectPage(yield* session.createPage);
+            yield* session.selectPage(yield* session.createPage);
 
-            yield* scout.navigate(NavigateRequest.make({ url: `${f.url}next` }));
-            expect((yield* scout.readText(ReadTextRequest.make({}))).text).toContain("next page");
-            yield* session.selectPage(stage.pageId);
+            yield* session.navigate(NavigateRequest.make({ url: `${f.url}next` }));
+            expect((yield* session.readText(ReadTextRequest.make({}))).text).toContain("next page");
+            yield* session.selectPage(stage);
 
             const native = f
               .nativePages(session.reference.sessionId)
@@ -148,7 +151,7 @@ it.live(
             expect((yield* read(native)).chunks).toBe(3);
             // One dispatch, never replayed, and the page takes input again.
             expect(f.requests.filter((path) => path === "/slow")).toHaveLength(1);
-            yield* session.bind().click(ClickRequest.make({ selector: "#act" }));
+            yield* session.click(ClickRequest.make({ selector: "#act" }));
             yield* session.close;
           }),
           { pageControl: true },
@@ -166,7 +169,7 @@ it.live("real CDP: stopping a navigation is a known outcome, and the session sta
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session.bind();
+          const handle = session;
 
           const operation = yield* handle.startNavigation(
             StartNavigationRequest.make({ url: `${f.url}slow`, timeoutMillis: 30000 }),
@@ -180,7 +183,7 @@ it.live("real CDP: stopping a navigation is a known outcome, and the session sta
           if (completed._tag === "Failure")
             expect(completed.failure).toMatchObject({
               operation: "navigate",
-              reason: "interrupted",
+              reason: { _tag: "Interrupted" },
             });
 
           // What had loaded is still there, and the page takes input again. Nothing was replayed.
@@ -204,7 +207,7 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session.bind();
+          const handle = session;
 
           yield* handle.navigate(NavigateRequest.make({ url: f.url }));
 

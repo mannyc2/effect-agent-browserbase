@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import type { Scope } from "effect";
 import { Effect, Exit, Fiber, Stream } from "effect";
-import { BrowserError, type InitializationError } from "effect-browser/errors";
+import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 
 import { PageInfo, Target } from "../../../packages/browser/src/BrowserData.ts";
 import { type CaptureOptions, type CaptureSize } from "../../../packages/browser/src/Capture.ts";
@@ -41,13 +41,13 @@ const test = (name: string, run: () => Effect.Effect<void, CaptureFailure, Scope
 
 const expectReason = <A, R>(
   effect: Effect.Effect<A, BrowserError, R>,
-  reason: BrowserError["reason"],
+  reason: BrowserError["reason"]["_tag"],
 ) =>
   effect.pipe(
     Effect.result,
     Effect.map((result) => {
       assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") assert.equal(result.failure.reason, reason);
+      if (result._tag === "Failure") assert.equal(result.failure.reason._tag, reason);
     }),
   );
 
@@ -90,7 +90,11 @@ const makeFixture = Effect.fnUntraced(function* (
 
       if (chosen.targetId !== `target-${chosen.pageId}`)
         return Effect.fail(
-          BrowserError.make({ operation: "capture", reason: "stale", outcome: "undispatched" }),
+          BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Stale.make({}),
+            outcome: "undispatched",
+          }),
         );
 
       return Effect.succeed({
@@ -188,7 +192,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const stopped = yield* interval.stop;
 
       assert.equal(stopped.received, 100);
-      assert.equal(stopped.dropped, 98);
+      assert.equal(stopped.discarded, 98);
       assert.equal(stopped.bufferedFrames, 2);
       assert.equal(stopped.peakBufferedFrames, 2);
       const frames = yield* Stream.runCollect(interval.frames);
@@ -215,7 +219,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const summary = yield* interval.stop;
 
       assert.equal(summary.peakBufferedBytes, size * 2);
-      assert.equal(summary.dropped, 4);
+      assert.equal(summary.discarded, 4);
       assert.equal(summary.bufferedFrames, 2);
     })),
   test("capture copies callback bytes and preserves source time separately from receipt time", () =>
@@ -248,7 +252,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const frames = yield* Stream.runCollect(interval.frames);
 
       assert.equal(summary.duplicates, 1);
-      assert.equal(summary.dropped, 1);
+      assert.equal(summary.discarded, 1);
       assert.deepEqual(
         frames.map((frame) => frame.sequence),
         [0, 2],
@@ -277,11 +281,65 @@ export const captureCases: ReadonlyArray<Case> = [
         [1_789_919_823_339.043, 1_789_919_823_372.043, 1_789_919_823_388.7],
       );
       assert.equal(summary.late, 1);
-      assert.equal(summary.dropped, 1);
+      assert.equal(summary.discarded, 1);
       assert.equal(summary.duplicates, 0);
       assert.equal(summary.reason, "stopped");
       assert.equal(summary.error, undefined);
       assert.equal(summary.sourceLastMillis, 1_789_919_823_388.7);
+    })),
+  test("discarded is the sum of disjoint overflow, duplicate, late and rejected frames", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+      const interval = yield* startCapture(f.parent, options);
+
+      f.emit(1000);
+      f.emit(1010);
+      f.emit(1020); // Evicts only the first frame from the two-frame buffer.
+      f.emit(1020); // Duplicate.
+      f.emit(1015); // Late.
+      const active = yield* interval.snapshot;
+
+      assert.deepEqual(
+        [active.discarded, active.overflow, active.duplicates, active.late, active.rejected],
+        [3, 1, 1, 1, 0],
+      );
+      f.emit(1030, new Uint8Array(9000)); // Measured frame-byte limit, not a late frame.
+      const sequences: number[] = [];
+
+      yield* expectReason(
+        Stream.runForEach(interval.frames, (frame) =>
+          Effect.sync(() => {
+            sequences.push(frame.sequence);
+          }),
+        ),
+        "Limit",
+      );
+      const final = yield* interval.completed;
+
+      assert.deepEqual(sequences, [1, 2]);
+      assert.deepEqual(
+        [
+          final.received,
+          final.delivered,
+          final.discarded,
+          final.overflow,
+          final.duplicates,
+          final.late,
+          final.rejected,
+        ],
+        [6, 2, 4, 1, 1, 1, 1],
+      );
+      assert.equal(
+        final.discarded,
+        final.overflow + final.duplicates + final.late + final.rejected,
+      );
+      assert.equal(final.upstreamDrops, "unknown");
+      assert.deepEqual(final.error?.reason, {
+        _tag: "Limit",
+        dimension: "frame-bytes",
+        maximum: 8192,
+        observed: 9000,
+      });
     })),
   test("two late frames in a row are the most concurrent encoding can produce", () =>
     Effect.gen(function* () {
@@ -337,7 +395,7 @@ export const captureCases: ReadonlyArray<Case> = [
             delivered.push(frame.sequence);
           }),
         ),
-        "timestamp",
+        "Timestamp",
       );
       assert.deepEqual(delivered, [0]);
       const summary = yield* interval.completed;
@@ -418,7 +476,7 @@ export const captureCases: ReadonlyArray<Case> = [
 
       assert.equal(active.phase, "capturing");
       assert.equal(active.delivered, 0);
-      assert.equal(active.dropped, 2);
+      assert.equal(active.discarded, 2);
       assert.equal(active.late, 1);
       assert.equal(active.upstreamDrops, "unknown");
       assert.equal(active.currentDocument, 1);
@@ -451,7 +509,7 @@ export const captureCases: ReadonlyArray<Case> = [
       assert.equal(stopped.nativeStop, "confirmed");
       assert.equal(stopped.reason, final.reason);
       assert.equal(stopped.delivered, final.delivered);
-      assert.equal(stopped.dropped, final.dropped);
+      assert.equal(stopped.discarded, final.discarded);
       assert.deepEqual(stopped.documentBoundaries, final.documentBoundaries);
     })),
   test("metadata reads report pending cleanup without waiting and retain truncation", () =>
@@ -499,22 +557,25 @@ export const captureCases: ReadonlyArray<Case> = [
       const observed = yield* interval.snapshot;
 
       assert.ok(observed.error);
-      assert.equal(observed.error.reason, "target-changed");
-      Reflect.set(observed.error, "reason", "denied");
+      assert.equal(observed.error.reason._tag, "TargetChanged");
+      Reflect.set(observed.error.reason, "_tag", "Denied");
       Reflect.set(observed.error, "operation", "fill");
-      Reflect.set(observed.error, "status", 401);
+      Reflect.set(observed.error.reason, "status", 401);
       const next = yield* interval.snapshot;
 
-      assert.equal(next.error?.reason, "target-changed");
+      assert.equal(next.error?.reason._tag, "TargetChanged");
       assert.equal(next.error?.operation, "capture");
-      assert.equal(next.error?.status, undefined);
-      yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
+      assert.equal(
+        next.error === undefined ? undefined : Reflect.get(next.error.reason, "status"),
+        undefined,
+      );
+      yield* expectReason(Stream.runDrain(interval.frames), "TargetChanged");
       const final = yield* interval.completed;
 
       assert.ok(final.error);
-      Reflect.set(final.error, "reason", "configuration");
-      assert.equal((yield* interval.completed).error?.reason, "target-changed");
-      assert.equal((yield* interval.snapshot).error?.reason, "target-changed");
+      Reflect.set(final.error.reason, "_tag", "Configuration");
+      assert.equal((yield* interval.completed).error?.reason._tag, "TargetChanged");
+      assert.equal((yield* interval.snapshot).error?.reason._tag, "TargetChanged");
     })),
   test("an interval that lasts one document still ends when its page navigates", () =>
     Effect.gen(function* () {
@@ -524,7 +585,7 @@ export const captureCases: ReadonlyArray<Case> = [
       f.emit(1000);
       f.navigate();
       f.emit(1010);
-      yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
+      yield* expectReason(Stream.runDrain(interval.frames), "TargetChanged");
       const summary = yield* interval.completed;
 
       assert.equal(summary.received, 1);
@@ -555,7 +616,7 @@ export const captureCases: ReadonlyArray<Case> = [
 
       f.emit(1000);
       f.emit(1010, widerJpeg());
-      yield* expectReason(Stream.runDrain(interval.frames), "resized");
+      yield* expectReason(Stream.runDrain(interval.frames), "Resized");
       assert.equal((yield* interval.completed).received, 2);
     })),
   test("CSS viewport changes segment capture even when image dimensions are unchanged", () =>
@@ -565,13 +626,13 @@ export const captureCases: ReadonlyArray<Case> = [
 
       f.emit(1000);
       f.emit(1010, jpeg(), 100, 48);
-      yield* expectReason(Stream.runDrain(interval.frames), "resized");
+      yield* expectReason(Stream.runDrain(interval.frames), "Resized");
     })),
   test("a malformed or oversized frame is rejected before retention", () =>
     Effect.gen(function* () {
       for (const [data, reason] of [
-        [new Uint8Array([1, 2, 3]), "malformed"],
-        [new Uint8Array(9000), "limit"],
+        [new Uint8Array([1, 2, 3]), "Malformed"],
+        [new Uint8Array(9000), "Limit"],
       ] as const) {
         const f = yield* makeFixture();
         const interval = yield* startCapture(f.parent, options);
@@ -605,7 +666,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const target = f.page("page-1");
       const first = yield* startCapture(f.parent, { ...options, target });
 
-      yield* expectReason(startCapture(f.parent, { ...options, target }), "busy");
+      yield* expectReason(startCapture(f.parent, { ...options, target }), "Busy");
       const second = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
 
       yield* first.stop;
@@ -625,7 +686,7 @@ export const captureCases: ReadonlyArray<Case> = [
         );
       yield* expectReason(
         startCapture(f.parent, { ...options, target: f.page("page-5") }),
-        "limit",
+        "Limit",
       );
       for (const interval of intervals) yield* interval.stop;
 
@@ -650,7 +711,7 @@ export const captureCases: ReadonlyArray<Case> = [
           maxBufferedBytes: 1,
           maxFrameBytes: 1,
         }),
-        "limit",
+        "Limit",
       );
       yield* largeA.stop;
       yield* largeB.stop;
@@ -714,7 +775,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const stopping = yield* interval.stop.pipe(Effect.forkChild);
 
       yield* Effect.promise(() => entered.promise);
-      yield* expectReason(startCapture(f.parent, options), "busy");
+      yield* expectReason(startCapture(f.parent, options), "Busy");
       const other = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
 
       release.resolve();
@@ -733,7 +794,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const interval = yield* startCapture(f.parent, options);
 
       assert.equal((yield* interval.stop).nativeStop, "unconfirmed");
-      yield* expectReason(startCapture(f.parent, options), "busy");
+      yield* expectReason(startCapture(f.parent, options), "Busy");
       const other = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
 
       assert.equal((yield* other.stop).nativeStop, "unconfirmed");
@@ -759,7 +820,7 @@ export const captureCases: ReadonlyArray<Case> = [
       const consumer = yield* Stream.runDrain(interval.frames).pipe(Effect.forkChild);
 
       yield* Effect.yieldNow;
-      yield* expectReason(Stream.runDrain(interval.frames), "busy");
+      yield* expectReason(Stream.runDrain(interval.frames), "Busy");
       assert.equal(f.counts().stops, 0);
       yield* interval.stop;
       yield* Fiber.join(consumer);
@@ -807,7 +868,7 @@ export const captureCases: ReadonlyArray<Case> = [
 
       assert.equal(result.local, "failed");
       receive?.({ data: jpeg(), timestamp: 1000, viewportWidth: 64, viewportHeight: 48 });
-      yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
+      yield* expectReason(Stream.runDrain(interval.frames), "TargetChanged");
       assert.equal((yield* interval.completed).received, 0);
       assert.equal(stops, 1);
     })),
@@ -821,13 +882,13 @@ export const captureCases: ReadonlyArray<Case> = [
       f.emit(1000);
       assert.equal(f.counts().stops, 0);
       f.invalidate("page-1", "target-changed");
-      yield* expectReason(Stream.runDrain(interval.frames), "target-changed");
+      yield* expectReason(Stream.runDrain(interval.frames), "TargetChanged");
     })),
   test("failed native start runs cleanup and leaves no active capture lease", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture({ startFailure: true });
 
-      yield* expectReason(startCapture(f.parent, options), "provider");
+      yield* expectReason(startCapture(f.parent, options), "Provider");
       assert.equal(f.counts().stops, 1);
       assert.equal(f.parent.captureLeases.size, 0);
       assert.equal(f.parent.owner.state.phase, "open");
@@ -865,7 +926,7 @@ export const captureCases: ReadonlyArray<Case> = [
           { width: invalid, height: 48 },
           { width: 64, height: invalid },
         ]) {
-          yield* expectReason(startCapture(f.parent, { ...options, size }), "configuration");
+          yield* expectReason(startCapture(f.parent, { ...options, size }), "Configuration");
         }
       }
       assert.deepEqual(f.counts(), { starts: 0, stops: 0 });
@@ -920,12 +981,12 @@ export const captureCases: ReadonlyArray<Case> = [
       });
 
       f.emit(1000, widerJpeg(), 64, 48);
-      yield* expectReason(Stream.runDrain(oversized.frames), "limit");
+      yield* expectReason(Stream.runDrain(oversized.frames), "Limit");
       const summary = yield* oversized.completed;
 
       assert.equal(summary.received, 1);
       assert.equal(summary.delivered, 0);
-      assert.equal(summary.dropped, 1);
+      assert.equal(summary.discarded, 1);
       assert.equal(summary.nativeStop, "confirmed");
       assert.equal(f.parent.captureLeases.size, 1);
       f.emitPage("page-2", 1001, widerJpeg());
@@ -943,7 +1004,7 @@ export const captureCases: ReadonlyArray<Case> = [
       });
 
       f.emit(1000, jpeg(), 64, 47);
-      yield* expectReason(Stream.runDrain(interval.frames), "limit");
+      yield* expectReason(Stream.runDrain(interval.frames), "Limit");
       assert.equal((yield* interval.completed).delivered, 0);
     })),
   test("omitting source size preserves native defaults and accepts the existing bounded geometry", () =>

@@ -15,7 +15,12 @@ import {
   Selector,
   Viewport,
 } from "./BrowserData.ts";
-import { BrowserError, type BrowserOperation, type InitializationError } from "./Errors.ts";
+import {
+  BrowserError,
+  Reasons,
+  type BrowserOperation,
+  type InitializationError,
+} from "./Errors.ts";
 import {
   bindingImplementation,
   fromNativeAttempt,
@@ -67,6 +72,7 @@ export const playwright = (options: PlaywrightOptions = {}): BrowserBinding => {
           const address = yield* decoded(
             Schema.NonEmptyString.check(Schema.isMaxLength(16384)),
             "connect",
+            "undispatched",
           )(request.connection);
 
           const endpoint =
@@ -266,7 +272,7 @@ export const make = Effect.fnUntraced(function* (
   if (engine === undefined)
     return yield* BrowserError.make({
       operation: "connect",
-      reason: "unregistered-session",
+      reason: Reasons.UnregisteredSession.make({}),
       outcome: "undispatched",
     });
 
@@ -277,7 +283,7 @@ export const make = Effect.fnUntraced(function* (
   if (pageControl && (keepAlive || popupPolicy === "pause" || dialogPolicy === "pause"))
     return yield* BrowserError.make({
       operation: "configure",
-      reason: "unsupported",
+      reason: Reasons.Unsupported.make({}),
       outcome: "undispatched",
     });
 
@@ -365,7 +371,7 @@ export const make = Effect.fnUntraced(function* (
                   ),
                 ),
               ),
-              Effect.flatMap((url) => decoded(ActionResult, "action-result")({ url })),
+              Effect.flatMap((url) => decoded(ActionResult, "action-result", "unknown")({ url })),
             );
 
           return {
@@ -374,7 +380,7 @@ export const make = Effect.fnUntraced(function* (
               clickForDownload: (request) =>
                 checked(ClickRequest, request, "download-action").pipe(
                   Effect.flatMap((value) => controls.clickForDownload(value.selector)),
-                  Effect.flatMap(decoded(DownloadEvent, "download-action")),
+                  Effect.flatMap(decoded(DownloadEvent, "download-action", "unknown")),
                 ),
               selectFiles: (request) => fileOperation("select-files", request),
               clickForFileSelection: (request) => fileOperation("file-chooser", request),

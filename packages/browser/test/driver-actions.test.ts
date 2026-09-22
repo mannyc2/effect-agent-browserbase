@@ -50,7 +50,7 @@ it("a file selection is either held bytes or provider paths, never a mix or noth
       // A native step names no operation; the owner stamps the one the caller asked for.
       expect.objectContaining({
         _tag: "NativeFailure",
-        reason: "configuration",
+        reason: { _tag: "Configuration" },
         outcome: "undispatched",
       }),
     );
@@ -89,7 +89,7 @@ it("an event wait is interrupted by its ticket, even one already aborted", async
     source.emit(1);
     await expect(wait.promise).rejects.toMatchObject({
       _tag: "NativeFailure",
-      reason: "interrupted",
+      reason: { _tag: "Interrupted" },
     });
     expect(source.listeners.size).toBe(0);
   }
@@ -99,7 +99,10 @@ it("an event wait is bounded by the ticket's remaining time", async () => {
   const source = emitter<number>();
   const wait = waitEvent(source.add, source.remove, ticketFor(new AbortController().signal, 1));
 
-  await expect(wait.promise).rejects.toMatchObject({ _tag: "NativeFailure", reason: "timeout" });
+  await expect(wait.promise).rejects.toMatchObject({
+    _tag: "NativeFailure",
+    reason: { _tag: "Timeout" },
+  });
   expect(source.listeners.size).toBe(0);
 });
 

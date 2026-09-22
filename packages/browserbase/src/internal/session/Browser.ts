@@ -1,6 +1,6 @@
 import { Effect, type Option, type Redacted } from "effect";
 import type { Lifetime, Source } from "effect-browser/browser-runtime";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import type { CleanupResult } from "../../Cleanup.ts";
 import { BrowserbaseClient } from "../../Client.ts";
@@ -9,12 +9,14 @@ import type { LaunchRecipe } from "../../Launch.ts";
 import type { AllocationAttempt, SessionReference } from "../../References.ts";
 import { BrowserbaseSessions } from "../../Sessions.ts";
 import { issueLiveView, type LiveView } from "../browser/LiveView.ts";
+import { browserRequestFailure } from "../browser/RequestFailure.ts";
 import { acquireRemote } from "./Acquisition.ts";
 import { attachRemote } from "./Attachment.ts";
 import type { ContextWriterPermit } from "./WriterFacts.ts";
 
 export interface RemoteLease extends Lifetime {
   readonly reference: SessionReference;
+  readonly closeChecked: Effect.Effect<CleanupResult, BrowserError>;
   readonly attempt?: AllocationAttempt;
   readonly release: Effect.Effect<CleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
@@ -24,18 +26,23 @@ export interface RemoteLease extends Lifetime {
 type RemoteSource<L extends Lifetime, E> = Source<L, E, BrowserbaseClient | BrowserbaseSessions>;
 
 /** A borrowed connection closes without requiring or requesting remote termination. */
-const checkedCleanup = (close: Effect.Effect<CleanupResult>): Effect.Effect<void, BrowserError> =>
+const checkedCleanup = (
+  close: Effect.Effect<CleanupResult>,
+): Effect.Effect<CleanupResult, BrowserError> =>
   close.pipe(
-    Effect.flatMap((result) =>
-      result.local === "closed" &&
-      result.issues.length === 0 &&
-      (result.ownership === "borrowed"
-        ? result.remote === "not-owned"
-        : result.remote === "confirmed")
-        ? Effect.void
-        : Effect.fail(
-            BrowserError.make({ operation: "close", reason: "provider", outcome: "unknown" }),
-          ),
+    Effect.filterOrFail(
+      (result) =>
+        result.local === "closed" &&
+        result.issues.length === 0 &&
+        (result.ownership === "borrowed"
+          ? result.remote === "not-owned"
+          : result.remote === "confirmed"),
+      () =>
+        BrowserError.make({
+          operation: "close",
+          reason: Reasons.Provider.make({}),
+          outcome: "unknown",
+        }),
     ),
   );
 
@@ -54,11 +61,7 @@ const withConnection = <
   connection: (timeoutMillis: number) =>
     acquired
       .connection(timeoutMillis)
-      .pipe(
-        Effect.mapError((error) =>
-          BrowserError.make({ operation: "connect", reason: error.reason }),
-        ),
-      ),
+      .pipe(Effect.mapError((error) => browserRequestFailure("connect", error))),
   closeChecked: checkedCleanup(acquired.release),
 });
 
@@ -83,11 +86,17 @@ const providerControls = (
 ) => ({
   liveView: (ttl: number) => issueLiveView(client, reference, ttl),
   verifyReconnect: sessions.retrieve(reference).pipe(
-    Effect.mapError((error) => BrowserError.make({ operation: "reconnect", reason: error.reason })),
+    Effect.mapError((error) => browserRequestFailure("reconnect", error)),
     Effect.flatMap((status) =>
       status.status === "RUNNING"
         ? Effect.void
-        : Effect.fail(BrowserError.make({ operation: "reconnect", reason: "expired" })),
+        : Effect.fail(
+            BrowserError.make({
+              operation: "reconnect",
+              reason: Reasons.Expired.make({}),
+              outcome: "undispatched",
+            }),
+          ),
     ),
   ),
 });

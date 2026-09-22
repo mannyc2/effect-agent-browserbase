@@ -34,7 +34,7 @@ it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation 
         Effect.gen(function* () {
           const host = yield* BrowserbaseBrowser;
           const session = yield* host.open(policy);
-          const h = session.bind();
+          const h = session;
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
           yield* h.fill(FillRequest.make({ selector: "#name", value: "typed from real CDP" }));
@@ -82,7 +82,9 @@ it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation 
           yield* h.scroll(ScrollRequest.make({ deltaX: 0, deltaY: 120 }));
           const frames = yield* session.frames;
           const child = frames.find((frame) => frame.name === "child")!;
-          const frameHandle = yield* session.selectFrame(child.frameId);
+
+          yield* session.selectFrame(child.frameId);
+          const frameHandle = session;
 
           expect((yield* frameHandle.readText(ReadTextRequest.make({}))).text).toContain(
             "frame text",
@@ -119,7 +121,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
             const observation = yield* session.observe();
             const control = observation.controls.find((c) => c.label === "Increment")!;
 
@@ -145,7 +147,7 @@ it.live(
             expect(rejected._tag).toBe("Failure");
             if (rejected._tag === "Failure") expect(rejected.failure.outcome).toBe("undispatched");
             expect(
-              (yield* session.bind().readText(ReadTextRequest.make({ selector: "#count" }))).text,
+              (yield* session.readText(ReadTextRequest.make({ selector: "#count" }))).text,
             ).toBe("0");
           }),
         );
@@ -162,7 +164,7 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const h = session.bind();
+          const h = yield* session.retain;
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
           const target = yield* session.target;
@@ -192,8 +194,11 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
 
           expect(pages).toHaveLength(2);
           expect((yield* session.target).pageId).toBe(target.pageId);
+          const original = pages.find((page) => page.pageId === target.pageId)!;
           const popup = pages.find((page) => !page.selected)!;
-          const selected = yield* session.selectPage(popup.pageId);
+
+          yield* session.selectPage(popup);
+          const selected = yield* session.retain;
 
           expect((yield* h.readText(ReadTextRequest.make({})).pipe(Effect.result))._tag).toBe(
             "Failure",
@@ -203,8 +208,8 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
 
           expect((yield* session.target).pageId).toBe(popup.pageId);
           yield* session.closePage(added);
-          yield* session.closePage(popup.pageId);
-          yield* session.selectPage(target.pageId);
+          yield* session.closePage(popup);
+          yield* session.selectPage(original);
         }),
       );
     }),
@@ -222,7 +227,7 @@ it.live(
           f,
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
-            const old = session.bind();
+            const old = yield* session.retain;
 
             yield* old.navigate(NavigateRequest.make({ url: f.url }));
             const handoff = yield* session.beginHandoff();
@@ -254,7 +259,7 @@ it.live(
 
             expect(reconnected.text).toContain("detached result");
             expect(f.connections).toEqual(["session-1", "session-1"]);
-            yield* session.bind().click(ClickRequest.make({ selector: "#increment" }));
+            yield* session.click(ClickRequest.make({ selector: "#increment" }));
           }),
           { launch: { ...localLaunch, keepAlive: true } },
         );
@@ -264,7 +269,7 @@ it.live(
 );
 
 it.live(
-  "real CDP: stale frame metadata never aliases a rebuilt frame after keep-alive reconnect",
+  "real CDP: reconnect preserves selected B after A closes and refuses old page and frame identities",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -276,10 +281,19 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate(NavigateRequest.make({ url: f.url }));
-            const page = (yield* session.pages).find((candidate) => candidate.selected)!;
+            const firstPage = (yield* session.pages).find((candidate) => candidate.selected)!;
+            const page = yield* session.createPage;
 
-            const oldFrame = (yield* session.framesOf(page)).find(
-              (frame) => frame.parentFrameId !== null,
+            yield* session.selectPage(page);
+            // Both pages have the same URL, so only their native identities can distinguish them.
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
+
+            const frames = yield* settle(session.framesOf(page), (listed) =>
+              listed.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
+            );
+
+            const oldFrame = frames.find(
+              (frame) => frame.name === "child" && frame.parentFrameId !== null,
             )!;
 
             expect(
@@ -288,15 +302,52 @@ it.live(
               )).text,
             ).toBe("Frame action");
 
-            yield* session.detach;
+            const detached = yield* session.detach;
+
+            expect(detached.targetId).toBe(page.targetId);
             yield* Effect.promise(() =>
               f.human(session.reference.sessionId, async (nativePage) => {
-                const navigated = nativePage.waitForEvent("framenavigated", {
+                // The fixture's temporary operator connects only after the owner detached.
+                const identified = await Promise.all(
+                  nativePage
+                    .context()
+                    .pages()
+                    .map(async (candidate) => {
+                      const cdp = await candidate.context().newCDPSession(candidate);
+
+                      try {
+                        const { targetInfo } = await cdp.send("Target.getTargetInfo");
+
+                        return { page: candidate, targetId: targetInfo.targetId };
+                      } finally {
+                        await cdp.detach();
+                      }
+                    }),
+                );
+
+                expect(identified).toHaveLength(2);
+
+                const disappearing = identified.filter(
+                  (entry) => entry.targetId === firstPage.targetId,
+                );
+
+                const surviving = identified.filter((entry) => entry.targetId === page.targetId);
+
+                expect(disappearing).toHaveLength(1);
+                expect(surviving).toHaveLength(1);
+                const survivor = surviving[0]!.page;
+
+                await disappearing[0]!.page.close();
+                expect(disappearing[0]!.page.isClosed()).toBe(true);
+                expect(survivor.context().pages()).toEqual([survivor]);
+
+                const navigated = survivor.waitForEvent("framenavigated", {
                   predicate: (frame) =>
                     frame.name() === "replacement" && frame.url().endsWith("/keyframe"),
+                  timeout: 5000,
                 });
 
-                await nativePage.evaluate(() => {
+                await survivor.evaluate(() => {
                   document.querySelector("iframe")?.remove();
                   const replacement = document.createElement("iframe");
 
@@ -309,21 +360,60 @@ it.live(
             );
             yield* session.reconnect(true);
 
-            const stale = yield* session.pinFrame(page, oldFrame).pipe(Effect.result);
+            const reconnected = yield* session.pages;
+
+            expect(reconnected).toHaveLength(1);
+            expect(reconnected.some((fresh) => fresh.targetId === firstPage.targetId)).toBe(false);
+            const matching = reconnected.filter((fresh) => fresh.targetId === page.targetId);
+
+            expect(matching).toHaveLength(1);
+            const freshPage = matching[0]!;
+
+            expect(freshPage.selected).toBe(true);
+            expect(freshPage.pageId).not.toBe(firstPage.pageId);
+            expect(freshPage.pageId).not.toBe(page.pageId);
+            for (const oldPage of [firstPage, page]) {
+              for (const refused of [session.selectPage(oldPage), session.closePage(oldPage)]) {
+                expect(yield* refused.pipe(Effect.result)).toMatchObject({
+                  _tag: "Failure",
+                  failure: { reason: { _tag: "NotFound" }, outcome: "undispatched" },
+                });
+              }
+            }
+            for (const unchecked of [
+              // @ts-expect-error A saved string ID is not checked PageInfo.
+              session.selectPage(firstPage.pageId),
+              // @ts-expect-error The old first page's ID must never close the surviving page.
+              session.closePage(firstPage.pageId),
+            ]) {
+              expect(yield* unchecked.pipe(Effect.result)).toMatchObject({
+                _tag: "Failure",
+                failure: { reason: { _tag: "Configuration" }, outcome: "undispatched" },
+              });
+            }
+            expect(yield* session.pinPage(page).pipe(Effect.result)).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: { _tag: "NotFound" }, outcome: "undispatched" },
+            });
+            yield* session.selectPage(freshPage);
+            expect((yield* session.target).pageId).toBe(freshPage.pageId);
+            expect((yield* session.pages).map((entry) => entry.targetId)).toEqual([page.targetId]);
+
+            const stale = yield* session.pinFrame(freshPage, oldFrame).pipe(Effect.result);
 
             expect(stale._tag).toBe("Failure");
             if (stale._tag === "Failure") {
-              expect(stale.failure.reason).toBe("not-found");
+              expect(stale.failure.reason._tag).toBe("NotFound");
               expect(stale.failure.outcome).toBe("undispatched");
             }
 
-            const freshFrame = (yield* session.framesOf(page)).find(
+            const freshFrame = (yield* session.framesOf(freshPage)).find(
               (frame) => frame.parentFrameId !== null,
             )!;
 
             expect(freshFrame.frameId).not.toBe(oldFrame.frameId);
             expect(
-              (yield* (yield* session.pinFrame(page, freshFrame)).readText(
+              (yield* (yield* session.pinFrame(freshPage, freshFrame)).readText(
                 ReadTextRequest.make({ selector: "#inside" }),
               )).text,
             ).toBe("");
@@ -346,7 +436,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
 
             const interval = yield* Capture.start(session, {
               maxFrames: 2,
@@ -359,7 +449,7 @@ it.live(
               Effect.forkChild,
             );
 
-            yield* session.bind().click(ClickRequest.make({ selector: "#increment" }));
+            yield* session.click(ClickRequest.make({ selector: "#increment" }));
             const frames = yield* Fiber.join(collected);
 
             expect(frames.length).toBe(5);
@@ -370,12 +460,12 @@ it.live(
             const next = yield* Capture.start(session);
 
             yield* session.resizeViewport(Viewport.make({ width: 800, height: 600 }));
-            expect((yield* next.completed).error?.reason).toBe("resized");
+            expect((yield* next.completed).error?.reason._tag).toBe("Resized");
             const last = yield* Capture.start(session);
 
             yield* session.close;
-            expect((yield* last.completed).error?.reason).toBe("target-changed");
-            expect((yield* session.currentTarget.pipe(Effect.result))._tag).toBe("Failure");
+            expect((yield* last.completed).error?.reason._tag).toBe("TargetChanged");
+            expect((yield* session.retain.pipe(Effect.result))._tag).toBe("Failure");
           }),
         );
       }),
@@ -392,15 +482,14 @@ it.live("real CDP: finite native action timeout is unknown, fenced and never rep
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.navigate(NavigateRequest.make({ url: f.url }));
 
           const failed = yield* session
-            .bind()
             .click(ClickRequest.make({ selector: "#disabled" }))
             .pipe(Effect.result);
 
           expect(failed._tag).toBe("Failure");
-          expect((yield* session.currentTarget.pipe(Effect.result))._tag).toBe("Failure");
+          expect((yield* session.retain.pipe(Effect.result))._tag).toBe("Failure");
           expect((yield* session.close).remote).toBe("confirmed");
         }),
         { actionTimeoutMillis: 2000 },

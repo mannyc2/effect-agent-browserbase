@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
 import * as BrowserBinding from "effect-browserbase/browser-binding";
 import { BrowserbaseClient, type ClientOptions } from "effect-browserbase/client";
@@ -189,7 +189,7 @@ export const localBrowser = Effect.acquireRelease(
           <div class=at style="top:140px">ghosted words</div><div id=ghost class="at slab" style="top:140px"></div>
           <form id=login class=at style="top:180px" action="/submit" method=post>
           <input id=user name=user aria-label="User" autocomplete=username>
-          <input id=pass name=pass aria-label="Secret" type=password autocomplete=current-password>
+          <input id=pass name=pass aria-label="Secret" type=password autocomplete=current-password value="preexisting-value">
           <button id=go>Sign in</button><button id=alt formaction="/other" formmethod=get>Other</button></form>
           <div id=tall class=at style="top:400px">${lines}</div>
           <p class=at style="top:3000px">far below words</p><a class=at style="top:3100px" href="/far">Far link</a>
@@ -295,7 +295,13 @@ export const localBrowser = Effect.acquireRelease(
           const session = id === null ? undefined : sessions.get(id);
 
           if (id === null || session === undefined)
-            return Effect.fail(BrowserError.make({ operation: "connect", reason: "provider" }));
+            return Effect.fail(
+              BrowserError.make({
+                operation: "connect",
+                reason: Reasons.Provider.make({}),
+                outcome: "undispatched",
+              }),
+            );
           connections.push(id);
           endpointSessions.set(session.endpoint, id);
 

@@ -71,7 +71,7 @@ it.effect("only a same-project reference becomes the provider's extensionId", ()
 
     expect(foreign._tag).toBe("Failure");
     if (foreign._tag === "Failure") {
-      expect(foreign.failure.reason).toBe("configuration");
+      expect(foreign.failure.reason._tag).toBe("Configuration");
       expect(foreign.failure.outcome).toBe("undispatched");
     }
   }),

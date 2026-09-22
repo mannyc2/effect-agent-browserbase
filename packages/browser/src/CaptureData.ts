@@ -70,10 +70,15 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserCapture
   reason: Schema.String.check(Schema.isMaxLength(64)),
   received: Schema.Natural,
   delivered: Schema.Natural,
-  dropped: Schema.Natural,
+  /** All frames this package omitted; the sum of the four disjoint components below. */
+  discarded: Schema.Natural,
+  /** Evicted by the frame-count or buffered-byte bound. */
+  overflow: Schema.Natural,
   duplicates: Schema.Natural,
-  /** Arrived after a newer frame was accepted; counted within `dropped`, never reordered in. */
+  /** Arrived after a newer frame was accepted; never reordered in. */
   late: Schema.Natural,
+  /** Other refused frames, including malformed data, bounds and undelivered scope cleanup. */
+  rejected: Schema.Natural,
   peakBufferedFrames: Schema.Natural,
   peakBufferedBytes: Schema.Natural,
   bufferedFrames: Schema.Natural,

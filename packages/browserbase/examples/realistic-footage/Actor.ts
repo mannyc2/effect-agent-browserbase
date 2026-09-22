@@ -1,5 +1,5 @@
 import { Duration, Effect } from "effect";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession } from "effect-browser/browser";
 import {
   ClickRequest,
   type InputReceipt,
@@ -86,7 +86,7 @@ const bringIntoView = Effect.fn("Actor.bringIntoView")(function* (selector: stri
  * Sending every sample of the path as its own native move would film the
  * round trip instead of the motion.
  */
-const glideOnto = Effect.fnUntraced(function* (session: BrowserSession, found: Located) {
+const glideOnto = Effect.fnUntraced(function* (session: AnySession, found: Located) {
   const aim = yield* Humanize.aimPoint(found.box);
 
   const path = yield* Humanize.pointerPath(
@@ -96,7 +96,7 @@ const glideOnto = Effect.fnUntraced(function* (session: BrowserSession, found: L
   );
 
   yield* cue({ _tag: "Glide", path }, "Played");
-  const target = yield* session.currentTarget;
+  const target = session;
 
   yield* received(
     "pointerMove",
@@ -108,19 +108,12 @@ const glideOnto = Effect.fnUntraced(function* (session: BrowserSession, found: L
 
 export const scrollTo = (selector: string) => Effect.asVoid(bringIntoView(selector));
 
-export const moveTo = Effect.fn("Actor.moveTo")(function* (
-  session: BrowserSession,
-  selector: string,
-) {
+export const moveTo = Effect.fn("Actor.moveTo")(function* (session: AnySession, selector: string) {
   yield* glideOnto(session, yield* bringIntoView(selector));
 });
 
 /** Arrive, settle, then let the session press: the ripple is drawn from its real event. */
-const press = <A, E, R>(
-  session: BrowserSession,
-  selector: string,
-  action: Effect.Effect<A, E, R>,
-) =>
+const press = <A, E, R>(session: AnySession, selector: string, action: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     yield* moveTo(session, selector);
     yield* Effect.sleep(yield* Humanize.between(Humanize.Pacing.dwellBeforeClickMillis));
@@ -131,11 +124,8 @@ const press = <A, E, R>(
     return result;
   });
 
-export const click = Effect.fn("Actor.click")(function* (
-  session: BrowserSession,
-  selector: string,
-) {
-  const target = yield* session.currentTarget;
+export const click = Effect.fn("Actor.click")(function* (session: AnySession, selector: string) {
+  const target = session;
 
   return yield* press(
     session,
@@ -149,10 +139,7 @@ export const click = Effect.fn("Actor.click")(function* (
  * so the loading is on film, and the new document is not acted on until it
  * reports ready.
  */
-export const follow = Effect.fn("Actor.follow")(function* (
-  session: BrowserSession,
-  selector: string,
-) {
+export const follow = Effect.fn("Actor.follow")(function* (session: AnySession, selector: string) {
   const result = yield* press(
     session,
     selector,
@@ -174,7 +161,7 @@ export const follow = Effect.fn("Actor.follow")(function* (
  * action against the policy's budget.
  */
 export const type = Effect.fn("Actor.type")(function* (
-  session: BrowserSession,
+  session: AnySession,
   selector: string,
   text: string,
 ) {
@@ -182,7 +169,7 @@ export const type = Effect.fn("Actor.type")(function* (
 
   for (const stroke of yield* Humanize.keystrokes(text)) {
     yield* Effect.sleep(stroke.afterMillis);
-    const target = yield* session.currentTarget;
+    const target = session;
 
     yield* received(
       "key",

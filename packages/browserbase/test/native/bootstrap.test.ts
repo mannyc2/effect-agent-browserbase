@@ -24,9 +24,7 @@ const ordered = (origin: string) =>
       origins: [origin],
       content: `
         globalThis.__second = globalThis.__first + 1;
-        globalThis.__granted = navigator.permissions
-          .query({ name: "notifications" })
-          .then((status) => status.state === "granted");
+        globalThis.__granted = Promise.resolve().then(() => Notification.permission === "granted");
         document.addEventListener("DOMContentLoaded", () => {
           const marker = document.createElement("p");
           marker.id = "marker";
@@ -65,7 +63,7 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
             bootstrap: ordered(origin),
           });
 
-          const h = session.bind();
+          const h = yield* session.retain;
 
           // The page this connection attached to was already open, so it never ran the
           // bundle. That is reported rather than hidden by an automatic reload.
@@ -76,7 +74,10 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#marker" }))).text).toBe(
             "bootstrap 2",
           );
-          expect(yield* session.ready).toEqual({ _tag: "Ready" });
+          expect(
+            yield* session.ready,
+            "the main document completed its registered readiness",
+          ).toEqual({ _tag: "Ready" });
 
           // A frame is its own document: the context-level registration reached it, and
           // readiness follows the selected frame rather than the page that contains it.
@@ -92,7 +93,10 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           if (child === undefined || main === undefined)
             throw new Error("The fixture page has a main frame and a child frame");
           yield* session.selectFrame(child.frameId);
-          expect(yield* session.ready).toEqual({ _tag: "Ready" });
+          expect(
+            yield* session.ready,
+            "the selected child completed its own registered readiness",
+          ).toEqual({ _tag: "Ready" });
           expect((yield* session.observe()).text).toContain("frame text");
           // Selecting a frame retires the earlier handle, so the main frame is re-bound.
           yield* session.selectFrame(main.frameId);
@@ -101,9 +105,9 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           );
 
           // A different origin is outside the registration, and says so rather than waiting.
-          yield* session
-            .bind()
-            .navigate(NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }));
+          yield* session.navigate(
+            NavigateRequest.make({ url: f.url.replace("127.0.0.1", "localhost") }),
+          );
           expect(yield* session.ready).toEqual({ _tag: "NotApplicable" });
           expect((yield* session.observe()).url).toContain("localhost");
         }),
@@ -126,7 +130,7 @@ it.live(
               bootstrap: always,
             });
 
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
             expect(yield* session.ready).toEqual({ _tag: "Ready" });
             yield* session.detach;
 
@@ -138,22 +142,21 @@ it.live(
             expect(yield* session.ready).toEqual({ _tag: "RequiresNavigation" });
 
             const refused = yield* session
-              .bind()
               .readText(ReadTextRequest.make({ selector: "h1" }))
               .pipe(Effect.result);
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") {
-              expect(refused.failure.reason).toBe("stale");
+              expect(refused.failure.reason._tag).toBe("Stale");
               expect(refused.failure.outcome).toBe("undispatched");
             }
 
             // Deliberate navigation is what initializes it, and is never gated.
-            yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+            yield* session.navigate(NavigateRequest.make({ url: f.url }));
             expect(yield* session.ready).toEqual({ _tag: "Ready" });
-            expect(
-              (yield* session.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
-            ).toBe("Local browser fixture");
+            expect((yield* session.readText(ReadTextRequest.make({ selector: "h1" }))).text).toBe(
+              "Local browser fixture",
+            );
           }),
           { launch: { ...localLaunch, keepAlive: true } },
         );
@@ -184,15 +187,15 @@ it.live("real CDP: an accepted running document admits dependent work after reat
             bootstrap: accepting,
           });
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.navigate(NavigateRequest.make({ url: f.url }));
           yield* session.detach;
           yield* session.reconnect(true);
 
           // The same document still satisfies the requirement, so it is verified, not assumed.
           expect(yield* session.ready).toEqual({ _tag: "Ready" });
-          expect(
-            (yield* session.bind().readText(ReadTextRequest.make({ selector: "h1" }))).text,
-          ).toBe("Local browser fixture");
+          expect((yield* session.readText(ReadTextRequest.make({ selector: "h1" }))).text).toBe(
+            "Local browser fixture",
+          );
         }),
         { launch: { ...localLaunch, keepAlive: true } },
       );

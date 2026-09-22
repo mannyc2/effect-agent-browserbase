@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import type { ElementHandle, Page } from "playwright-core";
 
 import type { ObservedElement } from "../../BrowserData.ts";
+import { Reasons } from "../../Errors.ts";
 import type { makeActions } from "./Actions.ts";
 import type { DriverTarget } from "./Driver.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
@@ -154,7 +155,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     const box = await element.boundingBox();
 
     if (box === null || box.width <= 0 || box.height <= 0)
-      throw failure("not-visible", "undispatched");
+      throw failure(Reasons.NotVisible.make({}), "undispatched");
     const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 
     const ancestors: Array<ElementHandle<Node>> = [];
@@ -162,12 +163,21 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     try {
       let frame = await element.ownerFrame();
 
-      if (frame === null || frame.page() !== page) throw failure("stale", "undispatched");
+      if (frame === null || frame.page() !== page)
+        throw failure(Reasons.Stale.make({}), "undispatched");
       while (frame !== page.mainFrame()) {
-        if (ancestors.length >= 32) throw failure("limit", "undispatched");
+        if (ancestors.length >= 32)
+          throw failure(
+            Reasons.Limit.make({
+              dimension: "frame-depth",
+              maximum: 32,
+              observed: ancestors.length,
+            }),
+            "undispatched",
+          );
         ancestors.push(await frame.frameElement());
         frame = frame.parentFrame();
-        if (frame === null) throw failure("stale", "undispatched");
+        if (frame === null) throw failure(Reasons.Stale.make({}), "undispatched");
       }
 
       let localPoint = point;
@@ -180,7 +190,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
           await ancestor.evaluate(hitPoint, { ...localPoint, child: true }),
         );
 
-        if (!reached.reachable) throw failure("not-visible", "undispatched");
+        if (!reached.reachable) throw failure(Reasons.NotVisible.make({}), "undispatched");
         localPoint = { x: reached.x, y: reached.y };
       }
 
@@ -189,7 +199,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
         await element.evaluate(hitPoint, { ...localPoint, child: false }),
       );
 
-      if (!reached.reachable) throw failure("not-visible", "undispatched");
+      if (!reached.reachable) throw failure(Reasons.NotVisible.make({}), "undispatched");
     } finally {
       await Promise.all(ancestors.map((ancestor) => ancestor.dispose()));
     }

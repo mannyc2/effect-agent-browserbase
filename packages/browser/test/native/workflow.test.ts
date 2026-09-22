@@ -4,7 +4,7 @@ import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { localSite } from "../fixtures/StandaloneBrowser.ts";
 
@@ -24,13 +24,14 @@ it.live("Browser.scoped joins callback resources before checked owned cleanup", 
       const site = yield* localSite;
       const events: string[] = [];
       const reports: ChromiumCleanupResult[] = [];
+      let checked: Effect.Effect<ChromiumCleanupResult, BrowserError> | undefined;
 
       const result = yield* Browser.scoped(Chromium.launch(policy), (browser) =>
         Effect.gen(function* () {
-          yield* browser.bind().navigate({ url: site.url });
+          checked = browser.closeChecked;
+          yield* browser.navigate({ url: site.url });
           yield* Effect.addFinalizer(() =>
-            browser.currentTarget.pipe(
-              Effect.flatMap((target) => target.readText({ selector: "#count" })),
+            browser.readText({ selector: "#count" }).pipe(
               Effect.tap((value) => Effect.sync(() => events.push(`callback:${value.text}`))),
               Effect.orDie,
             ),
@@ -53,6 +54,14 @@ it.live("Browser.scoped joins callback resources before checked owned cleanup", 
 
       expect(result).toBe("chromium");
       expect(events).toEqual(["callback:0", "browser cleanup"]);
+      if (checked === undefined) throw new Error("The workflow did not acquire its owner");
+      const receipt = yield* checked;
+
+      expect(yield* checked).toBe(receipt);
+      expect(receipt).toBe(reports[0]);
+      expect(receipt.ownership).toBe("owned");
+      expect(receipt.connection).toBe("closed");
+      expect(Object.isFrozen(receipt)).toBe(true);
       expect(reports).toHaveLength(1);
       expect(reports[0]?.process).toBe("terminated");
       expect(reports[0]?.issues).toEqual([]);
@@ -66,7 +75,7 @@ it.live("Browser.scoped retains both a callback failure and checked cleanup fail
 
     const cleanupError = BrowserError.make({
       operation: "close",
-      reason: "failed",
+      reason: Reasons.Failed.make({}),
       outcome: "unknown",
     });
 
@@ -148,7 +157,7 @@ it.live(
 
         yield* Browser.scoped(Chromium.launch(policy), (browser) =>
           Effect.gen(function* () {
-            yield* browser.bind().navigate({ url: site.url });
+            yield* browser.navigate({ url: site.url });
             const frames = Capture.stream(browser, { lifetime: "page", maxDurationMillis: 10000 });
 
             // Constructing a stream must not reserve the page. A separate explicit interval can start.
@@ -183,8 +192,8 @@ it.live(
             const restarted = yield* frames.pipe(Stream.take(1), Stream.runCollect);
 
             expect(restarted).toHaveLength(1);
-            yield* browser.bind().click({ selector: "#increment" });
-            expect((yield* browser.bind().readText({ selector: "#count" })).text).toBe("1");
+            yield* browser.click({ selector: "#increment" });
+            expect((yield* browser.readText({ selector: "#count" })).text).toBe("1");
           }),
         ).pipe(Effect.provide(Chromium.layer({ launch })));
       }),

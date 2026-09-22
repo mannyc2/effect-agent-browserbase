@@ -1,5 +1,5 @@
 import { Effect, Fiber } from "effect";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession } from "effect-browser/browser";
 import { NavigateRequest, ScrollRequest } from "effect-browser/browser-data";
 import type { BrowserError } from "effect-browser/errors";
 
@@ -37,7 +37,7 @@ type DemoRecordingError = Effect.Error<ReturnType<typeof recordInterval>> | Brow
  * hosted run is not spent discovering them.
  */
 export const recordDemo = (
-  session: BrowserSession,
+  session: AnySession,
   url: string,
   outputPath: string,
   options: DemoOptions = {},
@@ -47,7 +47,7 @@ export const recordDemo = (
     const scrollSteps = options.scrollSteps ?? 4;
     const scrollDelta = options.scrollDelta ?? 320;
 
-    yield* session.bind().navigate(NavigateRequest.make({ url }));
+    yield* session.navigate(NavigateRequest.make({ url }));
 
     const driver = Effect.gen(function* () {
       let dispatched = 0;
@@ -59,7 +59,7 @@ export const recordDemo = (
         // Re-verify the selected target between actions, the way the
         // model-facing scroll Tool does, rather than reusing a handle taken
         // before the navigation.
-        const handle = yield* session.currentTarget;
+        const handle = session;
 
         yield* handle.scroll(ScrollRequest.make({ deltaX: 0, deltaY: scrollDelta }));
         dispatched++;

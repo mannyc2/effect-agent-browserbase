@@ -37,7 +37,7 @@ it.effect(
         assert.ok(page);
         const disabled = yield* PageControl.state(session, page).pipe(Effect.flip);
 
-        assert.equal(disabled.reason, "unsupported");
+        assert.equal(disabled.reason._tag, "Unsupported");
         assert.equal(disabled.outcome, "undispatched");
 
         const unissued: ReadonlyArray<typeof session> = [
@@ -57,7 +57,7 @@ it.effect(
           ]) {
             const error = yield* action.pipe(Effect.flip);
 
-            assert.equal(error.reason, "unregistered-session");
+            assert.equal(error.reason._tag, "UnregisteredSession");
             assert.equal(error.outcome, "undispatched");
           }
         }
@@ -82,7 +82,7 @@ it.effect(
         ]) {
           const error = yield* action.pipe(Effect.flip);
 
-          assert.equal(error.reason, "unregistered-session");
+          assert.equal(error.reason._tag, "UnregisteredSession");
           assert.equal(error.outcome, "undispatched");
         }
         assert.equal(starts, 0);

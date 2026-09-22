@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserPolicy, Viewport } from "../../packages/browser/src/BrowserData.ts";
@@ -42,17 +42,17 @@ it.effect("the default binding refuses any address the provider could not have i
     const binding = BrowserBinding.playwright();
 
     for (const [connection, reason] of [
-      [42, "malformed"],
-      ["not a url", "malformed"],
-      ["ws://connect.browserbase.com/?session=1", "unsafe-url"],
-      ["wss://connect.browserbase.com.example.com/", "unsafe-url"],
-      ["wss://user:secret@connect.browserbase.com/", "unsafe-url"],
-      ["wss://connect.browserbase.com:4443/", "unsafe-url"],
+      [42, "Malformed"],
+      ["not a url", "Malformed"],
+      ["ws://connect.browserbase.com/?session=1", "UnsafeUrl"],
+      ["wss://connect.browserbase.com.example.com/", "UnsafeUrl"],
+      ["wss://user:secret@connect.browserbase.com/", "UnsafeUrl"],
+      ["wss://connect.browserbase.com:4443/", "UnsafeUrl"],
     ] as const) {
       const error = yield* connect(binding, connection);
 
       assert.ok(Schema.is(BrowserError)(error));
-      assert.equal(error.reason, reason, String(connection));
+      assert.equal(error.reason._tag, reason, String(connection));
     }
   }),
 );
@@ -65,7 +65,13 @@ it.effect("host routing runs only after the provider address passes the default 
       resolveEndpoint: ({ url }) =>
         Effect.sync(() => resolved.push(Redacted.value(url))).pipe(
           Effect.andThen(
-            Effect.fail(BrowserError.make({ operation: "connect", reason: "provider" })),
+            Effect.fail(
+              BrowserError.make({
+                operation: "connect",
+                reason: Reasons.Provider.make({}),
+                outcome: "undispatched",
+              }),
+            ),
           ),
         ),
     });
@@ -73,14 +79,14 @@ it.effect("host routing runs only after the provider address passes the default 
     const refused = yield* connect(binding, "wss://evil.example.com/?session=1");
 
     assert.ok(Schema.is(BrowserError)(refused));
-    assert.equal(refused.reason, "unsafe-url");
+    assert.equal(refused.reason._tag, "UnsafeUrl");
     assert.deepEqual(resolved, []);
 
     // An accepted address reaches the resolver, and the resolver's own refusal is kept.
     const routed = yield* connect(binding, "wss://connect.browserbase.com/?session=1");
 
     assert.ok(Schema.is(BrowserError)(routed));
-    assert.equal(routed.reason, "provider");
+    assert.equal(routed.reason._tag, "Provider");
     assert.deepEqual(resolved, ["wss://connect.browserbase.com/?session=1"]);
   }),
 );
@@ -128,7 +134,7 @@ it.effect("a binding the package did not issue is refused before any provider re
     );
 
     assert.ok(Schema.is(BrowserError)(error));
-    assert.equal(error.reason, "unregistered-session");
+    assert.equal(error.reason._tag, "UnregisteredSession");
     assert.equal(error.outcome, "undispatched");
     assert.equal(requests, 0);
   }),

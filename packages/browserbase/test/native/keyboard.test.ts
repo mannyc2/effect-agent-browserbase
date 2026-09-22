@@ -49,7 +49,7 @@ it.live("real CDP: keys are real input, delivered to whatever the browser says h
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session.bind();
+          const handle = session;
 
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           const [native] = f.nativePages(session.reference.sessionId);
@@ -153,7 +153,7 @@ const guarded = (options: { readonly pageControl?: boolean }) =>
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session.bind();
+          const handle = session;
 
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           const [native] = f.nativePages(session.reference.sessionId);
@@ -170,7 +170,7 @@ const guarded = (options: { readonly pageControl?: boolean }) =>
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") {
-              expect(refused.failure.reason).toBe("not-focused");
+              expect(refused.failure.reason._tag).toBe("NotFocused");
               expect(refused.failure.outcome).toBe("undispatched");
             }
           }
@@ -215,7 +215,7 @@ it.live("real CDP: real typing keeps the exactness and admission an observed nod
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
+          yield* session.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
@@ -238,7 +238,7 @@ it.live("real CDP: real typing keeps the exactness and admission an observed nod
           const early = yield* session.typeElement(second, "early").pipe(Effect.result);
 
           expect(early._tag).toBe("Failure");
-          if (early._tag === "Failure") expect(early.failure.reason).toBe("not-focused");
+          if (early._tag === "Failure") expect(early.failure.reason._tag).toBe("NotFocused");
 
           yield* session.clickElement(second);
           // A click is a mutation, so what was observed before it names nothing any more.
@@ -246,7 +246,7 @@ it.live("real CDP: real typing keeps the exactness and admission an observed nod
 
           expect(stale._tag).toBe("Failure");
           if (stale._tag === "Failure") {
-            expect(stale.failure.reason).toBe("stale");
+            expect(stale.failure.reason._tag).toBe("Stale");
             expect(stale.failure.outcome).toBe("undispatched");
           }
 
@@ -268,7 +268,7 @@ it.live("real CDP: real typing keeps the exactness and admission an observed nod
           expect(denied._tag).toBe("Failure");
           if (denied._tag === "Failure") {
             expect(denied.failure.operation).toBe("type");
-            expect(denied.failure.reason).toBe("denied");
+            expect(denied.failure.reason._tag).toBe("Denied");
             expect(denied.failure.outcome).toBe("undispatched");
           }
           expect((yield* read(native)).keys).toEqual([]);
@@ -302,7 +302,7 @@ it.live("real CDP: keys follow focus across frames, and a frame that lost it adm
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
+          yield* session.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
@@ -321,35 +321,35 @@ it.live("real CDP: keys follow focus across frames, and a frame that lost it adm
             () => native.frame({ name: "child" })?.evaluate("window.read()") ?? Promise.resolve(),
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(InFrame)));
 
-          const inChild = yield* session.selectFrame(child.frameId);
+          yield* session.selectFrame(child.frameId);
 
-          yield* inChild.click(ClickRequest.make({ selector: "#inside" }));
-          yield* inChild.type(TypeRequest.make({ text: "in", into: "#inside" }));
+          yield* session.click(ClickRequest.make({ selector: "#inside" }));
+          yield* session.type(TypeRequest.make({ text: "in", into: "#inside" }));
           expect(yield* readChild).toEqual({ inside: "in", active: "inside", focused: true });
 
           // The person moves on to a field in the page around the frame.
-          const inMain = yield* session.selectFrame(main.frameId);
+          yield* session.selectFrame(main.frameId);
 
-          yield* inMain.click(ClickRequest.make({ selector: "#first" }));
-          const again = yield* session.selectFrame(child.frameId);
+          yield* session.click(ClickRequest.make({ selector: "#first" }));
+          yield* session.selectFrame(child.frameId);
 
           // Focus left the frame, and the browser took the field's focus with it, so keys would
           // not reach it. Asking for that field sends nothing.
           expect(yield* readChild).toEqual({ inside: "in", active: "", focused: false });
 
-          const refused = yield* again
+          const refused = yield* session
             .type(TypeRequest.make({ text: "lost", into: "#inside" }))
             .pipe(Effect.result);
 
           expect(refused._tag).toBe("Failure");
           if (refused._tag === "Failure") {
-            expect(refused.failure.reason).toBe("not-focused");
+            expect(refused.failure.reason._tag).toBe("NotFocused");
             expect(refused.failure.outcome).toBe("undispatched");
           }
 
           // Unguarded keys go where the browser sends them: to what has focus, in the page
           // around the selected frame, never to the frame merely because it is selected.
-          yield* again.type(TypeRequest.make({ text: "out" }));
+          yield* session.type(TypeRequest.make({ text: "out" }));
           expect((yield* read(native)).first).toBe("out");
           expect((yield* readChild).inside).toBe("in");
           yield* session.close;
@@ -368,7 +368,7 @@ it.live("real CDP: keys meant for a held page are refused, never queued for when
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session.bind();
+          const handle = session;
 
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           yield* handle.click(ClickRequest.make({ selector: "#first" }));
@@ -417,11 +417,12 @@ it.live("real CDP: keys through a handle bound to another page reach neither pag
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const first = session.bind();
+          const first = yield* session.retain;
 
           yield* first.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           yield* first.click(ClickRequest.make({ selector: "#first" }));
-          const second = yield* session.selectPage(yield* session.createPage);
+          yield* session.selectPage(yield* session.createPage);
+          const second = yield* session.retain;
 
           yield* second.navigate(NavigateRequest.make({ url: `${f.url}keyboard#second` }));
 
@@ -433,7 +434,7 @@ it.live("real CDP: keys through a handle bound to another page reach neither pag
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") {
-              expect(refused.failure.reason).toBe("stale");
+              expect(refused.failure.reason._tag).toBe("Stale");
               expect(refused.failure.outcome).toBe("undispatched");
             }
           }

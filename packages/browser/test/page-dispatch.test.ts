@@ -63,7 +63,7 @@ it("page closure after a dispatched hold command cannot be reported as undispatc
 
   f.afterRate(f.close);
   await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({
-    reason: "closed",
+    reason: { _tag: "Closed" },
     outcome: "unknown",
   });
   expect(f.ticket.dispatched).toBe(true);
@@ -77,7 +77,7 @@ it("target invalidation after native dispatch stays unknown and stops the comman
     f.control.invalidate();
   });
   await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({
-    reason: "stale",
+    reason: { _tag: "Stale" },
     outcome: "unknown",
   });
   expect(f.control.state().state).toBe("unknown");
@@ -90,7 +90,7 @@ it("a page already closed before admission remains accurately undispatched", asy
 
   f.close();
   await expect(f.control.suspend(f.ticket)).rejects.toMatchObject({
-    reason: "closed",
+    reason: { _tag: "Closed" },
     outcome: "undispatched",
   });
   expect(f.ticket.dispatched).toBe(false);

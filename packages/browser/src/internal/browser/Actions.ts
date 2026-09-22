@@ -3,6 +3,7 @@ import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from
 
 import type { ObservedElement } from "../../BrowserData.ts";
 import { SafeFilename } from "../../BrowserData.ts";
+import { Reasons } from "../../Errors.ts";
 import type { Driver, DriverTarget, NativeFileSelection } from "./Driver.ts";
 import {
   closeWithin,
@@ -44,7 +45,7 @@ export const waitEvent = <A>(
     if (!done) {
       done = true;
       cleanup();
-      reject(failure("interrupted"));
+      reject(failure(Reasons.Interrupted.make({})));
     }
   };
 
@@ -60,7 +61,7 @@ export const waitEvent = <A>(
     if (!done) {
       done = true;
       cleanup();
-      reject(failure("timeout"));
+      reject(failure(Reasons.Timeout.make({})));
     }
   }, ticket.remainingMillis());
 
@@ -124,7 +125,7 @@ export const nativeSelection = (
       readonly payload: Array<{ name: string; mimeType: string; buffer: Buffer }>;
     }
   | { readonly _tag: "Remote"; readonly paths: Array<string> } => {
-  if (files.length === 0) throw failure("configuration", "undispatched");
+  if (files.length === 0) throw failure(Reasons.Configuration.make({}), "undispatched");
   const inline = files.filter((file) => file._tag === "Inline");
   const remote = files.filter((file) => file._tag === "Remote");
 
@@ -142,7 +143,7 @@ export const nativeSelection = (
   }
   if (remote.length === files.length)
     return { _tag: "Remote", paths: remote.map((file) => file.path) };
-  throw failure("configuration", "undispatched");
+  throw failure(Reasons.Configuration.make({}), "undispatched");
 };
 
 /**
@@ -164,10 +165,10 @@ export const makeActions = (
     try {
       url = new URL(value);
     } catch {
-      throw failure("malformed");
+      throw failure(Reasons.Malformed.make({}));
     }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
-      throw failure("malformed");
+      throw failure(Reasons.Malformed.make({}));
 
     return value;
   };
@@ -242,10 +243,11 @@ export const makeActions = (
     paths: ReadonlyArray<string>,
     ticket: Ticket,
   ) => {
-    if (typeof target !== "string") throw failure("unsupported", "undispatched");
+    if (typeof target !== "string") throw failure(Reasons.Unsupported.make({}), "undispatched");
     const { entry, frame } = current();
 
-    if (frame !== entry.page.mainFrame()) throw failure("unsupported", "undispatched");
+    if (frame !== entry.page.mainFrame())
+      throw failure(Reasons.Unsupported.make({}), "undispatched");
     const cdp = await context.newCDPSession(entry.page);
 
     try {
@@ -265,7 +267,10 @@ export const makeActions = (
       const nodeId = matched.nodeIds[0];
 
       if (matched.nodeIds.length !== 1 || nodeId === undefined)
-        throw failure(matched.nodeIds.length === 0 ? "not-found" : "ambiguous", "undispatched");
+        throw failure(
+          matched.nodeIds.length === 0 ? Reasons.NotFound.make({}) : Reasons.Ambiguous.make({}),
+          "undispatched",
+        );
       ticket.dispatch();
       await cdp.send("DOM.setFileInputFiles", { files: [...paths], nodeId });
     } finally {
@@ -433,7 +438,7 @@ export const makeActions = (
 
       // A chooser is satisfied with bytes this client holds. A provider-stored file is
       // attached to an exact input node instead, where the browser can open the path.
-      if (selection._tag === "Remote") throw failure("unsupported", "undispatched");
+      if (selection._tag === "Remote") throw failure(Reasons.Unsupported.make({}), "undispatched");
       const page = current().entry.page;
 
       const observer = waitEvent<FileChooser>(
@@ -447,7 +452,8 @@ export const makeActions = (
         const chooser = await observer.promise;
 
         ticket.check();
-        if (!chooser.isMultiple() && selection.payload.length > 1) throw failure("unsupported");
+        if (!chooser.isMultiple() && selection.payload.length > 1)
+          throw failure(Reasons.Unsupported.make({}));
         // Exactly one attachment for this chooser; a second would open another dispatch.
         await chooser.setFiles(selection.payload, { timeout: timeout(ticket) });
         ticket.check();

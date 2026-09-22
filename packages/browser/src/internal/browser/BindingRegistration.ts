@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect";
 
 import type * as Bootstrap from "../../Bootstrap.ts";
 import { Identifier } from "../../BrowserData.ts";
-import { BrowserError, InitializationError } from "../../Errors.ts";
+import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
 
 const Invoke = Symbol("BrowserBindingRegistration");
 const issued = new WeakSet<object>();
@@ -79,7 +79,23 @@ const issue = <E, R>(
 export const make = <I, IEncoded, O, OEncoded, E, R>(
   options: Bootstrap.BindingOptions<I, IEncoded, O, OEncoded, E, R>,
 ): Registration<E, R> => {
-  const metadata = Schema.decodeSync(metadataSchema)(options);
+  const {
+    maxConcurrent = 1,
+    maxInputBytes = 65536,
+    maxOutputBytes = 65536,
+    timeoutMillis = 10000,
+    failureMode = "reject-call",
+  } = options;
+
+  const metadata = Schema.decodeSync(metadataSchema)({
+    ...options,
+    maxConcurrent,
+    maxInputBytes,
+    maxOutputBytes,
+    timeoutMillis,
+    failureMode,
+  });
+
   const { input, output, handle } = options;
 
   if (!Schema.isSchema(input) || !Schema.isSchema(output) || typeof handle !== "function") {
@@ -127,7 +143,11 @@ export const snapshot = Effect.fnUntraced(function* <E, R>(
   registration: Registration<E, R>,
 ): Effect.fn.Return<Registration<E, R>, BrowserError> {
   const invalid = () =>
-    BrowserError.make({ operation: "configure", reason: "configuration", outcome: "undispatched" });
+    BrowserError.make({
+      operation: "configure",
+      reason: Reasons.Configuration.make({}),
+      outcome: "undispatched",
+    });
 
   if (!issued.has(registration)) return yield* invalid();
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Effect, Schema, Stream } from "effect";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession } from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
 
 import { CaptureEvidence, captureEvidence } from "./capture-evidence.ts";
@@ -62,11 +62,7 @@ const processResult = (command: string, args: ReadonlyArray<string>, cwd?: strin
  * dependencies. This seam is video-only because Playwright screencast supplies
  * rendered JPEG frames but no website-audio source.
  */
-export const recordInterval = (
-  session: BrowserSession,
-  outputPath: string,
-  durationMillis = 5_000,
-) =>
+export const recordInterval = (session: AnySession, outputPath: string, durationMillis = 5_000) =>
   Effect.scoped(
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(

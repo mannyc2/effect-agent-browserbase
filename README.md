@@ -46,15 +46,29 @@ Every agent turn borrows that session. `BrowserTools.run` provides the maintaine
 
 ## API migration
 
-| Previous composition                                               | Current API                                                                                                                          |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Provider-specific `withBrowser(policy, options, use)`              | `Browser.scoped(Chromium.launch(policy, options), use)` or the same combinator with `BrowserbaseBrowser.open`                        |
-| `session.bind().navigate(request)` for ordinary selected-page work | `session.navigate(request)` resolves selection when the Effect runs; retain `bind()` when selection changes must invalidate a handle |
-| Select a page, perform work, then restore selection                | `session.pinPage(page)` or `session.pinFrame(page, frame)` addresses that target without changing selection                          |
-| `Tools.handlers(Adapter.fromSession(session))`                     | `Tools.handlers(session)`; use `Tools.run(session, program, options)` for handler provisioning and failure supervision               |
-| Manually acquire an interval just to consume frames                | `Capture.stream(session, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                 |
+| Previous composition                                                   | Current API                                                                                                                                                             |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider-specific `withBrowser(policy, options, use)`                  | `Browser.scoped(Chromium.launch(policy, options), use)` or the same combinator with `BrowserbaseBrowser.open`                                                           |
+| `session.bind().navigate(request)` for ordinary selected-page work     | `session.navigate(request)` resolves selection when the Effect runs; `yield* session.retain` explicitly acquires a checked retained handle                              |
+| `bind()` / `currentTarget` and `BoundTarget`                           | `retain: Effect<RetainedTarget, BrowserError>` and the shared `TargetOperations` interface; `target` remains metadata                                                   |
+| `selectPage(id)` / `closePage(id)`                                     | Pass the exact `PageInfo`; selection returns `void`. `createPage` returns the created page's metadata without selecting it                                              |
+| Synchronous `Adapter.fromSession(browser)` / `currentHandle`           | `yield* Adapter.fromSession(browser, { selection: "current" })` or explicit `"retained"`; one handle beside the original browser                                        |
+| Select a page, perform work, then restore selection                    | `session.pinPage(page)` or `session.pinFrame(page, frame)` addresses that target without changing selection                                                             |
+| `Tools.handlers(Adapter.fromSession(session))`                         | `Tools.handlers(session)`; use `Tools.run(session, program, options)` for handler provisioning and failure supervision                                                  |
+| Manually acquire an interval just to consume frames                    | `Capture.stream(session, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                                                    |
+| `error.reason === "busy"`; optional dispatch evidence                  | `error.reason._tag === "Busy"` or `Effect.catchReason("BrowserError", "Busy", ...)`; `outcome` is required                                                              |
+| Provider `status` / retry timing on the outer browser error            | `Provider` / `Transport` reason carries `status`; `RateLimited` carries `retryAfterMillis`; `Limit` carries actual dimension, maximum and observed facts                |
+| Every host reason exposed to the model                                 | Eleven action-oriented tool reasons plus unchanged dispatch outcome. `ToolHost.toolFailures` retains original structured errors and bounded tool-call IDs on the host   |
+| Concrete `closeChecked` succeeds with `undefined`                      | It returns the same frozen cleanup receipt as `close` after the existing ownership-specific check passes; the generic session contract still permits discarding success |
+| Capture `dropped`                                                      | `discarded = overflow + late + duplicates + rejected`, with disjoint components; `upstreamDrops` remains `"unknown"`                                                    |
+| Helper parameter `BrowserSession` when it does not supervise callbacks | `AnySession` (`BrowserSession<unknown>`); keep supervisors generic in their callback error or concrete session                                                          |
+| Five required binding bounds/mode fields                               | Omission defaults to one concurrent invocation, 64 KiB input/output, 10 seconds and `reject-call`; explicit values are validated                                        |
+| A common navigation needs a different loading deadline                 | Optional `NavigateRequest.timeoutMillis`, 1–600000 ms, capped by remaining session lifetime; the model tool still accepts only URL                                      |
+| Control kind/label/disabled only                                       | Optional checked/selected/inputType/required state, collected with defined native/ARIA semantics and rechecked on the same node                                         |
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
+
+These are the coordinated `0.2.0-beta.0` shape changes. Remove old retained and adapter members rather than mixing both APIs. Old page/frame IDs, metadata and handles become stale after reconnect; within the same known browser lifetime, re-list pages and match exactly one saved native `targetId`, then use fresh metadata. Never substitute title, URL, order or the old local ID for that match. Explicit generic applications of curried `Browser.scoped` use four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`); ordinary inferred calls retain their syntax.
 
 ## Ownership and boundaries
 

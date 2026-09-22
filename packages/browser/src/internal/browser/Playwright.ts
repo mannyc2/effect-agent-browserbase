@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import type { Browser, BrowserContext, CDPSession, Dialog, Page } from "playwright-core";
 
-import { BrowserError, InitializationError } from "../../Errors.ts";
+import { Reasons, BrowserError, InitializationError } from "../../Errors.ts";
 import { makeActions } from "./Actions.ts";
 import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
@@ -28,7 +28,7 @@ export const connectPlaywrightEndpoint = async (
   events: DriverEvents,
   observe?: (browser: Browser) => void,
 ): Promise<Driver> => {
-  if (signal.aborted) throw failure("interrupted");
+  if (signal.aborted) throw failure(Reasons.Interrupted.make({}));
   const { chromium } = await import("playwright-core");
 
   const browser = await sanitize(() =>
@@ -40,7 +40,7 @@ export const connectPlaywrightEndpoint = async (
 
   if (signal.aborted) {
     await closeWithin(() => browser.close()).catch(() => {});
-    throw failure("interrupted");
+    throw failure(Reasons.Interrupted.make({}));
   }
   try {
     observe?.(browser);
@@ -48,7 +48,7 @@ export const connectPlaywrightEndpoint = async (
 
     if (signal.aborted) {
       await driver.disconnect().catch(() => {});
-      throw failure("interrupted");
+      throw failure(Reasons.Interrupted.make({}));
     }
 
     return driver;
@@ -58,7 +58,7 @@ export const connectPlaywrightEndpoint = async (
       Schema.is(InitializationError)(error) ||
       Schema.is(NativeFailure)(error)
       ? error
-      : failure("provider");
+      : failure(Reasons.Provider.make({}));
   }
 };
 
@@ -70,7 +70,7 @@ export const makePlaywrightDriver = async (
 ): Promise<Driver> => {
   const contexts = browser.contexts();
 
-  if (contexts.length !== 1) throw failure("ambiguous");
+  if (contexts.length !== 1) throw failure(Reasons.Ambiguous.make({}));
   const context: BrowserContext = contexts[0];
   const dialogs = new Set<Dialog>();
   const callbacks = new CallbackTasks(32, () => events.fault());
@@ -163,7 +163,7 @@ export const makePlaywrightDriver = async (
   browser.on("disconnected", onDisconnected);
 
   const sizeNativeContents = async (entry: Entry): Promise<void> => {
-    if (browserCdp === undefined) throw failure("closed", "undispatched");
+    if (browserCdp === undefined) throw failure(Reasons.Closed.make({}), "undispatched");
     const targetId = await targets.targetId(entry);
     const current: unknown = await browserCdp.send("Browser.getWindowForTarget", { targetId });
     const native = safeDecode(NativeWindow, current);
@@ -274,7 +274,7 @@ export const makePlaywrightDriver = async (
     await targets.selectInitial();
     const { selection } = targets;
 
-    if (selection.entry === undefined) throw failure("not-found");
+    if (selection.entry === undefined) throw failure(Reasons.NotFound.make({}));
     await initialization.attach(selection.entry.page);
     selection.frame = selection.entry.page.mainFrame();
     if (!options.preserveViewport) {

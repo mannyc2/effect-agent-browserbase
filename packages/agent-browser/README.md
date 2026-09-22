@@ -28,7 +28,7 @@ For Browserbase, use `BrowserbaseBrowser.open(...)` from `effect-browserbase/bro
 
 [`examples/chromium.ts`](examples/chromium.ts) and [`examples/agent.ts`](examples/agent.ts) use the same [`BrowserAgent.ts`](examples/BrowserAgent.ts) definition. The hosted example also shows human handoff and typed page-to-host callbacks. Both leave the model choice to the caller.
 
-The Tools accept `BrowserSession<E>` directly. This keeps the generic owner's typed `BrowserError` reason and dispatch outcome all the way into `BrowserToolFailure`, and leaves concrete provider capabilities on the original object. `Browser.scoped(open, use)` owns acquisition and checked cleanup around the application callback; `BrowserTools.run(browser, program, options)` owns only Tool-host lifetime and supervision inside an already-owned browser.
+The Tools accept `BrowserSession<E>` directly. They retain the owner's dispatch outcome and project its tagged reason into a compact `BrowserToolFailure`; `makeHost` keeps the original error fields in its host-only `toolFailures` snapshot. Concrete provider capabilities remain on the original object. `Browser.scoped(open, use)` owns acquisition and checked cleanup around the application callback; `BrowserTools.run(browser, program, options)` owns only Tool-host lifetime and supervision inside an already-owned browser.
 
 ## Provide InteractiveBrowser directly
 
@@ -45,7 +45,22 @@ const browserLayer = interactiveLayer({
 }).pipe(Layer.provide(Chromium.layer()));
 ```
 
-The opener's services are captured when the Layer is built; each `open` still uses its caller's execution Scope. Building the Layer allocates nothing. The common policy is validated before calling the opener, and unsupported containment fails before acquisition. Expected acquisition failures are sanitized into the framework's error contract. `fromSession<S>(browser)` likewise creates a framework `BrowserHandle` over the exact concrete session without allocating another browser. Use the direct Tools path when original browser and callback error types or dispatch classification matter.
+The opener's services are captured when the Layer is built; each `open` still uses its caller's execution Scope. Building the Layer allocates nothing. The common policy is validated before calling the opener, and unsupported containment fails before acquisition. Expected acquisition and retention failures are sanitized into the framework's error contract. This Layer explicitly retains the selection for each framework handle.
+
+`fromSession<S>(browser, { selection })` returns an Effect that keeps the exact concrete `S` beside its framework handle. Choose `"current"` to follow selection when an operation executes, or `"retained"` to check and retain selection when adaptation executes. Neither mode allocates or connects a browser. Inside the existing browser scope:
+
+```ts
+import * as Adapter from "effect-agent-browser/adapter";
+
+const current = yield * Adapter.fromSession(browser, { selection: "current" });
+const retained = yield * Adapter.fromSession(browser, { selection: "retained" });
+const next = yield * browser.createPage;
+yield * browser.selectPage(next);
+yield * current.handle.navigate({ url: "https://example.com" });
+// retained.handle now refuses stale selection, including after moving away and back.
+```
+
+There is one `AdaptedSession<S>` type containing `browser` and `handle`. Reacquire explicitly when a new retained selection is intended. `handle.close` checks the same owner's cleanup and returns `void`; concrete cleanup receipts remain available on `adapted.browser`. Use the direct Tools path when original browser and callback error types or dispatch classification matter.
 
 ## Host observation and exact-control policy
 
@@ -83,7 +98,7 @@ Real-input model results contain only `{ dispatched: true }`. They do not claim 
 
 ## Scoped navigation and receipt callbacks
 
-`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, their merged `layer`, `failure`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
+`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
 
 `onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
 
@@ -109,7 +124,20 @@ The generic guide's [Network policy](../browser/README.md#network-policy) sectio
 
 ## Error translation
 
-The generic package's `BrowserError` carries a reason and a dispatch outcome. The Tools consume the `BrowserSession` directly and map that error onto a declared `BrowserToolFailure`, keeping `undispatched`, `rejected` and `unknown` distinct for navigation, scrolling and exact-node input alike. The separate `InteractiveBrowser` adapter maps onto the framework's provider-neutral errors, whose contract does not preserve dispatch classification; it never guesses classification from a message or raw SDK cause. Consumer callback and browser fail-session causes stay on the host-only failure signal.
+The generic package's `BrowserError` carries a tagged `reason` and required `outcome`. The Tools return only `stale`, `busy`, `denied`, `not-found`, `ambiguous`, `not-visible`, `not-focused`, `limit`, `timeout`, `closed`, or `failed`, alongside the unchanged `undispatched`, `rejected`, or `unknown` outcome. An `Interrupted` navigation projects to `stale/unknown`; that does not authorize replay. Rate limiting projects to `busy`, with retry timing retained for the host. Provider status, diagnostic paths, limit measurements and native exceptions never enter this failure projection.
+
+Read `host.toolFailures` for the original `_tag`, `operation`, tagged `reason` fields and `outcome`, plus the supplied tool-call ID. Each `ToolFailureDiagnostic` is recorded before projection; navigation start/completion, exact-node refusals and malformed typed results use the same channel. The `ToolFailureSnapshot` keeps the latest 32 entries in oldest-first order, with a `dropped` count for evictions. IDs longer than 256 UTF-16 code units are omitted with `toolCallIdOmitted: true`; an absent ID leaves that flag false. Snapshots and their recorded fields are copied and frozen. Reading them performs no browser work, takes no action permit, adds no callback services and remains possible after host closure.
+
+```ts
+const host = yield * BrowserTools.makeHost(browser);
+const result = yield * host.run(agentProgram);
+const diagnostics = yield * host.toolFailures;
+// Keep diagnostics on the host; only result is part of the agent's declared output.
+```
+
+Ordinary failures do not complete `host.failure`. Consumer callback, browser fail-session and failed navigation-cleanup causes keep their existing supervision behavior. Direct module-level handler Layers retain caller-managed composition and do not create a diagnostic store. Framework parameter-validation and result-encoding failures outside the handlers belong to the Toolkit's own error contract.
+
+The separate `InteractiveBrowser` adapter maps only factual `Limit` reasons for `actions`, `elapsed` and `returned-bytes`, with a positive integer maximum, to `InteractiveBrowserLimitError`. Other dimensions or an unsupported zero maximum retain a bounded action error. Its pinned contract has no dispatch-outcome field; the adapter neither adds one nor infers it from exception text. Concrete browser diagnostics remain on the original session.
 
 This package exposes Effect AI Tools over a long-lived, execution-owned browser session supplied by Chromium or Browserbase. The pinned upstream browser guide describes its own interactive pass as a different, bounded construct and says it cannot become an agent Tool. The generic package's ownership and fencing model explains this extension; it should not be presented as upstream approval of it.
 
@@ -120,3 +148,18 @@ The common adapter and Tools support both self-managed Chromium and Browserbase.
 Use the frozen Vite+ workspace described in [Contributing](../../CONTRIBUTING.md). Both owners are exercised with the actual public AgentRuntime and Toolkit, using a scripted model and real Chromium. The `agent` installed consumer includes Chromium and the common Tools with no Browserbase installation. The `agent-hosted` consumer adds Browserbase and exercises provider acquisition/cleanup composition through scripted provider HTTP. They preserve typed callback errors, one session identity and capture after agent execution.
 
 Native framework tests prove that the adapter Layer captures configured services while each acquired browser closes with its caller's Scope, even while the Layer remains alive. Tool regressions cover direct BrowserSession dispatch classification, exact-node pointer and keyboard input, host callback/fail-session supervision, host-scope cancellation, viewport policy and capture on the same owner. A local native pass is not hosted Browserbase or paid-model evidence.
+
+## API migration
+
+| Previous use                                                         | Current use                                                                                                                                                     |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Adapter.fromSession(browser)`                                       | `yield* Adapter.fromSession(browser, { selection: "retained" })` preserves retained behavior; choose `"current"` deliberately for follow-selection.             |
+| `AgentSession<E>` and `adapted.currentHandle`                        | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                         |
+| `BoundTarget`, `browser.bind()` and `browser.currentTarget`          | Use `TargetOperations` for common operations and `yield* browser.retain` for a checked `RetainedTarget`. Ordinary calls use the session directly.               |
+| A string from `createPage`, passed to select/close                   | `createPage` returns `PageInfo`; `selectPage(page)` and `closePage(page)` check it. `selectPage` and `selectFrame` return `void`.                               |
+| `error.reason === "limit"`, top-level `status` or `retryAfterMillis` | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                          |
+| Full host reason names in model failures                             | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                             |
+| Concrete `closeChecked` returning `void`                             | Concrete browser owners return their canonical cleanup receipt. The framework handle still returns `void`.                                                      |
+| Capture `dropped`                                                    | Capture `discarded = overflow + late + duplicates + rejected`; default buffering stays unchanged. `toolFailures.dropped` separately counts diagnostic eviction. |
+
+Common-operation helpers may accept `AnySession`; helpers such as the example's `turns<E>` that supervise browser failure stay generic in `E`. Binding bounds now have validated defaults, while explicit bounds retain their meaning. `NavigateRequest.timeoutMillis` is a host option and does not add a model-selected timeout to the existing URL-only navigation Tool. Added observation state is bounded and does not include field values or destinations. The earlier `Browser.scoped` inference fix changes explicit curried generic argument lists from five to four outer parameters and two to three inner parameters; ordinary call syntax remains.

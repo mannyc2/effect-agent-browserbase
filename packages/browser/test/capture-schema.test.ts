@@ -175,7 +175,7 @@ it.effect("rejects invalid admission before resolving a native target or reservi
 
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
-          expect(result.failure.reason).toBe("configuration");
+          expect(result.failure.reason._tag).toBe("Configuration");
           expect(result.failure.outcome).toBe("undispatched");
         }
       }
@@ -254,4 +254,144 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
       expect(owner.state.phase).toBe("open");
     }),
   ),
+);
+
+it.effect(
+  "capture snapshots and drained summaries partition overflow, duplicates, late and rejected frames",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const owner = yield* makeOwner({
+          maxActions: 3,
+          maxElapsedMillis: 1000,
+          actionTimeoutMillis: 500,
+        });
+
+        owner.state.phase = "open";
+        const bytes = jpeg();
+        let receive: ((frame: NativeFrame) => void) | undefined;
+        let stops = 0;
+        const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
+
+        const parent: CaptureParent = {
+          owner,
+          target: () => target,
+          resolve: () =>
+            Effect.succeed({
+              key: "capture-accounting",
+              target,
+              source: {
+                start: async ({ receive: callback }) => {
+                  receive = callback;
+                },
+                stop: async () => {
+                  stops++;
+                },
+              },
+            }),
+          captureLeases: new Map(),
+          captureReservedBytes: 0,
+        };
+
+        const interval = yield* startCapture(parent, {
+          maxFrames: 2,
+          maxBufferedBytes: bytes.length * 2,
+          maxFrameBytes: bytes.length,
+        });
+
+        const emit = (timestamp: number, data = bytes) => {
+          if (receive === undefined) throw new Error("capture callback was not installed");
+          receive({ data, timestamp, viewportWidth: 64, viewportHeight: 48 });
+        };
+
+        emit(1000);
+        emit(1001);
+        emit(1002); // The two-frame buffer evicts sequence 0.
+        emit(1002); // Duplicate source timestamp, sequence 3.
+        emit(1001.5); // Arrives behind the accepted timestamp, sequence 4.
+        const live = yield* interval.snapshot;
+
+        expect(live).toMatchObject({
+          phase: "capturing",
+          reason: null,
+          nativeStop: null,
+          received: 5,
+          delivered: 0,
+          discarded: 3,
+          overflow: 1,
+          duplicates: 1,
+          late: 1,
+          rejected: 0,
+          bufferedFrames: 2,
+          upstreamDrops: "unknown",
+        });
+        const encodedSnapshot = yield* Schema.encodeEffect(Capture.CaptureSnapshot)(live);
+
+        expect(yield* Schema.decodeEffect(Capture.CaptureSnapshot)(encodedSnapshot)).toEqual(live);
+
+        emit(1003, new Uint8Array(bytes.length + 1)); // A frame-size refusal, not buffer overflow.
+        const seen: number[] = [];
+
+        const failure = yield* interval.frames.pipe(
+          Stream.runForEach((frame) =>
+            Effect.sync(() => {
+              seen.push(frame.sequence);
+            }),
+          ),
+          Effect.flip,
+        );
+
+        expect(failure).toMatchObject({
+          _tag: "BrowserError",
+          operation: "capture",
+          reason: {
+            _tag: "Limit",
+            dimension: "frame-bytes",
+            maximum: bytes.length,
+            observed: bytes.length + 1,
+          },
+          outcome: "undispatched",
+        });
+        const summary = yield* interval.completed;
+        const stopped = yield* interval.snapshot;
+
+        expect(seen).toEqual([1, 2]);
+        for (const recorded of [summary, stopped]) {
+          expect(recorded).toMatchObject({
+            reason: "frame-limit",
+            nativeStop: "confirmed",
+            received: 6,
+            delivered: 2,
+            discarded: 4,
+            overflow: 1,
+            duplicates: 1,
+            late: 1,
+            rejected: 1,
+            bufferedFrames: 0,
+            bufferedBytes: 0,
+            sourceFirstMillis: 1000,
+            sourceLastMillis: 1002,
+            upstreamDrops: "unknown",
+            error: failure,
+          });
+          expect(recorded.discarded).toBe(
+            recorded.overflow + recorded.duplicates + recorded.late + recorded.rejected,
+          );
+          expect("dropped" in recorded).toBe(false);
+        }
+        const encodedSummary = yield* Schema.encodeEffect(Capture.CaptureSummary)(summary);
+
+        expect(yield* Schema.decodeEffect(Capture.CaptureSummary)(encodedSummary)).toEqual(summary);
+        for (const field of ["discarded", "overflow", "rejected"] as const) {
+          expect(Schema.is(Capture.CaptureSummary)({ ...summary, [field]: undefined })).toBe(false);
+          expect(Schema.is(Capture.CaptureSnapshot)({ ...live, [field]: undefined })).toBe(false);
+        }
+        expect(stopped.phase).toBe("stopped");
+        expect(live.discarded).toBe(3);
+        expect(live.rejected).toBe(0);
+        expect(stops).toBe(1);
+        expect(parent.captureReservedBytes).toBe(0);
+        expect(owner.state.phase).toBe("open");
+      }),
+    ),
 );

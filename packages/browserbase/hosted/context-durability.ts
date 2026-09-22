@@ -52,7 +52,7 @@ const observe = (bootstrap: Bootstrap.Plan<never, never>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const session = yield* h.open({ bootstrap });
-      const target = session.bind();
+      const target = session;
 
       yield* target.navigate(NavigateRequest.make({ url: `${origin}/` }));
 

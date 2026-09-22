@@ -7,7 +7,7 @@ import {
   Viewport,
   ViewportEvidence,
 } from "../../../packages/browser/src/BrowserData.ts";
-import { BrowserError } from "../../../packages/browser/src/Errors.ts";
+import { BrowserError, Reasons } from "../../../packages/browser/src/Errors.ts";
 import { fromNativeAttempt } from "../../../packages/browser/src/internal/browser/Binding.ts";
 import type { Bindings } from "../../../packages/browser/src/internal/browser/Bindings.ts";
 import type {
@@ -38,6 +38,16 @@ export const gate = <A>() => {
 
   return { promise, resolve, reject };
 };
+
+/** Checked-shaped identities at this scripted native boundary; real registries have native tests. */
+export const scriptedPage = (pageId: string) =>
+  PageInfo.make({
+    pageId,
+    targetId: "target-1",
+    title: "fixture",
+    url: "https://example.test/",
+    selected: pageId === "page-1",
+  });
 
 export interface ScriptOptions {
   readonly createFails?: boolean;
@@ -183,22 +193,28 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         if (page.pageId !== pageId || page.targetId !== "target-1")
           throw BrowserError.make({
             operation: "target",
-            reason: "not-found",
+            reason: Reasons.NotFound.make({}),
             outcome: "undispatched",
           });
 
         return { pageId, frameId: "frame-1" };
       },
-      selectPage: async (id, ticket) => {
+      selectPage: async (page, ticket) => {
         ticket.check();
-        pageId = id;
+        if (page.targetId !== "target-1")
+          throw BrowserError.make({
+            operation: "select-page",
+            reason: Reasons.Stale.make({}),
+            outcome: "undispatched",
+          });
+        pageId = page.pageId;
         frameId = "frame-1";
         events.invalidate("target-changed");
       },
       newPage: async (ticket) => {
         ticket.dispatch();
 
-        return "page-2";
+        return scriptedPage("page-2");
       },
       closePage: async (_id, ticket) => {
         ticket.dispatch();
@@ -212,7 +228,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         if (page.pageId !== pageId || page.targetId !== "target-1" || frame.frameId !== frameId)
           throw BrowserError.make({
             operation: "target",
-            reason: "not-found",
+            reason: Reasons.NotFound.make({}),
             outcome: "undispatched",
           });
 

@@ -1,9 +1,9 @@
 import { Effect, Redacted, Schema } from "effect";
-import { BrowserError } from "effect-browser/errors";
 
 import type { BrowserbaseClient } from "../../Client.ts";
 import { ClientError } from "../../Errors.ts";
 import { Identifier, type SessionReference } from "../../References.ts";
+import { browserRequestFailure } from "./RequestFailure.ts";
 
 const LiveUrl = Schema.String.check(
   Schema.isMaxLength(16384),
@@ -86,5 +86,5 @@ export const issueLiveView = (
   expiresInSeconds: number,
 ) =>
   issueLiveUrls(client, reference, expiresInSeconds).pipe(
-    Effect.mapError((error) => BrowserError.make({ operation: "live-view", reason: error.reason })),
+    Effect.mapError((error) => browserRequestFailure("live-view", error)),
   );

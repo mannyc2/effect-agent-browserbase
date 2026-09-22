@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import * as BrowserBinding from "effect-browserbase/browser-binding";
 import { BrowserbaseClient } from "effect-browserbase/client";
@@ -117,7 +117,13 @@ export const localAgentBrowser = Effect.acquireRelease(
           const session = id === null ? undefined : sessions.get(id);
 
           if (id === null || session === undefined)
-            return Effect.fail(BrowserError.make({ operation: "connect", reason: "provider" }));
+            return Effect.fail(
+              BrowserError.make({
+                operation: "connect",
+                reason: Reasons.Provider.make({}),
+                outcome: "undispatched",
+              }),
+            );
           connectionIds.push(id);
 
           return Effect.succeed(session.endpoint);

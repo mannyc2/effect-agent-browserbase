@@ -9,7 +9,7 @@ import {
   type CaptureOptions,
   type CapturedFrame,
 } from "../../CaptureData.ts";
-import { BrowserError } from "../../Errors.ts";
+import { BrowserError, Reasons } from "../../Errors.ts";
 import { type CaptureLease, type CaptureParent } from "../browser/Association.ts";
 import type { CaptureSource, NativeFrame } from "../browser/Driver.ts";
 import { jpegGeometry } from "../browser/Images.ts";
@@ -63,7 +63,7 @@ export const startCapture = Effect.fnUntraced(function* (
           Effect.mapError(() =>
             BrowserError.make({
               operation: "capture",
-              reason: "configuration",
+              reason: Reasons.Configuration.make({}),
               outcome: "undispatched",
             }),
           ),
@@ -79,7 +79,7 @@ export const startCapture = Effect.fnUntraced(function* (
     Effect.mapError(() =>
       BrowserError.make({
         operation: "capture",
-        reason: "configuration",
+        reason: Reasons.Configuration.make({}),
         outcome: "undispatched",
       }),
     ),
@@ -157,9 +157,11 @@ export const startCapture = Effect.fnUntraced(function* (
       reason,
       received,
       delivered,
-      dropped: buffer.dropped + rejected,
+      discarded: buffer.dropped + rejected + late + duplicates,
+      overflow: buffer.dropped,
       duplicates,
       late,
+      rejected,
       peakBufferedFrames: buffer.highWaterFrames,
       peakBufferedBytes: buffer.highWaterBytes,
       bufferedFrames: buffer.size,
@@ -176,12 +178,8 @@ export const startCapture = Effect.fnUntraced(function* (
         : {
             error: BrowserError.make({
               operation: error.operation,
-              reason: error.reason,
-              ...(error.outcome === undefined ? {} : { outcome: error.outcome }),
-              ...(error.status === undefined ? {} : { status: error.status }),
-              ...(error.retryAfterMillis === undefined
-                ? {}
-                : { retryAfterMillis: error.retryAfterMillis }),
+              reason: { ...error.reason },
+              outcome: error.outcome,
             }),
           }),
     });
@@ -196,7 +194,12 @@ export const startCapture = Effect.fnUntraced(function* (
           yield* restore(
             Effect.tryPromise({
               try: () => startPromise!,
-              catch: () => BrowserError.make({ operation: "capture-start", reason: "provider" }),
+              catch: () =>
+                BrowserError.make({
+                  operation: "capture-start",
+                  reason: Reasons.Provider.make({}),
+                  outcome: "unknown",
+                }),
             }).pipe(Effect.timeout(2000), Effect.exit),
           );
         }
@@ -204,7 +207,12 @@ export const startCapture = Effect.fnUntraced(function* (
           const stopped = yield* restore(
             Effect.tryPromise({
               try: () => source!.stop(),
-              catch: () => BrowserError.make({ operation: "capture-stop", reason: "provider" }),
+              catch: () =>
+                BrowserError.make({
+                  operation: "capture-stop",
+                  reason: Reasons.Provider.make({}),
+                  outcome: "unknown",
+                }),
             }).pipe(Effect.timeout(3000)),
           ).pipe(Effect.exit);
 
@@ -241,7 +249,14 @@ export const startCapture = Effect.fnUntraced(function* (
       parent.owner.state.generation !== target.generation ||
       parent.owner.state.phase !== "open"
     ) {
-      finish("parent-unavailable", BrowserError.make({ operation: "capture", reason: "closed" }));
+      finish(
+        "parent-unavailable",
+        BrowserError.make({
+          operation: "capture",
+          reason: Reasons.Closed.make({}),
+          outcome: "undispatched",
+        }),
+      );
 
       return;
     }
@@ -250,21 +265,48 @@ export const startCapture = Effect.fnUntraced(function* (
     try {
       const meta = parseMetadata(frame);
 
-      if (!(frame.data instanceof Uint8Array) || frame.data.length > maxFrameBytes) {
+      if (!(frame.data instanceof Uint8Array)) {
         rejected++;
-        finish("frame-limit", BrowserError.make({ operation: "capture", reason: "limit" }));
+        finish(
+          "malformed-frame",
+          BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Malformed.make({ path: "bytes" }),
+            outcome: "undispatched",
+          }),
+        );
+
+        return;
+      }
+      if (frame.data.length > maxFrameBytes) {
+        rejected++;
+        finish(
+          "frame-limit",
+          BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Limit.make({
+              dimension: "frame-bytes",
+              maximum: maxFrameBytes,
+              observed: frame.data.length,
+            }),
+            outcome: "undispatched",
+          }),
+        );
 
         return;
       }
       if (last !== undefined && meta.timestamp < last) {
         // A newer frame is already accepted, so this one can no longer be presented in order.
         // It is discarded and counted rather than sorted in or given an invented time.
-        rejected++;
         late++;
         if (++lateRun > MaxConsecutiveLateFrames) {
           finish(
             "timestamp-discontinuity",
-            BrowserError.make({ operation: "capture", reason: "timestamp" }),
+            BrowserError.make({
+              operation: "capture",
+              reason: Reasons.Timestamp.make({}),
+              outcome: "undispatched",
+            }),
           );
         }
 
@@ -272,23 +314,54 @@ export const startCapture = Effect.fnUntraced(function* (
       }
       if (last === meta.timestamp) {
         duplicates++;
-        rejected++;
 
         return;
       }
       const dimensions = jpegGeometry(frame.data);
 
-      if (
-        dimensions.width > 16384 ||
-        dimensions.height > 16384 ||
-        (size !== undefined &&
-          (dimensions.width > size.width || dimensions.height > size.height)) ||
-        dimensions.width * dimensions.height > 33_554_432 ||
-        frame.data[frame.data.length - 2] !== 255 ||
-        frame.data[frame.data.length - 1] !== 217
-      ) {
+      if (frame.data[frame.data.length - 2] !== 255 || frame.data[frame.data.length - 1] !== 217) {
         rejected++;
-        finish("frame-limit", BrowserError.make({ operation: "capture", reason: "limit" }));
+        finish(
+          "malformed-frame",
+          BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Malformed.make({ path: "bytes" }),
+            outcome: "undispatched",
+          }),
+        );
+
+        return;
+      }
+      const maximumWidth = Math.min(16384, size?.width ?? 16384);
+      const maximumHeight = Math.min(16384, size?.height ?? 16384);
+
+      const excessive =
+        dimensions.width > maximumWidth
+          ? Reasons.Limit.make({
+              dimension: "width",
+              maximum: maximumWidth,
+              observed: dimensions.width,
+            })
+          : dimensions.height > maximumHeight
+            ? Reasons.Limit.make({
+                dimension: "height",
+                maximum: maximumHeight,
+                observed: dimensions.height,
+              })
+            : dimensions.width * dimensions.height > 33_554_432
+              ? Reasons.Limit.make({
+                  dimension: "pixels",
+                  maximum: 33_554_432,
+                  observed: dimensions.width * dimensions.height,
+                })
+              : undefined;
+
+      if (excessive !== undefined) {
+        rejected++;
+        finish(
+          "frame-limit",
+          BrowserError.make({ operation: "capture", reason: excessive, outcome: "undispatched" }),
+        );
 
         return;
       }
@@ -300,7 +373,14 @@ export const startCapture = Effect.fnUntraced(function* (
           geometry.viewportHeight !== meta.viewportHeight)
       ) {
         rejected++;
-        finish("resized", BrowserError.make({ operation: "capture", reason: "resized" }));
+        finish(
+          "resized",
+          BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Resized.make({}),
+            outcome: "undispatched",
+          }),
+        );
 
         return;
       }
@@ -328,7 +408,14 @@ export const startCapture = Effect.fnUntraced(function* (
       Queue.offerUnsafe(wake, undefined);
     } catch {
       rejected++;
-      finish("malformed-frame", BrowserError.make({ operation: "capture", reason: "malformed" }));
+      finish(
+        "malformed-frame",
+        BrowserError.make({
+          operation: "capture",
+          reason: Reasons.Malformed.make({}),
+          outcome: "undispatched",
+        }),
+      );
     }
   };
 
@@ -347,7 +434,7 @@ export const startCapture = Effect.fnUntraced(function* (
           if (parent.captureLeases.has(leaseKey)) {
             return yield* BrowserError.make({
               operation: "capture",
-              reason: "busy",
+              reason: Reasons.Busy.make({}),
               outcome: "undispatched",
             });
           }
@@ -357,7 +444,18 @@ export const startCapture = Effect.fnUntraced(function* (
           ) {
             return yield* BrowserError.make({
               operation: "capture",
-              reason: "limit",
+              reason:
+                parent.captureLeases.size >= MaxParentCaptures
+                  ? Reasons.Limit.make({
+                      dimension: "captures",
+                      maximum: MaxParentCaptures,
+                      observed: parent.captureLeases.size + 1,
+                    })
+                  : Reasons.Limit.make({
+                      dimension: "buffered-bytes",
+                      maximum: MaxParentBufferedBytes,
+                      observed: parent.captureReservedBytes + maxBytes,
+                    }),
               outcome: "undispatched",
             });
           }
@@ -369,7 +467,9 @@ export const startCapture = Effect.fnUntraced(function* (
                 why,
                 BrowserError.make({
                   operation: "capture",
-                  reason: why === "resized" ? "resized" : "target-changed",
+                  reason:
+                    why === "resized" ? Reasons.Resized.make({}) : Reasons.TargetChanged.make({}),
+                  outcome: "undispatched",
                 }),
               ),
           };
@@ -419,7 +519,12 @@ export const startCapture = Effect.fnUntraced(function* (
 
               return startPromise;
             },
-            catch: () => BrowserError.make({ operation: "capture-start", reason: "provider" }),
+            catch: () =>
+              BrowserError.make({
+                operation: "capture-start",
+                reason: Reasons.Provider.make({}),
+                outcome: "unknown",
+              }),
           });
           ticket.check();
         }),
@@ -460,7 +565,13 @@ export const startCapture = Effect.fnUntraced(function* (
   const frames = Stream.unwrap(
     Effect.suspend(() => {
       if (subscribed)
-        return Effect.fail(BrowserError.make({ operation: "capture-consume", reason: "busy" }));
+        return Effect.fail(
+          BrowserError.make({
+            operation: "capture-consume",
+            reason: Reasons.Busy.make({}),
+            outcome: "undispatched",
+          }),
+        );
       subscribed = true;
 
       return Effect.succeed(

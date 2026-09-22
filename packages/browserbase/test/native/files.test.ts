@@ -30,7 +30,7 @@ it.live("real CDP: in-memory selection reaches the page without any provisioning
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const h = session.bind();
+          const h = session;
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
 
@@ -76,7 +76,7 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const h = session.bind();
+          const h = session;
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
 
@@ -129,7 +129,7 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
 
           expect(forged._tag).toBe("Failure");
           if (forged._tag === "Failure") {
-            expect(forged.failure.reason).toBe("authorization");
+            expect(forged.failure.reason._tag).toBe("Authorization");
             expect(forged.failure.outcome).toBe("undispatched");
           }
           // The refusal changed nothing: the earlier selection is still attached.
@@ -146,7 +146,7 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
             .pipe(Effect.result);
 
           expect(chooser._tag).toBe("Failure");
-          if (chooser._tag === "Failure") expect(chooser.failure.reason).toBe("unsupported");
+          if (chooser._tag === "Failure") expect(chooser.failure.reason._tag).toBe("Unsupported");
         }),
       );
       expect(f.releaseIds).toEqual(["session-1"]);

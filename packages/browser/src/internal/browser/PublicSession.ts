@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 
 import type * as Bootstrap from "../../Bootstrap.ts";
-import type { BrowserSession, BoundTarget, PinnedTarget } from "../../Browser.ts";
+import type { BrowserSession, TargetOperations, PinnedTarget } from "../../Browser.ts";
 import {
   ActionResult,
   Checkpoint,
@@ -31,11 +31,18 @@ import {
   WheelRequest,
   Identifier,
 } from "../../BrowserData.ts";
-import { BrowserError, type BrowserOperation, InitializationError } from "../../Errors.ts";
+import {
+  BrowserError,
+  Reasons,
+  type BrowserOperation,
+  type BrowserOutcome,
+  InitializationError,
+} from "../../Errors.ts";
 import { associate } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
-import type { BoundControls, SessionControls, SessionLease } from "./Session.ts";
+import { schemaPath } from "./SchemaPath.ts";
+import type { TargetControls, SessionControls, SessionLease } from "./Session.ts";
 
 export const checked = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
@@ -43,30 +50,44 @@ export const checked = <A>(
   operation: BrowserOperation,
 ) =>
   Schema.decodeUnknownEffect(schema)(value, { onExcessProperty: "error" }).pipe(
-    Effect.mapError(() =>
-      BrowserError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+    Effect.mapError((error) =>
+      BrowserError.make({
+        operation,
+        reason: Reasons.Configuration.make(schemaPath(error)),
+        outcome: "undispatched",
+      }),
     ),
   );
 
 export const decoded =
-  <A>(schema: Schema.Codec<A, unknown, never, never>, operation: BrowserOperation) =>
+  <A>(
+    schema: Schema.Codec<A, unknown, never, never>,
+    operation: BrowserOperation,
+    outcome: BrowserOutcome,
+  ) =>
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
-      Effect.mapError(() => BrowserError.make({ operation, reason: "malformed" })),
+      Effect.mapError((error) =>
+        BrowserError.make({
+          operation,
+          reason: Reasons.Malformed.make(schemaPath(error)),
+          outcome,
+        }),
+      ),
     );
 
-const action = decoded(ActionResult, "action-result");
-const pointerMoved = decoded(InputReceipt, "pointer-move");
-const hovered = decoded(InputReceipt, "hover");
-const wheeled = decoded(InputReceipt, "wheel");
-const pressed = decoded(InputReceipt, "press");
-const typed = decoded(InputReceipt, "type");
+const action = decoded(ActionResult, "action-result", "unknown");
+const pointerMoved = decoded(InputReceipt, "pointer-move", "unknown");
+const hovered = decoded(InputReceipt, "hover", "unknown");
+const wheeled = decoded(InputReceipt, "wheel", "unknown");
+const pressed = decoded(InputReceipt, "press", "unknown");
+const typed = decoded(InputReceipt, "type", "unknown");
 
-const makeTarget = (bound: BoundControls): BoundTarget => ({
+const makeTarget = (bound: TargetControls): TargetOperations => ({
   navigate: (request) =>
     checked(NavigateRequest, request, "navigate").pipe(
-      Effect.flatMap((value) => bound.navigate(value.url)),
-      Effect.flatMap((url) => decoded(NavigationResult, "navigate")({ url })),
+      Effect.flatMap((value) => bound.navigate(value.url, value.timeoutMillis)),
+      Effect.flatMap((url) => decoded(NavigationResult, "navigate", "unknown")({ url })),
     ),
   startNavigation: (request) =>
     checked(StartNavigationRequest, request, "navigate").pipe(
@@ -74,7 +95,7 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
       Effect.map((operation) => ({
         target: operation.target,
         completed: operation.completed.pipe(
-          Effect.flatMap((url) => decoded(NavigationResult, "navigate")({ url })),
+          Effect.flatMap((url) => decoded(NavigationResult, "navigate", "unknown")({ url })),
         ),
         stop: operation.stop,
       })),
@@ -82,7 +103,7 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
   readText: (request) =>
     checked(ReadTextRequest, request, "read-text").pipe(
       Effect.flatMap((value) => bound.readText(value.selector)),
-      Effect.flatMap((text) => decoded(TextResult, "read-text")({ text })),
+      Effect.flatMap((text) => decoded(TextResult, "read-text", "undispatched")({ text })),
     ),
   click: (request) =>
     checked(ClickRequest, request, "click").pipe(
@@ -138,6 +159,7 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
         decoded(
           ScreenshotResult,
           "screenshot",
+          "undispatched",
         )({ mediaType: "image/png", bytes: new Uint8Array(bytes) }),
       ),
     ),
@@ -145,26 +167,26 @@ const makeTarget = (bound: BoundControls): BoundTarget => ({
 
 const makePinnedTarget = (value: {
   readonly target: Target;
-  readonly bound: BoundControls;
+  readonly operations: TargetControls;
 }): PinnedTarget =>
   Object.freeze({
-    ...makeTarget(value.bound),
+    ...makeTarget(value.operations),
     target: Object.freeze(Target.make({ ...value.target })),
   });
 
 /** A browser-operation failure keeps its meaning when it is reported as an initialization one. */
 const initialization = (reason: BrowserError["reason"]): InitializationError["reason"] =>
-  reason === "busy"
+  reason._tag === "Busy"
     ? "busy"
-    : reason === "closed" || reason === "disconnected"
+    : reason._tag === "Closed" || reason._tag === "Disconnected"
       ? "closed"
-      : reason === "timeout"
+      : reason._tag === "Timeout"
         ? "timeout"
-        : reason === "stale"
+        : reason._tag === "Stale"
           ? "stale"
-          : reason === "unsupported"
+          : reason._tag === "Unsupported"
             ? "unsupported"
-            : reason === "configuration"
+            : reason._tag === "Configuration"
               ? "configuration"
               : "native";
 
@@ -172,9 +194,6 @@ export const makeSession = <E>(
   controls: SessionControls<SessionLease>,
   bindings: Bindings<E>,
 ): BrowserSession<E> => {
-  const currentTarget = controls.currentTarget.pipe(Effect.map(() => makeTarget(controls.bind())));
-  const selectedTarget = () => makeTarget(controls.bind());
-
   const Wait = Schema.Struct({
     selector: ClickRequest.fields.selector,
     state: Schema.Literals(["visible", "hidden", "attached", "detached"]),
@@ -183,25 +202,13 @@ export const makeSession = <E>(
   const navigate = (url: string) => action({ url });
 
   const session: BrowserSession<E> = {
-    navigate: (request) => Effect.suspend(() => selectedTarget().navigate(request)),
-    startNavigation: (request) => Effect.suspend(() => selectedTarget().startNavigation(request)),
-    readText: (request) => Effect.suspend(() => selectedTarget().readText(request)),
-    click: (request) => Effect.suspend(() => selectedTarget().click(request)),
-    fill: (request) => Effect.suspend(() => selectedTarget().fill(request)),
-    scroll: (request) => Effect.suspend(() => selectedTarget().scroll(request)),
-    pointerMove: (request) => Effect.suspend(() => selectedTarget().pointerMove(request)),
-    hover: (request) => Effect.suspend(() => selectedTarget().hover(request)),
-    wheel: (request) => Effect.suspend(() => selectedTarget().wheel(request)),
-    press: (request) => Effect.suspend(() => selectedTarget().press(request)),
-    type: (request) => Effect.suspend(() => selectedTarget().type(request)),
-    screenshot: (request) => Effect.suspend(() => selectedTarget().screenshot(request)),
+    ...makeTarget(controls.operations),
     implementation: controls.implementation,
     closeChecked: controls.closeChecked,
     failure: bindings.failure,
     bindingDiagnostics: bindings.diagnostics,
-    bind: () => makeTarget(controls.bind()),
-    currentTarget,
-    target: controls.currentTarget,
+    retain: controls.retain.pipe(Effect.map(makeTarget)),
+    target: controls.target,
     observe: (options = {}) =>
       checked(ObservationOptions, options, "observe").pipe(
         Effect.flatMap((value) => controls.observe({ ...value, scope: value.scope ?? "document" })),
@@ -215,6 +222,7 @@ export const makeSession = <E>(
           decoded(
             Checkpoint,
             "checkpoint",
+            "undispatched",
           )({
             ...sampled,
             ...(picture === undefined
@@ -233,21 +241,21 @@ export const makeSession = <E>(
       ),
     clickElement: (reference, admission) =>
       checked(ObservedElement, reference, "click").pipe(
-        Effect.flatMap((value) => controls.bind().click(value, admission?.admit)),
+        Effect.flatMap((value) => controls.operations.click(value, admission?.admit)),
         Effect.flatMap(navigate),
       ),
     fillElement: (reference, value, admission) =>
       checked(ObservedElement, reference, "fill").pipe(
         Effect.flatMap((element) =>
           checked(FillRequest.fields.value, value, "fill").pipe(
-            Effect.flatMap((text) => controls.bind().fill(element, text, admission?.admit)),
+            Effect.flatMap((text) => controls.operations.fill(element, text, admission?.admit)),
           ),
         ),
         Effect.flatMap(navigate),
       ),
     hoverElement: (reference, admission) =>
       checked(ObservedElement, reference, "hover").pipe(
-        Effect.flatMap((value) => controls.bind().hover(value, admission?.admit)),
+        Effect.flatMap((value) => controls.operations.hover(value, admission?.admit)),
         Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
       ),
     pressElement: (reference, stroke, admission) =>
@@ -255,7 +263,12 @@ export const makeSession = <E>(
         Effect.flatMap((element) =>
           checked(KeyStroke, stroke, "press").pipe(
             Effect.flatMap((value) =>
-              controls.bind().press(value.key, value.modifiers ?? [], element, admission?.admit),
+              controls.operations.press(
+                value.key,
+                value.modifiers ?? [],
+                element,
+                admission?.admit,
+              ),
             ),
           ),
         ),
@@ -265,7 +278,7 @@ export const makeSession = <E>(
       checked(ObservedElement, reference, "type").pipe(
         Effect.flatMap((element) =>
           checked(TypeRequest.fields.text, text, "type").pipe(
-            Effect.flatMap((value) => controls.bind().type(value, element, admission?.admit)),
+            Effect.flatMap((value) => controls.operations.type(value, element, admission?.admit)),
           ),
         ),
         Effect.flatMap((input) => typed({ ...input, kind: "type" })),
@@ -288,19 +301,13 @@ export const makeSession = <E>(
         ),
         Effect.map(makePinnedTarget),
       ),
-    selectPage: (id) =>
-      checked(Identifier, id, "select-page").pipe(
-        Effect.flatMap(controls.selectPage),
-        Effect.andThen(currentTarget),
-      ),
+    selectPage: (page) =>
+      checked(PageInfo, page, "select-page").pipe(Effect.flatMap(controls.selectPage)),
     selectFrame: (id) =>
-      checked(Identifier, id, "select-frame").pipe(
-        Effect.flatMap(controls.selectFrame),
-        Effect.andThen(currentTarget),
-      ),
+      checked(Identifier, id, "select-frame").pipe(Effect.flatMap(controls.selectFrame)),
     createPage: controls.createPage(),
-    closePage: (id) =>
-      checked(Identifier, id, "close-page").pipe(Effect.flatMap(controls.closePage)),
+    closePage: (page) =>
+      checked(PageInfo, page, "close-page").pipe(Effect.flatMap(controls.closePage)),
     resizeViewport: (viewport) =>
       checked(Viewport, viewport, "resize").pipe(Effect.flatMap(controls.resize)),
     waitFor: (request) =>

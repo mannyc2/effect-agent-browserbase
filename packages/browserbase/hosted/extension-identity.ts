@@ -54,11 +54,11 @@ await h.run(
         Effect.gen(function* () {
           const session = yield* h.open();
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com/" }));
+          yield* session.navigate(NavigateRequest.make({ url: "https://example.com/" }));
           yield* session.waitFor({ selector: "#effect-agent-extension", state: "attached" });
 
           const { text } = yield* session
-            .bind()
+
             .readText(ReadTextRequest.make({ selector: "#effect-agent-extension" }));
 
           const cleanup = yield* session.close;

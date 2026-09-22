@@ -1,6 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { type Effect, type Scope } from "effect";
-import { type BoundTarget, type NavigationOperation } from "effect-browser/browser";
+import {
+  type TargetOperations,
+  type RetainedTarget,
+  type NavigationOperation,
+  type BrowserSession,
+} from "effect-browser/browser";
 import type {
   BrowserPolicy,
   Checkpoint,
@@ -46,14 +51,19 @@ const acquisitionClose: Same<BrowserAcquisition["close"], Effect.Effect<CleanupR
 
 const checkedClose: Same<
   BrowserbaseSession["closeChecked"],
-  Effect.Effect<void, BrowserError>
+  Effect.Effect<CleanupResult, BrowserError>
 > = true;
 
-const boundTarget: Same<ReturnType<BrowserbaseSession["bind"]>, BoundTarget> = true;
+const retainedTarget: Same<
+  BrowserbaseSession["retain"],
+  Effect.Effect<RetainedTarget, BrowserError>
+> = true;
+
+const genericClose: Same<BrowserSession["closeChecked"], Effect.Effect<void, BrowserError>> = true;
 
 /** Native input is an ordinary owned operation: one receipt, one error, no environment. */
 const inputEffect: Same<
-  ReturnType<BoundTarget["wheel"]>,
+  ReturnType<TargetOperations["wheel"]>,
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
@@ -64,7 +74,7 @@ const hoverElementEffect: Same<
 
 /** Key input is the same kind of owned operation, by selector or by the node an observation named. */
 const keyEffect: Same<
-  ReturnType<BoundTarget["press"]>,
+  ReturnType<TargetOperations["press"]>,
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
@@ -91,7 +101,7 @@ const revalidateEffect: Same<
 
 /** A navigation left in flight is a scoped resource; completing or stopping it needs nothing. */
 const navigationEffect: Same<
-  ReturnType<BoundTarget["startNavigation"]>,
+  ReturnType<TargetOperations["startNavigation"]>,
   Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>
 > = true;
 
@@ -116,7 +126,8 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
       receiptClose &&
       acquisitionClose &&
       checkedClose &&
-      boundTarget &&
+      genericClose &&
+      retainedTarget &&
       inputEffect &&
       hoverElementEffect &&
       keyEffect &&

@@ -18,8 +18,8 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.bind().navigate(NavigateRequest.make({ url: f.url }));
-          yield* session.bind().click(ClickRequest.make({ selector: "#popup" }));
+          yield* session.navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.click(ClickRequest.make({ selector: "#popup" }));
 
           // A dispatched click is not a registered target: the popup reaches this
           // session only once Chromium reports it and the owner registers it.
@@ -34,7 +34,8 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           assert.ok(original, "the fixture page must still be selected");
           assert.ok(popup, "the popup must be registered as a second page");
-          const popupHandle = yield* session.selectPage(popup.pageId);
+          yield* session.selectPage(popup);
+          const popupHandle = session;
 
           yield* popupHandle.navigate(NavigateRequest.make({ url: f.url }));
           const pages = yield* session.pages;
@@ -83,10 +84,10 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
             maxDurationMillis: 5000,
           });
 
-          yield* session.closePage(original.pageId);
+          yield* session.closePage(original);
           const closed = yield* closingCapture.completed;
 
-          expect(closed.error?.reason).toBe("target-changed");
+          expect(closed.error?.reason._tag).toBe("TargetChanged");
           expect(closed.nativeStop).toBe("confirmed");
 
           // B plus three replacements fills both the four-interval and 64 MiB budgets.
@@ -94,8 +95,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           const replacements: Array<Capture.CaptureInterval> = [];
 
           for (let index = 0; index < 3; index++) {
-            const pageId = yield* session.createPage;
-            const replacementPage = (yield* session.pages).find((page) => page.pageId === pageId)!;
+            const replacementPage = yield* session.createPage;
 
             replacements.push(
               yield* Capture.start(session, { target: replacementPage, maxDurationMillis: 5000 }),
@@ -110,7 +110,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           expect(survivor.target.pageId).toBe(popup.pageId);
           expect(survivor.received).toBeGreaterThan(0);
-          expect((yield* session.currentTarget.pipe(Effect.result))._tag).toBe("Success");
+          expect((yield* session.retain.pipe(Effect.result))._tag).toBe("Success");
           yield* session.close;
         }),
       );

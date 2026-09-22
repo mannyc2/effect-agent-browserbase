@@ -73,8 +73,8 @@ export interface NavigationOperation {
   readonly stop: Effect.Effect<void, BrowserError>;
 }
 
-/** Operations against one page and frame at one connection generation, never the current DOM. */
-export interface BoundTarget {
+/** Common operations. Direct, retained and pinned views choose their target at different times. */
+export interface TargetOperations {
   readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserError>;
   /** `navigate`, left in flight: the same single dispatch, completed by the caller. */
   readonly startNavigation: (
@@ -105,19 +105,22 @@ export interface BoundTarget {
  * this identity inside the same owner and connection. Closing/detaching it or reconnecting makes
  * the handle stale before dispatch.
  */
-export interface PinnedTarget extends BoundTarget {
+export interface PinnedTarget extends TargetOperations {
   readonly target: Target;
 }
+
+/** A checked selection retained at acquisition; moving selection away and back makes it stale. */
+export interface RetainedTarget extends TargetOperations {}
 
 /**
  * Host control over one owned browser. This is not a serializable model value: copying a
  * session object cannot copy its capture, page-control or connection authority.
  *
  * The inherited target operations resolve the selected page/frame when their Effect executes.
- * Use `bind()` to retain the current selection with stale-on-selection-change semantics, or
+ * Use `retain` to retain the current selection with stale-on-selection-change semantics, or
  * `pinPage` / `pinFrame` when work must stay on an explicit target while selection moves.
  */
-export interface BrowserSession<E = never> extends BoundTarget {
+export interface BrowserSession<E = never> extends TargetOperations {
   /** The implementation which owns this live connection. */
   readonly implementation: string;
   /** Close this scope and require its own ownership-specific cleanup evidence. */
@@ -126,9 +129,8 @@ export interface BrowserSession<E = never> extends BoundTarget {
   readonly failure: Effect.Effect<never, E | InitializationError>;
   /** Bounded host-only evidence; consumer causes are never projected into a page reply. */
   readonly bindingDiagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
-  readonly bind: () => BoundTarget;
-  /** Re-reads the live selection first, so a stale generation fails before any dispatch. */
-  readonly currentTarget: Effect.Effect<BoundTarget, BrowserError>;
+  /** Resolve, validate and retain the selection under owner admission. */
+  readonly retain: Effect.Effect<RetainedTarget, BrowserError>;
   readonly target: Effect.Effect<Target, BrowserError>;
   /**
    * The one observation whose nodes later actions may name. `scope: "viewport"` keeps only text
@@ -187,11 +189,11 @@ export interface BrowserSession<E = never> extends BoundTarget {
     page: PageInfo,
     frame: FrameInfo,
   ) => Effect.Effect<PinnedTarget, BrowserError>;
-  readonly selectPage: (pageId: string) => Effect.Effect<BoundTarget, BrowserError>;
-  readonly selectFrame: (frameId: string) => Effect.Effect<BoundTarget, BrowserError>;
-  /** Create a tab without selecting it. */
-  readonly createPage: Effect.Effect<string, BrowserError>;
-  readonly closePage: (pageId: string) => Effect.Effect<void, BrowserError>;
+  readonly selectPage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
+  readonly selectFrame: (frameId: string) => Effect.Effect<void, BrowserError>;
+  /** Create a tab without selecting it and return that exact tab's checked identity. */
+  readonly createPage: Effect.Effect<PageInfo, BrowserError>;
+  readonly closePage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
   readonly resizeViewport: (viewport: Viewport) => Effect.Effect<void, BrowserError>;
   readonly waitFor: (request: {
     readonly selector: string;
@@ -206,6 +208,9 @@ export interface BrowserSession<E = never> extends BoundTarget {
    */
   readonly ready: Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
 }
+
+/** Helpers that do not supervise callback failures accept any live browser session. */
+export type AnySession = BrowserSession<unknown>;
 
 /** Dependencies are captured at acquisition, not erased into an environment-free service Layer. */
 export interface OpenOptions<E = never, R = never> {

@@ -77,7 +77,7 @@ it.live(
           Effect.gen(function* () {
             const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* owner.bind().navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* owner.navigate(NavigateRequest.make({ url: fixture.url }));
             const selected = (yield* owner.pages).find((page) => page.selected);
             const endpoint = fixture.sessions.get(owner.reference.sessionId)?.endpoint;
 
@@ -106,9 +106,7 @@ it.live(
             expect(fixture.sessions.get(owner.reference.sessionId)?.status).toBe("RUNNING");
 
             // The owner still drives the page the other process changed.
-            const count = yield* owner
-              .bind()
-              .readText(ReadTextRequest.make({ selector: "#count" }));
+            const count = yield* owner.readText(ReadTextRequest.make({ selector: "#count" }));
 
             expect(count.text).toBe("1");
             const report = yield* owner.close;

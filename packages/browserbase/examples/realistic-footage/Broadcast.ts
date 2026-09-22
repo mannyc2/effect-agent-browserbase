@@ -75,7 +75,7 @@ setInterval(async () => {
     ["clock offset", m.capture.clock ? ms(m.capture.clock.offsetMillis) + " ± " + ms(m.capture.clock.uncertaintyMillis) : "measuring"],
     ["frame gap p50/p95/max", spread(m.capture.interFrameMillis)],
     ["takes", String(m.takes.length + 1)],
-    ["dropped here", String(m.takes.reduce((sum, take) => sum + take.dropped, 0))],
+    ["discarded here", String(m.takes.reduce((sum, take) => sum + take.discarded, 0))],
     ["uncovered at cuts", m.uncoveredMillis.map(ms).join(", ") || "–"],
     ["cue round trip p50/p95/max", spread(m.control.cueRoundTripMillis)],
     ["click to next frame", spread(m.control.clickToFrameMillis)],

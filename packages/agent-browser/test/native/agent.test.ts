@@ -131,9 +131,7 @@ it.live(
                       expect(result.output.done).toBe(true);
                       // Per-turn scopes ended, but the explicitly enclosing execution still owns its browser.
                       expect(f.releaseIds).not.toContain(generic.reference.sessionId);
-                      expect((yield* generic.bind().readText({ selector: "#count" })).text).toBe(
-                        "0",
-                      );
+                      expect((yield* generic.readText({ selector: "#count" })).text).toBe("0");
                       const diagnostics = yield* generic.bindingDiagnostics;
 
                       expect(diagnostics.faulted).toBe(false);
@@ -170,7 +168,7 @@ it.live(
 
                         if (next._tag === "Failure") {
                           expect(next.failure).toMatchObject({
-                            reason: "limit",
+                            reason: { _tag: "Limit", dimension: "actions" },
                             outcome: "undispatched",
                           });
                           exhausted = true;
@@ -219,7 +217,7 @@ it.live(
               }),
               (generic) =>
                 Effect.gen(function* () {
-                  yield* generic.bind().navigate({ url: f.url });
+                  yield* generic.navigate({ url: f.url });
                   yield* Deferred.succeed(borrowed, generic);
 
                   return yield* BrowserTools.run(
@@ -258,7 +256,7 @@ it.live(
             yield* Deferred.await(streaming).pipe(Effect.timeout(3000));
             const session = yield* Deferred.await(borrowed);
 
-            yield* session.bind().click({ selector: "#unavailable-settings" }).pipe(Effect.result);
+            yield* session.click({ selector: "#unavailable-settings" }).pipe(Effect.result);
             const result = yield* Fiber.join(running).pipe(Effect.timeout(3000));
 
             expect(result._tag).toBe("Failure");
@@ -289,8 +287,8 @@ it.live(
               bootstrap: settingsBootstrap(new URL(f.url).origin),
             });
 
-            yield* generic.bind().navigate({ url: f.url });
-            yield* generic.bind().click({ selector: "#unavailable-settings" }).pipe(Effect.result);
+            yield* generic.navigate({ url: f.url });
+            yield* generic.click({ selector: "#unavailable-settings" }).pipe(Effect.result);
             const ownerFailure = yield* generic.failure.pipe(Effect.result);
 
             expect(ownerFailure).toMatchObject({ _tag: "Failure" });
@@ -334,7 +332,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* openAgentBrowser(agentPolicy);
 
-            yield* session.bind().navigate({ url: f.url });
+            yield* session.navigate({ url: f.url });
 
             const turns: ScriptedTurnInput[] = [
               {
@@ -435,7 +433,7 @@ it.live(
             yield* Fiber.interrupt(fiber);
             expect(finalized).toBe(1);
             expect(f.releaseIds).toEqual(["session-2"]);
-            yield* survivor.bind().navigate({ url: f.url });
+            yield* survivor.navigate({ url: f.url });
             expect((yield* survivor.observe()).text).toContain("Local browser fixture");
           }),
         );
@@ -485,7 +483,7 @@ for (const revalidates of [true, false])
                 return `${before.text.includes("Local browser fixture")} ${before.picture !== undefined}`;
               }).pipe(
                 Effect.match({
-                  onFailure: (error) => `failed ${error.reason}`,
+                  onFailure: (error) => `failed ${error.reason._tag}`,
                   onSuccess: (ok) => ok,
                 }),
                 Effect.map((outcome) => {
@@ -525,7 +523,7 @@ for (const revalidates of [true, false])
 
               expect(result.output.done).toBe(true);
               expect(recorded).toBe("true true");
-              expect((yield* generic.bind().readText({ selector: "#count" })).text).toBe(
+              expect((yield* generic.readText({ selector: "#count" })).text).toBe(
                 revalidates ? "1" : "0",
               );
               yield* generic.close;

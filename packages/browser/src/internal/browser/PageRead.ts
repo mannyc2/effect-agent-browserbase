@@ -40,6 +40,9 @@ export const identityOf = (facts: ControlFacts): string =>
     facts.kind,
     facts.label,
     facts.disabled,
+    facts.checked ?? null,
+    facts.selected ?? null,
+    facts.required ?? null,
     facts.editable,
     facts.inputType ?? null,
     facts.autocomplete ?? null,
@@ -54,6 +57,10 @@ export const observedControl = (facts: ControlFacts, elementId: string): Observe
     kind: facts.kind,
     label: facts.label,
     disabled: facts.disabled,
+    ...(facts.checked === undefined ? {} : { checked: facts.checked }),
+    ...(facts.selected === undefined ? {} : { selected: facts.selected }),
+    ...(facts.inputType === undefined ? {} : { inputType: facts.inputType }),
+    ...(facts.required === undefined ? {} : { required: facts.required }),
   });
 
 /**
@@ -149,6 +156,54 @@ export const readPage = (
 
   const factsOf = (node: Element) => {
     const tag = node.tagName.toLowerCase();
+    const role = node.getAttribute("role");
+
+    const booleanAttribute = (name: string): boolean | undefined => {
+      const value = node.getAttribute(name);
+
+      return value === "true" ? true : value === "false" ? false : undefined;
+    };
+
+    const isNativeToggle =
+      node instanceof HTMLInputElement && (node.type === "checkbox" || node.type === "radio");
+
+    const checked = isNativeToggle
+      ? node.type === "checkbox" && node.indeterminate
+        ? undefined
+        : node.checked
+      : role !== null &&
+          ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)
+        ? booleanAttribute("aria-checked")
+        : undefined;
+
+    const selected =
+      node instanceof HTMLOptionElement
+        ? node.selected
+        : !(node instanceof HTMLSelectElement) &&
+            role !== null &&
+            ["option", "tab", "treeitem", "row", "gridcell"].includes(role)
+          ? booleanAttribute("aria-selected")
+          : undefined;
+
+    const required =
+      node instanceof HTMLSelectElement ||
+      node instanceof HTMLTextAreaElement ||
+      (node instanceof HTMLInputElement &&
+        !["hidden", "button", "submit", "reset", "image", "range", "color"].includes(node.type))
+        ? node.required
+        : role !== null &&
+            [
+              "checkbox",
+              "combobox",
+              "gridcell",
+              "listbox",
+              "radiogroup",
+              "spinbutton",
+              "textbox",
+              "tree",
+            ].includes(role)
+          ? booleanAttribute("aria-required")
+          : undefined;
 
     const field =
       node instanceof HTMLInputElement ||
@@ -208,6 +263,9 @@ export const readPage = (
         ""
       ).slice(0, 256),
       disabled,
+      ...(checked === undefined ? {} : { checked }),
+      ...(selected === undefined ? {} : { selected }),
+      ...(required === undefined ? {} : { required }),
       editable:
         !disabled &&
         (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
@@ -235,7 +293,7 @@ export const readPage = (
   const controls: Array<ReturnType<typeof factsOf>> = [];
 
   const candidates = document.querySelectorAll(
-    "a[href],button,input,select,textarea,[role=button]",
+    "a[href],button,input,select,textarea,option,[role=button],[role=checkbox],[role=radio],[role=switch],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=tab],[role=treeitem],[role=row],[role=gridcell],[role=textbox],[role=combobox],[role=listbox],[role=radiogroup],[role=spinbutton],[role=tree]",
   );
 
   let controlsTruncated = false;

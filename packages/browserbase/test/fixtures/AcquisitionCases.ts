@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { Deferred, Effect, Fiber, Layer, Redacted } from "effect";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 
 import type { CleanupResult } from "../../src/Cleanup.ts";
@@ -57,7 +57,7 @@ const layers = BrowserbaseSessions.layer.pipe(Layer.provideMerge(BrowserbaseClie
 
 /** Cleanup reports a failed local step as a `CleanupIssue`; the operation never survives it. */
 const fail = () =>
-  BrowserError.make({ operation: "close", reason: "provider", outcome: "unknown" });
+  BrowserError.make({ operation: "close", reason: Reasons.Provider.make({}), outcome: "unknown" });
 
 const expectFailure = <A, E, R>(value: Effect.Effect<A, E, R>) =>
   value.pipe(
@@ -476,7 +476,10 @@ export const acquisitionCases: ReadonlyArray<Case> = [
               }),
             );
 
-            assert.equal(invalid.reason, "configuration");
+            assert.ok(invalid._tag === "BrowserError");
+            assert.equal(invalid.operation, "launch");
+            assert.deepEqual(invalid.reason, { _tag: "Configuration" });
+            assert.equal(invalid.outcome, "undispatched");
           }),
         ),
       );

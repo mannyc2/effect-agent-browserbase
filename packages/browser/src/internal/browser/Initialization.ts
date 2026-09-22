@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import type { BrowserContext, Disposable, Frame, Page } from "playwright-core";
 
-import { InitializationError } from "../../Errors.ts";
+import { Reasons, InitializationError } from "../../Errors.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type {
@@ -93,7 +93,8 @@ export const makeInitialization = (
         ...(bindings === undefined ? [] : [bindings.dispose()]),
       ]);
 
-      if (outcomes.some((result) => result.status === "rejected")) throw failure("provider");
+      if (outcomes.some((result) => result.status === "rejected"))
+        throw failure(Reasons.Provider.make({}));
     })();
 
     return disposal;
@@ -160,7 +161,7 @@ export const makeInitialization = (
       return await Promise.race([
         frame.evaluate(expression),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(failure("timeout")), milliseconds);
+          timer = setTimeout(() => reject(failure(Reasons.Timeout.make({}))), milliseconds);
         }),
       ]);
     } finally {
@@ -209,7 +210,9 @@ export const makeInitialization = (
           _tag: "NotReady",
           step: requirement.step,
           reason:
-            Schema.is(NativeFailure)(error) && error.reason === "timeout" ? "timeout" : "failed",
+            Schema.is(NativeFailure)(error) && error.reason._tag === "Timeout"
+              ? "timeout"
+              : "failed",
         };
       }
       ticket.check();

@@ -115,7 +115,7 @@ export const recoveryCases: ReadonlyArray<Case> = [
         yield* session.reconnect(true);
         assert.equal(connections.length, 2);
         connections[0]!.disconnected();
-        assert.equal(yield* session.bind().readText(), "initial");
+        assert.equal(yield* session.operations.readText(), "initial");
         assert.equal(f.state.connects, 2);
         assert.equal((yield* session.close).remote, "confirmed");
       }),
@@ -167,12 +167,12 @@ export const recoveryCases: ReadonlyArray<Case> = [
         yield* session.reconnect(true);
         connections[0]!.pause();
         connections[0]!.fault();
-        assert.equal(yield* session.bind().readText(), "initial");
+        assert.equal(yield* session.operations.readText(), "initial");
         connections[1]!.disconnected();
-        const stopped = yield* session.bind().readText().pipe(Effect.result);
+        const stopped = yield* session.operations.readText().pipe(Effect.result);
 
         assert.equal(stopped._tag, "Failure");
-        if (stopped._tag === "Failure") assert.equal(stopped.failure.reason, "closed");
+        if (stopped._tag === "Failure") assert.equal(stopped.failure.reason._tag, "Closed");
       }),
     ),
   },

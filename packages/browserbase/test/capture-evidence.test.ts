@@ -3,7 +3,7 @@ import { Schema } from "effect";
 import { Target } from "effect-browser/browser-data";
 import type { CapturedFrame } from "effect-browser/capture";
 import { CaptureSummary } from "effect-browser/capture";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { CaptureEvidence, captureEvidence } from "../examples/capture-evidence.ts";
 
@@ -15,7 +15,9 @@ const summary = (delivered: number, received = delivered, duplicates = 0) =>
     reason: "duration",
     received,
     delivered,
-    dropped: duplicates,
+    discarded: duplicates,
+    overflow: 0,
+    rejected: 0,
     duplicates,
     late: 0,
     peakBufferedFrames: delivered,
@@ -29,7 +31,11 @@ const summary = (delivered: number, received = delivered, duplicates = 0) =>
     documentBoundariesTruncated: false,
     nativeStop: "confirmed",
     upstreamDrops: "unknown",
-    error: BrowserError.make({ operation: "capture", reason: "provider" }),
+    error: BrowserError.make({
+      operation: "capture",
+      reason: Reasons.Provider.make({}),
+      outcome: "unknown",
+    }),
   });
 
 const frame: CapturedFrame = {

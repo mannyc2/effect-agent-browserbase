@@ -17,7 +17,7 @@ await h.run(
     Effect.gen(function* () {
       const session = yield* h.open();
 
-      yield* session.bind().navigate(NavigateRequest.make({ url: start }));
+      yield* session.navigate(NavigateRequest.make({ url: start }));
       const handoff = yield* session.beginHandoff(240);
       const page = handoff.view.pages[0];
 

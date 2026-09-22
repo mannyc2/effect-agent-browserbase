@@ -60,13 +60,13 @@ it.effect("a busy first stop retries and concurrent callers share one native dis
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.bind().startNavigation("https://example.test/slow");
+      const operation = yield* session.operations.startNavigation("https://example.test/slow");
       const holder = yield* Effect.forkChild(session.observe());
 
       yield* Effect.promise(() => observing.promise);
       expect(yield* Effect.result(operation.stop)).toMatchObject({
         _tag: "Failure",
-        failure: { reason: "busy", outcome: "undispatched" },
+        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
       });
       expect(opens).toBe(0);
       observed.resolve();
@@ -88,9 +88,9 @@ it.effect("a busy first stop retries and concurrent callers share one native dis
       expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 1, closes: 1 });
       expect(yield* Effect.result(operation.completed)).toMatchObject({
         _tag: "Failure",
-        failure: { operation: "navigate", reason: "interrupted", outcome: "unknown" },
+        failure: { operation: "navigate", reason: { _tag: "Interrupted" }, outcome: "unknown" },
       });
-      yield* session.bind().click("#act");
+      yield* session.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -132,7 +132,7 @@ it.effect.each(["cancel", "timeout"] as const)(
 
         const f = yield* fixture({ onNavigate: navigation.script, lifetimeMillis: 20000 });
         const session = yield* (yield* f.acquisition).connect;
-        const operation = yield* session.bind().startNavigation("https://example.test/slow");
+        const operation = yield* session.operations.startNavigation("https://example.test/slow");
         const first = yield* Effect.forkChild(operation.stop);
 
         yield* Effect.promise(() => opened.promise);
@@ -146,7 +146,7 @@ it.effect.each(["cancel", "timeout"] as const)(
           expect(Exit.isFailure(timedOut)).toBe(true);
           if (Exit.isFailure(timedOut))
             expect(Cause.squash(timedOut.cause)).toMatchObject({
-              reason: "timeout",
+              reason: { _tag: "Timeout" },
               outcome: "undispatched",
             });
         }
@@ -154,17 +154,17 @@ it.effect.each(["cancel", "timeout"] as const)(
         for (let index = 0; index < 16; index++) {
           expect(yield* Effect.result(operation.stop)).toMatchObject({
             _tag: "Failure",
-            failure: { reason: "busy", outcome: "undispatched" },
+            failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
           });
         }
         expect({ opens, sends }).toEqual({ opens: 1, sends: 0 });
-        expect(yield* session.bind().readText()).toBe("initial");
+        expect(yield* session.operations.readText()).toBe("initial");
 
         setup.resolve();
         yield* Effect.promise(() => closing.promise);
         expect(yield* Effect.result(operation.stop)).toMatchObject({
           _tag: "Failure",
-          failure: { reason: "busy", outcome: "undispatched" },
+          failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
         close.resolve();
         yield* Effect.promise(() => navigation.nativeFinished.promise);
@@ -173,9 +173,9 @@ it.effect.each(["cancel", "timeout"] as const)(
         expect({ opens, sends, closes }).toEqual({ opens: 2, sends: 1, closes: 2 });
         expect(yield* Effect.result(operation.completed)).toMatchObject({
           _tag: "Failure",
-          failure: { reason: "interrupted" },
+          failure: { reason: { _tag: "Interrupted" } },
         });
-        yield* session.bind().click("#act");
+        yield* session.operations.click("#act");
         expect(f.state.clicks).toBe(1);
       }),
     ),
@@ -221,19 +221,19 @@ it.effect(
         });
 
         const session = yield* (yield* f.acquisition).connect;
-        const first = yield* session.bind().startNavigation("https://example.test/first");
+        const first = yield* session.operations.startNavigation("https://example.test/first");
         const canceled = yield* Effect.forkChild(first.stop);
 
         yield* Effect.promise(() => opened.promise);
         yield* Fiber.interrupt(canceled);
         predecessor.completed.resolve("https://example.test/first");
         expect(yield* first.completed).toBe("https://example.test/first");
-        const second = yield* session.bind().startNavigation("https://example.test/second");
+        const second = yield* session.operations.startNavigation("https://example.test/second");
 
         for (let index = 0; index < 16; index++) {
           expect(yield* Effect.result(second.stop)).toMatchObject({
             _tag: "Failure",
-            failure: { reason: "busy", outcome: "undispatched" },
+            failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
           });
         }
         expect(successorOpens).toBe(0);
@@ -241,16 +241,16 @@ it.effect(
         yield* Effect.promise(() => predecessor.nativeFinished.promise);
         yield* first.stop;
         expect(predecessorSends).toBe(0);
-        expect(yield* Effect.result(session.bind().click("#act"))).toMatchObject({
+        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
           _tag: "Failure",
-          failure: { reason: "busy", outcome: "undispatched" },
+          failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
         yield* second.stop;
         expect({ successorOpens, successorSends }).toEqual({
           successorOpens: 1,
           successorSends: 1,
         });
-        yield* session.bind().click("#act");
+        yield* session.operations.click("#act");
         expect(f.state.clicks).toBe(1);
       }),
     ),
@@ -283,22 +283,22 @@ it.effect("natural completion during stop setup keeps the permit and sends no st
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.bind().startNavigation("https://example.test/first");
+      const operation = yield* session.operations.startNavigation("https://example.test/first");
       const stopping = yield* Effect.forkChild(operation.stop);
 
       yield* Effect.promise(() => opened.promise);
       navigation.completed.resolve("https://example.test/first");
       yield* operation.completed;
       expect(
-        yield* Effect.result(session.bind().navigate("https://example.test/next")),
+        yield* Effect.result(session.operations.navigate("https://example.test/next")),
       ).toMatchObject({
         _tag: "Failure",
-        failure: { reason: "busy", outcome: "undispatched" },
+        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
       });
       setup.resolve();
       yield* Fiber.join(stopping);
       expect(sends).toBe(0);
-      const next = yield* session.bind().startNavigation("https://example.test/next");
+      const next = yield* session.operations.startNavigation("https://example.test/next");
 
       yield* operation.stop;
       expect(yield* next.completed).toBe("https://example.test/next");
@@ -328,7 +328,7 @@ it.effect.each(["failure", "cancel"] as const)(
 
         const f = yield* fixture({ onNavigate: navigation.script });
         const session = yield* (yield* f.acquisition).connect;
-        const operation = yield* session.bind().startNavigation("https://example.test/slow");
+        const operation = yield* session.operations.startNavigation("https://example.test/slow");
         const first = yield* Effect.forkChild(operation.stop);
 
         yield* Effect.promise(() => dispatched.promise);
@@ -344,9 +344,9 @@ it.effect.each(["failure", "cancel"] as const)(
 
         expect(repeated).toEqual(original);
         expect(sends).toBe(1);
-        expect(yield* Effect.result(session.bind().click("#act"))).toMatchObject({
+        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
           _tag: "Failure",
-          failure: { reason: "closed", outcome: "undispatched" },
+          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
         expect(f.state.clicks).toBe(0);
       }),
@@ -392,7 +392,7 @@ it.effect("failed late detach keeps setup quarantined across subsequent navigati
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const first = yield* session.bind().startNavigation("https://example.test/first");
+      const first = yield* session.operations.startNavigation("https://example.test/first");
       const canceled = yield* Effect.forkChild(first.stop);
 
       yield* Effect.promise(() => opened.promise);
@@ -402,16 +402,16 @@ it.effect("failed late detach keeps setup quarantined across subsequent navigati
       predecessor.completed.resolve("https://example.test/first");
       yield* first.completed;
 
-      const second = yield* session.bind().startNavigation("https://example.test/second");
+      const second = yield* session.operations.startNavigation("https://example.test/second");
 
       expect(yield* Effect.result(second.stop)).toMatchObject({
         _tag: "Failure",
-        failure: { reason: "busy", outcome: "undispatched" },
+        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
       });
       expect({ sends, successorOpens }).toEqual({ sends: 0, successorOpens: 0 });
       successor.completed.resolve("https://example.test/second");
       yield* second.completed;
-      yield* session.bind().click("#act");
+      yield* session.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -446,7 +446,10 @@ it.effect(
 
         const stopping = yield* Effect.scoped(
           Effect.gen(function* () {
-            const operation = yield* session.bind().startNavigation("https://example.test/slow");
+            const operation = yield* session.operations.startNavigation(
+              "https://example.test/slow",
+            );
+
             const fiber = yield* Effect.forkScoped(operation.stop);
 
             yield* Effect.promise(() => opened.promise);
@@ -459,9 +462,9 @@ it.effect(
         setup.resolve();
         yield* Effect.promise(() => navigation.nativeFinished.promise);
         expect({ sends, closes }).toEqual({ sends: 0, closes: 1 });
-        expect(yield* Effect.result(session.bind().click("#act"))).toMatchObject({
+        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
           _tag: "Failure",
-          failure: { reason: "closed", outcome: "undispatched" },
+          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
         expect(f.state.clicks).toBe(0);
       }),

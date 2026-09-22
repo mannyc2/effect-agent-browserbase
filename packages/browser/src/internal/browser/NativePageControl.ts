@@ -3,6 +3,7 @@ import type { Browser, BrowserContext, Frame } from "playwright-core";
 
 import type { PageInfo, PageSuspension } from "../../BrowserData.ts";
 import { Identifier } from "../../BrowserData.ts";
+import { Reasons } from "../../Errors.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
@@ -29,16 +30,17 @@ export const makePageControl = (
   const { current, entries } = targets;
 
   const execution = (entry: Entry): Promise<PageExecution> => {
-    if (!options.pageControl) return Promise.reject(failure("unsupported", "undispatched"));
+    if (!options.pageControl)
+      return Promise.reject(failure(Reasons.Unsupported.make({}), "undispatched"));
     entry.execution ??= sanitize(async () => {
       const cdp = await context.newCDPSession(entry.page);
 
       try {
         const targetId = await targets.targetId(entry);
 
-        if (closing() || entry.page.isClosed()) throw failure("closed");
+        if (closing() || entry.page.isClosed()) throw failure(Reasons.Closed.make({}));
         await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-        if (closing() || entry.page.isClosed()) throw failure("closed");
+        if (closing() || entry.page.isClosed()) throw failure(Reasons.Closed.make({}));
 
         const control = new PageExecution(entry.id, targetId, {
           readRate: async () =>
@@ -100,7 +102,7 @@ export const makePageControl = (
 
             ticket.check();
             if (result.exceptionDetails !== undefined || result.result.value !== true)
-              throw failure("malformed");
+              throw failure(Reasons.Malformed.make({}));
           },
         });
 
@@ -123,11 +125,12 @@ export const makePageControl = (
     ticket.check();
     const entry = entries.get(target.pageId);
 
-    if (entry === undefined || entry.page.isClosed()) throw failure("closed", "undispatched");
+    if (entry === undefined || entry.page.isClosed())
+      throw failure(Reasons.Closed.make({}), "undispatched");
     const control = await execution(entry);
 
     ticket.check();
-    if (control.targetId !== target.targetId) throw failure("stale", "undispatched");
+    if (control.targetId !== target.targetId) throw failure(Reasons.Stale.make({}), "undispatched");
 
     return control;
   };

@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import type { Browser, BrowserContext, Dialog, Frame, Page } from "playwright-core";
 
 import { FrameInfo, PageInfo, Identifier } from "../../BrowserData.ts";
+import { Reasons } from "../../Errors.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type { DriverEvents, DriverOptions, DriverTarget } from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
@@ -73,7 +74,7 @@ export const makeTargets = (
   const navigating = new Set<string>();
   // FrameInfo is connection-local public metadata. A new driver after reconnect must never
   // regenerate an old frame id for a different frame, even when serial order happens to match.
-  const frameNamespace = globalThis.crypto.randomUUID();
+  const connectionNamespace = globalThis.crypto.randomUUID();
 
   let serial = 0,
     frameSerial = 0;
@@ -86,7 +87,7 @@ export const makeTargets = (
     let id = frameIds.get(frame);
 
     if (id === undefined) {
-      id = `frame-${frameNamespace}-${++frameSerial}`;
+      id = `frame-${connectionNamespace}-${++frameSerial}`;
       frameIds.set(frame, id);
     }
 
@@ -97,7 +98,7 @@ export const makeTargets = (
     const existing = byPage.get(page);
 
     if (existing !== undefined) return existing;
-    const entry: Entry = { id: `page-${++serial}`, page, off: [] };
+    const entry: Entry = { id: `page-${connectionNamespace}-${++serial}`, page, off: [] };
 
     byPage.set(page, entry);
     if (entries.size >= options.maxPages) {
@@ -166,19 +167,21 @@ export const makeTargets = (
       selection.frame === undefined ||
       selection.frame.isDetached()
     )
-      throw failure("closed", "undispatched");
+      throw failure(Reasons.Closed.make({}), "undispatched");
 
     return { entry: selection.entry, frame: selection.frame };
   };
 
   const explicitCurrent = (target: DriverTarget) => {
-    if (closing() || !browser.isConnected()) throw failure("closed", "undispatched");
+    if (closing() || !browser.isConnected()) throw failure(Reasons.Closed.make({}), "undispatched");
     const entry = entries.get(target.pageId);
 
-    if (entry === undefined || entry.page.isClosed()) throw failure("stale", "undispatched");
+    if (entry === undefined || entry.page.isClosed())
+      throw failure(Reasons.Stale.make({}), "undispatched");
     const frame = entry.page.frames().find((candidate) => frameId(candidate) === target.frameId);
 
-    if (frame === undefined || frame.isDetached()) throw failure("stale", "undispatched");
+    if (frame === undefined || frame.isDetached())
+      throw failure(Reasons.Stale.make({}), "undispatched");
 
     return { entry, frame };
   };
@@ -186,13 +189,16 @@ export const makeTargets = (
   const current = (target?: DriverTarget) =>
     target === undefined ? selectedCurrent() : explicitCurrent(target);
 
-  const targetId = async (entry: Entry): Promise<string> => {
+  const targetId = async (entry: Entry, ticket?: Ticket): Promise<string> => {
+    ticket?.check();
     if (entry.targetId !== undefined) return entry.targetId;
     const cdp = await context.newCDPSession(entry.page);
 
     try {
+      ticket?.check();
       const info: unknown = await cdp.send("Target.getTargetInfo");
 
+      ticket?.check();
       entry.targetId = safeDecode(TargetInfo, info).targetInfo.targetId;
 
       return entry.targetId;
@@ -221,9 +227,9 @@ export const makeTargets = (
     } else if (options.initialTargetId !== undefined) {
       for (const entry of entries.values())
         if ((await targetId(entry)) === options.initialTargetId) selection.entry = entry;
-      if (selection.entry === undefined) throw failure("not-found");
+      if (selection.entry === undefined) throw failure(Reasons.NotFound.make({}));
     } else {
-      if (entries.size !== 1) throw failure("ambiguous");
+      if (entries.size !== 1) throw failure(Reasons.Ambiguous.make({}));
       selection.entry = entries.values().next().value;
     }
   };
@@ -242,27 +248,33 @@ export const makeTargets = (
 
   const selectedTargetId = () => sanitize(() => targetId(current().entry));
 
+  /** Describe this exact entry, including when creation has already dispatched. */
+  const pageInfo = async (entry: Entry, ticket: Ticket): Promise<PageInfo> => {
+    const id = await targetId(entry, ticket);
+
+    ticket.check();
+    const title: unknown = await entry.page.title();
+
+    ticket.check();
+    if (entries.get(entry.id) !== entry || entry.page.isClosed())
+      throw failure(Reasons.Stale.make({}), ticket.dispatched ? "unknown" : "undispatched");
+    if (typeof title !== "string") throw failure(Reasons.Malformed.make({ path: "page.title" }));
+
+    return safeDecode(PageInfo, {
+      pageId: entry.id,
+      targetId: id,
+      title: title.slice(0, 512),
+      url: entry.page.url(),
+      selected: selection.entry === entry,
+    });
+  };
+
   const listPages = (ticket: Ticket) =>
     sanitize(async () => {
       ticket.check();
       const output: PageInfo[] = [];
 
-      for (const entry of entries.values()) {
-        const id = await targetId(entry);
-        const title: unknown = await entry.page.title();
-
-        ticket.check();
-        if (typeof title !== "string") throw failure("malformed");
-        output.push(
-          safeDecode(PageInfo, {
-            pageId: entry.id,
-            targetId: id,
-            title: title.slice(0, 512),
-            url: entry.page.url(),
-            selected: selection.entry === entry,
-          }),
-        );
-      }
+      for (const entry of entries.values()) output.push(await pageInfo(entry, ticket));
 
       return output;
     });
@@ -271,9 +283,13 @@ export const makeTargets = (
     ticket.check();
     const entry = entries.get(page.pageId);
 
-    if (entry === undefined || entry.page.isClosed()) throw failure("not-found", "undispatched");
-    if ((await targetId(entry)) !== page.targetId) throw failure("stale", "undispatched");
+    if (entry === undefined || entry.page.isClosed())
+      throw failure(Reasons.NotFound.make({}), "undispatched");
+    if ((await targetId(entry, ticket)) !== page.targetId)
+      throw failure(Reasons.Stale.make({}), "undispatched");
     ticket.check();
+    if (entries.get(entry.id) !== entry || entry.page.isClosed())
+      throw failure(Reasons.Stale.make({}), "undispatched");
 
     return entry;
   };
@@ -285,14 +301,14 @@ export const makeTargets = (
       return { pageId: entry.id, frameId: frameId(entry.page.mainFrame()) };
     });
 
-  const selectPage = (id: string, ticket: Ticket) =>
+  const selectPage = (page: PageInfo, ticket: Ticket) =>
     sanitize(async () => {
-      const entry = entries.get(id);
+      const entry = await explicitPage(page, ticket);
 
-      ticket.check();
-      if (entry === undefined || entry.page.isClosed()) throw failure("not-found", "undispatched");
       await hooks.release();
       ticket.check();
+      if (entries.get(entry.id) !== entry || entry.page.isClosed())
+        throw failure(Reasons.Stale.make({}), "undispatched");
       selection.entry = entry;
       selection.frame = entry.page.mainFrame();
       hooks.changed("target-changed");
@@ -300,9 +316,19 @@ export const makeTargets = (
 
   const newPage = (ticket: Ticket) =>
     sanitize(async () => {
-      if (entries.size >= options.maxPages) throw failure("limit", "undispatched");
+      if (entries.size >= options.maxPages)
+        throw failure(
+          Reasons.Limit.make({
+            dimension: "pages",
+            maximum: options.maxPages,
+            observed: entries.size,
+          }),
+          "undispatched",
+        );
       ticket.dispatch();
       creatingPage = true;
+      let entry: Entry;
+
       try {
         const page = await context.newPage();
 
@@ -311,18 +337,19 @@ export const makeTargets = (
           ticket.check();
         }
 
-        // Creation never silently selects a different tab.
-        return register(page).id;
+        entry = register(page);
       } finally {
         creatingPage = false;
       }
+
+      // Creation never selects or relists. A failed metadata read cannot repeat the creation.
+      return pageInfo(entry, ticket);
     });
 
-  const closePage = (id: string, ticket: Ticket) =>
+  const closePage = (page: PageInfo, ticket: Ticket) =>
     sanitize(async () => {
-      const entry = entries.get(id);
+      const entry = await explicitPage(page, ticket);
 
-      if (entry === undefined) throw failure("not-found", "undispatched");
       ticket.dispatch();
       await entry.page.close({ runBeforeUnload: false });
       ticket.check();
@@ -334,7 +361,10 @@ export const makeTargets = (
       const entry = page === undefined ? selectedCurrent().entry : await explicitPage(page, ticket);
       const frames = entry.page.frames();
 
-      if (frames.length > 128) throw failure("limit");
+      if (frames.length > 128)
+        throw failure(
+          Reasons.Limit.make({ dimension: "frames", maximum: 128, observed: frames.length }),
+        );
 
       return frames.map((frame) =>
         safeDecode(FrameInfo, {
@@ -354,7 +384,8 @@ export const makeTargets = (
         .frames()
         .find((candidate) => frameId(candidate) === requested.frameId);
 
-      if (frame === undefined || frame.isDetached()) throw failure("not-found", "undispatched");
+      if (frame === undefined || frame.isDetached())
+        throw failure(Reasons.NotFound.make({}), "undispatched");
       ticket.check();
 
       return { pageId: entry.id, frameId: frameId(frame) };
@@ -364,10 +395,11 @@ export const makeTargets = (
     sanitize(async () => {
       const entry = selection.entry;
 
-      if (entry === undefined) throw failure("closed");
+      if (entry === undefined) throw failure(Reasons.Closed.make({}));
       const frame = entry.page.frames().find((f) => frameId(f) === id);
 
-      if (frame === undefined || frame.isDetached()) throw failure("not-found", "undispatched");
+      if (frame === undefined || frame.isDetached())
+        throw failure(Reasons.NotFound.make({}), "undispatched");
       await hooks.release();
       ticket.check();
       selection.frame = frame;

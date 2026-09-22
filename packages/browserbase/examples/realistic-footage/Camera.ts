@@ -1,5 +1,5 @@
 import { Clock, Deferred, Effect, Fiber, Schema, Stream } from "effect";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession } from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -87,7 +87,7 @@ interface Signals {
  * rather than silently holding its last picture to the end.
  */
 const footage = (
-  session: BrowserSession,
+  session: AnySession,
   options: Required<FilmOptions>,
   telemetry: Telemetry["Service"],
 ) =>
@@ -123,7 +123,7 @@ const footage = (
  * reel of JPEG bytes for the encoder, until the cut.
  */
 const reel = (
-  session: BrowserSession,
+  session: AnySession,
   options: Required<FilmOptions>,
   signals: Signals,
   telemetry: Telemetry["Service"],
@@ -235,7 +235,7 @@ const probe = Effect.fnUntraced(function* (outputPath: string) {
  * the scope, and its error is the one reported.
  */
 export const film = Effect.fn("Camera.film")(function* <A, E, R>(
-  session: BrowserSession,
+  session: AnySession,
   outputPath: string,
   performance: Effect.Effect<A, E, R>,
   overrides: FilmOptions = {},

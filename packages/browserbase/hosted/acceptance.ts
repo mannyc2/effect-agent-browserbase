@@ -16,9 +16,9 @@ const interactive = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* h.open();
 
-    yield* session.bind().navigate(NavigateRequest.make({ url: "https://example.com/" }));
+    yield* session.navigate(NavigateRequest.make({ url: "https://example.com/" }));
     const observation = yield* session.observe({ maxTextBytes: 16 * 1024, maxControls: 16 });
-    const screenshot = yield* session.bind().screenshot({ fullPage: true });
+    const screenshot = yield* session.screenshot({ fullPage: true });
 
     const capture = yield* Capture.start(session, {
       maxFrames: 64,

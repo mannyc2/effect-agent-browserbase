@@ -110,7 +110,7 @@ it.live("local startup timeout and interrupted connect terminate the exact launc
                 expect(result.failure).toMatchObject({
                   _tag: "BrowserError",
                   operation: "connect",
-                  reason: "timeout",
+                  reason: { _tag: "Timeout" },
                   outcome: "undispatched",
                 });
             }
@@ -207,7 +207,7 @@ it.live(
             expect(result.failure).toMatchObject({
               _tag: "BrowserError",
               operation: "connect",
-              reason: "timeout",
+              reason: { _tag: "Timeout" },
               outcome: "undispatched",
             });
           const cleanup = yield* acquired.close;
@@ -231,9 +231,9 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         for (const [portFile, reason] of [
-          ["", "timeout"],
-          ["\n", "timeout"],
-          ["12345\n/elsewhere/browser/x\n", "malformed"],
+          ["", "Timeout"],
+          ["\n", "Timeout"],
+          ["12345\n/elsewhere/browser/x\n", "Malformed"],
         ] as const) {
           const fixture = yield* stalledProcess(portFile);
 
@@ -249,7 +249,7 @@ it.live(
                 expect(result.failure).toMatchObject({
                   _tag: "BrowserError",
                   operation: "connect",
-                  reason,
+                  reason: { _tag: reason },
                   outcome: "undispatched",
                 });
               const cleanup = yield* acquired.close;

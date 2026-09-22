@@ -1,6 +1,6 @@
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy, ClickRequest, ReadTextRequest } from "effect-browser/browser-data";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, Reasons } from "effect-browser/errors";
 // A consumer started as its own process. Only the durable session reference, a target identifier
 // and the fixture's addresses cross from the allocating process, as JSON in the environment; no
 // closure, Scope, Layer or native object does. It borrows the session through the public API,
@@ -46,7 +46,13 @@ const binding = BrowserBinding.playwright({
   resolveEndpoint: ({ url }) =>
     new URL(Redacted.value(url)).searchParams.get("session") === handoff.reference.sessionId
       ? Effect.succeed(handoff.endpoint)
-      : Effect.fail(BrowserError.make({ operation: "connect", reason: "provider" })),
+      : Effect.fail(
+          BrowserError.make({
+            operation: "connect",
+            reason: Reasons.Provider.make({}),
+            outcome: "undispatched",
+          }),
+        ),
 });
 
 const account = BrowserbaseSessions.layer.pipe(
@@ -73,7 +79,7 @@ const result = await Effect.runPromise(
         target: { targetId: handoff.targetId },
       });
 
-      const target = session.bind();
+      const target = session;
       const heading = (yield* target.readText(ReadTextRequest.make({ selector: "h1" }))).text;
 
       yield* target.click(ClickRequest.make({ selector: "#increment" }));
