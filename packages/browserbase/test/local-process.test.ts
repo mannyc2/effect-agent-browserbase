@@ -9,43 +9,55 @@ import { Effect, Fiber, Layer } from "effect";
 import { BrowserPolicy } from "../src/BrowserData.ts";
 import { LocalBrowser, type LocalCleanupResult } from "../src/LocalBrowser.ts";
 
-/** A process that starts but never advertises CDP exposes cancellation without launching a browser. */
-const stalledProcess = Effect.acquireRelease(
-  Effect.promise(async () => {
-    const directory = await mkdtemp(join(tmpdir(), "local-process-test-"));
-    const executable = join(directory, "chromium-stalled");
-    const pidFile = join(directory, "pid");
-    const argsFile = join(directory, "args");
-    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-
-    await writeFile(
-      executable,
-      `#!/bin/sh\nprintf '%s' "$$" > ${quote(pidFile)}\nprintf '%s\\n' "$@" > ${quote(argsFile)}\nexec sleep 30\n`,
-      { mode: 0o700 },
-    );
-
-    return { directory, executable, pidFile, argsFile };
-  }),
-  (fixture) =>
+/**
+ * A process that starts but never advertises CDP exposes cancellation without launching a browser.
+ * With `portFile`, it first writes that content to its profile's DevToolsActivePort, the way Chromium
+ * leaves the file between creating it and filling it.
+ */
+const stalledProcess = (portFile?: string) =>
+  Effect.acquireRelease(
     Effect.promise(async () => {
-      // This fixture knows only its own process. Prevent a regression from leaving it behind.
-      const pid = await readFile(fixture.pidFile, "utf8")
-        .then(Number)
-        .catch(() => undefined);
+      const directory = await mkdtemp(join(tmpdir(), "local-process-test-"));
+      const executable = join(directory, "chromium-stalled");
+      const pidFile = join(directory, "pid");
+      const argsFile = join(directory, "args");
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-      if (pid !== undefined && Number.isSafeInteger(pid) && pid > 0) {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch {
-          /* Already terminated by the tested owner. */
-        }
-      }
-      await rm(fixture.directory, { recursive: true, force: true });
+      const advertise =
+        portFile === undefined
+          ? ""
+          : `for a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#--user-data-dir=}";; esac; done\nprintf '%s' ${quote(portFile)} > "$d/DevToolsActivePort"\n`;
+
+      await writeFile(
+        executable,
+        `#!/bin/sh\nprintf '%s' "$$" > ${quote(pidFile)}\nprintf '%s\\n' "$@" > ${quote(argsFile)}\n${advertise}exec sleep 30\n`,
+        { mode: 0o700 },
+      );
+
+      return { directory, executable, pidFile, argsFile };
     }),
-);
+    (fixture) =>
+      Effect.promise(async () => {
+        // This fixture knows only its own process. Prevent a regression from leaving it behind.
+        const pid = await readFile(fixture.pidFile, "utf8")
+          .then(Number)
+          .catch(() => undefined);
+
+        if (pid !== undefined && Number.isSafeInteger(pid) && pid > 0) {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            /* Already terminated by the tested owner. */
+          }
+        }
+        await rm(fixture.directory, { recursive: true, force: true });
+      }),
+  );
 
 /** Positive PID plus the final argv line prove the fixture body finished reporting startup. */
-const started = Effect.fnUntraced(function* (fixture: Effect.Success<typeof stalledProcess>) {
+const started = Effect.fnUntraced(function* (
+  fixture: Effect.Success<ReturnType<typeof stalledProcess>>,
+) {
   const deadline = performance.now() + 2000;
 
   while (performance.now() < deadline) {
@@ -77,7 +89,7 @@ it.live("local startup timeout and interrupted connect terminate the exact launc
   Effect.scoped(
     Effect.gen(function* () {
       for (const interrupt of [false, true]) {
-        const fixture = yield* stalledProcess;
+        const fixture = yield* stalledProcess();
         const reports: LocalCleanupResult[] = [];
 
         yield* Effect.scoped(
@@ -159,7 +171,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* stalledProcess;
+        const fixture = yield* stalledProcess();
         const args = ["--disable-quic"];
         const proxy = { server: "http://127.0.0.1:8080" };
 
@@ -211,6 +223,50 @@ it.live(
             expect(stat(profile)).rejects.toMatchObject({ code: "ENOENT" }),
           );
         }).pipe(Effect.provide(context));
+      }),
+    ),
+);
+
+it.live(
+  "an incomplete DevToolsActivePort is startup in progress; a complete non-loopback one is malformed",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        for (const [portFile, reason] of [
+          ["", "timeout"],
+          ["\n", "timeout"],
+          ["12345\n/elsewhere/browser/x\n", "malformed"],
+        ] as const) {
+          const fixture = yield* stalledProcess(portFile);
+
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const acquired = yield* (yield* LocalBrowser).acquire(BrowserPolicy.unrestricted());
+
+              yield* started(fixture);
+              const result = yield* acquired.connect.pipe(Effect.result);
+
+              expect(result._tag).toBe("Failure");
+              if (result._tag === "Failure")
+                expect(result.failure).toMatchObject({
+                  _tag: "BrowserError",
+                  operation: "connect",
+                  reason,
+                  outcome: "undispatched",
+                });
+              const cleanup = yield* acquired.close;
+
+              expect(cleanup.process).toBe("terminated");
+              expect(cleanup.connection).toBe("not-connected");
+            }),
+          ).pipe(
+            Effect.provide(
+              LocalBrowser.layer({
+                launch: { executablePath: fixture.executable, startupTimeoutMillis: 300 },
+              }),
+            ),
+          );
+        }
       }),
     ),
 );

@@ -103,11 +103,14 @@ export const externalChromium = Effect.acquireRelease(
           () => undefined,
         );
 
+        // Chromium creates the file before it writes the port and path; wait for both lines.
         if (portFile !== undefined) {
           const [port, path] = portFile.trim().split("\n");
 
-          address = `ws://127.0.0.1:${port}${path}`;
-          break;
+          if (port !== undefined && path !== undefined) {
+            address = `ws://127.0.0.1:${port}${path}`;
+            break;
+          }
         }
         await delay(20);
       }
