@@ -18,6 +18,21 @@ export default defineConfig({
   },
   pack: {
     entry: ["src/index.ts", "src/Adapter.ts", "src/Tools.ts"],
+    // Keep root namespaces on the public entry modules; the pinned bundler otherwise
+    // exposes synthetic namespace exports on those entries, even with strict signatures.
+    plugins: [
+      {
+        name: "public-entry-namespaces",
+        resolveId: {
+          order: "pre",
+          handler(id, importer) {
+            if (id.startsWith("./") && /[/\\]src[/\\]index(?:\.d)?\.ts$/.test(importer ?? "")) {
+              return { id: id.replace(/(?:\.d)?\.ts$/, ".mjs"), external: true };
+            }
+          },
+        },
+      },
+    ],
     dts: true,
     sourcemap: true,
   },

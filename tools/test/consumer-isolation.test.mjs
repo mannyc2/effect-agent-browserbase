@@ -190,3 +190,24 @@ for (const duplicate of [false, true]) {
     else assert.equal((await f.verify()).profile, "browser");
   });
 }
+
+for (const [stem, source] of [
+  ["Browser", "export const t = {};\n"],
+  ["PageControl", "export const state = () => undefined; export const t = { state };\n"],
+]) {
+  test(`rejects a bundled namespace alias leaking through the public ${stem} entry`, async (t) => {
+    const f = fixture(t, { profile: "browser", browserModules: {
+      index: `export { t as ${stem} } from "./${stem}.mjs";\n`,
+      [stem]: source,
+    } });
+    await assert.rejects(f.verify(), /expose different members/);
+  });
+}
+
+test("a type-only public entry remains an empty native module namespace", async (t) => {
+  const f = fixture(t, { profile: "browser", browserModules: {
+    index: 'export * as Browser from "./Browser.mjs";\n',
+    Browser: "export {};\n",
+  } });
+  assert.equal((await f.verify()).profile, "browser");
+});

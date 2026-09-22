@@ -118,7 +118,9 @@ export function packedConsumers(tree, out, sha) {
       if (!run(mode.name, "frozen-install", vp, ["install", "--frozen-lockfile", "--ignore-scripts"], directory)) continue;
       // All five consumers check reachable published declarations with skipLibCheck:false.
       // A dependency diagnostic fails the gate just as a diagnostic in a candidate does.
-      run(mode.name, "declarations", vp, ["run", "check"], directory);
+      // A consumer can live beneath another checkout. Task discovery may select that
+      // ancestor's `check`; execute this consumer's compiler and project explicitly.
+      run(mode.name, "declarations", vp, ["exec", join(directory, "node_modules/.bin/tsc"), "--noEmit", "--project", join(directory, "tsconfig.json")], directory);
       for (const runtime of ["node", "bun"]) {
         if (!run(mode.name, `${runtime}-identity`, runtime, [join(tools, "verify-consumer.mjs"), directory, out, mode.name], directory)) continue;
         const evidence = join(out, `video-${mode.name}-${runtime}`); mkdirSync(evidence);
