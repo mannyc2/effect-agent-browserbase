@@ -108,8 +108,8 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
           const activated = yield* Effect.promise(() =>
             page.evaluate(() => {
               sessionStorage.setItem("fixture-before-unload", "0");
-                // Keep the listener registered until dismissal. On the pinned Chromium a once-only
-                // listener runs without producing the native prompt this regression requires.
+              // Keep the listener registered until dismissal. On the pinned Chromium a once-only
+              // listener runs without producing the native prompt this regression requires.
               window.onbeforeunload = (event) => {
                 sessionStorage.setItem("fixture-before-unload", "1");
                 event.preventDefault();

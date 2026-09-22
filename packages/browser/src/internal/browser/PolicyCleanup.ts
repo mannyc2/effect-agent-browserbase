@@ -27,7 +27,11 @@ export class PolicyCleanup {
   private stopped = false;
   private connectionRetired = false;
 
-  constructor(private readonly events: Pick<DriverEvents, "fault">) {}
+  private readonly events: Pick<DriverEvents, "fault">;
+
+  constructor(events: Pick<DriverEvents, "fault">) {
+    this.events = events;
+  }
 
   run(
     subject: object,
