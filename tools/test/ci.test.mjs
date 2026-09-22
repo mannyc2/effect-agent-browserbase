@@ -98,7 +98,7 @@ function evidence(profile, alteration = (rows) => rows) {
 test("full evidence requires every stage and raw zero; a library receipt is not full", () => {
   const { out } = evidence("full"); verifyStages(out, "full");
   assert.throws(() => verifyStages(evidence("library").out, "full"), /Wrong/);
-  assert.throws(() => verifyStages(evidence("full", (rows) => rows.filter((row) => !row.startsWith("ready "))).out, "full"), /Missing/);
+  assert.throws(() => verifyStages(evidence("full", (rows) => rows.filter((row) => !row.startsWith("upstream-test "))).out, "full"), /Missing/);
   assert.throws(() => verifyStages(evidence("full", (rows) => rows.map((row) => row === "packed-consumer 0" ? "packed-consumer 1" : row)).out, "full"), /failed/);
   assert.throws(() => parseStatuses("unit 0\nunit 0\n"), /duplicate/);
   assert.throws(() => parseStatuses(""), /Malformed/);
@@ -204,7 +204,8 @@ for (const profile of ["docs", "library", "full"]) {
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const out = join(work, "results"); verifyStages(out, profile);
     const stages = parseStatuses(text(join(out, "statuses.txt")));
-    assert.equal(stages.has("ready"), profile === "full");
+    assert.equal(stages.has("upstream-test"), profile === "full");
+    if (profile === "full") assert.equal(text(join(out, "upstream-tests.txt")), "reachable\n");
     assert.equal(stages.has("generic-native"), profile === "full");
     assert.equal(stages.has("packed-consumer"), profile !== "docs");
     assert.equal(text(join(out, "acceptance-exit.txt")), "0\n");
@@ -229,7 +230,7 @@ test("full acceptance preserves an early native failure while independent checks
   assert.equal(result.status, 1, result.stdout + result.stderr);
   const out = join(work, "results"), stages = parseStatuses(text(join(out, "statuses.txt")));
   assert.equal(stages.get("generic-native"), 7);
-  assert.equal(stages.get("ready"), 0);
+  assert.equal(stages.get("upstream-test"), 0);
   assert.equal(stages.get("release-dry-run"), 0);
   assert.ok(existsSync(join(out, "consumers/agent/node_modules/fixture.d.mts")));
   assert.equal(existsSync(join(out, "consumer-fixtures.tar.gz")), false);
