@@ -56,6 +56,63 @@ export class FrameInfo extends Schema.Class<FrameInfo>("BrowserFrameInfo")({
   name: Schema.String.check(Schema.isMaxLength(256)),
 }) {}
 
+export const SessionPhase = Schema.Literals([
+  "acquiring",
+  "open",
+  "paused",
+  "detached",
+  "faulted",
+  "uncertain",
+  "closing",
+  "closed",
+]);
+
+export type SessionPhase = typeof SessionPhase.Type;
+
+export const SessionReason = Schema.Literals([
+  "expired",
+  "callback-failure",
+  "registration-failure",
+  "native-failure",
+  "disconnected",
+  "popup-policy",
+  "dialog-policy",
+  "popup-overflow",
+  "dialog-overflow",
+  "cleanup-capacity",
+  "handoff",
+  "detached",
+  "closed",
+]);
+
+export type SessionReason = typeof SessionReason.Type;
+
+const DiagnosticCounter = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
+
+/** Host-only admission evidence. Neither an admission token nor proof of remote termination. */
+export class SessionStatus extends Schema.Class<SessionStatus>("BrowserSessionStatus")({
+  phase: SessionPhase,
+  reason: Schema.NullOr(SessionReason),
+  generation: DiagnosticCounter,
+  busy: Schema.Boolean,
+  unresolvedDispatch: Schema.Boolean,
+}) {}
+
+/** Bounded host facts only: no target identity, page content, native exception or consumer cause. */
+export class BrowserDiagnostic extends Schema.Class<BrowserDiagnostic>("BrowserDiagnostic")({
+  reason: SessionReason,
+  disposition: Schema.Literals(["pending", "confirmed", "not-dispatched", "unknown"]),
+  generation: DiagnosticCounter,
+  monotonicNanos: Schema.BigInt.check(Schema.isGreaterThanOrEqualToBigInt(0n)),
+}) {}
+
+export class BrowserDiagnostics extends Schema.Class<BrowserDiagnostics>("BrowserDiagnostics")({
+  records: Schema.Array(BrowserDiagnostic).check(Schema.isMaxLength(32)),
+  total: DiagnosticCounter,
+  dropped: DiagnosticCounter,
+  truncated: Schema.Boolean,
+}) {}
+
 export class ObservedControl extends Schema.Class<ObservedControl>("BrowserObservedControl")({
   elementId: Identifier,
   kind: Schema.Literals(["link", "button", "input", "select", "textarea", "other"]),
@@ -475,6 +532,10 @@ export const InlineFiles = Schema.Array(InlineFile).check(
 export const AutomationOptions = Schema.Struct({
   actionTimeoutMillis: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 })),
+  ),
+  /** Independent host-only checkpoint/control-facts allowance; normalized to 10,000 by the runtime. */
+  maxHostReads: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000_000 })),
   ),
   maxPages: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
   initialPage: Schema.optionalKey(

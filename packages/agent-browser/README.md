@@ -137,6 +137,13 @@ The generic guide's [Network policy](../browser/README.md#network-policy) sectio
 
 ## Error translation
 
+`host.toolFailures` includes the browser's current `status`, read from host memory when the
+snapshot is requested. It is not historical state at the recorded failure: a `timeout/unknown`
+entry may accompany an open, recovered owner or a subsequently closed owner. Status carries
+phase, reason, generation, busy and unresolved-dispatch facts without becoming model output.
+The browser's separate `diagnostics` keeps bounded policy/native records; typed callback causes
+remain separate. All these snapshots remain readable after host closure.
+
 The generic package's `BrowserError` carries a tagged `reason` and required `outcome`. The Tools return only `stale`, `busy`, `denied`, `not-found`, `ambiguous`, `not-visible`, `not-focused`, `limit`, `timeout`, `closed`, or `failed`, alongside the unchanged `undispatched`, `rejected`, or `unknown` outcome. An `Interrupted` navigation projects to `stale/unknown`; that does not authorize replay. Rate limiting projects to `busy`, with retry timing retained for the host. Provider status, diagnostic paths, limit measurements and native exceptions never enter this failure projection.
 
 Read `host.toolFailures` for the original `_tag`, `operation`, tagged `reason` fields and `outcome`, plus the supplied tool-call ID. Each `ToolFailureDiagnostic` is recorded before projection; navigation start/completion, exact-node refusals and malformed typed results use the same channel. The `ToolFailureSnapshot` keeps the latest 32 entries in oldest-first order, with a `dropped` count for evictions. IDs longer than 256 UTF-16 code units are omitted with `toolCallIdOmitted: true`; an absent ID leaves that flag false. Snapshots and their recorded fields are copied and frozen. Reading them performs no browser work, takes no action permit, adds no callback services and remains possible after host closure.

@@ -4,7 +4,6 @@ import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { Browser, BrowserContext, Frame, Page } from "playwright-core";
 
-import { CallbackTasks } from "../src/internal/browser/CallbackTasks.ts";
 import { makeOwner, native, type Ticket } from "../src/internal/browser/Owner.ts";
 import { makeTargets, type TargetHooks } from "../src/internal/browser/Targets.ts";
 
@@ -34,6 +33,7 @@ const registry = (
   const identities = new WeakMap<Page, string>();
   const calls = { created: 0, closed: 0, detached: 0, titles: [] as number[] };
   const changes: Array<Parameters<TargetHooks["changed"]>> = [];
+  const overflows: Array<Parameters<TargetHooks["overflow"]>[0]> = [];
 
   const page = () => {
     const index = ++serial;
@@ -92,11 +92,12 @@ const registry = (
       dialogPolicy: "dismiss",
       maxPages: options.maxPages ?? 3,
     },
-    new CallbackTasks(8, () => {}),
-    { invalidate: () => {}, pause: () => {}, disconnected: () => {}, fault: () => {} },
     () => false,
     {
       opened: () => {},
+      overflow: (entry) => {
+        overflows.push(entry);
+      },
       closed: () => {},
       navigating: () => {},
       navigated: () => {},
@@ -113,7 +114,7 @@ const registry = (
   targets.selection.entry = initial;
   targets.selection.frame = initial.page.mainFrame();
 
-  return { targets, calls, changes };
+  return { targets, calls, changes, overflows, popup: () => targets.register(page()) };
 };
 
 it("independent registries refuse foreign page metadata and mismatched native target IDs before close", async () => {
@@ -167,6 +168,7 @@ it.effect(
 
       const owner = yield* makeOwner({
         maxActions: 10,
+        maxHostReads: 10_000,
         maxElapsedMillis: 10000,
         actionTimeoutMillis: 1000,
       });
@@ -204,6 +206,18 @@ it("page capacity reports its actual count and configured maximum without dispat
   });
   expect(admission.dispatched).toBe(false);
   expect(f.calls.created).toBe(0);
+});
+
+it("an excess native page is handed to its configured policy once without changing selection or silently closing it", () => {
+  const f = registry({ maxPages: 1 });
+  const original = f.targets.selected();
+  const popup = f.popup();
+
+  expect(f.targets.register(popup.page)).toBe(popup);
+  expect(f.overflows).toEqual([popup]);
+  expect(f.calls.closed).toBe(0);
+  expect(f.targets.entries.size).toBe(1);
+  expect(f.targets.selected()).toEqual(original);
 });
 
 it("selection notifications preserve retained nodes while a selected page close retires its own page", async () => {

@@ -142,6 +142,7 @@ it.effect("rejects invalid admission before resolving a native target or reservi
     Effect.gen(function* () {
       const owner = yield* makeOwner({
         maxActions: 1,
+        maxHostReads: 10_000,
         maxElapsedMillis: 1000,
         actionTimeoutMillis: 500,
       });
@@ -193,6 +194,7 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
     Effect.gen(function* () {
       const owner = yield* makeOwner({
         maxActions: 3,
+        maxHostReads: 10_000,
         maxElapsedMillis: 1000,
         actionTimeoutMillis: 500,
       });
@@ -263,6 +265,7 @@ it.effect(
       Effect.gen(function* () {
         const owner = yield* makeOwner({
           maxActions: 3,
+          maxHostReads: 10_000,
           maxElapsedMillis: 1000,
           actionTimeoutMillis: 500,
         });

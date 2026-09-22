@@ -87,7 +87,7 @@ const fixture = Effect.fnUntraced(function* (onRead?: () => Promise<void>) {
   const bindings = yield* makeBindings(Bootstrap.empty);
 
   const acquired = yield* acquireSession(
-    { maxActions: 20, maxElapsedMillis: 10000, actionTimeoutMillis: 400 },
+    { maxActions: 20, maxHostReads: 10_000, maxElapsedMillis: 10000, actionTimeoutMillis: 400 },
     {
       implementation: "target-test",
       // Unexpected use of an unimplemented native method is a fixture defect.

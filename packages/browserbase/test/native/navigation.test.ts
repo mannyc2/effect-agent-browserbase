@@ -87,6 +87,118 @@ const countStops = (page: Page, loseAcknowledgement = false) =>
     (probe) => Effect.sync(probe.restore),
   );
 
+it.live("real CDP: acknowledged before-unload dismissal retires only its rejected navigation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
+
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const session = yield* BrowserbaseBrowser.open(policy);
+
+          const previous = yield* session.startNavigation({ url: f.url });
+
+          expect((yield* previous.completed).url).toBe(f.url);
+          const [page] = f.nativePages(session.reference.sessionId);
+
+          assert.ok(page);
+          yield* session.click({ selector: "#increment" });
+
+          const activated = yield* Effect.promise(() =>
+            page.evaluate(() => {
+              sessionStorage.setItem("fixture-before-unload", "0");
+              // Keep the listener registered until dismissal. On the pinned Chromium a once-only
+              // listener runs without producing the native prompt this regression requires.
+              window.onbeforeunload = (event) => {
+                sessionStorage.setItem("fixture-before-unload", "1");
+                event.preventDefault();
+                event.returnValue = "Leave this fixture document?";
+              };
+
+              return navigator.userActivation.hasBeenActive;
+            }),
+          );
+
+          expect(
+            activated,
+            "the fixture must have user activation before requesting a leave prompt",
+          ).toBe(true);
+          let dialogs = 0;
+
+          const observedDialog = () => {
+            dialogs++;
+          };
+
+          yield* Effect.acquireRelease(
+            Effect.sync(() => page.on("dialog", observedDialog)),
+            () =>
+              Effect.sync(() => {
+                page.off("dialog", observedDialog);
+              }),
+          );
+          const stops = yield* countStops(page);
+          const original = yield* session.target;
+
+          const cancelled = yield* session.startNavigation({
+            url: `${f.url}next`,
+            timeoutMillis: 5000,
+          });
+
+          expect(yield* cancelled.completed.pipe(Effect.result)).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              operation: "navigate",
+              reason: { _tag: "Interrupted" },
+              outcome: "unknown",
+            },
+          });
+
+          const beforeUnloadRan = yield* Effect.promise(() =>
+            page.evaluate(() => sessionStorage.getItem("fixture-before-unload")),
+          );
+
+          expect(
+            beforeUnloadRan,
+            "the actual old document must run its before-unload handler",
+          ).toBe("1");
+          expect(dialogs, "the native leave prompt must reach this owner").toBe(1);
+          expect((yield* previous.completed).url).toBe(f.url);
+          expect(page.isClosed()).toBe(false);
+          expect(stops.count()).toBe(0);
+          expect((yield* session.target).pageId).toBe(original.pageId);
+          yield* session.click({ selector: "#increment" });
+          expect((yield* session.readText({ selector: "#count" })).text).toBe("2");
+          expect(yield* session.status).toMatchObject({
+            phase: "open",
+            reason: null,
+            unresolvedDispatch: false,
+          });
+
+          yield* Effect.promise(() =>
+            page.evaluate(() => {
+              window.onbeforeunload = null;
+            }),
+          );
+
+          // A successor is independent of both completed predecessors and their stop handles.
+          const successor = yield* session.startNavigation({
+            url: `${f.url}next`,
+            timeoutMillis: 5000,
+          });
+
+          yield* previous.stop;
+          yield* cancelled.stop;
+          expect((yield* successor.completed).url).toBe(`${f.url}next`);
+          expect(stops.count()).toBe(0);
+          expect(dialogs).toBe(1);
+          expect((yield* session.readText({})).text).toContain("next page");
+        }),
+      );
+    }),
+  ),
+);
+
 for (const phase of ["streaming", "precommit"] as const)
   it.live(`real CDP: ${phase} loading timeout sends one stop and preserves a usable page`, () =>
     Effect.scoped(

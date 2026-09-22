@@ -3,6 +3,7 @@ import { dual } from "effect/Function";
 
 import type * as Bootstrap from "./Bootstrap.ts";
 import type {
+  BrowserDiagnostics,
   Checkpoint,
   CheckpointOptions,
   FillRequest,
@@ -19,6 +20,7 @@ import type {
   ScreenshotRequest,
   ScreenshotResult,
   ScrollRequest,
+  SessionStatus,
   StartNavigationRequest,
   TextResult,
   TypeRequest,
@@ -123,6 +125,10 @@ export interface RetainedTarget extends TargetOperations {}
 export interface BrowserSession<E = never> extends TargetOperations {
   /** The implementation which owns this live connection. */
   readonly implementation: string;
+  /** Copied host-only state, readable without admission in every lifecycle phase. */
+  readonly status: Effect.Effect<SessionStatus>;
+  /** Bounded native/policy diagnostics. Typed callback causes remain in bindingDiagnostics. */
+  readonly diagnostics: Effect.Effect<BrowserDiagnostics>;
   /** Close this scope and require its own ownership-specific cleanup evidence. */
   readonly closeChecked: Effect.Effect<void, BrowserError>;
   /** First fail-session callback cause, preserving the consumer's error type on the host. */

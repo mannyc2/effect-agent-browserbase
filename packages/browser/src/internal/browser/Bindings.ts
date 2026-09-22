@@ -5,6 +5,7 @@ import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
 import * as Registration from "./BindingRegistration.ts";
 import { makeBindingRunner } from "./BindingRunner.ts";
 import { duplicateStep } from "./Bootstrap.ts";
+import type { DriverFault } from "./Driver.ts";
 
 export interface NativeBindingCall {
   /** Validate native membership, allowed origin and the captured document before returning JSON. */
@@ -38,7 +39,7 @@ export interface Bindings<E> {
   readonly failure: Effect.Effect<never, E | InitializationError>;
   readonly diagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
   readonly connect: (
-    onFault: () => void,
+    onFault: (event: DriverFault) => void,
     isActive: () => boolean,
     isCurrent?: () => boolean,
   ) => Effect.Effect<ConnectionBindings, never, Scope.Scope>;
@@ -160,7 +161,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
   );
 
   const connect = Effect.fnUntraced(function* (
-    onFault: () => void,
+    onFault: (event: DriverFault) => void,
     isActive: () => boolean,
     isCurrent: () => boolean = isActive,
   ): Effect.fn.Return<ConnectionBindings, never, Scope.Scope> {
@@ -178,6 +179,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
     const record = (
       registration: Pick<Registration.Registration<E, R>, "name" | "failureMode">,
       cause: Cause.Cause<E | InitializationError>,
+      event: DriverFault = { source: "binding", reason: "callback-failure", disposition: "known" },
     ) => {
       if (failures.length === 32) {
         failures.shift();
@@ -190,8 +192,9 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
         faulted = true;
         // The host can observe the original typed cause as soon as its owner is fenced.
         Deferred.doneUnsafe(failure, Effect.failCause(cause));
+        // The owner must fence browser admission before interrupted callback finalizers run.
+        onFault(event);
         for (const connection of connections) connection.close();
-        onFault();
       }
     };
 
@@ -207,6 +210,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           pending: number;
           finished: boolean;
           released: boolean;
+          nativeFault?: Extract<DriverFault, { readonly source: "native" }>;
         }
 
         const release = (work: Work) => {
@@ -240,7 +244,11 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           const disposing = Promise.resolve()
             .then(() => work.call.dispose())
             .catch(() => {
-              record(registration, Cause.fail(error("native", "dispose")));
+              record(registration, Cause.fail(error("native", "dispose")), {
+                source: "native",
+                reason: "callback",
+                disposition: "unknown",
+              });
             });
 
           track(work, disposing);
@@ -249,8 +257,11 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
         const native = <A>(work: Work, action: (signal: AbortSignal) => Promise<A>) =>
           Effect.tryPromise({
             try: (signal) => track(work, action(signal)),
-            catch: (cause) =>
-              Schema.is(InitializationError)(cause) ? error(cause.reason) : error("native"),
+            catch: (cause) => {
+              work.nativeFault = { source: "native", reason: "callback", disposition: "unknown" };
+
+              return Schema.is(InitializationError)(cause) ? error(cause.reason) : error("native");
+            },
           });
 
         const execute = Effect.fnUntraced(function* (work: Work) {
@@ -280,7 +291,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           () => {},
         ).pipe(Scope.provide(connectionScope));
 
-        fences.push(runner.close);
+        fences.push(runner.interrupt);
 
         const invoke = (call: NativeBindingCall): Promise<string> => {
           if (!active()) {
@@ -313,7 +324,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
               (exit) => {
                 if (Exit.isFailure(exit)) {
                   state.rejected = increment(state.rejected);
-                  record(registration, exit.cause);
+                  record(registration, exit.cause, work.nativeFault);
 
                   return rejected();
                 }
@@ -328,7 +339,12 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
               },
               () => {
                 state.rejected = increment(state.rejected);
-                if (active()) record(registration, Cause.fail(error("native")));
+                if (active())
+                  record(registration, Cause.fail(error("native")), {
+                    source: "native",
+                    reason: "callback",
+                    disposition: "unknown",
+                  });
 
                 return rejected();
               },
@@ -356,7 +372,11 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
       close,
       reportFailure: (error) => {
         if (!current()) return;
-        record({ name: error.step, failureMode: "fail-session" }, Cause.fail(error));
+        record({ name: error.step, failureMode: "fail-session" }, Cause.fail(error), {
+          source: "native",
+          reason: "registration",
+          disposition: "unknown",
+        });
       },
       dispose: Effect.sync(close).pipe(Effect.andThen(Scope.close(connectionScope, Exit.void))),
     };

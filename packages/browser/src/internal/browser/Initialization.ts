@@ -37,7 +37,12 @@ export const makeInitialization = (
 
   const initializationFault = (error: InitializationError) => {
     if (closing() || initializationClosed) return;
-    if (options.onBindingFault === undefined) events.fault();
+    if (options.onBindingFault === undefined)
+      events.fault({
+        source: "native",
+        reason: "registration",
+        disposition: error.reason === "busy" ? "not-dispatched" : "unknown",
+      });
     else options.onBindingFault(error);
   };
 

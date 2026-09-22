@@ -146,7 +146,8 @@ export const makePageControl = (
 
   /** A main-frame navigation invalidates the execution; one that was held faults the session. */
   const navigating = (entry: Entry, frame: Frame) => {
-    if (frame === entry.page.mainFrame() && entry.executionValue?.invalidate()) events.fault();
+    if (frame === entry.page.mainFrame() && entry.executionValue?.invalidate())
+      events.fault({ source: "native", reason: "page-control", disposition: "unknown" });
   };
 
   const operations: NonNullable<Driver["pageControl"]> = {

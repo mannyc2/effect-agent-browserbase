@@ -204,6 +204,8 @@ export const makeSession = <E>(
   const session: BrowserSession<E> = {
     ...makeTarget(controls.operations),
     implementation: controls.implementation,
+    status: controls.status,
+    diagnostics: controls.diagnostics,
     closeChecked: controls.closeChecked,
     failure: bindings.failure,
     bindingDiagnostics: bindings.diagnostics,

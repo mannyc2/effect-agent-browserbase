@@ -166,7 +166,7 @@ export const recoveryCases: ReadonlyArray<Case> = [
         yield* session.detach;
         yield* session.reconnect(true);
         connections[0]!.pause();
-        connections[0]!.fault();
+        connections[0]!.fault({ source: "native", reason: "connection", disposition: "unknown" });
         assert.equal(yield* session.operations.readText(), "initial");
         connections[1]!.disconnected();
         const stopped = yield* session.operations.readText().pipe(Effect.result);

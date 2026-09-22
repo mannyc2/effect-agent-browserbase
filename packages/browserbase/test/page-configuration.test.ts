@@ -39,6 +39,39 @@ const cases: ReadonlyArray<{
   { name: "dialog pause", options: { dialogPolicy: "pause" } },
 ];
 
+it.effect("invalid host-read allowance is rejected before any provider allocation", () =>
+  Effect.gen(function* () {
+    let requests = 0;
+
+    for (const maxHostReads of [0, 1.5, null, 1_000_001]) {
+      const result = yield* BrowserbaseBrowser.open(policy).pipe(
+        Effect.provide(
+          BrowserbaseBrowser.layer({ launch, maxHostReads: maxHostReads as never }).pipe(
+            Layer.provide(account),
+          ),
+        ),
+        Effect.provideService(FetchHttpClient.Fetch, async () => {
+          requests++;
+
+          return new Response("unexpected provider allocation", { status: 500 });
+        }),
+        Effect.scoped,
+        Effect.result,
+      );
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          operation: "configure",
+          reason: { _tag: "Configuration" },
+          outcome: "undispatched",
+        },
+      });
+    }
+    expect(requests).toBe(0);
+  }),
+);
+
 it.effect(
   "a misplaced layer bootstrap is rejected before allocation, including an own undefined property",
   () =>

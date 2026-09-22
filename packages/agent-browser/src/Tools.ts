@@ -14,6 +14,7 @@ import {
   PointerMoveRequest,
   TypeRequest,
   WheelRequest,
+  type SessionStatus,
 } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -422,6 +423,8 @@ export interface ToolFailureDiagnostic {
 
 /** A memory-only snapshot of the latest 32 ordinary browser failures, oldest first. */
 export interface ToolFailureSnapshot {
+  /** Current owner state at snapshot read time, not historical state at the recorded failure. */
+  readonly status: SessionStatus;
   readonly failures: ReadonlyArray<ToolFailureDiagnostic>;
   /** Entries evicted from the bounded window; saturates at Number.MAX_SAFE_INTEGER. */
   readonly dropped: number;
@@ -612,12 +615,15 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     keyboardHandlers: keyboardHandlerLayer,
     layer,
     failure: Deferred.await(failure),
-    toolFailures: Effect.sync(() =>
-      Object.freeze({
+    toolFailures: Effect.gen(function* () {
+      const status = yield* browser.status;
+
+      return Object.freeze({
+        status,
         failures: Object.freeze([...toolFailures]),
         dropped,
-      }),
-    ),
+      });
+    }),
     run: supervise,
   };
 });

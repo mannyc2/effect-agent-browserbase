@@ -61,6 +61,7 @@ const makeFixture = Effect.fnUntraced(function* (
 ) {
   const owner = yield* makeOwner({
     maxActions: 20,
+    maxHostReads: 10_000,
     maxElapsedMillis: 30_000,
     actionTimeoutMillis: 10_000,
   });
