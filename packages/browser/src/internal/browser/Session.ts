@@ -7,6 +7,7 @@ import {
   type ObservedElement,
   type PageInfo,
   type PageSuspension,
+  type SelectOptions,
   Target,
   type Viewport,
 } from "../../BrowserData.ts";
@@ -728,6 +729,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               "click-and-wait",
               "download-action",
               "select-files",
+              "select-option",
               "file-chooser",
               "checkpoint",
               "control-facts",
@@ -1290,6 +1292,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       nativeOperation("control-facts", (driver, ticket) => driver.controlFacts(reference, ticket), {
         charge: "host-read",
       }),
+    selectOption: (reference: ObservedElement, options: SelectOptions, policy?: AdmissionPolicy) =>
+      nativeOperation(
+        "select-option",
+        (driver, ticket) => driver.selectOption(reference, options, ticket, policy),
+        { mutation: true },
+      ),
     /** Not charged: it sends no input and reads one node the caller was already given. */
     revalidate: (reference: ObservedElement) =>
       nativeOperation("revalidate", (driver, ticket) => driver.revalidate(reference, ticket), {

@@ -122,6 +122,12 @@ export class ObservedControl extends Schema.Class<ObservedControl>("BrowserObser
   selected: Schema.optionalKey(Schema.Boolean),
   inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(32))),
   required: Schema.optionalKey(Schema.Boolean),
+  /** Native select state. A select is never represented by one `selected` boolean. */
+  multiple: Schema.optionalKey(Schema.Boolean),
+  /** The issued select this native option belongs to, in the same observation. */
+  selectElementId: Schema.optionalKey(Identifier),
+  /** Some choices could not be issued within this reading's shared control/value bounds. */
+  optionsTruncated: Schema.optionalKey(Schema.Boolean),
 }) {}
 
 /**
@@ -147,8 +153,10 @@ export class ViewportEvidence extends Schema.Class<ViewportEvidence>("BrowserVie
 
 /**
  * Revision is admission fencing, not a claim of a complete DOM version or atomic snapshot. A
- * `viewport` reading holds only what is on screen and reachable; a `document` reading is the
- * whole body, wherever it is. Nothing here carries a destination, a form or a field value.
+ * `viewport` reading holds what is on screen and reachable, plus the bounded choices of its
+ * native selects. Those choices are not a claim that a closed dropdown's rows were visible.
+ * A `document` reading is the whole body, wherever it is. Nothing here carries a destination,
+ * a form or a field value.
  */
 export class Observation extends Schema.Class<Observation>("BrowserObservation")({
   target: Target,
@@ -167,6 +175,15 @@ export class ObservedElement extends Schema.Class<ObservedElement>("BrowserObser
   observationId: Identifier,
   elementId: Identifier,
 }) {}
+
+/** Issued option element IDs from one observed native select; never values, labels or indices. */
+export const SelectOptions = Schema.Array(Identifier).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(64),
+  Schema.makeFilter((ids) => new Set(ids).size === ids.length),
+);
+
+export type SelectOptions = typeof SelectOptions.Type;
 
 /** Live, connection-owned receipt. It is not a durable promise that remote clocks remain held. */
 export class PageSuspension extends Schema.Class<PageSuspension>("BrowserPageSuspension")({
@@ -297,6 +314,7 @@ export class ControlFacts extends Schema.Class<ControlFacts>("BrowserControlFact
   checked: Schema.optionalKey(Schema.Boolean),
   selected: Schema.optionalKey(Schema.Boolean),
   required: Schema.optionalKey(Schema.Boolean),
+  multiple: Schema.optionalKey(Schema.Boolean),
   editable: Schema.Boolean,
   inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(32))),
   autocomplete: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),

@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import type { ElementHandle, JSHandle } from "playwright-core";
 
-import { ControlFacts, type ObservedElement } from "../../BrowserData.ts";
+import { ControlFacts, type ObservedElement, type SelectOptions } from "../../BrowserData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
 import type { DriverEvents, DriverTarget, NativeCheckpoint, NativeObservation } from "./Driver.ts";
 import { pngGeometry } from "./Images.ts";
@@ -48,6 +48,18 @@ const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
 
 const Facts = Schema.Struct({ facts: ControlFacts });
 
+const SelectionFacts = Schema.Struct({
+  facts: ControlFacts,
+  attached: Schema.Boolean,
+  options: Schema.Array(
+    Schema.Struct({
+      facts: ControlFacts,
+      member: Schema.Boolean,
+      valueMatches: Schema.Boolean,
+    }),
+  ).check(Schema.isMaxLength(64)),
+});
+
 /** Bounds the page traversal itself, so a huge document costs a bounded read. */
 const NodeBudget = 20_000;
 
@@ -58,6 +70,9 @@ interface Retained {
   readonly handle: ElementHandle<Element>;
   /** What made this control the one that was inspected; see `identityOf`. */
   readonly identity: string;
+  readonly multiple?: boolean;
+  /** The submitted value is retained privately and never appears in a control or receipt. */
+  readonly option?: { readonly selectElementId: string; readonly value: string };
 }
 
 /**
@@ -253,11 +268,12 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
    * Read from the exact node, never re-resolved from a selector or a label. It is the same page
    * function an observation uses, told to read one node and traverse nothing.
    */
-  const factsOf = async (
+  const sampleFacts = async (
     element: ElementHandle<Element>,
     check: () => void,
     target?: DriverTarget,
-  ): Promise<ControlFacts> => {
+    options?: ReadonlyArray<{ readonly node: ElementHandle<Element>; readonly value: string }>,
+  ): Promise<unknown> => {
     check();
 
     const holder = await current(target).frame.evaluateHandle(readPage, {
@@ -266,6 +282,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       controlLimit: 0,
       nodeBudget: 0,
       only: element,
+      ...(options === undefined ? {} : { options }),
     });
 
     try {
@@ -278,7 +295,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
         check();
 
-        return safeDecode(Facts, raw).facts;
+        return raw;
       } finally {
         await data.dispose();
       }
@@ -323,21 +340,42 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     try {
       check();
 
+      const select =
+        node?.option === undefined
+          ? undefined
+          : retainedNode?.snapshot.nodes.get(node.option.selectElementId)?.handle;
+
       const attached: unknown = await element.evaluate(
-        (candidate, selector) => {
+        (candidate, { selector, selection }) => {
           if (!candidate.isConnected || candidate.ownerDocument !== document) return false;
+          if (
+            selection !== undefined &&
+            (!(candidate instanceof HTMLOptionElement) ||
+              !(selection.select instanceof HTMLSelectElement) ||
+              !selection.select.isConnected ||
+              candidate.closest("select") !== selection.select ||
+              selection.select.options.item(candidate.index) !== candidate ||
+              candidate.value !== selection.value)
+          )
+            return false;
           if (selector === undefined) return true;
           const matches = candidate.ownerDocument.querySelectorAll(selector);
 
           return matches.length === 1 && matches[0] === candidate;
         },
-        typeof target === "string" ? target : undefined,
+        {
+          selector: typeof target === "string" ? target : undefined,
+          selection:
+            select === undefined || node?.option === undefined
+              ? undefined
+              : { select, value: node.option.value },
+        },
       );
 
       check();
       if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
       if (node !== undefined || policy !== undefined) {
-        facts = await factsOf(element, check, resolvedTarget);
+        facts = safeDecode(Facts, await sampleFacts(element, check, resolvedTarget)).facts;
 
         check();
         if (node !== undefined && identityOf(facts) !== node.identity)
@@ -361,6 +399,72 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       check();
       throw error;
     }
+  };
+
+  /** Validate all options in one fresh page read, while keeping the original exact handles. */
+  const selectOptions = async (
+    target: ObservedElement,
+    ids: SelectOptions,
+    element: ElementHandle<Element>,
+    ticket: Ticket,
+  ) => {
+    const select = retained(target, ticket);
+
+    if (select.node.handle !== element) throw failure(Reasons.Stale.make({}), "undispatched");
+    if (select.node.multiple === undefined)
+      throw failure(Reasons.Unsupported.make({}), "undispatched");
+
+    const options = ids.map((elementId) => {
+      const option = retained({ observationId: target.observationId, elementId }, ticket);
+      const identity = option.node.option;
+
+      if (identity === undefined || identity.selectElementId !== target.elementId)
+        throw failure(Reasons.Stale.make({}), "undispatched");
+
+      return { ...option, value: identity.value };
+    });
+
+    const check = () => {
+      select.check();
+      for (const option of options) option.check();
+    };
+
+    const fresh = safeDecode(
+      SelectionFacts,
+      await sampleFacts(
+        element,
+        check,
+        select.snapshot.target,
+        options.map((option) => ({ node: option.node.handle, value: option.value })),
+      ),
+    );
+
+    check();
+    if (!fresh.attached || identityOf(fresh.facts) !== select.node.identity)
+      throw failure(Reasons.Stale.make({}), "undispatched");
+    if (fresh.options.length !== options.length)
+      throw failure(Reasons.Malformed.make({}), "undispatched");
+    for (const [index, sampled] of fresh.options.entries()) {
+      const option = options[index];
+
+      if (
+        option === undefined ||
+        !sampled.member ||
+        !sampled.valueMatches ||
+        identityOf(sampled.facts) !== option.node.identity
+      )
+        throw failure(Reasons.Stale.make({}), "undispatched");
+    }
+    if (fresh.facts.disabled || fresh.options.some((option) => option.facts.disabled))
+      throw failure(Reasons.Disabled.make({}), "undispatched");
+    if (fresh.facts.multiple !== true && ids.length > 1)
+      throw failure(Reasons.Unsupported.make({}), "undispatched");
+    check();
+
+    return {
+      handles: options.map((option) => option.node.handle),
+      values: options.map((option) => option.value),
+    };
   };
 
   const controlFacts = (target: ObservedElement, ticket: Ticket) =>
@@ -445,6 +549,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       maximumBytes,
       controlLimit,
       nodeBudget: NodeBudget,
+      choices: keepNodes,
     });
 
     const handles: Array<ElementHandle<Element>> = [];
@@ -556,13 +661,37 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         handles = sampled.handles;
         checkSnapshot(snapshot, ticket);
         const { data } = sampled;
+        const selects = new Map<number, boolean>();
+        const options = new Map<number, NonNullable<Retained["option"]>>();
+
+        for (const select of data.selects ?? []) {
+          if (selects.has(select.index) || data.controls[select.index]?.multiple === undefined)
+            throw failure(Reasons.Malformed.make({}));
+          selects.set(select.index, select.optionsTruncated);
+          for (const option of select.options) {
+            if (options.has(option.index) || data.controls[option.index]?.selected === undefined)
+              throw failure(Reasons.Malformed.make({}));
+            options.set(option.index, {
+              selectElementId: `element-${select.index}`,
+              value: option.value,
+            });
+          }
+        }
 
         // One handle per control, in the order the page returned them.
         handles.forEach((handle, i) => {
           const facts = data.controls[i];
 
-          if (facts !== undefined)
-            snapshot.nodes.set(`element-${i}`, { handle, identity: identityOf(facts) });
+          if (facts !== undefined) {
+            const option = options.get(i);
+
+            snapshot.nodes.set(`element-${i}`, {
+              handle,
+              identity: identityOf(facts),
+              ...(facts.multiple === undefined ? {} : { multiple: facts.multiple }),
+              ...(option === undefined ? {} : { option }),
+            });
+          }
         });
         if (snapshot.nodes.size !== data.controls.length) throw failure(Reasons.Malformed.make({}));
 
@@ -573,7 +702,15 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
           text: data.text,
           textTruncated: data.textTruncated,
           controlsTruncated: data.controlsTruncated,
-          controls: data.controls.map((facts, i) => observedControl(facts, `element-${i}`)),
+          controls: data.controls.map((facts, i) => {
+            const option = options.get(i);
+            const optionsTruncated = selects.get(i);
+
+            return observedControl(facts, `element-${i}`, {
+              ...(option === undefined ? {} : { selectElementId: option.selectElementId }),
+              ...(optionsTruncated === undefined ? {} : { optionsTruncated }),
+            });
+          }),
           viewport: data.viewport,
         };
 
@@ -670,7 +807,11 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
       const result: NativeCheckpoint = {
         url: targets.selectedUrl(),
-        ...data,
+        text: data.text,
+        textTruncated: data.textTruncated,
+        controls: data.controls,
+        controlsTruncated: data.controlsTruncated,
+        viewport: data.viewport,
         ...(picture === undefined ? {} : { picture }),
         documentChanged: targets.epochOf(frame) !== epoch,
       };
@@ -684,6 +825,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     held,
     dispose,
     resolve,
+    selectOptions,
     controlFacts,
     revalidate,
     readText,

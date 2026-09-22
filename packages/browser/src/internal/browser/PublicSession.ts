@@ -23,6 +23,7 @@ import {
   ScreenshotRequest,
   ScreenshotResult,
   ScrollRequest,
+  SelectOptions,
   StartNavigationRequest,
   Target,
   TextResult,
@@ -251,6 +252,15 @@ export const makeSession = <E>(
         Effect.flatMap((element) =>
           checked(FillRequest.fields.value, value, "fill").pipe(
             Effect.flatMap((text) => controls.operations.fill(element, text, admission?.admit)),
+          ),
+        ),
+        Effect.flatMap(navigate),
+      ),
+    selectOption: (reference, options, admission) =>
+      checked(ObservedElement, reference, "select-option").pipe(
+        Effect.flatMap((element) =>
+          checked(SelectOptions, options, "select-option").pipe(
+            Effect.flatMap((ids) => controls.selectOption(element, ids, admission?.admit)),
           ),
         ),
         Effect.flatMap(navigate),
