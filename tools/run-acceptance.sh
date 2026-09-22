@@ -95,8 +95,8 @@ if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
   # Fail a spacing/type regression before downloading Chromium or starting a browser.
-  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browserbase packages/platform-browserbase
-  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browserbase packages/platform-browserbase
+  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browserbase packages/agent-browserbase
+  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browserbase packages/agent-browserbase
   fast_reject
   run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browserbase check
   run typecheck timeout 180s ./node_modules/.bin/vp run -F effect-agent-browserbase check
@@ -108,7 +108,7 @@ if [ "$LAST_CODE" = 0 ]; then
     run generic-native timeout 600s env BROWSERBASE_VIDEO_EVIDENCE_DIR="$OUT/video-generic" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   fi
   run generic-build timeout 180s ../../node_modules/.bin/vp pack
-  cd "$TREE/packages/platform-browserbase"
+  cd "$TREE/packages/agent-browserbase"
   run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
   if [ "$PROFILE" = full ]; then
     run native timeout 300s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
@@ -173,12 +173,12 @@ if [ "$LAST_CODE" = 0 ]; then
   fi
   # Only candidate source files belong in the review patch. Native CDP can leave
   # generated downloads below the package; a directory-wide add would include them.
-  git -C "$SOURCE_ROOT" ls-files -z -- packages/browserbase packages/platform-browserbase | \
+  git -C "$SOURCE_ROOT" ls-files -z -- packages/browserbase packages/agent-browserbase | \
     git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
   git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
   run review-check git diff --check
 
   git diff --binary > "$OUT/review.patch"
-  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browserbase packages/platform-browserbase
+  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browserbase packages/agent-browserbase
 fi
 exit "$FAILED"

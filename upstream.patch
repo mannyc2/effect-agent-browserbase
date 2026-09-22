@@ -61,7 +61,7 @@ index 2a9fbf1c..bfbb43aa 100644
 +        "playwright-core"
 +      ]
 +    },
-+    "packages/platform-browserbase": {
++    "packages/agent-browserbase": {
 +      "name": "effect-agent-browserbase",
 +      "version": "0.1.0-beta.102",
 +      "dependencies": {
@@ -100,7 +100,7 @@ index 2a9fbf1c..bfbb43aa 100644
  
 +    "effect-browserbase": ["effect-browserbase@workspace:packages/browserbase"],
 +
-+    "effect-agent-browserbase": ["effect-agent-browserbase@workspace:packages/platform-browserbase"],
++    "effect-agent-browserbase": ["effect-agent-browserbase@workspace:packages/agent-browserbase"],
 +
      "@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@workspace:packages/platform-cloudflare"],
  
@@ -213,7 +213,7 @@ index 0b337058..35cdf0cf 100644
    "ai-typesafe",
    "effect-agent",
 +  "browserbase",
-+  "platform-browserbase",
++  "agent-browserbase",
    "platform-cloudflare",
    "platform-node",
    "pr-review",
@@ -222,7 +222,7 @@ index 0b337058..35cdf0cf 100644
    "ai-typesafe",
    "effect-agent",
 +  "browserbase",
-+  "platform-browserbase",
++  "agent-browserbase",
    "platform-cloudflare",
    "platform-node",
    "pr-review",
@@ -231,7 +231,7 @@ index 0b337058..35cdf0cf 100644
    "ai-typesafe",
    "effect-agent",
 +  "browserbase",
-+  "platform-browserbase",
++  "agent-browserbase",
    "platform-cloudflare",
    "platform-node",
    "pr-review",
@@ -240,7 +240,7 @@ index 0b337058..35cdf0cf 100644
    "ai-typesafe": [],
    "effect-agent": [],
 +  browserbase: [],
-+  "platform-browserbase": ["browserbase", "effect-agent", "testing"],
++  "agent-browserbase": ["browserbase", "effect-agent", "testing"],
    "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
    "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
    "pr-review": ["effect-agent"],
@@ -270,7 +270,7 @@ index 0b337058..35cdf0cf 100644
            // clean in every dependency section.
 -          if (packageName !== "platform-cloudflare" && packageName !== "storage-cloudflare") {
 +          if (
-+            packageName !== "platform-browserbase" &&
++            packageName !== "agent-browserbase" &&
 +            packageName !== "platform-cloudflare" &&
 +            packageName !== "storage-cloudflare"
 +          ) {

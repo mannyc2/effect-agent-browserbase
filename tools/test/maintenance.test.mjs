@@ -18,7 +18,10 @@ test("bootstrap uses a single current patch and frozen installs, not historical 
   assert.ok(!bootstrap.includes("checkpoints/"));
   assert.equal((bootstrap.match(/--frozen-lockfile/g) ?? []).length, 2);
   assert.ok(bootstrap.includes('apply --check "$ROOT/upstream.patch"'));
-  assert.ok(!read("upstream.patch").includes("diff --git a/packages/platform-browserbase/"));
+  // The patch integrates the packages into upstream; their source arrives by copy, never by diff.
+  for (const owned of ["browserbase", "agent-browserbase"]) {
+    assert.ok(!read("upstream.patch").includes(`diff --git a/packages/${owned}/`));
+  }
   assert.ok(!existsSync(join(root, "tools/canonicalize-candidate.sh")));
   assert.ok(!existsSync(join(root, "tools/fetch-inputs.py")));
   assert.equal(JSON.parse(read("package.json")).private, true);

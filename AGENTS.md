@@ -1,6 +1,6 @@
 # Repository maintenance
 
-Read `README.md`, `CONTRIBUTING.md`, the relevant package guide and neighboring tests before editing. This repository owns `packages/platform-browserbase`; the pinned upstream workspace is a compatibility harness, not an invitation to change unrelated applications.
+Read `README.md`, `CONTRIBUTING.md`, the relevant package guide and neighboring tests before editing. This repository owns `packages/agent-browserbase`; the pinned upstream workspace is a compatibility harness, not an invitation to change unrelated applications.
 
 ## Contracts
 

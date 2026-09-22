@@ -6,7 +6,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
-    "directory": "packages/platform-browserbase"
+    "directory": "packages/agent-browserbase"
   },
   "files": [
     "dist",

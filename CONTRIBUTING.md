@@ -41,7 +41,7 @@ bash tools/bootstrap.sh
 
 cd .work/upstream/tree
 ./node_modules/.bin/vp run -F effect-agent-browserbase check
-cd packages/platform-browserbase
+cd packages/agent-browserbase
 # Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
 # hand-formatting to satisfy that gate does not reproduce this output.
 ../../node_modules/.bin/vp fmt
@@ -55,7 +55,7 @@ cd packages/platform-browserbase
 
 Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
 
-Make edits in this repository's `packages/browserbase` and `packages/platform-browserbase`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
+Make edits in this repository's `packages/browserbase` and `packages/agent-browserbase`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
 
 ## Acceptance profiles
 
