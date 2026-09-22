@@ -1,4 +1,16 @@
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Schema,
+  Scope,
+  Semaphore,
+} from "effect";
 import {
   BrowserActionResult,
   BrowserNavigationResult,
@@ -432,6 +444,22 @@ export interface ToolFailureSnapshot {
 
 const encodeBrowserError = Schema.encodeSync(BrowserError);
 
+const maximumInvocations = 32;
+const maximumQueueMillis = 30_000;
+
+interface Invocation {
+  readonly host: object;
+  active: boolean;
+}
+
+/** Inherited invocation extents, including enclosing hosts; never a public service requirement. */
+const invocations = Context.Reference<ReadonlyArray<Invocation>>(
+  "effect-agent-browser/Tools/invocations",
+  {
+    defaultValue: () => [],
+  },
+);
+
 export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly handlers: Layer.Layer<ToolHandlers>;
   readonly nativeHandlers: Layer.Layer<NativeToolHandlers>;
@@ -462,10 +490,14 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const consumer = yield* Effect.context<Exclude<R, Scope.Scope>>();
   const scope = yield* Scope.make("sequential");
   const failure = yield* Deferred.make<never, ToolHostFailure<OwnerError, E>>();
+  const lane = yield* Semaphore.make(1);
+  const clock = yield* Clock.Clock;
+  const identity = {};
   const { onNavigation, onInput } = options;
   const toolFailures: ToolFailureDiagnostic[] = [];
   let dropped = 0;
   let closed = false;
+  let outstanding = 0;
 
   const recordFailure = (error: BrowserError, toolCallId: string | undefined) => {
     const encoded = encodeBrowserError(error);
@@ -499,9 +531,11 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
   const callbackFailed = () => BrowserToolFailure.make({ reason: "failed", outcome: "unknown" });
 
-  const invoke = (effect: Effect.Effect<void, E, R | Scope.Scope>) =>
-    Effect.scoped(effect).pipe(
-      Effect.provideContext(consumer),
+  const invoke = Effect.fnUntraced(function* (effect: Effect.Effect<void, E, R | Scope.Scope>) {
+    const enclosing = yield* invocations;
+
+    return yield* Effect.scoped(effect).pipe(
+      Effect.provideContext(Context.add(consumer, invocations, enclosing)),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
 
@@ -510,18 +544,85 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         );
       }),
     );
+  });
 
   const run: Hooks["run"] = (effect) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        const enclosing = yield* invocations;
+
+        if (enclosing.some((invocation) => invocation.host === identity && invocation.active))
+          return yield* BrowserToolFailure.make({ reason: "busy", outcome: "undispatched" });
         if (closed)
           return yield* BrowserToolFailure.make({ reason: "closed", outcome: "undispatched" });
         if (Deferred.isDoneUnsafe(failure))
           return yield* BrowserToolFailure.make({ reason: "failed", outcome: "undispatched" });
+        if (outstanding >= maximumInvocations)
+          return yield* BrowserToolFailure.make({ reason: "busy", outcome: "undispatched" });
 
-        const fiber = yield* Effect.forkIn(restore(effect), scope);
+        const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+        const deadline = now() + maximumQueueMillis;
+        const invocation: Invocation = { host: identity, active: false };
 
-        return yield* restore(Fiber.join(fiber)).pipe(Effect.ensuring(Fiber.interrupt(fiber)));
+        outstanding++;
+
+        const admitted = lane.withPermits(1)(
+          Effect.suspend(() => {
+            if (closed)
+              return Effect.fail(
+                BrowserToolFailure.make({ reason: "closed", outcome: "undispatched" }),
+              );
+            if (Deferred.isDoneUnsafe(failure))
+              return Effect.fail(
+                BrowserToolFailure.make({ reason: "failed", outcome: "undispatched" }),
+              );
+            if (now() >= deadline)
+              return Effect.fail(
+                BrowserToolFailure.make({ reason: "timeout", outcome: "undispatched" }),
+              );
+
+            invocation.active = true;
+
+            return restore(effect).pipe(
+              Effect.provideService(invocations, [
+                ...enclosing.filter((entry) => entry.active),
+                invocation,
+              ]),
+            );
+          }),
+        );
+
+        // Race the bracketed acquisition, never a naked take: cancellation cannot leak a permit.
+        // Once admitted, neither a queue deadline nor a waiting-only failure can relabel input.
+        const waiting = Effect.suspend(() => Effect.sleep(Math.max(0, deadline - now()))).pipe(
+          Effect.provideService(Clock.Clock, clock),
+          Effect.as("timeout" as const),
+          Effect.raceFirst(Deferred.await(failure).pipe(Effect.exit, Effect.as("failed" as const))),
+          Effect.flatMap((reason) =>
+            Effect.suspend(() =>
+              invocation.active
+                ? Effect.never
+                : Effect.fail(BrowserToolFailure.make({ reason, outcome: "undispatched" })),
+            ),
+          ),
+        );
+
+        // Reserve before forking; the host owns this fiber before it can wait for admission.
+        const fiber = yield* Effect.forkIn(
+          Effect.raceFirst(admitted, waiting).pipe(Effect.interruptible),
+          scope,
+        );
+
+        return yield* restore(Fiber.join(fiber)).pipe(
+          Effect.ensuring(Fiber.interrupt(fiber)),
+          Effect.ensuring(
+            Effect.sync(() => {
+              outstanding--;
+              // Captured contexts can outlive a call; they must not retain an active reentry marker.
+              invocation.active = false;
+            }),
+          ),
+        );
       }),
     );
 

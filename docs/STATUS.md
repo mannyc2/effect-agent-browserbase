@@ -10,6 +10,13 @@ separate finite host allowance. Popup/dialog policy cleanup has bounded native c
 retained through lost acknowledgement; confirmed overflow cleanup can preserve the original page.
 These changes remain unpaid local-runtime work and do not establish hosted-provider equivalence.
 
+WP4 sequences complete tool invocations within each ToolHost, including callback finalizers and
+navigation stop cleanup. The fixed admission policy is 32 outstanding calls and 30 seconds of
+queue wait; native browser admission stays fail-fast. Same-host callback reentry is refused,
+while independent callers queue and retain their own cancellation and service context. Plain
+handler Layers remain caller-managed. Exact-source acceptance and installed-consumer evidence
+belong to the WP's PR.
+
 WP2 adds bounded main-frame loading-timeout recovery through the existing stop owner and
 page-scoped retirement of the single observation. Selection-only excursions preserve exact-node
 references without changing retained-handle semantics; reconnect cannot reuse an old observation

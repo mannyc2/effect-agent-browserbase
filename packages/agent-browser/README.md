@@ -125,6 +125,35 @@ never construct an ID from an assumed counter.
 
 `onInput` runs after input dispatch. Its failure is therefore not an undispatched input: the model receives `failed/unknown`, and the host retains the original error. In contrast, admission refusal and a call refused because its host is already closed/faulted dispatch nothing. Operation reservations, native fences and browser cleanup remain with the generic owner.
 
+### Concurrent tool calls
+
+Every `makeHost` owns one blocking invocation lane shared by its three handler Layers and all
+programs run through that host. Concurrent calls, including Effect Agent's default concurrency
+of four, wait for their first execution. The lane stays held until the complete tool finishes:
+navigation completion, callback finalizers and required stop cleanup all precede the next call.
+Calls from different toolkit groups share it. A queued exact-node call can still be stale when
+admitted if earlier input retired its observation; sequencing never refreshes references or
+replays input.
+
+The initial fixed policy permits 32 outstanding invocations including the active one, with at
+most 30 seconds waiting from invocation entry. These are policy choices, not throughput
+measurements. Overflow returns `busy/undispatched`; queue expiry returns `timeout/undispatched`.
+The queue deadline does not limit a handler after admission. Waiting spends no browser action;
+the operation's normal budget and deadline apply when it executes. Host closure, cancellation
+and host failure cancel or wake accepted waiters, which recheck admission before browser work.
+The lane serializes calls but does not promise a model-declared ordering for concurrent work.
+
+A callback or its finalizer invoking another tool through the same host receives
+`busy/undispatched` immediately. An inherited private context marker distinguishes this reentry
+from an independent caller, which queues normally; nesting another host does not erase the
+enclosing marker. Captured callback services and per-call services keep their existing meanings.
+
+Direct browser reads, capture and page control are outside the tool lane and retain the browser
+owner's fail-fast native permit. They can still report `Busy` while a native operation holds that
+permit. Module-level `handlers`, `nativeHandlers` and `keyboardHandlers` are the unsupervised,
+caller-managed path: they do not add this lane. Use `makeHost` or `Tools.run` for the maintained
+sequencing and supervision lifecycle.
+
 ## Know what authority this grants
 
 `browser_click`, `browser_fill`, `browser_hover`, `browser_press` and `browser_type` accept only an exact node from the most recent observation, so a model cannot name a target of its own, and a replaced or detached reference fails rather than resolving to something else. `browser_navigate` is different: the URL comes from the model, bounded only by the session's network policy, and the shared browser currently supports only trusted-host `Unrestricted` (see [Network policy](#network-policy)). There is deliberately no per-tool host allowlist: a URL check on the first request says nothing about where it redirects or what the page then loads. A host that needs navigation confined to known hosts must enforce that beneath the browser, at an egress proxy it operates.
