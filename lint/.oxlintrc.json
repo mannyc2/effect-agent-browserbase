@@ -1,0 +1,201 @@
+{
+  // Lint policy for the packages this repository owns and their integration tests. Acceptance
+  // runs Oxlint with this file alone and denies warnings, so every rule here, including the
+  // preset's warnings, blocks. An exception names its reason in the directive:
+  //   // oxlint-disable-next-line <rule> -- <why this site is an exception>
+  // Override globs resolve from this directory, hence their leading `**/`.
+  "$schema": "../node_modules/@effect/tsgo/oxlint-schema.json",
+  "extends": ["../node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest", "effecttsgo"],
+  // Upstream's own lint plugins, from the pinned tree this file is copied into.
+  "jsPlugins": [
+    { "name": "stylistic", "specifier": "../oxlint/plugin-style.js" },
+    { "name": "exports", "specifier": "../oxlint/plugin-exports.ts" },
+    { "name": "vite-plus", "specifier": "vite-plus/oxlint-plugin" }
+  ],
+  "options": { "typeAware": true },
+  "rules": {
+    // Upstream's root config also ran these on our packages.
+    "eqeqeq": "error",
+    "import/no-cycle": "error",
+    "import/no-duplicates": ["error", { "preferInline": true }],
+    "import/no-self-import": "error",
+    "stylistic/padding-line-between-statements": [
+      "error",
+      { "blankLine": "always", "prev": ["const", "let", "var", "multiline-export"], "next": "*" },
+      {
+        "blankLine": "always",
+        "prev": "*",
+        "next": ["multiline-const", "multiline-let", "multiline-var", "multiline-export"]
+      },
+      {
+        "blankLine": "any",
+        "prev": ["singleline-const", "singleline-let", "singleline-var"],
+        "next": ["singleline-const", "singleline-let", "singleline-var"]
+      },
+      { "blankLine": "always", "prev": "*", "next": "return" }
+    ],
+    "typescript/consistent-type-imports": [
+      "error",
+      { "fixStyle": "inline-type-imports", "prefer": "type-imports" }
+    ],
+    "typescript/no-explicit-any": "error",
+    // Rebuilding a Schema class instance through `make` spreads it, and code-point limits spread
+    // strings, both on purpose. Upstream turns this rule off for the same reason.
+    "typescript/no-misused-spread": "off",
+    "unicorn/prefer-node-protocol": "error",
+    "vite-plus/prefer-vite-plus-imports": "error",
+    "vitest/no-focused-tests": "error",
+    "vitest/no-identical-title": "error",
+    // It does not recognise `it.effect` as a test, so it reports every assertion inside one.
+    "vitest/no-standalone-expect": "off",
+    // Vitest's `expect` takes a message as its second argument.
+    "vitest/valid-expect": ["error", { "maxArgs": 2 }],
+
+    // Don't panic: a failure is a typed value, not an unchecked escape.
+    "typescript/no-non-null-assertion": "error",
+    "typescript/only-throw-error": "error",
+    // Re-rejecting a caught `unknown` forwards the original failure unchanged.
+    "typescript/prefer-promise-reject-errors": ["error", { "allowThrowingUnknown": true }],
+
+    // Don't fail silently: no dropped work, swallowed failure or assertion-free test.
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "eslint/preserve-caught-error": "error",
+    "eslint/no-empty": "error",
+    "effecttsgo/any-unknown-in-error-context": "error",
+    "vitest/expect-expect": "error",
+    "vitest/no-conditional-expect": "error",
+    "vitest/no-conditional-tests": "error",
+    "vitest/no-disabled-tests": "error",
+
+    // Don't do bad async things: keep interruption, supervision and settlement explicit.
+    "typescript/return-await": "error",
+    "eslint/no-promise-executor-return": "error",
+    "promise/no-callback-in-promise": "error",
+    "promise/no-multiple-resolved": "error",
+    "promise/no-promise-in-callback": "error",
+
+    // Don't escape the type system: `any` and narrowing casts are TypeScript's `unsafe`.
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-type-assertion": "error",
+    "effecttsgo/unsafe-effect-type-assertion": "error",
+    "typescript/ban-ts-comment": [
+      "error",
+      {
+        "ts-check": false,
+        "ts-expect-error": "allow-with-description",
+        "ts-ignore": true,
+        "ts-nocheck": true,
+        "minimumDescriptionLength": 10
+      }
+    ],
+
+    // Don't do potentially incorrect things with numbers.
+    "typescript/restrict-plus-operands": "error",
+    "typescript/require-array-sort-compare": "error",
+    "unicorn/prefer-number-properties": "error",
+    "eslint/radix": "error",
+
+    // Don't do bad things that are easy to avoid.
+    "eslint/no-new": "error",
+    "eslint/no-warning-comments": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/switch-exhaustiveness-check": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/packages/*/src/**/*.ts"],
+      "rules": {
+        "exports/no-self-barrel-import": "error",
+        "eslint/no-restricted-properties": [
+          "error",
+          // Library code never unwraps: each accessor below throws or leaves the caller's fiber.
+          { "object": "Option", "property": "getOrThrow" },
+          { "object": "Option", "property": "getOrThrowWith" },
+          { "object": "Result", "property": "getOrThrow" },
+          { "object": "Result", "property": "getOrThrowWith" },
+          { "object": "UndefinedOr", "property": "getOrThrow" },
+          { "object": "UndefinedOr", "property": "getOrThrowWith" },
+          { "object": "Array", "property": "getUnsafe" },
+          { "object": "Context", "property": "getUnsafe" },
+          { "object": "Effect", "property": "runSync" },
+          { "object": "Effect", "property": "runSyncExit" },
+          { "object": "Effect", "property": "runPromise" },
+          { "object": "Effect", "property": "runPromiseExit" },
+          { "object": "Effect", "property": "runFork" },
+          // Effect's crypto-random-uuid follows the global `crypto` and its aliases, but not
+          // `self.crypto`, element access, `.call` or destructuring, so the property itself is
+          // restricted.
+          {
+            "property": "randomUUID",
+            "message": "Draw a UUID from the Effect `Crypto` service the Layer captured."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/*/src/**/internal/**/*.ts"],
+      "rules": { "exports/no-internal-barrel": "error" }
+    },
+    {
+      "files": ["**/packages/*/src/**/index.ts"],
+      "rules": { "exports/public-entrypoint": "error" }
+    },
+    {
+      // The Playwright driver and the scripted engine implement `Driver`, a Promise-based
+      // interface around Playwright. The owner's `native` bridge is where they meet Effect.
+      "files": [
+        "**/packages/browser/src/internal/browser/**/*.ts",
+        "**/packages/browser/src/internal/testing/**/*.ts"
+      ],
+      "rules": {
+        "effecttsgo/async-function": "off",
+        "effecttsgo/new-promise": "off",
+        "effecttsgo/global-timers": "off"
+      }
+    },
+    {
+      // Tests, fixtures, hosted checks and examples drive the platform itself: they fake
+      // Playwright and `fetch`, serve pages, launch Chromium and read their environment. They
+      // may also unwrap, cast and use `any`-typed test utilities; a wrong guess fails the test.
+      "files": [
+        "**/packages/*/test/**/*.ts",
+        "**/packages/*/examples/**/*.ts",
+        "**/packages/browserbase/hosted/**/*.ts",
+        "**/test/integration/**/*.ts"
+      ],
+      "rules": {
+        "effecttsgo/async-function": "off",
+        "effecttsgo/crypto-random-uuid": "off",
+        "effecttsgo/crypto-random-uuid-in-effect": "off",
+        "effecttsgo/global-console": "off",
+        "effecttsgo/global-console-in-effect": "off",
+        "effecttsgo/global-date": "off",
+        "effecttsgo/global-fetch": "off",
+        "effecttsgo/global-fetch-in-effect": "off",
+        "effecttsgo/global-random": "off",
+        "effecttsgo/global-timers": "off",
+        "effecttsgo/instance-of-schema": "off",
+        "effecttsgo/new-promise": "off",
+        "effecttsgo/node-builtin-import": "off",
+        "effecttsgo/prefer-schema-over-json": "off",
+        "effecttsgo/process-env": "off",
+        "effecttsgo/process-env-in-effect": "off",
+        "effecttsgo/schema-sync": "off",
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off",
+        "typescript/no-unsafe-type-assertion": "off"
+      }
+    }
+  ]
+}

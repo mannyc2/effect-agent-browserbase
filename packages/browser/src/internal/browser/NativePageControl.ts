@@ -1,8 +1,7 @@
 import { Schema } from "effect";
 import type { Browser, BrowserContext, Frame } from "playwright-core";
 
-import type { PageInfo, PageSuspension } from "../../BrowserData.ts";
-import { Identifier } from "../../BrowserData.ts";
+import { Identifier, type PageInfo, type PageSuspension } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";

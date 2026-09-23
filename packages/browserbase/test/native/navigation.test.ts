@@ -57,6 +57,7 @@ const countStops = (page: Page, loseAcknowledgement = false) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const context = page.context();
+      // oxlint-disable-next-line typescript/unbound-method -- called on this context
       const original = context.newCDPSession;
       let sent = 0;
 

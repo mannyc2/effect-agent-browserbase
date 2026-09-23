@@ -183,7 +183,7 @@ export const artifactCases = [
 
       yield* withRecordings(
         async (input) => {
-          if (!String(input).includes("/recording/")) return metadata();
+          if (!new Request(input).url.includes("/recording/")) return metadata();
 
           return Response.json(
             ++reads < 2
@@ -211,7 +211,7 @@ export const artifactCases = [
     name: "bounded recording polling returns latest partial status, not a fabricated permanent failure",
     run: withRecordings(
       async (input) =>
-        String(input).includes("/recording/") ? Response.json(pending) : metadata(),
+        new Request(input).url.includes("/recording/") ? Response.json(pending) : metadata(),
       (api) =>
         Effect.gen(function* () {
           const batch = yield* elapse(api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 }), 30);
@@ -225,7 +225,7 @@ export const artifactCases = [
     name: `recording API preserves ${status} as a bounded typed state`,
     run: withRecordings(
       async (input) =>
-        String(input).includes("/recording/")
+        new Request(input).url.includes("/recording/")
           ? Response.json({ detail: "PRIVATE-BODY" }, { status, headers: { "retry-after": "60" } })
           : metadata(),
       (api) =>
@@ -245,7 +245,7 @@ export const artifactCases = [
     name: "BYOS completion without a URL does not become a corrupt download",
     run: withRecordings(
       async (input) =>
-        String(input).includes("/recording/")
+        new Request(input).url.includes("/recording/")
           ? Response.json({ downloads: [{ pageId: "0", status: "COMPLETED" }] })
           : metadata(),
       (api) =>
@@ -316,9 +316,9 @@ export const artifactCases = [
 
       yield* withRecordings(
         async (input) => {
-          if (!String(input).startsWith("https://api.browserbase.com")) external++;
+          if (!new Request(input).url.startsWith("https://api.browserbase.com")) external++;
 
-          return String(input).includes("/recording/")
+          return new Request(input).url.includes("/recording/")
             ? Response.json({
                 downloads: [
                   {
@@ -531,12 +531,12 @@ export const artifactCases = [
     name: "replay rejects encrypted or foreign-origin playlists rather than leaking credentials",
     run: withReplays(
       async (input) => {
-        if (String(input).endsWith("/replays"))
+        if (new Request(input).url.endsWith("/replays"))
           return Response.json({
             pageCount: 1,
             pages: [{ pageId: "0", startTimeMs: 0, endTimeMs: 1000, url: "ignored" }],
           });
-        if (String(input).endsWith("/replays/0"))
+        if (new Request(input).url.endsWith("/replays/0"))
           return new Response(
             '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://attacker.invalid/key"\n#EXT-X-ENDLIST\n',
             { headers: { "content-type": "application/vnd.apple.mpegurl" } },

@@ -79,6 +79,9 @@ const makeEngine = Effect.fnUntraced(function* (script: Script) {
     },
   };
 
+  // A refused initial target throws inside the engine; `async` turns that into the rejection the
+  // owner's `onSettled` bookkeeping waits for.
+  // oxlint-disable-next-line effecttsgo/async-function -- NativeAttempt is Promise-based
   const attempt: NativeAttempt = async (request) => {
     const engine = makeScriptedDriver(script, request.options, request.events, timers);
 

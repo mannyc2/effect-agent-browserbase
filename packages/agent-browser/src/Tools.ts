@@ -7,6 +7,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -624,7 +625,7 @@ const makeWaitHandlers = <E>(browser: BrowserSession<E>, hooks: Hooks) =>
       ),
   });
 
-const encodedObservedResult = Schema.encodeSync(
+const encodeObservedResult = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
       action: Schema.Union([BrowserActionResult, BrowserNavigationResult, NativeInputResult]),
@@ -695,7 +696,7 @@ const makeObservedHandlers = <E>(
       observation: { _tag: "Available" as const, observation: observed.success },
     };
 
-    const encoded = encodedObservedResult(result);
+    const encoded = yield* encodeObservedResult(result).pipe(Effect.orDie);
     const bytes = resultEncoder.encode(encoded).length;
 
     return bytes <= maximum
@@ -843,7 +844,7 @@ export interface ToolFailureSnapshot {
   readonly dropped: number;
 }
 
-const encodeBrowserError = Schema.encodeSync(BrowserError);
+const encodeBrowserError = Schema.encodeResult(BrowserError);
 
 const maximumInvocations = 32;
 const maximumQueueMillis = 30_000;
@@ -905,6 +906,9 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
   const recordFailure = (error: BrowserError, toolCallId: string | undefined) => {
     const encoded = encodeBrowserError(error);
+
+    // Only a BrowserError that bypassed its constructor's validation fails to encode.
+    if (Result.isFailure(encoded)) throw encoded.failure;
     const toolCallIdOmitted = toolCallId !== undefined && toolCallId.length > 256;
 
     if (toolFailures.length === 32) {
@@ -913,7 +917,10 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     }
     toolFailures.push(
       Object.freeze({
-        error: Object.freeze({ ...encoded, reason: Object.freeze({ ...encoded.reason }) }),
+        error: Object.freeze({
+          ...encoded.success,
+          reason: Object.freeze({ ...encoded.success.reason }),
+        }),
         toolCallId: toolCallIdOmitted ? undefined : toolCallId,
         toolCallIdOmitted,
       }),

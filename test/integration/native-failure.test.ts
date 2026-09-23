@@ -44,7 +44,7 @@ it("an operation is a closed vocabulary, so a misspelling is refused rather than
       reason: Reasons.Malformed.make({}),
       outcome: "undispatched",
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
 });
 
 it("a native failure keeps its reason and outcome and takes the caller's operation", () => {

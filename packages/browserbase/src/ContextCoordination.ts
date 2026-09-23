@@ -1,5 +1,4 @@
-import type { Scope } from "effect";
-import { Clock, Effect, Exit, Schema } from "effect";
+import { Clock, Effect, Exit, Schema, type Scope } from "effect";
 
 import { ContextError } from "./Errors.ts";
 import {

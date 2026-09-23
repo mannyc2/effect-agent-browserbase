@@ -139,6 +139,7 @@ export const provider = Effect.fnUntraced(function* (
 
   const create = fixed.create ?? { _tag: "Accept" as const };
 
+  // oxlint-disable-next-line effecttsgo/async-function -- stands in for the platform's fetch
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);

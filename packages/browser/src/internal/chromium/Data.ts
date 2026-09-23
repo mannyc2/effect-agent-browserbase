@@ -35,6 +35,7 @@ export class ChromiumCleanupResult extends Schema.Class<ChromiumCleanupResult>(
 
 const Text = Schema.NonEmptyString.check(
   Schema.isMaxLength(4096),
+  // oxlint-disable-next-line eslint/no-control-regex -- NUL is one of the characters it rejects
   Schema.isPattern(/^[^\u0000\r\n]+$/u),
 );
 

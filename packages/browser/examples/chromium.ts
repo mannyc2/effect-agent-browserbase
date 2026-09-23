@@ -1,5 +1,4 @@
-import type { Redacted } from "effect";
-import { Effect, Stream } from "effect";
+import { Effect, type Redacted, Stream } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";

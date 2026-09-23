@@ -4,6 +4,7 @@ import type { BrowserContext, CDPSession, Frame, Page } from "playwright-core";
 import { Identifier } from "../../BrowserData.ts";
 import { InitializationError } from "../../Errors.ts";
 import type { NativeBinding } from "./Bindings.ts";
+import { safeDecode } from "./NativeCalls.ts";
 
 const ContextCreated = Schema.Struct({
   context: Schema.Struct({
@@ -234,7 +235,7 @@ export const makeNativeBindings = (
       }
       const native = cdp;
 
-      const targetId = Schema.decodeSync(TargetIdentity)(await native.send("Target.getTargetInfo"))
+      const targetId = safeDecode(TargetIdentity, await native.send("Target.getTargetInfo"))
         .targetInfo.targetId;
 
       if (closing || page.isClosed() || targets.has(targetId)) return;

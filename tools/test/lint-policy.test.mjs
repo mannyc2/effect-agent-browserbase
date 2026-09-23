@@ -7,12 +7,27 @@ import { test } from "node:test";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
 
+// Oxlint reads its config as JSON with comments. Strings are kept whole, so a `//` inside one
+// survives; every comment outside a string is dropped.
+const parseJsonc = (source) =>
+  JSON.parse(
+    source.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match) =>
+      match.startsWith('"') ? match : "",
+    ),
+  );
+
+const config = parseJsonc(read("lint/.oxlintrc.json"));
+const severity = (setting) => (Array.isArray(setting) ? setting[0] : setting);
+const pluginOf = (rule) => (rule.includes("/") ? rule.split("/")[0] : "eslint");
+
 const strictCompilerOptions = {
   noImplicitOverride: true,
   noImplicitReturns: true,
   noFallthroughCasesInSwitch: true,
   allowUnreachableCode: false,
   allowUnusedLabels: false,
+  // Oxlint reports Effect's diagnostics; the patched `tsc` only typechecks.
+  plugins: [{ name: "@effect/language-service", diagnostics: false }],
 };
 // Compiler options apply to a whole program. effect-agent-browser's program compiles upstream's
 // effect-agent source, which is not written for noUncheckedIndexedAccess, so there the flag
@@ -28,70 +43,83 @@ test("every owned TypeScript project opts into the same strict compiler checks",
   for (const [path, specific] of Object.entries(ownedProjects)) {
     const options = JSON.parse(read(path)).compilerOptions;
     for (const [name, value] of Object.entries({ ...strictCompilerOptions, ...specific }))
-      assert.equal(options[name], value, `${path} sets ${name}`);
+      assert.deepEqual(options[name], value, `${path} sets ${name}`);
   }
 });
 
-test("the strict lint policy reaches upstream's root config, bootstrap and acceptance", () => {
+test("the lint config extends Effect's recommended preset and enables every rule's plugin", () => {
+  assert.deepEqual(config.extends, ["../node_modules/@effect/tsgo/oxlint-presets/recommended.json"]);
+  assert.equal(config.options.typeAware, true);
+  // Oxlint drops a rule whose plugin is not enabled, without saying so.
+  const enabled = new Set(["eslint", ...config.plugins, ...config.jsPlugins.map(({ name }) => name)]);
+
+  for (const rules of [config.rules, ...config.overrides.map((override) => override.rules)])
+    for (const rule of Object.keys(rules))
+      assert.ok(enabled.has(pluginOf(rule)), `${rule} has its plugin enabled`);
+  for (const [rule, setting] of Object.entries(config.rules))
+    assert.ok(["error", "off"].includes(severity(setting)), `${rule} is enforced or off, not advisory`);
+});
+
+test("overrides reach only owned paths, and each one either tightens or relaxes", () => {
+  // Globs resolve from the config's own directory, so an owned path is matched at any depth.
+  const ownedPath =
+    /^\*\*\/(?:packages\/(?:\*|browser|browserbase|agent-browser)\/|test\/integration\/)/;
+
+  for (const override of config.overrides) {
+    for (const glob of override.files) assert.match(glob, ownedPath, `${glob} is an owned path`);
+    const severities = new Set(Object.values(override.rules).map(severity));
+
+    assert.equal(severities.size, 1, `${override.files[0]} only tightens or only relaxes`);
+    if (!severities.has("off")) continue;
+    // Relaxing is only for a rule that is on: one of ours, or one of Effect's preset.
+    for (const rule of Object.keys(override.rules))
+      assert.ok(
+        severity(config.rules[rule]) === "error" || rule.startsWith("effecttsgo/"),
+        `${rule} is relaxed from an enforced rule`,
+      );
+  }
+});
+
+test("the lint config reaches bootstrap and acceptance, beside upstream's own", () => {
   const patch = read("upstream.patch");
-  assert.match(patch, /^\+import \{ ownedOverrides \} from "\.\/lint\/owned\.ts";$/m);
-  assert.match(patch, /^\+ {6}\.\.\.ownedOverrides,$/m);
-  // Effect's Oxlint rules exist only in the patched Oxlint binding and tsgolint.
+  // Effect's Oxlint rules exist only in the patched Oxlint binding and tsgolint, and plain Oxlint
+  // finds tsgolint only as a root dependency.
   assert.match(patch, /^\+ {4}"patch:tsgo": "effect-tsgo patch --typescript --oxlint",$/m);
+  assert.match(patch, /^\+ {4}"oxlint-tsgolint": "\d+\.\d+\.\d+",$/m);
+  // Upstream's root config lints upstream; nothing here reaches into it.
+  assert.doesNotMatch(patch, /^diff --git a\/vite\.config\.ts /m);
   assert.match(read("tools/bootstrap.sh"), /'packages\/agent-browser', 'test', 'lint'\n/);
   const acceptance = read("tools/run-acceptance.sh");
   assert.match(acceptance, /run format timeout \d+s \.\/node_modules\/\.bin\/vp fmt --check [^\n]* test lint\n/);
   assert.match(
     acceptance,
-    /run lint timeout \d+s \.\/node_modules\/\.bin\/vp lint --type-aware --report-unused-disable-directives-severity=error [^\n]* test lint\n/,
+    /run lint timeout \d+s \.\/node_modules\/\.bin\/oxlint -c lint\/\.oxlintrc\.json --deny-warnings --report-unused-disable-directives-severity=error packages\/browser packages\/browserbase packages\/agent-browser test\/integration test\/vite\.config\.ts\n/,
   );
 });
 
-test("the Oxlint pin agrees with the contributor toolchain table", () => {
-  const pinned = read("upstream.patch").match(/^\+ {4}"oxlint": "([^"]+)",$/m)?.[1];
-  assert.match(pinned ?? "", /^\d+\.\d+\.\d+$/);
-  const documented = read("CONTRIBUTING.md").split("\n")
-    .map((line) => line.split("|").map((cell) => cell.trim()))
-    .filter((cells) => cells[1] === "Effect tsgo / Oxlint");
-  assert.equal(documented.length, 1);
-  assert.equal(documented[0][2].split(" / ")[1], pinned);
-});
+test("the Oxlint and tsgolint pins agree with the contributor toolchain table", () => {
+  const patch = read("upstream.patch");
+  const pinned = (name) => patch.match(new RegExp(`^\\+ {4}"${name}": "([^"]+)",$`, "m"))?.[1];
+  const documented = (tool) =>
+    read("CONTRIBUTING.md")
+      .split("\n")
+      .map((line) => line.split("|").map((cell) => cell.trim()))
+      .filter((cells) => cells[1] === tool)
+      .map((cells) => cells[2]);
 
-test("the policy is owned-only, error-only, and relaxes only its own rules", async () => {
-  const { ownedOverrides } = await import("../../lint/owned.ts");
-  const ownedPath = /^(?:packages\/\{browser,browserbase,agent-browser\}\/|packages\/browserbase\/hosted\/|test\/integration\/|test\/vite\.config\.ts$)/;
-  const severity = (setting) => (Array.isArray(setting) ? setting[0] : setting);
-  const [strict, library, tests] = ownedOverrides;
-
-  assert.equal(ownedOverrides.length, 3);
-  for (const override of ownedOverrides)
-    for (const glob of override.files) assert.match(glob, ownedPath, `${glob} is an owned path`);
-  assert.ok(strict.plugins.includes("effecttsgo"));
-  // Oxlint silently drops these rules from an override that does not enable their plugin.
-  for (const override of ownedOverrides)
-    for (const rule of Object.keys(override.rules)) {
-      const plugin = rule.split("/")[0];
-
-      if (plugin === "effecttsgo" || plugin === "promise")
-        assert.ok(override.plugins?.includes(plugin), `${rule} needs ${plugin} in its override`);
-    }
-  for (const override of [strict, library])
-    for (const [rule, setting] of Object.entries(override.rules))
-      assert.equal(severity(setting), "error", `${rule} is enforced, not advisory`);
-  for (const [rule, setting] of Object.entries(tests.rules)) {
-    assert.equal(setting, "off", `${rule} is only relaxed in tests`);
-    assert.equal(severity(strict.rules[rule]), "error", `${rule} is relaxed from the strict set`);
-  }
+  assert.match(pinned("oxlint") ?? "", /^\d+\.\d+\.\d+$/);
+  assert.equal(documented("Effect tsgo / Oxlint")[0]?.split(" / ")[1], pinned("oxlint"));
+  assert.deepEqual(documented("oxlint-tsgolint"), [pinned("oxlint-tsgolint")]);
 });
 
 const ownedSources = execFileSync(
   "git",
-  ["ls-files", "-z", "--", "packages/browser", "packages/browserbase", "packages/agent-browser", "test", "lint"],
+  ["ls-files", "-z", "--", "packages/browser", "packages/browserbase", "packages/agent-browser", "test"],
   { cwd: root, encoding: "utf8" },
 ).split("\0").filter((path) => /\.[cm]?ts$/.test(path));
 
 test("every lint or Effect suppression in owned code says why", () => {
-  assert.ok(ownedSources.includes("lint/owned.ts"));
+  assert.ok(ownedSources.length > 0);
   for (const path of ownedSources) {
     const lines = read(path).split("\n");
 

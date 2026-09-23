@@ -32,6 +32,7 @@ export const makeCaptureSources = (targets: Targets) => {
     const changedFrameId = frame === undefined ? undefined : frameId(frame);
     const mainFrameId = frameId(entry.page.mainFrame());
 
+    // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may start or stop a watcher
     for (const watcher of [...watchers]) {
       if (
         frame !== undefined &&

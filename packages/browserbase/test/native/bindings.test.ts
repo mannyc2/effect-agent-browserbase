@@ -602,6 +602,7 @@ it.live(
                 yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
                 const page = pageFor(fixture, session.reference.sessionId);
                 const context = page.context();
+                // oxlint-disable-next-line typescript/unbound-method -- called on this context
                 const original = context.newCDPSession;
 
                 // One instance-local transport failpoint, after genuine successful initialization.

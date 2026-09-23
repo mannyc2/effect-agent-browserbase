@@ -14,8 +14,7 @@ import {
   Scope,
 } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
-import type { BrowserError } from "effect-browser/errors";
-import { InitializationError } from "effect-browser/errors";
+import { type BrowserError, InitializationError } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 
 import {

@@ -95,8 +95,9 @@ if [ "$LAST_CODE" = 0 ]; then
   cp bun.lock "$OUT/bun.lock"
   # Fail a spacing/type regression before downloading Chromium or starting a browser.
   run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browser packages/browserbase packages/agent-browser test lint
-  # A disable directive that suppresses nothing fails, so every exception stays necessary.
-  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware --report-unused-disable-directives-severity=error packages/browser packages/browserbase packages/agent-browser test lint
+  # Oxlint runs with this repository's own config, not upstream's. Every warning blocks, and a
+  # disable directive that suppresses nothing fails, so every exception stays necessary.
+  run lint timeout 180s ./node_modules/.bin/oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages/browser packages/browserbase packages/agent-browser test/integration test/vite.config.ts
   fast_reject
   run integration-typecheck timeout 180s ./node_modules/.bin/vp run check:integration
   run browser-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browser check

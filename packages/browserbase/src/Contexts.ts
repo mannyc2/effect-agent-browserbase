@@ -1,8 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { BrowserbaseClient } from "./Client.ts";
-import type { ClientError } from "./Errors.ts";
-import { ContextError } from "./Errors.ts";
+import { type ClientError, ContextError } from "./Errors.ts";
 import { isContextWriterBusy } from "./internal/session/ContextWriter.ts";
 import { ContextReference, Identifier } from "./References.ts";
 

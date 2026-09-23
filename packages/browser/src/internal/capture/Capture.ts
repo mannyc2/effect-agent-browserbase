@@ -1,4 +1,4 @@
-import { Cause, Clock, Deferred, Effect, Exit, Queue, Schema, Stream } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Option, Queue, Schema, Stream } from "effect";
 
 import type { Target } from "../../BrowserData.ts";
 import type { CaptureInterval } from "../../Capture.ts";
@@ -42,7 +42,7 @@ const Metadata = Schema.Struct({
   viewportHeight: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
 });
 
-const parseMetadata = Schema.decodeUnknownSync(Metadata);
+const decodeMetadata = Schema.decodeUnknownOption(Metadata);
 
 /** Private seam for deterministic callback/lifetime tests. The public start accepts a real live session. */
 export const startCapture = Effect.fnUntraced(function* (
@@ -267,7 +267,22 @@ export const startCapture = Effect.fnUntraced(function* (
     const sequence = received++;
 
     try {
-      const meta = parseMetadata(frame);
+      const decoded = decodeMetadata(frame);
+
+      if (Option.isNone(decoded)) {
+        rejected++;
+        finish(
+          "malformed-frame",
+          BrowserError.make({
+            operation: "capture",
+            reason: Reasons.Malformed.make({}),
+            outcome: "undispatched",
+          }),
+        );
+
+        return;
+      }
+      const meta = decoded.value;
 
       if (!(frame.data instanceof Uint8Array)) {
         rejected++;

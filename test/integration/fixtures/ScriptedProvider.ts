@@ -90,8 +90,7 @@ const SESSION = {
   connectUrl: "wss://connect.browserbase.com?key=PRIVATE-CDP",
 };
 
-/** Script only the provider/native boundary; real Effect ownership, HTTP, parsing and scopes remain. */
-export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {}) {
+const makeFixture = (options: ScriptOptions) => {
   const calls: string[] = [];
   const reports: CleanupResult[] = [];
   const uncertain: string[] = [];
@@ -494,4 +493,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
   );
 
   return { acquisition, calls, reports, uncertain, state, fetch };
-});
+};
+
+/** Script only the provider/native boundary; real Effect ownership, HTTP, parsing and scopes remain. */
+export const fixture = (options: ScriptOptions = {}) => Effect.sync(() => makeFixture(options));

@@ -9,7 +9,8 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "allowUnreachableCode": false,
-    "allowUnusedLabels": false
+    "allowUnusedLabels": false,
+    "plugins": [{ "name": "@effect/language-service", "diagnostics": false }]
   },
   "include": ["src", "test", "examples", "hosted", "vite.config.ts"]
 }

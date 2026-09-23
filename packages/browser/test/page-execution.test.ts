@@ -79,7 +79,9 @@ it("holds with an owned receipt and restores prior rate only after the actual fr
   expect(f.calls).toEqual(["read", "rate:0", "focus:false", "frozen"]);
   expect(f.control.state().state).toBe("suspended");
   expect(Object.isFrozen(receipt)).toBe(true);
-  expect(() => f.control.assertRunning()).toThrow();
+  expect(() => f.control.assertRunning()).toThrow(
+    expect.objectContaining({ reason: expect.objectContaining({ _tag: "Busy" }) }),
+  );
   await f.control.resume(receipt, f.ticket);
   expect(f.calls.slice(4)).toEqual(["active", "activate", "focus:true", "frame", "rate:0.5"]);
   expect(f.control.state().state).toBe("running");
@@ -118,7 +120,9 @@ it("a partial hold failure stays unknown without rollback or a successful receip
   expect(f.control.state()).toMatchObject({ state: "unknown" });
   expect(f.control.state().suspensionId).toBeUndefined();
   expect(f.calls).toEqual(["read", "rate:0"]);
-  expect(() => f.control.assertRunning()).toThrow();
+  expect(() => f.control.assertRunning()).toThrow(
+    expect.objectContaining({ reason: expect.objectContaining({ _tag: "Busy" }) }),
+  );
 });
 it("a failed resume barrier cannot restore playback or be replayed", async () => {
   const f = fixture({
@@ -185,5 +189,7 @@ it("cleanup detaches once without an implicit lifecycle resume or rate restorati
   await f.control.dispose();
   await f.control.dispose();
   expect(f.calls).toEqual(["read", "rate:0", "focus:false", "frozen", "detach"]);
-  expect(() => f.control.state()).toThrow();
+  expect(() => f.control.state()).toThrow(
+    expect.objectContaining({ reason: expect.objectContaining({ _tag: "Closed" }) }),
+  );
 });

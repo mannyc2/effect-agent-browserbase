@@ -1,8 +1,7 @@
 import { Schema } from "effect";
 import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from "playwright-core";
 
-import type { ObservedElement } from "../../BrowserData.ts";
-import { SafeFilename } from "../../BrowserData.ts";
+import { type ObservedElement, SafeFilename } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { Driver, DriverTarget, NativeFileSelection, NavigationControl } from "./Driver.ts";
 import {

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 
 import { Clock, Effect, Fiber, Redacted, Schema, type Scope } from "effect";
-import type { InitializationError } from "effect-browser/errors";
-import { BrowserError } from "effect-browser/errors";
+import { BrowserError, type InitializationError } from "effect-browser/errors";
 
 import type { NativeNavigation } from "../../../packages/browser/src/internal/browser/Driver.ts";
 import { makeOwner, native } from "../../../packages/browser/src/internal/browser/Owner.ts";

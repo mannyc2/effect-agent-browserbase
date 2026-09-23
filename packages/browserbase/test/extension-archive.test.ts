@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { Effect, Random } from "effect";
 
 import { inspectExtensionArchive } from "../src/internal/extension/Archive.ts";
 import { encodeFilePart } from "../src/internal/http/Multipart.ts";
@@ -48,53 +49,74 @@ it("keeps a trailing archive comment inside the record it declares", () => {
   expect(inspectExtensionArchive(truncated)._tag).toBe("Rejected");
 });
 
-it("encodes exactly one file part with a delimiter proven absent from the content", () => {
-  const bytes = new TextEncoder().encode("report contents");
+it.effect("encodes exactly one file part with a delimiter proven absent from the content", () =>
+  Effect.gen(function* () {
+    const bytes = new TextEncoder().encode("report contents");
 
-  const encoded = encodeFilePart(
-    { field: "file", filename: "quarterly report.pdf", mediaType: "application/pdf", bytes },
-    1024,
-  );
-
-  expect(encoded._tag).toBe("Encoded");
-  if (encoded._tag !== "Encoded") return;
-  const boundary = encoded.contentType.slice("multipart/form-data; boundary=".length);
-
-  expect(boundary).toMatch(/^effect-agent-browserbase-[0-9a-f]{32}$/);
-  expect(decode(encoded.body)).toBe(
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="quarterly report.pdf"\r\nContent-Type: application/pdf\r\n\r\nreport contents\r\n--${boundary}--\r\n`,
-  );
-});
-
-it("refuses parts whose name, type, bounds or delimiter cannot be trusted", () => {
-  const bytes = new TextEncoder().encode("x");
-
-  const part = {
-    field: "file",
-    filename: "extension.zip",
-    mediaType: "application/zip",
-    bytes,
-  } as const;
-
-  const rejections: ReadonlyArray<readonly [string, ReturnType<typeof encodeFilePart>]> = [
-    ["configuration", encodeFilePart({ ...part, field: "File" }, 1024)],
-    ["configuration", encodeFilePart({ ...part, filename: '"quoted".zip' }, 1024)],
-    ["configuration", encodeFilePart({ ...part, filename: "../escape.zip" }, 1024)],
-    ["configuration", encodeFilePart({ ...part, filename: "naïve.zip" }, 1024)],
-    ["configuration", encodeFilePart({ ...part, mediaType: "application/zip; x=1" }, 1024)],
-    ["configuration", encodeFilePart(part, 0)],
-    ["limit", encodeFilePart({ ...part, bytes: new Uint8Array(2048) }, 1024)],
-  ];
-
-  for (const [reason, result] of rejections)
-    expect(result).toMatchObject({ _tag: "Rejected", reason });
-
-  // A delimiter that cannot be separated from the content is refused, never emitted.
-  expect(
-    encodeFilePart(
-      { ...part, bytes: new TextEncoder().encode("prefix-collides-suffix") },
+    const encoded = yield* encodeFilePart(
+      { field: "file", filename: "quarterly report.pdf", mediaType: "application/pdf", bytes },
       1024,
-      () => "collides",
-    ),
-  ).toMatchObject({ _tag: "Rejected", reason: "configuration" });
-});
+    );
+
+    expect(encoded._tag).toBe("Encoded");
+    if (encoded._tag !== "Encoded") return;
+    const boundary = encoded.contentType.slice("multipart/form-data; boundary=".length);
+
+    expect(boundary).toMatch(/^effect-agent-browserbase-[0-9a-f]{32}$/);
+    expect(decode(encoded.body)).toBe(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="quarterly report.pdf"\r\nContent-Type: application/pdf\r\n\r\nreport contents\r\n--${boundary}--\r\n`,
+    );
+  }),
+);
+
+it.effect("draws the delimiter from the fiber's Random", () =>
+  Effect.gen(function* () {
+    const part = {
+      field: "file",
+      filename: "notes.txt",
+      mediaType: "text/plain",
+      bytes: new TextEncoder().encode("notes"),
+    };
+
+    const seeded = (seed: string) => encodeFilePart(part, 1024).pipe(Random.withSeed(seed));
+    const first = yield* seeded("boundary");
+
+    expect(yield* seeded("boundary")).toEqual(first);
+    expect(yield* seeded("another boundary")).not.toEqual(first);
+  }),
+);
+
+it.effect("refuses parts whose name, type, bounds or delimiter cannot be trusted", () =>
+  Effect.gen(function* () {
+    const bytes = new TextEncoder().encode("x");
+
+    const part = {
+      field: "file",
+      filename: "extension.zip",
+      mediaType: "application/zip",
+      bytes,
+    } as const;
+
+    const rejections: ReadonlyArray<readonly [string, ReturnType<typeof encodeFilePart>]> = [
+      ["configuration", encodeFilePart({ ...part, field: "File" }, 1024)],
+      ["configuration", encodeFilePart({ ...part, filename: '"quoted".zip' }, 1024)],
+      ["configuration", encodeFilePart({ ...part, filename: "../escape.zip" }, 1024)],
+      ["configuration", encodeFilePart({ ...part, filename: "naïve.zip" }, 1024)],
+      ["configuration", encodeFilePart({ ...part, mediaType: "application/zip; x=1" }, 1024)],
+      ["configuration", encodeFilePart(part, 0)],
+      ["limit", encodeFilePart({ ...part, bytes: new Uint8Array(2048) }, 1024)],
+    ];
+
+    for (const [reason, encoding] of rejections)
+      expect(yield* encoding).toMatchObject({ _tag: "Rejected", reason });
+
+    // A delimiter that cannot be separated from the content is refused, never emitted.
+    expect(
+      yield* encodeFilePart(
+        { ...part, bytes: new TextEncoder().encode("prefix-collides-suffix") },
+        1024,
+        Effect.succeed("collides"),
+      ),
+    ).toMatchObject({ _tag: "Rejected", reason: "configuration" });
+  }),
+);

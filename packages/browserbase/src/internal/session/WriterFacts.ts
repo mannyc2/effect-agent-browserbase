@@ -1,5 +1,4 @@
-import type { Effect } from "effect";
-import { Schema } from "effect";
+import { type Effect, Schema } from "effect";
 
 import { CleanupResult } from "../../Cleanup.ts";
 import { AllocationAttempt, ContextReference, SessionReference } from "../../References.ts";

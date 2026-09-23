@@ -56,13 +56,13 @@ it("status and bounded diagnostics are host data with no admission or native cap
   ).toHaveLength(1);
   expect(() =>
     decode({ records: Array(33).fill(record), total: 33, dropped: 0, truncated: false }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
   expect(() =>
     Schema.decodeUnknownSync(BrowserDiagnostic, { onExcessProperty: "error" })({
       ...record,
       url: "PRIVATE-PAGE",
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
   expect(() =>
     Schema.decodeUnknownSync(SessionStatus)({
       phase: "closed",
@@ -71,10 +71,10 @@ it("status and bounded diagnostics are host data with no admission or native cap
       busy: false,
       unresolvedDispatch: true,
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
   expect(() =>
     decode({ records: [], total: Number.MAX_SAFE_INTEGER + 1, dropped: 0, truncated: false }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
 });
 
 it.effect(
@@ -115,6 +115,6 @@ it.effect(
           ...BrowserPolicy.unrestricted(),
           maxHostReads: 2,
         }),
-      ).toThrow();
+      ).toThrow(Schema.SchemaError);
     }),
 );

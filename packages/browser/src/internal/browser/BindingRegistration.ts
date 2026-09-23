@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 
 import type * as Bootstrap from "../../Bootstrap.ts";
 import { Identifier } from "../../BrowserData.ts";
@@ -87,7 +87,7 @@ export const make = <I, IEncoded, O, OEncoded, E, R>(
     failureMode = "reject-call",
   } = options;
 
-  const metadata = Schema.decodeSync(metadataSchema)({
+  const decoded = Schema.decodeResult(metadataSchema)({
     ...options,
     maxConcurrent,
     maxInputBytes,
@@ -95,6 +95,9 @@ export const make = <I, IEncoded, O, OEncoded, E, R>(
     timeoutMillis,
     failureMode,
   });
+
+  if (Result.isFailure(decoded)) throw decoded.failure;
+  const metadata = decoded.success;
 
   const { input, output, handle } = options;
 

@@ -112,7 +112,7 @@ export const launch = Effect.fnUntraced(function* (
   const executable =
     options.executablePath ??
     (yield* Effect.tryPromise({
-      try: async () => (await import("playwright-core")).chromium.executablePath(),
+      try: () => import("playwright-core").then(({ chromium }) => chromium.executablePath()),
       catch: () => failure("launch", Reasons.Failed.make({})),
     }));
 
@@ -129,22 +129,26 @@ export const launch = Effect.fnUntraced(function* (
   let child: ChildProcess | undefined;
 
   return yield* Effect.gen(function* () {
-    const launched = yield* Effect.tryPromise({
-      try: () => {
-        const spawned = spawn(executable, launchArguments(options, directory), {
+    // Node reports a spawn's outcome on a later tick, so its listeners attach in the same turn.
+    const launched = yield* Effect.callback<ChildProcess, BrowserError>((resume) => {
+      const failed = () => resume(Effect.fail(failure("launch", Reasons.Failed.make({}))));
+      let spawned: ChildProcess;
+
+      try {
+        spawned = spawn(executable, launchArguments(options, directory), {
           cwd: directory,
           stdio: ["ignore", "ignore", "ignore"],
           detached: true,
         });
+      } catch {
+        failed();
 
-        child = spawned;
+        return;
+      }
 
-        return new Promise<ChildProcess>((resolve, reject) => {
-          spawned.once("spawn", () => resolve(spawned));
-          spawned.once("error", reject);
-        });
-      },
-      catch: () => failure("launch", Reasons.Failed.make({})),
+      child = spawned;
+      spawned.once("spawn", () => resume(Effect.succeed(spawned)));
+      spawned.once("error", failed);
     });
 
     const pid = launched.pid;

@@ -14,6 +14,7 @@ export const SafeFilename = Schema.NonEmptyString.check(
     (value) =>
       value !== "." &&
       value !== ".." &&
+      // oxlint-disable-next-line eslint/no-control-regex -- control characters are what it rejects
       !/[\x00-\x1f\x7f/\\:]/.test(value) &&
       !/[. ]$/.test(value) &&
       !/^\s/.test(value) &&

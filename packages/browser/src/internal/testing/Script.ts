@@ -1,5 +1,4 @@
-import type { Effect, Option } from "effect";
-import { Schema } from "effect";
+import { type Effect, type Option, Schema } from "effect";
 
 import type { BrowserSession } from "../../Browser.ts";
 import {

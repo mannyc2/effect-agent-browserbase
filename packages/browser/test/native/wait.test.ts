@@ -98,6 +98,7 @@ const watchElementWait = Effect.fnUntraced(function* (
   const prototype: ElementHandle<Element> = Object.getPrototypeOf(sample);
 
   yield* Effect.promise(() => sample.dispose());
+  // oxlint-disable-next-line typescript/unbound-method -- the spy calls it on each handle
   const native = prototype.waitForElementState;
 
   const entered = yield* Deferred.make<{
@@ -139,6 +140,7 @@ const watchSelectorWait = Effect.fnUntraced(function* (
   afterFirstResult?: () => Promise<void>,
 ) {
   const prototype: Frame = Object.getPrototypeOf(page.mainFrame());
+  // oxlint-disable-next-line typescript/unbound-method -- the spy calls it on each frame
   const native = prototype.waitForSelector;
   const entered = yield* Deferred.make<void>();
   const returned = yield* Deferred.make<void>();

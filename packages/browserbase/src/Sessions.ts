@@ -1,8 +1,7 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 
 import { BrowserbaseClient } from "./Client.ts";
-import type { ClientError } from "./Errors.ts";
-import { SessionError } from "./Errors.ts";
+import { type ClientError, SessionError } from "./Errors.ts";
 import { issueLiveUrls, type LiveView } from "./internal/browser/LiveView.ts";
 export type { LiveView } from "./internal/browser/LiveView.ts";
 import { SessionReference } from "./References.ts";

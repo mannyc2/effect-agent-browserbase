@@ -159,7 +159,7 @@ it("keeps static-only plans serializable and refuses invalid binding admission b
       failureMode: "reject-call",
       handle: () => Effect.succeed("ok"),
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
 });
 
 it.effect(

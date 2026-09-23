@@ -14,6 +14,7 @@ import {
   ScrollRequest,
 } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
+import type { BrowserError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 
 import {
@@ -520,7 +521,7 @@ type Same<A, B> =
 
 const expectedCaptureError: Same<
   Effect.Error<ReturnType<typeof Capture.start>>,
-  typeof import("effect-browser/errors").BrowserError.Type
+  BrowserError
 > = true;
 
 const encodedObservation = Schema.toCodecJson(ObservedElement);
