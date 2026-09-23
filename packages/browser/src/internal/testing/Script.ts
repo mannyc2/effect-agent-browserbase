@@ -268,7 +268,10 @@ export interface ScriptedControl {
     /** File names attached to which control id by file selection. */
     readonly files: Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
   };
-  /** The last point a pointer command placed, or null when none was placed yet. */
+  /**
+   * The last point a pointer command placed on any page, or null when none was placed yet. An
+   * input receipt reports the point placed on its own page, as Chromium's per-page pointer does.
+   */
   readonly pointer: Effect.Effect<ViewportPoint | null>;
   readonly capture: {
     /** Deliver one frame to the interval capturing the selected page. */

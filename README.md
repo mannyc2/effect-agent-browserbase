@@ -8,7 +8,7 @@ Three packages share one scoped browser owner:
 | `effect-browserbase`   | [`packages/browserbase`](packages/browserbase/README.md)     | Browserbase accounts/resources and hosted acquisition, cleanup, contexts, uploads, recordings and replays. Depends on the shared runtime.                                                     |
 | `effect-agent-browser` | [`packages/agent-browser`](packages/agent-browser/README.md) | One Effect Agent adapter and maintained Toolkit for either browser source. Depends on the shared runtime and framework, not Browserbase.                                                      |
 
-This branch prepares the breaking `0.2.0-beta.0` package set. The earlier `0.1.0-beta.103` release used `effect-browserbase` and `effect-agent-browserbase`; it does not establish publication or ownership of the new package names. Publication is a separate maintainer action.
+The `0.2.0-beta.0` package set was released from tag `v0.2.0-beta.0` through the [release workflow](docs/RELEASING.md), with provenance, on npm's `beta` dist-tag; `main` may be ahead of it. Install by exact version or `@beta`: a prerelease never moves `latest`, which still points at a name reservation (`0.0.0-reserved.0`) for `effect-browser` and `effect-agent-browser` and at `0.1.0-beta.102` for `effect-browserbase`. The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`.
 
 Install the shared host runtimes explicitly. Browserbase requires `effect-browser@0.2.0-beta.0` as a peer; the Agent adapter requires that same browser peer and `effect-agent@0.1.0-beta.102`. Those exact prerelease relationships keep the qualified package set coordinated. The existing Effect peer range remains `^4.0.0-rc.115`, with rc.115 as the tested version. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. Peer declarations cannot prevent every duplicate bundle or module evaluation: all callers must still use the same live runtime and session identity.
 
@@ -98,7 +98,7 @@ And footage meant to be watched: a storyboard performed with a drawn pointer, pa
 
 ## Development
 
-Read [Contributing](CONTRIBUTING.md), the applicable package guide and [AGENTS.md](AGENTS.md). The repository builds into a pinned upstream Effect Agent compatibility workspace. All three owned packages use one coordinated candidate version; the upstream framework pins remain separate.
+Read [Contributing](CONTRIBUTING.md), the applicable package guide and [AGENTS.md](AGENTS.md). The repository builds into a pinned upstream Effect Agent compatibility workspace. All three owned packages use one coordinated version; the upstream framework pins remain separate.
 
 ```sh
 # Use pinned Node 24.14.1 and Bun 1.4.2.

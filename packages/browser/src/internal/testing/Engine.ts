@@ -401,11 +401,20 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
     const bindings: ReadonlyArray<NativeBinding> = options.bindings ?? [];
     let viewport: Viewport = { ...options.viewport };
+    // Chromium keeps a pointer position per page; a receipt reports the one placed on its page.
+    const positions = new Map<string, ViewportPoint>();
     let pointer: ViewportPoint | null = null;
     let selectedId: string | undefined;
     let snapshot: Snapshot | undefined;
     let disconnected = false;
     let index = -1;
+
+    const place = (pageId: string, point: ViewportPoint) => {
+      positions.set(pageId, point);
+      pointer = point;
+    };
+
+    const receipt = (pageId: string): NativeInput => ({ position: positions.get(pageId) ?? null });
 
     const select = (pageId: string | undefined) => {
       selectedId = pageId;
@@ -1500,9 +1509,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             requireRunning(page, "pointer-move");
             dispatch(ticket, record);
-            pointer = { x: to.x, y: to.y };
+            place(page.pageId, { x: to.x, y: to.y });
 
-            return { position: pointer };
+            return receipt(page.pageId);
           },
         ),
       hover: (target, ticket, policy, browserTarget) =>
@@ -1520,12 +1529,12 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             requireRunning(page, "hover");
             if (node.script.offscreen === true) throw fail("hover", Reasons.NotVisible.make({}));
             dispatch(ticket, record);
-            pointer = {
+            place(page.pageId, {
               x: fresh.box.x + fresh.box.width / 2,
               y: fresh.box.y + fresh.box.height / 2,
-            };
+            });
 
-            return { position: pointer };
+            return receipt(page.pageId);
           },
         ),
       wheel: (_deltaX, _deltaY, at, ticket, target) =>
@@ -1538,9 +1547,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             requireRunning(page, "wheel");
             dispatch(ticket, record);
-            if (at !== undefined) pointer = { x: at.x, y: at.y };
+            if (at !== undefined) place(page.pageId, { x: at.x, y: at.y });
 
-            return { position: pointer };
+            return receipt(page.pageId);
           },
         ),
       press: (key, _modifiers: ReadonlyArray<KeyModifier>, into, ticket, policy, browserTarget) =>
@@ -1555,7 +1564,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             dispatch(ticket, record);
             if (key.length === 1) typed(page, key);
 
-            return { position: pointer };
+            return receipt(page.pageId);
           },
         ),
       type: (text, into, ticket, policy, browserTarget) =>
@@ -1570,7 +1579,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             dispatch(ticket, record);
             typed(page, text);
 
-            return { position: pointer };
+            return receipt(page.pageId);
           },
         ),
       screenshot: (_fullPage, _maximumBytes, ticket, target) =>

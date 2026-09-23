@@ -353,6 +353,31 @@ const cases: ReadonlyArray<Case> = [
       }),
   },
   {
+    name: "an input receipt reports the pointer placed on its own page",
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const home = (yield* session.pages).find((page) => page.selected);
+
+        expect(home).toBeDefined();
+        if (home === undefined) return;
+        expect((yield* session.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual({
+          x: 12,
+          y: 34,
+        });
+        const other = yield* session.createPage;
+
+        yield* session.selectPage(other);
+        // Chromium keeps a pointer position per page: nothing was placed on this one yet.
+        expect((yield* session.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
+        yield* session.selectPage(home);
+        expect((yield* session.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({
+          x: 12,
+          y: 34,
+        });
+      }),
+  },
+  {
     name: "a closed session refuses undispatched",
     run: (session, origin) =>
       Effect.gen(function* () {
