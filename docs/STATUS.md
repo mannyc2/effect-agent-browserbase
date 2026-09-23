@@ -34,6 +34,19 @@ reads, an opt-in exact-node wait tool and separately named mutation tools whose 
 action evidence when the following observation fails or exceeds its bound. Publishing, hosted qualification and the issue's evidence-dependent deferrals remain
 separate actions.
 
+The agent Tools were then reworked around what a real model does with them. `browser_inspect`
+takes object parameters (`find`, `scope`): its former empty struct was refused by the pinned
+OpenAI model before any request was sent, a failure no scripted-model test could see, and every
+Tool is now checked against both pinned providers' schema transforms. Host options are checked once,
+when the host is built, and cover the result bound, text continuation, form behaviour, lane limits
+and scheduling, with a hook that replaces how readings are taken. Results are fitted under one
+bound instead of being cut by the engine, observations default to the viewport, and `find` is
+applied inside the page before any limit. `host.run` schedules browser calls sequentially, in the
+order the model declared them. `effect-browser` adds a gated `fillForm`, which
+`browser_fill_form` exposes, so a whole form costs one call; `fillElement` refuses before dispatch
+what Playwright would otherwise refuse only after it. This is unpaid local evidence against
+Chromium with a scripted model: no model provider has been called and no hosted session run.
+
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 
 Current maintenance uses `Library CI` and a separate, manual, default-off npm OIDC workflow. Check the exact current PR/commit's Actions results; the historical acceptance record is not a claim that later changes were tested. Release procedures and required account configuration are in [RELEASING.md](RELEASING.md).

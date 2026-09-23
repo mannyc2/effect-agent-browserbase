@@ -319,6 +319,15 @@ seen.viewport; // { clippedText, coveredText, uncertainText, unreachableControls
 
 Visibility here is geometry and hit-testing, never a pixel comparison, and the counts say which was which. Text is kept when its line boxes intersect the viewport and the browser finds its own element at a sampled point. A text node that crosses the viewport edge contributes only its lines on screen (`clippedText`). Text behind another element is left out (`coveredText`). Text under something that takes no pointer events cannot be hit-tested at all, so it is left out as `uncertainText` rather than called visible. `exhausted` means the traversal budget ran out first and the reading is known to be incomplete. Canvas pixels and compositing effects are not interpreted.
 
+`match` narrows a reading, in either scope, to what contains a piece of text, ignoring case: text lines, and controls whose label contains it. A select is kept when its own label or any of its option labels matches, with its options beside it. The filter runs inside the page before `maxControls` and `maxTextBytes` are spent, so twenty header links cannot crowd out the one control asked for:
+
+```ts
+const found = yield * session.observe({ scope: "document", match: "create account" });
+found.match; // "create account"
+```
+
+It filters what is read and never searches for, re-finds or substitutes a node: references still come from the reading itself, with every exact-node check. What a matched reading leaves out is not evidence of absence, which is why it names its `match`.
+
 An `Observation` is safe to show a model, and the adapter's `browser_inspect` Tool returns it as is. It therefore carries no destination, form target or field value, in either scope. What a host needs to decide whether a control may be acted on is a separate, host-only read from the exact node:
 
 Controls also carry optional `checked`, `selected`, `inputType` and `required`. Native checkbox
@@ -350,6 +359,8 @@ yield *
 
 Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the owner's permit is held, where waiting on a model or a network call would stall every other operation. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
 
+`fillElement` also refuses, undispatched, what the maintained engine would otherwise refuse only after dispatch, where the unknown outcome would fence the owner: a hidden control (`not-visible`), a disabled one (`disabled`), one that is not an editable input, textarea or content-editable element, and text that a `number`, `date`, `time`, `range` or other value-typed input would not keep (`unsupported`). The value is checked on a detached copy with the same constraints; the page's own control is not touched until the fill is sent.
+
 ### Exact native option selection
 
 `selectOption(reference, options, admission?)` selects once on the native `<select>` named by
@@ -376,6 +387,33 @@ are never replayed. Selection emits ordinary native select input/change events t
 maintained engine, returns `ActionResult` and retires the observation on that page. It does not
 claim the website finished work triggered by those events. The same synchronous host `admission`
 used for exact-node input applies to the selected control.
+
+### Filling a form in one operation
+
+`fillForm(request, admission?, options?)` sets several controls of one observation, in order, then optionally clicks one submit control:
+
+```ts
+const result =
+  yield *
+  session.fillForm({
+    observationId: seen.observationId,
+    fields: [
+      { elementId: email, value: "ada@example.test" },
+      { elementId: terms, checked: true },
+      { elementId: plan, options: [pro] },
+    ],
+    submit: create,
+  });
+// { fields: [{ elementId, status: "set" | "unchanged" }], submitted, url, stopped? }
+```
+
+Each field gives exactly one of `value`, text that replaces the contents of an input, textarea or content-editable element; `checked`, the state a checkbox, radio or switch should end in, clicked only when it differs, and a native radio is never asked to clear itself; or `options`, issued option IDs of a native select exactly as for `selectOption`. A form has at most 32 fields, each control at most once, and its submit control is not also one of its fields.
+
+Every step is its own admitted and charged action on the exact observed node, after the same fresh checks as `fillElement`, `selectOption` and `clickElement`, including the host's `admission` policy. One difference is deliberate: a control may have become enabled since it was observed, such as a submit button a form enables once it is complete, but it must be enabled when its step runs. The observation stays usable for this form's own steps only. Navigation, a page hold or any other caller's action still retires it, and the form retires it when it ends.
+
+After each dispatched step, the page's own handlers get at least two rendered frames and `settleMillis` (50 by default, at most 5000, 0 to skip). A text field is then left, as a person moving on would leave it, so formatting a page applies on blur belongs to that step. Before submit, `verify` (true by default) reads every field again and stops the form when one no longer holds what its own step left there: a re-render, an asynchronous reset, anything that changed a field after it was set. What was read is compared on the host and never returned.
+
+The first refused or uncertain step ends the form, and nothing after it is sent. A form is not a transaction: fields set before the stop stay set, and `stopped` says where it ended (`field`, `verify` or `submit`) and why, as a `BrowserError` whose outcome says whether that step itself was dispatched. A toggle the page would not change stops with `failed` and `rejected`. `submitted` is true only when the submit click completed. The operation fails outright only when its first step does, exactly as that single action would.
 
 ### Bounded waits that leave room for recording
 

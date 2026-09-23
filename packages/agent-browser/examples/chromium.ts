@@ -1,4 +1,5 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -22,9 +23,12 @@ export const runChromiumAgent = (request: string) =>
     }),
   ).pipe(
     Effect.provide(
-      Chromium.layer({
-        viewport: { width: 1280, height: 720 },
-        launch: { chromiumSandbox: true },
-      }),
+      Layer.mergeAll(
+        Chromium.layer({
+          viewport: { width: 1280, height: 720 },
+          launch: { chromiumSandbox: true },
+        }),
+        InMemory.layer,
+      ),
     ),
   );
