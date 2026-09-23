@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Schema, Semaphore } from "effect";
+import { Clock, Deferred, Duration, Effect, Schema, Semaphore } from "effect";
 
 import {
   BrowserDiagnostic,
@@ -8,7 +8,7 @@ import {
   type SessionPhase,
 } from "../../BrowserData.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
-import type { DriverFault } from "./Driver.ts";
+import type { DriverFault, DriverTarget } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
@@ -44,15 +44,32 @@ export type Invalidation =
 /** Observation retirement is independent of the owner's revision and connection fences. */
 export type ObservationScope = "all" | "none" | { readonly pageId: string };
 
-/** One admitted native operation; checks at dispatch also fence late Promise continuations. */
-export interface Ticket {
+/** A bounded native reading has no mutation dispatch authority. */
+export interface ReadTicket {
   readonly signal: AbortSignal;
   readonly deadline: number;
   readonly generation: number;
-  readonly dispatched: boolean;
   readonly remainingMillis: () => number;
   check(): void;
+}
+
+/** One admitted native operation; checks at dispatch also fence late Promise continuations. */
+export interface Ticket extends ReadTicket {
+  readonly dispatched: boolean;
   dispatch(): void;
+}
+
+/** The driver retires native capacity only after its wait and required handle disposal settle. */
+export interface WaitTicket extends ReadTicket {
+  invalidate(): void;
+  retire(): void;
+}
+
+export interface OwnedWait {
+  readonly ticket: WaitTicket;
+  readonly completed: Effect.Effect<void, BrowserError>;
+  readonly start: (body: () => Promise<void>) => void;
+  readonly cancel: (reason?: BrowserError["reason"]) => void;
 }
 
 /**
@@ -94,6 +111,17 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
   let active: AbortController | undefined;
   let holdingPermit = false;
+
+  let waiting:
+    | {
+        readonly connection: object;
+        readonly target: DriverTarget;
+        readonly cancel: OwnedWait["cancel"];
+        readonly retire: () => void;
+        pending: boolean;
+      }
+    | undefined;
+
   const reservations = new Map<string, AbortController>();
   // These facts outlive the tickets which produced them. Aborting admission is not retirement.
   const unresolved = new Set<object>();
@@ -139,6 +167,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   };
 
   const invalidate = (reason: Invalidation, scope: ObservationScope = "all") => {
+    if (scope === "all" || (scope !== "none" && scope.pageId === waiting?.target.pageId))
+      waiting?.cancel(Reasons.Stale.make({}));
     state.revision++;
     for (const hook of hooks) hook(reason, scope);
   };
@@ -159,6 +189,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
     reservations.clear();
     active?.abort();
+    waiting?.cancel(
+      terminalReason === "expired" ? Reasons.Expired.make({}) : Reasons.Stale.make({}),
+    );
     for (const reservation of pending) reservation.abort();
     invalidate(reason);
   };
@@ -234,6 +267,138 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     };
   };
 
+  /**
+   * Admission transfers a pure wait to an independent deadline and cancellation record. Its
+   * logical barrier may end before uncancellable native work; neither is a mutation reservation.
+   */
+  const beginWait = (admission: Ticket, target: DriverTarget, connection: object): OwnedWait => {
+    admission.check();
+    if (waiting !== undefined)
+      throw BrowserError.make({
+        operation: "wait",
+        reason: Reasons.Busy.make({}),
+        outcome: "undispatched",
+      });
+    const controller = new AbortController();
+    const result = Deferred.makeUnsafe<void, BrowserError>();
+    const generation = admission.generation;
+    const deadline = admission.deadline;
+    let retired = false;
+    let started = false;
+    let canceled: BrowserError | undefined;
+
+    const error = (reason: BrowserError["reason"]) =>
+      BrowserError.make({ operation: "wait", reason, outcome: "undispatched" });
+
+    const release = () => {
+      if (retired && !record.pending && waiting === record) waiting = undefined;
+    };
+
+    const complete = (exit: Effect.Effect<void, BrowserError>) => {
+      if (!record.pending) return;
+      record.pending = false;
+      release();
+      Deferred.doneUnsafe(result, exit);
+    };
+
+    const cancel: OwnedWait["cancel"] = (reason = Reasons.Interrupted.make({})) => {
+      if (record.pending) {
+        canceled = error(reason);
+        complete(Effect.fail(canceled));
+      }
+      controller.abort();
+    };
+
+    const record = {
+      connection,
+      target: { ...target },
+      pending: true,
+      cancel,
+      retire: () => {
+        retired = true;
+        release();
+      },
+    };
+
+    waiting = record;
+
+    const check = () => {
+      const now = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+
+      if (now >= lifetimeDeadline) expire();
+      if (canceled !== undefined) throw canceled;
+      if (controller.signal.aborted || state.generation !== generation || state.phase !== "open")
+        throw error(Reasons.Stale.make({}));
+      if (now >= deadline) throw error(Reasons.Timeout.make({}));
+    };
+
+    const ticket: WaitTicket = {
+      signal: controller.signal,
+      deadline,
+      generation,
+      remainingMillis: () =>
+        Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+      check,
+      invalidate: () => cancel(Reasons.Stale.make({})),
+      retire: record.retire,
+    };
+
+    const fail = (cause: unknown) => {
+      let failure = publicError(cause, "wait", {
+        reason: Reasons.Provider.make({}),
+        outcome: "undispatched",
+      });
+
+      try {
+        check();
+      } catch (current) {
+        failure = publicError(current, "wait", failure);
+      }
+      complete(Effect.fail(failure));
+    };
+
+    return {
+      ticket,
+      cancel,
+      completed: within(Deferred.await(result), deadline, () => {
+        if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
+        cancel(Reasons.Timeout.make({}));
+
+        return canceled ?? error(Reasons.Timeout.make({}));
+      }).pipe(
+        Effect.tap(() =>
+          Effect.try({
+            try: check,
+            catch: (cause) =>
+              publicError(cause, "wait", {
+                reason: Reasons.Stale.make({}),
+                outcome: "undispatched",
+              }),
+          }),
+        ),
+      ),
+      start: (body) => {
+        if (started) return;
+        started = true;
+        try {
+          check();
+          // Observe settlement after cancellation too; the native retire callback owns capacity.
+          void body().then(() => {
+            try {
+              check();
+              complete(Effect.void);
+            } catch (cause) {
+              fail(cause);
+            }
+          }, fail);
+        } catch (cause) {
+          record.retire();
+          fail(cause);
+        }
+      },
+    };
+  };
+
   const guard = <A, E, R>(
     operation: BrowserOperation,
     body: (ticket: Ticket) => Effect.Effect<A, E, R>,
@@ -244,6 +409,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly phases?: ReadonlyArray<Phase>;
       readonly verifyAfter?: boolean;
       readonly preflight?: Effect.Effect<void, BrowserError>;
+      /** A request can shorten this operation's policy deadline, never extend it. */
+      readonly timeoutMillis?: number;
       /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
       readonly waitUntil?: number;
     } = {},
@@ -280,6 +447,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
         const deadline = Math.min(
           options.waitUntil ?? now + limits.actionTimeoutMillis,
+          options.timeoutMillis === undefined
+            ? Number.POSITIVE_INFINITY
+            : now + options.timeoutMillis,
           lifetimeDeadline,
         );
 
@@ -455,6 +625,18 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     guard,
     reserve,
     reserved: (key: string): boolean => reservations.has(key),
+    beginWait,
+    waitAvailable: () => waiting === undefined,
+    waitPending: (pageId?: string) =>
+      waiting?.pending === true && (pageId === undefined || waiting.target.pageId === pageId),
+    /** Positive retirement is specific to a connection, including a late retired predecessor. */
+    retireWait: (connection: object) => {
+      const previous = waiting;
+
+      if (previous?.connection !== connection) return;
+      previous.cancel(Reasons.Stale.make({}));
+      previous.retire();
+    },
     invalidate,
     fence,
     transition,
@@ -464,6 +646,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     record,
     /** Only positive lifetime-source evidence may retire control lost to a connection fence. */
     retireControl: () => {
+      const previous = waiting;
+
+      previous?.cancel(Reasons.Stale.make({}));
+      previous?.retire();
       unresolved.clear();
       nativeUncertainty = false;
       policies.clear();
@@ -474,7 +660,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           phase: state.phase,
           reason: terminalReason ?? pauseReason ?? policies.values().next().value?.reason ?? null,
           generation: state.generation,
-          busy: holdingPermit || policies.size > 0,
+          busy: holdingPermit || policies.size > 0 || waiting !== undefined,
           unresolvedDispatch: nativeUncertainty || unresolved.size > 0,
         }),
       ),

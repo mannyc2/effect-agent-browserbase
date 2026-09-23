@@ -13,7 +13,7 @@ import {
   sanitize,
   timeout,
 } from "./NativeCalls.ts";
-import type { ObservationScope, Ticket } from "./Owner.ts";
+import type { ObservationScope, ReadTicket, Ticket } from "./Owner.ts";
 import { identityOf, observedControl, PageReadResult, readPage } from "./PageRead.ts";
 import type { Targets } from "./Targets.ts";
 
@@ -73,6 +73,9 @@ interface Retained {
   readonly multiple?: boolean;
   /** The submitted value is retained privately and never appears in a control or receipt. */
   readonly option?: { readonly selectElementId: string; readonly value: string };
+  leases: number;
+  retired: boolean;
+  disposal?: Promise<void>;
 }
 
 /**
@@ -98,6 +101,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   const connectionNamespace = globalThis.crypto.randomUUID();
   let observation: Snapshot | undefined;
   let observationSerial = 0;
+  let connectionRetired = false;
 
   const invalidate = (scope: ObservationScope = "all") => {
     if (
@@ -156,15 +160,26 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     }
   };
 
+  const disposeNode = (node: Retained): Promise<void> =>
+    connectionRetired
+      ? Promise.resolve()
+      : (node.disposal ??= Promise.resolve().then(() =>
+          connectionRetired ? undefined : node.handle.dispose(),
+        ));
+
+  const retireNode = (node: Retained): Promise<void> => {
+    node.retired = true;
+
+    return node.leases === 0 ? disposeNode(node) : Promise.resolve();
+  };
+
   const dispose = async () => {
     const old = observation;
 
     observation = undefined;
     if (old !== undefined) {
       old.validity = "invalid";
-      await closeWithin(() =>
-        Promise.allSettled([...old.nodes.values()].map((node) => node.handle.dispose())),
-      );
+      await closeWithin(() => Promise.allSettled([...old.nodes.values()].map(retireNode)));
     }
   };
 
@@ -218,7 +233,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   };
 
   /** Selection can move away and back; the original document and snapshot cannot be replaced. */
-  const checkSnapshot = (snapshot: Snapshot, ticket: Ticket): void => {
+  const checkSnapshot = (snapshot: Snapshot, ticket: ReadTicket): void => {
     ticket.check();
     if (
       observation !== snapshot ||
@@ -238,7 +253,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
   };
 
   /** A retained node is only as current as the observation that produced it. */
-  const retained = (target: ObservedElement, ticket: Ticket, allowSuspended = false) => {
+  const retained = (target: ObservedElement, ticket: ReadTicket, allowSuspended = false) => {
     const snapshot = observation;
 
     if (snapshot === undefined || snapshot.id !== target.observationId)
@@ -262,6 +277,39 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     check();
 
     return { node, snapshot, check };
+  };
+
+  /**
+   * A wait borrows one exact node without authorizing input. Its state may change. Retiring the
+   * observation defers this node's disposal until the native wait actually releases the lease.
+   */
+  const lease = (reference: ObservedElement, ticket: ReadTicket) => {
+    const { node, snapshot } = retained(reference, ticket);
+
+    node.leases++;
+    let released: Promise<void> | undefined;
+
+    return {
+      element: node.handle,
+      check: () => {
+        ticket.check();
+        if (
+          connectionRetired ||
+          observation !== snapshot ||
+          snapshot.validity === "invalid" ||
+          targets.epochOf(current(snapshot.target).frame) !== snapshot.documentEpoch
+        )
+          throw failure(Reasons.Stale.make({}), "undispatched");
+      },
+      release: (): Promise<void> => {
+        released ??= (async () => {
+          node.leases--;
+          if (node.retired && node.leases === 0) await disposeNode(node);
+        })();
+
+        return released;
+      },
+    };
   };
 
   /**
@@ -688,6 +736,8 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
             snapshot.nodes.set(`element-${i}`, {
               handle,
               identity: identityOf(facts),
+              leases: 0,
+              retired: false,
               ...(facts.multiple === undefined ? {} : { multiple: facts.multiple }),
               ...(option === undefined ? {} : { option }),
             });
@@ -824,6 +874,17 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     changed,
     held,
     dispose,
+    lease,
+    retireConnection: () => {
+      connectionRetired = true;
+      const old = observation;
+
+      observation = undefined;
+      if (old !== undefined) {
+        old.validity = "invalid";
+        for (const node of old.nodes.values()) node.retired = true;
+      }
+    },
     resolve,
     selectOptions,
     controlFacts,

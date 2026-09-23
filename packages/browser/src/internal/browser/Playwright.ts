@@ -120,6 +120,7 @@ export const makePlaywrightDriver = async (
         });
     },
     closed: (entry) => {
+      actions.waitChanged(entry);
       for (const [dialog, beforeUnload] of dialogs)
         if (dialog.page() === entry.page) {
           beforeUnload?.dismissed(false);
@@ -135,6 +136,7 @@ export const makePlaywrightDriver = async (
       if (initialized) initialization.attachFrame(frame, entry.page);
     },
     frameChanged: (entry, frame) => {
+      actions.waitChanged(entry, frame);
       observation.invalidate({ pageId: entry.id });
       captures.invalidate(entry, "target-changed", frame);
     },
@@ -198,8 +200,15 @@ export const makePlaywrightDriver = async (
     register(page);
   };
 
-  const onDisconnected = () => {
+  const retired = () => {
     policyCleanup.retired();
+    actions.retireWait();
+    observation.retireConnection();
+    events.retired?.();
+  };
+
+  const onDisconnected = () => {
+    retired();
     if (!closing) {
       observation.invalidate();
       events.disconnected();
@@ -266,6 +275,7 @@ export const makePlaywrightDriver = async (
         ticket.check();
       }),
     waitFor: actions.waitFor,
+    waitForElement: actions.waitForElement,
     clickAndWait: actions.clickAndWait,
     clickForDownload: actions.clickForDownload,
     selectFiles: actions.selectFiles,
@@ -299,6 +309,9 @@ export const makePlaywrightDriver = async (
         callbacks.stop();
         observation.invalidate();
         context.off("page", onPage);
+        // Explicit cleanup owns its close result. Preserve the established ordering by removing
+        // the ordinary disconnect listener first; positive retirement is recorded only after the
+        // close below actually settles. Natural disconnects still retire through onDisconnected.
         browser.off("disconnected", onDisconnected);
         for (const entry of entries.values()) for (const off of entry.off.splice(0)) off();
         // Retained dialogs share their one dismissal with explicit resume. A timed-out dismissal
@@ -317,7 +330,7 @@ export const makePlaywrightDriver = async (
         await closeWithin(() => pageControl.dispose()).catch(() => {});
         await closeWithin(() => browserCdp?.detach() ?? Promise.resolve()).catch(() => {});
         await closeWithin(() => browser.close());
-        policyCleanup.retired();
+        retired();
         targets.clear();
       }),
   };

@@ -10,13 +10,14 @@ import type {
   SelectOptions,
   Viewport,
   ViewportEvidence,
+  WaitForElementRequest,
 } from "../../BrowserData.ts";
 import type { CaptureSize } from "../../CaptureData.ts";
 import type { InitializationError } from "../../Errors.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
-import type { Invalidation, ObservationScope, Ticket } from "./Owner.ts";
+import type { Invalidation, ObservationScope, Ticket, WaitTicket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
@@ -72,6 +73,8 @@ export type DriverFault =
 export interface DriverEvents {
   readonly invalidate: (reason: Invalidation, scope?: ObservationScope) => void;
   readonly disconnected: () => void;
+  /** Positive native connection retirement, also delivered during or after explicit cleanup. */
+  readonly retired?: () => void;
   readonly pause: (reason?: "popup" | "dialog") => void;
   readonly fault: (event: DriverFault) => void;
 }
@@ -311,7 +314,14 @@ export interface Driver {
   readonly waitFor: (
     selector: string,
     state: "visible" | "hidden" | "attached" | "detached",
-    ticket: Ticket,
+    ticket: WaitTicket,
+    target: DriverTarget,
+  ) => Promise<void>;
+  readonly waitForElement: (
+    reference: ObservedElement,
+    state: WaitForElementRequest["state"],
+    ticket: WaitTicket,
+    target: DriverTarget,
   ) => Promise<void>;
   readonly clickAndWait: (target: string | ObservedElement, ticket: Ticket) => Promise<string>;
   readonly clickForDownload: (

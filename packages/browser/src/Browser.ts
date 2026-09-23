@@ -25,6 +25,7 @@ import type {
   StartNavigationRequest,
   TextResult,
   TypeRequest,
+  WaitForElementRequest,
   WheelRequest,
   ControlFacts,
   ActionResult,
@@ -208,6 +209,11 @@ export interface BrowserSession<E = never> extends TargetOperations {
   readonly createPage: Effect.Effect<PageInfo, BrowserError>;
   readonly closePage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
   readonly resizeViewport: (viewport: Viewport) => Effect.Effect<void, BrowserError>;
+  /**
+   * Wait on the original observed node within the host deadline. Hidden includes its detachment;
+   * document replacement is stale. Success observes a condition, without authorizing later input.
+   */
+  readonly waitForElement: (request: WaitForElementRequest) => Effect.Effect<void, BrowserError>;
   readonly waitFor: (request: {
     readonly selector: string;
     readonly state: "visible" | "hidden" | "attached" | "detached";

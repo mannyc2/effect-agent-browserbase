@@ -26,6 +26,7 @@ import {
   PointerMoveRequest,
   SelectOptions,
   TypeRequest,
+  WaitForElementRequest,
   WheelRequest,
   type SessionStatus,
 } from "effect-browser/browser-data";
@@ -236,16 +237,187 @@ const SelectOption = Tool.make("browser_select_option", {
 /** Optional native option selection; the default five tools grant no new input authority. */
 export const selectionToolkit = Toolkit.make(SelectOption);
 
+/** A condition was observed on the original node; it is not reserved for a later action. */
+export const WaitResult = Schema.Struct({ satisfied: Schema.Literal(true) });
+
+const WaitFor = Tool.make("browser_wait_for", {
+  description:
+    "Wait within the host's deadline for an exact observed node to be visible, hidden, enabled or disabled. Hidden includes removal of that original node, never lookup of its replacement. Document replacement fails. Success is a sampled condition, not action authorization; inspect again before acting on changed state.",
+  parameters: WaitForElementRequest,
+  success: WaitResult,
+  failure: BrowserToolFailure,
+  failureMode: "return",
+});
+
+export const waitToolkit = Toolkit.make(WaitFor);
+
+/** The action's result and the later read are independent pieces of evidence. */
+export const FollowUpObservation = Schema.Union([
+  Schema.TaggedStruct("Available", { observation: Observation }),
+  Schema.TaggedStruct("Unavailable", {
+    failure: Schema.Struct({
+      reason: BrowserToolFailure.fields.reason,
+      outcome: BrowserToolFailure.fields.outcome,
+    }),
+  }),
+]);
+
+export type FollowUpObservation = typeof FollowUpObservation.Type;
+
+export const ObservedActionResult = Schema.Struct({
+  action: BrowserActionResult,
+  observation: FollowUpObservation,
+});
+
+export type ObservedActionResult = typeof ObservedActionResult.Type;
+
+export const ObservedNavigationResult = Schema.Struct({
+  action: BrowserNavigationResult,
+  observation: FollowUpObservation,
+});
+
+export type ObservedNavigationResult = typeof ObservedNavigationResult.Type;
+
+export const ObservedInputResult = Schema.Struct({
+  action: NativeInputResult,
+  observation: FollowUpObservation,
+});
+
+export type ObservedInputResult = typeof ObservedInputResult.Type;
+
+/** The floor leaves room for any accepted action URL plus an unavailable-observation envelope. */
+export const ObservedResultMaxBytes = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(50 * 1024),
+  Schema.isLessThanOrEqualTo(1024 * 1024),
+);
+
+const observedTool = <
+  const Name extends string,
+  Parameters extends Schema.Constraint,
+  Success extends Schema.Constraint,
+>(
+  name: Name,
+  parameters: Parameters,
+  success: Success,
+  description: string,
+) =>
+  Tool.make(name, {
+    parameters,
+    success,
+    failure: BrowserToolFailure,
+    failureMode: "return",
+    description: `${description} After success, sample a separate bounded observation. An unavailable observation does not undo successful input and must never cause the action to be replayed.`,
+  });
+
+// Distinct names produce distinct Effect Tool handler identities and preserve existing schemas.
+const ObservedNavigate = observedTool(
+  "browser_navigate_and_inspect",
+  Navigate.parametersSchema,
+  ObservedNavigationResult,
+  Navigate.description ?? "Navigate once.",
+);
+
+const ObservedClick = observedTool(
+  "browser_click_and_inspect",
+  Click.parametersSchema,
+  ObservedActionResult,
+  Click.description ?? "Click once.",
+);
+
+const ObservedFill = observedTool(
+  "browser_fill_and_inspect",
+  Fill.parametersSchema,
+  ObservedActionResult,
+  Fill.description ?? "Fill once.",
+);
+
+const ObservedScroll = observedTool(
+  "browser_scroll_and_inspect",
+  Scroll.parametersSchema,
+  ObservedActionResult,
+  Scroll.description ?? "Scroll once.",
+);
+
+const ObservedPointerMove = observedTool(
+  "browser_pointer_move_and_inspect",
+  PointerMove.parametersSchema,
+  ObservedInputResult,
+  PointerMove.description ?? "Move the pointer once.",
+);
+
+const ObservedHover = observedTool(
+  "browser_hover_and_inspect",
+  Hover.parametersSchema,
+  ObservedInputResult,
+  Hover.description ?? "Hover once.",
+);
+
+const ObservedWheel = observedTool(
+  "browser_wheel_and_inspect",
+  Wheel.parametersSchema,
+  ObservedInputResult,
+  Wheel.description ?? "Send wheel input once.",
+);
+
+const ObservedPress = observedTool(
+  "browser_press_and_inspect",
+  Press.parametersSchema,
+  ObservedInputResult,
+  Press.description ?? "Press a key once.",
+);
+
+const ObservedType = observedTool(
+  "browser_type_and_inspect",
+  Type.parametersSchema,
+  ObservedInputResult,
+  Type.description ?? "Type once.",
+);
+
+const ObservedSelect = observedTool(
+  "browser_select_option_and_inspect",
+  SelectOption.parametersSchema,
+  ObservedActionResult,
+  SelectOption.description ?? "Select once.",
+);
+
+export const observedToolkit = Toolkit.make(
+  Inspect,
+  ObservedNavigate,
+  ObservedClick,
+  ObservedFill,
+  ObservedScroll,
+);
+
+export const observedNativeToolkit = Toolkit.make(
+  ObservedPointerMove,
+  ObservedHover,
+  ObservedWheel,
+);
+
+export const observedKeyboardToolkit = Toolkit.make(ObservedPress, ObservedType);
+export const observedSelectionToolkit = Toolkit.make(ObservedSelect);
+
+const allObservedTools = Toolkit.merge(
+  observedToolkit,
+  observedNativeToolkit,
+  observedKeyboardToolkit,
+  observedSelectionToolkit,
+);
+
 export type ToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof toolkit>>;
 export type NativeToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof nativeToolkit>>;
 export type KeyboardToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof keyboardToolkit>>;
 export type SelectionToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof selectionToolkit>>;
+export type WaitToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof waitToolkit>>;
+export type ObservedToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof allObservedTools>>;
 
 export type ToolHostServices =
   | ToolHandlers
   | NativeToolHandlers
   | KeyboardToolHandlers
-  | SelectionToolHandlers;
+  | SelectionToolHandlers
+  | WaitToolHandlers
+  | ObservedToolHandlers;
 
 export type ToolRunRequirements<R> = Exclude<Exclude<R, ToolHostServices>, Scope.Scope>;
 
@@ -253,6 +425,8 @@ export interface HandlerOptions {
   readonly maxTextBytes?: number;
   readonly maxControls?: number;
   readonly observationScope?: "document" | "viewport";
+  /** Whole encoded action-plus-observation result, 50 KiB by default; only observed variants use it. */
+  readonly observedResultMaxBytes?: number;
   /** Synchronous, on fresh exact-node facts under the owner's permit. Never a Tool parameter. */
   readonly admission?: ElementAdmission;
 }
@@ -280,10 +454,29 @@ const failureWith = (hooks: Hooks, toolCallId: string | undefined) => (error: Br
   return failed(error);
 };
 
+const readObservation = <E>(browser: BrowserSession<E>, options: HandlerOptions) =>
+  browser
+    .observe({
+      maxTextBytes: options.maxTextBytes ?? 8192,
+      maxControls: options.maxControls ?? 16,
+      scope: options.observationScope ?? "document",
+    })
+    .pipe(
+      Effect.flatMap((result) =>
+        Schema.decodeEffect(Observation)(result).pipe(
+          Effect.mapError(() =>
+            BrowserError.make({
+              operation: "observe",
+              reason: Reasons.Malformed.make({}),
+              outcome: "unknown",
+            }),
+          ),
+        ),
+      ),
+    );
+
 const makeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions, hooks: Hooks) => {
-  const maxTextBytes = options.maxTextBytes ?? 8192;
-  const maxControls = options.maxControls ?? 16;
-  const scope = options.observationScope ?? "document";
+  const observationOptions = { ...options };
 
   const admission =
     options.admission === undefined ? undefined : { admit: options.admission.admit };
@@ -300,18 +493,7 @@ const makeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions, ho
       ),
     browser_inspect: (_request, context) =>
       hooks.run(
-        browser.observe({ maxTextBytes, maxControls, scope }).pipe(
-          Effect.flatMap((result) =>
-            Schema.decodeEffect(Observation)(result).pipe(
-              Effect.mapError(() =>
-                BrowserError.make({
-                  operation: "observe",
-                  reason: Reasons.Malformed.make({}),
-                  outcome: "unknown",
-                }),
-              ),
-            ),
-          ),
+        readObservation(browser, observationOptions).pipe(
           Effect.mapError(failureWith(hooks, context.toolCallId)),
         ),
       ),
@@ -339,32 +521,32 @@ const makeHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions, ho
   });
 };
 
-const inputWith = (hooks: Hooks) => {
-  const input = (
-    effect: Effect.Effect<InputReceipt, BrowserError>,
-    toolCallId: string | undefined,
-  ) =>
-    hooks.run(
-      effect.pipe(
-        Effect.tap((receipt) =>
-          Schema.decodeEffect(InputReceipt)(receipt).pipe(
-            Effect.mapError(() =>
-              BrowserError.make({
-                operation: "action-result",
-                reason: Reasons.Malformed.make({}),
-                outcome: "unknown",
-              }),
-            ),
-          ),
+const inputResult = (
+  hooks: Hooks,
+  effect: Effect.Effect<InputReceipt, BrowserError>,
+  toolCallId: string | undefined,
+) =>
+  effect.pipe(
+    Effect.tap((receipt) =>
+      Schema.decodeEffect(InputReceipt)(receipt).pipe(
+        Effect.mapError(() =>
+          BrowserError.make({
+            operation: "action-result",
+            reason: Reasons.Malformed.make({}),
+            outcome: "unknown",
+          }),
         ),
-        Effect.mapError(failureWith(hooks, toolCallId)),
-        Effect.tap((receipt) => hooks.input?.(receipt, toolCallId) ?? Effect.void),
-        Effect.as({ dispatched: true as const }),
       ),
-    );
+    ),
+    Effect.mapError(failureWith(hooks, toolCallId)),
+    Effect.tap((receipt) => hooks.input?.(receipt, toolCallId) ?? Effect.void),
+    Effect.as({ dispatched: true as const }),
+  );
 
-  return input;
-};
+const inputWith =
+  (hooks: Hooks) =>
+  (effect: Effect.Effect<InputReceipt, BrowserError>, toolCallId: string | undefined) =>
+    hooks.run(inputResult(hooks, effect, toolCallId));
 
 const makeNativeHandlers = <E>(
   browser: BrowserSession<E>,
@@ -429,6 +611,175 @@ const makeSelectionHandlers = <E>(
   });
 };
 
+const makeWaitHandlers = <E>(browser: BrowserSession<E>, hooks: Hooks) =>
+  waitToolkit.toLayer({
+    browser_wait_for: (request, context) =>
+      hooks.run(
+        browser
+          .waitForElement(request)
+          .pipe(
+            Effect.as({ satisfied: true as const }),
+            Effect.mapError(failureWith(hooks, context.toolCallId)),
+          ),
+      ),
+  });
+
+const encodedObservedResult = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      action: Schema.Union([BrowserActionResult, BrowserNavigationResult, NativeInputResult]),
+      observation: FollowUpObservation,
+    }),
+  ),
+);
+
+const resultEncoder = new TextEncoder();
+
+const makeObservedHandlers = <E>(
+  browser: BrowserSession<E>,
+  options: HandlerOptions,
+  hooks: Hooks,
+) => {
+  const fixed = { ...options };
+
+  const admission =
+    options.admission === undefined ? undefined : { admit: options.admission.admit };
+
+  const budget = Schema.decodeEffect(ObservedResultMaxBytes)(
+    options.observedResultMaxBytes === undefined ? 50 * 1024 : options.observedResultMaxBytes,
+  ).pipe(
+    Effect.mapError(() =>
+      BrowserError.make({
+        operation: "configure",
+        reason: Reasons.Configuration.make({ path: "observedResultMaxBytes" }),
+        outcome: "undispatched",
+      }),
+    ),
+  );
+
+  const action = (
+    effect: Effect.Effect<{ readonly url: string }, BrowserError>,
+    id: string | undefined,
+  ) =>
+    effect.pipe(
+      Effect.flatMap((value) => actionResult(value.url)),
+      Effect.mapError(failureWith(hooks, id)),
+    );
+
+  const follow = Effect.fnUntraced(function* <
+    A extends BrowserActionResult | typeof NativeInputResult.Type,
+  >(effect: Effect.Effect<A, BrowserToolFailure>, id: string | undefined) {
+    const maximum = yield* budget.pipe(Effect.mapError(failureWith(hooks, id)));
+    const action = yield* effect;
+
+    const observed = yield* Effect.suspend(() => readObservation(browser, fixed)).pipe(
+      Effect.result,
+    );
+
+    const unavailable = (error: BrowserError) => {
+      const failure = failureWith(hooks, id)(error);
+
+      return {
+        action,
+        observation: {
+          _tag: "Unavailable" as const,
+          failure: { reason: failure.reason, outcome: failure.outcome },
+        },
+      };
+    };
+
+    if (observed._tag === "Failure") return unavailable(observed.failure);
+
+    const result = {
+      action,
+      observation: { _tag: "Available" as const, observation: observed.success },
+    };
+
+    const encoded = encodedObservedResult(result);
+    const bytes = resultEncoder.encode(encoded).length;
+
+    return bytes <= maximum
+      ? result
+      : unavailable(
+          BrowserError.make({
+            operation: "observe",
+            reason: Reasons.Limit.make({
+              dimension: "returned-bytes",
+              maximum,
+              observed: bytes,
+            }),
+            outcome: "undispatched",
+          }),
+        );
+  }, hooks.run);
+
+  return allObservedTools.toLayer({
+    browser_inspect: (_request, context) =>
+      hooks.run(
+        readObservation(browser, fixed).pipe(
+          Effect.mapError(failureWith(hooks, context.toolCallId)),
+        ),
+      ),
+    browser_navigate_and_inspect: (request, context) =>
+      follow(
+        hooks.navigate === undefined
+          ? browser.navigate(request).pipe(
+              Effect.flatMap((result) => navigationResult(result.url)),
+              Effect.mapError(failureWith(hooks, context.toolCallId)),
+            )
+          : hooks.navigate(request, context.toolCallId),
+        context.toolCallId,
+      ),
+    browser_click_and_inspect: (reference, context) =>
+      follow(
+        action(browser.clickElement(reference, admission), context.toolCallId),
+        context.toolCallId,
+      ),
+    browser_fill_and_inspect: ({ reference, value }, context) =>
+      follow(
+        action(browser.fillElement(reference, value, admission), context.toolCallId),
+        context.toolCallId,
+      ),
+    browser_scroll_and_inspect: (request, context) =>
+      follow(action(browser.scroll(request), context.toolCallId), context.toolCallId),
+    browser_select_option_and_inspect: ({ reference, options }, context) =>
+      follow(
+        action(browser.selectOption(reference, options, admission), context.toolCallId),
+        context.toolCallId,
+      ),
+    browser_pointer_move_and_inspect: (request, context) =>
+      follow(
+        inputResult(hooks, browser.pointerMove(request), context.toolCallId),
+        context.toolCallId,
+      ),
+    browser_hover_and_inspect: (reference, context) =>
+      follow(
+        inputResult(hooks, browser.hoverElement(reference, admission), context.toolCallId),
+        context.toolCallId,
+      ),
+    browser_wheel_and_inspect: (request, context) =>
+      follow(inputResult(hooks, browser.wheel(request), context.toolCallId), context.toolCallId),
+    browser_press_and_inspect: ({ reference, key, modifiers }, context) =>
+      follow(
+        inputResult(
+          hooks,
+          browser.pressElement(
+            reference,
+            modifiers === undefined ? { key } : { key, modifiers },
+            admission,
+          ),
+          context.toolCallId,
+        ),
+        context.toolCallId,
+      ),
+    browser_type_and_inspect: ({ reference, text }, context) =>
+      follow(
+        inputResult(hooks, browser.typeElement(reference, text, admission), context.toolCallId),
+        context.toolCallId,
+      ),
+  });
+};
+
 /** Borrow one execution-owned session. These five tools keep their original default behavior. */
 export const handlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
   makeHandlers(browser, options, direct);
@@ -444,6 +795,13 @@ export const keyboardHandlers = <E>(browser: BrowserSession<E>, options: Handler
 /** Opt-in exact option selection with caller-managed sequencing and lifetime. */
 export const selectionHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
   makeSelectionHandlers(browser, options, direct);
+
+/** Pure bounded waits with caller-managed sequencing; scoped hosts use the same invocation lane. */
+export const waitHandlers = <E>(browser: BrowserSession<E>) => makeWaitHandlers(browser, direct);
+
+/** Handlers for opt-in result variants; each agent still declares its own permitted toolkit groups. */
+export const observedHandlers = <E>(browser: BrowserSession<E>, options: HandlerOptions = {}) =>
+  makeObservedHandlers(browser, options, direct);
 
 export interface HostOptions<E = never, R = never> extends HandlerOptions {
   /**
@@ -508,6 +866,8 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly nativeHandlers: Layer.Layer<NativeToolHandlers>;
   readonly keyboardHandlers: Layer.Layer<KeyboardToolHandlers>;
   readonly selectionHandlers: Layer.Layer<SelectionToolHandlers>;
+  readonly waitHandlers: Layer.Layer<WaitToolHandlers>;
+  readonly observedHandlers: Layer.Layer<ObservedToolHandlers>;
   /** All Tool handler services. The agent still sees only the Toolkits it explicitly declares. */
   readonly layer: Layer.Layer<ToolHostServices>;
   /** First host callback, navigation-cleanup or browser fail-session cause. */
@@ -730,12 +1090,16 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const nativeHandlerLayer = makeNativeHandlers(browser, options, hooks);
   const keyboardHandlerLayer = makeKeyboardHandlers(browser, options, hooks);
   const selectionHandlerLayer = makeSelectionHandlers(browser, options, hooks);
+  const waitHandlerLayer = makeWaitHandlers(browser, hooks);
+  const observedHandlerLayer = makeObservedHandlers(browser, options, hooks);
 
   const layer = Layer.mergeAll(
     handlerLayer,
     nativeHandlerLayer,
     keyboardHandlerLayer,
     selectionHandlerLayer,
+    waitHandlerLayer,
+    observedHandlerLayer,
   );
 
   const supervise: ToolHost<OwnerError, E>["run"] = (effect) =>
@@ -766,6 +1130,8 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     nativeHandlers: nativeHandlerLayer,
     keyboardHandlers: keyboardHandlerLayer,
     selectionHandlers: selectionHandlerLayer,
+    waitHandlers: waitHandlerLayer,
+    observedHandlers: observedHandlerLayer,
     layer,
     failure: Deferred.await(failure),
     toolFailures: Effect.gen(function* () {

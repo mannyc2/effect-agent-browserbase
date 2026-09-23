@@ -377,6 +377,38 @@ maintained engine, returns `ActionResult` and retires the observation on that pa
 claim the website finished work triggered by those events. The same synchronous host `admission`
 used for exact-node input applies to the selected control.
 
+### Bounded waits that leave room for recording
+
+`waitFor({ selector, state })` still supports the host's bounded selector conditions: `visible`,
+`hidden`, `attached` and `detached`. It captures the selected page, frame and document when admitted.
+`waitForElement({ reference, state, timeoutMillis? })` instead waits on an exact node issued by the
+current observation, with `visible`, `hidden`, `enabled` or `disabled`. It never searches for a node
+that replaced the reference. Hidden includes detachment of the original node; for the other
+conditions detachment fails `Stale/undispatched`. Replacing the document or frame fails even a
+hidden wait. A node's changed enabled/visible state is what the wait observes, not fresh input
+authorization: inspect again before acting on changed control state.
+
+Wait admission briefly holds the existing permit, checks readiness and page holds, and charges
+one model-reachable action. The pending wait then owns its own cancellation signal, connection
+generation and absolute deadline. An exact-node request may shorten the deadline to 1–60,000 ms;
+the configured action timeout and remaining lifetime still cap it, including setup. Selection
+can move elsewhere without retargeting the wait. Its condition is a sample, not a reservation
+that the page will remain unchanged.
+
+While a wait is pending, `checkpoint`, `pages` and ordinary bounded reads can use the normal
+permit. Mutations, another navigation and page holds on the waited page are refused before
+dispatch. Input on another page may proceed; replacing the single observation is refused until
+the logical wait ends. Closing a page or session remains available and cancels affected waits.
+No general read-under-write bypass has been added.
+
+One native wait may be outstanding per browser session. Cancellation and timeout release the
+logical barrier without inventing an uncertain mutation, but retain native capacity until the
+actual native promise and any required handle disposal settle, or that exact connection retires.
+Consequently another wait can still receive `Busy/undispatched` after its predecessor's caller
+has stopped waiting. Status `busy` includes that retained native capacity; it does not mean every
+ordinary operation is blocked. A cancelled exact-node wait keeps only its leased node alive when
+the observation is replaced, and its late cleanup cannot dispose a successor's references.
+
 ### Passive checkpoints for a recorder
 
 `observe()` replaces the one observation whose nodes later actions may name, so a recorder calling it would retire the references an agent is about to use. `session.checkpoint()` is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.

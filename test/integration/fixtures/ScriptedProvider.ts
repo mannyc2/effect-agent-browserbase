@@ -350,7 +350,12 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         ticket.dispatch();
         events.invalidate("resized");
       },
-      waitFor: async () => {},
+      waitFor: async (_selector, _state, ticket) => {
+        ticket.retire();
+      },
+      waitForElement: async (_reference, _state, ticket) => {
+        ticket.retire();
+      },
       clickAndWait: async (_target, ticket) => {
         ticket.dispatch();
 
