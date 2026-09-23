@@ -209,6 +209,7 @@ export const fixture = Effect.fnUntraced(function* (options: OwnerOptions = {}) 
   };
 
   const reference = ScriptedReference.make({ provider: "scripted", id: "owner-1" });
+
   const lifetime = scriptedSource(reference, (result) =>
     Effect.sync(() => {
       reports.push(result);

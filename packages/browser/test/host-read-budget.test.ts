@@ -2,11 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import {
-  ControlFacts,
-  ObservedElement,
-  ViewportRect,
-} from "../src/BrowserData.ts";
+import { ControlFacts, ObservedElement, ViewportRect } from "../src/BrowserData.ts";
 import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 const reference = ObservedElement.make({ observationId: "observed", elementId: "button" });
