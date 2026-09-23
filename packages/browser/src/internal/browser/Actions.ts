@@ -724,12 +724,13 @@ export const makeActions = (
     waitOn(ticket, target, () => {
       const leased = observation.lease(reference, ticket);
 
+      /** A node that can no longer be read, because its document is gone, is not attached. */
       const attached = async () => {
         leased.check();
 
-        const present = await leased.element.evaluate(
-          (node) => node.isConnected && node.ownerDocument === document,
-        );
+        const present = await leased.element
+          .evaluate((node) => node.isConnected && node.ownerDocument === document)
+          .catch(() => false);
 
         leased.check();
         if (present !== true) throw failure(Reasons.Stale.make({}), "undispatched");
@@ -744,7 +745,11 @@ export const makeActions = (
               signal: ticket.signal,
             });
           } catch (error) {
-            if (state !== "hidden") await attached();
+            // A replaced document can reject the native wait before the navigation event
+            // advances its epoch, so ask the node itself. A hidden wait needs asking only then:
+            // a node removed from a live document already satisfies it.
+            if (state !== "hidden" || !(isTimeoutError(error) || ticket.signal.aborted))
+              await attached();
             throw error;
           }
           if (state !== "hidden") await attached();
