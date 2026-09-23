@@ -105,6 +105,17 @@ it("no raw native exception crosses the private boundary, and a typed one passes
   expect(() => safeDecode(Schema.Natural, -1)).toThrow(
     expect.objectContaining({ _tag: "NativeFailure", reason: { _tag: "Malformed" } }),
   );
+
+  // A reply that throws while it is read is as malformed as one of the wrong shape.
+  const unreadable = {
+    get url(): string {
+      throw new Error("PRIVATE-UNREADABLE-REPLY");
+    },
+  };
+
+  expect(() => safeDecode(Schema.Struct({ url: Schema.String }), unreadable)).toThrow(
+    expect.objectContaining({ _tag: "NativeFailure", reason: { _tag: "Malformed" } }),
+  );
 });
 
 it.effect("the owner stamps the admitted operation on whatever the native step raised", () =>
