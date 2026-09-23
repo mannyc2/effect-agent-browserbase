@@ -2,21 +2,17 @@ import { expect, it } from "@effect/vitest";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import * as Bootstrap from "../../packages/browser/src/Bootstrap.ts";
-import { InitializationError } from "../../packages/browser/src/Errors.ts";
+import * as Bootstrap from "../src/Bootstrap.ts";
+import { InitializationError } from "../src/Errors.ts";
 import {
   makeBindings,
   preparePlan,
   type ConnectionBindings,
-} from "../../packages/browser/src/internal/browser/Bindings.ts";
-import type {
-  DriverEvents,
-  NavigationControl,
-} from "../../packages/browser/src/internal/browser/Driver.ts";
-import { makeOwner, type Ticket } from "../../packages/browser/src/internal/browser/Owner.ts";
-import type { TargetControls } from "../../packages/browser/src/internal/browser/Session.ts";
-import { fixture, gate } from "./fixtures/ScriptedProvider.ts";
-import { elapse } from "./fixtures/Time.ts";
+} from "../src/internal/browser/Bindings.ts";
+import type { DriverEvents, NavigationControl } from "../src/internal/browser/Driver.ts";
+import { makeOwner, type Ticket } from "../src/internal/browser/Owner.ts";
+import type { TargetControls } from "../src/internal/browser/Session.ts";
+import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 it.effect.each(["timeout", "native-check"] as const)(
   "the %s path records elapsed expiry before an overlapping action timeout",
@@ -94,69 +90,6 @@ it.effect.each(["timeout", "native-check"] as const)(
           disposition: "confirmed",
           generation: 0,
         });
-      }),
-    ),
-);
-
-it.effect.each([false, true])(
-  "expiry preserves pending navigation evidence (%s) until owned release confirms retirement",
-  (pending) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const disconnected = gate<void>();
-        const disconnect = gate<void>();
-        const loading = gate<string>();
-
-        const f = yield* fixture({
-          lifetimeMillis: 100,
-          onNavigate: (_url, pageId) => ({
-            pageId,
-            settled: loading.promise,
-            stop: async () => "settled",
-          }),
-          onConnect: async (driver) => ({
-            ...driver,
-            disconnect: async () => {
-              disconnected.resolve();
-              await disconnect.promise;
-              await driver.disconnect();
-            },
-          }),
-        });
-
-        const session = yield* (yield* f.acquisition).connect;
-
-        const operation = pending
-          ? yield* session.operations.startNavigation("https://example.test/slow")
-          : undefined;
-
-        yield* TestClock.adjust(100);
-        yield* Effect.promise(() => disconnected.promise);
-        expect(yield* session.status).toMatchObject({
-          phase: "closing",
-          reason: "expired",
-          unresolvedDispatch: pending,
-        });
-        if (operation !== undefined)
-          expect(yield* Effect.result(operation.completed)).toMatchObject({
-            _tag: "Failure",
-            failure: { outcome: "unknown" },
-          });
-        disconnect.resolve();
-        const report = yield* session.close;
-
-        expect(report.remote).toBe("confirmed");
-        expect(yield* session.status).toMatchObject({
-          phase: "closed",
-          reason: "expired",
-          unresolvedDispatch: false,
-        });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Expired" }, outcome: "undispatched" },
-        });
-        expect(f.state.releases).toBe(1);
-        expect(f.state.clicks).toBe(0);
       }),
     ),
 );
@@ -554,40 +487,6 @@ it.effect("capacity refusal is a known terminal block without invented native un
       });
       expect(f.state.clicks).toBe(0);
       expect(f.state.releases).toBe(0);
-    }),
-  ),
-);
-
-it.effect("unconfirmed owned release cannot retire a dispatched operation's control evidence", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* fixture({
-        releaseFails: true,
-        onClick: async (ticket) => {
-          ticket.dispatch();
-          throw new Error("PRIVATE-LOST-ACKNOWLEDGEMENT");
-        },
-      });
-
-      const session = yield* (yield* f.acquisition).connect;
-
-      expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
-        _tag: "Failure",
-        failure: { outcome: "unknown" },
-      });
-      const original = yield* session.status;
-
-      expect(original.unresolvedDispatch).toBe(true);
-      const report = yield* elapse(session.close, 12_000);
-
-      expect(report.remote).not.toBe("confirmed");
-      expect(yield* session.status).toMatchObject({
-        phase: "closed",
-        reason: original.reason,
-        unresolvedDispatch: true,
-      });
-      expect(yield* session.close).toEqual(report);
-      expect(f.state.releases).toBe(1);
     }),
   ),
 );

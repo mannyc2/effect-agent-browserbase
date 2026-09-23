@@ -803,6 +803,223 @@ it.effect("an in-flight navigation can be watched, stopped, or time out under th
   ),
 );
 
+it.effect("a wait its script refuses still releases the wait slot for the next one", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      yield* browser.navigate({ url: `${origin}/` });
+      yield* browser.control.next("wait", {
+        _tag: "Fail",
+        reason: Reasons.Timeout.make({}),
+        outcome: "undispatched",
+      });
+      expect(
+        yield* browser.waitFor({ selector: "#accept", state: "attached" }).pipe(Effect.flip),
+      ).toMatchObject({ reason: { _tag: "Timeout" }, outcome: "undispatched" });
+      yield* browser.waitFor({ selector: "#accept", state: "attached" });
+      expect(yield* browser.status).toMatchObject({ phase: "open", busy: false });
+    }),
+  ),
+);
+
+it.effect("moving the selection leaves a pending wait running on its page", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      yield* browser.navigate({ url: `${origin}/` });
+      const home = (yield* browser.pages).find((page) => page.selected);
+
+      expect(home).toBeDefined();
+      if (home === undefined) return;
+
+      const pending = yield* browser
+        .waitFor({ selector: "#banner", state: "attached" })
+        .pipe(Effect.forkChild);
+
+      // The wait's short admission guard retires once the native wait has started.
+      let moved = false;
+
+      for (let attempt = 0; attempt < 100 && !moved; attempt++) {
+        yield* Effect.yieldNow;
+        moved = (yield* browser.selectPage(home).pipe(Effect.result))._tag === "Success";
+      }
+      expect(moved).toBe(true);
+      const current = yield* browser.control.document.current;
+
+      yield* browser.control.document.update({
+        ...current,
+        controls: [...(current.controls ?? []), { id: "banner", kind: "other", label: "Banner" }],
+      });
+      yield* Fiber.join(pending);
+    }),
+  ),
+);
+
+it.effect("a navigation stop is recorded and can be held before it is sent", () =>
+  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+    Effect.gen(function* () {
+      const loading = yield* browser.control.gate;
+      const stopping = yield* browser.control.gate;
+
+      yield* browser.control.next("navigate", { _tag: "Hold", gate: loading, dispatched: true });
+      yield* browser.control.next("navigate-stop", {
+        _tag: "Hold",
+        gate: stopping,
+        dispatched: false,
+      });
+
+      const stopped = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const operation = yield* browser.startNavigation({ url: `${origin}/?consent=1` });
+
+          yield* loading.reached;
+          const stop = yield* operation.stop.pipe(Effect.forkChild);
+
+          yield* stopping.reached;
+          expect(
+            (yield* browser.control.calls)
+              .filter((call) => call.operation === "navigate-stop")
+              .map((call) => [call.dispatched, call.settled]),
+          ).toEqual([[false, "pending"]]);
+          yield* stopping.open;
+          yield* Fiber.join(stop);
+
+          return yield* operation.completed.pipe(Effect.flip);
+        }),
+      );
+
+      expect(stopped).toMatchObject({ operation: "navigate", reason: { _tag: "Interrupted" } });
+      expect(
+        (yield* browser.control.calls)
+          .filter((call) => call.operation === "navigate-stop")
+          .map((call) => [call.dispatched, call.settled]),
+      ).toEqual([[true, "completed"]]);
+    }),
+  ).pipe(
+    Effect.catchTag("BrowserError", (error) =>
+      error.operation === "close" ? Effect.void : Effect.fail(error),
+    ),
+  ),
+);
+
+it.effect("a native disconnect can be scripted to fail or to wait at a gate", () =>
+  Effect.gen(function* () {
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* Testing.open(shop);
+
+        yield* browser.control.next("disconnect", {
+          _tag: "Fail",
+          reason: Reasons.Provider.make({}),
+          outcome: "unknown",
+        });
+        expect(yield* browser.closeChecked.pipe(Effect.flip)).toMatchObject({
+          operation: "close",
+        });
+        expect(yield* browser.close).toMatchObject({
+          connection: "failed",
+          issues: [{ step: "disconnect", reason: "failed" }],
+        });
+        expect(yield* browser.control.connections).toEqual(["close-failed"]);
+      }),
+    );
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* Testing.open(shop);
+        const gate = yield* browser.control.gate;
+
+        yield* browser.control.next("disconnect", { _tag: "Hold", gate, dispatched: true });
+        const closing = yield* browser.close.pipe(Effect.forkChild);
+
+        yield* gate.reached;
+        expect(yield* browser.control.connections).toEqual(["open"]);
+        yield* gate.open;
+        expect(yield* Fiber.join(closing)).toMatchObject({ connection: "closed", issues: [] });
+        expect(yield* browser.control.connections).toEqual(["closed"]);
+      }),
+    );
+  }),
+);
+
+it.effect("a refused connection fails the owner's connect and is logged by its browser", () =>
+  Effect.gen(function* () {
+    const refused = yield* Effect.scoped(Testing.open({ ...shop, connections: ["refuse"] })).pipe(
+      Effect.flip,
+    );
+
+    expect(refused).toMatchObject({ operation: "connect", outcome: "unknown" });
+  }),
+);
+
+/** An integration's lifetime with one fixed address, so every connection reaches one browser. */
+const fixedAddress =
+  (address: string): BrowserRuntime.Source<BrowserRuntime.Lifetime, never> =>
+  (cleanup) =>
+    Effect.gen(function* () {
+      const release = yield* Effect.cached(
+        cleanup.fence.pipe(
+          Effect.andThen(cleanup.capture),
+          Effect.andThen(cleanup.initialization),
+          Effect.andThen(cleanup.disconnect),
+          Effect.orDie,
+          Effect.asVoid,
+        ),
+      );
+
+      yield* Effect.addFinalizer(() => release);
+
+      return {
+        reference: "integration-under-test",
+        connection: () => Effect.succeed(Redacted.make(address)),
+        release,
+        cleanupResult: Effect.succeedNone,
+        closeChecked: release,
+        verifyReconnect: Effect.void,
+      };
+    });
+
+it.effect("a keep-alive reconnection finds the pages its browser kept while detached", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scripted = yield* Testing.binding({ ...shop, connections: ["refuse"] });
+
+      const runtime = yield* BrowserRuntime.make({
+        implementation: "integration-under-test",
+        binding: scripted.binding,
+        keepAlive: true,
+      });
+
+      // The first attempt is refused, the second connects to the same browser.
+      const refused = yield* Effect.scoped(
+        runtime
+          .acquire(BrowserPolicy.unrestricted(), fixedAddress("wss://keep-alive.test/"))
+          .pipe(Effect.flatMap((acquired) => acquired.connect)),
+      ).pipe(Effect.flip);
+
+      expect(refused).toMatchObject({ operation: "connect" });
+
+      const acquired = yield* runtime.acquire(
+        BrowserPolicy.unrestricted(),
+        fixedAddress("wss://keep-alive.test/"),
+      );
+
+      const { session, operations } = yield* acquired.connect;
+
+      yield* session.navigate({ url: `${origin}/` });
+      const [control] = yield* scripted.browsers;
+
+      expect(control).toBeDefined();
+      if (control === undefined) return;
+      yield* operations.detach;
+      // A person changes the page while no connection is open.
+      yield* control.document.update({ url: `${origin}/`, text: "Changed while detached." });
+      const observed = yield* operations.reconnect(true);
+
+      expect(observed.text).toBe("Changed while detached.");
+      expect(yield* scripted.browsers).toHaveLength(1);
+      expect(yield* control.connections).toEqual(["refused", "closed", "open"]);
+    }),
+  ),
+);
+
 it.effect("the same engine composes under browser-runtime as an opaque binding", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -838,7 +1055,7 @@ it.effect("the same engine composes under browser-runtime as an opaque binding",
       );
 
       const { session } = yield* acquired.connect;
-      const [control] = yield* scripted.connections;
+      const [control] = yield* scripted.browsers;
 
       expect(control).toBeDefined();
       expect((yield* session.observe()).text).toBe("Welcome. We use cookies.");

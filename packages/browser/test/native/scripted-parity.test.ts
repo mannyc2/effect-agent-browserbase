@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 
 import { expect, it } from "@effect/vitest";
-import { Effect, type Scope } from "effect";
+import { Effect, Fiber, Schedule, type Scope } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, ObservedElement, type Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -89,12 +89,16 @@ const script = (origin: string): Testing.Script => ({
 type Open = (
   origin: string,
   policy: BrowserPolicy,
+  actionTimeoutMillis?: number,
 ) => Effect.Effect<Browser.AnySession, BrowserError | InitializationError, Scope.Scope>;
 
-const openScripted: Open = (origin, policy) =>
-  Testing.open<BrowserError | InitializationError, never>(script(origin), { policy });
+const openScripted: Open = (origin, policy, actionTimeoutMillis) =>
+  Testing.open<BrowserError | InitializationError, never>(script(origin), {
+    policy,
+    ...(actionTimeoutMillis === undefined ? {} : { automation: { actionTimeoutMillis } }),
+  });
 
-const openChromium: Open = (origin, policy) =>
+const openChromium: Open = (origin, policy, actionTimeoutMillis) =>
   Effect.gen(function* () {
     // The real owner is launched per case, so budgets and receipts start fresh each time.
     void origin;
@@ -111,6 +115,7 @@ const openChromium: Open = (origin, policy) =>
           startupTimeoutMillis: 25000,
         },
         viewport: { width: 640, height: 480 },
+        ...(actionTimeoutMillis === undefined ? {} : { actionTimeoutMillis }),
       }),
     ),
   );
@@ -140,6 +145,7 @@ const failure = <A>(effect: Effect.Effect<A, BrowserError>) =>
 interface Case {
   readonly name: string;
   readonly policy?: BrowserPolicy;
+  readonly actionTimeoutMillis?: number;
   readonly run: (session: Browser.AnySession, origin: string) => Effect.Effect<void, BrowserError>;
 }
 
@@ -312,6 +318,28 @@ const cases: ReadonlyArray<Case> = [
       }),
   },
   {
+    name: "moving the selection leaves a pending wait running to its own deadline",
+    actionTimeoutMillis: 1500,
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const home = (yield* session.pages).find((page) => page.selected);
+
+        expect(home).toBeDefined();
+        if (home === undefined) return;
+
+        const pending = yield* failure(
+          session.waitFor({ selector: "#never", state: "attached" }),
+        ).pipe(Effect.forkChild);
+
+        // The wait's short admission guard retires once the native wait has started.
+        yield* session
+          .selectPage(home)
+          .pipe(Effect.retry({ times: 100, schedule: Schedule.spaced("5 millis") }));
+        expect(yield* Fiber.join(pending)).toEqual({ reason: "Timeout", outcome: "undispatched" });
+      }),
+  },
+  {
     name: "an off-screen control cannot be hovered",
     run: (session, origin) =>
       Effect.gen(function* () {
@@ -350,8 +378,9 @@ for (const [owner, open] of [
           const running = yield* site;
           const policy = parity.policy ?? BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 });
 
-          yield* Browser.scoped(open(running.origin, policy), (session) =>
-            parity.run(session, running.origin),
+          yield* Browser.scoped(
+            open(running.origin, policy, parity.actionTimeoutMillis),
+            (session) => parity.run(session, running.origin),
           );
         }),
       ),

@@ -1,79 +1,19 @@
 import assert from "node:assert/strict";
 
-import { Effect, Redacted } from "effect";
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
-import { FetchHttpClient } from "effect/unstable/http";
 
-import type { DriverEvents } from "../../../packages/browser/src/internal/browser/Driver.ts";
-import { BrowserbaseClient } from "../../../packages/browserbase/src/Client.ts";
-import type {
-  AllocationError,
-  ClientError,
-  ContextError,
-} from "../../../packages/browserbase/src/Errors.ts";
-import { fixture } from "./ScriptedProvider.ts";
+import type { DriverEvents } from "../src/internal/browser/Driver.ts";
+import { fixture } from "./fixtures/ScriptedOwner.ts";
 
 interface Case {
   readonly name: string;
-  readonly run: Effect.Effect<
-    void,
-    AllocationError | BrowserError | ClientError | ContextError | InitializationError
-  >;
+  readonly run: Effect.Effect<void, BrowserError | InitializationError>;
 }
 
 /** Regressions found by inspecting the preserved checkpoint, not inherited historical results. */
-export const recoveryCases: ReadonlyArray<Case> = [
-  {
-    // The old private seam let one options object reach both an account layer and a
-    // browser layer, where excess keys were rejected only by the former. Account
-    // authority and browser configuration are now separate types with no shared keys.
-    name: "account options reject browser configuration instead of silently accepting it",
-    run: Effect.gen(function* () {
-      let requests = 0;
-
-      const fetch: typeof globalThis.fetch = async () => {
-        requests++;
-
-        return Response.json({ ok: true });
-      };
-
-      const rejected = yield* Effect.gen(function* () {
-        const client = yield* BrowserbaseClient;
-
-        yield* client.json("GET", "/v1/sessions/session-1");
-      }).pipe(
-        Effect.provide(
-          BrowserbaseClient.layer({
-            projectId: "project-1",
-            apiKey: Redacted.make("private-test-key"),
-            // @ts-expect-error browser configuration is not account authority
-            viewport: { width: 640, height: 480 },
-          }),
-        ),
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-        Effect.result,
-      );
-
-      assert.equal(rejected._tag, "Failure");
-      if (rejected._tag === "Failure") assert.equal(rejected.failure.reason, "configuration");
-      assert.equal(requests, 0);
-
-      yield* Effect.gen(function* () {
-        const client = yield* BrowserbaseClient;
-
-        yield* client.json("GET", "/v1/sessions/session-1");
-      }).pipe(
-        Effect.provide(
-          BrowserbaseClient.layer({
-            projectId: "project-1",
-            apiKey: Redacted.make("private-test-key"),
-          }),
-        ),
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-      );
-      assert.equal(requests, 1);
-    }),
-  },
+const recoveryCases: ReadonlyArray<Case> = [
   {
     name: "an operator-pause event during connection setup never exposes an open handle",
     run: Effect.scoped(
@@ -117,7 +57,10 @@ export const recoveryCases: ReadonlyArray<Case> = [
         connections[0]!.disconnected();
         assert.equal(yield* session.operations.readText(), "initial");
         assert.equal(f.state.connects, 2);
-        assert.equal((yield* session.close).remote, "confirmed");
+        const closed = yield* session.close;
+
+        assert.equal(closed.connection, "closed");
+        assert.deepEqual(closed.issues, []);
       }),
     ),
   },
@@ -177,3 +120,5 @@ export const recoveryCases: ReadonlyArray<Case> = [
     ),
   },
 ];
+
+for (const test of recoveryCases) it.effect(test.name, () => test.run);

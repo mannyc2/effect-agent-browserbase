@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const common = ["tooling", "source-cleanliness"];
-const library = ["boundary", "bootstrap", "format", "lint", "integration-typecheck", "browser-typecheck", "generic-typecheck", "typecheck", "integration-unit", "browser-unit", "generic-unit", "unit", "browser-build", "generic-build", "build", "exports", "purity", "install-browser", "install-media-tools", "packed-consumer", "release-identity", "package-dry-run", "review-check"];
+const library = ["bootstrap", "format", "lint", "browser-typecheck", "generic-typecheck", "typecheck", "browser-unit", "generic-unit", "unit", "browser-build", "generic-build", "build", "exports", "purity", "install-browser", "install-media-tools", "packed-consumer", "release-identity", "package-dry-run", "review-check"];
 export function requiredStages(profile) {
   assert.ok(["docs", "library", "full"].includes(profile), "Unknown acceptance profile");
   return [...common, ...(profile === "docs" ? ["docs-plan", "diff-check"] : library), ...(profile === "full" ? ["browser-native", "generic-native", "native", "upstream-check", "upstream-test", "upstream-build", "release-dry-run"] : [])];

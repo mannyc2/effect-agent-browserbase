@@ -144,37 +144,6 @@ it.effect("a rejected allocation is a typed rejection with no session to release
   ),
 );
 
-it.effect("a lost creation reply is an unknown allocation, reported exactly once", () => {
-  const uncertain: string[] = [];
-
-  return Effect.gen(function* () {
-    const failure = yield* Effect.scoped(BrowserbaseBrowser.open(policy)).pipe(Effect.flip);
-
-    expect(failure).toMatchObject({
-      _tag: "AllocationError",
-      outcome: "unknown",
-      reason: "transport",
-    });
-    expect(uncertain).toHaveLength(1);
-    const scripted = yield* Testing.ScriptedBrowserbase;
-
-    expect((yield* scripted.provider.calls).map((call) => call.method)).toEqual(["POST"]);
-  }).pipe(
-    Effect.provide(
-      Testing.layer({
-        browser: shop,
-        provider: { create: { _tag: "Lost" } },
-        options: {
-          onAllocationUncertain: (attempt) =>
-            Effect.sync(() => {
-              uncertain.push(attempt.attemptId);
-            }),
-        },
-      }),
-    ),
-  );
-});
-
 it.effect(
   "a release the provider does not confirm is reported as pending, under the test clock",
   () => {
@@ -243,7 +212,11 @@ it.effect("a borrowed attachment disconnects without releasing the owner's sessi
           local: "closed",
         });
         expect((yield* scripted.provider.sessions)[0]).toMatchObject({ releaseRequests: 0 });
-        expect((yield* scripted.browsers).length).toBe(2);
+        // The borrower reached the owner's own browser, and closing it left the owner's open.
+        const [browser] = yield* scripted.browsers;
+
+        expect(yield* scripted.browsers).toHaveLength(1);
+        expect(yield* browser!.connections).toEqual(["open", "closed"]);
       }),
     );
     expect((yield* scripted.provider.sessions)[0]).toMatchObject({

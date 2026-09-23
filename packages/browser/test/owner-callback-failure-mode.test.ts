@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { CallbackTasks } from "../../packages/browser/src/internal/browser/CallbackTasks.ts";
-import { gate } from "./fixtures/ScriptedProvider.ts";
+import { CallbackTasks } from "../src/internal/browser/CallbackTasks.ts";
+import { gate } from "./fixtures/ScriptedOwner.ts";
 
 it.effect("reject-call failures stay local and leave admission usable", () =>
   Effect.gen(function* () {

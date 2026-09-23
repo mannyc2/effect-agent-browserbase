@@ -1,33 +1,21 @@
 import assert from "node:assert/strict";
 
+import { it } from "@effect/vitest";
 import type { Scope } from "effect";
 import { Effect, Exit, Fiber, Stream } from "effect";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 
-import { PageInfo, Target } from "../../../packages/browser/src/BrowserData.ts";
-import { type CaptureOptions, type CaptureSize } from "../../../packages/browser/src/Capture.ts";
-import { type CaptureParent } from "../../../packages/browser/src/internal/browser/Association.ts";
-import {
-  type CaptureInvalidation,
-  type NativeFrame,
-} from "../../../packages/browser/src/internal/browser/Driver.ts";
-import { makeOwner } from "../../../packages/browser/src/internal/browser/Owner.ts";
-import { startCapture } from "../../../packages/browser/src/internal/capture/Capture.ts";
-import {
-  type AllocationError,
-  type ClientError,
-  type ContextError,
-} from "../../../packages/browserbase/src/Errors.ts";
-import { jpeg, widerJpeg } from "./Jpeg.ts";
-import { fixture as sessionFixture, gate } from "./ScriptedProvider.ts";
-import { advance, timed } from "./Time.ts";
+import { PageInfo, Target } from "../src/BrowserData.ts";
+import { type CaptureOptions, type CaptureSize } from "../src/Capture.ts";
+import { type CaptureParent } from "../src/internal/browser/Association.ts";
+import { type CaptureInvalidation, type NativeFrame } from "../src/internal/browser/Driver.ts";
+import { makeOwner } from "../src/internal/browser/Owner.ts";
+import { startCapture } from "../src/internal/capture/Capture.ts";
+import { jpeg, widerJpeg } from "./fixtures/Jpeg.ts";
+import { fixture as sessionFixture, gate } from "./fixtures/ScriptedOwner.ts";
+import { advance, timed } from "./fixtures/Time.ts";
 
-type CaptureFailure =
-  | AllocationError
-  | BrowserError
-  | ClientError
-  | ContextError
-  | InitializationError;
+type CaptureFailure = BrowserError | InitializationError;
 
 interface Case {
   readonly name: string;
@@ -183,7 +171,7 @@ const makeFixture = Effect.fnUntraced(function* (
 
 const options: CaptureOptions = { maxFrames: 2, maxBufferedBytes: 16_384, maxFrameBytes: 8192 };
 
-export const captureCases: ReadonlyArray<Case> = [
+const captureCases: ReadonlyArray<Case> = [
   test("capture has a bounded drop-oldest queue with explicit sequence gaps", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();
@@ -867,7 +855,11 @@ export const captureCases: ReadonlyArray<Case> = [
       const interval = yield* startCapture(session.capture, options);
       const result = yield* session.close;
 
-      assert.equal(result.local, "failed");
+      assert.equal(result.connection, "failed");
+      assert.deepEqual(
+        result.issues.map((issue) => [issue.step, issue.reason]),
+        [["disconnect", "failed"]],
+      );
       receive?.({ data: jpeg(), timestamp: 1000, viewportWidth: 64, viewportHeight: 48 });
       yield* expectReason(Stream.runDrain(interval.frames), "TargetChanged");
       assert.equal((yield* interval.completed).received, 0);
@@ -1026,3 +1018,5 @@ export const captureCases: ReadonlyArray<Case> = [
       assert.equal(frame.height, 48);
     })),
 ];
+
+for (const test of captureCases) it.effect(test.name, () => test.run);

@@ -17,6 +17,7 @@ import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { CleanupResult } from "effect-browserbase/cleanup";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import { BrowserbaseExtensions } from "effect-browserbase/extensions";
+import { recipe } from "effect-browserbase/launch";
 import { BrowserbaseRecordings } from "effect-browserbase/recordings";
 import { SessionReference } from "effect-browserbase/references";
 import { BrowserbaseReplays } from "effect-browserbase/replays";
@@ -73,6 +74,18 @@ const fetch: typeof globalThis.fetch = async (input, init) => {
       pageCount: 1,
       pages: [{ pageId: "0", startTimeMs: 0, endTimeMs: 1000, url: "ignored" }],
     });
+  }
+  // A signed-media stream the network cuts off after its first chunk.
+  if (url.origin === "https://media.example.test" && url.pathname === "/cut") {
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2]));
+          controller.error(new Error("connection reset"));
+        },
+      }),
+      { headers: { "content-type": "video/mp4" } },
+    );
   }
   if (url.origin === "https://media.example.test") {
     return new Response(new Uint8Array([1, 2, 3, 4]), {
@@ -211,6 +224,26 @@ const program = Effect.gen(function* () {
 
   expect(bytes === 4, "signed media streams through the approved origin");
 
+  // This runtime's own fetch and streams: a bound is enforced on the bytes as they arrive, and a
+  // stream cut off mid-transfer fails instead of completing short.
+  const bounded = yield* recordings
+    .download(RecordingPageReference.make({ session: reference, pageId: "0" }), {
+      maxBytes: 2,
+      timeoutMillis: 5000,
+    })
+    .pipe(Stream.runDrain, Effect.result);
+
+  expect(
+    bounded._tag === "Failure" && bounded.failure.reason === "limit",
+    "a download larger than its bound is refused",
+  );
+
+  const cut = yield* (yield* BrowserbaseClient)
+    .media(Redacted.make("https://media.example.test/cut"), 1024, ["video/mp4"])
+    .pipe(Stream.runDrain, Effect.result);
+
+  expect(cut._tag === "Failure", "a stream cut off mid-transfer is a failure, not a short success");
+
   const pages = yield* replays.metadata(reference);
 
   expect(pages.length === 1, "replay metadata is independent of recording assembly");
@@ -324,6 +357,31 @@ const scripted = await Effect.runPromise(
       }),
     );
 
+    // A native teardown that fails is reported in the receipt, never hidden.
+    const teardown = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* ScriptedBrowser.open(shop);
+
+        yield* browser.control.next("disconnect", {
+          _tag: "Fail",
+          reason: Reasons.Provider.make({}),
+          outcome: "unknown",
+        });
+        const receipt = yield* browser.close;
+
+        expect(
+          receipt.connection === "failed" &&
+            receipt.issues.some((issue) => issue.step === "disconnect"),
+          "a failed native teardown is reported in the receipt",
+        );
+        const connections = (yield* browser.control.connections).join(",");
+
+        expect(connections === "close-failed", "the engine saw the teardown fail");
+
+        return connections;
+      }),
+    );
+
     // The provider testing entry: the real account and browser Layers over scripted replies.
     const receipts: CleanupResult[] = [];
 
@@ -386,7 +444,47 @@ const scripted = await Effect.runPromise(
       "the real cleanup receipt confirms release over the scripted control plane",
     );
 
-    return { generic, uncertain, hosted };
+    // A keep-alive session reconnects to the same scripted browser, which kept its pages and
+    // could be changed while nothing was connected.
+    const reconnected = yield* Effect.gen(function* () {
+      const handles = yield* ScriptedBrowserbase.ScriptedBrowserbase;
+
+      return yield* Browser.scoped(
+        BrowserbaseBrowser.open(BrowserPolicy.unrestricted()),
+        (session) =>
+          Effect.gen(function* () {
+            yield* session.navigate({ url: "https://shop.test/" });
+            yield* session.detach;
+            const [control] = yield* handles.browsers;
+
+            if (control === undefined) throw new Error("Consumer assertion failed: no engine");
+            yield* control.document.update({
+              url: "https://shop.test/",
+              text: "Changed while detached.",
+            });
+            const observed = yield* session.reconnect(true);
+
+            expect(
+              observed.text === "Changed while detached.",
+              "a keep-alive reconnection finds the page its browser kept",
+            );
+            const connections = (yield* control.connections).join(",");
+
+            expect(
+              connections === "closed,open",
+              "the reconnection reached the same browser over a new connection",
+            );
+
+            return connections;
+          }),
+      );
+    }).pipe(
+      Effect.provide(
+        ScriptedBrowserbase.layer({ browser: shop, launch: recipe({ keepAlive: true }) }),
+      ),
+    );
+
+    return { generic, uncertain, teardown, hosted, reconnected };
   }),
 );
 

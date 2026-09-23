@@ -113,6 +113,13 @@ export const Script = Schema.Struct({
   ),
   /** The first page's document at connect; defaults to the first listed document. */
   start: Schema.optionalKey(TargetUrl),
+  /**
+   * What successive connection attempts to one browser do: `refuse` fails the attempt as an
+   * unreachable endpoint would, and `accept` connects. Attempts past the list connect.
+   */
+  connections: Schema.optionalKey(
+    Schema.Array(Schema.Literals(["accept", "refuse"])).check(Schema.isMaxLength(16)),
+  ),
 });
 
 export type Script = typeof Script.Type;
@@ -138,7 +145,10 @@ export class ScriptedCleanupResult extends Schema.Class<ScriptedCleanupResult>(
   issues: Schema.Array(ScriptedCleanupIssue).check(Schema.isMaxLength(16)),
 }) {}
 
-/** The operations whose next admitted call a test may script. */
+/**
+ * The operations whose next call a test may script. `disconnect` is the owner's native teardown
+ * of a connection: a `Fail` makes it fail and a `Hold` parks it, however long cleanup waits.
+ */
 export const ScriptableOperation = Schema.Literals([
   "navigate",
   "navigate-stop",
@@ -173,6 +183,7 @@ export const ScriptableOperation = Schema.Literals([
   "page-suspend",
   "page-resume",
   "capture-stop",
+  "disconnect",
 ] satisfies ReadonlyArray<BrowserOperation>);
 
 export type ScriptableOperation = typeof ScriptableOperation.Type;
@@ -217,16 +228,30 @@ export interface ScriptedFrame {
   readonly viewportHeight?: number;
 }
 
+/**
+ * How one connection to a scripted browser went: refused by the script, still open, closed by
+ * its owner, dropped (as `disconnect` or an armed `Disconnect` drops it), or failed to close.
+ */
+export type ScriptedConnection = "refused" | "open" | "closed" | "dropped" | "close-failed";
+
 /** What a page would see when it calls a registered binding: a reply, or a bare rejection. */
 export type BindingReply = { readonly ok: true; readonly output: unknown } | { readonly ok: false };
 
+/**
+ * The test's side of one scripted browser. The browser outlives any one connection, as a
+ * keep-alive browser does: a reconnection finds the same pages, and this handle keeps working
+ * while no connection is open.
+ */
 export interface ScriptedControl {
   readonly calls: Effect.Effect<ReadonlyArray<RecordedCall>>;
   /** Arm the next admitted call of one operation. Arms are consumed one-shot in arming order. */
   readonly next: (operation: ScriptableOperation, outcome: ScriptedOutcome) => Effect.Effect<void>;
   readonly gate: Effect.Effect<Gate>;
   readonly document: {
-    /** The selected page's document as it is now; `Closed` once there is no selected page. */
+    /**
+     * The document of the page selected last, whether or not a connection is open; `Closed`
+     * once that page is closed.
+     */
     readonly current: Effect.Effect<DocumentScript, BrowserError>;
     /**
      * The document is replaced, as a navigation replaces it: every retained node and every
@@ -255,8 +280,10 @@ export interface ScriptedControl {
     input: unknown,
     options?: { readonly origin?: string },
   ) => Effect.Effect<BindingReply>;
-  /** The native connection drops; the owner reports the session as disconnected. */
+  /** Every open connection drops; each owner reports its session as disconnected. */
   readonly disconnect: Effect.Effect<void>;
+  /** Every connection made to this browser, in order, and how each has ended so far. */
+  readonly connections: Effect.Effect<ReadonlyArray<ScriptedConnection>>;
 }
 
 /** The real public session over the scripted engine, decorated the way owned sessions are. */

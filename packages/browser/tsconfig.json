@@ -3,7 +3,8 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
-    "skipLibCheck": false
+    "skipLibCheck": false,
+    "erasableSyntaxOnly": true
   },
   "include": ["src", "test", "examples", "vite.config.ts"]
 }

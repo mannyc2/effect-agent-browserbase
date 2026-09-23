@@ -5,11 +5,8 @@ import { Effect, Schema } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
 import type { BrowserError } from "effect-browser/errors";
 
-import {
-  compileBootstrap,
-  duplicateStep,
-} from "../../packages/browser/src/internal/browser/Bootstrap.ts";
-import { fixture } from "./fixtures/ScriptedProvider.ts";
+import { compileBootstrap, duplicateStep } from "../src/internal/browser/Bootstrap.ts";
+import { fixture } from "./fixtures/ScriptedOwner.ts";
 
 const script = (id: string, content: string, extra: Partial<Bootstrap.InitScript> = {}) =>
   Bootstrap.init({ id, content, ...extra });

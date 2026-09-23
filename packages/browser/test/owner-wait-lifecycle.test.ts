@@ -2,10 +2,10 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { Reasons } from "../../packages/browser/src/Errors.ts";
-import { failure } from "../../packages/browser/src/internal/browser/NativeCalls.ts";
-import type { WaitTicket } from "../../packages/browser/src/internal/browser/Owner.ts";
-import { fixture, gate, scriptedPage } from "./fixtures/ScriptedProvider.ts";
+import { Reasons } from "../src/Errors.ts";
+import { failure } from "../src/internal/browser/NativeCalls.ts";
+import type { WaitTicket } from "../src/internal/browser/Owner.ts";
+import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 const busy = {
   _tag: "Failure",
@@ -24,7 +24,6 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       let nativeWaits = 0;
       let holds = 0;
       let observationReads = 0;
-      let selected = "page-1";
       const inputs: string[] = [];
 
       const f = yield* fixture({
@@ -39,15 +38,9 @@ it.effect("a pending wait releases admission for host reads while excluding conf
 
             return driver.documentReadiness(ticket);
           },
-          selected: () => ({ pageId: selected, frameId: "frame-1" }),
-          selectPage: async (page, ticket) => {
-            ticket.check();
-            selected = page.pageId;
-          },
-          resolvePage: async (page) => ({ pageId: page.pageId, frameId: "frame-1" }),
           click: async (_selector, ticket, _policy, target) => {
             ticket.dispatch();
-            inputs.push(target?.pageId ?? selected);
+            inputs.push(target?.pageId ?? driver.selected().pageId);
 
             return "https://example.test/";
           },
@@ -84,6 +77,12 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       });
 
       const session = yield* (yield* f.acquisition).connect;
+      const first = (yield* session.pages)[0];
+
+      expect(first).toBeDefined();
+      if (first === undefined) return;
+      // The scout's page is a real second page, opened before the wait begins.
+      const second = yield* session.createPage();
       const waiting = yield* Effect.forkChild(session.waitFor("#ready", "visible"));
 
       yield* Effect.promise(() => entered.promise);
@@ -91,7 +90,7 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       yield* Effect.promise(() => admissionReleased.promise);
       expect(waitTicket?.signal.aborted).toBe(false);
       yield* session.checkpoint({ picture: false });
-      expect(yield* session.pages).toHaveLength(1);
+      expect(yield* session.pages).toHaveLength(2);
       expect(yield* session.status).toMatchObject({
         phase: "open",
         busy: true,
@@ -102,21 +101,19 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       expect(
         yield* Effect.result(session.operations.navigate("https://example.test/next")),
       ).toMatchObject(busy);
-      expect(
-        yield* Effect.result(session.pageControl.suspend(scriptedPage("page-1"))),
-      ).toMatchObject(busy);
+      expect(yield* Effect.result(session.pageControl.suspend(first))).toMatchObject(busy);
       expect(
         yield* Effect.result(
           session.pageControl.resume({ pageId: "page-1", targetId: "target-1", suspensionId: "x" }),
         ),
       ).toMatchObject(busy);
       expect(yield* Effect.result(session.waitFor("#other", "attached"))).toMatchObject(busy);
-      const scout = yield* session.pinPage(scriptedPage("page-2"));
+      const scout = yield* session.pinPage(second);
 
       yield* scout.operations.click("#scout");
-      yield* session.selectPage(scriptedPage("page-2"));
+      yield* session.selectPage(second);
       expect(waitTicket?.signal.aborted).toBe(false);
-      yield* session.selectPage(scriptedPage("page-1"));
+      yield* session.selectPage(first);
       finish.resolve();
       yield* Fiber.join(waiting);
       yield* session.operations.click("#act");
@@ -174,7 +171,7 @@ it.effect(
         expect(Exit.hasInterrupts(yield* Fiber.await(waiting))).toBe(true);
         expect(original?.signal.aborted).toBe(true);
         yield* session.observe();
-        yield* session.operations.click("#continue");
+        yield* session.operations.click("#act");
         for (let i = 0; i < 3; i++)
           expect(
             yield* Effect.result(session.waitForElement({ reference, state: "hidden" })),
