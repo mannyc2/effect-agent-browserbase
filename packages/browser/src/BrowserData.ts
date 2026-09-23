@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { BrowserError } from "./Errors.ts";
+
 export const Identifier = Schema.NonEmptyString.check(
   Schema.isMaxLength(256),
   Schema.isPattern(/^[A-Za-z0-9_-]+$/),
@@ -153,17 +155,30 @@ export class ViewportEvidence extends Schema.Class<ViewportEvidence>("BrowserVie
 }) {}
 
 /**
+ * Case-insensitive text a reading keeps. It is applied inside the page before any limit, so
+ * matching controls are not crowded out by earlier ones. It filters what is read; it never
+ * searches for, re-finds or substitutes a node.
+ */
+export const ReadingMatch = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(256),
+  Schema.makeFilter((value) => value.trim().length > 0, { title: "not only whitespace" }),
+);
+
+/**
  * Revision is admission fencing, not a claim of a complete DOM version or atomic snapshot. A
  * `viewport` reading holds what is on screen and reachable, plus the bounded choices of its
  * native selects. Those choices are not a claim that a closed dropdown's rows were visible.
- * A `document` reading is the whole body, wherever it is. Nothing here carries a destination,
- * a form or a field value.
+ * A `document` reading is the whole body, wherever it is. A reading with `match` keeps only
+ * matching text lines and controls, so what it leaves out is not evidence of absence. Nothing
+ * here carries a destination, a form or a field value.
  */
 export class Observation extends Schema.Class<Observation>("BrowserObservation")({
   target: Target,
   observationId: Identifier,
   revision: Schema.Natural,
   scope: Schema.Literals(["document", "viewport"]),
+  match: Schema.optionalKey(ReadingMatch),
   url: Schema.String.check(Schema.isMaxLength(8192)),
   text: Schema.String.check(Schema.isMaxLength(131072)),
   controls: Schema.Array(ObservedControl).check(Schema.isMaxLength(64)),
@@ -292,6 +307,97 @@ export class FillRequest extends Schema.Class<FillRequest>("BrowserFillRequest")
   value: Schema.String.check(Schema.isMaxLength(65536)),
 }) {}
 
+/**
+ * One observed control and the one state a form gives it: replacement text, the checked state a
+ * checkbox, radio or switch should end in (it is clicked only when it differs, and a native radio
+ * is never asked to clear itself), or issued option IDs of a native select from the same
+ * observation.
+ */
+export const FormField = Schema.Struct({
+  elementId: Identifier,
+  value: Schema.optionalKey(FillRequest.fields.value),
+  checked: Schema.optionalKey(Schema.Boolean),
+  options: Schema.optionalKey(SelectOptions),
+}).check(
+  Schema.makeFilter(
+    (field) =>
+      Number(field.value !== undefined) +
+        Number(field.checked !== undefined) +
+        Number(field.options !== undefined) ===
+      1,
+    { title: "exactly one of value, checked or options" },
+  ),
+);
+
+export type FormField = typeof FormField.Type;
+
+/** At most 32 distinct fields, and a submit control that is not one of them. */
+export class FillFormRequest extends Schema.Class<FillFormRequest>("BrowserFillFormRequest")(
+  Schema.Struct({
+    observationId: Identifier,
+    fields: Schema.Array(FormField).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(32),
+      Schema.makeFilter(
+        (fields) => new Set(fields.map((field) => field.elementId)).size === fields.length,
+        { title: "each field at most once" },
+      ),
+    ),
+    submit: Schema.optionalKey(Identifier),
+  }).check(
+    Schema.makeFilter(
+      (request) =>
+        request.submit === undefined ||
+        !request.fields.some((field) => field.elementId === request.submit),
+      { title: "a submit control that is not also a field" },
+    ),
+  ),
+) {}
+
+/**
+ * Host choices about how a form proceeds. `verify` (default true) re-reads every field before
+ * submit and stops when one no longer holds what its own step left there. `settleMillis`
+ * (default 50, at most 5000; 0 skips it) is how long each dispatched step lets the page's own
+ * handlers run, after at least two rendered frames, before its result is read back.
+ */
+export const FillFormOptions = Schema.Struct({
+  verify: Schema.optionalKey(Schema.Boolean),
+  settleMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 5000 })),
+  ),
+});
+
+export type FillFormOptions = typeof FillFormOptions.Type;
+
+/** `set` dispatched input; `unchanged` needed none, because a toggle already held its state. */
+export class FormFieldResult extends Schema.Class<FormFieldResult>("BrowserFormFieldResult")({
+  elementId: Identifier,
+  status: Schema.Literals(["set", "unchanged"]),
+}) {}
+
+/**
+ * Where a form stopped and why. `error.outcome` says whether this step itself was dispatched;
+ * nothing after it was. `elementId` names the control it stopped at, when there is one: a
+ * verification that could not read the form at all names none.
+ */
+export class FormStop extends Schema.Class<FormStop>("BrowserFormStop")({
+  stage: Schema.Literals(["field", "verify", "submit"]),
+  elementId: Schema.optionalKey(Identifier),
+  error: BrowserError,
+}) {}
+
+/**
+ * What a form did, in order. `stopped` is present when it did not finish: the fields before it
+ * stay set, because a form is not a transaction. `submitted` is true only when the submit click
+ * completed; a stop at `submit` with an `unknown` outcome may have sent it.
+ */
+export class FillFormResult extends Schema.Class<FillFormResult>("BrowserFillFormResult")({
+  fields: Schema.Array(FormFieldResult).check(Schema.isMaxLength(32)),
+  submitted: Schema.Boolean,
+  url: TargetUrl,
+  stopped: Schema.optionalKey(FormStop),
+}) {}
+
 export class ScrollRequest extends Schema.Class<ScrollRequest>("BrowserScrollRequest")({
   deltaX: Schema.Int.check(Schema.isBetween({ minimum: -100000, maximum: 100000 })),
   deltaY: Schema.Int.check(Schema.isBetween({ minimum: -100000, maximum: 100000 })),
@@ -377,6 +483,7 @@ const ReadingBounds = {
 /** Omitted bounds default at admission; `scope` defaults to the whole document. */
 export const ObservationOptions = Schema.Struct({
   scope: Schema.optionalKey(Schema.Literals(["document", "viewport"])),
+  match: Schema.optionalKey(ReadingMatch),
   ...ReadingBounds,
 });
 

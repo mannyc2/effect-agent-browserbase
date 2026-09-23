@@ -294,7 +294,7 @@ it.live(
 );
 
 it.live(
-  "real AgentRuntime: default concurrency sequences independent tools from different groups",
+  "real AgentRuntime: with lane scheduling, default concurrency sequences independent tools from different groups",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -359,7 +359,8 @@ it.live(
                     }),
                   ),
               );
-              const host = yield* BrowserTools.makeHost(browser);
+              // The engine may start both calls at once; only the host lane orders them.
+              const host = yield* BrowserTools.makeHost(browser, { scheduling: "lane" });
 
               const result = yield* host.run(
                 AgentRuntime.run(concurrent, "scroll and move the pointer").pipe(
@@ -434,6 +435,146 @@ it.live(
               },
               viewport: { width: 640, height: 480 },
             }).pipe(Layer.provide(NodeCrypto.layer)),
+          ),
+        );
+      }),
+    ),
+);
+
+it.live(
+  "real AgentRuntime: sequential scheduling starts each browser call after the previous one, in declared order",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const site = yield* toolSite;
+
+        const ordered = Agent.make("sequential-browser-calls", {
+          input: Schema.String,
+          output: Schema.Struct({ done: Schema.Boolean }),
+          instructions: "Perform the browser operations once, in order.",
+          toolkit: Toolkit.merge(BrowserTools.toolkit, BrowserTools.nativeToolkit),
+          policy: { maxTurns: 3, maxToolCalls: 3, maxDuration: "30 seconds" },
+        });
+
+        yield* Browser.scoped(
+          Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
+          (browser) =>
+            Effect.gen(function* () {
+              yield* browser.navigate({ url: site.url });
+              const originalScroll = browser.scroll;
+              const originalPointer = browser.pointerMove;
+              const log: string[] = [];
+
+              // A handler builds its browser operation when the engine starts the call, so the
+              // log shows whether a later call started before an earlier one finished.
+              const tracked = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) => {
+                log.push(`start ${name}`);
+
+                return Effect.sync(() => log.push(`run ${name}`)).pipe(
+                  Effect.andThen(Effect.sleep(20)),
+                  Effect.andThen(effect),
+                  Effect.ensuring(Effect.sync(() => log.push(`done ${name}`))),
+                );
+              };
+
+              let scrolls = 0;
+
+              const scroll: typeof originalScroll = (request) =>
+                tracked(
+                  ++scrolls === 1 ? "first-scroll" : "second-scroll",
+                  originalScroll(request),
+                );
+
+              const pointerMove: typeof originalPointer = (request) =>
+                tracked("pointer", originalPointer(request));
+
+              yield* Effect.acquireRelease(
+                Effect.sync(() => Object.assign(browser, { scroll, pointerMove })),
+                () =>
+                  Effect.sync(() =>
+                    Object.assign(browser, {
+                      scroll: originalScroll,
+                      pointerMove: originalPointer,
+                    }),
+                  ),
+              );
+              const host = yield* BrowserTools.makeHost(browser);
+
+              const result = yield* host.run(
+                AgentRuntime.run(ordered, "scroll twice and move the pointer").pipe(
+                  Effect.provide(
+                    Layer.mergeAll(
+                      ScriptedModel.layer([
+                        {
+                          _tag: "Stream",
+                          parts: [
+                            {
+                              type: "tool-call",
+                              id: "first",
+                              name: "browser_scroll",
+                              params: { deltaX: 0, deltaY: 120 },
+                            },
+                            {
+                              type: "tool-call",
+                              id: "pointer",
+                              name: "browser_pointer_move",
+                              params: { to: { x: 10, y: 10 } },
+                            },
+                            {
+                              type: "tool-call",
+                              id: "second",
+                              name: "browser_scroll",
+                              params: { deltaX: 0, deltaY: 60 },
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ],
+                          termination: { _tag: "Complete" },
+                        },
+                        {
+                          _tag: "Stream",
+                          parts: [
+                            { type: "text-start", id: "answer" },
+                            { type: "text-delta", id: "answer", delta: '{"done":true}' },
+                            { type: "text-end", id: "answer" },
+                            { type: "finish", reason: "stop", usage },
+                          ],
+                          termination: { _tag: "Complete" },
+                        },
+                      ]),
+                      Layer.succeed(Model.ProviderName, "scripted"),
+                      Layer.succeed(Model.ModelName, "sequential-scheduling"),
+                      InMemory.layer,
+                    ),
+                  ),
+                ),
+              );
+
+              expect(result.output.done).toBe(true);
+              expect(log).toEqual([
+                "start first-scroll",
+                "run first-scroll",
+                "done first-scroll",
+                "start pointer",
+                "run pointer",
+                "done pointer",
+                "start second-scroll",
+                "run second-scroll",
+                "done second-scroll",
+              ]);
+              expect((yield* host.toolFailures).failures).toEqual([]);
+            }),
+        ).pipe(
+          Effect.provide(
+            Chromium.layer({
+              launch: {
+                ...(process.env.BROWSERBASE_CHROMIUM === undefined
+                  ? {}
+                  : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+                chromiumSandbox: false,
+                startupTimeoutMillis: 25000,
+              },
+              viewport: { width: 640, height: 480 },
+            }),
           ),
         );
       }),

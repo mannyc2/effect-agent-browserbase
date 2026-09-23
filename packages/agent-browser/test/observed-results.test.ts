@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Fiber, Schema, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import * as Tools from "effect-agent-browser/tools";
 import { InputReceipt, Observation, Target } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
@@ -202,17 +202,12 @@ it.effect(
 );
 
 it.effect(
-  "the encoded envelope is bounded after successful input, including action URL and JSON overhead",
+  "the encoded result is fitted after successful input: text is cut, references are kept",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const maximum = 50 * 1024;
-        const large = observation("x".repeat(48 * 1024));
-
-        expect(
-          new TextEncoder().encode(JSON.stringify(yield* Schema.encodeEffect(Observation)(large)))
-            .length,
-        ).toBeLessThan(maximum);
+        const large = observation("x".repeat(64 * 1024));
         const longUrl = url + "a".repeat(4000);
         let actions = 0;
 
@@ -226,7 +221,7 @@ it.effect(
               }),
             observe: () => Effect.succeed(large),
           }),
-          { maxTextBytes: 65536, observedResultMaxBytes: maximum },
+          { maxTextBytes: 65536, resultMaxBytes: maximum },
         );
 
         const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));
@@ -240,29 +235,26 @@ it.effect(
             isFailure: false,
             encodedResult: {
               action: { url: longUrl },
-              observation: { _tag: "Unavailable", failure: { reason: "limit" } },
+              observation: {
+                _tag: "Available",
+                observation: { observationId: "fresh", textTruncated: true },
+              },
             },
           },
         ]);
-        expect(
-          new TextEncoder().encode(JSON.stringify(results[0]?.encodedResult)).length,
-        ).toBeLessThanOrEqual(maximum);
-        expect(actions).toBe(1);
-        const failure = (yield* host.toolFailures).failures[0]?.error;
+        const bytes = new TextEncoder().encode(JSON.stringify(results[0]?.encodedResult)).length;
 
-        expect(failure?.reason).toMatchObject({
-          _tag: "Limit",
-          dimension: "returned-bytes",
-          maximum,
-        });
-        if (failure?.reason._tag === "Limit")
-          expect(failure.reason.observed).toBeGreaterThan(maximum);
+        expect(bytes).toBeLessThanOrEqual(maximum);
+        // Only as much text was cut as the bound needed.
+        expect(bytes).toBeGreaterThan(maximum - 64);
+        expect(actions).toBe(1);
+        expect((yield* host.toolFailures).failures).toEqual([]);
       }),
     ),
 );
 
 it.effect(
-  "invalid observation-result budgets refuse before input and ordinary action failure never triggers inspection",
+  "invalid result budgets refuse the host before any input and ordinary action failure never triggers inspection",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -290,26 +282,20 @@ it.effect(
             }),
         });
 
-        for (const maximum of [
-          0,
-          51199,
-          1024 * 1024 + 1,
-          Number.NaN,
-          Number.POSITIVE_INFINITY,
-          null,
-        ]) {
-          // @ts-expect-error Explicit null is an untyped invalid host input, not omission.
-          const host = yield* Tools.makeHost(browser, { observedResultMaxBytes: maximum });
-          const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));
-
+        for (const maximum of [0, 16383, 1024 * 1024 + 1, Number.NaN, Number.POSITIVE_INFINITY, null])
           expect(
-            yield* Stream.runCollect(yield* ready.handle("browser_click_and_inspect", reference)),
-          ).toMatchObject([
-            { isFailure: true, encodedResult: { reason: "failed", outcome: "undispatched" } },
-          ]);
-          expect(actions).toBe(0);
-          expect(reads).toBe(0);
-        }
+            // @ts-expect-error Explicit null is an untyped invalid host input, not omission.
+            yield* Effect.result(Tools.makeHost(browser, { resultMaxBytes: maximum })),
+          ).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              operation: "configure",
+              reason: { _tag: "Configuration", path: "resultMaxBytes" },
+              outcome: "undispatched",
+            },
+          });
+        expect(actions).toBe(0);
+        expect(reads).toBe(0);
         const host = yield* Tools.makeHost(browser);
         const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));
 

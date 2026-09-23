@@ -8,7 +8,7 @@ Three packages share one scoped browser owner:
 | `effect-browserbase`   | [`packages/browserbase`](packages/browserbase/README.md)     | Browserbase accounts/resources and hosted acquisition, cleanup, contexts, uploads, recordings and replays. Depends on the shared runtime.                                                     |
 | `effect-agent-browser` | [`packages/agent-browser`](packages/agent-browser/README.md) | One Effect Agent adapter and maintained Toolkit for either browser source. Depends on the shared runtime and framework, not Browserbase.                                                      |
 
-This branch prepares the breaking `0.2.0-beta.0` package set. The earlier `0.1.0-beta.103` release used `effect-browserbase` and `effect-agent-browserbase`; it does not establish publication or ownership of the new package names. Publication is a separate maintainer action.
+The `0.2.0-beta.0` package set was released from tag `v0.2.0-beta.0` through the [release workflow](docs/RELEASING.md), with provenance, on npm's `beta` dist-tag; `main` may be ahead of it. Install by exact version or `@beta`: a prerelease never moves `latest`, which still points at a name reservation (`0.0.0-reserved.0`) for `effect-browser` and `effect-agent-browser` and at `0.1.0-beta.102` for `effect-browserbase`. The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`.
 
 Install the shared host runtimes explicitly. Browserbase requires `effect-browser@0.2.0-beta.0` as a peer; the Agent adapter requires that same browser peer and `effect-agent@0.1.0-beta.102`. Those exact prerelease relationships keep the qualified package set coordinated. The existing Effect peer range remains `^4.0.0-rc.115`, with rc.115 as the tested version. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. Peer declarations cannot prevent every duplicate bundle or module evaluation: all callers must still use the same live runtime and session identity.
 
@@ -39,11 +39,11 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 
 // The host acquired browser through Chromium or Browserbase, in the active execution scope.
 const result = BrowserTools.run(browser, AgentRuntime.run(agent, request), {
-  observationScope: "viewport",
+  maxControls: 32,
 });
 ```
 
-Every agent turn borrows that session. `BrowserTools.run` provides the maintained handlers and supervises both browser and host callback failures; the host still supplies its selected LanguageModel and other Agent services. An agent declares the tools it may see: the original five, optional pointer/wheel tools, and separately optional exact-node keyboard tools. `Adapter.fromSession` remains available for the framework's `InteractiveBrowser` handle. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition.
+Every agent turn borrows that session. `BrowserTools.run` provides the maintained handlers, runs browser calls one at a time in the order the model declared them, and supervises both browser and host callback failures; the host still supplies its selected LanguageModel and other Agent services. An agent declares the tools it may see: the original five, optional reading, pointer/wheel, keyboard, option-selection, wait and form tools, and `_and_inspect` variants that return the page an action leaves behind. `BrowserTools.instructions(toolkit)` and `BrowserTools.policy(...)` give the agent instructions and policy that match its tools, and every host option is checked once, when the host is built. `Adapter.fromSession` remains available for the framework's `InteractiveBrowser` handle. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition.
 
 ## API migration
 
@@ -59,13 +59,15 @@ Every agent turn borrows that session. `BrowserTools.run` provides the maintaine
 | Manually acquire an interval just to consume frames                    | `Capture.stream(session, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                                                    |
 | `error.reason === "busy"`; optional dispatch evidence                  | `error.reason._tag === "Busy"` or `Effect.catchReason("BrowserError", "Busy", ...)`; `outcome` is required                                                              |
 | Provider `status` / retry timing on the outer browser error            | `Provider` / `Transport` reason carries `status`; `RateLimited` carries `retryAfterMillis`; `Limit` carries actual dimension, maximum and observed facts                |
-| Every host reason exposed to the model                                 | Eleven action-oriented tool reasons plus unchanged dispatch outcome. `ToolHost.toolFailures` retains original structured errors and bounded tool-call IDs on the host   |
+| Every host reason exposed to the model                                 | Thirteen action-oriented tool reasons plus unchanged dispatch outcome. `ToolHost.toolFailures` retains original structured errors, Tool names and bounded call IDs      |
 | Concrete `closeChecked` succeeds with `undefined`                      | It returns the same frozen cleanup receipt as `close` after the existing ownership-specific check passes; the generic session contract still permits discarding success |
 | Capture `dropped`                                                      | `discarded = overflow + late + duplicates + rejected`, with disjoint components; `upstreamDrops` remains `"unknown"`                                                    |
 | Helper parameter `BrowserSession` when it does not supervise callbacks | `AnySession` (`BrowserSession<unknown>`); keep supervisors generic in their callback error or concrete session                                                          |
 | Five required binding bounds/mode fields                               | Omission defaults to one concurrent invocation, 64 KiB input/output, 10 seconds and `reject-call`; explicit values are validated                                        |
 | A common navigation needs a different loading deadline                 | Optional `NavigateRequest.timeoutMillis`, 1–600000 ms, capped by remaining session lifetime; the model tool still accepts only URL                                      |
 | Control kind/label/disabled only                                       | Optional checked/selected/inputType/required state, collected with defined native/ARIA semantics and rechecked on the same node                                         |
+| Several model fill/click calls for one form                            | `session.fillForm` / `browser_fill_form`: one gated operation that submits only after every field was set and still holds                                               |
+| Tool options checked on every call; `observedResultMaxBytes`           | Options checked once when the host is built; `resultMaxBytes` fits every result. See the [agent guide](packages/agent-browser/README.md#api-migration)                  |
 | Browser Layers and `Allocation.scoped` required no platform service    | `Chromium.layer`, `BrowserbaseBrowser.layer`, `BrowserRuntime.make` and `Allocation.scoped` require Effect's `Crypto`, such as the platform's `NodeServices.layer`      |
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
@@ -98,7 +100,7 @@ And footage meant to be watched: a storyboard performed with a drawn pointer, pa
 
 ## Development
 
-Read [Contributing](CONTRIBUTING.md), the applicable package guide and [AGENTS.md](AGENTS.md). The repository builds into a pinned upstream Effect Agent compatibility workspace. All three owned packages use one coordinated candidate version; the upstream framework pins remain separate.
+Read [Contributing](CONTRIBUTING.md), the applicable package guide and [AGENTS.md](AGENTS.md). The repository builds into a pinned upstream Effect Agent compatibility workspace. All three owned packages use one coordinated version; the upstream framework pins remain separate.
 
 ```sh
 # Use pinned Node 24.14.1 and Bun 1.4.2.
@@ -107,10 +109,9 @@ cd .work/upstream/tree
 ./node_modules/.bin/vp run -F effect-browser check
 ./node_modules/.bin/vp run -F effect-browserbase check
 ./node_modules/.bin/vp run -F effect-agent-browser check
-./node_modules/.bin/vp run check:integration
 ```
 
-Package unit tests stay with their owners. Consumers test their own code through `effect-browser/testing`, which runs the real session owner over a scripted engine, and `effect-browserbase/testing`, which composes the real account and browser Layers over a scripted control plane; neither needs Chromium, Playwright or credentials, and neither establishes anything about a hosted provider. Source-only regressions that combine private provider and browser boundaries live in `test/integration` and use the same Vite+ runner. Installed-package consumers cover resources, Chromium, hosted browser integration, Chromium agents and hosted agents on both Node and Bun. Production import checks keep framework/provider dependencies out of the common runtime and Chromium process code out of its root.
+Package unit tests stay with their owners. Consumers test their own code through `effect-browser/testing`, which runs the real session owner over a scripted engine, and `effect-browserbase/testing`, which composes the real account and browser Layers over a scripted control plane; neither needs Chromium, Playwright or credentials, and neither establishes anything about a hosted provider. The repository's own regressions use the same entries: owner regressions run over the scripted engine in `packages/browser/test`, and provider regressions compose the real Browserbase Layers over `effect-browserbase/testing` in `packages/browserbase/test`. Installed-package consumers cover resources, Chromium, hosted browser integration, Chromium agents and hosted agents on both Node and Bun. Production import checks keep framework/provider dependencies out of the common runtime and Chromium process code out of its root.
 
 Ordinary CI is unpaid and read-only. [Hosted checks](docs/HOSTED.md) and [publication](docs/RELEASING.md) require separate authorization. [Security](SECURITY.md) describes the host trust boundary. Historical releases and media evidence retain their original source identity in [Status](docs/STATUS.md).
 

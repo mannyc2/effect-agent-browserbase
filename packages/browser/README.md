@@ -324,6 +324,15 @@ seen.viewport; // { clippedText, coveredText, uncertainText, unreachableControls
 
 Visibility here is geometry and hit-testing, never a pixel comparison, and the counts say which was which. Text is kept when its line boxes intersect the viewport and the browser finds its own element at a sampled point. A text node that crosses the viewport edge contributes only its lines on screen (`clippedText`). Text behind another element is left out (`coveredText`). Text under something that takes no pointer events cannot be hit-tested at all, so it is left out as `uncertainText` rather than called visible. `exhausted` means the traversal budget ran out first and the reading is known to be incomplete. Canvas pixels and compositing effects are not interpreted.
 
+`match` narrows a reading, in either scope, to what contains a piece of text, ignoring case: text lines, and controls whose label contains it. A select is kept when its own label or any of its option labels matches, with its options beside it. The filter runs inside the page before `maxControls` and `maxTextBytes` are spent, so twenty header links cannot crowd out the one control asked for:
+
+```ts
+const found = yield * session.observe({ scope: "document", match: "create account" });
+found.match; // "create account"
+```
+
+It filters what is read and never searches for, re-finds or substitutes a node: references still come from the reading itself, with every exact-node check. What a matched reading leaves out is not evidence of absence, which is why it names its `match`.
+
 An `Observation` is safe to show a model, and the adapter's `browser_inspect` Tool returns it as is. It therefore carries no destination, form target or field value, in either scope. What a host needs to decide whether a control may be acted on is a separate, host-only read from the exact node:
 
 Controls also carry optional `checked`, `selected`, `inputType` and `required`. Native checkbox
@@ -355,6 +364,8 @@ yield *
 
 Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the owner's permit is held, where waiting on a model or a network call would stall every other operation. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
 
+`fillElement` also refuses, undispatched, what the maintained engine would otherwise refuse only after dispatch, where the unknown outcome would fence the owner: a hidden control (`not-visible`), a disabled one (`disabled`), one that is not an editable input, textarea or content-editable element, and text that a `number`, `date`, `time`, `range` or other value-typed input would not keep (`unsupported`). The value is checked on a detached copy with the same constraints; the page's own control is not touched until the fill is sent.
+
 ### Exact native option selection
 
 `selectOption(reference, options, admission?)` selects once on the native `<select>` named by
@@ -381,6 +392,33 @@ are never replayed. Selection emits ordinary native select input/change events t
 maintained engine, returns `ActionResult` and retires the observation on that page. It does not
 claim the website finished work triggered by those events. The same synchronous host `admission`
 used for exact-node input applies to the selected control.
+
+### Filling a form in one operation
+
+`fillForm(request, admission?, options?)` sets several controls of one observation, in order, then optionally clicks one submit control:
+
+```ts
+const result =
+  yield *
+  session.fillForm({
+    observationId: seen.observationId,
+    fields: [
+      { elementId: email, value: "ada@example.test" },
+      { elementId: terms, checked: true },
+      { elementId: plan, options: [pro] },
+    ],
+    submit: create,
+  });
+// { fields: [{ elementId, status: "set" | "unchanged" }], submitted, url, stopped? }
+```
+
+Each field gives exactly one of `value`, text that replaces the contents of an input, textarea or content-editable element; `checked`, the state a checkbox, radio or switch should end in, clicked only when it differs, and a native radio is never asked to clear itself; or `options`, issued option IDs of a native select exactly as for `selectOption`. A form has at most 32 fields, each control at most once, and its submit control is not also one of its fields.
+
+Every step is its own admitted and charged action on the exact observed node, after the same fresh checks as `fillElement`, `selectOption` and `clickElement`, including the host's `admission` policy. One difference is deliberate: a control may have become enabled since it was observed, such as a submit button a form enables once it is complete, but it must be enabled when its step runs. The observation stays usable for this form's own steps only. Navigation, a page hold or any other caller's action still retires it, and the form retires it when it ends.
+
+After each dispatched step, the page's own handlers get at least two rendered frames and `settleMillis` (50 by default, at most 5000, 0 to skip). A text field is then left, as a person moving on would leave it, so formatting a page applies on blur belongs to that step. Before submit, `verify` (true by default) reads every field again and stops the form when one no longer holds what its own step left there: a re-render, an asynchronous reset, anything that changed a field after it was set. What was read is compared on the host and never returned.
+
+The first refused or uncertain step ends the form, and nothing after it is sent. A form is not a transaction: fields set before the stop stay set, and `stopped` says where it ended (`field`, `verify` or `submit`) and why, as a `BrowserError` whose outcome says whether that step itself was dispatched. A toggle the page would not change stops with `failed` and `rejected`. `submitted` is true only when the submit click completed. The operation fails outright only when its first step does, exactly as that single action would.
 
 ### Bounded waits that leave room for recording
 
@@ -647,7 +685,7 @@ Only explicit trusted-host `Unrestricted` network policy is implemented. `ExactH
 
 `effect-browser/testing` opens the real owner over a scripted native engine. `Testing.open(script, options)` returns a `ScriptedSession<E>`: the same `BrowserSession<E>` that Chromium and Browserbase return, and admission, budgets, staleness, dispatch evidence, capture accounting, page holds and typed callbacks are the production code paths. Only the pages and the native outcomes are scripted, so an application, a Toolkit composition or a Layer runs on the pinned Node and Bun with no Chromium process, no Playwright installation and no credentials. The defaults are the ones a Chromium launch would use: an unrestricted policy, a 1280×720 viewport and a ten-second action timeout.
 
-A script lists documents by address, each with its text and the controls it offers. A control's `id` becomes its issued `elementId`, and observations are numbered `observation-1`, `observation-2`, …, so a scripted model turn or a stored expectation can name a node statically. A `link` or a submit control carries a `destination`, which is both its host-only destination fact and where activating it leads; a plain button navigates through `activates` and reports no destination, as a real `onclick` handler has none, and the schema refuses a destination where a real document would report none. Navigating to an unlisted address reaches an empty document at that address.
+A script lists documents by address, each with its text and the controls it offers. A control's `id` becomes its issued `elementId`, and observations are numbered `observation-1`, `observation-2`, …, so a scripted model turn or a stored expectation can name a node statically. A `link` or a submit control carries a `destination`, which is both its host-only destination fact and where activating it leads; a plain button navigates through `activates` and reports no destination, as a real `onclick` handler has none, and the schema refuses a destination where a real document would report none. Navigating to an unlisted address reaches an empty document at that address. A checkbox or radio `input` without `checked` starts unchecked, as a real one does. `fillForm` and matched readings take the same steps over the script: a text step records its value in `document.values` and leaves the control, a toggle is clicked only when it differs, options are the observation's issued option IDs, and `next("fill-form", …)` arms the next step, verification read or submit.
 
 ```ts
 import { expect, it } from "@effect/vitest";
@@ -703,9 +741,9 @@ it.effect("an unknown click is never replayed", () =>
 );
 ```
 
-`browser.control` is the test's side of the engine. `next(operation, outcome)` arms what the next admitted call of one operation does. `Fail` with `outcome: "unknown"` dispatches and then fails, so the owner fences the session and refuses every later mutation `Closed` and `undispatched`; `Fail` with `undispatched` or `rejected` never dispatches. `Hold` parks the call at a `Gate` before or after dispatch, so a test can interrupt or time out a call at a known point and then check what the owner made of it. `Disconnect` drops the connection inside the call. `calls` is the recorder: every admitted call with its operation, page, node, `dispatched` and `settled`, and never a filled value, typed text or address; `document.values` and `document.files` hold those separately. `document.replace` swaps the page's document as a navigation would, so retained nodes and pending waits go stale and a capture learns of a new document; `document.update` changes the same document in place, so controls that keep their `id` keep their identity and waits re-evaluate. `capture.emit` hands a frame to a running interval, `invoke` calls a registered binding as a page would, and `disconnect` drops the connection outside any call. `closeChecked` returns a `ScriptedCleanupResult`, and `onCleanup` receives it, as the concrete owners do.
+`browser.control` is the test's side of the scripted browser. The browser outlives any one connection, as a keep-alive browser does: a reconnection to the same address finds the pages it left, and the control keeps working while no connection is open, so a test can change a page while its owner is detached. `connections` lists every connection made to that browser and how each ended so far (`open`, `closed`, `dropped`, `close-failed`, or `refused` by the script's `connections: ["refuse", …]`), which makes a connection an owner left open visible. `next("disconnect", …)` scripts the owner's native teardown: `Fail` makes it fail, so the receipt reports `connection: "failed"` with a `disconnect` issue, and `Hold` parks it at a gate however long cleanup waits. A navigation stop is recorded in `calls` as `navigate-stop`, and its arms apply before or after it is sent. The rest of `browser.control`: `next(operation, outcome)` arms what the next admitted call of one operation does. `Fail` with `outcome: "unknown"` dispatches and then fails, so the owner fences the session and refuses every later mutation `Closed` and `undispatched`; `Fail` with `undispatched` or `rejected` never dispatches. `Hold` parks the call at a `Gate` before or after dispatch, so a test can interrupt or time out a call at a known point and then check what the owner made of it. `Disconnect` drops the connection inside the call. `calls` is the recorder: every admitted call with its operation, page, node, `dispatched` and `settled`, and never a filled value, typed text or address; `document.values` and `document.files` hold those separately. `document.replace` swaps the page's document as a navigation would, so retained nodes and pending waits go stale and a capture learns of a new document; `document.update` changes the same document in place, so controls that keep their `id` keep their identity and waits re-evaluate. `capture.emit` hands a frame to a running interval, `invoke` calls a registered binding as a page would, and `disconnect` drops every open connection outside any call. `closeChecked` returns a `ScriptedCleanupResult`, and `onCleanup` receives it, as the concrete owners do.
 
-Time is the caller's clock. In-flight navigations, waits, holds and callback deadlines run under the context the session was opened in, so under `it.effect` from `@effect/vitest` a `TestClock.adjust` advances them and nothing real elapses, while `it.live` runs them in real time. `Testing.binding(script)` is the same engine as an opaque `BrowserBinding`, with one control handle per connection, for code that constructs a runtime itself; `Testing.jpeg()` is a small valid JPEG for frames.
+Time is the caller's clock. In-flight navigations, waits, holds and callback deadlines run under the context the session was opened in, so under `it.effect` from `@effect/vitest` a `TestClock.adjust` advances them and nothing real elapses, while `it.live` runs them in real time. `Testing.binding(script)` is the same engine as an opaque `BrowserBinding` for code that constructs a runtime itself; its `browsers` has one control handle for each address connected to, in first-connection order; `Testing.jpeg()` is a small valid JPEG for frames.
 
 Randomness is scripted too. The owner's ids and handoff tokens come from `Testing.sequentialCrypto`, a `Crypto` Layer whose bytes count up from one, so `Testing.open` requires no platform service and its values repeat from run to run. A provider Layer built over `Testing.binding` still requires a `Crypto`; provide `Testing.sequentialCrypto` to keep that test free of a platform package. It is not random and computes no digest, so never give it to a real browser.
 
@@ -733,7 +771,7 @@ The native driver, action permits, mutable capture leases and registry lookup ar
 | `browser-runtime`        | Supported construction for integrations supplying browser lifetimes                   |
 | `testing`                | The real owner over a scripted engine: scripts, armed outcomes, a call recorder       |
 
-The root intentionally excludes the Chromium namespace. Import its entry point explicitly. Source-only cross-package regression tests live in the repository's `test/integration`; they are not exported or shipped.
+The root intentionally excludes the Chromium namespace. Import its entry point explicitly.
 
 ## Validation
 

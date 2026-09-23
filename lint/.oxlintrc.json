@@ -1,5 +1,5 @@
 {
-  // Lint policy for the packages this repository owns and their integration tests. Acceptance
+  // Lint policy for the packages this repository owns. Acceptance
   // runs Oxlint with this file alone and denies warnings, so every rule here, including the
   // preset's warnings, blocks. An exception names its reason in the directive:
   //   // oxlint-disable-next-line <rule> -- <why this site is an exception>
@@ -167,8 +167,7 @@
       "files": [
         "**/packages/*/test/**/*.ts",
         "**/packages/*/examples/**/*.ts",
-        "**/packages/browserbase/hosted/**/*.ts",
-        "**/test/integration/**/*.ts"
+        "**/packages/browserbase/hosted/**/*.ts"
       ],
       "rules": {
         "effecttsgo/async-function": "off",

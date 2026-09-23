@@ -36,7 +36,6 @@ const ownedProjects = {
   "packages/browser/tsconfig.json": { noUncheckedIndexedAccess: true },
   "packages/browserbase/tsconfig.json": { noUncheckedIndexedAccess: true },
   "packages/agent-browser/tsconfig.json": { noUncheckedIndexedAccess: undefined },
-  "test/tsconfig.json": { noUncheckedIndexedAccess: true },
 };
 
 test("every owned TypeScript project opts into the same strict compiler checks", () => {
@@ -114,7 +113,7 @@ test("the Oxlint and tsgolint pins agree with the contributor toolchain table", 
 
 const ownedSources = execFileSync(
   "git",
-  ["ls-files", "-z", "--", "packages/browser", "packages/browserbase", "packages/agent-browser", "test"],
+  ["ls-files", "-z", "--", "packages/browser", "packages/browserbase", "packages/agent-browser"],
   { cwd: root, encoding: "utf8" },
 ).split("\0").filter((path) => /\.[cm]?ts$/.test(path));
 

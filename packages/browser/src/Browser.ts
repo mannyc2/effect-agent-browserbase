@@ -6,6 +6,9 @@ import type {
   BrowserDiagnostics,
   Checkpoint,
   CheckpointOptions,
+  FillFormOptions,
+  FillFormRequest,
+  FillFormResult,
   FillRequest,
   HoverRequest,
   InputReceipt,
@@ -192,6 +195,22 @@ export interface BrowserSession<E = never> extends TargetOperations {
     text: string,
     admission?: ElementAdmission,
   ) => Effect.Effect<InputReceipt, BrowserError>;
+  /**
+   * Set several controls of one observation in order, then optionally click one submit control.
+   * Every step acts on the exact observed node after the same fresh checks as `fillElement`,
+   * except that a control may have become enabled since it was observed, and each is admitted
+   * and charged as its own action. The observation stays usable for this form's own steps only;
+   * anything else that changes the page still retires it, and the form retires it when it ends.
+   * The first refused or uncertain step ends the form. Submit is sent only after every field
+   * succeeded and, unless `verify` is false, still holds what its step left there. Fields set
+   * before a stop stay set. It fails only when its first step does; otherwise `stopped` says
+   * where it ended and why.
+   */
+  readonly fillForm: (
+    request: FillFormRequest,
+    admission?: ElementAdmission,
+    options?: FillFormOptions,
+  ) => Effect.Effect<FillFormResult, BrowserError>;
   readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
   /** List frames on one exact page without selecting it. */

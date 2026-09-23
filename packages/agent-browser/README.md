@@ -1,10 +1,10 @@
 # Browser tools for Effect Agent
 
-`effect-agent-browser` connects [`effect-browser`](../browser/README.md) to Effect Agent. One adapter, maintained Toolkit and host callback implementation support both self-managed Chromium and Browserbase. The host supplies its required peers explicitly: `effect-browser@0.2.0-beta.0` and `effect-agent@0.1.0-beta.102` for this candidate. These exact prerelease peers express the qualified combination; supply matching versions and keep one runtime instance across the application and adapter. The Effect peer remains `^4.0.0-rc.115`, with only rc.115 qualified. The adapter does not install Browserbase or own a Playwright peer.
+`effect-agent-browser` connects [`effect-browser`](../browser/README.md) to Effect Agent. One adapter, maintained Toolkit and host callback implementation support both self-managed Chromium and Browserbase. The host supplies its required peers explicitly: `effect-browser@0.2.0-beta.0` and `effect-agent@0.1.0-beta.102` for this release. These exact prerelease peers express the qualified combination; supply matching versions and keep one runtime instance across the application and adapter. The Effect peer remains `^4.0.0-rc.115`, with only rc.115 qualified. The adapter does not install Browserbase or own a Playwright peer.
 
 ## Public entry points
 
-`tools` exports the maintained Toolkit, direct `BrowserSession` handlers, supervised host composition and separate pointer/wheel, keyboard and option-selection opt-ins. `adapter` exports `fromSession` and `interactiveLayer` for code that specifically needs Effect Agent's provider-neutral `InteractiveBrowser` contract. The root exports those two namespaces. This package has no testing entry point of its own: a test gives the Tools a session from `effect-browser/testing` or a Layer from `effect-browserbase/testing`, exactly as an application gives them a Chromium or Browserbase session.
+`tools` exports the maintained Toolkit, direct `BrowserSession` handlers, supervised host composition and separate reading, pointer/wheel, keyboard, option-selection, wait and form opt-ins, with instructions, an Agent policy helper and scheduling for them. `adapter` exports `fromSession` and `interactiveLayer` for code that specifically needs Effect Agent's provider-neutral `InteractiveBrowser` contract. The root exports those two namespaces. This package has no testing entry point of its own: a test gives the Tools a session from `effect-browser/testing` or a Layer from `effect-browserbase/testing`, exactly as an application gives them a Chromium or Browserbase session.
 
 ## One session, chosen by the host
 
@@ -20,12 +20,33 @@ import { Chromium } from "effect-browser/chromium";
 
 const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
   BrowserTools.run(browser, agentProgram, {
-    observationScope: "viewport",
+    maxControls: 32,
+    admission: { admit: (facts) => facts.inputType !== "password" },
   }),
 ).pipe(Effect.provide(Chromium.layer().pipe(Layer.provide(NodeServices.layer))));
 ```
 
 Both browser Layers take Effect's `Crypto` from the host platform, here `NodeServices.layer`.
+
+A complete agent declares the Tools it may use and takes its instructions and policy from them:
+
+```ts
+import { Toolkit } from "effect/unstable/ai";
+
+const toolkit = Toolkit.merge(
+  BrowserTools.observedToolkit,
+  BrowserTools.observedFormToolkit,
+  BrowserTools.readingToolkit,
+);
+
+const agent = Agent.make("browser", {
+  input: Schema.String,
+  output: Schema.Struct({ summary: Schema.String }),
+  instructions: BrowserTools.instructions(toolkit),
+  toolkit,
+  policy: BrowserTools.policy({ maxTurns: 8, maxDuration: "2 minutes" }),
+});
+```
 
 For Browserbase, use `BrowserbaseBrowser.open(...)` from `effect-browserbase/browser`, supplying its account and launch configuration, then pass that session to the same `BrowserTools` functions. Nothing in the tool implementation branches on the provider. The model does not choose the account, browser source, credentials, endpoint, launch options or capture settings.
 
@@ -68,13 +89,16 @@ There is one `AdaptedSession<S>` type containing `browser` and `handle`. Reacqui
 
 ## Host observation and exact-control policy
 
-`handlers(browser, options)` keeps document inspection and the original five Tools by default. The host can select `observationScope: "viewport"` and pass `admission: ElementAdmission`. The same options apply to `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, `makeHost` and `run`:
+Every handler function, `makeHost` and `run` take the same `HandlerOptions`. Each is checked once, when the host or handler Layer is built: an invalid value fails there with a `Configuration` reason that names it, and never reaches a model as a failed call.
 
 ```ts
 const handlers = BrowserTools.handlers(browser, {
-  observationScope: "viewport",
-  maxTextBytes: 8192,
+  observationScope: "viewport", // the default; "document" reads the whole page
+  maxTextBytes: 8192, // text a model is shown from one reading
   maxControls: 16,
+  resultMaxBytes: 48 * 1024, // the bound on every encoded Tool result
+  continuationBytes: 32 * 1024, // text read per reading, for browser_read_more
+  form: { verify: true, settleMillis: 50 }, // how browser_fill_form proceeds
   admission: {
     admit: (facts) =>
       facts.inputType !== "password" &&
@@ -84,11 +108,50 @@ const handlers = BrowserTools.handlers(browser, {
 });
 ```
 
-Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof. Scout consumers can still explicitly use document scope.
+Observations read the viewport by default: what a person would see, and what `browser_scroll` moves. `browser_inspect` takes two optional parameters. `scope` asks for the whole document or the viewport for one reading. `find` keeps only controls whose label contains its text, and lines containing it, and it is applied inside the page before `maxControls` and `maxTextBytes` are spent, so a crowded header cannot hide the control a model is looking for. A matched reading names its `match`: what it leaves out is not evidence of absence. Neither parameter can widen the host's bounds, and references still come from the reading itself.
 
-The policy runs for maintained `browser_click`, `browser_fill` and `browser_hover` on fresh facts from the exact observed node. The owner first rejects replaced or changed controls, independently of that policy. `admit` is synchronous under the owner's permit; it returns a boolean. False, a thrown exception or a non-boolean result fails `denied/undispatched`, without projecting the exception to the model. Policy and destination/type/autocomplete/form facts are host-only and are never Tool parameters. Asynchronous application checks belong before dispatch and retain their own Effect errors, services and cancellation; they do not replace this final synchronous policy. Native input is still not atomic with DOM validation: page script can run after validation and before input arrives.
+Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof.
+
+Every result is fitted under `resultMaxBytes` (16 KiB–1 MiB, 48 KiB by default, under Effect Agent's default 50 KiB `toolResultBounds`), so the engine never cuts one in the middle of its JSON. A reading that does not fit loses text first and then trailing controls, never part of a reference it keeps, and says so through `textTruncated`, `controlsTruncated` and a select's `optionsTruncated`.
+
+`observe` replaces how the Tools read the page, for `browser_inspect` and for the reading after an action. It receives the request (scope, optional `match`, text and control bounds) and the borrowed session, and must return a reading that session issued, because later actions name its references. A host can wait for its own readiness signal first, retry, or narrow the request:
+
+```ts
+const host =
+  yield *
+  BrowserTools.makeHost(browser, {
+    observe: (request, session) =>
+      appReady.pipe(Effect.andThen(session.observe({ ...request, maxControls: 24 }))),
+  });
+```
+
+`admission` runs for every exact-node Tool (`browser_click`, `browser_fill`, `browser_hover`, `browser_press`, `browser_type`, `browser_select_option`, each step of `browser_fill_form` and their `_and_inspect` variants) on fresh facts from the exact observed node. The owner first rejects replaced or changed controls, independently of that policy. `admit` is synchronous under the owner's permit; it returns a boolean. False, a thrown exception or a non-boolean result fails `denied/undispatched`, without projecting the exception to the model. Policy and destination/type/autocomplete/form facts are host-only and are never Tool parameters. Asynchronous application checks belong before dispatch and retain their own Effect errors, services and cancellation; they do not replace this final synchronous policy. Native input is still not atomic with DOM validation: page script can run after validation and before input arrives.
 
 Passive `checkpoint` does not replace the observation used by Tools. After a page hold/resume, call `revalidateElement` on the retained exact reference before dispatch; unchanged, admissible controls remain usable, while replacements and changed control facts fail without substitution. The native AgentRuntime regression exercises this composition on the same owner.
+
+## Reading on past what a model was shown
+
+Merge `readingToolkit` to give a model `browser_read_more`. Each reading reads `continuationBytes` of text (32 KiB by default, at least `maxTextBytes`, at most 128 KiB) while the model is shown `maxTextBytes`; `browser_read_more({ observationId })` returns the next part of the latest reading's text, with `remaining` and the page's own `textTruncated`. It reads nothing new from the page, spends no browser action and changes no reference; an older reading's ID fails `stale`. A browser policy whose `maxReturnedBytes` is too small for the continuation reads `maxTextBytes` instead. The latest reading is kept per borrowed session, so every handler Layer over that session continues the same one.
+
+## Forms in one call
+
+Every action on a page retires the observation its references came from, so a model that sends three fills and a click in one response gets one fill and three `stale` refusals, and each refusal counts toward Effect Agent's `repeatedFailureLimit`. `formToolkit` adds `browser_fill_form`, and `observedFormToolkit` its `_and_inspect` variant:
+
+```ts
+{
+  observationId, // from the latest observation
+  fields: [
+    { elementId, value: "ada@example.test" }, // replaces the text
+    { elementId, checked: true }, // the state a toggle should end in
+    { elementId, options: [optionId] }, // a native select's issued options
+  ],
+  submit: buttonId, // optional; clicked once every field is set and still holds
+}
+```
+
+It runs on `effect-browser`'s `fillForm`: every step is the exact-node action it replaces, with the same fresh checks and the host's `admission`, and each is charged as one action. The observation stays usable for the form's own steps only. Before submit the form reads every field again, unless the host sets `form: { verify: false }`, and does not submit when one was changed after its step. A completed form returns each field's `status` (`set`, or `unchanged` for a toggle already in the requested state), `submitted` and the URL. A form that stopped fails with `BrowserFormFailure`: the compact `reason` and `outcome` of the step it stopped at, its `stage` (`field`, `verify` or `submit`) and `elementId`, and the fields it `completed`, which stay set. The whole form costs one model turn and at most one counted failure.
+
+`browser_fill_form` clicks and selects as well as filling text, so it carries the authority of `browser_click` and `browser_select_option` together; no other Toolkit gains it.
 
 ## Optional native input
 
@@ -157,10 +220,11 @@ is caller-managed. No existing toolkit gains the wait tool automatically.
 ## Optional observation results after input
 
 Choose `observedToolkit` in place of the default toolkit when mutation results should include a
-fresh inspection. It contains the unchanged `browser_inspect` and separately named
-`browser_navigate_and_inspect`, `browser_click_and_inspect`, `browser_fill_and_inspect` and
-`browser_scroll_and_inspect`. `observedNativeToolkit`, `observedKeyboardToolkit` and
-`observedSelectionToolkit` separately offer the corresponding native, keyboard and select
+fresh inspection, which saves a model turn after every action. It contains the unchanged
+`browser_inspect` and separately named `browser_navigate_and_inspect`,
+`browser_click_and_inspect`, `browser_fill_and_inspect` and `browser_scroll_and_inspect`.
+`observedNativeToolkit`, `observedKeyboardToolkit`, `observedSelectionToolkit` and
+`observedFormToolkit` separately offer the corresponding native, keyboard, select and form
 operations with `_and_inspect` names. Distinct names keep the original Tool success schemas and
 handler identities intact; only the groups explicitly declared by the agent are available.
 
@@ -186,23 +250,23 @@ The observation is sampled afterwards through normal selected-target admission, 
 with input; its target and URL identify what was actually inspected.
 
 The extra `observe` spends one additional model-action allowance, and uses the same `maxTextBytes`,
-`maxControls` and `observationScope` limits. `observedResultMaxBytes` bounds the whole encoded
-action-plus-observation result, including JSON and action URL: default 50 KiB, allowed 50 KiB–1 MiB.
-The minimum leaves room for any accepted action result plus an unavailable-observation envelope.
-An invalid host bound is rejected before input. If a successful inspection exceeds the envelope
-bound, only that inspection is replaced with `Unavailable/limit`; the action remains intact.
-Match the agent's `toolResultBounds.maxBytes` to this bound or higher so the framework does not
-truncate the envelope again. Token budgeting and history compaction still belong to the Agent
-policy and selected model; these byte bounds are not a token-count estimate.
+`maxControls`, `observationScope` and `observe` settings. The whole encoded action-plus-observation
+result is fitted under `resultMaxBytes`: the reading loses text, then trailing controls, and only a
+reading whose fixed fields alone exceed the bound becomes `Unavailable/limit`; the action remains
+intact. Keep the agent's `toolResultBounds.maxBytes` at this bound or higher, as
+`BrowserTools.policy` does, so the framework does not truncate a result again. Token budgeting and
+history compaction still belong to the Agent policy and selected model; these byte bounds are not a
+token-count estimate. For long sessions set the Agent's `contextTokenLimit`, so compaction prunes
+old readings that later actions have already made stale.
 
-`ObservedActionResult`, `ObservedNavigationResult`, `ObservedInputResult` and `FollowUpObservation`
-are exported schemas. `host.observedHandlers` shares the host's lane; `observedHandlers(browser,
+`ObservedActionResult`, `ObservedNavigationResult`, `ObservedInputResult`, `ObservedFormResult`
+and `FollowUpObservation` are exported schemas. `host.observedHandlers` shares the host's lane; `observedHandlers(browser,
 options)` provides the caller-managed variant handlers. The default toolkit and existing result
 formats remain unchanged.
 
 ## Scoped navigation and receipt callbacks
 
-`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, `waitHandlers`, `observedHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` accepts these optional host callbacks:
+`makeHost(browser, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `readingHandlers`, `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, `waitHandlers`, `formHandlers`, `observedHandlers`, their merged `layer`, `failure`, `toolFailures`, and `run(effect)`. Its `HostOptions<E, R>` adds `lane` and `scheduling` (below) and these optional host callbacks:
 
 `onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
 
@@ -231,21 +295,29 @@ never construct an ID from an assumed counter.
 
 ### Concurrent tool calls
 
-Every `makeHost` owns one blocking invocation lane shared by its handler Layers and all
-programs run through that host. Concurrent calls, including Effect Agent's default concurrency
-of four, wait for their first execution. The lane stays held until the complete tool finishes:
-navigation completion, callback finalizers and required stop cleanup all precede the next call.
-Calls from different toolkit groups share it. A queued exact-node call can still be stale when
-admitted if earlier input retired its observation; sequencing never refreshes references or
-replays input.
+`host.run` and `Tools.run` schedule this package's Tools sequentially by default: they add every
+browser Tool to Effect Agent's `RunToolScheduling`, keeping whatever the caller already provides,
+so the engine runs each browser call alone and in the order the model declared it, while other
+Tools still run concurrently between them. A host that passes `RunOptions.scheduling` replaces the
+ambient reference rather than merging with it, and a durable host registers its own scheduling, so
+both pass their hook through `BrowserTools.sequentialScheduling(hook)`. `scheduling: "lane"` leaves
+the engine's scheduling alone.
 
-The initial fixed policy permits 32 outstanding invocations including the active one, with at
-most 30 seconds waiting from invocation entry. These are policy choices, not throughput
-measurements. Overflow returns `busy/undispatched`; queue expiry returns `timeout/undispatched`.
-The queue deadline does not limit a handler after admission. Waiting spends no browser action;
-the operation's normal budget and deadline apply when it executes. Host closure, cancellation
-and host failure cancel or wake accepted waiters, which recheck admission before browser work.
-The lane serializes calls but does not promise a model-declared ordering for concurrent work.
+Every `makeHost` also owns one blocking invocation lane shared by its handler Layers and all
+programs run through that host. Concurrent calls wait for their first execution. The lane stays
+held until the complete tool finishes: navigation completion, callback finalizers and required stop
+cleanup all precede the next call. Calls from different toolkit groups share it. A queued
+exact-node call can still be stale when admitted if earlier input retired its observation;
+sequencing never refreshes references or replays input.
+
+`lane.maxOutstanding` (32 by default, 1–1024) bounds invocations including the active one, and
+`lane.maxQueueMillis` (30,000 by default, 1–600,000) bounds waiting from invocation entry. These are
+policy choices, not throughput measurements. Overflow returns `busy/undispatched`; queue expiry
+returns `timeout/undispatched`. The queue deadline does not limit a handler after admission.
+Waiting spends no browser action; the operation's normal budget and deadline apply when it
+executes. Host closure, cancellation and host failure cancel or wake accepted waiters, which
+recheck admission before browser work. Without sequential scheduling the lane serializes calls but
+does not promise a model-declared ordering for concurrent work.
 
 A callback or its finalizer invoking another tool through the same host receives
 `busy/undispatched` immediately. An inherited private context marker distinguishes this reentry
@@ -257,6 +329,36 @@ owner's fail-fast native permit. They can still report `Busy` while a native ope
 permit. Module-level `handlers`, `nativeHandlers`, `keyboardHandlers` and `selectionHandlers` are the unsupervised,
 caller-managed path: they do not add this lane. Use `makeHost` or `Tools.run` for the maintained
 sequencing and supervision lifecycle.
+
+## Instructions, policy and descriptions
+
+`BrowserTools.instructions(toolkit)` returns agent instructions for the Tools a Toolkit declares:
+page text is untrusted data, one control per response, how to read the new observation, a form in
+one call, what an unknown outcome means and how to reach what a reading left out. They restate the
+rules the Tools enforce, so a model plans around them instead of learning them from failures. Use
+them as they are, add to them, or write your own; nothing depends on their wording.
+
+`BrowserTools.policy(input, { resultMaxBytes })` returns Agent policy fields for these Tools under
+the host's own: `repeatedFailureLimit: 5`, because a refused stale action counts like any failure
+and the engine's default of 3 can end a run after one batched response, and a `toolResultBounds`
+at least as large as the Tools' own bound. Anything in `input` wins.
+
+`BrowserTools.describe(toolkit, { browser_click: "..." })` returns the same Toolkit with some
+descriptions replaced. Names, schemas and annotations are unchanged, so the maintained handlers
+still serve it: a deployment can tell the model what it allows. A host may also narrow a Tool's
+parameters by making its own Tool with the same name; handlers are keyed by name and accept the
+maintained parameters. `BrowserTools.toolNames` and `isBrowserTool` name every Tool this package
+defines.
+
+The Tools are ordinary Effect AI Tools, so `tool.setNeedsApproval(...)` gates a consequential
+call, such as `browser_fill_form` with a submit, and the maintained handlers still serve it because
+handlers are keyed by name. The host decides through Effect Agent's `approval` run option, for
+example `toRunApprovalHook(...)` from `effect-agent/run-hooks`. Unlike a synchronous `admission`
+refusal, an explicit denial fails the run with `AgentApprovalDenied` rather than returning a
+failure to the model.
+
+Every Tool's parameters are an object schema with described fields, and a conformance test runs
+each through the pinned OpenAI and Anthropic providers' own schema transforms and wire round trip.
 
 ## Testing an agent without a browser process
 
@@ -326,9 +428,9 @@ phase, reason, generation, busy and unresolved-dispatch facts without becoming m
 The browser's separate `diagnostics` keeps bounded policy/native records; typed callback causes
 remain separate. All these snapshots remain readable after host closure.
 
-The generic package's `BrowserError` carries a tagged `reason` and required `outcome`. The Tools return only `stale`, `busy`, `denied`, `not-found`, `ambiguous`, `not-visible`, `not-focused`, `limit`, `timeout`, `closed`, or `failed`, alongside the unchanged `undispatched`, `rejected`, or `unknown` outcome. An `Interrupted` navigation projects to `stale/unknown`; that does not authorize replay. Rate limiting projects to `busy`, with retry timing retained for the host. Provider status, diagnostic paths, limit measurements and native exceptions never enter this failure projection.
+The generic package's `BrowserError` carries a tagged `reason` and required `outcome`. The Tools return only `stale`, `busy`, `denied`, `not-found`, `ambiguous`, `not-visible`, `not-focused`, `disabled`, `unsupported`, `limit`, `timeout`, `closed`, or `failed`, alongside the unchanged `undispatched`, `rejected`, or `unknown` outcome. `disabled` asks for a control that is not enabled now; `unsupported` for input a control cannot take, such as text in a checkbox or a date it would not keep. An `Interrupted` navigation projects to `stale/unknown`; that does not authorize replay. Rate limiting projects to `busy`, with retry timing retained for the host. Provider status, diagnostic paths, limit measurements and native exceptions never enter this failure projection.
 
-Read `host.toolFailures` for the original `_tag`, `operation`, tagged `reason` fields and `outcome`, plus the supplied tool-call ID. Each `ToolFailureDiagnostic` is recorded before projection; navigation start/completion, exact-node refusals and malformed typed results use the same channel. The `ToolFailureSnapshot` keeps the latest 32 entries in oldest-first order, with a `dropped` count for evictions. IDs longer than 256 UTF-16 code units are omitted with `toolCallIdOmitted: true`; an absent ID leaves that flag false. Snapshots and their recorded fields are copied and frozen. Reading them performs no browser work, takes no action permit, adds no callback services and remains possible after host closure.
+Read `host.toolFailures` for the original `_tag`, `operation`, tagged `reason` fields and `outcome`, plus the Tool's name and the supplied tool-call ID. Each `ToolFailureDiagnostic` is recorded before projection; navigation start/completion, exact-node refusals and malformed typed results use the same channel. The `ToolFailureSnapshot` keeps the latest 32 entries in oldest-first order, with a `dropped` count for evictions. IDs longer than 256 UTF-16 code units are omitted with `toolCallIdOmitted: true`; an absent ID leaves that flag false. Snapshots and their recorded fields are copied and frozen. Reading them performs no browser work, takes no action permit, adds no callback services and remains possible after host closure.
 
 ```ts
 const host = yield * BrowserTools.makeHost(browser);
@@ -349,19 +451,24 @@ The common adapter and Tools support both self-managed Chromium and Browserbase.
 
 Use the frozen Vite+ workspace described in [Contributing](../../CONTRIBUTING.md). Both owners are exercised with the actual public AgentRuntime and Toolkit, using a scripted model and real Chromium, and `test/scripted-agent.test.ts` runs the same AgentRuntime and Toolkit over the scripted engine with no browser process. The `agent` installed consumer includes Chromium and the common Tools with no Browserbase installation. The `agent-hosted` consumer adds Browserbase and exercises provider acquisition/cleanup composition through scripted provider HTTP. They preserve typed callback errors, one session identity and capture after agent execution.
 
-Native framework tests prove that the adapter Layer captures configured services while each acquired browser closes with its caller's Scope, even while the Layer remains alive. Tool regressions cover direct BrowserSession dispatch classification, exact-node pointer and keyboard input, host callback/fail-session supervision, host-scope cancellation, viewport policy and capture on the same owner. A local native pass is not hosted Browserbase or paid-model evidence.
+Native framework tests prove that the adapter Layer captures configured services while each acquired browser closes with its caller's Scope, even while the Layer remains alive. Tool regressions cover direct BrowserSession dispatch classification, exact-node pointer and keyboard input, host callback/fail-session supervision, host-scope cancellation, viewport policy and capture on the same owner. Native AgentRuntime tests also fill a whole form in one call, reach a crowded-out control with `find`, read on with `browser_read_more`, run browser calls in declared order, and show that a batched response ends a run under the engine's default failure limit but not under `BrowserTools.policy`. Every Tool's parameters are checked against the pinned OpenAI and Anthropic schema transforms, which a scripted model never exercises. A local native pass is not hosted Browserbase or paid-model evidence.
 
 ## API migration
 
-| Previous use                                                         | Current use                                                                                                                                                     |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Adapter.fromSession(browser)`                                       | `yield* Adapter.fromSession(browser, { selection: "retained" })` preserves retained behavior; choose `"current"` deliberately for follow-selection.             |
-| `AgentSession<E>` and `adapted.currentHandle`                        | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                         |
-| `BoundTarget`, `browser.bind()` and `browser.currentTarget`          | Use `TargetOperations` for common operations and `yield* browser.retain` for a checked `RetainedTarget`. Ordinary calls use the session directly.               |
-| A string from `createPage`, passed to select/close                   | `createPage` returns `PageInfo`; `selectPage(page)` and `closePage(page)` check it. `selectPage` and `selectFrame` return `void`.                               |
-| `error.reason === "limit"`, top-level `status` or `retryAfterMillis` | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                          |
-| Full host reason names in model failures                             | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                             |
-| Concrete `closeChecked` returning `void`                             | Concrete browser owners return their canonical cleanup receipt. The framework handle still returns `void`.                                                      |
-| Capture `dropped`                                                    | Capture `discarded = overflow + late + duplicates + rejected`; default buffering stays unchanged. `toolFailures.dropped` separately counts diagnostic eviction. |
+| Previous use                                                                                | Current use                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Adapter.fromSession(browser)`                                                              | `yield* Adapter.fromSession(browser, { selection: "retained" })` preserves retained behavior; choose `"current"` deliberately for follow-selection.             |
+| `AgentSession<E>` and `adapted.currentHandle`                                               | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                         |
+| `BoundTarget`, `browser.bind()` and `browser.currentTarget`                                 | Use `TargetOperations` for common operations and `yield* browser.retain` for a checked `RetainedTarget`. Ordinary calls use the session directly.               |
+| A string from `createPage`, passed to select/close                                          | `createPage` returns `PageInfo`; `selectPage(page)` and `closePage(page)` check it. `selectPage` and `selectFrame` return `void`.                               |
+| `error.reason === "limit"`, top-level `status` or `retryAfterMillis`                        | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                          |
+| Full host reason names in model failures                                                    | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                             |
+| Concrete `closeChecked` returning `void`                                                    | Concrete browser owners return their canonical cleanup receipt. The framework handle still returns `void`.                                                      |
+| Capture `dropped`                                                                           | Capture `discarded = overflow + late + duplicates + rejected`; default buffering stays unchanged. `toolFailures.dropped` separately counts diagnostic eviction. |
+| Document scope by default                                                                   | Viewport is the default. Pass `observationScope: "document"`, or let the model pass `scope: "document"` to `browser_inspect` for one reading.                   |
+| `observedResultMaxBytes`, `ObservedResultMaxBytes`, `Unavailable/limit` for a large reading | `resultMaxBytes` and the `ResultMaxBytes` schema (16 KiB–1 MiB, 48 KiB default) bound every result, and readings are fitted to them instead.                    |
+| An invalid option failing each Tool call `failed/undispatched`                              | `makeHost`, `run` and handler Layers fail when built, with a `Configuration` reason naming the option.                                                          |
+| `unsupported` and `disabled` projected to `failed`                                          | They keep their own names in `BrowserToolFailure`; match them where a switch was exhaustive.                                                                    |
+| Browser calls run concurrently, ordered only by the lane                                    | `host.run` schedules them sequentially in declared order; `scheduling: "lane"` restores the previous behaviour.                                                 |
 
 Common-operation helpers may accept `AnySession`; helpers such as the example's `turns<E>` that supervise browser failure stay generic in `E`. Binding bounds now have validated defaults, while explicit bounds retain their meaning. `NavigateRequest.timeoutMillis` is a host option and does not add a model-selected timeout to the existing URL-only navigation Tool. Added observation state is bounded and does not include field values or destinations. The earlier `Browser.scoped` inference fix changes explicit curried generic argument lists from five to four outer parameters and two to three inner parameters; ordinary call syntax remains.

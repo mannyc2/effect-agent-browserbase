@@ -15,7 +15,7 @@ This repository owns three packages, `packages/browser` (`effect-browser`), `pac
 - `effect-browser` owns the shared runtime, browser data, bindings, capture and page control. Its root must not import the Chromium process implementation; launch and borrowed loopback attachment live at `/chromium`.
 - Browserbase supplies provider lifetimes through the supported `/browser-runtime` constructor. Provider resources, receipt authorization and release/status facts remain in `effect-browserbase`.
 - `effect-agent-browser` adapts either exact session through the same tools. It calls the owner's checked cleanup and keeps typed errors and references on the original browser; it never parses provider receipts or opens another connection.
-- Package unit/native tests stay in their owning `test/`. Source-only tests combining private provider and browser implementations live at repository `test/integration`, with strict checks and the same Vite+ runner. They are never exports, native consumer inputs or published files.
+- Every test stays in its owning package's `test/`, including a regression that needs both sides: it reaches the other package only through public exports and the public testing entries (`effect-browser/testing`, `effect-browserbase/testing`). There is no repository-level test tree. Tests are never exports or published files.
 
 ## Working
 

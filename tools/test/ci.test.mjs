@@ -31,7 +31,7 @@ for (const path of ["README.md", "CONTRIBUTING.md", "docs/history/example.md", "
 for (const path of ["packages/browser/src/Browser.ts", "packages/browserbase/src/Browser.ts", "packages/browserbase/README.md", "packages/agent-browser/test/native/agent.test.ts", "tools/ci-plan.mjs", ".github/workflows/ci.yml", "docs/media/demo.mp4"]) {
   test(`owned change retains all five artifact consumers: ${path}`, () => assert.equal(classifyChanges([change(path)]).profile, "library"));
 }
-for (const path of ["test/integration/ownership.test.ts", "test/unknown.ts", "test/vite.config.ts", "upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh", "new-runtime/index.ts", ".gitignore", "docs/../hidden.md", "docs/line\nbreak.md"]) {
+for (const path of ["test/unknown.ts", "upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh", "new-runtime/index.ts", ".gitignore", "docs/../hidden.md", "docs/line\nbreak.md"]) {
   test(`integration or unknown paths require full validation: ${JSON.stringify(path)}`, () => assert.equal(classifyChanges([change(path)]).profile, "full"));
 }
 test("empty diffs, symlinks and submodules cannot become docs passes", () => {
@@ -139,9 +139,7 @@ function runnerFixture() {
   }
   write(join(dir, ".node-version"), process.versions.node + "\n");
   write(join(dir, "tools/test/fixture.test.mjs"), 'import { after, test } from "node:test"; test("substitute", () => {});\n');
-  write(join(dir, "tools/run-boundary-suite.sh"), '#!/bin/sh\necho "fixture boundary"\n');
   write(join(dir, "packages/browser/index.ts"), "export {};\n");
-  write(join(dir, "test/integration/fixture.test.ts"), "export {};\n");
   write(join(dir, "packages/browserbase/index.ts"), "export {};\n");
   write(join(dir, "packages/agent-browser/index.ts"), "export {};\n");
   write(join(dir, "lint/.oxlintrc.json"), "{}\n");
@@ -169,7 +167,7 @@ process.exit(task===process.env.CI_FIXTURE_FAIL?7:0);
 set -eu
 TREE="$1/tree"
 mkdir -p "$TREE/node_modules/.bin" "$TREE/.changeset" "$TREE/docs/guide"
-cp -r packages test lint "$TREE/"
+cp -r packages lint "$TREE/"
 cp tools/vp-fixture.mjs "$TREE/node_modules/.bin/vp"
 cp tools/vp-fixture.mjs "$TREE/node_modules/.bin/oxlint"
 chmod +x "$TREE/node_modules/.bin/vp" "$TREE/node_modules/.bin/oxlint"
@@ -198,6 +196,9 @@ printf '{"strict":true,"skipLibCheck":false}\\n' > "$2/consumers/agent/tsconfig.
   write(join(dir, "README.md"), "# Docs change\n"); commit(dir);
   const env = { ...process.env, PATH: bin + ":" + process.env.PATH, BROWSERBASE_WORK_ROOT: work, CI_FIXTURE_COMMANDS: join(work, "commands.ndjson"), GITHUB_STEP_SUMMARY: join(work, "summary.md") };
   delete env.NODE_TEST_CONTEXT;
+  // The fixture's environment, not the job's: a scheduled run's BROWSERBASE_UPSTREAM_TESTS or a
+  // full run's BROWSERBASE_TASK_CACHE must never reach the substitute runner.
+  for (const name of Object.keys(env)) if (name.startsWith("BROWSERBASE_") && name !== "BROWSERBASE_WORK_ROOT") delete env[name];
   write(join(work, "ci-plan.json"), JSON.stringify(makePlan(dir, { GITHUB_EVENT_NAME: "pull_request", CI_BASE_SHA: base })));
   return { dir, work, env };
 }
@@ -212,7 +213,7 @@ for (const profile of ["docs", "library", "full"]) {
     if (profile === "full") assert.equal(text(join(out, "upstream-tests.txt")), "reachable\n");
     assert.equal(stages.has("generic-native"), profile === "full");
     assert.equal(stages.has("browser-native"), profile === "full");
-    assert.equal(stages.has("integration-unit"), profile !== "docs");
+    assert.equal(stages.has("browser-unit"), profile !== "docs");
     assert.equal(stages.has("packed-consumer"), profile !== "docs");
     assert.equal(text(join(out, "acceptance-exit.txt")), "0\n");
     assert.match(text(join(out, "timings.tsv")), /^stage\texit_code\tduration_ms\n/);

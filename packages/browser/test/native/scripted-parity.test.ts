@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, type Scope } from "effect";
+import { Effect, Fiber, Layer, Schedule, type Scope } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, ObservedElement, type Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -22,6 +22,8 @@ const page = (consented: boolean) =>
 <button id="accept" onclick="location.assign('/?consent=1')">Accept all</button>
 <a id="terms" href="https://evil.test/terms">Terms</a>
 <input id="name" aria-label="Name" type="text">
+<input id="news" aria-label="Newsletter" type="checkbox">
+<input id="code" aria-label="Code" type="text" disabled>
 <a id="report" href="https://evil.test/" style="position:absolute;top:5000px;left:0">Report</a>`;
 
 const site = Effect.acquireRelease(
@@ -70,6 +72,8 @@ const script = (origin: string): Testing.Script => ({
         { id: "accept", kind: "button", label: "Accept all", activates: `${origin}/?consent=1` },
         { id: "terms", kind: "link", label: "Terms", destination: "https://evil.test/terms" },
         { id: "name", kind: "input", label: "Name", inputType: "text" },
+        { id: "news", kind: "input", label: "Newsletter", inputType: "checkbox" },
+        { id: "code", kind: "input", label: "Code", inputType: "text", disabled: true },
         {
           id: "report",
           kind: "link",
@@ -87,16 +91,20 @@ const script = (origin: string): Testing.Script => ({
 type Open = (
   origin: string,
   policy: BrowserPolicy,
+  actionTimeoutMillis?: number,
 ) => Effect.Effect<
   Browser.BrowserSession<BrowserError | InitializationError>,
   BrowserError | InitializationError,
   Scope.Scope
 >;
 
-const openScripted: Open = (origin, policy) =>
-  Testing.open<BrowserError | InitializationError, never>(script(origin), { policy });
+const openScripted: Open = (origin, policy, actionTimeoutMillis) =>
+  Testing.open<BrowserError | InitializationError, never>(script(origin), {
+    policy,
+    ...(actionTimeoutMillis === undefined ? {} : { automation: { actionTimeoutMillis } }),
+  });
 
-const openChromium: Open = (origin, policy) =>
+const openChromium: Open = (origin, policy, actionTimeoutMillis) =>
   Effect.gen(function* () {
     // The real owner is launched per case, so budgets and receipts start fresh each time.
     void origin;
@@ -113,6 +121,7 @@ const openChromium: Open = (origin, policy) =>
           startupTimeoutMillis: 25000,
         },
         viewport: { width: 640, height: 480 },
+        ...(actionTimeoutMillis === undefined ? {} : { actionTimeoutMillis }),
       }).pipe(Layer.provide(NodeCrypto.layer)),
     ),
   );
@@ -142,6 +151,7 @@ const failure = <A>(effect: Effect.Effect<A, BrowserError>) =>
 interface Case {
   readonly name: string;
   readonly policy?: BrowserPolicy;
+  readonly actionTimeoutMillis?: number;
   readonly run: (session: Browser.AnySession, origin: string) => Effect.Effect<void, BrowserError>;
 }
 
@@ -222,6 +232,120 @@ const cases: ReadonlyArray<Case> = [
       }),
   },
   {
+    name: "a disabled input is refused before any text is sent",
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const observation = yield* session.observe();
+
+        expect(yield* failure(session.fillElement(named(observation, "Code"), "42"))).toEqual({
+          reason: "Disabled",
+          outcome: "undispatched",
+        });
+      }),
+  },
+  {
+    name: "a form sets fields in order and stops, undispatched, at a disabled one",
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const observation = yield* session.observe();
+
+        const result = yield* session.fillForm({
+          observationId: observation.observationId,
+          fields: [
+            { elementId: named(observation, "Name").elementId, value: "Ada" },
+            { elementId: named(observation, "Newsletter").elementId, checked: true },
+            { elementId: named(observation, "Code").elementId, value: "42" },
+          ],
+          submit: named(observation, "Accept all").elementId,
+        });
+
+        expect({
+          fields: result.fields.map((field) => field.status),
+          submitted: result.submitted,
+          stage: result.stopped?.stage,
+          reason: result.stopped?.error.reason._tag,
+          outcome: result.stopped?.error.outcome,
+        }).toEqual({
+          fields: ["set", "set"],
+          submitted: false,
+          stage: "field",
+          reason: "Disabled",
+          outcome: "undispatched",
+        });
+        // What the form dispatched retired its observation.
+        expect(yield* failure(session.fillElement(named(observation, "Name"), "Grace"))).toEqual({
+          reason: "Stale",
+          outcome: "undispatched",
+        });
+      }),
+  },
+  {
+    name: "a verified form submits once and reports where it led",
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const observation = yield* session.observe();
+
+        const result = yield* session.fillForm({
+          observationId: observation.observationId,
+          fields: [
+            { elementId: named(observation, "Name").elementId, value: "Ada" },
+            { elementId: named(observation, "Newsletter").elementId, checked: true },
+          ],
+          submit: named(observation, "Accept all").elementId,
+        });
+
+        expect({
+          fields: result.fields.map((field) => field.status),
+          submitted: result.submitted,
+          url: result.url,
+          stopped: result.stopped,
+        }).toEqual({
+          fields: ["set", "set"],
+          submitted: true,
+          url: `${origin}/?consent=1`,
+          stopped: undefined,
+        });
+      }),
+  },
+  {
+    name: "a matched reading keeps only the controls that match",
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const matched = yield* session.observe({ match: "NEWS" });
+
+        expect({
+          match: matched.match,
+          controls: matched.controls.map((control) => [control.label, control.checked]),
+        }).toEqual({ match: "NEWS", controls: [["Newsletter", false]] });
+      }),
+  },
+  {
+    name: "moving the selection leaves a pending wait running to its own deadline",
+    actionTimeoutMillis: 1500,
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const home = (yield* session.pages).find((page) => page.selected);
+
+        expect(home).toBeDefined();
+        if (home === undefined) return;
+
+        const pending = yield* failure(
+          session.waitFor({ selector: "#never", state: "attached" }),
+        ).pipe(Effect.forkChild);
+
+        // The wait's short admission guard retires once the native wait has started.
+        yield* session
+          .selectPage(home)
+          .pipe(Effect.retry({ times: 100, schedule: Schedule.spaced("5 millis") }));
+        expect(yield* Fiber.join(pending)).toEqual({ reason: "Timeout", outcome: "undispatched" });
+      }),
+  },
+  {
     name: "an off-screen control cannot be hovered",
     run: (session, origin) =>
       Effect.gen(function* () {
@@ -231,6 +355,31 @@ const cases: ReadonlyArray<Case> = [
         expect(yield* failure(session.hoverElement(named(observation, "Report")))).toEqual({
           reason: "NotVisible",
           outcome: "undispatched",
+        });
+      }),
+  },
+  {
+    name: "an input receipt reports the pointer placed on its own page",
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const home = (yield* session.pages).find((page) => page.selected);
+
+        expect(home).toBeDefined();
+        if (home === undefined) return;
+        expect((yield* session.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual({
+          x: 12,
+          y: 34,
+        });
+        const other = yield* session.createPage;
+
+        yield* session.selectPage(other);
+        // Chromium keeps a pointer position per page: nothing was placed on this one yet.
+        expect((yield* session.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
+        yield* session.selectPage(home);
+        expect((yield* session.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({
+          x: 12,
+          y: 34,
         });
       }),
   },
@@ -260,8 +409,9 @@ for (const [owner, open] of [
           const running = yield* site;
           const policy = parity.policy ?? BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 });
 
-          yield* Browser.scoped(open(running.origin, policy), (session) =>
-            parity.run(session, running.origin),
+          yield* Browser.scoped(
+            open(running.origin, policy, parity.actionTimeoutMillis),
+            (session) => parity.run(session, running.origin),
           );
         }),
       ),

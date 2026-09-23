@@ -37,6 +37,12 @@ export const ProviderScript = Schema.Struct({
   release: Schema.optionalKey(Schema.Literals(["confirmed", "pending", "failed"])),
   liveView: Schema.optionalKey(Schema.Literals(["issued", "denied"])),
   region: Schema.optionalKey(ProviderSession.fields.region),
+  /**
+   * Whose identity a session's retrieval and release replies carry: its own, another session's
+   * or another project's. The real client refuses a reply it cannot match, so a test can see
+   * what allocation, connection and cleanup make of a provider that answers for someone else.
+   */
+  identity: Schema.optionalKey(Schema.Literals(["own", "foreign-session", "foreign-project"])),
 });
 
 export type ProviderScript = typeof ProviderScript.Type;
@@ -81,6 +87,7 @@ const secrets = {
 
 interface SessionRow {
   readonly id: string;
+  readonly keepAlive: boolean;
   status: SessionStatus;
   releaseRequests: number;
   readonly uploads: Array<string>;
@@ -118,9 +125,11 @@ export const provider = Effect.fnUntraced(function* (
   const sessions = new Map<string, SessionRow>();
   let serial = 0;
 
+  const identity = fixed.identity ?? "own";
+
   const row = (session: SessionRow) => ({
-    id: session.id,
-    projectId,
+    id: identity === "foreign-session" ? `${session.id}-other` : session.id,
+    projectId: identity === "foreign-project" ? `${projectId}-other` : projectId,
     status: session.status,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:01.000Z",
@@ -131,7 +140,7 @@ export const provider = Effect.fnUntraced(function* (
     session.status === "TIMED_OUT"
       ? { endedAt: "2026-01-01T00:10:00.000Z" }
       : {}),
-    keepAlive: false,
+    keepAlive: session.keepAlive,
     proxyBytes: 0,
     region,
     connectUrl: `wss://connect.browserbase.com/?session=${session.id}&key=${secrets.connectUrl}`,
@@ -169,8 +178,15 @@ export const provider = Effect.fnUntraced(function* (
         case "Lost":
           throw new Error("The scripted provider lost this reply");
         case "Accept": {
+          const body: unknown = await request.json().catch(() => undefined);
+
           const session: SessionRow = {
             id: `session-${++serial}`,
+            keepAlive:
+              typeof body === "object" &&
+              body !== null &&
+              "keepAlive" in body &&
+              body.keepAlive === true,
             status: create.status ?? "RUNNING",
             releaseRequests: 0,
             uploads: [],
@@ -248,7 +264,11 @@ export class ScriptedBrowserbase extends Context.Service<
   ScriptedBrowserbase,
   {
     readonly provider: ProviderControl;
-    /** One control for each browser connection the Layer made, in connection order. */
+    /**
+     * One control for each scripted browser the Layer connected to, in first-connection order:
+     * one per provider session, which a keep-alive reconnection or a borrowed attachment reaches
+     * again.
+     */
     readonly browsers: Effect.Effect<ReadonlyArray<BrowserTesting.ScriptedControl>>;
   }
 >()("effect-browserbase/testing/ScriptedBrowserbase") {}
@@ -295,7 +315,7 @@ export const layer = (
 
       const control = Layer.succeed(
         ScriptedBrowserbase,
-        ScriptedBrowserbase.of({ provider: scripted.control, browsers: engine.connections }),
+        ScriptedBrowserbase.of({ provider: scripted.control, browsers: engine.browsers }),
       );
 
       return Layer.mergeAll(browser, account, control);

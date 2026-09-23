@@ -57,6 +57,7 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
     clickElement: () => unexpected,
     fillElement: () => unexpected,
     selectOption: () => unexpected,
+    fillForm: () => unexpected,
     hoverElement: () => unexpected,
     pressElement: () => unexpected,
     typeElement: () => unexpected,

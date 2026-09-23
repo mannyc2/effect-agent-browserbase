@@ -96,6 +96,30 @@ export const toolSite = Effect.acquireRelease(
                 if (event.data === 'remove') button.remove();
               });
             </script>`);
+        } else if (path === "/signup") {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          response.end(`<!doctype html><meta charset=utf-8><title>Sign up</title>
+            <nav>${Array.from({ length: 24 }, (_, i) => `<a href="/section-${i}">Section ${i}</a>`).join(" ")}</nav>
+            <h1>Create your account</h1>
+            <form id="signup">
+              <input id="email" name="email" type="email" aria-label="Email">
+              <input id="password" name="password" type="password" aria-label="Password">
+              <input id="terms" name="terms" type="checkbox" aria-label="I accept the terms">
+              <select id="plan" name="plan" aria-label="Plan">
+                <option value="free">Free</option><option value="pro">Pro</option>
+              </select>
+              <button id="create" type="submit">Create account</button>
+            </form>
+            <p id="result">Not created</p>
+            <article>${Array.from({ length: 40 }, (_, i) => `<p>Paragraph ${i} of the terms. ${"Words ".repeat(20)}</p>`).join("")}<p>END OF TERMS</p></article>
+            <script>
+              document.querySelector('#signup').addEventListener('submit', event => {
+                event.preventDefault();
+                const form = new FormData(event.target);
+                document.querySelector('#result').textContent =
+                  'Created ' + form.get('email') + ' on ' + form.get('plan') + (form.get('terms') ? ' with terms' : '');
+              });
+            </script>`);
         } else if (path === "/select") {
           response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           response.end(`<!doctype html><meta charset=utf-8><title>Exact option selection</title>

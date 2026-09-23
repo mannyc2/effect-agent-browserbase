@@ -66,8 +66,9 @@ const named = (observation: Observation, label: string) => {
 
 const inspect = Effect.fnUntraced(function* (
   tools: Toolkit.WithHandler<Toolkit.Tools<typeof BrowserTools.toolkit>>,
+  request: BrowserTools.InspectRequest = {},
 ) {
-  const results = yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}));
+  const results = yield* Stream.runCollect(yield* tools.handle("browser_inspect", request));
 
   expect(results).toHaveLength(1);
   expect(results[0]?.isFailure).toBe(false);
@@ -311,7 +312,7 @@ it.live(
 );
 
 it.live(
-  "real Toolkit: document remains the default; changed and replaced controls cannot bypass host admission",
+  "real Toolkit: viewport is the default, document is one call away; changed and replaced controls cannot bypass host admission",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -342,7 +343,12 @@ it.live(
                 ),
               );
 
-              const observed = yield* inspect(tools);
+              const onScreen = yield* inspect(tools);
+
+              expect(onScreen.scope).toBe("viewport");
+              expect(onScreen.text).not.toContain("BELOW WORDS");
+
+              const observed = yield* inspect(tools, { scope: "document" });
 
               expect(observed.scope).toBe("document");
               expect(observed.text).toContain("BELOW WORDS");

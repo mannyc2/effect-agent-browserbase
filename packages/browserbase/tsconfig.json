@@ -4,6 +4,7 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "skipLibCheck": false,
+    "erasableSyntaxOnly": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noImplicitReturns": true,

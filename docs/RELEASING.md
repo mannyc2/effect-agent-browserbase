@@ -2,7 +2,7 @@
 
 Publication is not performed by ordinary CI. This workflow prepares three independently published browser packages from the pinned upstream integration workspace; it does **not** publish the rest of the Effect Agent monorepo.
 
-The canonical candidate names are `effect-browser`, `effect-browserbase` and `effect-agent-browser`. The earlier `0.1.0-beta.103` release used the former two-package graph (`effect-browserbase` and `effect-agent-browserbase`); it does not establish control or publication of the new names. Confirm npm ownership and trusted-publisher configuration for all three names before enabling publication. Repository changes do not register names or perform first-publication account setup. Keep historical prepared-state and journal refs intact for recovery of the releases that created them.
+The published names are `effect-browser`, `effect-browserbase` and `effect-agent-browser`. This workflow released `0.2.0-beta.0` of all three from tag `v0.2.0-beta.0` (`089a6ea`), with provenance. The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`; `v0.1.0-beta.103` was tagged but never published. Repository changes do not register names or perform first-publication account setup. Keep historical prepared-state and journal refs intact for recovery of the releases that created them.
 
 ## Configure npm trusted publishing
 
@@ -49,7 +49,7 @@ The application still verifies the successful build's whole **release-set receip
 
 Before any npm upload, the complete prepared set—the native Bundle and Plan plus their content-addressed receipt, archives and signed provenance—is committed once to `ts-release-prepared/<source-sha>`. The fixed snapshot has no duplicate archive copies or separate source metadata; source identity belongs to the native provenance intents. Creating that ref is conditional on absence; an existing preparation is restored, never replaced. ts-release's `openGitJournal` stores dispatch and observation history on a deterministic `ts-release-journal/<hash>` branch. Credentials stay in the live host, not the retained files or journal.
 
-`alpha.N`, `beta.N` and `rc.N` versions use their corresponding dist-tag; a stable `x.y.z` release uses `latest`. A prerelease can never fall through to `latest`. This is an ESM distribution with `.d.mts` declarations; it does not claim CommonJS support.
+`alpha.N`, `beta.N` and `rc.N` versions use their corresponding dist-tag; a stable `x.y.z` release uses `latest`. A prerelease can never fall through to `latest`. npm sets `latest` on a name's first publication, so until a stable release it stays at `0.0.0-reserved.0` for `effect-browser` and `effect-agent-browser` and at `0.1.0-beta.102` for `effect-browserbase`. Moving it earlier is an owner's manual `npm dist-tag add <name>@<version> latest`, never this workflow. This is an ESM distribution with `.d.mts` declarations; it does not claim CommonJS support.
 
 The workflow does not bump versions, push release tags, create GitHub releases, deploy documentation or allocate Browserbase sessions. Its only Git writes are the prepared-state and journal refs. There is no atomic three-package registry transaction.
 
