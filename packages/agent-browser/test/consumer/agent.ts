@@ -7,6 +7,7 @@ import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
 import type { InitializationError } from "effect-browser/errors";
+import * as ScriptedBrowser from "effect-browser/testing";
 // Installed-package workflow for an actual Effect Agent consumer.
 //
 // It runs as an ordinary program on the pinned Node and Bun with both published
@@ -206,4 +207,82 @@ const program = Effect.scoped(
 
 const result = await Effect.runPromise(program);
 
-console.log(JSON.stringify({ profile: "agent-hosted", ...result }));
+// The same agent over the scripted engine: no Chromium process and no provider at all.
+const shop: ScriptedBrowser.Script = {
+  documents: [
+    {
+      url: "https://shop.test/",
+      text: "We use cookies.",
+      controls: [
+        {
+          id: "accept",
+          kind: "button",
+          label: "Accept all",
+          activates: "https://shop.test/?consent=1",
+        },
+      ],
+    },
+    { url: "https://shop.test/?consent=1", text: "Welcome back." },
+  ],
+};
+
+const scripted = await Effect.runPromise(
+  Browser.scoped(ScriptedBrowser.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const turn = (id: string, name: string, params: unknown): ScriptedTurnInput => ({
+        _tag: "Stream",
+        parts: [
+          { type: "tool-call", id, name, params },
+          { type: "finish", reason: "tool-calls", usage },
+        ],
+        termination: { _tag: "Complete" },
+      });
+
+      const run = yield* BrowserTools.run(
+        browser,
+        AgentRuntime.run(browserAgent, "accept the banner").pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              InMemory.layer,
+              model([
+                turn("call-1", "browser_navigate", { url: "https://shop.test/" }),
+                turn("call-2", "browser_inspect", {}),
+                // Deterministic ids let a scripted turn name the control without a lookup.
+                turn("call-3", "browser_click", {
+                  observationId: "observation-1",
+                  elementId: "accept",
+                }),
+                {
+                  _tag: "Stream",
+                  parts: [
+                    { type: "text-start", id: "answer" },
+                    { type: "text-delta", id: "answer", delta: '{"done":true}' },
+                    { type: "text-end", id: "answer" },
+                    { type: "finish", reason: "stop", usage },
+                  ],
+                  termination: { _tag: "Complete" },
+                },
+              ]),
+            ),
+          ),
+        ),
+      );
+
+      expect(run.output.done === true, "the scripted agent completed its declared output");
+      const calls = yield* browser.control.calls;
+
+      expect(
+        calls.map((call) => call.operation).join(",") === "navigate,observe,click",
+        "the agent's tool calls reached the real owner in order",
+      );
+      expect(
+        (yield* browser.control.document.current).url === "https://shop.test/?consent=1",
+        "the scripted click followed its destination",
+      );
+
+      return { turns: run.turns, calls: calls.length };
+    }),
+  ),
+);
+
+console.log(JSON.stringify({ profile: "agent-hosted", ...result, scripted }));
