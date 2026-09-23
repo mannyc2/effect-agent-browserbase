@@ -1,12 +1,11 @@
 import { writeFileSync } from 'node:fs';
 import { Effect } from 'effect';
-const root = '../overlay/test/integration/fixtures/';
 const browser = '../overlay/packages/browser/test/fixtures/';
 const browserbase = '../overlay/packages/browserbase/test/fixtures/';
 const selection = process.argv[2] ?? 'all';
 // Each recovery regression lives in the package whose code it tests.
 const regressions = [`${browser}RecoveryCases`, `${browserbase}RecoveryCases`];
-const suites = selection === 'regressions' ? regressions : [`${root}OwnershipCases`, `${browserbase}ArtifactCases`, `${browser}CaptureCases`, ...regressions];
+const suites = selection === 'regressions' ? regressions : [`${browser}OwnershipCases`, `${browserbase}ProviderOwnershipCases`, `${browserbase}ArtifactCases`, `${browser}CaptureCases`, ...regressions];
 const rows = [];
 for (const suite of suites) {
   const mod = await import(new URL(`${suite}.ts`, import.meta.url));

@@ -2,40 +2,54 @@ import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
+import { BrowserPolicy } from "effect-browser/browser-data";
+import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { BrowserPolicy, Viewport } from "../../packages/browser/src/BrowserData.ts";
-import {
-  bindingImplementation,
-  type ConnectRequest,
-} from "../../packages/browser/src/internal/browser/Binding.ts";
-import { BrowserbaseBrowser } from "../../packages/browserbase/src/Browser.ts";
-import * as BrowserBinding from "../../packages/browserbase/src/BrowserBinding.ts";
-import { BrowserbaseClient } from "../../packages/browserbase/src/Client.ts";
-import { recipe } from "../../packages/browserbase/src/Launch.ts";
-import { BrowserbaseSessions } from "../../packages/browserbase/src/Sessions.ts";
+import { BrowserbaseBrowser } from "../src/Browser.ts";
+import * as BrowserBinding from "../src/BrowserBinding.ts";
+import { BrowserbaseClient } from "../src/Client.ts";
+import { recipe } from "../src/Launch.ts";
+import { BrowserbaseSessions } from "../src/Sessions.ts";
 
-const request = (connection: unknown): ConnectRequest => ({
-  connection,
-  options: {
-    viewport: Viewport.make({ width: 640, height: 480 }),
-    popupPolicy: "retain",
-    dialogPolicy: "dismiss",
-    maxPages: 4,
-  },
-  events: { invalidate: () => {}, disconnected: () => {}, pause: () => {}, fault: () => {} },
-  onAbandoned: () => {},
-  onSettled: () => {},
-});
+/**
+ * Connects the public runtime over `binding` to a lifetime whose provider issued `connection`,
+ * so only the binding's own checks decide what becomes of the address.
+ */
+const connect = (binding: BrowserBinding.BrowserBinding, connection: unknown) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const runtime = yield* BrowserRuntime.make({ implementation: "binding-under-test", binding });
 
-const connect = (binding: BrowserBinding.BrowserBinding, connection: unknown) => {
-  const engine = bindingImplementation(binding);
+      const acquired = yield* runtime.acquire(BrowserPolicy.unrestricted(), (cleanup) =>
+        Effect.gen(function* () {
+          const release = yield* Effect.cached(
+            cleanup.fence.pipe(
+              Effect.andThen(cleanup.capture),
+              Effect.andThen(cleanup.initialization),
+              Effect.andThen(cleanup.disconnect),
+              Effect.orDie,
+              Effect.asVoid,
+            ),
+          );
 
-  assert.ok(engine !== undefined, "a package-issued binding has an engine");
+          yield* Effect.addFinalizer(() => release);
 
-  return engine.connect(request(connection)).pipe(Effect.flip);
-};
+          return {
+            reference: "binding-under-test",
+            // A source is typed to issue strings; the binding still refuses anything else.
+            connection: () => Effect.succeed(Redacted.make(connection as string)),
+            release,
+            cleanupResult: Effect.succeedNone,
+            closeChecked: release,
+          };
+        }),
+      );
+
+      return yield* acquired.connect;
+    }),
+  ).pipe(Effect.flip);
 
 it.effect("the default binding refuses any address the provider could not have issued", () =>
   Effect.gen(function* () {
@@ -96,7 +110,13 @@ it.effect("a binding the package did not issue is refused before any provider re
     let requests = 0;
     const forged = { _tag: "BrowserBinding" } as const;
 
-    assert.equal(bindingImplementation(forged), undefined);
+    // Issuance, not shape, gives a binding an engine: the runtime has none for this one.
+    const unissued = yield* BrowserRuntime.make({
+      implementation: "binding-under-test",
+      binding: forged,
+    }).pipe(Effect.flip);
+
+    assert.equal(unissued.reason._tag, "UnregisteredSession");
 
     const error = yield* Effect.scoped(
       Effect.gen(function* () {
@@ -145,7 +165,8 @@ it.effect("the default engine needs no provision and every issued binding is fro
     const binding = yield* BrowserBinding.BrowserbaseBrowserBinding;
 
     assert.equal(binding._tag, "BrowserBinding");
-    assert.ok(bindingImplementation(binding) !== undefined);
+    // An issued binding has an engine, so the runtime accepts it.
+    yield* BrowserRuntime.make({ implementation: "binding-under-test", binding });
     assert.ok(Object.isFrozen(binding));
     assert.ok(Object.isFrozen(BrowserBinding.playwright()));
   }),
