@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 // per phase. No check reads the environment, builds an account or opens a session on its own.
 import { createInterface } from "node:readline/promises";
 
-import { Effect, Redacted } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Effect, Layer, Redacted } from "effect";
 import { type OpenOptions } from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Account from "effect-browserbase/account";
@@ -76,7 +77,7 @@ export const hostedCase = (name: CheckName) => {
   const report = (phase: string, result: unknown) =>
     Effect.sync(() =>
       console.log(
-        JSON.stringify({ check: name, phase, result }, (_key, value) =>
+        JSON.stringify({ check: name, phase, result }, (_key, value: unknown) =>
           typeof value === "bigint" ? value.toString() : value,
         ),
       ),
@@ -116,7 +117,7 @@ export const hostedCase = (name: CheckName) => {
         actionTimeoutMillis: 15_000,
         onCleanup: (cleanup) => report("cleanup", cleanup),
         onAllocationUncertain: (attempt) => report("allocation-unknown", attempt),
-      }),
+      }).pipe(Layer.provide(NodeCrypto.layer)),
     /** The only way a check allocates, so the session budget is enforced before spending. */
     open: (options: OpenOptions = {}) =>
       Effect.gen(function* () {

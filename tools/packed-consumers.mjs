@@ -79,9 +79,10 @@ export function consumerManifest(mode, receipt, out, catalog) {
     devDependencies["@effect/vitest"] = catalog["@effect/vitest"];
     devDependencies.vitest = catalog.vitest;
   }
-  // The generic consumer compiles and runs every example; realistic-footage spawns its encoder
-  // and serves its stage through Effect's Node platform services.
-  if (mode === "generic" || mode === "browser")
+  // Every consumer that launches a real browser supplies the platform's Crypto, as any host
+  // would. The generic consumer also compiles and runs every example; realistic-footage spawns
+  // its encoder and serves its stage through Effect's Node platform services.
+  if (mode !== "resources")
     devDependencies["@effect/platform-node"] = catalog["@effect/platform-node"];
   if (mode.startsWith("agent")) {
     dependencies["effect-agent"] = receipt.frameworkVersion;

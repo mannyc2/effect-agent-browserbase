@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Redacted } from "effect";
+import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
@@ -17,7 +17,7 @@ export const playwright = (options: PlaywrightOptions = {}): BrowserBinding => {
         const validated = yield* Effect.try({
           try: () => validateConnection(Redacted.value(url)),
           catch: (error) =>
-            error instanceof BrowserError
+            Schema.is(BrowserError)(error)
               ? error
               : BrowserError.make({
                   operation: "connect",

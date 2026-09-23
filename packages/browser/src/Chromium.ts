@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, type Option, Redacted, type Scope } from "effect";
+import { Context, Crypto, Effect, Layer, type Option, Redacted, type Scope } from "effect";
 
 import type { BrowserSession, OpenOptions } from "./Browser.ts";
 import type { AutomationOptions, BrowserPolicy, Viewport } from "./BrowserData.ts";
@@ -92,7 +92,8 @@ export class Chromium extends Context.Service<
     return Effect.flatMap(Chromium, (browser) => browser.attach(endpoint, request));
   }
 
-  static layer(options: ChromiumOptions = {}): Layer.Layer<Chromium, BrowserError> {
+  /** Chromium references, connection ids and handoff tokens come from the required `Crypto`. */
+  static layer(options: ChromiumOptions = {}): Layer.Layer<Chromium, BrowserError, Crypto.Crypto> {
     return Layer.effect(
       Chromium,
       Effect.gen(function* () {
@@ -129,16 +130,22 @@ export class Chromium extends Context.Service<
           },
         });
 
+        const crypto = yield* Crypto.Crypto;
+
         const acquire = Effect.fnUntraced(function* <E = never, R = never>(
           policy: BrowserPolicy,
           request: OpenOptions<E, R> = {},
           attachment?: { readonly endpoint: Redacted.Redacted<string>; readonly targetId?: string },
         ) {
-          const acquired = yield* runtime.acquire(
-            policy,
+          const source =
             attachment === undefined
               ? ownedChromium(launch, options.onCleanup)
-              : borrowedChromium(attachment.endpoint, options.onCleanup),
+              : borrowedChromium(attachment.endpoint, options.onCleanup);
+
+          const acquired = yield* runtime.acquire(
+            policy,
+            (cleanup, deadline) =>
+              source(cleanup, deadline).pipe(Effect.provideService(Crypto.Crypto, crypto)),
             {
               ...request,
               ...(attachment === undefined

@@ -63,128 +63,126 @@ it.live(
           yield* withGenericAgentBrowser(
             f,
             Effect.scoped(
-              Effect.gen(function* () {
-                return yield* Browser.scoped(
-                  BrowserbaseBrowser.open(
-                    { ...genericAgentPolicy, maxActions: 6 },
-                    { bootstrap: settingsBootstrap(new URL(f.url).origin) },
-                  ),
-                  (generic) =>
-                    Effect.gen(function* () {
-                      references.push(generic.reference.sessionId);
+              Browser.scoped(
+                BrowserbaseBrowser.open(
+                  { ...genericAgentPolicy, maxActions: 6 },
+                  { bootstrap: settingsBootstrap(new URL(f.url).origin) },
+                ),
+                (generic) =>
+                  Effect.gen(function* () {
+                    references.push(generic.reference.sessionId);
 
-                      const script: ScriptedTurnInput[] = [
-                        {
-                          _tag: "Stream",
-                          parts: [
-                            {
-                              type: "tool-call",
-                              id: "navigate",
-                              name: "browser_navigate",
-                              params: { url: f.url },
-                            },
-                            { type: "finish", reason: "tool-calls", usage },
-                          ],
-                          termination: { _tag: "Complete" },
-                        },
-                        {
-                          _tag: "Stream",
-                          parts: [
-                            {
-                              type: "tool-call",
-                              id: "inspect",
-                              name: "browser_inspect",
-                              params: {},
-                            },
-                            { type: "finish", reason: "tool-calls", usage },
-                          ],
-                          termination: { _tag: "Complete" },
-                        },
-                        {
-                          ...final,
-                          assertRequest: (request) => {
-                            const encoded = JSON.stringify(request.prompt);
-
-                            expect(encoded).toContain("Local browser fixture");
-                            expect(encoded).toContain("host settings:7");
-                            expect(encoded).not.toContain("fixture-key-not-a-credential");
-                            expect(encoded).not.toContain("wss://connect.browserbase.com");
-                            expect(f.releaseIds).not.toContain(generic.reference.sessionId);
+                    const script: ScriptedTurnInput[] = [
+                      {
+                        _tag: "Stream",
+                        parts: [
+                          {
+                            type: "tool-call",
+                            id: "navigate",
+                            name: "browser_navigate",
+                            params: { url: f.url },
                           },
+                          { type: "finish", reason: "tool-calls", usage },
+                        ],
+                        termination: { _tag: "Complete" },
+                      },
+                      {
+                        _tag: "Stream",
+                        parts: [
+                          {
+                            type: "tool-call",
+                            id: "inspect",
+                            name: "browser_inspect",
+                            params: {},
+                          },
+                          { type: "finish", reason: "tool-calls", usage },
+                        ],
+                        termination: { _tag: "Complete" },
+                      },
+                      {
+                        ...final,
+                        assertRequest: (request) => {
+                          const encoded = JSON.stringify(request.prompt);
+
+                          expect(encoded).toContain("Local browser fixture");
+                          expect(encoded).toContain("host settings:7");
+                          expect(encoded).not.toContain("fixture-key-not-a-credential");
+                          expect(encoded).not.toContain("wss://connect.browserbase.com");
+                          expect(f.releaseIds).not.toContain(generic.reference.sessionId);
                         },
-                      ];
+                      },
+                    ];
 
-                      const turns = script.map((turn) => ({
-                        ...turn,
-                        onStreamFinalize: Effect.sync(() => {
-                          modelFinalizers++;
-                        }),
-                      }));
+                    const turns = script.map((turn) => ({
+                      ...turn,
+                      onStreamFinalize: Effect.sync(() => {
+                        modelFinalizers++;
+                      }),
+                    }));
 
-                      const result = yield* BrowserTools.run(
-                        generic,
-                        AgentRuntime.run(agent, "begin").pipe(
-                          Effect.provide(Layer.mergeAll(model(turns), InMemory.layer)),
-                        ),
-                      );
+                    const result = yield* BrowserTools.run(
+                      generic,
+                      AgentRuntime.run(agent, "begin").pipe(
+                        Effect.provide(Layer.mergeAll(model(turns), InMemory.layer)),
+                      ),
+                    );
 
-                      expect(result.turns).toBe(3);
-                      expect(result.output.done).toBe(true);
-                      // Per-turn scopes ended, but the explicitly enclosing execution still owns its browser.
-                      expect(f.releaseIds).not.toContain(generic.reference.sessionId);
-                      expect((yield* generic.readText({ selector: "#count" })).text).toBe("0");
-                      const diagnostics = yield* generic.bindingDiagnostics;
+                    expect(result.turns).toBe(3);
+                    expect(result.output.done).toBe(true);
+                    // Per-turn scopes ended, but the explicitly enclosing execution still owns its browser.
+                    expect(f.releaseIds).not.toContain(generic.reference.sessionId);
+                    expect((yield* generic.readText({ selector: "#count" })).text).toBe("0");
+                    const diagnostics = yield* generic.bindingDiagnostics;
 
-                      expect(diagnostics.faulted).toBe(false);
-                      expect(diagnostics.failures).toEqual([]);
-                      expect(diagnostics.bindings[0]?.succeeded).toBe(1);
+                    expect(diagnostics.faulted).toBe(false);
+                    expect(diagnostics.failures).toEqual([]);
+                    expect(diagnostics.bindings[0]?.succeeded).toBe(1);
 
-                      const summary = yield* Effect.scoped(
-                        Effect.gen(function* () {
-                          const interval = yield* Capture.start(generic, {
-                            maxFrames: 2,
-                            maxDurationMillis: 5000,
-                          });
+                    const summary = yield* Effect.scoped(
+                      Effect.gen(function* () {
+                        const interval = yield* Capture.start(generic, {
+                          maxFrames: 2,
+                          maxDurationMillis: 5000,
+                        });
 
-                          const frame = yield* Stream.runHead(interval.frames).pipe(
-                            Effect.timeout(3000),
-                          );
+                        const frame = yield* Stream.runHead(interval.frames).pipe(
+                          Effect.timeout(3000),
+                        );
 
-                          expect(Option.isSome(frame) && frame.value.bytes.length > 0).toBe(true);
+                        expect(Option.isSome(frame) && frame.value.bytes.length > 0).toBe(true);
 
-                          return yield* interval.stop;
-                        }),
-                      );
+                        return yield* interval.stop;
+                      }),
+                    );
 
-                      expect(summary.nativeStop).toBe("confirmed");
-                      expect(f.connectionIds).toEqual(references);
+                    expect(summary.nativeStop).toBe("confirmed");
+                    expect(f.connectionIds).toEqual(references);
 
-                      let exhausted = false;
-                      let remainingReads = 0;
+                    let exhausted = false;
+                    let remainingReads = 0;
 
-                      for (let index = 0; index < 4; index++) {
-                        const next = yield* generic
-                          .observe({ maxTextBytes: 1024 })
-                          .pipe(Effect.result);
+                    for (let index = 0; index < 4; index++) {
+                      const next = yield* generic
+                        .observe({ maxTextBytes: 1024 })
+                        .pipe(Effect.result);
 
-                        if (next._tag === "Failure") {
-                          expect(next.failure).toMatchObject({
-                            reason: { _tag: "Limit", dimension: "actions" },
-                            outcome: "undispatched",
-                          });
-                          exhausted = true;
-                          break;
-                        }
-                        remainingReads++;
+                      if (next._tag === "Failure") {
+                        expect(next.failure).toMatchObject({
+                          reason: { _tag: "Limit", dimension: "actions" },
+                          outcome: "undispatched",
+                        });
+                        exhausted = true;
+                        break;
                       }
-                      expect(exhausted && remainingReads <= 3).toBe(true);
-                    }),
-                ).pipe(
-                  Effect.provideService(Settings, {
-                    read: (revision) => Effect.succeed({ label: "host settings", revision }),
+                      remainingReads++;
+                    }
+                    expect(exhausted && remainingReads <= 3).toBe(true);
                   }),
-                );
-              }),
+              ).pipe(
+                Effect.provideService(Settings, {
+                  read: (revision) => Effect.succeed({ label: "host settings", revision }),
+                }),
+              ),
             ),
           );
           expect(f.releaseIds).toEqual(references);

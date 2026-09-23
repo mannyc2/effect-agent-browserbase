@@ -7,6 +7,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -117,7 +118,7 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   ) => Effect.Effect<A, E | ToolHostFailure<OwnerError, CallbackError>, ToolRunRequirements<R>>;
 }
 
-const encodeBrowserError = Schema.encodeSync(BrowserError);
+const encodeBrowserError = Schema.encodeResult(BrowserError);
 
 interface Invocation {
   readonly host: object;
@@ -187,6 +188,9 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
   const recordFailure = (error: BrowserError, call: Call) => {
     const encoded = encodeBrowserError(error);
+
+    // Only a BrowserError that bypassed its constructor's validation fails to encode.
+    if (Result.isFailure(encoded)) throw encoded.failure;
     const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
 
     if (toolFailures.length === 32) {
@@ -195,7 +199,10 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     }
     toolFailures.push(
       Object.freeze({
-        error: Object.freeze({ ...encoded, reason: Object.freeze({ ...encoded.reason }) }),
+        error: Object.freeze({
+          ...encoded.success,
+          reason: Object.freeze({ ...encoded.success.reason }),
+        }),
         toolName: call.tool,
         toolCallId: toolCallIdOmitted ? undefined : call.id,
         toolCallIdOmitted,

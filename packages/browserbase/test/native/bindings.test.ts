@@ -17,9 +17,8 @@ import {
 } from "../fixtures/LocalBrowser.ts";
 
 const CallResult = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("Returned"), value: Schema.Json }),
-  Schema.Struct({
-    _tag: Schema.Literal("Rejected"),
+  Schema.TaggedStruct("Returned", { value: Schema.Json }),
+  Schema.TaggedStruct("Rejected", {
     name: Schema.String,
     message: Schema.String,
     stack: Schema.String,
@@ -75,7 +74,7 @@ class SettingsUnavailable extends Schema.TaggedError<SettingsUnavailable>()(
   { detail: Schema.String },
 ) {}
 
-const SettingsValue = Schema.Struct({ revision: Schema.NumberFromString, label: Schema.String });
+const SettingsValue = Schema.Struct({ revision: Schema.FiniteFromString, label: Schema.String });
 
 class Settings extends Context.Service<
   Settings,
@@ -102,7 +101,7 @@ it.live(
             ...limits,
             name: "getSettings",
             origins: [origin],
-            input: Schema.Struct({ revision: Schema.NumberFromString }),
+            input: Schema.Struct({ revision: Schema.FiniteFromString }),
             output: SettingsValue,
             failureMode: "fail-session",
             handle: ({ revision }) =>
@@ -412,9 +411,9 @@ it.live(
 
                     frame.name = name;
 
-                    const loaded = new Promise<void>((resolve) =>
-                      frame.addEventListener("load", () => resolve(), { once: true }),
-                    );
+                    const loaded = new Promise<void>((resolve) => {
+                      frame.addEventListener("load", () => resolve(), { once: true });
+                    });
 
                     frame.src = url;
                     document.body.append(frame);
@@ -603,6 +602,7 @@ it.live(
                 yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
                 const page = pageFor(fixture, session.reference.sessionId);
                 const context = page.context();
+                // oxlint-disable-next-line typescript/unbound-method -- called on this context
                 const original = context.newCDPSession;
 
                 // One instance-local transport failpoint, after genuine successful initialization.
@@ -1064,8 +1064,8 @@ it.live(
           ...limits,
           name: "borrowedReply",
           origins: [new URL(fixture.url).origin],
-          input: Schema.NumberFromString,
-          output: Schema.NumberFromString,
+          input: Schema.FiniteFromString,
+          output: Schema.FiniteFromString,
           handle: (value) => Effect.succeed(value + 1),
         });
 

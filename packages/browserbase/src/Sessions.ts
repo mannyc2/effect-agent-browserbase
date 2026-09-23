@@ -1,8 +1,7 @@
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 
 import { BrowserbaseClient } from "./Client.ts";
-import type { ClientError } from "./Errors.ts";
-import { SessionError } from "./Errors.ts";
+import { type ClientError, SessionError } from "./Errors.ts";
 import { issueLiveUrls, type LiveView } from "./internal/browser/LiveView.ts";
 export type { LiveView } from "./internal/browser/LiveView.ts";
 import { SessionReference } from "./References.ts";
@@ -158,7 +157,7 @@ export class BrowserbaseSessions extends Context.Service<
         raw: unknown,
         operation: SessionError["operation"],
         expected?: SessionReference,
-        mutation = false,
+        mutation: boolean = false,
       ) {
         const value = yield* Schema.decodeUnknownEffect(ProviderSession)(raw).pipe(
           Effect.mapError(() => malformed(operation, mutation)),
@@ -316,7 +315,7 @@ export class BrowserbaseSessions extends Context.Service<
 
       const liveUrls = Effect.fn("BrowserbaseSessions.liveUrls")(function* (
         reference: SessionReference,
-        expiresInSeconds = 300,
+        expiresInSeconds: number = 300,
       ) {
         const ref = yield* validate(reference, "session-live-view");
 

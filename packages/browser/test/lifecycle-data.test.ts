@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import type { BrowserSession } from "effect-browser/browser";
@@ -55,13 +56,13 @@ it("status and bounded diagnostics are host data with no admission or native cap
   ).toHaveLength(1);
   expect(() =>
     decode({ records: Array(33).fill(record), total: 33, dropped: 0, truncated: false }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
   expect(() =>
     Schema.decodeUnknownSync(BrowserDiagnostic, { onExcessProperty: "error" })({
       ...record,
       url: "PRIVATE-PAGE",
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
   expect(() =>
     Schema.decodeUnknownSync(SessionStatus)({
       phase: "closed",
@@ -70,19 +71,19 @@ it("status and bounded diagnostics are host data with no admission or native cap
       busy: false,
       unresolvedDispatch: true,
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
   expect(() =>
     decode({ records: [], total: Number.MAX_SAFE_INTEGER + 1, dropped: 0, truncated: false }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
 });
 
 it.effect(
   "the host-read allowance is validated as automation configuration before browser launch",
   () =>
     Effect.gen(function* () {
-      expect(Schema.decodeSync(AutomationOptions)({})).not.toHaveProperty("maxHostReads");
+      expect(yield* Schema.decodeEffect(AutomationOptions)({})).not.toHaveProperty("maxHostReads");
       for (const maxHostReads of [1, 10_000, 1_000_000])
-        expect(Schema.decodeSync(AutomationOptions)({ maxHostReads }).maxHostReads).toBe(
+        expect((yield* Schema.decodeEffect(AutomationOptions)({ maxHostReads })).maxHostReads).toBe(
           maxHostReads,
         );
       for (const maxHostReads of [
@@ -95,7 +96,9 @@ it.effect(
         1_000_001,
       ]) {
         const result = yield* Layer.build(
-          Chromium.layer({ maxHostReads: maxHostReads as never }),
+          Chromium.layer({ maxHostReads: maxHostReads as never }).pipe(
+            Layer.provide(NodeCrypto.layer),
+          ),
         ).pipe(Effect.scoped, Effect.result);
 
         expect(result).toMatchObject({
@@ -112,6 +115,6 @@ it.effect(
           ...BrowserPolicy.unrestricted(),
           maxHostReads: 2,
         }),
-      ).toThrow();
+      ).toThrow(Schema.SchemaError);
     }),
 );

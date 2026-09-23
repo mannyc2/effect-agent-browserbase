@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
-import { Effect, Stream } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Effect, Layer, Stream } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
@@ -83,7 +84,7 @@ const result = await Effect.runPromise(
           Effect.sync(() => {
             cleanup.push(value);
           }),
-      }),
+      }).pipe(Layer.provide(NodeCrypto.layer)),
     ),
     Effect.provideService(FetchHttpClient.Fetch, () => {
       providerCalls++;

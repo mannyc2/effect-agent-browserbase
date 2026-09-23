@@ -1,7 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, type Layer, type Scope } from "effect";
-import type { AdaptedSession, fromSession, SelectionOptions } from "effect-agent-browser/adapter";
-import { interactiveLayer } from "effect-agent-browser/adapter";
+import {
+  type AdaptedSession,
+  type fromSession,
+  interactiveLayer,
+  type SelectionOptions,
+} from "effect-agent-browser/adapter";
 import {
   type formHandlers,
   type keyboardHandlers,

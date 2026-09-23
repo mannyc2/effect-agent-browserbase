@@ -13,6 +13,8 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 | effect-agent / testing | 0.1.0-beta.102                                                     |
 | Playwright             | playwright-core 1.63.0                                             |
 | TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
+| Effect tsgo / Oxlint   | 0.45.0 / 1.82.0                                                    |
+| oxlint-tsgolint        | 7.0.2001                                                           |
 
 These are the verified acceptance targets, not a promise that every version allowed by the inherited engine/peer ranges has been tested. Dependency changes belong in a coordinated catalog/lockfile update, not an unreviewed install-time re-resolution.
 
@@ -56,6 +58,8 @@ cd packages/agent-browser
 Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
 
 Make edits in this repository's `packages/browser`, `packages/browserbase` and `packages/agent-browser`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
+
+Owned code is held to a stricter lint and compiler policy than upstream. `lint/.oxlintrc.json` is that policy: an Oxlint config that extends `@effect/tsgo`'s recommended preset and adds rules grouped by the failure each prevents. Library code gets every rule, except the async, Promise and timer rules in the Promise-based Playwright driver and scripted engine; tests, fixtures, hosted checks and examples skip most Effect-native rules, since they drive the platform itself. Acceptance runs Oxlint with this file alone over the owned paths and denies warnings, so the preset's warnings block too. Upstream's root `vite.config.ts` is untouched and keeps linting upstream; the config restates the rules it also enforced on owned code, its own stylistic and export plugins included. The `effecttsgo` rules exist only because `patch:tsgo` patches Oxlint and tsgolint as well as `tsc` (`effect-tsgo patch --typescript --oxlint`), so Oxlint and `oxlint-tsgolint` are pinned to versions `@effect/tsgo` supports. The owned tsconfigs turn the Effect language service's diagnostics off, so the patched `tsc` only typechecks and Oxlint reports each Effect diagnostic once. They add matching strict compiler checks, and `tools/test/lint-policy.test.mjs` keeps the four projects and the config aligned. Fix a finding, an Effect diagnostic included, rather than suppress it. A genuine exception names its reason in the directive, `// oxlint-disable-next-line <rule> -- <reason>`, or in a comment directly above `@effect-diagnostics-next-line`, which Oxlint honours for Effect's rules. Acceptance rejects an Oxlint directive that no longer suppresses anything.
 
 ## Source and package integration
 

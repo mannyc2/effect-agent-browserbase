@@ -12,5 +12,7 @@ only through `tools/hosted-run.sh`.
 | [`demo-recording.ts`](demo-recording.ts)            | A bounded demo interval — navigate, scroll, capture — on top of `record-video.ts`. `test/native/demo.test.ts` proves the pacing locally so the hosted `demo` check spends its session on publishing, not discovery.                                                                          |
 | [`realistic-footage/`](realistic-footage/README.md) | A storyboard filmed with a drawn pointer, real keys at a typist's cadence and eased scrolling, resampled onto a constant-rate reel. The film in `docs/media/` came from it.                                                                                                                  |
 
-For model-driven control of the same session, see the adapter package's
+Compositions that open a browser leave Effect's `Crypto` to the caller, who
+provides the platform's, such as `NodeServices.layer`. For model-driven control
+of the same session, see the adapter package's
 [`examples/agent.ts`](../../agent-browser/examples/agent.ts).

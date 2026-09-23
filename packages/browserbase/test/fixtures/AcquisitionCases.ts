@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 
-import { Deferred, Effect, Fiber, Layer, Redacted } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 
 import type { CleanupResult } from "../../src/Cleanup.ts";
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { withWriter, type WriterSettlementFacts } from "../../src/ContextCoordination.ts";
-import type { ClientError, ContextError, SessionError } from "../../src/Errors.ts";
-import { AllocationError } from "../../src/Errors.ts";
+import {
+  AllocationError,
+  type ClientError,
+  type ContextError,
+  type SessionError,
+} from "../../src/Errors.ts";
 import { acquireRemote } from "../../src/internal/session/Acquisition.ts";
 import { attachRemote } from "../../src/internal/session/Attachment.ts";
 import { makeCleanup, type LocalCleanup } from "../../src/internal/session/Cleanup.ts";
@@ -53,7 +58,10 @@ const metadata = (status = "RUNNING", projectId = account.projectId) => ({
   connectUrl: "wss://connect.browserbase.com/connect?sessionId=session-1",
 });
 
-const layers = BrowserbaseSessions.layer.pipe(Layer.provideMerge(BrowserbaseClient.layer(account)));
+const layers = Layer.merge(
+  BrowserbaseSessions.layer.pipe(Layer.provideMerge(BrowserbaseClient.layer(account))),
+  NodeCrypto.layer,
+);
 
 /** Cleanup reports a failed local step as a `CleanupIssue`; the operation never survives it. */
 const fail = () =>
@@ -215,11 +223,11 @@ export const acquisitionCases: ReadonlyArray<Case> = [
         "settle",
       ]);
       assert.equal(facts.length, 1);
-      assert.equal(facts[0].attempts[0].attempt, attempt);
-      assert.equal(facts[0].attempts[0].session?.sessionId, "session-1");
-      assert.equal(facts[0].attempts[0].cleanup?.observedStatus, "COMPLETED");
-      assert.equal(facts[0].disposition, "release");
-      assert.equal(facts[0].persistence._tag, "Observed");
+      assert.equal(facts[0]!.attempts[0]!.attempt, attempt);
+      assert.equal(facts[0]!.attempts[0]!.session?.sessionId, "session-1");
+      assert.equal(facts[0]!.attempts[0]!.cleanup?.observedStatus, "COMPLETED");
+      assert.equal(facts[0]!.disposition, "release");
+      assert.equal(facts[0]!.persistence._tag, "Observed");
       assert.deepEqual(f.bodies[0], {
         projectId: account.projectId,
         timeout: 60,
@@ -252,8 +260,8 @@ export const acquisitionCases: ReadonlyArray<Case> = [
         Effect.scoped(expectFailure(acquireRemote({ launch: recipe }, f.local))),
       );
 
-      assert.ok(result instanceof AllocationError);
-      if (result instanceof AllocationError) {
+      assert.ok(Schema.is(AllocationError)(result));
+      if (Schema.is(AllocationError)(result)) {
         assert.equal(result.outcome, "rejected");
         assert.equal(result.status, status);
         assert.equal(result.retryAfterMillis, 2000);
@@ -298,9 +306,9 @@ export const acquisitionCases: ReadonlyArray<Case> = [
         ),
       );
       assert.deepEqual(f.order, ["allocate"]);
-      assert.equal(facts[0].attempts[0].state, "unknown");
-      assert.equal(facts[0].attempts[0].session, undefined);
-      assert.equal(facts[0].disposition, "quarantine");
+      assert.equal(facts[0]!.attempts[0]!.state, "unknown");
+      assert.equal(facts[0]!.attempts[0]!.session, undefined);
+      assert.equal(facts[0]!.disposition, "quarantine");
     }),
   },
   {
@@ -541,9 +549,9 @@ export const acquisitionCases: ReadonlyArray<Case> = [
         yield* Fiber.interrupt(fiber);
         assert.deepEqual(f.order, ["allocate"]);
         assert.equal(facts.length, 1);
-        assert.equal(facts[0].attempts[0].state, "unknown");
-        assert.equal(facts[0].attempts[0].session, undefined);
-        assert.equal(facts[0].disposition, "quarantine");
+        assert.equal(facts[0]!.attempts[0]!.state, "unknown");
+        assert.equal(facts[0]!.attempts[0]!.session, undefined);
+        assert.equal(facts[0]!.disposition, "quarantine");
       }),
     ),
   },
@@ -558,8 +566,8 @@ export const acquisitionCases: ReadonlyArray<Case> = [
         Effect.scoped(expectFailure(acquireRemote({ launch: recipe }, f.local))),
       );
 
-      assert.ok(error instanceof AllocationError);
-      if (error instanceof AllocationError) {
+      assert.ok(Schema.is(AllocationError)(error));
+      if (Schema.is(AllocationError)(error)) {
         assert.equal(error.outcome, "unknown");
         assert.equal(error.reference?.projectId, "foreign-project");
       }

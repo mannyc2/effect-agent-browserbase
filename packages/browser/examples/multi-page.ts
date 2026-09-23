@@ -5,6 +5,9 @@ import * as Capture from "effect-browser/capture";
 import { Chromium } from "effect-browser/chromium";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
+// Each browser Layer here takes Effect's `Crypto` from the caller's platform Layer, such as
+// `NodeServices.layer`, so these compositions still require it.
+
 /** Inspect a scout tab while reading and capturing the pinned presentation page. */
 export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
   Browser.scoped(

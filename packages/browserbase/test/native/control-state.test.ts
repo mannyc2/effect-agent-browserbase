@@ -77,7 +77,10 @@ it.live(
             for (const label of ["Native option", "First selected", "Second selected"])
               expect(named(label).selected).toBe(true);
             expect(named("Other option").selected).toBe(false);
-            const encoded = Schema.encodeSync(Schema.fromJsonString(Observation))(observation);
+
+            const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Observation))(
+              observation,
+            );
 
             for (const value of [
               "FIELD-SECRET",

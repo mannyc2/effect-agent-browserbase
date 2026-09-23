@@ -402,7 +402,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
       });
     }
 
-    const encoded = encodeFilePart(part, limits.maxBytes);
+    const encoded = yield* encodeFilePart(part, limits.maxBytes);
 
     if (encoded._tag === "Rejected") {
       return yield* ClientError.make({

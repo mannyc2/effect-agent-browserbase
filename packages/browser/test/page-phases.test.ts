@@ -42,7 +42,7 @@ const fixture = () => {
     if (name === abortAfter) aborted = true;
   };
 
-  const control = new PageExecution("stage", "stage-native", {
+  const control = new PageExecution("stage", "stage-native", () => "suspension-1", {
     readRate: async () => {
       await step("read");
 

@@ -374,8 +374,8 @@ it.effect(
             Bootstrap.binding({
               name: "hold",
               origins: ["https://example.test"],
-              input: Schema.Number,
-              output: Schema.Number,
+              input: Schema.Finite,
+              output: Schema.Finite,
               handle: () =>
                 Effect.gen(function* () {
                   yield* Effect.addFinalizer(() =>
@@ -396,8 +396,8 @@ it.effect(
             Bootstrap.binding({
               name: "fail",
               origins: ["https://example.test"],
-              input: Schema.Number,
-              output: Schema.Number,
+              input: Schema.Finite,
+              output: Schema.Finite,
               failureMode: "fail-session",
               handle: () => Effect.fail(expected),
             }),
@@ -598,8 +598,8 @@ it.effect.each(["consumer", "consumer-initialization-error", "registration"] as 
           Bootstrap.binding({
             name: "fail",
             origins: ["https://example.test"],
-            input: Schema.Number,
-            output: Schema.Number,
+            input: Schema.Finite,
+            output: Schema.Finite,
             failureMode: "fail-session",
             handle: () => Effect.fail(expected),
           }),

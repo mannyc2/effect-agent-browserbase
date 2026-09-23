@@ -142,6 +142,7 @@ function runnerFixture() {
   write(join(dir, "packages/browser/index.ts"), "export {};\n");
   write(join(dir, "packages/browserbase/index.ts"), "export {};\n");
   write(join(dir, "packages/agent-browser/index.ts"), "export {};\n");
+  write(join(dir, "lint/.oxlintrc.json"), "{}\n");
   write(join(bin, "bun"), '#!/bin/sh\necho "1.4.2"\n', 0o755);
   // An extension-less script takes its module type from the nearest package.json. Without
   // this, a TMPDIR inside a "type": "module" checkout parses the CommonJS stub as ESM.
@@ -166,9 +167,10 @@ process.exit(task===process.env.CI_FIXTURE_FAIL?7:0);
 set -eu
 TREE="$1/tree"
 mkdir -p "$TREE/node_modules/.bin" "$TREE/.changeset" "$TREE/docs/guide"
-cp -r packages "$TREE/"
+cp -r packages lint "$TREE/"
 cp tools/vp-fixture.mjs "$TREE/node_modules/.bin/vp"
-chmod +x "$TREE/node_modules/.bin/vp"
+cp tools/vp-fixture.mjs "$TREE/node_modules/.bin/oxlint"
+chmod +x "$TREE/node_modules/.bin/vp" "$TREE/node_modules/.bin/oxlint"
 printf 'node_modules/\\n' > "$TREE/.gitignore"
 printf '{}\\n' > "$TREE/package.json"
 printf 'lock\\n' > "$TREE/bun.lock"

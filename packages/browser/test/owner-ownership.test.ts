@@ -331,9 +331,12 @@ const ownershipCases: ReadonlyArray<Case> = [
       // Another tab showing the same controls, set up before anything is in flight.
       const second = yield* session.createPage();
 
+      const [initial] = ownerScript.documents;
+
       assert.ok(first !== undefined);
+      assert.ok(initial !== undefined);
       yield* session.selectPage(second);
-      yield* f.control.document.replace(ownerScript.documents[0]);
+      yield* f.control.document.replace(initial);
       yield* session.selectPage(first);
       const handle = yield* session.retain;
       const operation = yield* handle.startNavigation("https://example.test/slow");
@@ -456,8 +459,9 @@ const ownershipCases: ReadonlyArray<Case> = [
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         // Schema failure here is a fixture defect, not part of the runtime error channel.
-        // @effect-diagnostics-next-line schemaSyncInEffect:off
-        const encoded = Schema.encodeSync(Schema.fromJsonString(BrowserError))(result.failure);
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(BrowserError))(
+          result.failure,
+        ).pipe(Effect.orDie);
 
         assert.ok(encoded.includes('"unknown"'));
         assert.ok(!encoded.includes("PRIVATE"));

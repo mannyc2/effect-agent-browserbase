@@ -4,10 +4,22 @@ import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 
+/**
+ * Random values the owner draws from its `Crypto` service for one connection attempt. A native
+ * engine has no randomness of its own.
+ */
+export interface ConnectionIdentity {
+  /** Scopes the page, frame, observation and suspension ids this connection reports. */
+  readonly namespace: string;
+  /** Names the native binding channel's page globals. Never reported, so no page can claim them first. */
+  readonly bindings: string;
+}
+
 /** What the owner asks of a native engine for one connection attempt. */
 export interface ConnectRequest {
   /** The provider-issued connection address, unvalidated. */
   readonly connection: unknown;
+  readonly identity: ConnectionIdentity;
   readonly options: DriverOptions;
   readonly events: DriverEvents;
   /** A connection that completes after the attempt was interrupted is disposed through this. */

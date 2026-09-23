@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
@@ -128,7 +129,7 @@ const result = await Effect.runPromise(
           Effect.sync(() => {
             cleanup.push(value);
           }),
-      }),
+      }).pipe(Layer.provide(NodeCrypto.layer)),
     ),
     Effect.provideService(Settings, {
       read: (revision) => Effect.succeed({ label: "host settings", revision }),

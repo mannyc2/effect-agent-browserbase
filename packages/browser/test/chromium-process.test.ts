@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Fiber, Layer } from "effect";
 
@@ -133,7 +134,7 @@ it.live("local startup timeout and interrupted connect terminate the exact launc
                 Effect.sync(() => {
                   reports.push(result);
                 }),
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
         expect(reports).toHaveLength(1);
@@ -160,7 +161,11 @@ it.live(
         }
       }),
     ).pipe(
-      Effect.provide(Chromium.layer({ launch: { executablePath: "/PRIVATE-EXECUTABLE/missing" } })),
+      Effect.provide(
+        Chromium.layer({ launch: { executablePath: "/PRIVATE-EXECUTABLE/missing" } }).pipe(
+          Layer.provide(NodeCrypto.layer),
+        ),
+      ),
     ),
 );
 
@@ -176,7 +181,7 @@ it.live(
         const context = yield* Layer.build(
           Chromium.layer({
             launch: { executablePath: fixture.executable, startupTimeoutMillis: 100, args, proxy },
-          }),
+          }).pipe(Layer.provide(NodeCrypto.layer)),
         );
 
         args[0] = "--no-sandbox";
@@ -261,7 +266,7 @@ it.live(
             Effect.provide(
               Chromium.layer({
                 launch: { executablePath: fixture.executable, startupTimeoutMillis: 300 },
-              }),
+              }).pipe(Layer.provide(NodeCrypto.layer)),
             ),
           );
         }

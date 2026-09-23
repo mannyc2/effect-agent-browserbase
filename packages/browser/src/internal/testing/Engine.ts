@@ -391,6 +391,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     return internal;
   };
 
+  /** Only a mutation's Ticket carries dispatch evidence; a read's ticket has none to give. */
+  const isTicket = (ticket: ReadTicket): ticket is Ticket => "dispatch" in ticket;
+
   const connect = (options: DriverOptions, events: DriverEvents): Driver => {
     const ordinal = attempts++;
 
@@ -493,7 +496,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const dispatch = (ticket: ReadTicket, record: MutableCall) => {
-      if ("dispatch" in ticket) (ticket as Ticket).dispatch();
+      if (isTicket(ticket)) ticket.dispatch();
       record.dispatched = true;
     };
 
@@ -1262,6 +1265,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
                       await hold(armedStop.gate, stopTicket, "navigate-stop", stopRecord);
                       stopTicket.check();
                     }
+                    break;
+                  case undefined:
+                    break;
                 }
                 page.navigation?.stop();
 
@@ -1910,6 +1916,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           : open.invoke(name, input, invokeOptions?.origin);
       }),
     disconnect: Effect.sync(() => {
+      // oxlint-disable-next-line unicorn/no-useless-spread -- dropping removes it from `live`
       for (const connection of [...live]) connection.drop();
     }),
     connections: Effect.sync(() => [...connections]),

@@ -309,15 +309,18 @@ export const describe = <Tools extends Record<string, Tool.Any>>(
   descriptions: { readonly [Name in keyof Tools]?: string },
 ): Toolkit.Toolkit<Tools> => {
   const tools = Object.values(kit.tools).map((tool) => {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- `Tool.Any` leaves its name `any`
     const description: unknown = descriptions[tool.name as keyof Tools];
 
+    if (typeof description !== "string") return tool;
+
     // The same clone Effect AI's own Tool setters make: prototype and every field kept.
-    return typeof description === "string"
-      ? (Object.assign(Object.create(Object.getPrototypeOf(tool)), tool, {
-          description,
-        }) as Tool.Any)
-      : tool;
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion, typescript/no-unsafe-argument -- a prototype is untyped; the clone is the Tool it copies
+    return Object.assign(Object.create(Object.getPrototypeOf(tool)), tool, {
+      description,
+    }) as Tool.Any;
   });
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the same Tools, by name, as `kit`
   return Toolkit.make(...tools) as unknown as Toolkit.Toolkit<Tools>;
 };

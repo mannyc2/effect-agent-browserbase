@@ -1,5 +1,6 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
@@ -48,7 +49,7 @@ it.live("Browser.scoped joins callback resources before checked owned cleanup", 
                 reports.push(receipt);
                 events.push("browser cleanup");
               }),
-          }),
+          }).pipe(Layer.provide(NodeCrypto.layer)),
         ),
       );
 
@@ -96,7 +97,7 @@ it.live("Browser.scoped retains both a callback failure and checked cleanup fail
     );
 
     const exit = yield* Browser.scoped(acquired, () => Effect.fail(callbackError)).pipe(
-      Effect.provide(Chromium.layer({ launch })),
+      Effect.provide(Chromium.layer({ launch }).pipe(Layer.provide(NodeCrypto.layer))),
       Effect.exit,
     );
 
@@ -134,7 +135,7 @@ it.live("Browser.scoped cancellation joins child work and terminates its owned p
                 reports.push(receipt);
                 events.push("browser");
               }),
-          }),
+          }).pipe(Layer.provide(NodeCrypto.layer)),
         ),
         Effect.forkScoped,
       );
@@ -195,7 +196,7 @@ it.live(
             yield* browser.click({ selector: "#increment" });
             expect((yield* browser.readText({ selector: "#count" })).text).toBe("1");
           }),
-        ).pipe(Effect.provide(Chromium.layer({ launch })));
+        ).pipe(Effect.provide(Chromium.layer({ launch }).pipe(Layer.provide(NodeCrypto.layer))));
       }),
     ),
 );

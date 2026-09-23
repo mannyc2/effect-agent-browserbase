@@ -159,7 +159,7 @@ it("keeps static-only plans serializable and refuses invalid binding admission b
       failureMode: "reject-call",
       handle: () => Effect.succeed("ok"),
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
 });
 
 it.effect(
@@ -167,7 +167,7 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const decoded = Schema.decodeSync(Bootstrap.Plan)(defaulted);
+        const decoded = yield* Schema.decodeEffect(Bootstrap.Plan)(defaulted);
 
         expect(decoded.bindings?.[0]).toBe(defaulted.bindings?.[0]);
 

@@ -148,6 +148,7 @@ export const provider = Effect.fnUntraced(function* (
 
   const create = fixed.create ?? { _tag: "Accept" as const };
 
+  // oxlint-disable-next-line effecttsgo/async-function -- stands in for the platform's fetch
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
@@ -284,7 +285,8 @@ export interface ScriptedLayerOptions {
  * The real account and browser Layers over the scripted provider and the scripted engine.
  * Allocation attempts, release reconciliation, cleanup receipts, `onCleanup`,
  * `onAllocationUncertain`, borrowed attachment and every resource service run for real;
- * only the provider's replies and the browser's pages are scripted.
+ * only the provider's replies and the browser's pages are scripted. Attempt ids and handoff
+ * tokens come from `sequentialCrypto` in `effect-browser/testing`, so they are predictable too.
  */
 export const layer = (
   options: ScriptedLayerOptions,
@@ -305,7 +307,11 @@ export const layer = (
       const browser = BrowserbaseBrowser.layer({
         launch: options.launch ?? recipe(),
         ...options.options,
-      }).pipe(Layer.provide(account), Layer.provide(bindingLayer(engine.binding)));
+      }).pipe(
+        Layer.provide(account),
+        Layer.provide(bindingLayer(engine.binding)),
+        Layer.provide(BrowserTesting.sequentialCrypto),
+      );
 
       const control = Layer.succeed(
         ScriptedBrowserbase,

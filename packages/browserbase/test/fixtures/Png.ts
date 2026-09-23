@@ -28,21 +28,23 @@ export const decodePng = (bytes: Uint8Array) => {
 
   const paeth = (left: number, up: number, upLeft: number) => {
     const estimate = left + up - upLeft;
-    const [dl, du, dul] = [left, up, upLeft].map((value) => Math.abs(estimate - value));
+    const dl = Math.abs(estimate - left);
+    const du = Math.abs(estimate - up);
+    const dul = Math.abs(estimate - upLeft);
 
     return dl <= du && dl <= dul ? left : du <= dul ? up : upLeft;
   };
 
   for (let row = 0; row < height; row++) {
-    const filter = raw[row * (stride + 1)];
+    const filter = raw[row * (stride + 1)]!;
 
     for (let i = 0; i < stride; i++) {
-      const left = i >= channels ? pixels[row * stride + i - channels] : 0;
-      const up = row > 0 ? pixels[(row - 1) * stride + i] : 0;
-      const upLeft = row > 0 && i >= channels ? pixels[(row - 1) * stride + i - channels] : 0;
+      const left = i >= channels ? pixels[row * stride + i - channels]! : 0;
+      const up = row > 0 ? pixels[(row - 1) * stride + i]! : 0;
+      const upLeft = row > 0 && i >= channels ? pixels[(row - 1) * stride + i - channels]! : 0;
       const predicted = [0, left, up, (left + up) >> 1, paeth(left, up, upLeft)][filter] ?? 0;
 
-      pixels[row * stride + i] = (raw[row * (stride + 1) + 1 + i] + predicted) & 255;
+      pixels[row * stride + i] = (raw[row * (stride + 1) + 1 + i]! + predicted) & 255;
     }
   }
 
@@ -53,7 +55,7 @@ export const decodePng = (bytes: Uint8Array) => {
     rgb: (x: number, y: number): readonly [number, number, number] => {
       const at = (Math.floor(y) * width + Math.floor(x)) * channels;
 
-      return [pixels[at], pixels[at + 1], pixels[at + 2]];
+      return [pixels[at]!, pixels[at + 1]!, pixels[at + 2]!];
     },
   };
 };

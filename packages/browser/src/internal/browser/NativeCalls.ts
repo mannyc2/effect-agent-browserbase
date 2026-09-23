@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Exit, Schema } from "effect";
 
 import {
   BrowserError,
@@ -44,11 +44,12 @@ export const failure = (reason: BrowserReason, outcome?: BrowserOutcome) =>
   NativeFailure.make({ reason, ...(outcome === undefined ? {} : { outcome }) });
 
 export const safeDecode = <A>(codec: Schema.Codec<A, unknown, never, never>, raw: unknown): A => {
-  try {
-    return Schema.decodeUnknownSync(codec)(raw);
-  } catch {
-    throw failure(Reasons.Malformed.make({}));
-  }
+  const decoded = Schema.decodeUnknownExit(codec)(raw);
+
+  // A schema issue and a throw while reading the reply are both a malformed reply.
+  if (Exit.isFailure(decoded)) throw failure(Reasons.Malformed.make({}));
+
+  return decoded.value;
 };
 
 /**

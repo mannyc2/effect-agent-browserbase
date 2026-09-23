@@ -37,6 +37,7 @@ const launch: LaunchRecipe = {
   provider: { browserSettings: { recordSession: true } },
 };
 
+/** A browser Layer takes Effect's `Crypto` from the caller's platform, so its compositions do too. */
 const browser = (options: Partial<BrowserOptions> = {}) =>
   BrowserbaseBrowser.layer({ launch, ...options });
 

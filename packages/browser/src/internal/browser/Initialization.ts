@@ -23,6 +23,7 @@ import type { Targets } from "./Targets.ts";
 export const makeInitialization = (
   context: BrowserContext,
   options: DriverOptions,
+  bindingIdentity: string,
   targets: Targets,
   callbacks: CallbackTasks,
   events: DriverEvents,
@@ -72,7 +73,7 @@ export const makeInitialization = (
   const bindings =
     options.bindings === undefined || options.bindings.length === 0
       ? undefined
-      : makeNativeBindings(context, options.bindings, () =>
+      : makeNativeBindings(context, bindingIdentity, options.bindings, () =>
           initializationFault(
             InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
           ),

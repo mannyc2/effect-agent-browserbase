@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Option, Redacted } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
@@ -120,7 +121,7 @@ it.effect(
               disconnect: mark("disconnect").pipe(Effect.as("closed" as const)),
             },
             1000,
-          );
+          ).pipe(Effect.provide(NodeCrypto.layer));
 
           expect(Option.isNone(yield* lease.cleanupResult)).toBe(true);
 
@@ -168,7 +169,7 @@ it.effect(
             disconnect: Effect.succeed("pending"),
           },
           1000,
-        );
+        ).pipe(Effect.provide(NodeCrypto.layer));
 
         const result = yield* cleanup.release;
 
@@ -205,7 +206,7 @@ it.effect(
               Effect.sync(() => {
                 reports.push(result);
               }),
-          }),
+          }).pipe(Layer.provide(NodeCrypto.layer)),
         );
 
         for (const endpoint of [
@@ -229,7 +230,10 @@ it.effect(
         expect(reports).toEqual([]);
         for (const bootstrap of [Bootstrap.empty, undefined]) {
           const misplaced = { launch: {}, bootstrap };
-          const error = yield* Layer.build(Chromium.layer(misplaced)).pipe(Effect.flip);
+
+          const error = yield* Layer.build(
+            Chromium.layer(misplaced).pipe(Layer.provide(NodeCrypto.layer)),
+          ).pipe(Effect.flip);
 
           expect(error).toMatchObject({
             operation: "configure",
@@ -243,9 +247,9 @@ it.effect(
           "--user-data-dir=/other",
           "--proxy-server=http://other:8080",
         ]) {
-          const error = yield* Layer.build(Chromium.layer({ launch: { args: [arg] } })).pipe(
-            Effect.flip,
-          );
+          const error = yield* Layer.build(
+            Chromium.layer({ launch: { args: [arg] } }).pipe(Layer.provide(NodeCrypto.layer)),
+          ).pipe(Effect.flip);
 
           expect(error.reason._tag).toBe("Configuration");
         }

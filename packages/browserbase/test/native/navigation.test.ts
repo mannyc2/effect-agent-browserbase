@@ -45,7 +45,7 @@ const evidenceOf = <E>(
     session.checkpoint(options).pipe(
       Effect.catchIf(
         (error) => error.reason._tag === "TargetChanged" && error.outcome === "undispatched",
-        () => Effect.succeed(undefined),
+        () => Effect.void,
       ),
     ),
     (sampled) => sampled?.text.includes(marker) === true,
@@ -57,6 +57,7 @@ const countStops = (page: Page, loseAcknowledgement = false) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const context = page.context();
+      // oxlint-disable-next-line typescript/unbound-method -- called on this context
       const original = context.newCDPSession;
       let sent = 0;
 
@@ -113,7 +114,6 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
               window.onbeforeunload = (event) => {
                 sessionStorage.setItem("fixture-before-unload", "1");
                 event.preventDefault();
-                event.returnValue = "Leave this fixture document?";
               };
 
               return navigator.userActivation.hasBeenActive;
@@ -563,7 +563,7 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
           expect(summary.documentBoundaries).toEqual(live.documentBoundaries);
           expect(new Set(documents)).toEqual(new Set([0, 1]));
           // Receipt order is kept: no frame of the first document follows one of the second.
-          expect(documents).toEqual([...documents].sort());
+          expect(documents).toEqual([...documents].sort((left, right) => left - right));
           yield* session.close;
         }),
         { pageControl: true },

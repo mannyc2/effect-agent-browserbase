@@ -1,4 +1,4 @@
-import { Effect, Redacted, type Scope } from "effect";
+import { Crypto, Effect, Layer, Redacted, type Scope } from "effect";
 
 import type { OpenOptions } from "./Browser.ts";
 import { type AutomationOptions, BrowserPolicy, type Viewport } from "./BrowserData.ts";
@@ -6,6 +6,7 @@ import { type BrowserBinding, make as makeRuntime } from "./BrowserRuntime.ts";
 import { BrowserError, Reasons, type InitializationError } from "./Errors.ts";
 import { fromNativeAttempt, issueBinding, type NativeAttempt } from "./internal/browser/Binding.ts";
 import { checked } from "./internal/browser/PublicSession.ts";
+import { makeSequentialCrypto } from "./internal/testing/Crypto.ts";
 import {
   makeScriptedBrowser,
   type EngineTimers,
@@ -87,7 +88,10 @@ const makeEngine = Effect.fnUntraced(function* (script: Script) {
     },
   };
 
-  // The provider's address names the browser: the same address reaches the same pages again.
+  // The provider's address names the browser: the same address reaches the same pages again. A
+  // refused connection throws inside the engine; `async` turns that into the rejection the
+  // owner's `onSettled` bookkeeping waits for.
+  // oxlint-disable-next-line effecttsgo/async-function -- NativeAttempt is Promise-based
   const attempt: NativeAttempt = async (request) => {
     const address = Redacted.isRedacted(request.connection)
       ? String(Redacted.value(request.connection))
@@ -111,7 +115,8 @@ const makeEngine = Effect.fnUntraced(function* (script: Script) {
 /**
  * Open one scripted browser in the caller's Scope. The session is the real owner over a
  * scripted native engine: admission, budgets, staleness, dispatch evidence, capture, page holds
- * and typed callbacks are the production code paths. Only the page and its outcomes are scripted.
+ * and typed callbacks are the production code paths. Only the page and its outcomes are scripted,
+ * and the owner's ids and handoff tokens come from `sequentialCrypto`.
  */
 export const open = Effect.fnUntraced(function* <E = never, R = never>(
   script: Script,
@@ -136,7 +141,7 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
     binding: engine.binding,
     ...(options.automation === undefined ? {} : { automation: options.automation }),
     ...(options.viewport === undefined ? {} : { viewport: options.viewport }),
-  });
+  }).pipe(Effect.provide(sequentialCrypto));
 
   const reference = Object.freeze(
     ScriptedReference.make({ provider: "scripted", id: `scripted-${++references}` }),
@@ -168,6 +173,17 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
     cleanupResult: acquired.lifetime.cleanupResult,
   }) satisfies ScriptedSession<E>;
 });
+
+/**
+ * The `Crypto` scripted browsers draw their ids and handoff tokens from. Its bytes count up from
+ * one on each build, so every value is predictable; it is not random and computes no digest.
+ * `open` uses it already. A provider Layer built over `binding` still requires a `Crypto`, and
+ * this one keeps such a test free of a platform package.
+ */
+export const sequentialCrypto: Layer.Layer<Crypto.Crypto> = Layer.sync(
+  Crypto.Crypto,
+  makeSequentialCrypto,
+);
 
 /**
  * The same engine for a provider Layer built on `browser-runtime`, such as

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import * as Tools from "effect-agent-browser/tools";
@@ -25,7 +26,7 @@ const layer = Chromium.layer({
     chromiumSandbox: false,
     startupTimeoutMillis: 25000,
   },
-});
+}).pipe(Layer.provide(NodeCrypto.layer));
 
 const usage = { inputTokens: {}, outputTokens: {} };
 

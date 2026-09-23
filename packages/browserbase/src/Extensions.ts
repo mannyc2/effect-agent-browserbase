@@ -1,8 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { BrowserbaseClient } from "./Client.ts";
-import type { ClientError } from "./Errors.ts";
-import { ExtensionError } from "./Errors.ts";
+import { type ClientError, ExtensionError } from "./Errors.ts";
 import { inspectExtensionArchive } from "./internal/extension/Archive.ts";
 import { ExtensionReference, Identifier } from "./References.ts";
 import { SafeFilename } from "./Transfers.ts";

@@ -4,6 +4,7 @@ import type { BrowserContext, CDPSession, Frame, Page } from "playwright-core";
 import { Identifier } from "../../BrowserData.ts";
 import { InitializationError } from "../../Errors.ts";
 import type { NativeBinding } from "./Bindings.ts";
+import { safeDecode } from "./NativeCalls.ts";
 
 const ContextCreated = Schema.Struct({
   context: Schema.Struct({
@@ -183,10 +184,12 @@ const pageBundle = (
  */
 export const makeNativeBindings = (
   context: BrowserContext,
+  /** Unpredictable and never reported, so no page can define these globals before they install. */
+  bindingIdentity: string,
   bindings: ReadonlyArray<NativeBinding>,
   fault: () => void,
 ) => {
-  const identity = globalThis.crypto.randomUUID().replaceAll("-", "");
+  const identity = bindingIdentity.replaceAll("-", "");
   const nativeName = `__effect_agent_binding_${identity}`;
   const controllerName = `__effect_agent_bindings_${identity}`;
   const bundle = pageBundle(nativeName, controllerName, bindings);
@@ -232,7 +235,7 @@ export const makeNativeBindings = (
       }
       const native = cdp;
 
-      const targetId = Schema.decodeSync(TargetIdentity)(await native.send("Target.getTargetInfo"))
+      const targetId = safeDecode(TargetIdentity, await native.send("Target.getTargetInfo"))
         .targetInfo.targetId;
 
       if (closing || page.isClosed() || targets.has(targetId)) return;

@@ -1,4 +1,13 @@
-import { Context, Effect, Layer, type Option, type Redacted, Schema, type Scope } from "effect";
+import {
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  type Option,
+  type Redacted,
+  Schema,
+  type Scope,
+} from "effect";
 import type { BrowserSession, OpenOptions } from "effect-browser/browser";
 import type {
   ActionResult,
@@ -20,6 +29,7 @@ import type { CleanupResult } from "./Cleanup.ts";
 import { BrowserbaseClient } from "./Client.ts";
 import type { AllocationError, ContextError, SessionError } from "./Errors.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
+import { isList } from "./internal/List.ts";
 import { borrowedRemote, ownedRemote, type RemoteLease } from "./internal/session/Browser.ts";
 import type { ContextWriterPermit } from "./internal/session/WriterFacts.ts";
 import { issuedUpload } from "./internal/upload/Issued.ts";
@@ -106,7 +116,7 @@ const selection = (
 
     const uploads = request.selection.uploads;
 
-    if (!Array.isArray(uploads) || uploads.length < 1 || uploads.length > 8)
+    if (!isList(uploads) || uploads.length < 1 || uploads.length > 8)
       return Effect.fail(
         BrowserError.make({
           operation,
@@ -231,14 +241,20 @@ export class BrowserbaseBrowser extends Context.Service<
     return Effect.flatMap(BrowserbaseBrowser, (browser) => browser.attach(reference, request));
   }
 
+  /** Allocation attempts, connection ids and handoff tokens come from the required `Crypto`. */
   static layer(
     options: BrowserOptions,
-  ): Layer.Layer<BrowserbaseBrowser, BrowserError, BrowserbaseClient | BrowserbaseSessions> {
+  ): Layer.Layer<
+    BrowserbaseBrowser,
+    BrowserError,
+    BrowserbaseClient | BrowserbaseSessions | Crypto.Crypto
+  > {
     return Layer.effect(
       BrowserbaseBrowser,
       Effect.gen(function* () {
         const client = yield* BrowserbaseClient;
         const sessions = yield* BrowserbaseSessions;
+        const crypto = yield* Crypto.Crypto;
         const binding = yield* BrowserbaseBrowserBinding;
 
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
@@ -268,12 +284,17 @@ export class BrowserbaseBrowser extends Context.Service<
 
         const source =
           <L extends BrowserRuntime.Lifetime, E>(
-            remote: BrowserRuntime.Source<L, E, BrowserbaseClient | BrowserbaseSessions>,
+            remote: BrowserRuntime.Source<
+              L,
+              E,
+              BrowserbaseClient | BrowserbaseSessions | Crypto.Crypto
+            >,
           ): BrowserRuntime.Source<L, E> =>
           (cleanup, deadline) =>
             remote(cleanup, deadline).pipe(
               Effect.provideService(BrowserbaseClient, client),
               Effect.provideService(BrowserbaseSessions, sessions),
+              Effect.provideService(Crypto.Crypto, crypto),
             );
 
         const acquire = Effect.fnUntraced(function* <E = never, R = never>(

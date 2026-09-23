@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
-import type { Scope } from "effect";
-import { Effect, Exit, Fiber, Stream } from "effect";
+import { Effect, Exit, Fiber, type Scope, Stream } from "effect";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 
 import { PageInfo, Target } from "../src/BrowserData.ts";

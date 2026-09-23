@@ -1,4 +1,4 @@
-import { Effect, Option, type Redacted } from "effect";
+import { type Crypto, Effect, Option, type Redacted } from "effect";
 import type { Lifetime, Source } from "effect-browser/browser-runtime";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
@@ -23,7 +23,11 @@ export interface RemoteLease extends Lifetime {
   readonly liveView: (ttl: number) => Effect.Effect<LiveView, BrowserError>;
 }
 
-type RemoteSource<L extends Lifetime, E> = Source<L, E, BrowserbaseClient | BrowserbaseSessions>;
+type RemoteSource<L extends Lifetime, E> = Source<
+  L,
+  E,
+  BrowserbaseClient | BrowserbaseSessions | Crypto.Crypto
+>;
 
 /** A borrowed connection closes without requiring or requesting remote termination. */
 const checkedCleanup = (

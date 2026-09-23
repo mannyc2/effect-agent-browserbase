@@ -1,8 +1,7 @@
 import { Schema } from "effect";
 import type { Browser, BrowserContext, Frame } from "playwright-core";
 
-import type { PageInfo, PageSuspension } from "../../BrowserData.ts";
-import { Identifier } from "../../BrowserData.ts";
+import { Identifier, type PageInfo, type PageSuspension } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { CallbackTasks } from "./CallbackTasks.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
@@ -20,6 +19,8 @@ export const makePageControl = (
   browser: Browser,
   context: BrowserContext,
   options: DriverOptions,
+  /** Suspension ids from an earlier connection never match a hold on this one. */
+  connectionNamespace: string,
   targets: Targets,
   callbacks: CallbackTasks,
   events: DriverEvents,
@@ -28,6 +29,9 @@ export const makePageControl = (
   held: (pageId: string) => void,
 ) => {
   const { current, entries } = targets;
+  let suspensions = 0;
+
+  const suspensionId = () => `suspension-${connectionNamespace}-${++suspensions}`;
 
   const execution = (entry: Entry): Promise<PageExecution> => {
     if (!options.pageControl)
@@ -42,7 +46,7 @@ export const makePageControl = (
         await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
         if (closing() || entry.page.isClosed()) throw failure(Reasons.Closed.make({}));
 
-        const control = new PageExecution(entry.id, targetId, {
+        const control = new PageExecution(entry.id, targetId, suspensionId, {
           readRate: async () =>
             safeDecode(
               Schema.Struct({ playbackRate: Schema.Finite }),

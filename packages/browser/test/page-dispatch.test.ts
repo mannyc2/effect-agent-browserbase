@@ -23,7 +23,7 @@ const fixture = () => {
     },
   };
 
-  const control = new PageExecution("page-a", "target-a", {
+  const control = new PageExecution("page-a", "target-a", () => "suspension-1", {
     readRate: async () => 1,
     rate: async () => {
       calls.push("rate");

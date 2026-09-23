@@ -10,7 +10,7 @@ This is a prerelease trusted-host integration, not a multi-tenant browser isolat
 
 Only trusted-host `Unrestricted` network policy is supported. `ExactHosts` and `PublicWeb` fail before allocation. A browser must not use ambient application credentials, URLs, filesystem paths or network authority supplied by an untrusted model. A supplied host fetch implementation is trusted code, not a sandbox boundary.
 
-Keep Browserbase API keys, CDP connection URLs, Live View URLs and signed artifact URLs out of model inputs, logs and durable records. Human takeover/release is an application authorization decision; displaying an iframe is not authorization. Persistent browser-context writers require an exclusive application-owned lease.
+Keep Browserbase API keys, CDP connection URLs, Live View URLs and signed artifact URLs out of model inputs, logs and durable records. Human takeover/release is an application authorization decision; displaying an iframe is not authorization. Handoff tokens and native binding names come from the host's Effect `Crypto`: provide the platform's cryptographically secure implementation, such as `NodeServices.layer`. `sequentialCrypto` from `effect-browser/testing` is predictable and belongs only to scripted tests. Persistent browser-context writers require an exclusive application-owned lease.
 
 An action with an unknown outcome must not be replayed automatically. Local disconnect and accepted release are not proof of remote termination. Live capture supplies frames only, not website audio or proof that the provider captured every frame.
 

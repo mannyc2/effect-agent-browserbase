@@ -25,7 +25,7 @@ it("an operation is a closed vocabulary, so a misspelling is refused rather than
       reason: Reasons.Malformed.make({}),
       outcome: "undispatched",
     }),
-  ).toThrow();
+  ).toThrow(Schema.SchemaError);
 });
 
 it("a native failure keeps its reason and outcome and takes the caller's operation", () => {
@@ -86,6 +86,17 @@ it("no raw native exception crosses the private boundary, and a typed one passes
   expect(() => safeDecode(Schema.Natural, -1)).toThrow(
     expect.objectContaining({ _tag: "NativeFailure", reason: { _tag: "Malformed" } }),
   );
+
+  // A reply that throws while it is read is as malformed as one of the wrong shape.
+  const unreadable = {
+    get url(): string {
+      throw new Error("PRIVATE-UNREADABLE-REPLY");
+    },
+  };
+
+  expect(() => safeDecode(Schema.Struct({ url: Schema.String }), unreadable)).toThrow(
+    expect.objectContaining({ _tag: "NativeFailure", reason: { _tag: "Malformed" } }),
+  );
 });
 
 it.effect("the owner stamps the admitted operation on whatever the native step raised", () =>
@@ -135,6 +146,7 @@ it.effect("a refused connection keeps the reason the native attempt gave", () =>
   Effect.gen(function* () {
     const request = {
       connection: "wss://connect.browserbase.com/?session=1",
+      identity: { namespace: "connection", bindings: "bindings" },
       options: {
         viewport: { width: 640, height: 480 },
         popupPolicy: "retain",

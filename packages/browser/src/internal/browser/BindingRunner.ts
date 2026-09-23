@@ -86,7 +86,7 @@ export const makeBindingRunner = <I, A, E, R>(
 
             return exit;
           },
-          (error) => {
+          (error: unknown) => {
             if (failureMode === "fail-session") fault();
             throw error;
           },

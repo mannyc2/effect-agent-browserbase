@@ -73,10 +73,10 @@ it.effect("host reasons support reason recovery, factual limits and exhaustive u
     expect(yield* recoveredReasons).toBe(11);
     yield* exhaustive;
     expect(noErrors).toBe(true);
-    const decode = Schema.decodeUnknownSync(BrowserError, { onExcessProperty: "error" });
+    const decode = Schema.decodeUnknownEffect(BrowserError, { onExcessProperty: "error" });
 
     expect(
-      decode({
+      yield* decode({
         _tag: "BrowserError",
         operation: expected.operation,
         reason: expected.reason,
@@ -93,7 +93,7 @@ it.effect("host reasons support reason recovery, factual limits and exhaustive u
       { operation: "observe", reason: { _tag: "Limit" }, outcome: "undispatched" },
       { operation: "observe", reason: { _tag: "Busy", maximum: 10 }, outcome: "undispatched" },
     ])
-      expect(() => decode({ _tag: "BrowserError", ...input })).toThrow();
+      yield* Effect.flip(decode({ _tag: "BrowserError", ...input }));
   }),
 );
 

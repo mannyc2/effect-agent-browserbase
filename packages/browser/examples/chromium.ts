@@ -1,11 +1,13 @@
-import type { Redacted } from "effect";
-import { Effect, Stream } from "effect";
+import { Effect, type Redacted, Stream } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium } from "effect-browser/chromium";
 
 const policy = BrowserPolicy.unrestricted({ maxActions: 20, maxElapsedMillis: 60000 });
+
+// Each browser Layer here takes Effect's `Crypto` from the caller's platform Layer, such as
+// `NodeServices.layer`, so these compositions still require it.
 
 /** Launch one owned Chromium and capture a real frame from the page it navigated to. */
 export const inspectChromium = (url: string) =>

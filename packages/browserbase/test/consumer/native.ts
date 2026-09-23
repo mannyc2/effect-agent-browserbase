@@ -17,7 +17,7 @@ type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Requirements<T> = T extends Effect.Effect<infer _A, infer _E, infer R> ? R : never;
 
-const PublicSettings = Schema.Struct({ label: Schema.String, revision: Schema.NumberFromString });
+const PublicSettings = Schema.Struct({ label: Schema.String, revision: Schema.FiniteFromString });
 
 class SettingsUnavailable extends Schema.TaggedError<SettingsUnavailable>()(
   "ConsumerSettingsUnavailable",
@@ -39,7 +39,7 @@ const bootstrap = (origin: string) =>
     Bootstrap.binding({
       name: "getConsumerSettings",
       origins: [origin],
-      input: Schema.Struct({ revision: Schema.NumberFromString }),
+      input: Schema.Struct({ revision: Schema.FiniteFromString }),
       output: PublicSettings,
       maxConcurrent: 4,
       maxInputBytes: 128,

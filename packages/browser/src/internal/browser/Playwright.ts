@@ -1,8 +1,9 @@
 import { Schema } from "effect";
-import type { Browser, BrowserContext, CDPSession, Dialog, Page } from "playwright-core";
+import type { Browser, CDPSession, Dialog, Page } from "playwright-core";
 
 import { Reasons, BrowserError, InitializationError } from "../../Errors.ts";
 import { makeActions } from "./Actions.ts";
+import type { ConnectionIdentity } from "./Binding.ts";
 import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
@@ -25,6 +26,7 @@ const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
 export const connectPlaywrightEndpoint = async (
   endpoint: string,
   signal: AbortSignal,
+  identity: ConnectionIdentity,
   options: DriverOptions,
   events: DriverEvents,
   observe?: (browser: Browser) => void,
@@ -45,7 +47,7 @@ export const connectPlaywrightEndpoint = async (
   }
   try {
     observe?.(browser);
-    const driver = await makePlaywrightDriver(browser, options, events);
+    const driver = await makePlaywrightDriver(browser, identity, options, events);
 
     if (signal.aborted) {
       await driver.disconnect().catch(() => {});
@@ -66,15 +68,16 @@ export const connectPlaywrightEndpoint = async (
 /** Tests may supply a real already-connected browser. This is deliberately not an exported subpath. */
 export const makePlaywrightDriver = async (
   browser: Browser,
+  identity: ConnectionIdentity,
   options: DriverOptions,
   events: DriverEvents,
 ): Promise<Driver> => {
   // This constructor is reached only after native acquisition, including in driver tests.
   const { errors } = await import("playwright-core");
   const contexts = browser.contexts();
+  const [context] = contexts;
 
-  if (contexts.length !== 1) throw failure(Reasons.Ambiguous.make({}));
-  const context: BrowserContext = contexts[0];
+  if (contexts.length !== 1 || context === undefined) throw failure(Reasons.Ambiguous.make({}));
 
   const dialogs = new Map<
     Dialog,
@@ -92,7 +95,7 @@ export const makePlaywrightDriver = async (
   let initialized = false;
   let browserCdp: CDPSession | undefined;
 
-  const targets = makeTargets(browser, context, options, () => closing, {
+  const targets = makeTargets(browser, context, options, identity.namespace, () => closing, {
     opened: (entry, created) => {
       if (initialized && !created && options.popupPolicy === "close") {
         void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
@@ -166,13 +169,14 @@ export const makePlaywrightDriver = async (
   const initialization = makeInitialization(
     context,
     options,
+    identity.bindings,
     targets,
     callbacks,
     events,
     () => closing,
   );
 
-  const observation = makeObservation(targets, events);
+  const observation = makeObservation(targets, identity.namespace, events);
 
   const actions = makeActions(
     context,
@@ -189,6 +193,7 @@ export const makePlaywrightDriver = async (
     browser,
     context,
     options,
+    identity.namespace,
     targets,
     callbacks,
     events,

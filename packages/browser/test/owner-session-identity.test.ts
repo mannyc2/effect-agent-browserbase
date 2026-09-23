@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vite-plus/test";
 
 import * as Bootstrap from "../src/Bootstrap.ts";
+import type { PageInfo } from "../src/BrowserData.ts";
 import * as BrowserRuntime from "../src/BrowserRuntime.ts";
 import * as Capture from "../src/Capture.ts";
 import { makeBindings } from "../src/internal/browser/Bindings.ts";
@@ -32,9 +34,11 @@ it.effect(
         const controls = yield* acquisition.rawConnect;
         const bindings = yield* makeBindings(Bootstrap.empty);
         const session = makeSession(controls, bindings);
-        const page = (yield* session.pages)[0];
+        const [first] = yield* session.pages;
 
-        assert.ok(page);
+        if (first === undefined) return assert.fail("the scripted provider opens one page");
+        // Declared, not narrowed: the loop below would otherwise make this inference circular.
+        const page: PageInfo = first;
         const disabled = yield* PageControl.state(session, page).pipe(Effect.flip);
 
         assert.equal(disabled.reason._tag, "Unsupported");
@@ -78,7 +82,9 @@ it.effect(
         for (const action of [
           foreign.capture.start(session).pipe(Effect.asVoid),
           foreign.control.state(session, page).pipe(Effect.asVoid),
-          foreign.runtime.make({ implementation: "foreign-test", binding }).pipe(Effect.asVoid),
+          foreign.runtime
+            .make({ implementation: "foreign-test", binding })
+            .pipe(Effect.asVoid, Effect.provide(NodeCrypto.layer)),
         ]) {
           const error = yield* action.pipe(Effect.flip);
 

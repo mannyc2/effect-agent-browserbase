@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 import {
   BrowserPolicy,
   type FormField,
@@ -147,8 +148,14 @@ const text = (observation: Observation, label: string, value: string): FormField
   value,
 });
 
-const layer = Chromium.layer({ viewport: { width: 640, height: 900 } });
-const controlled = Chromium.layer({ pageControl: true, viewport: { width: 640, height: 900 } });
+const layer = Chromium.layer({ viewport: { width: 640, height: 900 } }).pipe(
+  Layer.provide(NodeCrypto.layer),
+);
+
+const controlled = Chromium.layer({
+  pageControl: true,
+  viewport: { width: 640, height: 900 },
+}).pipe(Layer.provide(NodeCrypto.layer));
 
 it.live("a form sets text, toggles and options in order, then submits once", () =>
   Effect.scoped(

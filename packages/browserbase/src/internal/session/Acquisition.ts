@@ -1,4 +1,4 @@
-import { Clock, Effect, Exit, Option, Schema, Scope } from "effect";
+import { Clock, Crypto, Effect, Exit, Option, Schema, Scope } from "effect";
 
 import type { CleanupResult } from "../../Cleanup.ts";
 import { BrowserbaseClient } from "../../Client.ts";
@@ -42,11 +42,13 @@ export const acquireRemote = Effect.fnUntraced(function* (
 ) {
   const client = yield* BrowserbaseClient;
   const sessions = yield* BrowserbaseSessions;
+  const crypto = yield* Crypto.Crypto;
   const parent = yield* Scope.Scope;
 
   const launch = yield* compileLaunch(options.launch, {
     projectId: client.projectId,
-    attemptId: globalThis.crypto.randomUUID(),
+    // Secure randomness is a platform precondition, so its failure is a defect, not an outcome.
+    attemptId: yield* Effect.orDie(crypto.randomUUIDv4),
     requestedAtMillis: yield* Clock.currentTimeMillis,
   });
 

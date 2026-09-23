@@ -16,6 +16,7 @@ export const SafeFilename = Schema.NonEmptyString.check(
     (value) =>
       value !== "." &&
       value !== ".." &&
+      // oxlint-disable-next-line eslint/no-control-regex -- control characters are what it rejects
       !/[\x00-\x1f\x7f/\\:]/.test(value) &&
       !/[. ]$/.test(value) &&
       !/^\s/.test(value) &&
@@ -229,7 +230,7 @@ export class PageExecutionState extends Schema.Class<PageExecutionState>(
 
 /** Explicit opt-out: this integration does not claim whole-browser network containment. */
 export class BrowserPolicy extends Schema.Class<BrowserPolicy>("BrowserBrowserPolicy")({
-  network: Schema.Struct({ _tag: Schema.Literal("Unrestricted") }),
+  network: Schema.TaggedStruct("Unrestricted", {}),
   maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1000)),
   maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(21_600_000)),
   maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),

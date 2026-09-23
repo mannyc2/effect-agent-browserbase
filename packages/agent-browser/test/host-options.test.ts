@@ -11,9 +11,7 @@ import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 const url = "https://example.test/";
 
 /** The scheduling an Agent run inside this context would use. */
-const scheduling = Effect.gen(function* () {
-  return yield* RunToolScheduling;
-});
+const scheduling = Effect.service(RunToolScheduling);
 
 it.effect("every option is checked once, when the host or a handler Layer is built", () =>
   Effect.gen(function* () {

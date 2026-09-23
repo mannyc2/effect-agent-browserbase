@@ -46,6 +46,8 @@ test("five clean consumers supply hosts directly and substitute only the browser
   assert.match(agent.dependencies[packages[2].name], /^file:/);
   assert.equal(agent.dependencies[packages[1].name], undefined);
   assert.equal(agent.devDependencies[packages[1].name], undefined);
+  // A real browser needs the platform's Crypto; the scripted testing entry points do not.
+  assert.equal(agent.devDependencies["@effect/platform-node"], catalog["@effect/platform-node"]);
   const browser = consumerManifest("browser", receipt, "/tmp/artifacts", catalog);
 
   assert.deepEqual(
@@ -57,6 +59,7 @@ test("five clean consumers supply hosts directly and substitute only the browser
 
   assert.equal(hosted.dependencies[packages[1].name], undefined);
   assert.match(hosted.devDependencies[packages[1].name], /^file:/);
+  assert.equal(hosted.devDependencies["@effect/platform-node"], catalog["@effect/platform-node"]);
   for (const manifest of [resources, browser, generic, agent, hosted]) {
     assert.equal(
       manifest.overrides["effect-browser"],

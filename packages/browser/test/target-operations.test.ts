@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Redacted } from "effect";
 import { TestClock } from "effect/testing";
@@ -131,7 +132,7 @@ const fixture = Effect.fnUntraced(function* (onRead?: () => Promise<void>) {
         maxPages: 2,
       },
     },
-  );
+  ).pipe(Effect.provide(NodeCrypto.layer));
 
   const controls = yield* acquired.connect;
 

@@ -18,7 +18,7 @@ import {
 } from "../fixtures/LocalBrowser.ts";
 
 const ChildResult = Schema.Struct({
-  pid: Schema.Number,
+  pid: Schema.Finite,
   heading: Schema.String,
   count: Schema.String,
   cleanup: Schema.Struct({

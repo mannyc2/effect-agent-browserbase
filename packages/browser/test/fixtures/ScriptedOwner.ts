@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect } from "effect";
 
 import { Viewport } from "../../src/BrowserData.ts";
@@ -244,6 +245,7 @@ export const fixture = Effect.fnUntraced(function* (options: OwnerOptions = {}) 
         : { connectBindings: options.connectBindings }),
     },
   ).pipe(
+    Effect.provide(NodeCrypto.layer),
     Effect.flatMap((acquired) =>
       Effect.cached(acquired.connect).pipe(
         Effect.map((connected) => ({

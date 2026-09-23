@@ -1,4 +1,5 @@
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
@@ -140,7 +141,7 @@ it.live(
                 Effect.sync(() => {
                   cleanup.push(result);
                 }),
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
           Effect.provideService(FetchHttpClient.Fetch, () => {
             httpCalls++;
@@ -268,7 +269,7 @@ it.live(
                 Effect.sync(() => {
                   cleanup.push(receipt);
                 }),
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
           Effect.provideService(FetchHttpClient.Fetch, () => {
             providerCalls++;
@@ -433,7 +434,7 @@ it.live(
                 startupTimeoutMillis: 25000,
               },
               viewport: { width: 640, height: 480 },
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
       }),
@@ -573,7 +574,7 @@ it.live(
                 startupTimeoutMillis: 25000,
               },
               viewport: { width: 640, height: 480 },
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
       }),

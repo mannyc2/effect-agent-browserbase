@@ -5,6 +5,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
@@ -370,7 +371,9 @@ export const localBrowser = Effect.acquireRelease(
             try {
               port = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0];
             } catch {
-              await new Promise<void>((resolve) => setTimeout(resolve, 20));
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 20);
+              });
             }
           }
           if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
@@ -390,9 +393,9 @@ export const localBrowser = Effect.acquireRelease(
         return Response.json(providerSession(id, "RUNNING"));
       }
       const id = parsed.pathname.split("/")[3];
-      const session = sessions.get(id);
+      const session = id === undefined ? undefined : sessions.get(id);
 
-      if (!session) return Response.json({}, { status: 404 });
+      if (id === undefined || !session) return Response.json({}, { status: 404 });
       if (parsed.pathname.endsWith("/uploads") && request.method === "POST") {
         // The fixture stands in for provider-side storage: it keeps the bytes where the
         // browser process can open them, exactly as a remote upload location would.
@@ -450,6 +453,7 @@ export const localBrowser = Effect.acquireRelease(
       binding,
       layer: (overrides: Partial<BrowserOptions> = {}) =>
         BrowserbaseBrowser.layer({ ...options, ...overrides }).pipe(
+          Layer.provide(NodeCrypto.layer),
           Layer.provide(account),
           Layer.provide(BrowserBinding.layer(binding)),
         ),
@@ -494,7 +498,9 @@ export const localBrowser = Effect.acquireRelease(
           ),
         );
         server.closeAllConnections();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
         // Chromium may finish releasing profile files just after process exit.
         // Node's recursive rm retries the documented ENOTEMPTY/EBUSY/EPERM class
         // without weakening the fixture's requirement to remove its whole profile.

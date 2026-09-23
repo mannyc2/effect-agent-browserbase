@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Random, Schema } from "effect";
 
 import type { MultipartFile } from "../../Client.ts";
 import { SafeFilename } from "../../Transfers.ts";
@@ -22,11 +22,15 @@ const isSafeFilename = Schema.is(SafeFilename);
 const quotable = (value: string): boolean =>
   isSafeFilename(value) && PRINTABLE_ASCII.test(value) && !value.includes('"');
 
-const randomBoundary = (): string => {
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
-
-  return `effect-agent-browserbase-${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-};
+/**
+ * Sixteen bytes from the fiber's `Random`. A boundary needs no secrecy: the encoder checks that
+ * the content does not contain it, and draws another if it does.
+ */
+const randomBoundary: Effect.Effect<string> = Effect.map(
+  Effect.all(Array.from({ length: 16 }, () => Random.nextIntBetween(0, 255))),
+  (bytes) =>
+    `effect-agent-browserbase-${bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+);
 
 const contains = (haystack: Uint8Array, needle: Uint8Array): boolean => {
   const first = needle[0];
@@ -51,11 +55,11 @@ const contains = (haystack: Uint8Array, needle: Uint8Array): boolean => {
  * A deliberately small RFC 7578 encoder: one file part, an ASCII-quotable name and a
  * delimiter proven absent from the content. It performs no filesystem or stream work.
  */
-export const encodeFilePart = (
+export const encodeFilePart = Effect.fnUntraced(function* (
   part: MultipartFile,
   maxBytes: number,
-  boundaries: () => string = randomBoundary,
-): MultipartResult => {
+  boundaries: Effect.Effect<string> = randomBoundary,
+): Effect.fn.Return<MultipartResult> {
   if (
     !FIELD.test(part.field) ||
     !quotable(part.filename) ||
@@ -70,7 +74,7 @@ export const encodeFilePart = (
   const encoder = new TextEncoder();
 
   for (let attempt = 0; attempt < 4; attempt++) {
-    const boundary = boundaries();
+    const boundary = yield* boundaries;
 
     if (!/^[A-Za-z0-9-]{1,70}$/.test(boundary)) continue;
     const delimiter = encoder.encode(boundary);
@@ -96,4 +100,4 @@ export const encodeFilePart = (
   }
 
   return { _tag: "Rejected", reason: "configuration" };
-};
+});

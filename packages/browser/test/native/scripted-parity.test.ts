@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, Schedule, type Scope } from "effect";
+import { Effect, Fiber, Layer, Schedule, type Scope } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, ObservedElement, type Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -86,11 +87,16 @@ const script = (origin: string): Testing.Script => ({
   ],
 });
 
+// Both owners' callbacks fail only with host errors, so a case's error channel stays typed.
 type Open = (
   origin: string,
   policy: BrowserPolicy,
   actionTimeoutMillis?: number,
-) => Effect.Effect<Browser.AnySession, BrowserError | InitializationError, Scope.Scope>;
+) => Effect.Effect<
+  Browser.BrowserSession<BrowserError | InitializationError>,
+  BrowserError | InitializationError,
+  Scope.Scope
+>;
 
 const openScripted: Open = (origin, policy, actionTimeoutMillis) =>
   Testing.open<BrowserError | InitializationError, never>(script(origin), {
@@ -116,7 +122,7 @@ const openChromium: Open = (origin, policy, actionTimeoutMillis) =>
         },
         viewport: { width: 640, height: 480 },
         ...(actionTimeoutMillis === undefined ? {} : { actionTimeoutMillis }),
-      }),
+      }).pipe(Layer.provide(NodeCrypto.layer)),
     ),
   );
 
