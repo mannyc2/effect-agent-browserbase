@@ -57,6 +57,7 @@ const fixture = Effect.fnUntraced(function* () {
       finish,
       disposalEntered,
       connected: true,
+      documentGone: false,
       disabled: true,
       disposals: 0,
       waits: 0,
@@ -65,7 +66,11 @@ const fixture = Effect.fnUntraced(function* () {
     };
 
     const handle = {
-      evaluate: async () => record.connected,
+      evaluate: async () => {
+        if (record.documentGone) throw new Error("PRIVATE-CONTEXT-DESTROYED");
+
+        return record.connected;
+      },
       waitForElementState: async (_state: string, options: { signal?: AbortSignal }) => {
         record.waits++;
         record.signal = options.signal;
@@ -397,6 +402,63 @@ it.effect(
       yield* Effect.promise(() => f.observation.dispose());
       expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
     }),
+);
+
+it.effect(
+  "document replacement makes a hidden wait stale even when the native failure arrives first",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const seen = yield* f.observe;
+      const original = f.records[0]!;
+
+      const wait = yield* f.begin((wait) =>
+        f.actions.waitForElement(
+          { observationId: seen.observationId, elementId: seen.controls[0]!.elementId },
+          "hidden",
+          wait.ticket,
+          f.target,
+        ),
+      );
+
+      yield* Effect.promise(() => original.entered.promise);
+      // Playwright fails the wait for a node whose document went away, then reports the navigation.
+      original.native.documentGone = true;
+      original.finish.reject(new Error("PRIVATE-ELEMENT-NOT-ATTACHED"));
+      expect(yield* Effect.result(wait.completed)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+      });
+      f.replaceDocument();
+      yield* Effect.promise(() => f.observation.dispose());
+      expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
+    }),
+);
+
+it.effect("a native wait failure in a live document keeps its own classification", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const seen = yield* f.observe;
+    const original = f.records[0]!;
+
+    const wait = yield* f.begin((wait) =>
+      f.actions.waitForElement(
+        { observationId: seen.observationId, elementId: seen.controls[0]!.elementId },
+        "hidden",
+        wait.ticket,
+        f.target,
+      ),
+    );
+
+    yield* Effect.promise(() => original.entered.promise);
+    original.finish.reject(new Error("PRIVATE-NATIVE-FAILURE"));
+    expect(yield* Effect.result(wait.completed)).toMatchObject({
+      _tag: "Failure",
+      failure: { reason: { _tag: "Provider" }, outcome: "undispatched" },
+    });
+    yield* Effect.promise(() => f.observation.dispose());
+    expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
+  }),
 );
 
 it.effect("remaining lifetime expires a pure wait without inventing unresolved input", () =>

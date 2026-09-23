@@ -492,12 +492,14 @@ export const makeActions = (
     waitOn(ticket, target, () => {
       const leased = observation.lease(reference, ticket);
 
+      // The node is still in the document it was observed in. A node whose document has gone
+      // cannot be evaluated at all, which answers the same question.
       const attached = async () => {
         leased.check();
 
-        const present = await leased.element.evaluate(
-          (node) => node.isConnected && node.ownerDocument === document,
-        );
+        const present = await leased.element
+          .evaluate((node) => node.isConnected && node.ownerDocument === document)
+          .catch(() => false);
 
         leased.check();
         if (present !== true) throw failure(Reasons.Stale.make({}), "undispatched");
@@ -512,9 +514,12 @@ export const makeActions = (
               signal: ticket.signal,
             });
           } catch (error) {
-            if (state !== "hidden") await attached();
+            // Playwright can fail a wait because its node's document went away before it reports
+            // the navigation that replaced it, so a failure asks the node itself, whatever the state.
+            await attached();
             throw error;
           }
+          // A hidden node may have left its document; any other state needs it attached.
           if (state !== "hidden") await attached();
         },
         dispose: leased.release,
