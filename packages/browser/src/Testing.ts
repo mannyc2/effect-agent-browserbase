@@ -2,7 +2,7 @@ import { Effect, type Scope } from "effect";
 
 import type { OpenOptions } from "./Browser.ts";
 import { type AutomationOptions, BrowserPolicy, type Viewport } from "./BrowserData.ts";
-import * as BrowserRuntime from "./BrowserRuntime.ts";
+import { type BrowserBinding, make as makeRuntime } from "./BrowserRuntime.ts";
 import { BrowserError, Reasons, type InitializationError } from "./Errors.ts";
 import { fromNativeAttempt, issueBinding, type NativeAttempt } from "./internal/browser/Binding.ts";
 import { checked } from "./internal/browser/PublicSession.ts";
@@ -52,7 +52,7 @@ export interface ScriptedOptions<E = never, R = never> extends OpenOptions<E, R>
 
 /** The scripted engine as an opaque binding, with one control handle for each connection made. */
 export interface ScriptedBinding {
-  readonly binding: BrowserRuntime.BrowserBinding;
+  readonly binding: BrowserBinding;
   readonly connections: Effect.Effect<ReadonlyArray<ScriptedControl>>;
 }
 
@@ -114,7 +114,7 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
 
   const engine = yield* makeEngine(fixed);
 
-  const runtime = yield* BrowserRuntime.make({
+  const runtime = yield* makeRuntime({
     implementation: "scripted",
     binding: engine.binding,
     ...(options.automation === undefined ? {} : { automation: options.automation }),

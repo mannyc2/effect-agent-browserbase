@@ -3,9 +3,9 @@ import type { BrowserError } from "effect-browser/errors";
 import * as BrowserTesting from "effect-browser/testing";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import * as Account from "./Account.ts";
+import { type Services as AccountServices, layer as accountLayer } from "./Account.ts";
 import { BrowserbaseBrowser, type BrowserOptions } from "./Browser.ts";
-import * as BrowserBinding from "./BrowserBinding.ts";
+import { layer as bindingLayer } from "./BrowserBinding.ts";
 import { ClientError } from "./Errors.ts";
 import { type LaunchRecipe, recipe } from "./Launch.ts";
 import { Identifier } from "./References.ts";
@@ -269,7 +269,7 @@ export interface ScriptedLayerOptions {
 export const layer = (
   options: ScriptedLayerOptions,
 ): Layer.Layer<
-  BrowserbaseBrowser | Account.Services | ScriptedBrowserbase,
+  BrowserbaseBrowser | AccountServices | ScriptedBrowserbase,
   BrowserError | ClientError
 > =>
   Layer.unwrap(
@@ -277,7 +277,7 @@ export const layer = (
       const scripted = yield* provider(options.provider);
       const engine = yield* BrowserTesting.binding(options.browser);
 
-      const account = Account.layer({
+      const account = accountLayer({
         projectId: scripted.control.projectId,
         apiKey: Redacted.make(scripted.control.secrets.apiKey),
       }).pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, scripted.fetch)));
@@ -285,7 +285,7 @@ export const layer = (
       const browser = BrowserbaseBrowser.layer({
         launch: options.launch ?? recipe(),
         ...options.options,
-      }).pipe(Layer.provide(account), Layer.provide(BrowserBinding.layer(engine.binding)));
+      }).pipe(Layer.provide(account), Layer.provide(bindingLayer(engine.binding)));
 
       const control = Layer.succeed(
         ScriptedBrowserbase,
