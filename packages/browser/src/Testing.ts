@@ -6,7 +6,8 @@ import * as BrowserRuntime from "./BrowserRuntime.ts";
 import { BrowserError, Reasons, type InitializationError } from "./Errors.ts";
 import { fromNativeAttempt, issueBinding, type NativeAttempt } from "./internal/browser/Binding.ts";
 import { checked } from "./internal/browser/PublicSession.ts";
-import { jpegFrame, makeScriptedDriver, type EngineTimers } from "./internal/testing/Engine.ts";
+import { makeScriptedDriver, type EngineTimers } from "./internal/testing/Engine.ts";
+import { jpegFrame } from "./internal/testing/Frame.ts";
 import { scriptedSource } from "./internal/testing/Lifetime.ts";
 import {
   Script,
