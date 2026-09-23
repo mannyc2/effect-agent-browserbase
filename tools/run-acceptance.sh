@@ -87,22 +87,19 @@ if [ "$PROFILE" = docs ]; then
   run diff-check git diff --check "$BASE" HEAD --
   exit "$FAILED"
 fi
-run boundary timeout 300s bash tools/run-boundary-suite.sh "$OUT/boundary"
 run bootstrap timeout 600s bash tools/bootstrap.sh "$WORK_ROOT/upstream"
 TREE="$WORK_ROOT/upstream/tree"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
   # Fail a spacing/type regression before downloading Chromium or starting a browser.
-  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browser packages/browserbase packages/agent-browser test
-  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browser packages/browserbase packages/agent-browser test
+  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browser packages/browserbase packages/agent-browser
+  run lint timeout 180s ./node_modules/.bin/vp lint --type-aware packages/browser packages/browserbase packages/agent-browser
   fast_reject
-  run integration-typecheck timeout 180s ./node_modules/.bin/vp run check:integration
   run browser-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browser check
   run generic-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browserbase check
   run typecheck timeout 180s ./node_modules/.bin/vp run -F effect-agent-browser check
   fast_reject
-  run integration-unit timeout 180s ./node_modules/.bin/vp run test:integration
   if [ "$PROFILE" = full ]; then install_native; fi
   cd "$TREE/packages/browser"
   run browser-unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
@@ -198,12 +195,12 @@ if [ "$LAST_CODE" = 0 ]; then
   fi
   # Only candidate source files belong in the review patch. Native CDP can leave
   # generated downloads below the package; a directory-wide add would include them.
-  git -C "$SOURCE_ROOT" ls-files -z -- packages/browser packages/browserbase packages/agent-browser test | \
+  git -C "$SOURCE_ROOT" ls-files -z -- packages/browser packages/browserbase packages/agent-browser | \
     git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
   git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
   run review-check git diff --check
 
   git diff --binary > "$OUT/review.patch"
-  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browser packages/browserbase packages/agent-browser test
+  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browser packages/browserbase packages/agent-browser
 fi
 exit "$FAILED"

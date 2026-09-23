@@ -764,7 +764,7 @@ The native driver, action permits, mutable capture leases and registry lookup ar
 | `browser-runtime`        | Supported construction for integrations supplying browser lifetimes                   |
 | `testing`                | The real owner over a scripted engine: scripts, armed outcomes, a call recorder       |
 
-The root intentionally excludes the Chromium namespace. Import its entry point explicitly. Source-only cross-package regression tests live in the repository's `test/integration`; they are not exported or shipped.
+The root intentionally excludes the Chromium namespace. Import its entry point explicitly.
 
 ## Validation
 
