@@ -34,6 +34,19 @@ reads, an opt-in exact-node wait tool and separately named mutation tools whose 
 action evidence when the following observation fails or exceeds its bound. Publishing, hosted qualification and the issue's evidence-dependent deferrals remain
 separate actions.
 
+The agent Tools were then reworked around what a real model does with them. `browser_inspect`
+takes object parameters (`find`, `scope`): its former empty struct was refused by the pinned
+OpenAI model before any request was sent, a failure no scripted-model test could see, and every
+Tool is now checked against both pinned providers' schema transforms. Host options are checked once,
+when the host is built, and cover the result bound, text continuation, form behaviour, lane limits
+and scheduling, with a hook that replaces how readings are taken. Results are fitted under one
+bound instead of being cut by the engine, observations default to the viewport, and `find` is
+applied inside the page before any limit. `host.run` schedules browser calls sequentially, in the
+order the model declared them. `effect-browser` adds a gated `fillForm`, which
+`browser_fill_form` exposes, so a whole form costs one call; `fillElement` refuses before dispatch
+what Playwright would otherwise refuse only after it. This is unpaid local evidence against
+Chromium with a scripted model: no model provider has been called and no hosted session run.
+
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 
 Current maintenance uses `Library CI` and a separate, manual, default-off npm OIDC workflow. Check the exact current PR/commit's Actions results; the historical acceptance record is not a claim that later changes were tested. Release procedures and required account configuration are in [RELEASING.md](RELEASING.md).
@@ -54,7 +67,7 @@ The recorded-workflow capabilities added for [#34](https://github.com/mannyc2/ef
 
 `effect-browser/testing` and `effect-browserbase/testing` are public. The first opens the real session owner over a scripted native engine, so admission, budgets, staleness, dispatch evidence, capture accounting, page holds and typed callbacks are the production code with only the pages and native outcomes scripted; a test arms the next call of one operation to fail before or after dispatch, hold at a gate, or disconnect, and reads a recorder that carries dispatch evidence and never a value. The second answers the reviewed session subset of the provider API from a script and composes the real account and browser Layers over it and over the scripted engine. Deterministic identifiers (`observation-1`, `session-1`, a control's scripted `id` as its `elementId`) let a scripted model turn name a node statically, and the scripted clocks follow the caller's, so `TestClock` reaches release and navigation bounds with nothing real elapsing.
 
-Their standing is unpaid and local. The unit suites of both packages, the actual AgentRuntime composition in `packages/agent-browser/test/scripted-agent.test.ts`, and the `resources` and `agent-hosted` installed consumers run them from source and from the packed tarballs on Node and Bun. `packages/browser/test/native/scripted-parity.test.ts` runs one case list against the scripted engine and a real Chromium over CDP and requires the same reason and outcome from both; it belongs to the `browser` consumer's native suite. The script schema refuses a destination on a control where a real document reports none, which that suite found. A scripted pass says what the owner and the provider code do with the answers they were given; it establishes nothing about what Chromium reports for a page beyond the parity cases, and nothing about what Browserbase answers, which only the hosted records below cover. Exact-commit acceptance remains the authority for which candidate artifacts and checks passed.
+Their standing is unpaid and local. The unit suites of both packages, the actual AgentRuntime composition in `packages/agent-browser/test/scripted-agent.test.ts`, and the `resources` and `agent-hosted` installed consumers run them from source and from the packed tarballs on Node and Bun. `packages/browser/test/native/scripted-parity.test.ts` runs one case list against the scripted engine and a real Chromium over CDP and requires the same reason and outcome from both; it belongs to the `browser` consumer's native suite. The script schema refuses a destination on a control where a real document reports none, which that suite found. Form filling and matched readings take the same steps and refusals over a script as over Chromium, and the parity cases cover a form that stops at a disabled field, a verified form that submits, a refused disabled fill and a matched reading. A scripted pass says what the owner and the provider code do with the answers they were given; it establishes nothing about what Chromium reports for a page beyond the parity cases, and nothing about what Browserbase answers, which only the hosted records below cover. Exact-commit acceptance remains the authority for which candidate artifacts and checks passed.
 
 ## Hard-cutover callback implementation, 21 September 2026
 

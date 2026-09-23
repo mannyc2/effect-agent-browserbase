@@ -9,6 +9,7 @@ import {
   PageSuspension,
   ViewportEvidence,
   ViewportRect,
+  type FormField,
   type KeyModifier,
   type ObservedElement,
   type SelectOptions,
@@ -172,6 +173,54 @@ const isSelectable = (kind: ControlScript["kind"]) => kind === "select";
 const isEditable = (control: ControlScript) =>
   (control.kind === "input" || control.kind === "textarea") && control.disabled !== true;
 
+const isToggle = (control: ControlScript) =>
+  control.kind === "input" && (control.inputType === "checkbox" || control.inputType === "radio");
+
+/** Input types native fill types or assigns text into; every other input takes none. */
+const textInputs = new Set([
+  "",
+  "email",
+  "number",
+  "password",
+  "search",
+  "tel",
+  "text",
+  "url",
+  "color",
+  "date",
+  "time",
+  "datetime-local",
+  "month",
+  "range",
+  "week",
+]);
+
+/**
+ * What the real driver refuses before dispatching text into a control: a disabled one, one that
+ * takes no text, and a number field given something that is not a number.
+ */
+const textRefusal = (control: ControlScript, text: string): BrowserReason | undefined => {
+  const editable = control.facts?.editable;
+
+  if (control.disabled === true) return Reasons.Disabled.make({});
+  if (editable === false) return Reasons.Unsupported.make({});
+  if (control.kind === "textarea") return undefined;
+  if (control.kind !== "input") return editable === true ? undefined : Reasons.Unsupported.make({});
+  const type = (control.inputType ?? "").toLowerCase();
+
+  if (!textInputs.has(type)) return Reasons.Unsupported.make({});
+
+  return type === "number" && Number.isNaN(Number(text.trim()))
+    ? Reasons.Unsupported.make({})
+    : undefined;
+};
+
+const controlState = (script: ControlScript): ControlState => ({
+  script,
+  checked: script.checked ?? (isToggle(script) ? false : undefined),
+  selected: script.selected,
+});
+
 export const makeScriptedDriver = (
   script: Script,
   options: DriverOptions,
@@ -198,11 +247,7 @@ export const makeScriptedDriver = (
     url: document.url,
     title: document.title ?? "",
     text: document.text,
-    controls: (document.controls ?? []).map((control) => ({
-      script: control,
-      checked: control.checked,
-      selected: control.selected,
-    })),
+    controls: (document.controls ?? []).map(controlState),
   });
 
   const documentFor = (url: string): DocumentState => {
@@ -324,8 +369,7 @@ export const makeScriptedDriver = (
     const controls = (document.controls ?? []).map((script): ControlState => {
       const existing = previous.get(script.id);
 
-      if (existing === undefined)
-        return { script, checked: script.checked, selected: script.selected };
+      if (existing === undefined) return controlState(script);
       existing.script = script;
       if (script.checked !== undefined) existing.checked = script.checked;
       if (script.selected !== undefined) existing.selected = script.selected;
@@ -552,6 +596,7 @@ export const makeScriptedDriver = (
     ticket: ReadTicket,
     operation: BrowserOperation,
     allowSuspended = false,
+    attached = true,
   ) => {
     ticket.check();
     const stale = () => fail(operation, Reasons.Stale.make({}));
@@ -572,7 +617,7 @@ export const makeScriptedDriver = (
       !current.revalidated.has(target.elementId)
     )
       throw stale();
-    if (!page.document.controls.includes(node)) throw stale();
+    if (attached && !page.document.controls.includes(node)) throw stale();
 
     return { node, page, snapshot: current };
   };
@@ -584,6 +629,7 @@ export const makeScriptedDriver = (
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
     allowSuspended = false,
+    enablement = false,
   ) => {
     let node: ControlState;
     let page: Page;
@@ -596,6 +642,9 @@ export const makeScriptedDriver = (
     }
     const fresh = facts(node);
 
+    // A form step's control may have become enabled since it was observed; it must be now.
+    if (enablement && node.script.disabled === true)
+      throw fail(operation, Reasons.Disabled.make({}));
     if (policy !== undefined) {
       let admitted = false;
 
@@ -658,6 +707,113 @@ export const makeScriptedDriver = (
 
     if (focused !== undefined && isEditable(focused.script))
       page.values.set(focused.script.id, (page.values.get(focused.script.id) ?? "") + text);
+  };
+
+  /** Issued options of one select, refused exactly where native selection refuses them. */
+  const chosen = (node: ControlState, ids: SelectOptions, operation: BrowserOperation) => {
+    const current = snapshot;
+
+    if (current === undefined) throw fail(operation, Reasons.Stale.make({}));
+    if (!isSelectable(node.script.kind)) throw fail(operation, Reasons.Unsupported.make({}));
+
+    const options = ids.map((id) => {
+      const option = current.nodes.get(id);
+
+      if (option === undefined || option.script.selectElementId !== node.script.id)
+        throw fail(operation, Reasons.Stale.make({}));
+
+      return option;
+    });
+
+    if (node.script.disabled === true || options.some((option) => option.script.disabled === true))
+      throw fail(operation, Reasons.Disabled.make({}));
+    if (node.script.multiple !== true && options.length > 1)
+      throw fail(operation, Reasons.Unsupported.make({}));
+
+    return options;
+  };
+
+  const choose = (page: Page, node: ControlState, options: ReadonlyArray<ControlState>) => {
+    if (node.script.multiple !== true)
+      for (const candidate of page.document.controls)
+        if (candidate.script.selectElementId === node.script.id) candidate.selected = false;
+    for (const option of options) option.selected = true;
+    page.focused = node.script.id;
+  };
+
+  /** A control's private state after a form step. It is compared here and never returned. */
+  const fieldState = (page: Page, node: ControlState): string => {
+    const { script: value } = node;
+
+    if (node.checked !== undefined) return JSON.stringify(["checked", node.checked]);
+    if (value.kind === "select")
+      return JSON.stringify([
+        "options",
+        page.document.controls
+          .filter((option) => option.script.selectElementId === value.id && option.selected)
+          .map((option) => option.script.id),
+      ]);
+    if (value.kind === "input" || value.kind === "textarea" || value.facts?.editable === true)
+      return JSON.stringify(["value", page.values.get(value.id) ?? ""]);
+
+    return JSON.stringify(["other"]);
+  };
+
+  /** One form step, as the real driver takes it; see `Driver["formStep"]`. */
+  const formStep = (
+    page: Page,
+    node: ControlState,
+    field: FormField,
+    ticket: Ticket,
+    record: MutableCall,
+  ) => {
+    const epoch = page.epoch;
+    let act: (() => void) | undefined;
+
+    if (field.options !== undefined) {
+      const options = chosen(node, field.options, "fill-form");
+
+      act = () => choose(page, node, options);
+    } else if (field.checked !== undefined) {
+      if (node.checked === undefined) throw fail("fill-form", Reasons.Unsupported.make({}));
+      if (node.checked !== field.checked) {
+        if (!field.checked && node.script.inputType === "radio")
+          throw fail("fill-form", Reasons.Unsupported.make({}));
+        act = () => {
+          activate(page, node);
+        };
+      }
+    } else {
+      const text = field.value ?? "";
+      const refusal = textRefusal(node.script, text);
+
+      if (refusal !== undefined) throw fail("fill-form", refusal);
+      act = () => {
+        page.values.set(node.script.id, text);
+        // The step then leaves the control, as a person moving on would.
+        page.focused = undefined;
+      };
+    }
+    if (act !== undefined) {
+      dispatch(ticket, record);
+      act();
+    }
+
+    // A step that navigated away cannot be read back, which is never a failure of its own.
+    const state =
+      page.epoch === epoch && !page.closed && page.document.controls.includes(node)
+        ? fieldState(page, node)
+        : undefined;
+
+    return {
+      status: act === undefined ? ("unchanged" as const) : ("set" as const),
+      reached:
+        field.checked === undefined ||
+        state === undefined ||
+        state === JSON.stringify(["checked", field.checked]),
+      state,
+      url: page.document.url,
+    };
   };
 
   const inFlight = (
@@ -996,18 +1152,56 @@ export const makeScriptedDriver = (
 
         return bounded(control.script.text ?? control.script.label, maximumBytes).text;
       }),
-    observe: (scope, maximumBytes, controls, ticket) =>
+    observe: (scope, maximumBytes, controls, ticket, match) =>
       attempt("observe", ticket, {}, async (): Promise<NativeObservation> => {
         const page = selectedPage("observe");
+        const needle = match?.toLowerCase();
+
+        const matches = (value: string) =>
+          needle === undefined || value.toLowerCase().includes(needle);
 
         snapshot = undefined;
 
-        const reachable = page.document.controls.filter(
+        // A select matches through its own label or an option's, and keeps its options with it.
+        const selects = new Set(
+          page.document.controls
+            .filter(
+              (control) =>
+                isSelectable(control.script.kind) &&
+                (matches(control.script.label) ||
+                  page.document.controls.some(
+                    (option) =>
+                      option.script.selectElementId === control.script.id &&
+                      matches(option.script.label),
+                  )),
+            )
+            .map((control) => control.script.id),
+        );
+
+        const matching = page.document.controls.filter((control) =>
+          control.script.selectElementId !== undefined
+            ? selects.has(control.script.selectElementId)
+            : isSelectable(control.script.kind)
+              ? selects.has(control.script.id)
+              : matches(control.script.label),
+        );
+
+        const reachable = matching.filter(
           (control) => scope === "document" || control.script.offscreen !== true,
         );
 
         const kept = reachable.slice(0, controls);
-        const text = bounded(page.document.text, maximumBytes);
+
+        const text = bounded(
+          needle === undefined
+            ? page.document.text
+            : page.document.text
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line !== "" && matches(line))
+                .join("\n"),
+          maximumBytes,
+        );
 
         const next: Snapshot = {
           id: `observation-${++observationSerial}`,
@@ -1024,6 +1218,7 @@ export const makeScriptedDriver = (
         return {
           observationId: next.id,
           scope,
+          ...(match === undefined ? {} : { match }),
           url: page.document.url,
           text: text.text,
           textTruncated: text.truncated,
@@ -1035,7 +1230,7 @@ export const makeScriptedDriver = (
             clippedText: 0,
             coveredText: 0,
             uncertainText: 0,
-            unreachableControls: page.document.controls.length - reachable.length,
+            unreachableControls: matching.length - reachable.length,
             exhausted: false,
           }),
         };
@@ -1103,7 +1298,9 @@ export const makeScriptedDriver = (
           const { node, page } = resolve(target, ticket, "fill", policy, browserTarget);
 
           requireRunning(page, "fill");
-          if (!isEditable(node.script)) throw fail("fill", Reasons.Unsupported.make({}));
+          const refusal = textRefusal(node.script, value);
+
+          if (refusal !== undefined) throw fail("fill", refusal);
           dispatch(ticket, record);
           page.focused = node.script.id;
           page.values.set(node.script.id, value);
@@ -1114,37 +1311,40 @@ export const makeScriptedDriver = (
     selectOption: (target, ids, ticket, policy) =>
       attempt("select-option", ticket, meta(target), async (record) => {
         const { node, page } = resolve(target, ticket, "select-option", policy);
-        const current = snapshot;
 
-        if (current === undefined) throw fail("select-option", Reasons.Stale.make({}));
         requireRunning(page, "select-option");
-        if (!isSelectable(node.script.kind))
-          throw fail("select-option", Reasons.Unsupported.make({}));
+        const options = chosen(node, ids as SelectOptions, "select-option");
 
-        const options = (ids as SelectOptions).map((id) => {
-          const option = current.nodes.get(id);
-
-          if (option === undefined || option.script.selectElementId !== node.script.id)
-            throw fail("select-option", Reasons.Stale.make({}));
-
-          return option;
-        });
-
-        if (
-          node.script.disabled === true ||
-          options.some((option) => option.script.disabled === true)
-        )
-          throw fail("select-option", Reasons.Disabled.make({}));
-        if (node.script.multiple !== true && options.length > 1)
-          throw fail("select-option", Reasons.Unsupported.make({}));
         dispatch(ticket, record);
-        if (node.script.multiple !== true)
-          for (const candidate of page.document.controls)
-            if (candidate.script.selectElementId === node.script.id) candidate.selected = false;
-        for (const option of options) option.selected = true;
-        page.focused = node.script.id;
+        choose(page, node, options);
 
         return page.document.url;
+      }),
+    formStep: (target, field, ticket, policy) =>
+      attempt("fill-form", ticket, meta(target), async (record) => {
+        const { node, page } = resolve(target, ticket, "fill-form", policy, undefined, false, true);
+
+        requireRunning(page, "fill-form");
+
+        return formStep(page, node, field, ticket, record);
+      }),
+    formState: (targets, ticket) =>
+      attempt("fill-form", ticket, {}, async () =>
+        targets.map((target) => {
+          // A node the form's own steps detached reads as absent rather than stale.
+          const { node, page } = retained(target, ticket, "fill-form", false, false);
+
+          return page.document.controls.includes(node) ? fieldState(page, node) : undefined;
+        }),
+      ),
+    formSubmit: (target, ticket, policy) =>
+      attempt("fill-form", ticket, meta(target), async (record) => {
+        const { node, page } = resolve(target, ticket, "fill-form", policy, undefined, false, true);
+
+        requireRunning(page, "fill-form");
+        dispatch(ticket, record);
+
+        return activate(page, node);
       }),
     scroll: (_deltaX, _deltaY, ticket, target) =>
       attempt("scroll", ticket, { pageId: target?.pageId }, async (record) => {

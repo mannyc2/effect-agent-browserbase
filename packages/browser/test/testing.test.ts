@@ -404,6 +404,162 @@ it.effect("native selects, downloads and file selection follow the same admissio
   ),
 );
 
+it.effect("forms and matched readings take the real owner's steps, stops and retirement", () =>
+  Browser.scoped(
+    Testing.open({
+      documents: [
+        {
+          url: `${origin}/checkout`,
+          text: "Checkout\nShipping address\nNewsletter preferences",
+          controls: [
+            { id: "name", kind: "input", label: "Name", inputType: "text" },
+            { id: "news", kind: "input", label: "Newsletter", inputType: "checkbox" },
+            { id: "size", kind: "select", label: "Size", multiple: false },
+            { id: "small", kind: "other", label: "Small", selectElementId: "size", selected: true },
+            {
+              id: "large",
+              kind: "other",
+              label: "Large",
+              selectElementId: "size",
+              selected: false,
+            },
+            { id: "code", kind: "input", label: "Code", inputType: "text", disabled: true },
+            {
+              id: "pay",
+              kind: "button",
+              label: "Pay",
+              inputType: "submit",
+              destination: `${origin}/done`,
+            },
+          ],
+        },
+        { url: `${origin}/done`, text: "Thank you." },
+      ],
+    }),
+    (browser) =>
+      Effect.gen(function* () {
+        const news = yield* browser.observe({ match: "NEWS" });
+
+        expect(news).toMatchObject({ match: "NEWS", text: "Newsletter preferences" });
+        expect(news.controls.map((c) => [c.elementId, c.checked])).toEqual([["news", false]]);
+        // A select matches through an option label and keeps its options beside it.
+        const large = yield* browser.observe({ match: "large" });
+
+        expect(large.controls.map((c) => c.elementId)).toEqual(["size", "small", "large"]);
+
+        const observation = yield* browser.observe();
+
+        const stopped = yield* browser.fillForm({
+          observationId: observation.observationId,
+          fields: [
+            { elementId: "name", value: "Ada" },
+            { elementId: "news", checked: true },
+            { elementId: "code", value: "42" },
+          ],
+          submit: "pay",
+        });
+
+        expect(stopped).toMatchObject({
+          fields: [
+            { elementId: "name", status: "set" },
+            { elementId: "news", status: "set" },
+          ],
+          submitted: false,
+          stopped: {
+            stage: "field",
+            elementId: "code",
+            error: { reason: { _tag: "Disabled" }, outcome: "undispatched" },
+          },
+        });
+        // Fields set before the stop stay set, and what the form dispatched retired its
+        // observation when it ended.
+        expect((yield* browser.control.document.values).get("name")).toBe("Ada");
+        expect(
+          yield* browser.clickElement(reference(observation, "pay")).pipe(Effect.flip),
+        ).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
+
+        const again = yield* browser.observe();
+
+        const submitted = yield* browser.fillForm({
+          observationId: again.observationId,
+          fields: [
+            { elementId: "news", checked: true },
+            { elementId: "size", options: ["large"] },
+          ],
+          submit: "pay",
+        });
+
+        expect(submitted).toMatchObject({
+          fields: [
+            { elementId: "news", status: "unchanged" },
+            { elementId: "size", status: "set" },
+          ],
+          submitted: true,
+          url: `${origin}/done`,
+        });
+        expect(submitted.stopped).toBeUndefined();
+        const calls = yield* browser.control.calls;
+
+        // Each step and the submit are recorded; the verification read carries no element.
+        expect(
+          calls
+            .filter((call) => call.operation === "fill-form")
+            .map((call) => [call.elementId ?? null, call.dispatched]),
+        ).toEqual([
+          ["name", true],
+          ["news", true],
+          ["code", false],
+          ["news", false],
+          ["size", true],
+          [null, false],
+          ["pay", true],
+        ]);
+        expect(JSON.stringify(calls)).not.toContain("Ada");
+      }),
+  ),
+);
+
+it.effect("a disabled or textless control refuses text before it is sent", () =>
+  Browser.scoped(
+    Testing.open({
+      documents: [
+        {
+          url: `${origin}/`,
+          text: "",
+          controls: [
+            { id: "code", kind: "input", label: "Code", inputType: "text", disabled: true },
+            { id: "news", kind: "input", label: "Newsletter", inputType: "checkbox" },
+            { id: "age", kind: "input", label: "Age", inputType: "number" },
+          ],
+        },
+      ],
+    }),
+    (browser) =>
+      Effect.gen(function* () {
+        const observation = yield* browser.observe();
+
+        const refused = (elementId: string, value: string) =>
+          browser.fillElement(reference(observation, elementId), value).pipe(Effect.flip);
+
+        expect(yield* refused("code", "42")).toMatchObject({
+          reason: { _tag: "Disabled" },
+          outcome: "undispatched",
+        });
+        expect(yield* refused("news", "on")).toMatchObject({
+          reason: { _tag: "Unsupported" },
+          outcome: "undispatched",
+        });
+        expect(yield* refused("age", "forty")).toMatchObject({
+          reason: { _tag: "Unsupported" },
+          outcome: "undispatched",
+        });
+        // Nothing was sent, so the observation still admits a number.
+        yield* browser.fillElement(reference(observation, "age"), "40");
+        expect((yield* browser.control.document.values).get("age")).toBe("40");
+      }),
+  ),
+);
+
 it.effect("capture delivers scripted frames with the real accounting", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {

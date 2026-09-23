@@ -14,7 +14,13 @@ import {
   timeout,
 } from "./NativeCalls.ts";
 import type { ObservationScope, ReadTicket, Ticket } from "./Owner.ts";
-import { identityOf, observedControl, PageReadResult, readPage } from "./PageRead.ts";
+import {
+  identityOf,
+  observedControl,
+  PageReadResult,
+  readPage,
+  stableIdentityOf,
+} from "./PageRead.ts";
 import type { Targets } from "./Targets.ts";
 
 const TextResult = Schema.Struct({
@@ -66,10 +72,57 @@ const NodeBudget = 20_000;
 /** A host's own decision about one control, made on facts read from the page just now. */
 export type AdmissionPolicy = (facts: ControlFacts) => boolean;
 
+/**
+ * A node's private state after a form step: its value, checked state or selected option values.
+ * It is compared on the host and never leaves it. Runs inside the page, so it is self-contained.
+ */
+const privateState = (node: Element): string | null => {
+  if (!node.isConnected || node.ownerDocument !== document) return null;
+  const role = node.getAttribute("role");
+
+  if (node instanceof HTMLInputElement && (node.type === "checkbox" || node.type === "radio"))
+    return JSON.stringify(["checked", node.checked]);
+  if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)
+    return JSON.stringify(["value", node.value]);
+  if (node instanceof HTMLSelectElement)
+    return JSON.stringify(["options", Array.from(node.selectedOptions, (option) => option.value)]);
+  if (
+    role !== null &&
+    ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)
+  )
+    return JSON.stringify(["checked", node.getAttribute("aria-checked") === "true"]);
+  if (node instanceof HTMLElement && node.isContentEditable)
+    return JSON.stringify(["text", node.textContent ?? ""]);
+
+  return JSON.stringify(["other"]);
+};
+
+/**
+ * Reads that private state once. A node that is gone, or a document that navigated away while it
+ * was read, reads as unknown: after a dispatched step this never becomes a failure of its own.
+ */
+export const readFieldState = async (
+  element: ElementHandle<Element>,
+): Promise<string | undefined> => {
+  try {
+    const value: unknown = await element.evaluate(privateState);
+
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Whether a private state says a toggle ended checked, or unchecked, as it was asked to. */
+export const holdsChecked = (state: string | undefined, checked: boolean): boolean =>
+  state === JSON.stringify(["checked", checked]);
+
 interface Retained {
   readonly handle: ElementHandle<Element>;
   /** What made this control the one that was inspected; see `identityOf`. */
   readonly identity: string;
+  /** The same without enablement, for form steps; see `stableIdentityOf`. */
+  readonly stable: string;
   readonly multiple?: boolean;
   /** The submitted value is retained privately and never appears in a control or receipt. */
   readonly option?: { readonly selectElementId: string; readonly value: string };
@@ -357,6 +410,8 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
    * still match it and nothing else. A retained node must still be the control that was
    * inspected: the same node with a different destination, type or label is not. A host policy
    * then decides on those fresh facts, and a refusal or a policy that throws sends nothing.
+   * `enablement` is for form steps only: the control may have become enabled since it was
+   * observed, and it must be enabled now; every other fact must be unchanged.
    */
   const resolve = async (
     target: string | ObservedElement,
@@ -364,6 +419,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     policy?: AdmissionPolicy,
     allowSuspended = false,
     browserTarget?: DriverTarget,
+    enablement = false,
   ): Promise<{
     readonly element: ElementHandle<Element>;
     readonly kept: boolean;
@@ -426,8 +482,14 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         facts = safeDecode(Facts, await sampleFacts(element, check, resolvedTarget)).facts;
 
         check();
-        if (node !== undefined && identityOf(facts) !== node.identity)
+        if (
+          node !== undefined &&
+          (enablement
+            ? stableIdentityOf(facts) !== node.stable
+            : identityOf(facts) !== node.identity)
+        )
           throw failure(Reasons.Stale.make({}), "undispatched");
+        if (enablement && facts.disabled) throw failure(Reasons.Disabled.make({}), "undispatched");
         if (policy !== undefined) {
           let admitted = false;
 
@@ -455,7 +517,11 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     ids: SelectOptions,
     element: ElementHandle<Element>,
     ticket: Ticket,
+    enablement = false,
   ) => {
+    const same = (facts: ControlFacts, node: Retained) =>
+      enablement ? stableIdentityOf(facts) === node.stable : identityOf(facts) === node.identity;
+
     const select = retained(target, ticket);
 
     if (select.node.handle !== element) throw failure(Reasons.Stale.make({}), "undispatched");
@@ -488,7 +554,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     );
 
     check();
-    if (!fresh.attached || identityOf(fresh.facts) !== select.node.identity)
+    if (!fresh.attached || !same(fresh.facts, select.node))
       throw failure(Reasons.Stale.make({}), "undispatched");
     if (fresh.options.length !== options.length)
       throw failure(Reasons.Malformed.make({}), "undispatched");
@@ -499,7 +565,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         option === undefined ||
         !sampled.member ||
         !sampled.valueMatches ||
-        identityOf(sampled.facts) !== option.node.identity
+        !same(sampled.facts, option.node)
       )
         throw failure(Reasons.Stale.make({}), "undispatched");
     }
@@ -523,6 +589,30 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
 
       return facts;
+    });
+
+  /**
+   * Current private states of this observation's own nodes, read without an identity check: a
+   * form's own steps may have changed exactly what identity compares. A retired observation or a
+   * replaced document still fails stale, and a detached node reads as absent.
+   */
+  const formState = (references: ReadonlyArray<ObservedElement>, ticket: Ticket) =>
+    sanitize(async () => {
+      const states: Array<string | undefined> = [];
+
+      for (const reference of references) {
+        const leased = lease(reference, ticket);
+
+        try {
+          leased.check();
+          states.push(await readFieldState(leased.element));
+          leased.check();
+        } finally {
+          await leased.release();
+        }
+      }
+
+      return states;
     });
 
   /** After a hold, one node at a time: still attached, and still the control inspected. */
@@ -589,6 +679,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     check: () => void,
     keepNodes: boolean,
     target?: DriverTarget,
+    match?: string,
   ) => {
     check();
 
@@ -598,6 +689,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
       controlLimit,
       nodeBudget: NodeBudget,
       choices: keepNodes,
+      ...(match === undefined ? {} : { match }),
     });
 
     const handles: Array<ElementHandle<Element>> = [];
@@ -671,6 +763,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     maximumBytes: number,
     controlLimit: number,
     ticket: Ticket,
+    match?: string,
   ) =>
     sanitize(async () => {
       ticket.check();
@@ -702,6 +795,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
               () => checkSnapshot(snapshot, ticket),
               true,
               target,
+              match,
             ),
           target,
         );
@@ -736,6 +830,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
             snapshot.nodes.set(`element-${i}`, {
               handle,
               identity: identityOf(facts),
+              stable: stableIdentityOf(facts),
               leases: 0,
               retired: false,
               ...(facts.multiple === undefined ? {} : { multiple: facts.multiple }),
@@ -748,6 +843,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
         const result: NativeObservation = {
           observationId: snapshot.id,
           scope,
+          ...(match === undefined ? {} : { match }),
           url: targets.url(target),
           text: data.text,
           textTruncated: data.textTruncated,
@@ -888,6 +984,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
     resolve,
     selectOptions,
     controlFacts,
+    formState,
     revalidate,
     readText,
     observe,

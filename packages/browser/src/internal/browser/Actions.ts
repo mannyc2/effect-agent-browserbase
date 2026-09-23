@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from "playwright-core";
 
-import type { ObservedElement } from "../../BrowserData.ts";
+import type { ControlFacts, ObservedElement } from "../../BrowserData.ts";
 import { SafeFilename } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { Driver, DriverTarget, NativeFileSelection, NavigationControl } from "./Driver.ts";
@@ -13,9 +13,113 @@ import {
   sanitize,
   timeout,
 } from "./NativeCalls.ts";
-import type { AdmissionPolicy, Observation } from "./Observation.ts";
+import {
+  type AdmissionPolicy,
+  holdsChecked,
+  type Observation,
+  readFieldState,
+} from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
 import type { Entry, Targets } from "./Targets.ts";
+
+/**
+ * What Playwright's own input would refuse only after dispatch, checked before it: a node it
+ * would wait for until the deadline, or text it would not put into this control. Either way the
+ * wait or the thrown error would be an unknown outcome that fences the owner. It mirrors
+ * Playwright's visible, enabled and editable checks and its fill rules for the control and text.
+ * Runs in the page, so it is self-contained.
+ */
+const inputRefusal = (
+  node: Element,
+  text: string | undefined,
+): "not-visible" | "disabled" | "unsupported" | null => {
+  const style = getComputedStyle(node);
+
+  if (style.display !== "contents") {
+    const rect = node.getBoundingClientRect();
+
+    if (
+      ("checkVisibility" in node && !node.checkVisibility()) ||
+      style.visibility !== "visible" ||
+      !(rect.width > 0 && rect.height > 0)
+    )
+      return "not-visible";
+  }
+  if (node.matches(":disabled") || node.getAttribute("aria-disabled") === "true") return "disabled";
+  if (text === undefined) return null;
+  if (node instanceof HTMLInputElement) {
+    const type = node.type.toLowerCase();
+    const assigned = ["color", "date", "time", "datetime-local", "month", "range", "week"];
+    const typed = ["", "email", "number", "password", "search", "tel", "text", "url"];
+
+    if (node.readOnly || (!typed.includes(type) && !assigned.includes(type))) return "unsupported";
+    if (type === "number" && Number.isNaN(Number(text.trim()))) return "unsupported";
+    if (assigned.includes(type)) {
+      // A fresh detached control with the same constraints shows whether this one would keep
+      // the value; nothing is written to the page's own node or announced to the page.
+      const probe = document.createElement("input");
+      const value = type === "color" ? text.trim().toLowerCase() : text.trim();
+
+      probe.type = type;
+      for (const name of ["min", "max", "step"]) {
+        const constraint = node.getAttribute(name);
+
+        if (constraint !== null) probe.setAttribute(name, constraint);
+      }
+      probe.value = value;
+      if (probe.value !== value) return "unsupported";
+    }
+
+    return null;
+  }
+  if (node instanceof HTMLTextAreaElement) return node.readOnly ? "unsupported" : null;
+
+  return node instanceof HTMLElement && node.isContentEditable ? null : "unsupported";
+};
+
+/**
+ * Lets the page's own handlers run after a form step: two animation frames when the page renders
+ * them, then `millis`. A hidden page renders no frames, so the host bounds the wait as well; the
+ * wait is never a failure of a step that already dispatched. Runs in the page.
+ */
+const settleInPage = (_node: Element, millis: number) =>
+  new Promise<void>((resolve) => {
+    let rendered = false;
+    let elapsed = false;
+
+    const finish = () => {
+      if (rendered && elapsed) resolve();
+    };
+
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        rendered = true;
+        finish();
+      }),
+    );
+    setTimeout(() => {
+      elapsed = true;
+      finish();
+    }, millis);
+  });
+
+/** A step that already dispatched reads back within a bounded wait, and never fails for it. */
+const bounded = async <A>(work: Promise<A>, millis: number, fallback: A): Promise<A> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  void work.catch(() => {});
+
+  try {
+    return await Promise.race([
+      work.catch(() => fallback),
+      new Promise<A>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), Math.max(0, millis));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 export const waitEvent = <A>(
   add: (listener: (value: A) => void) => void,
@@ -190,26 +294,29 @@ export const makeActions = (
    * still the control that was inspected and that the host's policy, if any, admits it. `admit`
    * then sees that node before anything is dispatched, so a refusal it raises is undispatched
    * too, and what it learns reaches the action without the node being resolved a second time.
+   * `enablement` is a form step's: see `Observation.resolve`.
    */
   const withAdmittedElement = async <Admitted, A>(
     target: string | ObservedElement,
     ticket: Ticket,
-    admit: (element: ElementHandle<Element>) => Promise<Admitted>,
+    admit: (element: ElementHandle<Element>, facts: ControlFacts | undefined) => Promise<Admitted>,
     action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
+    enablement = false,
   ): Promise<A> => {
-    const { element, kept, check } = await observation.resolve(
+    const { element, kept, check, facts } = await observation.resolve(
       target,
       ticket,
       policy,
       false,
       browserTarget,
+      enablement,
     );
 
     try {
       check();
-      const admitted = await admit(element);
+      const admitted = await admit(element, facts);
 
       check();
       ticket.check();
@@ -230,6 +337,20 @@ export const makeActions = (
     browserTarget?: DriverTarget,
   ): Promise<A> =>
     withAdmittedElement(target, ticket, async () => {}, action, policy, browserTarget);
+
+  /** Refuses, undispatched, what `inputRefusal` finds on this exact node right now. */
+  const refuseInput = async (element: ElementHandle<Element>, text?: string) => {
+    const refusal: unknown = await element.evaluate(inputRefusal, text);
+
+    if (refusal === "not-visible") throw failure(Reasons.NotVisible.make({}), "undispatched");
+    if (refusal === "disabled") throw failure(Reasons.Disabled.make({}), "undispatched");
+    if (refusal === "unsupported") throw failure(Reasons.Unsupported.make({}), "undispatched");
+    if (refusal !== null) throw failure(Reasons.Malformed.make({}), "undispatched");
+  };
+
+  /** What is left of a step's deadline for reading back, keeping a margin for the owner. */
+  const readBack = (ticket: Ticket, wanted: number) =>
+    Math.min(wanted, Math.max(0, ticket.remainingMillis() - 250));
 
   const click: Driver["click"] = (target, ticket, policy, browserTarget) =>
     sanitize(async () => {
@@ -356,9 +477,10 @@ export const makeActions = (
 
   const fill: Driver["fill"] = (target, value, ticket, policy, browserTarget) =>
     sanitize(async () => {
-      await withElement(
+      await withAdmittedElement(
         target,
         ticket,
+        (element) => refuseInput(element, value),
         (element) => element.fill(value, { timeout: timeout(ticket) }),
         policy,
         browserTarget,
@@ -366,6 +488,115 @@ export const makeActions = (
       ticket.check();
 
       return postUrl(browserTarget);
+    });
+
+  /**
+   * One form step on an exact observed node, which may have become enabled since it was
+   * observed. Text is filled and the control is then left, as a person moving on would, so what
+   * the page does on blur belongs to this step. A toggle is clicked only when it is not already
+   * in the requested state, and a native radio is never asked to clear itself. Options are the
+   * issued nodes of the same observation, exactly as `selectOption` sends them.
+   */
+  const formStep: Driver["formStep"] = (target, field, ticket, policy, settleMillis) =>
+    sanitize(async () => {
+      const { element, check, facts } = await observation.resolve(
+        target,
+        ticket,
+        policy,
+        false,
+        undefined,
+        true,
+      );
+
+      check();
+      if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+      let act: (() => Promise<unknown>) | undefined;
+
+      if (field.options !== undefined) {
+        const admitted = await observation.selectOptions(
+          target,
+          field.options,
+          element,
+          ticket,
+          true,
+        );
+
+        act = async () => {
+          const values = await element.selectOption(admitted.handles, { timeout: timeout(ticket) });
+          const expected = [...admitted.values].sort();
+
+          if (
+            values.length !== expected.length ||
+            values.sort().some((value, i) => value !== expected[i])
+          )
+            throw failure(Reasons.Stale.make({}), "unknown");
+        };
+      } else if (field.checked !== undefined) {
+        if (facts.checked === undefined)
+          throw failure(Reasons.Unsupported.make({}), "undispatched");
+        if (facts.checked !== field.checked) {
+          if (!field.checked && facts.inputType === "radio")
+            throw failure(Reasons.Unsupported.make({}), "undispatched");
+          await refuseInput(element);
+          act = () => element.click({ timeout: timeout(ticket) });
+        }
+      } else {
+        const text = field.value ?? "";
+
+        await refuseInput(element, text);
+        act = async () => {
+          await element.fill(text, { timeout: timeout(ticket) });
+          await bounded(
+            element.evaluate((node) => {
+              if (node instanceof HTMLElement && node.ownerDocument.activeElement === node)
+                node.blur();
+            }),
+            readBack(ticket, 1000),
+            undefined,
+          );
+        };
+      }
+      check();
+      ticket.check();
+      if (act !== undefined) {
+        // ElementHandle actions do not re-resolve onto a replacement node.
+        ticket.dispatch();
+        await act();
+        if (settleMillis > 0)
+          await bounded(
+            element.evaluate(settleInPage, settleMillis),
+            readBack(ticket, settleMillis + 250),
+            undefined,
+          );
+      }
+      const state = await bounded(readFieldState(element), readBack(ticket, 1000), undefined);
+
+      ticket.check();
+
+      return {
+        status: act === undefined ? "unchanged" : "set",
+        reached:
+          field.checked === undefined || state === undefined || holdsChecked(state, field.checked),
+        state,
+        url: postUrl(),
+      };
+    });
+
+  /** The one submit click, on an exact observed node that may have become enabled. */
+  const formSubmit: Driver["formSubmit"] = (target, ticket, policy) =>
+    sanitize(async () => {
+      await withAdmittedElement(
+        target,
+        ticket,
+        (element) => refuseInput(element),
+        (element) => element.click({ timeout: timeout(ticket) }),
+        policy,
+        undefined,
+        true,
+      );
+      ticket.check();
+
+      return postUrl();
     });
 
   const selectOption: Driver["selectOption"] = (target, options, ticket, policy) =>
@@ -493,12 +724,13 @@ export const makeActions = (
     waitOn(ticket, target, () => {
       const leased = observation.lease(reference, ticket);
 
+      /** A node that can no longer be read, because its document is gone, is not attached. */
       const attached = async () => {
         leased.check();
 
-        const present = await leased.element.evaluate(
-          (node) => node.isConnected && node.ownerDocument === document,
-        );
+        const present = await leased.element
+          .evaluate((node) => node.isConnected && node.ownerDocument === document)
+          .catch(() => false);
 
         leased.check();
         if (present !== true) throw failure(Reasons.Stale.make({}), "undispatched");
@@ -513,7 +745,11 @@ export const makeActions = (
               signal: ticket.signal,
             });
           } catch (error) {
-            if (state !== "hidden") await attached();
+            // A replaced document can reject the native wait before the navigation event
+            // advances its epoch, so ask the node itself. A hidden wait needs asking only then:
+            // a node removed from a live document already satisfies it.
+            if (state !== "hidden" || !(isTimeoutError(error) || ticket.signal.aborted))
+              await attached();
             throw error;
           }
           if (state !== "hidden") await attached();
@@ -632,6 +868,8 @@ export const makeActions = (
     },
     click,
     fill,
+    formStep,
+    formSubmit,
     selectOption,
     scroll,
     waitFor,

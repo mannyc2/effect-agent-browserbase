@@ -1,5 +1,6 @@
 import type {
   ControlFacts,
+  FormField,
   FrameInfo,
   KeyModifier,
   ObservedControl,
@@ -82,6 +83,7 @@ export interface DriverEvents {
 export interface NativeObservation {
   readonly observationId: string;
   readonly scope: "document" | "viewport";
+  readonly match?: string;
   readonly url: string;
   readonly text: string;
   readonly textTruncated: boolean;
@@ -232,6 +234,7 @@ export interface Driver {
     maximumBytes: number,
     controls: number,
     ticket: Ticket,
+    match?: string,
   ) => Promise<NativeObservation>;
   readonly checkpoint: (
     maximumBytes: number,
@@ -260,6 +263,36 @@ export interface Driver {
   readonly selectOption: (
     target: ObservedElement,
     options: SelectOptions,
+    ticket: Ticket,
+    policy?: AdmissionPolicy,
+  ) => Promise<string>;
+  /**
+   * One form step on an exact observed node that may have become enabled since it was observed.
+   * `state` is the node's private post-step state, read after `settleMillis` (0 skips settling);
+   * it never leaves the host. It is absent when the page could not be read back, which never
+   * fails a step that already dispatched. `reached` is false only when a toggle was read back in
+   * a state other than the requested one.
+   */
+  readonly formStep: (
+    target: ObservedElement,
+    field: FormField,
+    ticket: Ticket,
+    policy: AdmissionPolicy | undefined,
+    settleMillis: number,
+  ) => Promise<{
+    readonly status: "set" | "unchanged";
+    readonly reached: boolean;
+    readonly state: string | undefined;
+    readonly url: string;
+  }>;
+  /** Private current states of retained nodes, without identity checks; absent when detached. */
+  readonly formState: (
+    targets: ReadonlyArray<ObservedElement>,
+    ticket: Ticket,
+  ) => Promise<ReadonlyArray<string | undefined>>;
+  /** The one submit click, on an exact observed node that may have become enabled. */
+  readonly formSubmit: (
+    target: ObservedElement,
     ticket: Ticket,
     policy?: AdmissionPolicy,
   ) => Promise<string>;

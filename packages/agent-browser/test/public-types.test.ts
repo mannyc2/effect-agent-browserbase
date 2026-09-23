@@ -3,7 +3,9 @@ import { Effect, type Layer, type Scope } from "effect";
 import type { AdaptedSession, fromSession, SelectionOptions } from "effect-agent-browser/adapter";
 import { interactiveLayer } from "effect-agent-browser/adapter";
 import {
+  type formHandlers,
   type keyboardHandlers,
+  type readingHandlers,
   type selectionHandlers,
   type waitHandlers,
   type observedHandlers,
@@ -16,7 +18,7 @@ import {
   type ToolFailureSnapshot,
 } from "effect-agent-browser/tools";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
-import type { BrowserSession } from "effect-browser/browser";
+import type { AnySession, BrowserSession } from "effect-browser/browser";
 import type { BrowserPolicy } from "effect-browser/browser-data";
 import type { ChromiumSession } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
@@ -80,6 +82,11 @@ const selectionBorrowed: Same<
 
 const waitBorrowed: Same<LayerRequirements<ReturnType<typeof waitHandlers>>, never> = true;
 const observedBorrowed: Same<LayerRequirements<ReturnType<typeof observedHandlers>>, never> = true;
+const formBorrowed: Same<LayerRequirements<ReturnType<typeof formHandlers>>, never> = true;
+const readingBorrowed: Same<LayerRequirements<ReturnType<typeof readingHandlers>>, never> = true;
+
+/** A replacement reading sees the borrowed session and returns an ordinary typed reading. */
+const observeHook: Same<Parameters<NonNullable<HandlerOptions["observe"]>>[1], AnySession> = true;
 
 const retainedFailure: Same<
   Effect.Error<AdaptedSession<BrowserbaseSession<CallbackFailure>>["browser"]["failure"]>,
@@ -106,6 +113,9 @@ const callbackRequirements: Same<
   Requirements<ReturnType<typeof callbackHost>>,
   RecorderService | Scope.Scope
 > = true;
+
+/** Invalid options fail host acquisition, never a later Tool call. */
+const hostConfiguration: Same<Effect.Error<ReturnType<typeof callbackHost>>, BrowserError> = true;
 
 const callbackErrors: Same<
   Effect.Error<Effect.Success<ReturnType<typeof callbackHost>>["failure"]>,
@@ -200,6 +210,10 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       selectionBorrowed &&
       waitBorrowed &&
       observedBorrowed &&
+      formBorrowed &&
+      readingBorrowed &&
+      observeHook &&
+      hostConfiguration &&
       retainedFailure &&
       callbackRequirements &&
       callbackErrors &&

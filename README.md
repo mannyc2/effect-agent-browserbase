@@ -38,11 +38,11 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 
 // The host acquired browser through Chromium or Browserbase, in the active execution scope.
 const result = BrowserTools.run(browser, AgentRuntime.run(agent, request), {
-  observationScope: "viewport",
+  maxControls: 32,
 });
 ```
 
-Every agent turn borrows that session. `BrowserTools.run` provides the maintained handlers and supervises both browser and host callback failures; the host still supplies its selected LanguageModel and other Agent services. An agent declares the tools it may see: the original five, optional pointer/wheel tools, and separately optional exact-node keyboard tools. `Adapter.fromSession` remains available for the framework's `InteractiveBrowser` handle. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition.
+Every agent turn borrows that session. `BrowserTools.run` provides the maintained handlers, runs browser calls one at a time in the order the model declared them, and supervises both browser and host callback failures; the host still supplies its selected LanguageModel and other Agent services. An agent declares the tools it may see: the original five, optional reading, pointer/wheel, keyboard, option-selection, wait and form tools, and `_and_inspect` variants that return the page an action leaves behind. `BrowserTools.instructions(toolkit)` and `BrowserTools.policy(...)` give the agent instructions and policy that match its tools, and every host option is checked once, when the host is built. `Adapter.fromSession` remains available for the framework's `InteractiveBrowser` handle. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition.
 
 ## API migration
 
@@ -58,13 +58,15 @@ Every agent turn borrows that session. `BrowserTools.run` provides the maintaine
 | Manually acquire an interval just to consume frames                    | `Capture.stream(session, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                                                    |
 | `error.reason === "busy"`; optional dispatch evidence                  | `error.reason._tag === "Busy"` or `Effect.catchReason("BrowserError", "Busy", ...)`; `outcome` is required                                                              |
 | Provider `status` / retry timing on the outer browser error            | `Provider` / `Transport` reason carries `status`; `RateLimited` carries `retryAfterMillis`; `Limit` carries actual dimension, maximum and observed facts                |
-| Every host reason exposed to the model                                 | Eleven action-oriented tool reasons plus unchanged dispatch outcome. `ToolHost.toolFailures` retains original structured errors and bounded tool-call IDs on the host   |
+| Every host reason exposed to the model                                 | Thirteen action-oriented tool reasons plus unchanged dispatch outcome. `ToolHost.toolFailures` retains original structured errors, Tool names and bounded call IDs      |
 | Concrete `closeChecked` succeeds with `undefined`                      | It returns the same frozen cleanup receipt as `close` after the existing ownership-specific check passes; the generic session contract still permits discarding success |
 | Capture `dropped`                                                      | `discarded = overflow + late + duplicates + rejected`, with disjoint components; `upstreamDrops` remains `"unknown"`                                                    |
 | Helper parameter `BrowserSession` when it does not supervise callbacks | `AnySession` (`BrowserSession<unknown>`); keep supervisors generic in their callback error or concrete session                                                          |
 | Five required binding bounds/mode fields                               | Omission defaults to one concurrent invocation, 64 KiB input/output, 10 seconds and `reject-call`; explicit values are validated                                        |
 | A common navigation needs a different loading deadline                 | Optional `NavigateRequest.timeoutMillis`, 1–600000 ms, capped by remaining session lifetime; the model tool still accepts only URL                                      |
 | Control kind/label/disabled only                                       | Optional checked/selected/inputType/required state, collected with defined native/ARIA semantics and rechecked on the same node                                         |
+| Several model fill/click calls for one form                            | `session.fillForm` / `browser_fill_form`: one gated operation that submits only after every field was set and still holds                                               |
+| Tool options checked on every call; `observedResultMaxBytes`           | Options checked once when the host is built; `resultMaxBytes` fits every result. See the [agent guide](packages/agent-browser/README.md#api-migration)                  |
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 

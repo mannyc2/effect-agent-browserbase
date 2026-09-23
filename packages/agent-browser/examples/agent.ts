@@ -12,6 +12,7 @@
 // the caller's: provide a LanguageModel layer beside these programs. `test/native/agent.test.ts`
 // runs this same wiring against a local Chromium with a scripted model.
 import { Context, Effect, Layer, Schema } from "effect";
+import * as InMemory from "effect-agent/in-memory";
 import * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
@@ -34,7 +35,11 @@ const launch = recipe({ viewport: { _tag: "Fixed", width: 1280, height: 720 } })
 // Layer is built. Building it allocates nothing.
 const account = Account.layerConfig();
 
-const host = BrowserbaseBrowser.layer({ launch }).pipe(Layer.provide(account));
+// One thread store for the execution, so a later run can continue an earlier conversation.
+const host = Layer.mergeAll(
+  BrowserbaseBrowser.layer({ launch }).pipe(Layer.provide(account)),
+  InMemory.layer,
+);
 
 /** The execution owns the session, so the host can still look after the agent is done. */
 export const runBrowserAgent = (request: string) =>
@@ -52,7 +57,8 @@ export const runBrowserAgent = (request: string) =>
 
 /**
  * Both runs borrow the one session, so nothing is allocated twice and the second run sees the
- * page exactly as the person left it — signed in, say.
+ * page exactly as the person left it — signed in, say. It continues the first run's thread, so
+ * the model keeps what it learned before the handoff.
  */
 export const runWithOperator = (
   request: string,
@@ -74,7 +80,8 @@ export const runWithOperator = (
 
       const second = yield* turns(
         session,
-        `${request} The operator has signed in; continue from the page as it is now.`,
+        "The operator has signed in; continue from the page as it is now.",
+        first.threadId,
       );
 
       return second.output;
@@ -122,4 +129,4 @@ const bootstrap = Bootstrap.binding({
 export const runSupervised = (request: string) =>
   Browser.scoped(BrowserbaseBrowser.open(genericPolicy, { bootstrap }), (browser) =>
     turns(browser, request),
-  ).pipe(Effect.provide(BrowserbaseBrowser.layer({ launch }).pipe(Layer.provide(account))));
+  ).pipe(Effect.provide(host));

@@ -56,6 +56,12 @@ export interface PageReadRequest {
   readonly only?: Element;
   /** Action observations issue a visible select's choices even while its dropdown is closed. */
   readonly choices?: boolean;
+  /**
+   * Case-insensitive text a reading keeps, applied before any limit: text lines and controls
+   * whose label contains it. A select is kept through its own label or any option label, and an
+   * option only beside the select it belongs to.
+   */
+  readonly match?: string;
   /** Fresh membership and identity checks for already retained options; values stay private. */
   readonly options?: ReadonlyArray<{ readonly node: Element; readonly value: string }>;
 }
@@ -71,6 +77,25 @@ export const identityOf = (facts: ControlFacts): string =>
     facts.required ?? null,
     facts.multiple ?? null,
     facts.editable,
+    facts.inputType ?? null,
+    facts.autocomplete ?? null,
+    facts.destination ?? null,
+    facts.formMethod ?? null,
+  ]);
+
+/**
+ * The same identity without enablement. A form may enable the control it is about to use, so a
+ * form step compares this and separately requires the control to be enabled now. `editable`
+ * follows `disabled`, so it is left out too; a form step checks it where text is written.
+ */
+export const stableIdentityOf = (facts: ControlFacts): string =>
+  JSON.stringify([
+    facts.kind,
+    facts.label,
+    facts.checked ?? null,
+    facts.selected ?? null,
+    facts.required ?? null,
+    facts.multiple ?? null,
     facts.inputType ?? null,
     facts.autocomplete ?? null,
     facts.destination ?? null,
@@ -111,6 +136,10 @@ export const readPage = (
   const { scope, maximumBytes, controlLimit, nodeBudget, only } = request;
   const width = window.innerWidth;
   const height = window.innerHeight;
+  const needle = request.match?.toLowerCase();
+
+  const matches = (value: string): boolean =>
+    needle === undefined || value.toLowerCase().includes(needle);
 
   const evidence = {
     width,
@@ -375,6 +404,19 @@ export const readPage = (
     const choice =
       request.choices === true && parentSelect !== null && selectIndices.has(parentSelect);
 
+    // A select stays with its choices: it matches through its own label or any option label,
+    // and an option is kept only beside the select it belongs to.
+    if (needle !== undefined) {
+      const kept =
+        node instanceof HTMLOptionElement
+          ? parentSelect !== null && selectIndices.has(parentSelect)
+          : matches(facts.label) ||
+            (node instanceof HTMLSelectElement &&
+              Array.from(node.options).some((option) => matches(option.label)));
+
+      if (!kept) continue;
+    }
+
     // Choices of a visible native select are metadata, not evidence of visible dropdown rows.
     // Filter before applying the shared limit so offscreen controls cannot spend it first.
     if (scope === "viewport" && !choice && facts.hitTest !== "self") {
@@ -416,7 +458,18 @@ export const readPage = (
   let textTruncated = false;
 
   if (scope === "document") {
-    const encoded = encoder.encode(document.body?.innerText ?? "");
+    const whole = document.body?.innerText ?? "";
+
+    const encoded = encoder.encode(
+      needle === undefined
+        ? whole
+        : whole
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line !== "" && matches(line))
+            .join("\n"),
+    );
+
     let end = Math.min(encoded.length, maximumBytes);
 
     // Do not manufacture a replacement character by cutting a UTF-8 sequence.
@@ -501,7 +554,7 @@ export const readPage = (
       }
       const fragment = visible.replace(/\s+/g, " ").trim();
 
-      if (fragment === "") continue;
+      if (fragment === "" || !matches(fragment)) continue;
       const joined = (text === "" ? "" : first.top >= lastBottom - 1 ? "\n" : " ") + fragment;
       const size = encoder.encode(joined).length;
 

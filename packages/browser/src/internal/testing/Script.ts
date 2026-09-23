@@ -47,6 +47,7 @@ export const ControlScript = Schema.Struct({
   kind: ObservedControl.fields.kind,
   label: ObservedControl.fields.label,
   disabled: Schema.optionalKey(Schema.Boolean),
+  /** A checkbox or radio `input` without it starts unchecked, as a real one does. */
   checked: Schema.optionalKey(Schema.Boolean),
   selected: Schema.optionalKey(Schema.Boolean),
   inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(32))),
@@ -150,6 +151,7 @@ export const ScriptableOperation = Schema.Literals([
   "wait",
   "click",
   "fill",
+  "fill-form",
   "select-option",
   "scroll",
   "click-and-wait",
