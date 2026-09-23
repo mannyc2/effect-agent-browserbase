@@ -218,6 +218,41 @@ it.effect(
   },
 );
 
+it.effect(
+  "a provider that answers for another session is neither attached to nor confirmed released",
+  () => {
+    const receipts: CleanupResult[] = [];
+
+    return Effect.gen(function* () {
+      const workflow = Effect.scoped(BrowserbaseBrowser.open(policy)).pipe(
+        Effect.provide(
+          Testing.layer({
+            browser: shop,
+            provider: { identity: "foreign-session" },
+            options: {
+              onCleanup: (result) =>
+                Effect.sync(() => {
+                  receipts.push(result);
+                }),
+            },
+          }),
+        ),
+      );
+
+      const fiber = yield* workflow.pipe(Effect.forkScoped);
+
+      yield* TestClock.adjust("15 seconds");
+      // The endpoint's metadata names another session, so nothing connects to it, and no reply
+      // about that other session can confirm this one ended.
+      expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
+        operation: "connect",
+        reason: { _tag: "Malformed" },
+      });
+      expect(receipts[0]).toMatchObject({ remote: "unknown", local: "not-connected" });
+    });
+  },
+);
+
 it.effect("a borrowed attachment disconnects without releasing the owner's session", () =>
   Effect.gen(function* () {
     const scripted = yield* Testing.ScriptedBrowserbase;
@@ -243,7 +278,11 @@ it.effect("a borrowed attachment disconnects without releasing the owner's sessi
           local: "closed",
         });
         expect((yield* scripted.provider.sessions)[0]).toMatchObject({ releaseRequests: 0 });
-        expect((yield* scripted.browsers).length).toBe(2);
+        // The borrower reached the owner's own browser, and closing it left the owner's open.
+        const [browser] = yield* scripted.browsers;
+
+        expect(yield* scripted.browsers).toHaveLength(1);
+        expect(yield* browser!.connections).toEqual(["open", "closed"]);
       }),
     );
     expect((yield* scripted.provider.sessions)[0]).toMatchObject({

@@ -1,4 +1,4 @@
-import { Effect, type Scope } from "effect";
+import { Effect, Redacted, type Scope } from "effect";
 
 import type { OpenOptions } from "./Browser.ts";
 import { type AutomationOptions, BrowserPolicy, type Viewport } from "./BrowserData.ts";
@@ -6,7 +6,11 @@ import { type BrowserBinding, make as makeRuntime } from "./BrowserRuntime.ts";
 import { BrowserError, Reasons, type InitializationError } from "./Errors.ts";
 import { fromNativeAttempt, issueBinding, type NativeAttempt } from "./internal/browser/Binding.ts";
 import { checked } from "./internal/browser/PublicSession.ts";
-import { makeScriptedDriver, type EngineTimers } from "./internal/testing/Engine.ts";
+import {
+  makeScriptedBrowser,
+  type EngineTimers,
+  type ScriptedBrowser,
+} from "./internal/testing/Engine.ts";
 import { jpegFrame } from "./internal/testing/Frame.ts";
 import { scriptedSource } from "./internal/testing/Lifetime.ts";
 import {
@@ -32,6 +36,7 @@ export type {
   BindingReply,
   Gate,
   RecordedCall,
+  ScriptedConnection,
   ScriptedControl,
   ScriptedFrame,
   ScriptedOutcome,
@@ -50,10 +55,14 @@ export interface ScriptedOptions<E = never, R = never> extends OpenOptions<E, R>
   readonly onCleanup?: (result: ScriptedCleanupResult) => Effect.Effect<void>;
 }
 
-/** The scripted engine as an opaque binding, with one control handle for each connection made. */
+/**
+ * The scripted engine as an opaque binding. Connections to one address reach one browser, so a
+ * reconnection finds the pages it left; each browser has one control handle.
+ */
 export interface ScriptedBinding {
   readonly binding: BrowserBinding;
-  readonly connections: Effect.Effect<ReadonlyArray<ScriptedControl>>;
+  /** One control for each browser connected to so far, in first-connection order. */
+  readonly browsers: Effect.Effect<ReadonlyArray<ScriptedControl>>;
 }
 
 let references = 0;
@@ -62,7 +71,7 @@ const makeEngine = Effect.fnUntraced(function* (script: Script) {
   // Time for an in-flight navigation follows the clock this browser was opened under, so a
   // TestClock advances it and nothing real elapses.
   const context = yield* Effect.context<never>();
-  const connections: Array<ScriptedControl> = [];
+  const browsers = new Map<string, ScriptedBrowser>();
 
   const timers: EngineTimers = {
     sleep: (millis) => {
@@ -78,17 +87,25 @@ const makeEngine = Effect.fnUntraced(function* (script: Script) {
     },
   };
 
+  // The provider's address names the browser: the same address reaches the same pages again.
   const attempt: NativeAttempt = async (request) => {
-    const engine = makeScriptedDriver(script, request.options, request.events, timers);
+    const address = Redacted.isRedacted(request.connection)
+      ? String(Redacted.value(request.connection))
+      : String(request.connection);
 
-    connections.push(engine.control);
+    let browser = browsers.get(address);
 
-    return engine.driver;
+    if (browser === undefined) {
+      browser = makeScriptedBrowser(script, timers);
+      browsers.set(address, browser);
+    }
+
+    return browser.connect(request.options, request.events);
   };
 
   const binding = issueBinding({ _tag: "BrowserBinding" as const }, fromNativeAttempt(attempt));
 
-  return { binding, connections };
+  return { binding, controls: () => [...browsers.values()].map((browser) => browser.control) };
 });
 
 /**
@@ -132,7 +149,7 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
   );
 
   const connection = yield* acquired.connect;
-  const control = engine.connections[engine.connections.length - 1];
+  const control = engine.controls().at(-1);
 
   if (control === undefined)
     return yield* BrowserError.make({
@@ -154,8 +171,8 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
 
 /**
  * The same engine for a provider Layer built on `browser-runtime`, such as
- * `BrowserbaseBrowser.layer` with `BrowserBinding.layer(binding)`. Each connection the Layer
- * makes gets its own control handle, in connection order.
+ * `BrowserbaseBrowser.layer` with `BrowserBinding.layer(binding)`. Each address the Layer
+ * connects to is one browser with one control handle; reconnecting to it finds its pages.
  */
 export const binding = Effect.fnUntraced(function* (
   script: Script,
@@ -165,7 +182,7 @@ export const binding = Effect.fnUntraced(function* (
 
   return {
     binding: engine.binding,
-    connections: Effect.sync(() => [...engine.connections]),
+    browsers: Effect.sync(engine.controls),
   };
 });
 
