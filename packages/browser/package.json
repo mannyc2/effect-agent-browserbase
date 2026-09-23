@@ -24,7 +24,8 @@
     "./capture-data": "./src/CaptureData.ts",
     "./chromium": "./src/Chromium.ts",
     "./errors": "./src/Errors.ts",
-    "./page-control": "./src/PageControl.ts"
+    "./page-control": "./src/PageControl.ts",
+    "./testing": "./src/Testing.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -39,6 +39,7 @@
     "./search": "./src/Search.ts",
     "./session-data": "./src/SessionData.ts",
     "./sessions": "./src/Sessions.ts",
+    "./testing": "./src/Testing.ts",
     "./transfers": "./src/Transfers.ts",
     "./uploads": "./src/Uploads.ts",
     "./webhooks": "./src/Webhooks.ts"

@@ -1,16 +1,27 @@
 import { Effect, Layer, Redacted, Stream } from "effect";
+import * as Browser from "effect-browser/browser";
+import { BrowserPolicy } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import { Reasons } from "effect-browser/errors";
+import * as ScriptedBrowser from "effect-browser/testing";
 // Installed-package workflow for a consumer that never opens a browser.
 //
 // It runs as an ordinary program on the pinned Node and Bun with only
 // `effect-browserbase` and `effect` installed: no Playwright, no
 // framework, no test runner. The provider is scripted through `fetch`, so the
 // real Client, Sessions and artifact resources do their own parsing and bounds.
+// The second half opens scripted browsers through the testing entry points:
+// the real owner over a scripted engine, and the real provider Layers over a
+// scripted control plane, still with no Playwright installed.
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import type { CleanupResult } from "effect-browserbase/cleanup";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import { BrowserbaseExtensions } from "effect-browserbase/extensions";
 import { BrowserbaseRecordings } from "effect-browserbase/recordings";
 import { SessionReference } from "effect-browserbase/references";
 import { BrowserbaseReplays } from "effect-browserbase/replays";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
+import * as ScriptedBrowserbase from "effect-browserbase/testing";
 import { RecordingPageReference } from "effect-browserbase/transfers";
 import { BrowserbaseUploads } from "effect-browserbase/uploads";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -219,4 +230,164 @@ const program = Effect.gen(function* () {
 
 const result = await Effect.runPromise(program);
 
-console.log(JSON.stringify({ profile: "resources", ...result }));
+const shop: ScriptedBrowser.Script = {
+  documents: [
+    {
+      url: "https://shop.test/",
+      text: "We use cookies.",
+      controls: [
+        {
+          id: "accept",
+          kind: "button",
+          label: "Accept all",
+          activates: "https://shop.test/?consent=1",
+        },
+      ],
+    },
+    { url: "https://shop.test/?consent=1", text: "Welcome back." },
+  ],
+};
+
+const scripted = await Effect.runPromise(
+  Effect.gen(function* () {
+    // The generic testing entry: the real owner, no Chromium, no provider.
+    const generic = yield* Browser.scoped(
+      ScriptedBrowser.open(shop, { policy: BrowserPolicy.unrestricted({ maxActions: 3 }) }),
+      (browser) =>
+        Effect.gen(function* () {
+          yield* browser.navigate({ url: "https://shop.test/" });
+          const observation = yield* browser.observe();
+          const accept = observation.controls[0];
+
+          expect(accept?.label === "Accept all", "the scripted control is observed");
+          if (accept === undefined) return { calls: 0 };
+          yield* browser.clickElement({
+            observationId: observation.observationId,
+            elementId: accept.elementId,
+          });
+          expect(
+            (yield* browser.control.document.current).url === "https://shop.test/?consent=1",
+            "a click follows the scripted destination",
+          );
+          const budget = yield* browser.observe().pipe(Effect.result);
+
+          expect(
+            budget._tag === "Failure" &&
+              budget.failure.reason._tag === "Limit" &&
+              budget.failure.outcome === "undispatched",
+            "the real action budget refuses undispatched work",
+          );
+
+          return { calls: (yield* browser.control.calls).length };
+        }),
+    );
+
+    // An unknown outcome fences the real owner; the recorder proves nothing was re-sent.
+    const uncertain = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* ScriptedBrowser.open(shop);
+
+        yield* browser.control.next("click", {
+          _tag: "Fail",
+          reason: Reasons.Timeout.make({}),
+          outcome: "unknown",
+        });
+        const observation = yield* browser.observe();
+        const accept = observation.controls[0];
+
+        if (accept === undefined) throw new Error("Consumer assertion failed: no control");
+        const reference = { observationId: observation.observationId, elementId: accept.elementId };
+        const first = yield* browser.clickElement(reference).pipe(Effect.result);
+
+        expect(
+          first._tag === "Failure" && first.failure.outcome === "unknown",
+          "the scripted outcome keeps its unknown dispatch evidence",
+        );
+        const retry = yield* browser.clickElement(reference).pipe(Effect.result);
+
+        expect(
+          retry._tag === "Failure" &&
+            retry.failure.reason._tag === "Closed" &&
+            retry.failure.outcome === "undispatched",
+          "an uncertain owner refuses the retry without sending it",
+        );
+        const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
+
+        expect(
+          clicks.length === 1 && clicks[0]?.dispatched === true,
+          "the unknown click was dispatched once and never replayed",
+        );
+        const status = yield* browser.status;
+        const receipt = yield* browser.close;
+
+        return { phase: status.phase, connection: receipt.connection };
+      }),
+    );
+
+    // The provider testing entry: the real account and browser Layers over scripted replies.
+    const receipts: CleanupResult[] = [];
+
+    const hosted = yield* Effect.gen(function* () {
+      const handles = yield* ScriptedBrowserbase.ScriptedBrowserbase;
+
+      const run = yield* Browser.scoped(
+        BrowserbaseBrowser.open(BrowserPolicy.unrestricted()),
+        (session) =>
+          Effect.gen(function* () {
+            yield* session.navigate({ url: "https://shop.test/" });
+            const [control] = yield* handles.browsers;
+
+            if (control === undefined) throw new Error("Consumer assertion failed: no engine");
+
+            const delivered = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const interval = yield* Capture.start(session, {
+                  maxFrames: 2,
+                  maxDurationMillis: 5000,
+                });
+
+                yield* control.capture.emit();
+                const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
+
+                return frames.length;
+              }),
+            );
+
+            return { delivered, session: session.reference.sessionId };
+          }),
+      );
+
+      const sessions = yield* handles.provider.sessions;
+
+      expect(
+        sessions[0]?.status === "COMPLETED" && sessions[0].releaseRequests === 1,
+        "the scripted provider saw exactly one release",
+      );
+
+      return { ...run, released: sessions[0]?.releaseRequests };
+    }).pipe(
+      Effect.provide(
+        ScriptedBrowserbase.layer({
+          browser: shop,
+          options: {
+            onCleanup: (value) =>
+              Effect.sync(() => {
+                receipts.push(value);
+              }),
+          },
+        }),
+      ),
+    );
+
+    expect(
+      receipts.length === 1 &&
+        receipts[0]?.remote === "confirmed" &&
+        receipts[0].local === "closed",
+      "the real cleanup receipt confirms release over the scripted control plane",
+    );
+
+    return { generic, uncertain, hosted };
+  }),
+);
+
+console.log(JSON.stringify({ profile: "resources", ...result, scripted }));
