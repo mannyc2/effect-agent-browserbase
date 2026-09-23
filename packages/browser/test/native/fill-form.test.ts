@@ -9,6 +9,7 @@ import {
   ObservedElement,
 } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
+import * as PageControl from "effect-browser/page-control";
 import { chromium, type Page } from "playwright-core";
 
 import { externalChromium, localSite } from "../fixtures/StandaloneBrowser.ts";
@@ -147,6 +148,7 @@ const text = (observation: Observation, label: string, value: string): FormField
 });
 
 const layer = Chromium.layer({ viewport: { width: 640, height: 900 } });
+const controlled = Chromium.layer({ pageControl: true, viewport: { width: 640, height: 900 } });
 
 it.live("a form sets text, toggles and options in order, then submits once", () =>
   Effect.scoped(
@@ -476,4 +478,61 @@ it.live("match keeps matching controls and lines ahead of the control limit", ()
       });
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.live(
+  "a held page refuses a form until its nodes are revalidated, and a submit may navigate",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session, page } = yield* fixture();
+        const observed = yield* session.observe({ maxControls: 64 });
+        const stage = (yield* session.pages).find((candidate) => candidate.selected);
+
+        assert.ok(stage);
+        yield* PageControl.resume(session, yield* PageControl.suspend(session, stage));
+
+        const request = {
+          observationId: observed.observationId,
+          fields: [text(observed, "Email", "ada@example.test")],
+          submit: id(observed, "Sign up"),
+        };
+
+        expect(yield* Effect.result(session.fillForm(request))).toMatchObject({
+          _tag: "Failure",
+          failure: { operation: "fill-form", reason: { _tag: "Stale" }, outcome: "undispatched" },
+        });
+        // Revalidation is per node: the field may be set, but its submit control was not checked.
+        yield* session.revalidateElement(reference(observed, "Email"));
+        expect(yield* session.fillForm(request)).toMatchObject({
+          fields: [{ status: "set" }],
+          submitted: false,
+          stopped: {
+            stage: "submit",
+            elementId: id(observed, "Sign up"),
+            error: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+          },
+        });
+        expect(yield* events(page)).toBe("");
+
+        const site = yield* localSite;
+
+        yield* Effect.promise(() =>
+          page.setContent(`<!doctype html><form action="${site.url}" method=get>
+          <input name=q aria-label=Query><button>Search</button></form>`),
+        );
+        const search = yield* session.observe();
+
+        expect(
+          yield* session.fillForm({
+            observationId: search.observationId,
+            fields: [text(search, "Query", "effect")],
+            submit: id(search, "Search"),
+          }),
+        ).toMatchObject({ fields: [{ status: "set" }], submitted: true });
+        yield* Effect.promise(() => page.waitForURL(/[?]q=effect$/));
+        expect((yield* session.observe()).url).toMatch(/[?]q=effect$/);
+        expect((yield* session.status).phase).toBe("open");
+      }),
+    ).pipe(Effect.provide(controlled)),
 );

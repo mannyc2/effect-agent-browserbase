@@ -1,9 +1,13 @@
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
-import { Effect, Exit, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as InMemory from "effect-agent/in-memory";
 import { FillFormResult, FormStop, Observation, Target } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
-import { Toolkit } from "effect/unstable/ai";
+import { Model, Toolkit } from "effect/unstable/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 
@@ -238,6 +242,111 @@ it.effect(
           expect(Exit.isFailure(exit) || exit.value.every((result) => result.isFailure)).toBe(true);
         }
         expect(forms).toBe(1);
+      }),
+    ),
+);
+
+it.effect(
+  "a form Tool gated for approval keeps the maintained handler, and a denial fails the run before it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const forms: Array<unknown> = [];
+        const asked: Array<unknown> = [];
+        const usage = { inputTokens: {}, outputTokens: {} };
+
+        const browser = scriptedSession({
+          fillForm: (form) =>
+            Effect.sync(() => {
+              forms.push(form);
+
+              return FillFormResult.make({ fields, submitted: form.submit !== undefined, url });
+            }),
+        });
+
+        // Only a form that would be sent asks first.
+        const gated = Toolkit.make(
+          BrowserTools.formToolkit.tools.browser_fill_form.setNeedsApproval(
+            (params) => params.submit !== undefined,
+          ),
+        );
+
+        const agent = Agent.make("gated-form", {
+          input: Schema.String,
+          output: Schema.Struct({ done: Schema.Boolean }),
+          instructions: BrowserTools.instructions(gated),
+          toolkit: gated,
+          policy: BrowserTools.policy({ maxTurns: 4, maxToolCalls: 4, maxDuration: "30 seconds" }),
+        });
+
+        const call = (id: string, params: unknown): ScriptedTurnInput => ({
+          _tag: "Stream",
+          parts: [
+            { type: "tool-call", id, name: "browser_fill_form", params },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          termination: { _tag: "Complete" },
+        });
+
+        const answer: ScriptedTurnInput = {
+          _tag: "Stream",
+          parts: [
+            { type: "text-start", id: "answer" },
+            { type: "text-delta", id: "answer", delta: '{"done":true}' },
+            { type: "text-end", id: "answer" },
+            { type: "finish", reason: "stop", usage },
+          ],
+          termination: { _tag: "Complete" },
+        };
+
+        const host = yield* BrowserTools.makeHost(browser);
+
+        const run = (decision: "approved" | "denied", turns: ReadonlyArray<ScriptedTurnInput>) =>
+          host.run(
+            AgentRuntime.run(agent, "Create the account.", {
+              approval: {
+                request: ({ toolName, parameters }) =>
+                  Effect.sync(() => {
+                    asked.push({ toolName, parameters });
+
+                    return decision === "approved"
+                      ? { _tag: "approved" as const }
+                      : { _tag: "denied" as const, reason: "A person sends this form." };
+                  }),
+              },
+            }).pipe(
+              Effect.provide(
+                Layer.mergeAll(
+                  ScriptedModel.layer(turns),
+                  Layer.succeed(Model.ProviderName, "scripted"),
+                  Layer.succeed(Model.ModelName, "gated"),
+                  InMemory.layer,
+                ),
+              ),
+            ),
+          );
+
+        const { submit: _, ...unsent } = request;
+
+        const approved = yield* run("approved", [
+          call("fill", unsent),
+          call("send", request),
+          answer,
+        ]);
+
+        expect(approved.output.done).toBe(true);
+        expect(forms).toEqual([unsent, request]);
+        expect(asked).toEqual([{ toolName: "browser_fill_form", parameters: request }]);
+
+        const denied = yield* run("denied", [call("send", request), answer]).pipe(Effect.flip);
+
+        expect(denied).toMatchObject({
+          _tag: "AgentApprovalDenied",
+          toolName: "browser_fill_form",
+          message: "A person sends this form.",
+        });
+        expect(forms).toHaveLength(2);
+        expect(asked).toHaveLength(2);
       }),
     ),
 );

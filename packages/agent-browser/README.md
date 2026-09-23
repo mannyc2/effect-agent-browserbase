@@ -346,6 +346,13 @@ parameters by making its own Tool with the same name; handlers are keyed by name
 maintained parameters. `BrowserTools.toolNames` and `isBrowserTool` name every Tool this package
 defines.
 
+The Tools are ordinary Effect AI Tools, so `tool.setNeedsApproval(...)` gates a consequential
+call, such as `browser_fill_form` with a submit, and the maintained handlers still serve it because
+handlers are keyed by name. The host decides through Effect Agent's `approval` run option, for
+example `toRunApprovalHook(...)` from `effect-agent/run-hooks`. Unlike a synchronous `admission`
+refusal, an explicit denial fails the run with `AgentApprovalDenied` rather than returning a
+failure to the model.
+
 Every Tool's parameters are an object schema with described fields, and a conformance test runs
 each through the pinned OpenAI and Anthropic providers' own schema transforms and wire round trip.
 
@@ -395,20 +402,20 @@ Native framework tests prove that the adapter Layer captures configured services
 
 ## API migration
 
-| Previous use                                                         | Current use                                                                                                                                                     |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Adapter.fromSession(browser)`                                       | `yield* Adapter.fromSession(browser, { selection: "retained" })` preserves retained behavior; choose `"current"` deliberately for follow-selection.             |
-| `AgentSession<E>` and `adapted.currentHandle`                        | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                         |
-| `BoundTarget`, `browser.bind()` and `browser.currentTarget`          | Use `TargetOperations` for common operations and `yield* browser.retain` for a checked `RetainedTarget`. Ordinary calls use the session directly.               |
-| A string from `createPage`, passed to select/close                   | `createPage` returns `PageInfo`; `selectPage(page)` and `closePage(page)` check it. `selectPage` and `selectFrame` return `void`.                               |
-| `error.reason === "limit"`, top-level `status` or `retryAfterMillis` | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                          |
-| Full host reason names in model failures                             | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                             |
-| Concrete `closeChecked` returning `void`                             | Concrete browser owners return their canonical cleanup receipt. The framework handle still returns `void`.                                                      |
-| Capture `dropped`                                                    | Capture `discarded = overflow + late + duplicates + rejected`; default buffering stays unchanged. `toolFailures.dropped` separately counts diagnostic eviction. |
-| Document scope by default                                            | Viewport is the default. Pass `observationScope: "document"`, or let the model pass `scope: "document"` to `browser_inspect` for one reading.                   |
-| `observedResultMaxBytes`, `Unavailable/limit` for a large reading    | `resultMaxBytes` (16 KiB–1 MiB, 48 KiB default) bounds every result, and readings are fitted to it instead.                                                     |
-| An invalid option failing each Tool call `failed/undispatched`       | `makeHost`, `run` and handler Layers fail when built, with a `Configuration` reason naming the option.                                                          |
-| `unsupported` and `disabled` projected to `failed`                   | They keep their own names in `BrowserToolFailure`; match them where a switch was exhaustive.                                                                    |
-| Browser calls run concurrently, ordered only by the lane             | `host.run` schedules them sequentially in declared order; `scheduling: "lane"` restores the previous behaviour.                                                 |
+| Previous use                                                                                | Current use                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Adapter.fromSession(browser)`                                                              | `yield* Adapter.fromSession(browser, { selection: "retained" })` preserves retained behavior; choose `"current"` deliberately for follow-selection.             |
+| `AgentSession<E>` and `adapted.currentHandle`                                               | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                         |
+| `BoundTarget`, `browser.bind()` and `browser.currentTarget`                                 | Use `TargetOperations` for common operations and `yield* browser.retain` for a checked `RetainedTarget`. Ordinary calls use the session directly.               |
+| A string from `createPage`, passed to select/close                                          | `createPage` returns `PageInfo`; `selectPage(page)` and `closePage(page)` check it. `selectPage` and `selectFrame` return `void`.                               |
+| `error.reason === "limit"`, top-level `status` or `retryAfterMillis`                        | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                          |
+| Full host reason names in model failures                                                    | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                             |
+| Concrete `closeChecked` returning `void`                                                    | Concrete browser owners return their canonical cleanup receipt. The framework handle still returns `void`.                                                      |
+| Capture `dropped`                                                                           | Capture `discarded = overflow + late + duplicates + rejected`; default buffering stays unchanged. `toolFailures.dropped` separately counts diagnostic eviction. |
+| Document scope by default                                                                   | Viewport is the default. Pass `observationScope: "document"`, or let the model pass `scope: "document"` to `browser_inspect` for one reading.                   |
+| `observedResultMaxBytes`, `ObservedResultMaxBytes`, `Unavailable/limit` for a large reading | `resultMaxBytes` and the `ResultMaxBytes` schema (16 KiB–1 MiB, 48 KiB default) bound every result, and readings are fitted to them instead.                    |
+| An invalid option failing each Tool call `failed/undispatched`                              | `makeHost`, `run` and handler Layers fail when built, with a `Configuration` reason naming the option.                                                          |
+| `unsupported` and `disabled` projected to `failed`                                          | They keep their own names in `BrowserToolFailure`; match them where a switch was exhaustive.                                                                    |
+| Browser calls run concurrently, ordered only by the lane                                    | `host.run` schedules them sequentially in declared order; `scheduling: "lane"` restores the previous behaviour.                                                 |
 
 Common-operation helpers may accept `AnySession`; helpers such as the example's `turns<E>` that supervise browser failure stay generic in `E`. Binding bounds now have validated defaults, while explicit bounds retain their meaning. `NavigateRequest.timeoutMillis` is a host option and does not add a model-selected timeout to the existing URL-only navigation Tool. Added observation state is bounded and does not include field values or destinations. The earlier `Browser.scoped` inference fix changes explicit curried generic argument lists from five to four outer parameters and two to three inner parameters; ordinary call syntax remains.
