@@ -21,7 +21,10 @@ import { BrowserbaseSessions } from "../src/Sessions.ts";
 const connect = (binding: BrowserBinding.BrowserBinding, connection: unknown) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const runtime = yield* BrowserRuntime.make({ implementation: "binding-under-test", binding });
+      const runtime = yield* BrowserRuntime.make({
+        implementation: "binding-under-test",
+        binding,
+      }).pipe(Effect.provide(NodeCrypto.layer));
 
       const acquired = yield* runtime.acquire(BrowserPolicy.unrestricted(), (cleanup) =>
         Effect.gen(function* () {
@@ -115,7 +118,7 @@ it.effect("a binding the package did not issue is refused before any provider re
     const unissued = yield* BrowserRuntime.make({
       implementation: "binding-under-test",
       binding: forged,
-    }).pipe(Effect.flip);
+    }).pipe(Effect.provide(NodeCrypto.layer), Effect.flip);
 
     assert.equal(unissued.reason._tag, "UnregisteredSession");
 
@@ -168,7 +171,9 @@ it.effect("the default engine needs no provision and every issued binding is fro
 
     assert.equal(binding._tag, "BrowserBinding");
     // An issued binding has an engine, so the runtime accepts it.
-    yield* BrowserRuntime.make({ implementation: "binding-under-test", binding });
+    yield* BrowserRuntime.make({ implementation: "binding-under-test", binding }).pipe(
+      Effect.provide(NodeCrypto.layer),
+    );
     assert.ok(Object.isFrozen(binding));
     assert.ok(Object.isFrozen(BrowserBinding.playwright()));
   }),

@@ -125,7 +125,7 @@ for (const [directory, manifest] of [
 test("unpaid acceptance cannot silently omit the generic package", () => {
   assert.match(
     read("tools/bootstrap.sh"),
-    /'packages\/browser', 'packages\/browserbase', 'packages\/agent-browser'\n\]/,
+    /'packages\/browser', 'packages\/browserbase', 'packages\/agent-browser', 'lint'\n\]/,
   );
   const acceptance = read("tools/run-acceptance.sh");
 
@@ -141,7 +141,7 @@ test("unpaid acceptance cannot silently omit the generic package", () => {
   }
   assert.match(
     acceptance,
-    /ls-files -z -- packages\/browser packages\/browserbase packages\/agent-browser \|/,
+    /ls-files -z -- packages\/browser packages\/browserbase packages\/agent-browser lint \|/,
   );
 });
 

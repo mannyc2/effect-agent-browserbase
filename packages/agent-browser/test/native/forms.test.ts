@@ -1,4 +1,5 @@
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
@@ -76,7 +77,7 @@ const chromium = Chromium.layer({
     startupTimeoutMillis: 25000,
   },
   viewport: { width: 640, height: 480 },
-});
+}).pipe(Layer.provide(NodeCrypto.layer));
 
 const scripted = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   Layer.mergeAll(

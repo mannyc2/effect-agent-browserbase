@@ -282,7 +282,14 @@ it.effect(
             }),
         });
 
-        for (const maximum of [0, 16383, 1024 * 1024 + 1, Number.NaN, Number.POSITIVE_INFINITY, null])
+        for (const maximum of [
+          0,
+          16383,
+          1024 * 1024 + 1,
+          Number.NaN,
+          Number.POSITIVE_INFINITY,
+          null,
+        ])
           expect(
             // @ts-expect-error Explicit null is an untyped invalid host input, not omission.
             yield* Effect.result(Tools.makeHost(browser, { resultMaxBytes: maximum })),

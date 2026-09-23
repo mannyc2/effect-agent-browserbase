@@ -1010,7 +1010,7 @@ it.effect("a keep-alive reconnection finds the pages its browser kept while deta
         implementation: "integration-under-test",
         binding: scripted.binding,
         keepAlive: true,
-      });
+      }).pipe(Effect.provide(NodeCrypto.layer));
 
       // The first attempt is refused, the second connects to the same browser.
       const refused = yield* Effect.scoped(

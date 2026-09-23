@@ -1265,6 +1265,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
                       await hold(armedStop.gate, stopTicket, "navigate-stop", stopRecord);
                       stopTicket.check();
                     }
+                    break;
+                  case undefined:
+                    break;
                 }
                 page.navigation?.stop();
 
@@ -1913,6 +1916,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           : open.invoke(name, input, invokeOptions?.origin);
       }),
     disconnect: Effect.sync(() => {
+      // oxlint-disable-next-line unicorn/no-useless-spread -- dropping removes it from `live`
       for (const connection of [...live]) connection.drop();
     }),
     connections: Effect.sync(() => [...connections]),

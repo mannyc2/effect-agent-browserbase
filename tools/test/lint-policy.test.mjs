@@ -87,12 +87,12 @@ test("the lint config reaches bootstrap and acceptance, beside upstream's own", 
   assert.match(patch, /^\+ {4}"oxlint-tsgolint": "\d+\.\d+\.\d+",$/m);
   // Upstream's root config lints upstream; nothing here reaches into it.
   assert.doesNotMatch(patch, /^diff --git a\/vite\.config\.ts /m);
-  assert.match(read("tools/bootstrap.sh"), /'packages\/agent-browser', 'test', 'lint'\n/);
+  assert.match(read("tools/bootstrap.sh"), /'packages\/agent-browser', 'lint'\n/);
   const acceptance = read("tools/run-acceptance.sh");
-  assert.match(acceptance, /run format timeout \d+s \.\/node_modules\/\.bin\/vp fmt --check [^\n]* test lint\n/);
+  assert.match(acceptance, /run format timeout \d+s \.\/node_modules\/\.bin\/vp fmt --check [^\n]* packages\/agent-browser lint\n/);
   assert.match(
     acceptance,
-    /run lint timeout \d+s \.\/node_modules\/\.bin\/oxlint -c lint\/\.oxlintrc\.json --deny-warnings --report-unused-disable-directives-severity=error packages\/browser packages\/browserbase packages\/agent-browser test\/integration test\/vite\.config\.ts\n/,
+    /run lint timeout \d+s \.\/node_modules\/\.bin\/oxlint -c lint\/\.oxlintrc\.json --deny-warnings --report-unused-disable-directives-severity=error packages\/browser packages\/browserbase packages\/agent-browser\n/,
   );
 });
 

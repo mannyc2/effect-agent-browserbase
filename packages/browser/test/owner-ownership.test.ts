@@ -331,9 +331,12 @@ const ownershipCases: ReadonlyArray<Case> = [
       // Another tab showing the same controls, set up before anything is in flight.
       const second = yield* session.createPage();
 
+      const [initial] = ownerScript.documents;
+
       assert.ok(first !== undefined);
+      assert.ok(initial !== undefined);
       yield* session.selectPage(second);
-      yield* f.control.document.replace(ownerScript.documents[0]);
+      yield* f.control.document.replace(initial);
       yield* session.selectPage(first);
       const handle = yield* session.retain;
       const operation = yield* handle.startNavigation("https://example.test/slow");

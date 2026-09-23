@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 import { Observation, ObservedControl } from "effect-browser/browser-data";
 
 import type { ReadMoreResult } from "./Model.ts";
@@ -7,9 +7,16 @@ const encoder = new TextEncoder();
 
 /** What Effect Agent measures against `toolResultBounds`: the UTF-8 JSON of an encoded result. */
 export const measure = <A>(schema: Schema.Codec<A, unknown, never, never>) => {
-  const encode = Schema.encodeSync(schema);
+  const encode = Schema.encodeResult(schema);
 
-  return (value: A): number => encoder.encode(JSON.stringify(encode(value))).length;
+  return (value: A): number => {
+    const encoded = encode(value);
+
+    // Only a value that bypassed its schema's validation fails to encode.
+    if (Result.isFailure(encoded)) throw encoded.failure;
+
+    return encoder.encode(JSON.stringify(encoded.success)).length;
+  };
 };
 
 /** The longest prefix within a UTF-8 byte bound; a code point is never split. */

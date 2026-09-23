@@ -574,7 +574,7 @@ it.live(
                 startupTimeoutMillis: 25000,
               },
               viewport: { width: 640, height: 480 },
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
       }),
