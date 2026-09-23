@@ -1,9 +1,10 @@
-import { Effect, Option, Redacted } from "effect";
+import { Crypto, Effect, Option, Redacted } from "effect";
 
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
 import { cleanupStep, reported, type ConnectionCleanup } from "../browser/ConnectionCleanup.ts";
 import { checked } from "../browser/PublicSession.ts";
+import { randomUuid } from "../browser/Random.ts";
 import {
   ChromiumCleanupIssue,
   ChromiumCleanupResult,
@@ -83,17 +84,16 @@ const acquireChromium =
     endpoint: Redacted.Redacted<string> | undefined,
     options: ChromiumLaunch,
     onCleanup?: (result: ChromiumCleanupResult) => Effect.Effect<void>,
-  ): Source<ChromiumLease, BrowserError, never> =>
+  ): Source<ChromiumLease, BrowserError, Crypto.Crypto> =>
   (local) =>
     Effect.uninterruptible(
       Effect.gen(function* () {
+        // Drawn first: a draw after the spawn would sit between it and finalizer registration.
+        const id = yield* randomUuid(yield* Crypto.Crypto);
         // The process cannot escape between spawn and finalizer registration. Startup waiting happens
         // later in connect, where it is interruptible and the owning finalizer is already installed.
         const process = endpoint === undefined ? yield* launch(options) : undefined;
-
-        const reference = Object.freeze(
-          ChromiumReference.make({ provider: "chromium", id: globalThis.crypto.randomUUID() }),
-        );
+        const reference = Object.freeze(ChromiumReference.make({ provider: "chromium", id }));
 
         const cleanup = yield* makeChromiumCleanup(reference, local, process);
         let closing = false;

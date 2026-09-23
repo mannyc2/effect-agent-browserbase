@@ -32,8 +32,9 @@ export class PageExecution {
   constructor(
     pageId: string,
     targetId: string,
+    /** Each hold's receipt id, unique on this connection and never reissued by a later one. */
+    freshId: () => string,
     port: PageExecutionNative,
-    freshId: () => string = () => globalThis.crypto.randomUUID(),
   ) {
     this.pageId = pageId;
     this.targetId = targetId;

@@ -150,7 +150,7 @@ const fixture = Effect.fnUntraced(function* () {
     navigating: { has: () => false },
   } as unknown as Targets;
 
-  const observation = makeObservation(targets, {
+  const observation = makeObservation(targets, "connection", {
     invalidate: owner.invalidate,
     disconnected: () => {},
     pause: () => {},

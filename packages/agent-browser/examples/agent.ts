@@ -8,9 +8,10 @@
 //                    same session through Live View; the agent continues from where they left it
 //   runSupervised    a typed page→host binding whose failure ends the whole run
 //
-// Credentials, launch and budgets are host configuration and never Tool parameters. The model is
-// the caller's: provide a LanguageModel layer beside these programs. `test/native/agent.test.ts`
-// runs this same wiring against a local Chromium with a scripted model.
+// Credentials, launch and budgets are host configuration and never Tool parameters. The model and
+// the platform are the caller's: provide a LanguageModel layer and the platform's `Crypto`, for
+// example `NodeServices.layer`, beside these programs. `test/native/agent.test.ts` runs this same
+// wiring against a local Chromium with a scripted model.
 import { Context, Effect, Layer, Schema } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";

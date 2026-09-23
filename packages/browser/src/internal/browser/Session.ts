@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect, Exit, Redacted, Schema, Scope } from "effect";
+import { Clock, Crypto, Deferred, Effect, Exit, Redacted, Schema, Scope } from "effect";
 
 import {
   type FrameInfo,
@@ -15,7 +15,7 @@ import {
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import { type CaptureParent } from "./Association.ts";
-import type { BindingImplementation } from "./Binding.ts";
+import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import { cleanupStep, type ConnectionCleanup, type ConnectionState } from "./ConnectionCleanup.ts";
 import type {
@@ -40,6 +40,7 @@ import {
   type WaitTicket,
 } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
+import { randomUuid } from "./Random.ts";
 
 export type SessionLease = Lifetime;
 export type RemoteSource<L extends SessionLease, E, R = never> = Source<L, E, R>;
@@ -225,6 +226,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const ended = yield* Deferred.make<void>();
   const owner = yield* makeOwner(limits);
   const clock = yield* Clock.Clock;
+  const uuid = randomUuid(yield* Crypto.Crypto);
 
   let driver: Driver | undefined;
   let connectPending = false;
@@ -432,6 +434,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const connectNative = (url: Redacted.Redacted<unknown>, nativeOptions: DriverOptions) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        // Drawn before this attempt claims the connection, so a failed draw leaves nothing to undo.
+        const identity: ConnectionIdentity = { namespace: yield* uuid, bindings: yield* uuid };
         const connectionLease = {};
 
         activeConnection = connectionLease;
@@ -473,6 +477,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         const acquired = yield* restore(
           engine.connect({
             connection: Redacted.value(url),
+            identity,
             options: {
               ...nativeOptions,
               ...(bindings === undefined
@@ -1493,8 +1498,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 reason: Reasons.Unsupported.make({}),
                 outcome: "undispatched",
               });
+            // Drawn before the fence, so the pause and the token that ends it commit together.
+            const token = handoffToken ?? (yield* uuid);
+
             if (owner.state.phase === "open") owner.fence("paused", "paused", "handoff");
-            handoffToken ??= globalThis.crypto.randomUUID();
+            handoffToken ??= token;
             // A refused authorization leaves automation paused until explicit operator release.
             const view = yield* issue;
 

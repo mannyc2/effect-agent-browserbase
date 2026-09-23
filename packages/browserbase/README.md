@@ -19,7 +19,7 @@ const account = Account.layerConfig({
 });
 ```
 
-`Account.layer({ projectId, apiKey: Redacted.make(key), ... })` takes the same authority explicitly. Either one bundles every resource service on a single Client, so credentials are composed once instead of per service; each service still exports its own `layer` when you want a narrower set. `BrowserbaseBrowser.layer` stays separate, because a browser also fixes budgets and a connection lifetime that an account does not. The Client uses Effect's `FetchHttpClient.Fetch` reference, which already defaults to `globalThis.fetch`; provide a different `fetch` only when you need one.
+`Account.layer({ projectId, apiKey: Redacted.make(key), ... })` takes the same authority explicitly. Either one bundles every resource service on a single Client, so credentials are composed once instead of per service; each service still exports its own `layer` when you want a narrower set. `BrowserbaseBrowser.layer` stays separate, because a browser also fixes budgets and a connection lifetime that an account does not. It also requires Effect's `Crypto` from the host platform (`NodeServices.layer`, `BunServices.layer` or `NodeCrypto.layer`), which supplies allocation attempt ids, connection ids and handoff tokens; the account services need no `Crypto`. The Client uses Effect's `FetchHttpClient.Fetch` reference, which already defaults to `globalThis.fetch`; provide a different `fetch` only when you need one.
 
 `artifactOrigins` is the exact set of HTTPS origins this client will fetch provider media from, and it is deliberately empty by default: recording downloads and replay media are refused with `unsafe-url` until you approve a host. Browserbase documents only a "signed CDN URL" and does not publish that origin, so discover your own rather than copying anyone's — request a recording for a completed session, read `downloadUrl` from `GET /v1/sessions/{id}/recording/downloads`, and approve exactly its origin. A hosted run on 21 September 2026 confirmed that a completed recording then downloads through this check rather than around it. The origin is an observation and not a contract: it may differ by project or region, the provider can re-point it without notice, and a BYOS project returns no signed URL at all. Treat a later `unsafe-url` as the delivery host having moved, not as a defect.
 
@@ -34,6 +34,7 @@ const account = Account.layerConfig({
 For the simplest post-session video path, opt in to Browserbase recording in the launch recipe:
 
 ```ts
+import { NodeServices } from "@effect/platform-node";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, NavigateRequest } from "effect-browser/browser-data";
@@ -50,6 +51,7 @@ const policy = BrowserPolicy.unrestricted();
 
 const layers = Layer.merge(BrowserbaseBrowser.layer({ launch }), BrowserbaseRecordings.layer).pipe(
   Layer.provide(account),
+  Layer.provide(NodeServices.layer),
 );
 
 const program = Effect.gen(function* () {
@@ -116,7 +118,7 @@ Prefer provider recording when post-session MP4/HLS is enough. Use `capture` whe
 
 That split is why an agent can use one browser for many turns while provider artifacts remain accessible after the interactive scope ends. Importing a Layer does not allocate a browser.
 
-`Allocation.scoped(recipe)` allocates a session without connecting a browser, for a caller that drives the remote session with its own automation client. It is the same allocation path the browser owner uses, so the creation request is never retried, an unknown outcome is still reported exactly once, a persisting Context still needs a live writer permit, and no native peer is loaded. The scope owns the release: closing it releases the session whether or not anything ever connected. A reply naming another project is refused, and because a foreign reference is never acted on, the caller is handed that reference rather than a mutation attempted against it.
+`Allocation.scoped(recipe)` allocates a session without connecting a browser, for a caller that drives the remote session with its own automation client. It is the same allocation path the browser owner uses, so the creation request is never retried, an unknown outcome is still reported exactly once, a persisting Context still needs a live writer permit, and no native peer is loaded. The scope owns the release: closing it releases the session whether or not anything ever connected. A reply naming another project is refused, and because a foreign reference is never acted on, the caller is handed that reference rather than a mutation attempted against it. The attempt id comes from Effect's `Crypto`, so `Allocation.scoped` requires that service beside the account.
 
 The shared browser runtime delegates allocation and release to this provider lifetime. It supplies the local half of cleanup — fence, capture stop, initialization teardown, disconnect — and the canonical control plane owns the release request and the terminal status observation. A local disconnect, an accepted provider release request and provider-confirmed termination therefore stay distinct facts in one `CleanupResult`, together with the exact steps that failed.
 
@@ -227,7 +229,7 @@ What this package does check is input, not requests. `controlFacts` and an `admi
 
 `effect-browserbase/testing` supplies the provider side of a test the way `effect-browser/testing` supplies the browser side. `Testing.provider(script)` returns a `fetch` for `FetchHttpClient.Fetch` and a `ProviderControl` handle; the real `Client`, `Sessions`, `Uploads`, allocation and cleanup code parse its replies, apply their bounds and reconcile release against it. The script says how creation answers (`Accept`, `Reject` with a status the transport classifies and an optional `retryAfterMillis`, `Malformed`, or `Lost` after the request was sent, so the allocation outcome is unknown), whether a release request is `confirmed`, stays `pending` or fails, and whether a Live View is issued. Its secrets are marker strings, so evidence can be grepped for a leak, and nothing in it is a credential.
 
-`Testing.layer({ browser, provider?, launch?, options? })` composes that control plane under the real `Account.layer` and `BrowserbaseBrowser.layer`, with the scripted engine from `effect-browser/testing` as the `BrowserBinding`, and adds a `ScriptedBrowserbase` service whose `provider` is the control handle and whose `browsers` are the engine control handles, one per connection made. An application written against `BrowserbaseBrowser.open` runs unchanged:
+`Testing.layer({ browser, provider?, launch?, options? })` composes that control plane under the real `Account.layer` and `BrowserbaseBrowser.layer`, with the scripted engine from `effect-browser/testing` as the `BrowserBinding` and its `sequentialCrypto` as the browser's `Crypto`, and adds a `ScriptedBrowserbase` service whose `provider` is the control handle and whose `browsers` are the engine control handles, one per connection made. An application written against `BrowserbaseBrowser.open` runs unchanged:
 
 ```ts
 import { expect, it } from "@effect/vitest";
@@ -259,7 +261,7 @@ it.effect("release is requested once and confirmed", () =>
 );
 ```
 
-Sessions are numbered `session-1`, `session-2`, … in creation order. A `pending` release leaves the session `RUNNING`, so checked close fails `Provider` with outcome `unknown` after the real status bound elapses, and the receipt carries `remote: "pending"`; under `it.effect` a `TestClock.adjust` reaches that bound with nothing real elapsing. A `Lost` creation makes `onAllocationUncertain` fire once, as it does when a real request is cut off. Borrowed attachment through `attach` makes a second engine connection and no release request. `Allocation.scoped`, `BrowserbaseSessions` and the other resource services run over the same `fetch` with `Testing.provider()` alone, with no browser at all.
+Sessions are numbered `session-1`, `session-2`, … in creation order. A `pending` release leaves the session `RUNNING`, so checked close fails `Provider` with outcome `unknown` after the real status bound elapses, and the receipt carries `remote: "pending"`; under `it.effect` a `TestClock.adjust` reaches that bound with nothing real elapsing. A `Lost` creation makes `onAllocationUncertain` fire once, as it does when a real request is cut off. Borrowed attachment through `attach` makes a second engine connection and no release request. `Allocation.scoped`, `BrowserbaseSessions` and the other resource services run over the same `fetch` with `Testing.provider()` alone, with no browser at all; `Allocation.scoped` also takes a `Crypto`, and `sequentialCrypto` from `effect-browser/testing` keeps its attempt ids predictable.
 
 What a scripted control plane answers is what this repository has read of the provider API, replayed. It establishes that this package handles those answers correctly; it establishes nothing about what Browserbase answers today, which only the hosted checks in [Status](../../docs/STATUS.md) record.
 

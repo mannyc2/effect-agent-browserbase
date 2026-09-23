@@ -25,6 +25,8 @@ const ticket = (): Ticket => {
   };
 };
 
+let connections = 0;
+
 /** Only the native registry boundary is scripted. Each registry owns its real identity checks. */
 const registry = (
   options: { readonly failMetadata?: boolean; readonly maxPages?: number } = {},
@@ -92,6 +94,8 @@ const registry = (
       dialogPolicy: "dismiss",
       maxPages: options.maxPages ?? 3,
     },
+    // Each registry is its own connection, with the fresh namespace its owner would draw.
+    `connection-${++connections}`,
     () => false,
     {
       opened: () => {},

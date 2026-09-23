@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it, vi } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Redacted, Schedule } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Redacted, Schedule } from "effect";
 import type { AnySession } from "effect-browser/browser";
 import {
   BrowserPolicy,
@@ -50,7 +51,7 @@ const layer = Chromium.layer({
   pageControl: true,
   actionTimeoutMillis: 15000,
   viewport: { width: 640, height: 480 },
-});
+}).pipe(Layer.provide(NodeCrypto.layer));
 
 const reference = (observation: Observation, label = "Target") => {
   const control = observation.controls.find((control) => control.label === label);

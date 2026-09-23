@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy, ClickRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
@@ -91,6 +92,7 @@ const result = await Effect.runPromise(
   ).pipe(
     Effect.provide(
       BrowserbaseBrowser.layer({ launch: recipe(), actionTimeoutMillis: 5000 }).pipe(
+        Layer.provide(NodeCrypto.layer),
         Layer.provide(account),
         Layer.provide(BrowserBinding.layer(binding)),
       ),

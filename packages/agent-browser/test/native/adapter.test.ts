@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Context, Effect, Layer } from "effect";
 import { fromSession, interactiveLayer } from "effect-agent-browser/adapter";
@@ -41,7 +42,7 @@ it.live(
             Effect.sync(() => {
               cleanup.push(result);
             }),
-        });
+        }).pipe(Layer.provide(NodeCrypto.layer));
 
         const layer = interactiveLayer({
           implementation: "chromium-playwright-cdp",
@@ -164,7 +165,7 @@ it.live(
                 startupTimeoutMillis: 25000,
               },
               viewport: { width: 640, height: 480 },
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
       }),

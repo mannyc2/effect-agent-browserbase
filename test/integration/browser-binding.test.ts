@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserError, Reasons } from "effect-browser/errors";
@@ -18,6 +19,7 @@ import { BrowserbaseSessions } from "../../packages/browserbase/src/Sessions.ts"
 
 const request = (connection: unknown): ConnectRequest => ({
   connection,
+  identity: { namespace: "connection", bindings: "bindings" },
   options: {
     viewport: Viewport.make({ width: 640, height: 480 }),
     popupPolicy: "retain",
@@ -112,6 +114,7 @@ it.effect("a binding the package did not issue is refused before any provider re
     ).pipe(
       Effect.provide(
         BrowserbaseBrowser.layer({ launch: recipe() }).pipe(
+          Layer.provide(NodeCrypto.layer),
           Layer.provide(
             BrowserbaseSessions.layer.pipe(
               Layer.provideMerge(

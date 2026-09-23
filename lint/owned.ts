@@ -54,6 +54,16 @@ const escapeHatches = [
   message: `${object}.${property} throws or leaves the caller's fiber; library code returns a typed Effect.`,
 }));
 
+/**
+ * Ids and tokens come from the `Crypto` service a Layer captured. Effect's `cryptoRandomUUID`
+ * rules match only the DOM lib's global `crypto`, which these packages do not compile against, so
+ * the property is restricted in every spelling instead.
+ */
+const platformUuid = {
+  property: "randomUUID",
+  message: "Draw a UUID from the Effect `Crypto` service the Layer captured.",
+};
+
 export const ownedOverrides: Array<OxlintOverride> = [
   {
     files: owned,
@@ -136,7 +146,7 @@ export const ownedOverrides: Array<OxlintOverride> = [
     // Oxlint drops an override's plugin rules unless that override enables the plugin itself.
     plugins: ["effecttsgo"],
     rules: {
-      "eslint/no-restricted-properties": ["error", ...escapeHatches],
+      "eslint/no-restricted-properties": ["error", ...escapeHatches, platformUuid],
       "effecttsgo/prefer-schema-over-json": "error",
       "effecttsgo/global-console": "error",
       "effecttsgo/global-console-in-effect": "error",

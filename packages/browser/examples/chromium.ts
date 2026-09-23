@@ -7,6 +7,9 @@ import { Chromium } from "effect-browser/chromium";
 
 const policy = BrowserPolicy.unrestricted({ maxActions: 20, maxElapsedMillis: 60000 });
 
+// Each browser Layer here takes Effect's `Crypto` from the caller's platform Layer, such as
+// `NodeServices.layer`, so these compositions still require it.
+
 /** Launch one owned Chromium and capture a real frame from the page it navigated to. */
 export const inspectChromium = (url: string) =>
   Browser.scoped(Chromium.launch(policy), (session) =>

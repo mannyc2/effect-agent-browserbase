@@ -11,7 +11,8 @@
 Acquire a session once and give that exact browser to the Tools:
 
 ```ts
-import { Effect } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
@@ -21,8 +22,10 @@ const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (b
   BrowserTools.run(browser, agentProgram, {
     observationScope: "viewport",
   }),
-).pipe(Effect.provide(Chromium.layer()));
+).pipe(Effect.provide(Chromium.layer().pipe(Layer.provide(NodeServices.layer))));
 ```
+
+Both browser Layers take Effect's `Crypto` from the host platform, here `NodeServices.layer`.
 
 For Browserbase, use `BrowserbaseBrowser.open(...)` from `effect-browserbase/browser`, supplying its account and launch configuration, then pass that session to the same `BrowserTools` functions. Nothing in the tool implementation branches on the provider. The model does not choose the account, browser source, credentials, endpoint, launch options or capture settings.
 
@@ -35,6 +38,7 @@ The Tools accept `BrowserSession<E>` directly. They retain the owner's dispatch 
 A host can configure framework acquisition without introducing separate provider adapters:
 
 ```ts
+import { NodeServices } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { interactiveLayer } from "effect-agent-browser/adapter";
 import { Chromium } from "effect-browser/chromium";
@@ -42,7 +46,7 @@ import { Chromium } from "effect-browser/chromium";
 const browserLayer = interactiveLayer({
   implementation: "chromium-playwright-cdp",
   open: (policy) => Chromium.launch(policy),
-}).pipe(Layer.provide(Chromium.layer()));
+}).pipe(Layer.provide(Chromium.layer()), Layer.provide(NodeServices.layer));
 ```
 
 The opener's services are captured when the Layer is built; each `open` still uses its caller's execution Scope. Building the Layer allocates nothing. The common policy is validated before calling the opener, and unsupported containment fails before acquisition. Expected acquisition and retention failures are sanitized into the framework's error contract. This Layer explicitly retains the selection for each framework handle.

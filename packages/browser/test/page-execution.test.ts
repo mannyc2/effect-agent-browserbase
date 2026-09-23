@@ -68,7 +68,7 @@ const fixture = (overrides: Partial<PageExecutionNative> = {}) => {
     abort: () => {
       aborted = true;
     },
-    control: new PageExecution("page-a", "target-a", port, () => `hold-${++serial}`),
+    control: new PageExecution("page-a", "target-a", () => `hold-${++serial}`, port),
   };
 };
 

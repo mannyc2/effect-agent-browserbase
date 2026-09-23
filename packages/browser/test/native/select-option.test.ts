@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 import {
   BrowserPolicy,
   type Observation,
@@ -73,7 +74,9 @@ const named = (observation: Observation, label: string) => {
 const reference = (observation: Observation, control: ObservedControl) =>
   ObservedElement.make({ observationId: observation.observationId, elementId: control.elementId });
 
-const layer = Chromium.layer({ pageControl: true, viewport: { width: 640, height: 480 } });
+const layer = Chromium.layer({ pageControl: true, viewport: { width: 640, height: 480 } }).pipe(
+  Layer.provide(NodeCrypto.layer),
+);
 
 it.live(
   "exact option IDs distinguish duplicate labels and set one single or multiple selection",

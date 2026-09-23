@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
@@ -275,6 +276,7 @@ export const withGenericAgentBrowser = <A, E, R>(
   Effect.scoped(effect).pipe(
     Effect.provide(
       BrowserbaseBrowser.layer({ launch, actionTimeoutMillis: 5000, ...options }).pipe(
+        Layer.provide(NodeCrypto.layer),
         Layer.provide(accounts),
         Layer.provide(fixture.binding),
       ),

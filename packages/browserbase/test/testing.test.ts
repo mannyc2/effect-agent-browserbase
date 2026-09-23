@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, Redacted } from "effect";
+import { Effect, Fiber, Layer, Redacted } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
-import type { Script } from "effect-browser/testing";
+import { sequentialCrypto, type Script } from "effect-browser/testing";
 import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -292,6 +292,8 @@ it.effect("the scripted control plane serves the resource services and scoped al
           Effect.gen(function* () {
             const sessions = yield* BrowserbaseSessions;
 
+            // The attempt id is the first value drawn from the provided Crypto.
+            expect(allocated.attempt.attemptId).toBe("00000000-0000-4000-8000-000000000001");
             expect((yield* sessions.retrieve(allocated.reference)).status).toBe("RUNNING");
             expect((yield* sessions.list()).map((session) => session.reference.sessionId)).toEqual([
               "session-1",
@@ -302,11 +304,15 @@ it.effect("the scripted control plane serves the resource services and scoped al
         ),
       ),
     ).pipe(
+      // Allocation draws its attempt id from a Crypto; the scripted one needs no platform package.
       Effect.provide(
-        Account.layer({
-          projectId: scripted.control.projectId,
-          apiKey: Redacted.make(scripted.control.secrets.apiKey),
-        }),
+        Layer.merge(
+          Account.layer({
+            projectId: scripted.control.projectId,
+            apiKey: Redacted.make(scripted.control.secrets.apiKey),
+          }),
+          sequentialCrypto,
+        ),
       ),
       Effect.provideService(FetchHttpClient.Fetch, scripted.fetch),
     );

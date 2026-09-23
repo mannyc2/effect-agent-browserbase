@@ -1,4 +1,4 @@
-import { Effect, type Option, Redacted, Schema, Scope } from "effect";
+import { Crypto, Effect, type Option, Redacted, Schema, Scope } from "effect";
 
 import * as Bootstrap from "./Bootstrap.ts";
 import type { BrowserSession, OpenOptions } from "./Browser.ts";
@@ -84,6 +84,7 @@ export const playwright = (options: PlaywrightOptions = {}): BrowserBinding => {
             connectPlaywrightEndpoint(
               endpoint,
               signal,
+              attempt.identity,
               attempt.options,
               attempt.events,
               onConnected === undefined ? undefined : (native) => onConnected({ native, endpoint }),
@@ -246,10 +247,14 @@ const resolveFiles = (
     ),
   );
 
-/** Validate immutable connection configuration without loading a peer or acquiring a lifetime. */
+/**
+ * Validate immutable connection configuration without loading a peer or acquiring a lifetime.
+ * Connection ids and handoff tokens come from the `Crypto` service captured here, so a Layer
+ * built on this runtime requires `Crypto` once and its operations never do.
+ */
 export const make = Effect.fnUntraced(function* (
   options: RuntimeOptions,
-): Effect.fn.Return<Runtime, BrowserError> {
+): Effect.fn.Return<Runtime, BrowserError, Crypto.Crypto> {
   const implementation = yield* checked(
     Schema.NonEmptyString.check(Schema.isMaxLength(128)),
     options.implementation,
@@ -305,6 +310,8 @@ export const make = Effect.fnUntraced(function* (
         : { newPage: true }),
   };
 
+  const crypto = yield* Crypto.Crypto;
+
   const acquire = Effect.fnUntraced(function* <L extends Lifetime, AE, AR, E = never, R = never>(
     policy: BrowserPolicy,
     source: Source<L, AE, AR>,
@@ -357,7 +364,7 @@ export const make = Effect.fnUntraced(function* (
         connectBindings: bindings.connect,
         maxReturnedBytes: fixed.maxReturnedBytes,
       },
-    ).pipe(Scope.provide(scope));
+    ).pipe(Scope.provide(scope), Effect.provideService(Crypto.Crypto, crypto));
 
     const connected = yield* Effect.cached(
       acquired.connect.pipe(

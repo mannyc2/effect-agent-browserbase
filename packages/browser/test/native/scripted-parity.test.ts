@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, type Scope } from "effect";
+import { Effect, Layer, type Scope } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, ObservedElement, type Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -112,7 +113,7 @@ const openChromium: Open = (origin, policy) =>
           startupTimeoutMillis: 25000,
         },
         viewport: { width: 640, height: 480 },
-      }),
+      }).pipe(Layer.provide(NodeCrypto.layer)),
     ),
   );
 

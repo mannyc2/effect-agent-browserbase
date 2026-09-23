@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
@@ -47,6 +48,7 @@ it.effect("invalid host-read allowance is rejected before any provider allocatio
       const result = yield* BrowserbaseBrowser.open(policy).pipe(
         Effect.provide(
           BrowserbaseBrowser.layer({ launch, maxHostReads: maxHostReads as never }).pipe(
+            Layer.provide(NodeCrypto.layer),
             Layer.provide(account),
           ),
         ),
@@ -82,7 +84,12 @@ it.effect(
         const misplaced = { launch, bootstrap };
 
         const result = yield* BrowserbaseBrowser.open(policy).pipe(
-          Effect.provide(BrowserbaseBrowser.layer(misplaced).pipe(Layer.provide(account))),
+          Effect.provide(
+            BrowserbaseBrowser.layer(misplaced).pipe(
+              Layer.provide(NodeCrypto.layer),
+              Layer.provide(account),
+            ),
+          ),
           Effect.provideService(FetchHttpClient.Fetch, async () => {
             requests++;
 
@@ -125,6 +132,7 @@ for (const { name, options } of cases) {
       ).pipe(
         Effect.provide(
           BrowserbaseBrowser.layer({ launch, pageControl: true, ...options }).pipe(
+            Layer.provide(NodeCrypto.layer),
             Layer.provide(account),
           ),
         ),
@@ -162,7 +170,7 @@ it.effect("ordinary sessions retain pause and keep-alive configuration", () =>
           pageControl: false,
           popupPolicy: "pause",
           dialogPolicy: "pause",
-        }).pipe(Layer.provide(account)),
+        }).pipe(Layer.provide(NodeCrypto.layer), Layer.provide(account)),
       ),
       Effect.provideService(FetchHttpClient.Fetch, fetch),
       Effect.result,

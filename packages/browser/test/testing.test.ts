@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Fiber, Option, Redacted, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -655,7 +656,7 @@ it.effect("the same engine composes under browser-runtime as an opaque binding",
       const runtime = yield* BrowserRuntime.make({
         implementation: "integration-under-test",
         binding: scripted.binding,
-      });
+      }).pipe(Effect.provide(NodeCrypto.layer));
 
       const acquired = yield* runtime.acquire(BrowserPolicy.unrestricted(), (cleanup) =>
         Effect.gen(function* () {

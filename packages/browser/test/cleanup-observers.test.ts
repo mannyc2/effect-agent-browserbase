@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Option, Redacted } from "effect";
 import * as Browser from "effect-browser/browser";
@@ -57,7 +58,7 @@ for (const mode of ["success", "construction-throw", "defect", "interrupt", "tim
             disconnect: mark("disconnect").pipe(Effect.as("closed" as const)),
           },
           60_000,
-        );
+        ).pipe(Effect.provide(NodeCrypto.layer));
 
         const closing = yield* Effect.all([lease.release, lease.closeChecked, lease.release], {
           concurrency: 3,
@@ -149,7 +150,7 @@ const cleanupFixture = () => {
           maxPages: 1,
         },
       },
-    );
+    ).pipe(Effect.provide(NodeCrypto.layer));
 
     lease = acquired.lease;
 

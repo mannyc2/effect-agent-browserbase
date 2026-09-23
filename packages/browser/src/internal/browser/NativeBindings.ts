@@ -183,10 +183,12 @@ const pageBundle = (
  */
 export const makeNativeBindings = (
   context: BrowserContext,
+  /** Unpredictable and never reported, so no page can define these globals before they install. */
+  bindingIdentity: string,
   bindings: ReadonlyArray<NativeBinding>,
   fault: () => void,
 ) => {
-  const identity = globalThis.crypto.randomUUID().replaceAll("-", "");
+  const identity = bindingIdentity.replaceAll("-", "");
   const nativeName = `__effect_agent_binding_${identity}`;
   const controllerName = `__effect_agent_bindings_${identity}`;
   const bundle = pageBundle(nativeName, controllerName, bindings);

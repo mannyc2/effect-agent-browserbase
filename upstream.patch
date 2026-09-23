@@ -1,6 +1,6 @@
 diff --git a/.changeset/browserbase-interactive.md b/.changeset/browserbase-interactive.md
 new file mode 100644
-index 00000000..c491e138
+index 00000000..bec35d49
 --- /dev/null
 +++ b/.changeset/browserbase-interactive.md
 @@ -0,0 +1,7 @@
@@ -10,7 +10,7 @@ index 00000000..c491e138
 +"effect-agent-browser": minor
 +---
 +
-+Add shared browser automation for Chromium and Browserbase with scoped workflows, pinned targets, lazy capture streams and supervised agent tools. Move Chromium to `effect-browser/chromium` and agent integration to `effect-agent-browser`; tools receive browser sessions directly, and keyboard tools are explicitly opt-in.
++Add shared browser automation for Chromium and Browserbase with scoped workflows, pinned targets, lazy capture streams and supervised agent tools. Move Chromium to `effect-browser/chromium` and agent integration to `effect-agent-browser`; tools receive browser sessions directly, and keyboard tools are explicitly opt-in. Browser Layers, `BrowserRuntime.make` and `Allocation.scoped` require Effect's `Crypto` from the host platform; the testing entry points supply a sequential one.
 diff --git a/.changeset/config.json b/.changeset/config.json
 index 7db06dca..9d614b7c 100644
 --- a/.changeset/config.json
@@ -303,10 +303,10 @@ index bd0a4a63..7a6c168c 100644
  testing package, and both Cloudflare packages separate runners. The remaining workspace suites
  share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 diff --git a/docs/guide/browser.md b/docs/guide/browser.md
-index efaa1da4..96247de1 100644
+index efaa1da4..5b3de2b5 100644
 --- a/docs/guide/browser.md
 +++ b/docs/guide/browser.md
-@@ -115,6 +115,47 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
+@@ -115,6 +115,48 @@ Choose `ExactHosts` for a known site. Let a trusted host, never model output, ch
  `Unrestricted`. One policy also fixes maximum actions, elapsed time, and bytes returned by each
  operation.
  
@@ -338,7 +338,8 @@ index efaa1da4..96247de1 100644
 +`adapter` and `tools`; it does not reexport generic or provider resources.
 +
 +Use `Browser.scoped(Chromium.launch(policy, { bootstrap }), use)` or the same supervisor with
-+`BrowserbaseBrowser.open`. Static accessors use the configured services. `Browser.scoped` retains
++`BrowserbaseBrowser.open`. Static accessors use the configured services. Both browser Layers take
++Effect's `Crypto` from the host platform, such as `NodeServices.layer`. `Browser.scoped` retains
 +typed errors, joins callback resources before checked browser cleanup and checks closure on every
 +exit. `Bootstrap.binding` checks the native caller's origin and document identity before decoding,
 +before the handler and before replying; page-visible rejections contain no host causes or stacks.

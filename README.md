@@ -15,7 +15,8 @@ Install the shared host runtimes explicitly. Browserbase requires `effect-browse
 ## Start a browser
 
 ```ts
-import { Effect } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -25,10 +26,10 @@ const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (b
     yield* browser.navigate({ url: "https://example.com" });
     return yield* browser.observe({ scope: "viewport" });
   }),
-).pipe(Effect.provide(Chromium.layer()));
+).pipe(Effect.provide(Chromium.layer().pipe(Layer.provide(NodeServices.layer))));
 ```
 
-For hosted acquisition, supply `BrowserbaseBrowser.open(policy)` with a Browserbase account and launch recipe. `Browser.scoped` supervises either source: it preserves the concrete session and typed callback errors, joins callback resources before closing the browser, and retains checked cleanup failures in the workflow's own final cause even when its body fails. An outer race can discard that cause; use the provider's `onCleanup` with a host-owned sink to retain receipt evidence outside the race. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
+Browser Layers take Effect's `Crypto` from the host platform: `NodeServices.layer` here, `BunServices.layer` on Bun. For hosted acquisition, supply `BrowserbaseBrowser.open(policy)` with a Browserbase account and launch recipe. `Browser.scoped` supervises either source: it preserves the concrete session and typed callback errors, joins callback resources before closing the browser, and retains checked cleanup failures in the workflow's own final cause even when its body fails. An outer race can discard that cause; use the provider's `onCleanup` with a host-owned sink to retain receipt evidence outside the race. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
 
 ## Use the same tools with either source
 
@@ -65,6 +66,7 @@ Every agent turn borrows that session. `BrowserTools.run` provides the maintaine
 | Five required binding bounds/mode fields                               | Omission defaults to one concurrent invocation, 64 KiB input/output, 10 seconds and `reject-call`; explicit values are validated                                        |
 | A common navigation needs a different loading deadline                 | Optional `NavigateRequest.timeoutMillis`, 1–600000 ms, capped by remaining session lifetime; the model tool still accepts only URL                                      |
 | Control kind/label/disabled only                                       | Optional checked/selected/inputType/required state, collected with defined native/ARIA semantics and rechecked on the same node                                         |
+| Browser Layers and `Allocation.scoped` required no platform service    | `Chromium.layer`, `BrowserbaseBrowser.layer`, `BrowserRuntime.make` and `Allocation.scoped` require Effect's `Crypto`, such as the platform's `NodeServices.layer`      |
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 

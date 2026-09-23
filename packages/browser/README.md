@@ -17,7 +17,8 @@ Mutations are serialized. An observed node remains usable only until an invalida
 `effect-browser/chromium` provides `Chromium`. It uses the same modeled browser owner, native driver, exact-node observations, bootstrap bindings, capture and page control as a hosted session. It requires no Browserbase client, project, key, allocation response or provider endpoint. `BrowserSession<E>` is their shared modeled capability; `BrowserbaseSession<E>` retains the separate provider reference, artifacts, Live View, handoff and release contracts.
 
 ```ts
-import { Effect } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
@@ -33,12 +34,12 @@ const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (b
       viewport: { width: 1280, height: 720 },
       pageControl: true,
       launch: { headless: true, chromiumSandbox: true },
-    }),
+    }).pipe(Layer.provide(NodeServices.layer)),
   ),
 );
 ```
 
-Layer construction validates configuration and starts nothing. The optional `playwright-core` peer is loaded only when needed. `Chromium.acquire(policy, { bootstrap })` starts one owned Chromium process and registers cleanup before waiting for a connection; its cached `connect` yields one `ChromiumSession<E>`. `Chromium.launch` combines those steps. These static operations access the configured service, as do `Chromium.attach` and the corresponding `BrowserbaseBrowser` operations. Bootstrap consumer errors and services remain in the acquisition signatures.
+The Layer requires Effect's `Crypto`, which the host platform supplies: `NodeServices.layer` here, `BunServices.layer` on Bun, or `NodeCrypto.layer` alone. Process references, connection ids, native binding names and handoff tokens are drawn from it. The Layer captures it once, so `launch`, `acquire` and `attach` never require it. Layer construction validates configuration and starts nothing. The optional `playwright-core` peer is loaded only when needed. `Chromium.acquire(policy, { bootstrap })` starts one owned Chromium process and registers cleanup before waiting for a connection; its cached `connect` yields one `ChromiumSession<E>`. `Chromium.launch` combines those steps. These static operations access the configured service, as do `Chromium.attach` and the corresponding `BrowserbaseBrowser` operations. Bootstrap consumer errors and services remain in the acquisition signatures.
 
 `Browser.scoped(open, use)` is the common workflow supervisor for both sources, including borrowed attachment. It runs the acquisition once in its own scope, retains the concrete browser type in `use`, and races workflow completion against typed fail-session callbacks. The workflow has its own child scope: fibers and finalizers finish before `closeChecked` runs, so callback cleanup may still use a healthy browser. Checked closure runs on success, failure, thrown defects and cancellation. A body failure and a cleanup failure both remain in this workflow's own final Effect cause; neither is overwritten. An outer race or timeout can select another result and discard that losing cause even though cleanup ran. Configure the provider's `onCleanup` to record its receipt in a host-owned sink outside the raced workflow when cleanup evidence must survive that composition. A body that completes concurrently with a fail-session callback can still win the race; supervision does not establish failure priority. The ownership finalizer still runs if acquisition itself fails. No failed acquisition or action is replayed.
 
@@ -49,6 +50,7 @@ The same combinator supports `open.pipe(Browser.scoped(use))`, including a reusa
 An application can share one acquired session through a Layer for its finite application scope:
 
 ```ts
+import { NodeServices } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
 import { Chromium, type ChromiumSession } from "effect-browser/chromium";
 import { BrowserPolicy } from "effect-browser/browser-data";
@@ -60,7 +62,10 @@ class SharedBrowser extends Context.Service<SharedBrowser, ChromiumSession>()(
 const shared = Layer.effect(
   SharedBrowser,
   Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 300_000 })),
-).pipe(Layer.provide(Chromium.layer({ onCleanup: recordReceipt })));
+).pipe(
+  Layer.provide(Chromium.layer({ onCleanup: recordReceipt })),
+  Layer.provide(NodeServices.layer),
+);
 
 const program = Effect.gen(function* () {
   const browser = yield* SharedBrowser;
@@ -702,11 +707,13 @@ it.effect("an unknown click is never replayed", () =>
 
 Time is the caller's clock. In-flight navigations, waits, holds and callback deadlines run under the context the session was opened in, so under `it.effect` from `@effect/vitest` a `TestClock.adjust` advances them and nothing real elapses, while `it.live` runs them in real time. `Testing.binding(script)` is the same engine as an opaque `BrowserBinding`, with one control handle per connection, for code that constructs a runtime itself; `Testing.jpeg()` is a small valid JPEG for frames.
 
+Randomness is scripted too. The owner's ids and handoff tokens come from `Testing.sequentialCrypto`, a `Crypto` Layer whose bytes count up from one, so `Testing.open` requires no platform service and its values repeat from run to run. A provider Layer built over `Testing.binding` still requires a `Crypto`; provide `Testing.sequentialCrypto` to keep that test free of a platform package. It is not random and computes no digest, so never give it to a real browser.
+
 A scripted pass establishes the owner's behaviour over any engine, not what real Chromium reports for a page. `test/native/scripted-parity.test.ts` therefore runs one case list against both `Testing.open` and `Chromium.launch` on a loopback page, and every case must end in the same reason and outcome under both. Nothing scripted establishes anything about a hosted provider.
 
 ## Integration construction
 
-`effect-browser/browser-runtime` is the supported host integration boundary. `make` validates an immutable runtime configuration and returns `acquire(policy, source, request)`. A source acquires one concrete lifetime, registers its release in the supplied Scope before returning, resolves its authorized endpoint, and supplies detailed release evidence plus `closeChecked`. Browserbase owns remote allocation/status and writer settlement; Chromium owns process termination/profile removal. The runtime supplies connection cleanup, captures bootstrap services, and creates the one registered session.
+`effect-browser/browser-runtime` is the supported host integration boundary. `make` validates an immutable runtime configuration and returns `acquire(policy, source, request)`. It requires Effect's `Crypto` and captures it for connection ids and handoff tokens, so an integration's Layer requires `Crypto` once and `acquire` never does. A source acquires one concrete lifetime, registers its release in the supplied Scope before returning, resolves its authorized endpoint, and supplies detailed release evidence plus `closeChecked`. Browserbase owns remote allocation/status and writer settlement; Chromium owns process termination/profile removal. The runtime supplies connection cleanup, captures bootstrap services, and creates the one registered session.
 
 The connection exposes that exact session and a bounded set of modeled integration operations. An integration can add its own resource identity and authorized file-selection or handoff methods to the same object. It must authorize stored file paths before using integration file selection; ordinary browser sessions do not expose a server-path interface. Hosted handoff pauses under the existing owner before a provider Live View is issued, and resume/reconnect remain owned state transitions.
 

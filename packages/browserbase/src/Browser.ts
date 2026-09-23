@@ -1,4 +1,13 @@
-import { Context, Effect, Layer, type Option, type Redacted, Schema, type Scope } from "effect";
+import {
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  type Option,
+  type Redacted,
+  Schema,
+  type Scope,
+} from "effect";
 import type { BrowserSession, OpenOptions } from "effect-browser/browser";
 import type {
   ActionResult,
@@ -232,14 +241,20 @@ export class BrowserbaseBrowser extends Context.Service<
     return Effect.flatMap(BrowserbaseBrowser, (browser) => browser.attach(reference, request));
   }
 
+  /** Allocation attempts, connection ids and handoff tokens come from the required `Crypto`. */
   static layer(
     options: BrowserOptions,
-  ): Layer.Layer<BrowserbaseBrowser, BrowserError, BrowserbaseClient | BrowserbaseSessions> {
+  ): Layer.Layer<
+    BrowserbaseBrowser,
+    BrowserError,
+    BrowserbaseClient | BrowserbaseSessions | Crypto.Crypto
+  > {
     return Layer.effect(
       BrowserbaseBrowser,
       Effect.gen(function* () {
         const client = yield* BrowserbaseClient;
         const sessions = yield* BrowserbaseSessions;
+        const crypto = yield* Crypto.Crypto;
         const binding = yield* BrowserbaseBrowserBinding;
 
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
@@ -269,12 +284,17 @@ export class BrowserbaseBrowser extends Context.Service<
 
         const source =
           <L extends BrowserRuntime.Lifetime, E>(
-            remote: BrowserRuntime.Source<L, E, BrowserbaseClient | BrowserbaseSessions>,
+            remote: BrowserRuntime.Source<
+              L,
+              E,
+              BrowserbaseClient | BrowserbaseSessions | Crypto.Crypto
+            >,
           ): BrowserRuntime.Source<L, E> =>
           (cleanup, deadline) =>
             remote(cleanup, deadline).pipe(
               Effect.provideService(BrowserbaseClient, client),
               Effect.provideService(BrowserbaseSessions, sessions),
+              Effect.provideService(Crypto.Crypto, crypto),
             );
 
         const acquire = Effect.fnUntraced(function* <E = never, R = never>(

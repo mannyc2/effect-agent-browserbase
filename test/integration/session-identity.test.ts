@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vite-plus/test";
@@ -81,7 +82,9 @@ it.effect(
         for (const action of [
           foreign.capture.start(session).pipe(Effect.asVoid),
           foreign.control.state(session, page).pipe(Effect.asVoid),
-          foreign.runtime.make({ implementation: "foreign-test", binding }).pipe(Effect.asVoid),
+          foreign.runtime
+            .make({ implementation: "foreign-test", binding })
+            .pipe(Effect.asVoid, Effect.provide(NodeCrypto.layer)),
         ]) {
           const error = yield* action.pipe(Effect.flip);
 

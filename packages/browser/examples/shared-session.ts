@@ -9,6 +9,9 @@ import {
 
 const policy = BrowserPolicy.unrestricted({ maxElapsedMillis: 300_000 });
 
+// Each browser Layer here takes Effect's `Crypto` from the caller's platform Layer, such as
+// `NodeServices.layer`, so these compositions still require it.
+
 /** The Layer shares one finite lifetime; application code chooses how to supervise it. */
 export class SharedBrowser extends Context.Service<SharedBrowser, ChromiumSession>()(
   "examples/SharedBrowser",

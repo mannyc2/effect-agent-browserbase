@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -459,6 +460,7 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
         : { connectBindings: options.connectBindings }),
     },
   ).pipe(
+    Effect.provide(NodeCrypto.layer),
     Effect.flatMap((acquired) =>
       Effect.gen(function* () {
         const connected = yield* Effect.cached(

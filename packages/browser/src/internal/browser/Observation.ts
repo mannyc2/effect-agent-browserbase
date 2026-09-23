@@ -96,9 +96,13 @@ interface Snapshot {
  * What is read from the selected document, and the one retained observation whose nodes a later
  * action may name. That observation is valid only until the next invalidating event.
  */
-export const makeObservation = (targets: Targets, events: DriverEvents) => {
+export const makeObservation = (
+  targets: Targets,
+  /** Observation ids from an earlier connection never name this one's nodes. */
+  connectionNamespace: string,
+  events: DriverEvents,
+) => {
   const { current } = targets;
-  const connectionNamespace = globalThis.crypto.randomUUID();
   let observation: Snapshot | undefined;
   let observationSerial = 0;
   let connectionRetired = false;

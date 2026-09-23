@@ -154,6 +154,7 @@ it.effect("a refused connection keeps the reason the native attempt gave", () =>
   Effect.gen(function* () {
     const request = {
       connection: "wss://connect.browserbase.com/?session=1",
+      identity: { namespace: "connection", bindings: "bindings" },
       options: {
         viewport: { width: 640, height: 480 },
         popupPolicy: "retain",

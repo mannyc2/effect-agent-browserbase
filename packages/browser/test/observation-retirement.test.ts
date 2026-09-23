@@ -140,7 +140,7 @@ const fixture = (
     navigating: { has: () => false },
   } as unknown as Targets;
 
-  const observation = makeObservation(targets, {
+  const observation = makeObservation(targets, "connection", {
     invalidate: () => {},
     pause: () => {},
     fault: () => {},

@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
   Clock,
@@ -33,13 +34,16 @@ const launch = {
   provider: {},
 } as const;
 
-const layers = BrowserbaseSessions.layer.pipe(
-  Layer.provideMerge(
-    BrowserbaseClient.layer({
-      projectId: "project-1",
-      apiKey: Redacted.make("fixture-not-a-credential"),
-    }),
+const layers = Layer.merge(
+  BrowserbaseSessions.layer.pipe(
+    Layer.provideMerge(
+      BrowserbaseClient.layer({
+        projectId: "project-1",
+        apiKey: Redacted.make("fixture-not-a-credential"),
+      }),
+    ),
   ),
+  NodeCrypto.layer,
 );
 
 /** Real provider parsing, lifetime and cleanup; only transport/native teardown are injected. */

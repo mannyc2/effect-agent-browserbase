@@ -5,6 +5,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
@@ -452,6 +453,7 @@ export const localBrowser = Effect.acquireRelease(
       binding,
       layer: (overrides: Partial<BrowserOptions> = {}) =>
         BrowserbaseBrowser.layer({ ...options, ...overrides }).pipe(
+          Layer.provide(NodeCrypto.layer),
           Layer.provide(account),
           Layer.provide(BrowserBinding.layer(binding)),
         ),

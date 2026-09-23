@@ -1,5 +1,6 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Redacted, Stream } from "effect";
+import { Effect, Layer, Redacted, Stream } from "effect";
 import {
   BrowserPolicy,
   ClickRequest,
@@ -74,7 +75,7 @@ it.live(
                 Effect.sync(() => {
                   reports.push(result);
                 }),
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
         expect(reports).toHaveLength(1);
@@ -115,7 +116,7 @@ it.live(
                 Effect.sync(() => {
                   reports.push(result);
                 }),
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
         expect(host.running()).toBe(true);
@@ -130,7 +131,10 @@ it.live(
               target: { targetId: "does-not-exist" },
             });
           }),
-        ).pipe(Effect.provide(Chromium.layer()), Effect.result);
+        ).pipe(
+          Effect.provide(Chromium.layer().pipe(Layer.provide(NodeCrypto.layer))),
+          Effect.result,
+        );
 
         expect(failed).toMatchObject({
           _tag: "Failure",
@@ -364,7 +368,7 @@ it.live(
               launch,
               pageControl: true,
               viewport: { width: 640, height: 480 },
-            }),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
           ),
         );
       }),

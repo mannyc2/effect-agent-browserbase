@@ -1,5 +1,6 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Redacted } from "effect";
+import { type Crypto, Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import * as Account from "../src/Account.ts";
@@ -56,9 +57,9 @@ const fixture = (allocatedProject = account.projectId) => {
     throw new Error(`Unexpected provider operation ${request.method} ${path}`);
   };
 
-  const run = <A, E>(program: Effect.Effect<A, E, Account.Services>) =>
+  const run = <A, E>(program: Effect.Effect<A, E, Account.Services | Crypto.Crypto>) =>
     program.pipe(
-      Effect.provide(Account.layer(account)),
+      Effect.provide(Layer.merge(Account.layer(account), NodeCrypto.layer)),
       Effect.provideService(FetchHttpClient.Fetch, fetch),
     );
 

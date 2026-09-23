@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import type { BrowserSession } from "effect-browser/browser";
@@ -95,7 +96,9 @@ it.effect(
         1_000_001,
       ]) {
         const result = yield* Layer.build(
-          Chromium.layer({ maxHostReads: maxHostReads as never }),
+          Chromium.layer({ maxHostReads: maxHostReads as never }).pipe(
+            Layer.provide(NodeCrypto.layer),
+          ),
         ).pipe(Effect.scoped, Effect.result);
 
         expect(result).toMatchObject({

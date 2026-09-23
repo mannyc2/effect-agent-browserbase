@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { NodeCrypto } from "@effect/platform-node";
 import { Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
@@ -53,7 +54,10 @@ const metadata = (status = "RUNNING", projectId = account.projectId) => ({
   connectUrl: "wss://connect.browserbase.com/connect?sessionId=session-1",
 });
 
-const layers = BrowserbaseSessions.layer.pipe(Layer.provideMerge(BrowserbaseClient.layer(account)));
+const layers = Layer.merge(
+  BrowserbaseSessions.layer.pipe(Layer.provideMerge(BrowserbaseClient.layer(account))),
+  NodeCrypto.layer,
+);
 
 /** Cleanup reports a failed local step as a `CleanupIssue`; the operation never survives it. */
 const fail = () =>

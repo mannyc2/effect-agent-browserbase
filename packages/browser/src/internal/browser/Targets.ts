@@ -59,6 +59,11 @@ export const makeTargets = (
   browser: Browser,
   context: BrowserContext,
   options: DriverOptions,
+  /**
+   * FrameInfo is connection-local public metadata. A new driver after reconnect must never
+   * regenerate an old frame id for a different frame, even when serial order happens to match.
+   */
+  connectionNamespace: string,
   closing: () => boolean,
   hooks: TargetHooks,
 ) => {
@@ -70,9 +75,6 @@ export const makeTargets = (
   const selection: Selection = {};
   // Pages whose navigation this driver began and has not seen settle.
   const navigating = new Set<string>();
-  // FrameInfo is connection-local public metadata. A new driver after reconnect must never
-  // regenerate an old frame id for a different frame, even when serial order happens to match.
-  const connectionNamespace = globalThis.crypto.randomUUID();
 
   let serial = 0,
     frameSerial = 0;
