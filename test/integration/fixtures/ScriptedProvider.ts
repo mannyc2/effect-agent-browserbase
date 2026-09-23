@@ -296,6 +296,15 @@ export const fixture = Effect.fnUntraced(function* (options: ScriptOptions = {})
       selectOption: async () => {
         throw new Error("PRIVATE-NO-RETAINED-OPTION");
       },
+      formStep: async () => {
+        throw new Error("PRIVATE-NO-RETAINED-NODE");
+      },
+      formState: async () => {
+        throw new Error("PRIVATE-NO-RETAINED-NODE");
+      },
+      formSubmit: async () => {
+        throw new Error("PRIVATE-NO-RETAINED-NODE");
+      },
       click: async (_target, ticket) => {
         if (options.onClick !== undefined) return options.onClick(ticket);
         ticket.dispatch();

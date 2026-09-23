@@ -1,6 +1,7 @@
-import { Clock, Deferred, Effect, Exit, Redacted, Schema, Scope } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Option, Redacted, Schema, Scope } from "effect";
 
 import {
+  type FillFormRequest,
   type FrameInfo,
   type KeyModifier,
   Observation,
@@ -47,8 +48,30 @@ export type RemoteSource<L extends SessionLease, E, R = never> = Source<L, E, R>
 /** Bounds a reading of the selected document. Already validated at the public boundary. */
 export interface Reading {
   readonly scope: "document" | "viewport";
+  readonly match?: string;
   readonly maxTextBytes?: number;
   readonly maxControls?: number;
+}
+
+/** How a form proceeds. Already validated and defaulted at the public boundary. */
+export interface FormSettings {
+  readonly verify: boolean;
+  readonly settleMillis: number;
+}
+
+/** What a form did; the public boundary decodes it. */
+export interface FormOutcome {
+  readonly fields: ReadonlyArray<{
+    readonly elementId: string;
+    readonly status: "set" | "unchanged";
+  }>;
+  readonly submitted: boolean;
+  readonly url: string;
+  readonly stopped?: {
+    readonly stage: "field" | "verify" | "submit";
+    readonly elementId?: string;
+    readonly error: BrowserError;
+  };
 }
 
 interface NavigationStopAttempt<E> {
@@ -542,6 +565,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     "revalidate",
     "click",
     "fill",
+    "fill-form",
     "scroll",
     "pointer-move",
     "hover",
@@ -589,6 +613,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     controls = 32,
     dependent = true,
     scope: "document" | "viewport" = "document",
+    match?: string,
   ) =>
     Effect.suspend(() => {
       const revision = owner.state.revision;
@@ -597,7 +622,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         await getDriver().pageControl?.checkTarget(undefined, ticket);
         if (dependent) await requireReady("observe", ticket);
 
-        return getDriver().observe(scope, maximumBytes, controls, ticket);
+        return getDriver().observe(scope, maximumBytes, controls, ticket, match);
       }).pipe(
         Effect.flatMap((raw) =>
           Effect.gen(function* () {
@@ -749,6 +774,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               "download-action",
               "select-files",
               "select-option",
+              "fill-form",
               "file-chooser",
               "checkpoint",
               "control-facts",
@@ -1337,7 +1363,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           owner.guard(
             "observe",
             (ticket) =>
-              observeInside(ticket, bytes, reading.maxControls ?? 32, true, reading.scope),
+              observeInside(
+                ticket,
+                bytes,
+                reading.maxControls ?? 32,
+                true,
+                reading.scope,
+                reading.match,
+              ),
             { preflight: waitFree("observe") },
           ),
         ),
@@ -1385,6 +1418,156 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         (driver, ticket) => driver.selectOption(reference, options, ticket, policy),
         { mutation: true },
       ),
+    /**
+     * Each step is its own admitted, charged mutation that leaves the observation usable for the
+     * next one; anything else that changes the page still retires it. The form ends at the first
+     * refusal, and whatever it dispatched retires the observation when it ends, however it ends.
+     */
+    fillForm: (request: FillFormRequest, policy: AdmissionPolicy | undefined, form: FormSettings) =>
+      Effect.suspend(() => {
+        // The page whose observation the steps kept usable, known once one of them dispatched.
+        let pageId: string | undefined;
+
+        const reference = (elementId: string): ObservedElement => ({
+          observationId: request.observationId,
+          elementId,
+        });
+
+        const kept = (): ObservationScope => {
+          pageId ??= getDriver().selected().pageId;
+
+          return "none";
+        };
+
+        const body = Effect.gen(function* () {
+          const fields: Array<{ elementId: string; status: "set" | "unchanged" }> = [];
+          const states: Array<string | undefined> = [];
+          let url = "";
+
+          const finish = (submitted: boolean): FormOutcome => ({ fields, submitted, url });
+
+          const stop = (
+            stage: "field" | "verify" | "submit",
+            error: BrowserError,
+            elementId?: string,
+          ): FormOutcome => ({
+            ...finish(false),
+            stopped: { stage, error, ...(elementId === undefined ? {} : { elementId }) },
+          });
+
+          for (const field of request.fields) {
+            const exit = yield* Effect.exit(
+              nativeOperation(
+                "fill-form",
+                (driver, ticket) =>
+                  driver.formStep(
+                    reference(field.elementId),
+                    field,
+                    ticket,
+                    policy,
+                    form.settleMillis,
+                  ),
+                { mutation: true, mutationScope: kept },
+              ),
+            );
+
+            if (Exit.isFailure(exit)) {
+              const error = Cause.findErrorOption(exit.cause);
+
+              // Interruption and defects keep their own meaning. A form that has completed no
+              // step fails exactly as its first step did.
+              if (Option.isNone(error) || fields.length === 0)
+                return yield* Effect.failCause(exit.cause);
+
+              return stop("field", error.value, field.elementId);
+            }
+            const step = exit.value;
+
+            fields.push({ elementId: field.elementId, status: step.status });
+            states.push(step.state);
+            url = step.url;
+            if (!step.reached)
+              return stop(
+                "field",
+                BrowserError.make({
+                  operation: "fill-form",
+                  reason: Reasons.Failed.make({}),
+                  outcome: "rejected",
+                }),
+                field.elementId,
+              );
+          }
+
+          if (form.verify) {
+            // Not charged, like revalidation: it sends no input and reads nodes already issued.
+            const exit = yield* Effect.exit(
+              nativeOperation(
+                "fill-form",
+                (driver, ticket) =>
+                  driver.formState(
+                    request.fields.map((field) => reference(field.elementId)),
+                    ticket,
+                  ),
+                { charge: false },
+              ),
+            );
+
+            if (Exit.isFailure(exit)) {
+              const error = Cause.findErrorOption(exit.cause);
+
+              if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
+
+              return stop("verify", error.value);
+            }
+            for (const [index, field] of request.fields.entries()) {
+              const expected = states[index];
+
+              if (expected === undefined || exit.value[index] !== expected)
+                return stop(
+                  "verify",
+                  BrowserError.make({
+                    operation: "fill-form",
+                    reason: Reasons.Stale.make({}),
+                    outcome: "undispatched",
+                  }),
+                  field.elementId,
+                );
+            }
+          }
+
+          if (request.submit === undefined) return finish(false);
+          const submit = request.submit;
+
+          const exit = yield* Effect.exit(
+            nativeOperation(
+              "fill-form",
+              (driver, ticket) => driver.formSubmit(reference(submit), ticket, policy),
+              { mutation: true },
+            ),
+          );
+
+          if (Exit.isFailure(exit)) {
+            const error = Cause.findErrorOption(exit.cause);
+
+            if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
+
+            return stop("submit", error.value, submit);
+          }
+          url = exit.value;
+
+          return finish(true);
+        });
+
+        // The steps kept the observation usable for each other only. A submit that dispatched
+        // has already retired it, as every other mutation does.
+        return body.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (pageId !== undefined) owner.invalidate("observation", { pageId });
+            }),
+          ),
+        );
+      }),
     /** Not charged: it sends no input and reads one node the caller was already given. */
     revalidate: (reference: ObservedElement) =>
       nativeOperation("revalidate", (driver, ticket) => driver.revalidate(reference, ticket), {

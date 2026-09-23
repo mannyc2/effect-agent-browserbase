@@ -7,6 +7,9 @@ import {
   Checkpoint,
   CheckpointOptions,
   ClickRequest,
+  FillFormOptions,
+  FillFormRequest,
+  FillFormResult,
   FillRequest,
   FrameInfo,
   HoverRequest,
@@ -84,6 +87,7 @@ const hovered = decoded(InputReceipt, "hover", "unknown");
 const wheeled = decoded(InputReceipt, "wheel", "unknown");
 const pressed = decoded(InputReceipt, "press", "unknown");
 const typed = decoded(InputReceipt, "type", "unknown");
+const formed = decoded(FillFormResult, "fill-form", "unknown");
 
 const makeTarget = (bound: TargetControls): TargetOperations => ({
   navigate: (request) =>
@@ -265,6 +269,20 @@ export const makeSession = <E>(
           ),
         ),
         Effect.flatMap(navigate),
+      ),
+    fillForm: (request, admission, options = {}) =>
+      checked(FillFormRequest, request, "fill-form").pipe(
+        Effect.flatMap((form) =>
+          checked(FillFormOptions, options, "fill-form").pipe(
+            Effect.flatMap((settings) =>
+              controls.fillForm(form, admission?.admit, {
+                verify: settings.verify ?? true,
+                settleMillis: settings.settleMillis ?? 50,
+              }),
+            ),
+          ),
+        ),
+        Effect.flatMap(formed),
       ),
     hoverElement: (reference, admission) =>
       checked(ObservedElement, reference, "hover").pipe(
