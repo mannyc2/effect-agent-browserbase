@@ -6,8 +6,8 @@ import {
   ControlFacts,
   ObservedElement,
   ViewportRect,
-} from "../../packages/browser/src/BrowserData.ts";
-import { fixture, gate } from "./fixtures/ScriptedProvider.ts";
+} from "../src/BrowserData.ts";
+import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 const reference = ObservedElement.make({ observationId: "observed", elementId: "button" });
 

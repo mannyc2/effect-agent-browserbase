@@ -2,9 +2,9 @@ import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { dispatchNavigationStop } from "../../packages/browser/src/internal/browser/Actions.ts";
-import type { NativeNavigation } from "../../packages/browser/src/internal/browser/Driver.ts";
-import { fixture, gate } from "./fixtures/ScriptedProvider.ts";
+import { dispatchNavigationStop } from "../src/internal/browser/Actions.ts";
+import type { NativeNavigation } from "../src/internal/browser/Driver.ts";
+import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 /** Script only the native setup/acknowledgement; the real session, permit and dispatch path run. */
 const flight = (open: Parameters<typeof dispatchNavigationStop>[3]) => {
