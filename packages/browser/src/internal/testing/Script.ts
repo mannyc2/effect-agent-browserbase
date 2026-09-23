@@ -9,7 +9,12 @@ import {
   TargetUrl,
   type ViewportPoint,
 } from "../../BrowserData.ts";
-import { type BrowserOperation,type BrowserError,type BrowserOutcome,type BrowserReason } from "../../Errors.ts";
+import {
+  type BrowserOperation,
+  type BrowserError,
+  type BrowserOutcome,
+  type BrowserReason,
+} from "../../Errors.ts";
 
 const uniqueBy = <A>(key: (value: A) => string, title: string) =>
   Schema.makeFilter((items: ReadonlyArray<A>) => new Set(items.map(key)).size === items.length, {
