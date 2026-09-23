@@ -369,6 +369,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const ref: L["reference"] = acquired.reference;
   // Effect.tap preserves the exact supplying lifetime's success; the generic constraint alone
   // would infer unknown here. No receipt value is decoded, constructed or coerced by this owner.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- restates L's own release type
   const release = acquired.release as Effect.Effect<Effect.Success<L["release"]>>;
   const cleanupResult: L["cleanupResult"] = acquired.cleanupResult;
 

@@ -13,6 +13,7 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 | effect-agent / testing | 0.1.0-beta.102                                                     |
 | Playwright             | playwright-core 1.63.0                                             |
 | TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
+| Effect tsgo / Oxlint   | 0.45.0 / 1.82.0                                                    |
 
 These are the verified acceptance targets, not a promise that every version allowed by the inherited engine/peer ranges has been tested. Dependency changes belong in a coordinated catalog/lockfile update, not an unreviewed install-time re-resolution.
 
@@ -56,6 +57,8 @@ cd packages/agent-browser
 Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
 
 Make edits in this repository's `packages/browser`, `packages/browserbase` and `packages/agent-browser`, not just the disposable upstream worktree. Stage new files before bootstrapping: only Git-tracked paths are copied, with their current working-copy contents. Use a new bootstrap destination after edits; an existing destination is refused rather than silently mixed with new source.
+
+Owned code is held to a stricter lint and compiler policy than upstream. `lint/owned.ts` is that policy, grouped by the failure each rule prevents; upstream's root `vite.config.ts` appends its overrides, which match only owned paths. Its `effecttsgo` rules add the stricter Effect diagnostics to the language-service defaults that the patched `tsc` already reports, and exist only because `patch:tsgo` also patches the Vite+ Oxlint (`effect-tsgo patch --typescript --oxlint`); Oxlint is pinned to a version that `@effect/tsgo` supports for that reason. The owned tsconfigs add matching strict compiler checks, and `tools/test/lint-policy.test.mjs` keeps the four projects aligned. Fix a finding, an Effect diagnostic included, rather than suppress it. A genuine exception names its reason in the directive, `// oxlint-disable-next-line <rule> -- <reason>`, or, for a rule `tsc` also reports, puts it in a comment directly above `@effect-diagnostics-next-line`. Acceptance rejects a directive that no longer suppresses anything.
 
 ## Source and package integration
 

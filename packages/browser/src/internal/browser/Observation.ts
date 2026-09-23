@@ -645,6 +645,9 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
               await node.dispose();
               throw failure(Reasons.Malformed.make({}));
             }
+            // Playwright types every property handle as `any`. readPage stores only Elements
+            // under `nodes`, and asElement() has already rejected any other value.
+            // oxlint-disable-next-line typescript/no-unsafe-argument -- untyped Playwright handle
             handles.push(element);
             check();
           }
