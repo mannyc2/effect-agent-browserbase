@@ -1,12 +1,15 @@
 import { writeFileSync } from 'node:fs';
 import { Effect } from 'effect';
 const root = '../overlay/test/integration/fixtures/';
-const artifacts = '../overlay/packages/browserbase/test/fixtures/';
+const browser = '../overlay/packages/browser/test/fixtures/';
+const browserbase = '../overlay/packages/browserbase/test/fixtures/';
 const selection = process.argv[2] ?? 'all';
-const suites = selection === 'regressions' ? ['RecoveryCases'] : ['OwnershipCases', 'ArtifactCases', 'CaptureCases', 'RecoveryCases'];
+// Each recovery regression lives in the package whose code it tests.
+const regressions = [`${browser}RecoveryCases`, `${browserbase}RecoveryCases`];
+const suites = selection === 'regressions' ? regressions : [`${root}OwnershipCases`, `${browserbase}ArtifactCases`, `${browser}CaptureCases`, ...regressions];
 const rows = [];
 for (const suite of suites) {
-  const mod = await import(new URL(`${suite === "ArtifactCases" ? artifacts : root}${suite}.ts`, import.meta.url));
+  const mod = await import(new URL(`${suite}.ts`, import.meta.url));
   const tests = Object.values(mod).find(Array.isArray);
   for (const test of tests) {
     const before = performance.now();

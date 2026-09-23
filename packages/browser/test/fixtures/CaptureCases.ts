@@ -4,30 +4,17 @@ import type { Scope } from "effect";
 import { Effect, Exit, Fiber, Stream } from "effect";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 
-import { PageInfo, Target } from "../../../packages/browser/src/BrowserData.ts";
-import { type CaptureOptions, type CaptureSize } from "../../../packages/browser/src/Capture.ts";
-import { type CaptureParent } from "../../../packages/browser/src/internal/browser/Association.ts";
-import {
-  type CaptureInvalidation,
-  type NativeFrame,
-} from "../../../packages/browser/src/internal/browser/Driver.ts";
-import { makeOwner } from "../../../packages/browser/src/internal/browser/Owner.ts";
-import { startCapture } from "../../../packages/browser/src/internal/capture/Capture.ts";
-import {
-  type AllocationError,
-  type ClientError,
-  type ContextError,
-} from "../../../packages/browserbase/src/Errors.ts";
+import { PageInfo, Target } from "../../src/BrowserData.ts";
+import { type CaptureOptions, type CaptureSize } from "../../src/Capture.ts";
+import { type CaptureParent } from "../../src/internal/browser/Association.ts";
+import { type CaptureInvalidation, type NativeFrame } from "../../src/internal/browser/Driver.ts";
+import { makeOwner } from "../../src/internal/browser/Owner.ts";
+import { startCapture } from "../../src/internal/capture/Capture.ts";
 import { jpeg, widerJpeg } from "./Jpeg.ts";
-import { fixture as sessionFixture, gate } from "./ScriptedProvider.ts";
+import { fixture as sessionFixture, gate } from "./ScriptedOwner.ts";
 import { advance, timed } from "./Time.ts";
 
-type CaptureFailure =
-  | AllocationError
-  | BrowserError
-  | ClientError
-  | ContextError
-  | InitializationError;
+type CaptureFailure = BrowserError | InitializationError;
 
 interface Case {
   readonly name: string;
@@ -867,7 +854,11 @@ export const captureCases: ReadonlyArray<Case> = [
       const interval = yield* startCapture(session.capture, options);
       const result = yield* session.close;
 
-      assert.equal(result.local, "failed");
+      assert.equal(result.connection, "failed");
+      assert.deepEqual(
+        result.issues.map((issue) => [issue.step, issue.reason]),
+        [["disconnect", "failed"]],
+      );
       receive?.({ data: jpeg(), timestamp: 1000, viewportWidth: 64, viewportHeight: 48 });
       yield* expectReason(Stream.runDrain(interval.frames), "TargetChanged");
       assert.equal((yield* interval.completed).received, 0);

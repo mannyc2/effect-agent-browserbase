@@ -2,11 +2,11 @@ import { expect, it } from "@effect/vitest";
 import { Clock, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import { Reasons } from "../../packages/browser/src/Errors.ts";
-import { dispatchNavigationStop } from "../../packages/browser/src/internal/browser/Actions.ts";
-import type { NativeNavigation } from "../../packages/browser/src/internal/browser/Driver.ts";
-import { failure } from "../../packages/browser/src/internal/browser/NativeCalls.ts";
-import { fixture, gate } from "./fixtures/ScriptedProvider.ts";
+import { Reasons } from "../src/Errors.ts";
+import { dispatchNavigationStop } from "../src/internal/browser/Actions.ts";
+import type { NativeNavigation } from "../src/internal/browser/Driver.ts";
+import { failure } from "../src/internal/browser/NativeCalls.ts";
+import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 /** The engine reports completion; the real session and D1 stop coordinator own recovery. */
 const flight = (open: Parameters<typeof dispatchNavigationStop>[3], mainFrame = true) => {
