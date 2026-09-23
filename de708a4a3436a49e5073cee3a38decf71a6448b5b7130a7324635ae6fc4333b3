@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "repository": "git+https://github.com/mannyc2/effect-agent-browserbase.git",
+  "sourceSha": "089a6eaf919123195c423d19b216ce4b0dc89bca",
+  "version": "0.2.0-beta.0",
+  "frameworkVersion": "0.1.0-beta.102",
+  "distTag": "beta",
+  "packages": [
+    {
+      "name": "effect-browser",
+      "version": "0.2.0-beta.0",
+      "directory": "packages/browser",
+      "filename": "effect-browser-0.2.0-beta.0.tgz",
+      "bytes": 263241,
+      "sha256": "a016d63eac48234f56b84b1fa17f7d7b39ca12e4188c857c2b2c0c7aaf3a7be8",
+      "integrity": "sha512-k7ggemAUxGYPJxn89KUgD/Vhhg8yozLt36pgbAADCi7K8x0Gj52CqvMFvjSwK/dmWdsRrdpXFunvSAvWnU8jDQ=="
+    },
+    {
+      "name": "effect-browserbase",
+      "version": "0.2.0-beta.0",
+      "directory": "packages/browserbase",
+      "filename": "effect-browserbase-0.2.0-beta.0.tgz",
+      "bytes": 156307,
+      "sha256": "8bbf6ceb309993036e930c40d924336d5195c497e447fab25e31213fe272abfd",
+      "integrity": "sha512-f/HZrP7baGevK1zfvQ8dbP1jeugg0u8aqM23bqUKcBQ3REYym9+veAkFC15rKO9XzEs8XEmgbicSunb1Ev9JUw=="
+    },
+    {
+      "name": "effect-agent-browser",
+      "version": "0.2.0-beta.0",
+      "directory": "packages/agent-browser",
+      "filename": "effect-agent-browser-0.2.0-beta.0.tgz",
+      "bytes": 41143,
+      "sha256": "553dfc8426849d663bac7779a9fb31cf1698c93dbdcc025feaf9fc6273430449",
+      "integrity": "sha512-rhvRGRqEXrXXwykEEcgK+0t7xGdyLeqnliNSO3mO4l6fJ0oyIBA4Re2P/xiS/E3MmDQsncog7iJODNoxBiF1Eg=="
+    }
+  ]
+}
