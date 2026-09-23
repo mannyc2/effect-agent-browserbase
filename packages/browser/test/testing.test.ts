@@ -292,6 +292,30 @@ it.effect("a lost connection is reported as disconnected and refused afterwards"
   ),
 );
 
+it.effect("an input receipt reports the pointer placed on its own page", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      yield* browser.navigate({ url: `${origin}/` });
+      const home = (yield* browser.pages).find((page) => page.selected);
+
+      expect(home).toBeDefined();
+      if (home === undefined) return;
+      expect((yield* browser.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual({
+        x: 12,
+        y: 34,
+      });
+      const other = yield* browser.createPage;
+
+      yield* browser.selectPage(other);
+      // Nothing placed the pointer on this page, whatever the last command did elsewhere.
+      expect((yield* browser.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
+      expect(yield* browser.control.pointer).toEqual({ x: 12, y: 34 });
+      yield* browser.selectPage(home);
+      expect((yield* browser.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({ x: 12, y: 34 });
+    }),
+  ),
+);
+
 it.effect("waits observe the exact node until the document changes or the deadline passes", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
