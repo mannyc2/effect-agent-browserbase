@@ -133,6 +133,8 @@ export const ownedOverrides: Array<OxlintOverride> = [
   {
     // Library code reaches the platform only through Effect services, and never unwraps.
     files: library,
+    // Oxlint drops an override's plugin rules unless that override enables the plugin itself.
+    plugins: ["effecttsgo"],
     rules: {
       "eslint/no-restricted-properties": ["error", ...escapeHatches],
       "effecttsgo/prefer-schema-over-json": "error",

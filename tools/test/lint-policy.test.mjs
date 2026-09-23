@@ -67,6 +67,14 @@ test("the policy is owned-only, error-only, and relaxes only its own rules", asy
   for (const override of ownedOverrides)
     for (const glob of override.files) assert.match(glob, ownedPath, `${glob} is an owned path`);
   assert.ok(strict.plugins.includes("effecttsgo"));
+  // Oxlint silently drops these rules from an override that does not enable their plugin.
+  for (const override of ownedOverrides)
+    for (const rule of Object.keys(override.rules)) {
+      const plugin = rule.split("/")[0];
+
+      if (plugin === "effecttsgo" || plugin === "promise")
+        assert.ok(override.plugins?.includes(plugin), `${rule} needs ${plugin} in its override`);
+    }
   for (const override of [strict, library])
     for (const [rule, setting] of Object.entries(override.rules))
       assert.equal(severity(setting), "error", `${rule} is enforced, not advisory`);
