@@ -10,13 +10,11 @@ import { AllocationAttempt, ContextReference, SessionReference } from "../../Ref
  * `ContextCoordination` and `ContextWriter` both read this module, never each other.
  */
 export const PersistenceEvidence = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("NotRequested") }),
-  Schema.Struct({
-    _tag: Schema.Literal("Unconfirmed"),
+  Schema.TaggedStruct("NotRequested", {}),
+  Schema.TaggedStruct("Unconfirmed", {
     reason: Schema.Literals(["writer-active", "writer-unknown", "flush-unacknowledged"]),
   }),
-  Schema.Struct({
-    _tag: Schema.Literal("Observed"),
+  Schema.TaggedStruct("Observed", {
     method: Schema.Literal("consumer-readback"),
     observedAtMillis: Schema.Finite,
   }),

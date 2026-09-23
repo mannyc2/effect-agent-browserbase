@@ -3,6 +3,15 @@ import { failure } from "./NativeCalls.ts";
 
 const malformed = () => failure(Reasons.Malformed.make({}));
 
+/** A checked read: a truncated segment is malformed framing, never `undefined` arithmetic. */
+const byteAt = (bytes: Uint8Array, index: number): number => {
+  const byte = bytes[index];
+
+  if (byte === undefined) throw malformed();
+
+  return byte;
+};
+
 /** Parse framing only; a caller decoding media must still validate its complete bitstream. */
 export const pngGeometry = (bytes: Uint8Array): { width: number; height: number } => {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
@@ -41,13 +50,13 @@ export const jpegGeometry = (bytes: Uint8Array): { width: number; height: number
     if (marker === undefined || marker === 217 || marker === 218) break;
     if (marker === 1 || (marker >= 208 && marker <= 215)) continue;
     if (offset + 1 >= bytes.length) throw malformed();
-    const size = bytes[offset] * 256 + bytes[offset + 1];
+    const size = byteAt(bytes, offset) * 256 + byteAt(bytes, offset + 1);
 
     if (size < 2 || offset + size > bytes.length) throw malformed();
     if ([192, 193, 194, 195, 197, 198, 199, 201, 202, 203, 205, 206, 207].includes(marker)) {
       if (size < 8) throw malformed();
-      const height = bytes[offset + 3] * 256 + bytes[offset + 4];
-      const width = bytes[offset + 5] * 256 + bytes[offset + 6];
+      const height = byteAt(bytes, offset + 3) * 256 + byteAt(bytes, offset + 4);
+      const width = byteAt(bytes, offset + 5) * 256 + byteAt(bytes, offset + 6);
 
       if (width === 0 || height === 0) throw malformed();
 

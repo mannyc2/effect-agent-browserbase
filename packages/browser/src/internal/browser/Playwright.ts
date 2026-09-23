@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { Browser, BrowserContext, CDPSession, Dialog, Page } from "playwright-core";
+import type { Browser, CDPSession, Dialog, Page } from "playwright-core";
 
 import { Reasons, BrowserError, InitializationError } from "../../Errors.ts";
 import { makeActions } from "./Actions.ts";
@@ -72,9 +72,9 @@ export const makePlaywrightDriver = async (
   // This constructor is reached only after native acquisition, including in driver tests.
   const { errors } = await import("playwright-core");
   const contexts = browser.contexts();
+  const [context] = contexts;
 
-  if (contexts.length !== 1) throw failure(Reasons.Ambiguous.make({}));
-  const context: BrowserContext = contexts[0];
+  if (contexts.length !== 1 || context === undefined) throw failure(Reasons.Ambiguous.make({}));
 
   const dialogs = new Map<
     Dialog,

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, Schema, Stream } from "effect";
+import { Clock, Effect, Fiber, Schema, Stream } from "effect";
 import {
   ObservedElement,
   Viewport,
@@ -463,9 +463,14 @@ it.live(
             const frames = yield* Fiber.join(collected);
 
             expect(frames.length).toBe(5);
-            expect(frames[0].sourceClock).toBe("presentation-unix-millis");
-            expect(frames[4].sourceTimeMillis).toBeGreaterThan(frames[0].sourceTimeMillis);
-            expect(Math.abs(frames[4].sourceTimeMillis - Date.now())).toBeLessThan(10000);
+
+            const firstFrame = frames[0]!,
+              lastFrame = frames[4]!,
+              now = yield* Clock.currentTimeMillis;
+
+            expect(firstFrame.sourceClock).toBe("presentation-unix-millis");
+            expect(lastFrame.sourceTimeMillis).toBeGreaterThan(firstFrame.sourceTimeMillis);
+            expect(Math.abs(lastFrame.sourceTimeMillis - now)).toBeLessThan(10000);
             expect((yield* interval.completed).nativeStop).toBe("confirmed");
             const next = yield* Capture.start(session);
 

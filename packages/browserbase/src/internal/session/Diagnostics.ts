@@ -14,9 +14,9 @@ class SessionUnsettled extends Data.TaggedError("BrowserbaseSessionUnsettled")<{
   readonly message: string;
   readonly details: Readonly<Record<string, string | number>>;
 }> {
-  readonly [ErrorReporter.severity] = "Warn" as const;
+  override readonly [ErrorReporter.severity] = "Warn" as const;
 
-  get [ErrorReporter.attributes]() {
+  override get [ErrorReporter.attributes]() {
     return this.details;
   }
 }

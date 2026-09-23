@@ -88,8 +88,8 @@ export const writerCases: ReadonlyArray<Case> = [
 
       assert.equal(yield* withWriter(backend(facts), reference(), () => Effect.succeed(42)), 42);
       assert.equal(facts.length, 1);
-      assert.equal(facts[0].disposition, "release");
-      assert.equal(facts[0].attempts.length, 0);
+      assert.equal(facts[0]!.disposition, "release");
+      assert.equal(facts[0]!.attempts.length, 0);
     }),
   ),
   test(
@@ -106,8 +106,8 @@ export const writerCases: ReadonlyArray<Case> = [
           assert.equal((yield* expectFailure(permit.recordAttempt(attempt()))).reason, "active");
         }),
       );
-      assert.equal(facts[0].attempts.length, 1);
-      assert.equal(facts[0].disposition, "quarantine");
+      assert.equal(facts[0]!.attempts.length, 1);
+      assert.equal(facts[0]!.disposition, "quarantine");
     }),
   ),
   test(
@@ -156,9 +156,9 @@ export const writerCases: ReadonlyArray<Case> = [
           permit.completed(request, cleanup(session()));
         }),
       );
-      assert.equal(facts[0].attempts[0].session?.sessionId, allocated.sessionId);
-      assert.equal(facts[0].disposition, "quarantine");
-      assert.notEqual(facts[0].attempts[0].state, "terminal");
+      assert.equal(facts[0]!.attempts[0]!.session?.sessionId, allocated.sessionId);
+      assert.equal(facts[0]!.disposition, "quarantine");
+      assert.notEqual(facts[0]!.attempts[0]!.state, "terminal");
     }),
   ),
   test(
@@ -179,12 +179,12 @@ export const writerCases: ReadonlyArray<Case> = [
           assert.equal((yield* expectFailure(permit.recordAttempt(attempt()))).reason, "active");
         }),
       );
-      assert.equal(facts[0].attempts[0].state, "terminal");
-      assert.deepEqual(facts[0].persistence, {
+      assert.equal(facts[0]!.attempts[0]!.state, "terminal");
+      assert.deepEqual(facts[0]!.persistence, {
         _tag: "Unconfirmed",
         reason: "flush-unacknowledged",
       });
-      assert.equal(facts[0].disposition, "quarantine");
+      assert.equal(facts[0]!.disposition, "quarantine");
     }),
   ),
   test(
@@ -223,8 +223,8 @@ export const writerCases: ReadonlyArray<Case> = [
         },
       );
       assert.deepEqual(order, ["cleanup", "readback"]);
-      assert.equal(facts[0].persistence._tag, "Observed");
-      assert.equal(facts[0].disposition, "release");
+      assert.equal(facts[0]!.persistence._tag, "Observed");
+      assert.equal(facts[0]!.disposition, "release");
     }),
   ),
   test(
@@ -246,13 +246,13 @@ export const writerCases: ReadonlyArray<Case> = [
           permit.rejected(next);
         }),
       );
-      assert.equal(facts[0].attempts.length, 2);
+      assert.equal(facts[0]!.attempts.length, 2);
       assert.ok(
-        facts[0].attempts.every(
+        facts[0]!.attempts.every(
           (value) => value.state === "rejected" && value.session === undefined,
         ),
       );
-      assert.equal(facts[0].disposition, "release");
+      assert.equal(facts[0]!.disposition, "release");
     }),
   ),
   test(
@@ -280,7 +280,7 @@ export const writerCases: ReadonlyArray<Case> = [
       );
 
       assert.equal(failure.reason, "active");
-      assert.equal(facts[0].disposition, "quarantine");
+      assert.equal(facts[0]!.disposition, "quarantine");
     }),
   ),
   test(
@@ -335,7 +335,7 @@ export const writerCases: ReadonlyArray<Case> = [
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
       assert.deepEqual(order, ["child-finalizer", "settle"]);
-      assert.equal(facts[0].disposition, "quarantine");
+      assert.equal(facts[0]!.disposition, "quarantine");
     }),
   ),
   test(

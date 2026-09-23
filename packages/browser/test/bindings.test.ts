@@ -269,7 +269,15 @@ it("refuses non-finite, fractional and out-of-range admission bounds", () => {
   const fields = ["maxConcurrent", "maxInputBytes", "maxOutputBytes", "timeoutMillis"] as const;
 
   for (const field of fields) {
-    for (const value of [NaN, Infinity, -Infinity, 0, -1, 1.5, Number.MAX_SAFE_INTEGER]) {
+    for (const value of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0,
+      -1,
+      1.5,
+      Number.MAX_SAFE_INTEGER,
+    ]) {
       assert.throws(() => numeric(Effect.succeed, { [field]: value }));
     }
   }
@@ -425,7 +433,7 @@ it.effect("rejects output codec violations, non-JSON values and encoded byte ove
           ...metadata,
           input: Schema.Finite,
           output: Schema.Unknown,
-          handle: () => Effect.succeed(NaN),
+          handle: () => Effect.succeed(Number.NaN),
         }),
         Bootstrap.binding({
           ...metadata,
@@ -906,7 +914,7 @@ it.effect(
           Effect.fnUntraced(function* () {
             yield* Effect.addFinalizer(() =>
               Effect.sync(() => {
-                probe = binding.invoke(neverAdmitted.call);
+                probe = binding!.invoke(neverAdmitted.call);
               }),
             );
             yield* Deferred.succeed(entered, undefined);

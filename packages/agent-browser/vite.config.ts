@@ -29,6 +29,8 @@ export default defineConfig({
             if (id.startsWith("./") && /[/\\]src[/\\]index(?:\.d)?\.ts$/.test(importer ?? "")) {
               return { id: id.replace(/(?:\.d)?\.ts$/, ".mjs"), external: true };
             }
+
+            return undefined;
           },
         },
         // Keep ambient declaration helpers private without changing explicit exports.
@@ -38,6 +40,8 @@ export default defineConfig({
             if (chunk.fileName.endsWith(".d.mts")) {
               return { code: code + "\nexport {};", map: null };
             }
+
+            return undefined;
           },
         },
       },

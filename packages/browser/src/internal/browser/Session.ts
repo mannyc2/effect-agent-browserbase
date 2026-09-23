@@ -928,7 +928,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
      */
     const startNavigation = Effect.fnUntraced(function* (
       url: string,
-      timeoutMillis = limits.actionTimeoutMillis,
+      timeoutMillis: number = limits.actionTimeoutMillis,
     ) {
       let active = true;
       let dismissals = 0;

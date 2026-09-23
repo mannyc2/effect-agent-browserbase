@@ -191,17 +191,18 @@ for (const mode of [
             yield* TestClock.adjust(51);
             expect(Option.isNone(yield* Fiber.join(fiber))).toBe(true);
           } else {
-            const exit =
-              mode === "direct-interruption"
-                ? yield* Effect.gen(function* () {
-                    const fiber = yield* workflow.pipe(Effect.forkChild);
+            const interrupted = Effect.gen(function* () {
+              const fiber = yield* workflow.pipe(Effect.forkChild);
 
-                    yield* Deferred.await(entered);
-                    yield* Fiber.interrupt(fiber);
+              yield* Deferred.await(entered);
+              yield* Fiber.interrupt(fiber);
 
-                    return yield* Fiber.await(fiber);
-                  })
-                : yield* Effect.exit(workflow);
+              return yield* Fiber.await(fiber);
+            });
+
+            const exit = yield* mode === "direct-interruption"
+              ? interrupted
+              : Effect.exit(workflow);
 
             expect(Exit.isFailure(exit)).toBe(true);
             if (Exit.isFailure(exit)) {

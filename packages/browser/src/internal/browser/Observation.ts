@@ -339,7 +339,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
       try {
         check();
-        const raw = await data.jsonValue();
+        const raw: unknown = await data.jsonValue();
 
         check();
 
@@ -612,7 +612,7 @@ export const makeObservation = (targets: Targets, events: DriverEvents) => {
 
         try {
           check();
-          const raw = await dataHandle.jsonValue();
+          const raw: unknown = await dataHandle.jsonValue();
 
           check();
           data = safeDecode(PageReadResult, raw);

@@ -389,28 +389,26 @@ export const artifactCases = [
   },
   {
     name: "HTTP byte limits apply to actual streamed bytes without Content-Length",
-    run: Effect.gen(function* () {
-      yield* withClient(
-        async () =>
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new Uint8Array(8));
-                controller.enqueue(new Uint8Array(8));
-                controller.close();
-              },
-            }),
-            { headers: { "content-type": "video/mp4" } },
+    run: withClient(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(8));
+              controller.enqueue(new Uint8Array(8));
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "video/mp4" } },
+        ),
+      (client) =>
+        expectReason(
+          Stream.runDrain(
+            client.media(Redacted.make("https://media.example.test/video"), 10, ["video/mp4"]),
           ),
-        (client) =>
-          expectReason(
-            Stream.runDrain(
-              client.media(Redacted.make("https://media.example.test/video"), 10, ["video/mp4"]),
-            ),
-            "limit",
-          ),
-      );
-    }),
+          "limit",
+        ),
+    ),
   },
   {
     name: "early stream completion releases the request scope",
@@ -480,9 +478,11 @@ export const artifactCases = [
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         assert.equal(result.failure.reason, "malformed");
+
         // Schema failure here is a fixture defect, not part of the runtime error channel.
-        // @effect-diagnostics-next-line schemaSyncInEffect:off
-        const encoded = Schema.encodeSync(Schema.fromJsonString(ClientError))(result.failure);
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(ClientError))(
+          result.failure,
+        ).pipe(Effect.orDie);
 
         assert.ok(!encoded.includes("PRIVATE"));
       }

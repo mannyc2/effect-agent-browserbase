@@ -223,9 +223,8 @@ const StoredPath = Schema.NonEmptyString.check(
 );
 
 const Selection = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("Inline"), files: InlineFiles }),
-  Schema.Struct({
-    _tag: Schema.Literal("Stored"),
+  Schema.TaggedStruct("Inline", { files: InlineFiles }),
+  Schema.TaggedStruct("Stored", {
     paths: Schema.Array(StoredPath).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
   }),
 ]);

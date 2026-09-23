@@ -210,7 +210,8 @@ it.effect(
         const large = observation("x".repeat(48 * 1024));
 
         expect(
-          new TextEncoder().encode(JSON.stringify(Schema.encodeSync(Observation)(large))).length,
+          new TextEncoder().encode(JSON.stringify(yield* Schema.encodeEffect(Observation)(large)))
+            .length,
         ).toBeLessThan(maximum);
         const longUrl = url + "a".repeat(4000);
         let actions = 0;
@@ -289,7 +290,14 @@ it.effect(
             }),
         });
 
-        for (const maximum of [0, 51199, 1024 * 1024 + 1, NaN, Infinity, null]) {
+        for (const maximum of [
+          0,
+          51199,
+          1024 * 1024 + 1,
+          Number.NaN,
+          Number.POSITIVE_INFINITY,
+          null,
+        ]) {
           // @ts-expect-error Explicit null is an untyped invalid host input, not omission.
           const host = yield* Tools.makeHost(browser, { observedResultMaxBytes: maximum });
           const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));

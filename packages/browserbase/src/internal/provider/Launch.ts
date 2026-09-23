@@ -4,6 +4,7 @@ import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { LaunchRecipe, type ProxyRule } from "../../Launch.ts";
 import { AllocationAttempt } from "../../References.ts";
+import { isList } from "../List.ts";
 
 export interface CompiledLaunch {
   readonly attempt: AllocationAttempt;
@@ -82,7 +83,7 @@ export const compileLaunch = Effect.fnUntraced(function* (
         }).pipe(Effect.mapError(fail))
       : undefined;
 
-  if (Array.isArray(recipe.provider.proxies)) {
+  if (isList(recipe.provider.proxies)) {
     for (const rule of recipe.provider.proxies) {
       if (
         rule.type === "browserbase" &&
@@ -150,7 +151,7 @@ export const compileLaunch = Effect.fnUntraced(function* (
     timeout: recipe.remoteTimeoutSeconds,
     keepAlive,
     ...(recipe.provider.region === undefined ? {} : { region: recipe.provider.region }),
-    proxies: Array.isArray(recipe.provider.proxies)
+    proxies: isList(recipe.provider.proxies)
       ? recipe.provider.proxies.map(proxy)
       : (recipe.provider.proxies ?? false),
     ...(recipe.provider.proxySettings === undefined
@@ -171,7 +172,9 @@ export const compileLaunch = Effect.fnUntraced(function* (
   };
 
   // Own all nested values, including arrays. The admitted body never observes later caller mutation.
-  const encoded = yield* Effect.try({ try: () => JSON.stringify(body), catch: fail });
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(body).pipe(
+    Effect.mapError(fail),
+  );
 
   if (new TextEncoder().encode(encoded).length > 64 * 1024) return yield* fail();
 

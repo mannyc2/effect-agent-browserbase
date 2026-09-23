@@ -76,7 +76,7 @@ export const hostedCase = (name: CheckName) => {
   const report = (phase: string, result: unknown) =>
     Effect.sync(() =>
       console.log(
-        JSON.stringify({ check: name, phase, result }, (_key, value) =>
+        JSON.stringify({ check: name, phase, result }, (_key, value: unknown) =>
           typeof value === "bigint" ? value.toString() : value,
         ),
       ),

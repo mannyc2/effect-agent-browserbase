@@ -219,7 +219,7 @@ export class BrowserbaseDownloads extends Context.Service<
       const waitForNew = Effect.fnUntraced(function* (
         ref: SessionReference,
         previousIds: ReadonlyArray<string>,
-        timeoutMillis = 30_000,
+        timeoutMillis: number = 30_000,
       ) {
         if (
           previousIds.length > 10_000 ||

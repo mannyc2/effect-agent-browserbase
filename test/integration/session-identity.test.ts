@@ -5,6 +5,7 @@ import { Effect } from "effect";
 import { vi } from "vite-plus/test";
 
 import * as Bootstrap from "../../packages/browser/src/Bootstrap.ts";
+import type { PageInfo } from "../../packages/browser/src/BrowserData.ts";
 import * as BrowserRuntime from "../../packages/browser/src/BrowserRuntime.ts";
 import * as Capture from "../../packages/browser/src/Capture.ts";
 import { makeBindings } from "../../packages/browser/src/internal/browser/Bindings.ts";
@@ -32,9 +33,11 @@ it.effect(
         const controls = yield* acquisition.rawConnect;
         const bindings = yield* makeBindings(Bootstrap.empty);
         const session = makeSession(controls, bindings);
-        const page = (yield* session.pages)[0];
+        const [first] = yield* session.pages;
 
-        assert.ok(page);
+        if (first === undefined) return assert.fail("the scripted provider opens one page");
+        // Declared, not narrowed: the loop below would otherwise make this inference circular.
+        const page: PageInfo = first;
         const disabled = yield* PageControl.state(session, page).pipe(Effect.flip);
 
         assert.equal(disabled.reason._tag, "Unsupported");

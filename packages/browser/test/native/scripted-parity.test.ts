@@ -82,10 +82,15 @@ const script = (origin: string): Testing.Script => ({
   ],
 });
 
+// Both owners' callbacks fail only with host errors, so a case's error channel stays typed.
 type Open = (
   origin: string,
   policy: BrowserPolicy,
-) => Effect.Effect<Browser.AnySession, BrowserError | InitializationError, Scope.Scope>;
+) => Effect.Effect<
+  Browser.BrowserSession<BrowserError | InitializationError>,
+  BrowserError | InitializationError,
+  Scope.Scope
+>;
 
 const openScripted: Open = (origin, policy) =>
   Testing.open<BrowserError | InitializationError, never>(script(origin), { policy });

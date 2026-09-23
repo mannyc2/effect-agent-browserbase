@@ -71,9 +71,12 @@ it.live(
               }),
             );
             const result = yield* recordInterval(session, output, 2_000);
-            // Malformed ffprobe output should fail this fixture synchronously, not widen its Effect error type.
-            // @effect-diagnostics-next-line schemaSyncInEffect:off
-            const probe = Schema.decodeUnknownSync(Probe)(result.decoded);
+
+            // Malformed ffprobe output is a fixture defect: it dies rather than widening the error type.
+            const probe = yield* Schema.decodeUnknownEffect(Probe)(result.decoded).pipe(
+              Effect.orDie,
+            );
+
             const video = probe.streams.find((stream) => stream.codec_type === "video");
 
             expect(video).toBeDefined();

@@ -82,9 +82,8 @@ export const LaunchRecipe = Schema.Struct({
    */
   extension: Schema.optionalKey(ExtensionReference),
   viewport: Schema.Union([
-    Schema.Struct({ _tag: Schema.Literal("ProviderManaged") }),
-    Schema.Struct({
-      _tag: Schema.Literal("Fixed"),
+    Schema.TaggedStruct("ProviderManaged", {}),
+    Schema.TaggedStruct("Fixed", {
       width: Viewport.fields.width,
       height: Viewport.fields.height,
     }),

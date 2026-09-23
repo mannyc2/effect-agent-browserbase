@@ -36,21 +36,12 @@ export const connectionUrl = Schema.String.check(
 
 /** The provider endpoint is validated before any custom routing gets to observe it. */
 export const validateConnection = (connection: unknown): string => {
-  if (typeof connection !== "string" || connection.length > 16384)
+  if (typeof connection !== "string" || connection.length > 16384 || !URL.canParse(connection))
     throw BrowserError.make({
       operation: "connect",
       reason: Reasons.Malformed.make({}),
       outcome: "undispatched",
     });
-  try {
-    new URL(connection);
-  } catch {
-    throw BrowserError.make({
-      operation: "connect",
-      reason: Reasons.Malformed.make({}),
-      outcome: "undispatched",
-    });
-  }
   if (!Schema.is(connectionUrl)(connection))
     throw BrowserError.make({
       operation: "connect",

@@ -251,7 +251,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
               });
             });
 
-          track(work, disposing);
+          void track(work, disposing);
         };
 
         const native = <A>(work: Work, action: (signal: AbortSignal) => Promise<A>) =>

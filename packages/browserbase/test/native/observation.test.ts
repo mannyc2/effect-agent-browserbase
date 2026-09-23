@@ -109,7 +109,9 @@ it.live("real CDP: a viewport reading holds only what is on screen and says what
 
           // What a model is shown never carries a destination, a form target or a token.
           for (const observation of [viewport, document]) {
-            const shown = Schema.encodeSync(Schema.fromJsonString(Observation))(observation);
+            const shown = yield* Schema.encodeEffect(Schema.fromJsonString(Observation))(
+              observation,
+            );
 
             expect(
               observation.controls.find((control) => control.label === "Secret")?.inputType,

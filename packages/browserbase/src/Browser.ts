@@ -20,6 +20,7 @@ import type { CleanupResult } from "./Cleanup.ts";
 import { BrowserbaseClient } from "./Client.ts";
 import type { AllocationError, ContextError, SessionError } from "./Errors.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
+import { isList } from "./internal/List.ts";
 import { borrowedRemote, ownedRemote, type RemoteLease } from "./internal/session/Browser.ts";
 import type { ContextWriterPermit } from "./internal/session/WriterFacts.ts";
 import { issuedUpload } from "./internal/upload/Issued.ts";
@@ -106,7 +107,7 @@ const selection = (
 
     const uploads = request.selection.uploads;
 
-    if (!Array.isArray(uploads) || uploads.length < 1 || uploads.length > 8)
+    if (!isList(uploads) || uploads.length < 1 || uploads.length > 8)
       return Effect.fail(
         BrowserError.make({
           operation,

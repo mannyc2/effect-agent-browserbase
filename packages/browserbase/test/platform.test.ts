@@ -162,12 +162,7 @@ it.effect("layerConfig reads account authority from the ConfigProvider", () =>
 it.effect("layerConfig fails with a ConfigError when a variable is missing", () =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(
-      Effect.provide(
-        Effect.gen(function* () {
-          return yield* BrowserbaseClient;
-        }),
-        BrowserbaseClient.layerConfig(),
-      ).pipe(
+      Effect.provide(BrowserbaseClient, BrowserbaseClient.layerConfig()).pipe(
         Effect.provideService(
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromEnvRecord({ BROWSERBASE_PROJECT_ID: "project-env" }),

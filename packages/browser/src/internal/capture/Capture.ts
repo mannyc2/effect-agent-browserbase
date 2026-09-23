@@ -191,9 +191,11 @@ export const startCapture = Effect.fnUntraced(function* (
         finish("stopped");
         // Wait for an in-flight start before stop. If it will not settle, quarantine this page lease.
         if (startPromise !== undefined && !startSettled) {
+          const starting = startPromise;
+
           yield* restore(
             Effect.tryPromise({
-              try: () => startPromise!,
+              try: () => starting,
               catch: () =>
                 BrowserError.make({
                   operation: "capture-start",
@@ -204,9 +206,11 @@ export const startCapture = Effect.fnUntraced(function* (
           );
         }
         if (source !== undefined) {
+          const stopping = source;
+
           const stopped = yield* restore(
             Effect.tryPromise({
-              try: () => source!.stop(),
+              try: () => stopping.stop(),
               catch: () =>
                 BrowserError.make({
                   operation: "capture-stop",
@@ -429,7 +433,9 @@ export const startCapture = Effect.fnUntraced(function* (
           // Frames and summaries share this identity with the generation guard. It must not
           // become writable through consumer-owned frame data.
           target = Object.freeze(resolved.target);
-          source = resolved.source;
+          const resolvedSource = resolved.source;
+
+          source = resolvedSource;
           leaseKey = resolved.key;
           if (parent.captureLeases.has(leaseKey)) {
             return yield* BrowserError.make({
@@ -489,7 +495,7 @@ export const startCapture = Effect.fnUntraced(function* (
           startSettled = false;
           yield* Effect.tryPromise({
             try: () => {
-              startPromise = source!.start({
+              startPromise = resolvedSource.start({
                 receive,
                 quality,
                 invalidate: (why) => lease?.invalidate(why),
@@ -509,7 +515,7 @@ export const startCapture = Effect.fnUntraced(function* (
                     parent.captureLeases.get(leaseKey) === lease
                   ) {
                     // One late acquisition cleanup, not a callback-side worker. Keep the page quarantined.
-                    void source!.stop().catch(() => {});
+                    void resolvedSource.stop().catch(() => {});
                   }
                 },
                 () => {

@@ -701,8 +701,9 @@ export const ownershipCases: ReadonlyArray<Case> = [
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         // Schema failure here is a fixture defect, not part of the runtime error channel.
-        // @effect-diagnostics-next-line schemaSyncInEffect:off
-        const encoded = Schema.encodeSync(Schema.fromJsonString(BrowserError))(result.failure);
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(BrowserError))(
+          result.failure,
+        ).pipe(Effect.orDie);
 
         assert.ok(encoded.includes('"unknown"'));
         assert.ok(!encoded.includes("PRIVATE"));

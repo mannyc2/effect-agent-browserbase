@@ -362,14 +362,16 @@ export const makeTargets = (
           Reasons.Limit.make({ dimension: "frames", maximum: 128, observed: frames.length }),
         );
 
-      return frames.map((frame) =>
-        safeDecode(FrameInfo, {
+      return frames.map((frame) => {
+        const parent = frame.parentFrame();
+
+        return safeDecode(FrameInfo, {
           frameId: frameId(frame),
-          parentFrameId: frame.parentFrame() === null ? null : frameId(frame.parentFrame()!),
+          parentFrameId: parent === null ? null : frameId(parent),
           url: frame.url(),
           name: frame.name().slice(0, 256),
-        }),
-      );
+        });
+      });
     });
 
   const resolveFrame = (page: PageInfo, requested: FrameInfo, ticket: Ticket) =>

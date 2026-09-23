@@ -103,8 +103,7 @@ export const recordInterval = (session: AnySession, outputPath: string, duration
 
       const lines: string[] = [];
 
-      for (let index = 0; index < frames.length; index++) {
-        const frame = frames[index]!;
+      for (const [index, frame] of frames.entries()) {
         const name = `frame-${String(index).padStart(6, "0")}.jpg`;
 
         yield* Effect.tryPromise({
@@ -112,8 +111,9 @@ export const recordInterval = (session: AnySession, outputPath: string, duration
           catch: (cause) => RecordVideoError.make({ operation: "write-frame", cause }),
         });
         lines.push(`file '${name}'`);
-        if (index + 1 < frames.length) {
-          const next = frames[index + 1]!;
+        const next = frames[index + 1];
+
+        if (next !== undefined) {
           const seconds = Math.max(0.001, (next.sourceTimeMillis - frame.sourceTimeMillis) / 1000);
 
           lines.push(`duration ${seconds.toFixed(6)}`);

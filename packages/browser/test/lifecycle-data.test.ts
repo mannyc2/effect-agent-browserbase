@@ -80,9 +80,9 @@ it.effect(
   "the host-read allowance is validated as automation configuration before browser launch",
   () =>
     Effect.gen(function* () {
-      expect(Schema.decodeSync(AutomationOptions)({})).not.toHaveProperty("maxHostReads");
+      expect(yield* Schema.decodeEffect(AutomationOptions)({})).not.toHaveProperty("maxHostReads");
       for (const maxHostReads of [1, 10_000, 1_000_000])
-        expect(Schema.decodeSync(AutomationOptions)({ maxHostReads }).maxHostReads).toBe(
+        expect((yield* Schema.decodeEffect(AutomationOptions)({ maxHostReads })).maxHostReads).toBe(
           maxHostReads,
         );
       for (const maxHostReads of [

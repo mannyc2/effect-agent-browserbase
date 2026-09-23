@@ -177,7 +177,9 @@ export const localAgentBrowser = Effect.acquireRelease(
             try {
               port = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0];
             } catch {
-              await new Promise<void>((resolve) => setTimeout(resolve, 20));
+              await new Promise<void>((resolve) => {
+                setTimeout(resolve, 20);
+              });
             }
           }
           if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
@@ -236,7 +238,9 @@ export const localAgentBrowser = Effect.acquireRelease(
           ),
         );
         server.closeAllConnections();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
         // Chromium may finish releasing profile files just after process exit.
         await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       },

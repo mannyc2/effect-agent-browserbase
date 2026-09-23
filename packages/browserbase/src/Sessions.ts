@@ -158,7 +158,7 @@ export class BrowserbaseSessions extends Context.Service<
         raw: unknown,
         operation: SessionError["operation"],
         expected?: SessionReference,
-        mutation = false,
+        mutation: boolean = false,
       ) {
         const value = yield* Schema.decodeUnknownEffect(ProviderSession)(raw).pipe(
           Effect.mapError(() => malformed(operation, mutation)),
@@ -316,7 +316,7 @@ export class BrowserbaseSessions extends Context.Service<
 
       const liveUrls = Effect.fn("BrowserbaseSessions.liveUrls")(function* (
         reference: SessionReference,
-        expiresInSeconds = 300,
+        expiresInSeconds: number = 300,
       ) {
         const ref = yield* validate(reference, "session-live-view");
 

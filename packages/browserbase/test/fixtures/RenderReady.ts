@@ -22,7 +22,7 @@ const Targets = Schema.Array(
 
 const Reply = Schema.fromJsonString(
   Schema.Struct({
-    id: Schema.optionalKey(Schema.Number),
+    id: Schema.optionalKey(Schema.Finite),
     error: Schema.optionalKey(Schema.Unknown),
   }),
 );

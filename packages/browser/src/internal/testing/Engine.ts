@@ -371,8 +371,11 @@ export const makeScriptedDriver = (
     return internal;
   };
 
+  /** Only a mutation's Ticket carries dispatch evidence; a read's ticket has none to give. */
+  const isTicket = (ticket: ReadTicket): ticket is Ticket => "dispatch" in ticket;
+
   const dispatch = (ticket: ReadTicket, record: MutableCall) => {
-    if ("dispatch" in ticket) (ticket as Ticket).dispatch();
+    if (isTicket(ticket)) ticket.dispatch();
     record.dispatched = true;
   };
 
