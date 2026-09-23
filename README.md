@@ -110,7 +110,7 @@ cd .work/upstream/tree
 ./node_modules/.bin/vp run check:integration
 ```
 
-Package unit tests stay with their owners. Source-only regressions that combine private provider and browser boundaries live in `test/integration`; they use the same Vite+ runner and do not create public testing APIs. Installed-package consumers cover resources, Chromium, hosted browser integration, Chromium agents and hosted agents on both Node and Bun. Production import checks keep framework/provider dependencies out of the common runtime and Chromium process code out of its root.
+Package unit tests stay with their owners. Consumers test their own code through `effect-browser/testing`, which runs the real session owner over a scripted engine, and `effect-browserbase/testing`, which composes the real account and browser Layers over a scripted control plane; neither needs Chromium, Playwright or credentials, and neither establishes anything about a hosted provider. Source-only regressions that combine private provider and browser boundaries live in `test/integration` and use the same Vite+ runner. Installed-package consumers cover resources, Chromium, hosted browser integration, Chromium agents and hosted agents on both Node and Bun. Production import checks keep framework/provider dependencies out of the common runtime and Chromium process code out of its root.
 
 Ordinary CI is unpaid and read-only. [Hosted checks](docs/HOSTED.md) and [publication](docs/RELEASING.md) require separate authorization. [Security](SECURITY.md) describes the host trust boundary. Historical releases and media evidence retain their original source identity in [Status](docs/STATUS.md).
 

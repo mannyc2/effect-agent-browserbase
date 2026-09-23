@@ -4,7 +4,7 @@
 
 ## Public entry points
 
-`tools` exports the maintained Toolkit, direct `BrowserSession` handlers, supervised host composition and separate reading, pointer/wheel, keyboard, option-selection, wait and form opt-ins, with instructions, an Agent policy helper and scheduling for them. `adapter` exports `fromSession` and `interactiveLayer` for code that specifically needs Effect Agent's provider-neutral `InteractiveBrowser` contract. The root exports those two namespaces.
+`tools` exports the maintained Toolkit, direct `BrowserSession` handlers, supervised host composition and separate reading, pointer/wheel, keyboard, option-selection, wait and form opt-ins, with instructions, an Agent policy helper and scheduling for them. `adapter` exports `fromSession` and `interactiveLayer` for code that specifically needs Effect Agent's provider-neutral `InteractiveBrowser` contract. The root exports those two namespaces. This package has no testing entry point of its own: a test gives the Tools a session from `effect-browser/testing` or a Layer from `effect-browserbase/testing`, exactly as an application gives them a Chromium or Browserbase session.
 
 ## One session, chosen by the host
 
@@ -356,6 +356,55 @@ failure to the model.
 Every Tool's parameters are an object schema with described fields, and a conformance test runs
 each through the pinned OpenAI and Anthropic providers' own schema transforms and wire round trip.
 
+## Testing an agent without a browser process
+
+`effect-browser/testing` opens the real session owner over a scripted page, so an Agent composition runs the maintained Toolkit, host supervision and adapter against deterministic pages with no Chromium process, no provider account and no credentials. Observations are numbered `observation-1`, `observation-2`, … and a control's script `id` is its `elementId`, so a `ScriptedModel` turn from `@effect-agent/testing` can name the node it clicks statically instead of parsing a tool result.
+
+```ts
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
+import { expect, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+import * as BrowserTools from "effect-agent-browser/tools";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as InMemory from "effect-agent/in-memory";
+import * as Browser from "effect-browser/browser";
+import * as Testing from "effect-browser/testing";
+import { Model } from "effect/unstable/ai";
+
+it.effect("the agent clicks the observed control exactly once", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const turns = [
+        call("c1", "browser_navigate", { url: "https://shop.test/" }),
+        call("c2", "browser_inspect", {}),
+        call("c3", "browser_click", { observationId: "observation-1", elementId: "accept" }),
+        answer('{"done":true}'),
+      ];
+
+      const run = yield* BrowserTools.run(browser, AgentRuntime.run(consent, "accept")).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            InMemory.layer,
+            ScriptedModel.layer(turns),
+            Layer.succeed(Model.ProviderName, "scripted"),
+            Layer.succeed(Model.ModelName, "consent-test"),
+          ),
+        ),
+      );
+
+      expect(run.output).toEqual({ done: true });
+      expect((yield* browser.control.calls).map((c) => c.operation)).toEqual([
+        "navigate",
+        "observe",
+        "click",
+      ]);
+    }),
+  ),
+);
+```
+
+`call` and `answer` build `ScriptedTurnInput` values; [`test/scripted-agent.test.ts`](test/scripted-agent.test.ts) is the maintained version with the `consent` agent and the `shop` script. Its second case arms an unknown click outcome: the model sees a `timeout`/`unknown` tool failure, retries with the same reference, and sees `closed`/`undispatched`, while `browser.control.calls` shows one dispatched click and `makeHost`'s `toolFailures` shows the same two failures, so a test can assert that a mutation whose outcome was lost was never re-sent on the model's behalf. The `agent-hosted` installed consumer runs the same composition from the packed tarballs on Node and Bun. A scripted pass is evidence about the Tools and the owner, not about Chromium or a hosted browser.
+
 ## Know what authority this grants
 
 `browser_click`, `browser_fill`, `browser_hover`, `browser_press` and `browser_type` accept only an exact node from the most recent observation, so a model cannot name a target of its own, and a replaced or detached reference fails rather than resolving to something else. `browser_navigate` is different: the URL comes from the model, bounded only by the session's network policy, and the shared browser currently supports only trusted-host `Unrestricted` (see [Network policy](#network-policy)). There is deliberately no per-tool host allowlist: a URL check on the first request says nothing about where it redirects or what the page then loads. A host that needs navigation confined to known hosts must enforce that beneath the browser, at an egress proxy it operates.
@@ -396,7 +445,7 @@ The common adapter and Tools support both self-managed Chromium and Browserbase.
 
 ## Development and evidence
 
-Use the frozen Vite+ workspace described in [Contributing](../../CONTRIBUTING.md). Both owners are exercised with the actual public AgentRuntime and Toolkit, using a scripted model and real Chromium. The `agent` installed consumer includes Chromium and the common Tools with no Browserbase installation. The `agent-hosted` consumer adds Browserbase and exercises provider acquisition/cleanup composition through scripted provider HTTP. They preserve typed callback errors, one session identity and capture after agent execution.
+Use the frozen Vite+ workspace described in [Contributing](../../CONTRIBUTING.md). Both owners are exercised with the actual public AgentRuntime and Toolkit, using a scripted model and real Chromium, and `test/scripted-agent.test.ts` runs the same AgentRuntime and Toolkit over the scripted engine with no browser process. The `agent` installed consumer includes Chromium and the common Tools with no Browserbase installation. The `agent-hosted` consumer adds Browserbase and exercises provider acquisition/cleanup composition through scripted provider HTTP. They preserve typed callback errors, one session identity and capture after agent execution.
 
 Native framework tests prove that the adapter Layer captures configured services while each acquired browser closes with its caller's Scope, even while the Layer remains alive. Tool regressions cover direct BrowserSession dispatch classification, exact-node pointer and keyboard input, host callback/fail-session supervision, host-scope cancellation, viewport policy and capture on the same owner. Native AgentRuntime tests also fill a whole form in one call, reach a crowded-out control with `find`, read on with `browser_read_more`, run browser calls in declared order, and show that a batched response ends a run under the engine's default failure limit but not under `BrowserTools.policy`. Every Tool's parameters are checked against the pinned OpenAI and Anthropic schema transforms, which a scripted model never exercises. A local native pass is not hosted Browserbase or paid-model evidence.
 

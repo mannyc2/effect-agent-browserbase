@@ -223,6 +223,46 @@ A host that does this still selects `Unrestricted` here, and the containment cla
 
 What this package does check is input, not requests. `controlFacts` and an `admit` policy ([above](#what-is-on-screen-and-what-a-host-may-know-about-it)) let a host that drives the session refuse a link or a form by its resolved destination before anything is sent. That limits what the host's own automation acts on. It does not limit what a page loads, or where it redirects.
 
+## Testing against a scripted control plane
+
+`effect-browserbase/testing` supplies the provider side of a test the way `effect-browser/testing` supplies the browser side. `Testing.provider(script)` returns a `fetch` for `FetchHttpClient.Fetch` and a `ProviderControl` handle; the real `Client`, `Sessions`, `Uploads`, allocation and cleanup code parse its replies, apply their bounds and reconcile release against it. The script says how creation answers (`Accept`, `Reject` with a status the transport classifies and an optional `retryAfterMillis`, `Malformed`, or `Lost` after the request was sent, so the allocation outcome is unknown), whether a release request is `confirmed`, stays `pending` or fails, and whether a Live View is issued. Its secrets are marker strings, so evidence can be grepped for a leak, and nothing in it is a credential.
+
+`Testing.layer({ browser, provider?, launch?, options? })` composes that control plane under the real `Account.layer` and `BrowserbaseBrowser.layer`, with the scripted engine from `effect-browser/testing` as the `BrowserBinding`, and adds a `ScriptedBrowserbase` service whose `provider` is the control handle and whose `browsers` are the engine control handles, one per connection made. An application written against `BrowserbaseBrowser.open` runs unchanged:
+
+```ts
+import { expect, it } from "@effect/vitest";
+import { Effect } from "effect";
+import * as Browser from "effect-browser/browser";
+import { BrowserPolicy } from "effect-browser/browser-data";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import * as Testing from "effect-browserbase/testing";
+
+it.effect("release is requested once and confirmed", () =>
+  Effect.gen(function* () {
+    const scripted = yield* Testing.ScriptedBrowserbase;
+
+    const receipt = yield* Browser.scoped(
+      BrowserbaseBrowser.open(BrowserPolicy.unrestricted()),
+      (session) =>
+        Effect.gen(function* () {
+          yield* session.navigate({ url: "https://shop.test/" });
+
+          return yield* session.closeChecked;
+        }),
+    );
+
+    expect(receipt).toMatchObject({ releaseRequested: true, remote: "confirmed", local: "closed" });
+    expect(yield* scripted.provider.sessions).toMatchObject([
+      { id: "session-1", status: "COMPLETED", releaseRequests: 1 },
+    ]);
+  }).pipe(Effect.provide(Testing.layer({ browser: shop }))),
+);
+```
+
+Sessions are numbered `session-1`, `session-2`, … in creation order. A `pending` release leaves the session `RUNNING`, so checked close fails `Provider` with outcome `unknown` after the real status bound elapses, and the receipt carries `remote: "pending"`; under `it.effect` a `TestClock.adjust` reaches that bound with nothing real elapsing. A `Lost` creation makes `onAllocationUncertain` fire once, as it does when a real request is cut off. Borrowed attachment through `attach` makes a second engine connection and no release request. `Allocation.scoped`, `BrowserbaseSessions` and the other resource services run over the same `fetch` with `Testing.provider()` alone, with no browser at all.
+
+What a scripted control plane answers is what this repository has read of the provider API, replayed. It establishes that this package handles those answers correctly; it establishes nothing about what Browserbase answers today, which only the hosted checks in [Status](../../docs/STATUS.md) record.
+
 ## Beyond the browser session
 
 These services share the Client and its rules: strict input decoding, identity-checked replies, 1 MiB reply bounds, mutations that are never retried, and typed failures whose `outcome` says whether a request was sent. They are host APIs; none of them is exposed to a model by the adapter package.
@@ -251,6 +291,7 @@ An agent run or Function invocation that persists a Context writes it from Brows
 - `downloads` — ordinary website download metadata, provider-side filters, bounded byte streams and deletion, separate from provider recordings.
 - `projects`, `certificates` — project inspection and usage; proxy CA certificate administration.
 - `search`, `page-fetch`, `agents`, `functions`, `webhooks` — the Browserbase platform APIs outside a browser session.
+- `testing` — a scripted control plane as `fetch`, and the real account and browser Layers composed over it and over the scripted engine from `effect-browser/testing`.
 
 Every expected failure says three things. `operation` is what you asked for, from a closed vocabulary per error class: `BrowserError` names the browser operations, `SessionError` only session calls, and so on, so you can match on them exhaustively and a misspelling is a type error, not a string that happens to compile. `reason` is why it failed. `outcome`, when present, is whether the work was sent: `undispatched` is safe to retry, `rejected` was refused, and `unknown` means a mutation may have happened and is never replayed for you. Why an extension archive was refused is a `reason` (`limit`, `unsafe-filename`, `configuration`) of the one `extension-archive` operation. A native step's own name never appears: the driver raises a private failure, and the owner stamps the operation it admitted.
 
@@ -268,4 +309,4 @@ Live frames and page holds follow the common [capture guarantees](../browser/REA
 
 ## Development and evidence
 
-Read [Contributing](../../CONTRIBUTING.md) for the frozen compatibility workspace and required checks. Provider unit tests cover HTTP/resources and release reconciliation. Cross-package source regression tests live in `test/integration`. The `generic` and `agent-hosted` installed consumers run the maintained native suites against real Chromium with scripted provider HTTP; the `resources` consumer installs no Playwright or Effect Agent. Hosted evidence remains separately recorded in [Status](../../docs/STATUS.md) and never inferred from a local pass.
+Read [Contributing](../../CONTRIBUTING.md) for the frozen compatibility workspace and required checks. Provider unit tests cover HTTP/resources and release reconciliation; `test/testing.test.ts` runs the public scripted control plane and Layer through the real allocation and cleanup code. Cross-package source regression tests live in `test/integration`. The `generic` and `agent-hosted` installed consumers run the maintained native suites against real Chromium with scripted provider HTTP; the `resources` consumer installs no Playwright or Effect Agent, and it also opens scripted browsers through both testing entry points from the packed tarballs. Hosted evidence remains separately recorded in [Status](../../docs/STATUS.md) and never inferred from a local pass.

@@ -45,6 +45,7 @@ export default defineConfig({
       "src/Transfers.ts",
       "src/Uploads.ts",
       "src/Webhooks.ts",
+      "src/Testing.ts",
     ],
     // Keep root namespaces on the public entry modules; the pinned bundler otherwise
     // exposes synthetic namespace exports on those entries, even with strict signatures.

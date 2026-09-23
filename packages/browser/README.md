@@ -676,6 +676,72 @@ Partial native failures fence the session as uncertain; there is no success rece
 
 Only explicit trusted-host `Unrestricted` network policy is implemented. `ExactHosts` and `PublicWeb` fail before acquisition. A local debugger endpoint, an input-admission callback or a filtered initial navigation URL does not establish containment for redirects, subresources, popups, workers or DNS. Applications requiring egress restrictions must operate and independently qualify that enforcing boundary. Chromium can select a host-operated proxy at launch; provider routing is configured by its own integration. These choices never silently substitute a browser provider.
 
+## Testing without a browser
+
+`effect-browser/testing` opens the real owner over a scripted native engine. `Testing.open(script, options)` returns a `ScriptedSession<E>`: the same `BrowserSession<E>` that Chromium and Browserbase return, and admission, budgets, staleness, dispatch evidence, capture accounting, page holds and typed callbacks are the production code paths. Only the pages and the native outcomes are scripted, so an application, a Toolkit composition or a Layer runs on the pinned Node and Bun with no Chromium process, no Playwright installation and no credentials. The defaults are the ones a Chromium launch would use: an unrestricted policy, a 1280×720 viewport and a ten-second action timeout.
+
+A script lists documents by address, each with its text and the controls it offers. A control's `id` becomes its issued `elementId`, and observations are numbered `observation-1`, `observation-2`, …, so a scripted model turn or a stored expectation can name a node statically. A `link` or a submit control carries a `destination`, which is both its host-only destination fact and where activating it leads; a plain button navigates through `activates` and reports no destination, as a real `onclick` handler has none, and the schema refuses a destination where a real document would report none. Navigating to an unlisted address reaches an empty document at that address.
+
+```ts
+import { expect, it } from "@effect/vitest";
+import { Effect } from "effect";
+import * as Browser from "effect-browser/browser";
+import { BrowserPolicy } from "effect-browser/browser-data";
+import { Reasons } from "effect-browser/errors";
+import * as Testing from "effect-browser/testing";
+
+const shop: Testing.Script = {
+  documents: [
+    {
+      url: "https://shop.test/",
+      text: "We use cookies.",
+      controls: [
+        {
+          id: "accept",
+          kind: "button",
+          label: "Accept all",
+          activates: "https://shop.test/?consent=1",
+        },
+      ],
+    },
+    { url: "https://shop.test/?consent=1", text: "Welcome back." },
+  ],
+};
+
+it.effect("an unknown click is never replayed", () =>
+  Browser.scoped(
+    Testing.open(shop, { policy: BrowserPolicy.unrestricted({ maxActions: 10 }) }),
+    (browser) =>
+      Effect.gen(function* () {
+        yield* browser.control.next("click", {
+          _tag: "Fail",
+          reason: Reasons.Timeout.make({}),
+          outcome: "unknown",
+        });
+        const observation = yield* browser.observe();
+        const accept = { observationId: observation.observationId, elementId: "accept" };
+
+        const first = yield* browser.clickElement(accept).pipe(Effect.flip);
+
+        expect(first).toMatchObject({ reason: { _tag: "Timeout" }, outcome: "unknown" });
+        const retry = yield* browser.clickElement(accept).pipe(Effect.flip);
+
+        expect(retry).toMatchObject({ reason: { _tag: "Closed" }, outcome: "undispatched" });
+        const clicks = (yield* browser.control.calls).filter((c) => c.operation === "click");
+
+        expect(clicks).toHaveLength(1);
+        expect(clicks[0]).toMatchObject({ dispatched: true, settled: "failed" });
+      }),
+  ),
+);
+```
+
+`browser.control` is the test's side of the engine. `next(operation, outcome)` arms what the next admitted call of one operation does. `Fail` with `outcome: "unknown"` dispatches and then fails, so the owner fences the session and refuses every later mutation `Closed` and `undispatched`; `Fail` with `undispatched` or `rejected` never dispatches. `Hold` parks the call at a `Gate` before or after dispatch, so a test can interrupt or time out a call at a known point and then check what the owner made of it. `Disconnect` drops the connection inside the call. `calls` is the recorder: every admitted call with its operation, page, node, `dispatched` and `settled`, and never a filled value, typed text or address; `document.values` and `document.files` hold those separately. `document.replace` swaps the page's document as a navigation would, so retained nodes and pending waits go stale and a capture learns of a new document; `document.update` changes the same document in place, so controls that keep their `id` keep their identity and waits re-evaluate. `capture.emit` hands a frame to a running interval, `invoke` calls a registered binding as a page would, and `disconnect` drops the connection outside any call. `closeChecked` returns a `ScriptedCleanupResult`, and `onCleanup` receives it, as the concrete owners do.
+
+Time is the caller's clock. In-flight navigations, waits, holds and callback deadlines run under the context the session was opened in, so under `it.effect` from `@effect/vitest` a `TestClock.adjust` advances them and nothing real elapses, while `it.live` runs them in real time. `Testing.binding(script)` is the same engine as an opaque `BrowserBinding`, with one control handle per connection, for code that constructs a runtime itself; `Testing.jpeg()` is a small valid JPEG for frames.
+
+A scripted pass establishes the owner's behaviour over any engine, not what real Chromium reports for a page. `test/native/scripted-parity.test.ts` therefore runs one case list against both `Testing.open` and `Chromium.launch` on a loopback page, and every case must end in the same reason and outcome under both. Nothing scripted establishes anything about a hosted provider.
+
 ## Integration construction
 
 `effect-browser/browser-runtime` is the supported host integration boundary. `make` validates an immutable runtime configuration and returns `acquire(policy, source, request)`. A source acquires one concrete lifetime, registers its release in the supplied Scope before returning, resolves its authorized endpoint, and supplies detailed release evidence plus `closeChecked`. Browserbase owns remote allocation/status and writer settlement; Chromium owns process termination/profile removal. The runtime supplies connection cleanup, captures bootstrap services, and creates the one registered session.
@@ -696,9 +762,10 @@ The native driver, action permits, mutable capture leases and registry lookup ar
 | `page-control`           | Explicit host-owned page holds and receipt-based resume                               |
 | `chromium`               | Self-managed Chromium launch, borrowed loopback attachment and process cleanup        |
 | `browser-runtime`        | Supported construction for integrations supplying browser lifetimes                   |
+| `testing`                | The real owner over a scripted engine: scripts, armed outcomes, a call recorder       |
 
 The root intentionally excludes the Chromium namespace. Import its entry point explicitly. Source-only cross-package regression tests live in the repository's `test/integration`; they are not exported or shipped.
 
 ## Validation
 
-Use the pinned workspace and Vite+ commands described in [Contributing](../../CONTRIBUTING.md). Unit tests exercise ownership, callback errors, native-call classification and bounded capture. Native Chromium tests use real loopback pages, capture and page holds, and verify that borrowed closure leaves the external browser running. The `browser` installed consumer has no Browserbase or Effect Agent package; the `agent` consumer adds only the common adapter and framework. Provider-backed native integration remains separately exercised by Browserbase consumers. None of these local checks establishes hosted-provider equivalence.
+Use the pinned workspace and Vite+ commands described in [Contributing](../../CONTRIBUTING.md). Unit tests exercise ownership, callback errors, native-call classification and bounded capture; `test/testing.test.ts` exercises the public scripted engine through the same owner. Native Chromium tests use real loopback pages, capture and page holds, verify that borrowed closure leaves the external browser running, and run the scripted-parity case list against both engines. The `browser` installed consumer has no Browserbase or Effect Agent package; the `agent` consumer adds only the common adapter and framework. Provider-backed native integration remains separately exercised by Browserbase consumers. None of these local checks establishes hosted-provider equivalence.
