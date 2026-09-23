@@ -4,13 +4,13 @@ import { it } from "@effect/vitest";
 import { Effect } from "effect";
 import { vi } from "vite-plus/test";
 
-import * as Bootstrap from "../../packages/browser/src/Bootstrap.ts";
-import * as BrowserRuntime from "../../packages/browser/src/BrowserRuntime.ts";
-import * as Capture from "../../packages/browser/src/Capture.ts";
-import { makeBindings } from "../../packages/browser/src/internal/browser/Bindings.ts";
-import { makeSession } from "../../packages/browser/src/internal/browser/PublicSession.ts";
-import * as PageControl from "../../packages/browser/src/PageControl.ts";
-import { fixture } from "./fixtures/ScriptedProvider.ts";
+import * as Bootstrap from "../src/Bootstrap.ts";
+import * as BrowserRuntime from "../src/BrowserRuntime.ts";
+import * as Capture from "../src/Capture.ts";
+import { makeBindings } from "../src/internal/browser/Bindings.ts";
+import { makeSession } from "../src/internal/browser/PublicSession.ts";
+import * as PageControl from "../src/PageControl.ts";
+import { fixture } from "./fixtures/ScriptedOwner.ts";
 
 it.effect(
   "copied and foreign sessions remain unregistered while a local disabled capability remains unsupported",
@@ -67,9 +67,9 @@ it.effect(
         vi.resetModules();
 
         const foreign = yield* Effect.promise(async () => ({
-          capture: await import("../../packages/browser/src/Capture.ts"),
-          control: await import("../../packages/browser/src/PageControl.ts"),
-          runtime: await import("../../packages/browser/src/BrowserRuntime.ts"),
+          capture: await import("../src/Capture.ts"),
+          control: await import("../src/PageControl.ts"),
+          runtime: await import("../src/BrowserRuntime.ts"),
         }));
 
         assert.notEqual(foreign.capture.start, Capture.start);

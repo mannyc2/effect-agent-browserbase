@@ -9,9 +9,9 @@ import {
   type ConnectionBindings,
   makeBindings,
   preparePlan,
-} from "../../packages/browser/src/internal/browser/Bindings.ts";
-import type { SessionControls } from "../../packages/browser/src/internal/browser/Session.ts";
-import { fixture } from "./fixtures/ScriptedProvider.ts";
+} from "../src/internal/browser/Bindings.ts";
+import type { SessionControls } from "../src/internal/browser/Session.ts";
+import { fixture } from "./fixtures/ScriptedOwner.ts";
 
 for (const strategy of ["sequential", "parallel"] as const) {
   it.effect(
@@ -19,7 +19,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
     () =>
       Effect.gen(function* () {
         const parent = yield* Scope.make(strategy);
-        // Match BrowserbaseBrowser's private sequential acquisition scope; the application may
+        // Match BrowserRuntime's private sequential acquisition scope; the application may
         // choose parallel finalizers outside it without changing the browser's cleanup protocol.
         const acquisition = yield* Scope.fork(parent, "sequential");
         const entered = yield* Deferred.make<void>();
@@ -125,9 +125,10 @@ for (const strategy of ["sequential", "parallel"] as const) {
         assert.equal(scripted.state.releases, 1);
         assert.equal(scripted.state.localCloses, 1);
         assert.equal(scripted.reports.length, 1);
-        assert.equal(scripted.reports[0]?.remote, "confirmed");
-        assert.equal(scripted.reports[0]?.local, "closed");
+        assert.equal(scripted.reports[0]?.connection, "closed");
         assert.deepEqual(scripted.reports[0]?.issues, []);
+        // The browser saw the same teardown: its one connection was closed by its owner.
+        assert.deepEqual(yield* scripted.control.connections, ["closed"]);
       }),
   );
 }

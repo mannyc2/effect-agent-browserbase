@@ -2,12 +2,12 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
-import * as Bootstrap from "../../packages/browser/src/Bootstrap.ts";
-import { ObservedElement } from "../../packages/browser/src/BrowserData.ts";
-import { makeBindings } from "../../packages/browser/src/internal/browser/Bindings.ts";
-import type { Driver } from "../../packages/browser/src/internal/browser/Driver.ts";
-import { makeSession } from "../../packages/browser/src/internal/browser/PublicSession.ts";
-import { fixture, gate } from "./fixtures/ScriptedProvider.ts";
+import * as Bootstrap from "../src/Bootstrap.ts";
+import { ObservedElement } from "../src/BrowserData.ts";
+import { makeBindings } from "../src/internal/browser/Bindings.ts";
+import type { Driver } from "../src/internal/browser/Driver.ts";
+import { makeSession } from "../src/internal/browser/PublicSession.ts";
+import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 const reference = ObservedElement.make({
   observationId: "observation-test",
