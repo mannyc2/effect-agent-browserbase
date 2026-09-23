@@ -258,6 +258,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     return {
       signal: controller.signal,
       settle: (outcome) => {
+        // Navigation recovery is bounded by the lifetime, so it can give up at the same instant
+        // as the independent lifetime timer. As for an action's timer, that instant is expiry.
+        if (
+          outcome === "unknown" &&
+          reservations.get(key) === controller &&
+          Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline
+        )
+          expire();
         // A fence already cleared it, and decided the outcome for everything it aborted.
         if (reservations.get(key) !== controller) return;
         reservations.delete(key);

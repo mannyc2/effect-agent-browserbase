@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Reasons } from "effect-browser/errors";
 import type { Script } from "effect-browser/testing";
@@ -20,11 +20,10 @@ const script: Script = {
 };
 
 /**
- * The engine times an in-flight navigation out on the clock it was opened under, and the owner
- * bounds that timeout by the lifetime, so on the test's clock both would end at the same instant.
- * Opened under a clock the test never advances, the navigation is still loading at expiry.
+ * The owner bounds a navigation's timeout by the lifetime, so the engine gives up on a page still
+ * loading at the same instant the lifetime ends. That instant is expiry, not a native failure.
  */
-const stillLoading = Testing.layer({ browser: script }).pipe(Layer.provide(TestClock.layer()));
+const stillLoading = Testing.layer({ browser: script });
 
 it.effect.each([false, true])(
   "expiry preserves pending navigation evidence (%s) until owned release confirms retirement",

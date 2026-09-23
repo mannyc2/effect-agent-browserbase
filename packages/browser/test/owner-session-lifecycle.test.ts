@@ -94,6 +94,42 @@ it.effect.each(["timeout", "native-check"] as const)(
     ),
 );
 
+it.effect.each([
+  { at: 99, phase: "uncertain", reason: "native-failure" },
+  { at: 100, phase: "faulted", reason: "expired" },
+] as const)(
+  "a navigation reservation settled unknown at $at ms of a 100 ms lifetime records $reason",
+  ({ at, phase, reason }) =>
+    Effect.gen(function* () {
+      const clock = yield* Clock.Clock;
+      let nativeNow: bigint | undefined;
+
+      const owner = yield* makeOwner({
+        maxActions: 2,
+        maxHostReads: 2,
+        maxElapsedMillis: 100,
+        actionTimeoutMillis: 100,
+      }).pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          monotonicTimeNanosUnsafe: () => nativeNow ?? clock.monotonicTimeNanosUnsafe(),
+        }),
+      );
+
+      owner.transition("open");
+      const navigation = owner.reserve("page-1");
+
+      // Navigation recovery is bounded by the lifetime, so it can give up at that very instant,
+      // before the lifetime's own timer runs. Only a settlement at the deadline is expiry.
+      nativeNow = BigInt(at) * 1_000_000n;
+      navigation.settle("unknown");
+      expect(yield* owner.status).toMatchObject({ phase, reason, unresolvedDispatch: true });
+      expect(
+        (yield* owner.diagnostics).records.map((record) => [record.reason, record.disposition]),
+      ).toEqual(reason === "expired" ? [["expired", "confirmed"]] : []);
+    }),
+);
+
 it.effect(
   "policy quarantine preserves the admitted click and exposes bounded copied evidence",
   () =>
