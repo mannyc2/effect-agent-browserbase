@@ -140,7 +140,8 @@ export const makePlaywrightDriver = async (
     },
     frameChanged: (entry, frame) => {
       actions.waitChanged(entry, frame);
-      observation.invalidate({ pageId: entry.id });
+      // Only the frame an observation read can change what it names.
+      observation.invalidate({ pageId: entry.id, frameId: targets.frameId(frame) });
       captures.invalidate(entry, "target-changed", frame);
     },
     dialog: (entry, dialog) => {

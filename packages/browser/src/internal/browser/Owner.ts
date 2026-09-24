@@ -41,8 +41,15 @@ export type Invalidation =
   | "uncertain"
   | "closed";
 
-/** Observation retirement is independent of the owner's revision and connection fences. */
-export type ObservationScope = "all" | "none" | { readonly pageId: string };
+/**
+ * Observation retirement is independent of the owner's revision and connection fences. A frame
+ * narrows a page: an observation holds nodes of the one frame it read, so another frame of the
+ * page navigating or detaching (an advertisement reloading, say) changes nothing it names.
+ */
+export type ObservationScope =
+  | "all"
+  | "none"
+  | { readonly pageId: string; readonly frameId?: string };
 
 /** A bounded native reading has no mutation dispatch authority. */
 export interface ReadTicket {
