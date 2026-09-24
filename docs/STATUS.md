@@ -181,6 +181,16 @@ In run 4 the viewport reading reported 2 clipped text runs, 0 covered, 1 uncerta
 
 These are single runs against three public pages from one account and region. They don't measure a real narrator model's latency within the delay, a viewer on a slow link, or pages that repaint continuously for long periods.
 
+## The livestream example with real models, 24 September 2026
+
+The owner supplied Browserbase and OpenRouter credentials and authorized real model calls for the livestream example. A script outside the repository ran the example's `livestream` on Browserbase with a 5,000 ms delay, a real agent and narrator, and a local headless viewer. The task was to search Wikipedia for the Eiffel Tower and report its height. Ten sessions were allocated; the provider listed none running after each, and the script kept no cleanup records. Model spend was under $0.45 in all.
+
+- **Provider.** `@effect/ai-openai` pointed at OpenRouter's Responses endpoint fails on the stream's closing `data: [DONE]`, which arrives in the same chunk as `response.completed`. `@effect/ai-openrouter` 4.0.0-rc.115 uses Chat Completions and handles it without any filter.
+- **Agent model.** With `openai/gpt-6-luna-pro` the agent answered "330 metres (1,083 ft)" in 7 model calls. `anthropic/claude-sonnet-5` found the answer but kept re-checking it until `maxTurns: 8` ran out, then answered the forced final turn in prose, which fails the output contract.
+- **Narrator.** A narrator that reasons first (`gpt-6-luna-pro` at its default effort) took 4.0–6.8 s per caption, and 2 of 6 captions missed the delay. The narrator Agent, with reasoning off, took 1.9–2.7 s. In the last run it captioned the navigation, the search box fill and the click, and stayed silent for three inspections. Each caption aired 5,001 ms after its step started, over its own step only, and 57 of 57 frames aired 5,000.3–5,001.2 ms after receipt.
+
+These are single runs of one task from one account and region.
+
 ## Historical material
 
 Nothing in the tree is needed to reconstruct current source except the tracked packages, `upstream.patch` and the pins; everything historical lives in Git history rather than beside the code.

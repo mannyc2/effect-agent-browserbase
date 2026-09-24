@@ -4,6 +4,7 @@ import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import type { RunEvent } from "effect-agent/run-event";
 import type { BrowserSession } from "effect-browser/browser";
+import type { PageInfo } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 
 import { MaxCaption, Narrator, type Step } from "./Narrator.ts";
@@ -46,7 +47,12 @@ export type AirEvent =
       readonly airedNanos: bigint;
     }
   | { readonly _tag: "Clear"; readonly step: StepWindow; readonly airedNanos: bigint }
-  | { readonly _tag: "Skipped"; readonly step: StepWindow; readonly reason: "late" | "empty" };
+  | {
+      readonly _tag: "Skipped";
+      readonly step: StepWindow;
+      /** Not written before its step's pictures aired, silent by choice, or the narrator failed. */
+      readonly reason: "late" | "silent" | "failed";
+    };
 
 const Millis = 1_000_000n;
 
@@ -85,7 +91,9 @@ const Controls = Schema.Struct({
 
 const decodeControls = Schema.decodeUnknownOption(Controls);
 
-const Target = Schema.Struct({ elementId: Schema.String });
+// A click names its control directly; fill, type, press, select and wait name it as `reference`.
+const Reference = Schema.Struct({ elementId: Schema.String });
+const Target = Schema.Union([Reference, Schema.Struct({ reference: Reference })]);
 
 const decodeTarget = Schema.decodeUnknownOption(Target);
 
@@ -111,9 +119,12 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
   const onAir = options.onAir ?? (() => Effect.void);
 
   /** Wait until `stamp` is `delayMillis` old. */
-  const airAt = (stamp: bigint) =>
+  const airAt = (stamp: bigint): Effect.Effect<void> =>
     Effect.flatMap(Clock.monotonicTimeNanos, (now) =>
-      stamp + delay > now ? Effect.sleep(Number(stamp + delay - now) / 1e6) : Effect.void,
+      stamp + delay > now
+        ? // A timer can wake a few milliseconds early by this clock, so check again.
+          Effect.andThen(Effect.sleep(Number(stamp + delay - now) / 1e6), airAt(stamp))
+        : Effect.void,
     );
 
   const interval = yield* Capture.start(session, {
@@ -154,6 +165,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
   const labels = new Map<string, string>();
   const declared = new Map<string, unknown>();
   let latest: StepState | undefined;
+  let finished: { readonly step: StepState; readonly succeeded: boolean } | undefined;
   let captioned: string | undefined;
   let summary: unknown = null;
 
@@ -175,18 +187,28 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
           return Effect.asVoid(Deferred.succeed(step.next, at));
         });
 
-  const narrate = (step: StepState, succeeded: boolean) =>
+  /** The step's pictures have aired: a caption written later could only cover another step. */
+  const windowClosed = (step: StepState) => Effect.flatMap(Deferred.await(step.next), airAt);
+
+  const narrate = (step: StepState, facts: Step) =>
     Effect.gen(function* () {
-      const facts: Step = {
-        tool: step.tool,
-        ...(step.target === undefined ? {} : { target: step.target }),
-        succeeded,
-      };
+      const written = yield* Effect.raceFirst(
+        narrator.caption(facts).pipe(
+          Effect.map((text) => ({ _tag: "Written", text }) as const),
+          Effect.orElseSucceed(() => ({ _tag: "Failed" }) as const),
+        ),
+        Effect.as(windowClosed(step), { _tag: "Late" } as const),
+      );
 
-      const text = (yield* narrator.caption(facts)).slice(0, MaxCaption);
+      if (written._tag !== "Written" || written.text === null)
+        return yield* onAir({
+          _tag: "Skipped",
+          step: windowOf(step),
+          reason:
+            written._tag === "Late" ? "late" : written._tag === "Failed" ? "failed" : "silent",
+        });
+      const text = written.text.slice(0, MaxCaption);
 
-      if (text === "")
-        return yield* onAir({ _tag: "Skipped", step: windowOf(step), reason: "empty" });
       yield* airAt(step.startedNanos);
       const shownNanos = yield* Clock.monotonicTimeNanos;
 
@@ -196,18 +218,41 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
       captioned = step.toolCallId;
       yield* stage.update({ caption: text });
       yield* onAir({ _tag: "Caption", text, step: windowOf(step), airedNanos: shownNanos });
-      yield* Deferred.await(step.next).pipe(
-        Effect.flatMap(airAt),
-        Effect.timeoutOption(Number(MaxDisplayNanos) / 1e6),
-      );
-      if (captioned !== step.toolCallId) return;
-      captioned = undefined;
-      yield* stage.update({ caption: null });
+      yield* windowClosed(step).pipe(Effect.timeoutOption(Number(MaxDisplayNanos) / 1e6));
+      // The next step's caption may already have replaced this one; it must not be cleared.
+      if (captioned === step.toolCallId) {
+        captioned = undefined;
+        yield* stage.update({ caption: null });
+      }
       yield* onAir({
         _tag: "Clear",
         step: windowOf(step),
         airedNanos: yield* Clock.monotonicTimeNanos,
       });
+    });
+
+  /**
+   * A finished step's facts are complete once the next model call starts, when the page it left
+   * can be read. A step that no model call follows is narrated without the page.
+   */
+  const narrateFinished = (page: PageInfo | undefined) =>
+    Effect.suspend(() => {
+      const done = finished;
+
+      finished = undefined;
+      if (done === undefined) return Effect.void;
+      const address = page === undefined ? null : addressOf(page.url);
+
+      return FiberSet.run(
+        background,
+        narrate(done.step, {
+          tool: done.step.tool,
+          ...(done.step.target === undefined ? {} : { target: done.step.target }),
+          ...(address === null ? {} : { address }),
+          ...(page === undefined || page.title === "" ? {} : { title: page.title }),
+          succeeded: done.succeeded,
+        }),
+      );
     });
 
   /** Stamp each event on receipt: a fast consumer is within a couple of milliseconds of it. */
@@ -218,7 +263,8 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
       if (event._tag === "ModelStarted") {
         // No browser call runs while the model thinks, so the page's title can be read.
         const pages = yield* Effect.orElseSucceed(session.pages, () => []);
-        const title = pages.find((page) => page.selected)?.title;
+        const page = pages.find((known) => known.selected);
+        const title = page?.title;
 
         if (title !== undefined && title !== "")
           yield* FiberSet.run(
@@ -229,16 +275,25 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
               Effect.flatMap((airedNanos) => onAir({ _tag: "Title", title, airedNanos })),
             ),
           );
+        yield* narrateFinished(page);
       } else if (event._tag === "ToolCallDeclared")
         declared.set(event.toolCallId, event.parameters);
       else if (event._tag === "ToolCallStarted") {
+        yield* narrateFinished(undefined);
         yield* close(now);
         const target = decodeTarget(declared.get(event.toolCallId));
 
         latest = {
           toolCallId: event.toolCallId,
           tool: event.toolName,
-          target: target._tag === "Some" ? labels.get(target.value.elementId) : undefined,
+          target:
+            target._tag === "Some"
+              ? labels.get(
+                  "reference" in target.value
+                    ? target.value.reference.elementId
+                    : target.value.elementId,
+                )
+              : undefined,
           startedNanos: now,
           nextNanos: null,
           next: yield* Deferred.make<bigint>(),
@@ -254,11 +309,12 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
         const step = latest;
 
         if (step?.toolCallId === event.toolCallId)
-          yield* FiberSet.run(background, narrate(step, event._tag === "ToolCallSucceeded"));
-      } else if (event._tag === "RunCompleted") {
-        summary = event.output;
+          finished = { step, succeeded: event._tag === "ToolCallSucceeded" };
+      } else if (event._tag === "RunCompleted" || event._tag === "RunFailed") {
+        if (event._tag === "RunCompleted") summary = event.output;
+        yield* narrateFinished(undefined);
         yield* close(now);
-      } else if (event._tag === "RunFailed") yield* close(now);
+      }
     });
 
   const outcome = yield* BrowserTools.run(
