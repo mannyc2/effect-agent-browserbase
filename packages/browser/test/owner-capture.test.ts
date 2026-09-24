@@ -520,7 +520,10 @@ const captureCases: ReadonlyArray<Case> = [
 
       assert.equal(running.currentDocument, 65);
       assert.equal(running.documentBoundaries.length, 64);
-      assert.equal(running.documentBoundaries[0]?.url, null);
+      // The latest boundaries are kept, so the first, whose address was too long, is let go.
+      assert.equal(running.documentBoundaries[0]?.document, 2);
+      assert.equal(running.documentBoundaries.at(-1)?.document, 65);
+      assert.ok(running.documentBoundaries.every((boundary) => boundary.url !== null));
       assert.equal(running.documentBoundariesTruncated, true);
       const stopping = yield* interval.stop.pipe(Effect.forkChild);
 
@@ -593,6 +596,8 @@ const captureCases: ReadonlyArray<Case> = [
 
       assert.equal(summary.documentBoundaries.length, 64);
       assert.equal(summary.documentBoundariesTruncated, true);
+      assert.equal(summary.documentBoundaries[0]?.document, 7);
+      assert.equal(summary.documentBoundaries.at(-1)?.document, 70);
       assert.equal(frames[0]?.document, 70);
       // Before any frame arrived there is no sequence to point at.
       assert.equal(summary.documentBoundaries[0]?.afterSequence, null);
@@ -998,6 +1003,32 @@ const captureCases: ReadonlyArray<Case> = [
       f.emit(1000, jpeg(), 64, 47);
       yield* expectReason(Stream.runDrain(interval.frames), "Limit");
       assert.equal((yield* interval.completed).delivered, 0);
+    })),
+  test("a consumer that delays its frames holds them in the interval's bounded buffer", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture();
+
+      const interval = yield* startCapture(f.parent, {
+        maxFrames: 150,
+        maxBufferedBytes: 4 * 1024 * 1024,
+        maxFrameBytes: 8192,
+      });
+
+      // Five seconds at thirty frames a second arrive before the consumer takes any of them.
+      for (let i = 0; i < 150; i++) f.emit(1000 + i * 33);
+      const held = yield* interval.snapshot;
+
+      assert.equal(held.bufferedFrames, 150);
+      assert.equal(held.overflow, 0);
+      f.emit(1000 + 150 * 33);
+      const summary = yield* interval.stop;
+      const frames = yield* Stream.runCollect(interval.frames);
+
+      // One frame past the bound lets the oldest go, counted, and never reorders the rest.
+      assert.equal(summary.overflow, 1);
+      assert.equal(frames.length, 150);
+      assert.equal(frames[0]?.sequence, 1);
+      assert.equal(frames.at(-1)?.sequence, 150);
     })),
   test("omitting source size preserves native defaults and accepts the existing bounded geometry", () =>
     Effect.gen(function* () {

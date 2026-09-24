@@ -3,6 +3,13 @@ import { Schema } from "effect";
 export const Dimension = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 }));
 const BufferedBytes = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 }));
 
+/**
+ * Upper bounds of one interval. Frames can be held for as long as a consumer delays them, so the
+ * frame bound is set by memory (the byte bound), not by a short hand-off; an interval can last
+ * as long as a session may.
+ */
+export const CaptureMaxima = Object.freeze({ frames: 1024, durationMillis: 21_600_000 });
+
 /** Defaults shared by runtime admission and the optional public data schema. */
 export const CaptureDefaults = Object.freeze({
   maxFrames: 4,
@@ -13,10 +20,12 @@ export const CaptureDefaults = Object.freeze({
 });
 
 export const LimitFields = {
-  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 })),
+  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: CaptureMaxima.frames })),
   maxBufferedBytes: BufferedBytes,
   maxFrameBytes: BufferedBytes,
-  maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600000 })),
+  maxDurationMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: CaptureMaxima.durationMillis }),
+  ),
   quality: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
 };
 

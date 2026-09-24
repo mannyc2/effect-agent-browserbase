@@ -123,14 +123,17 @@ export const startCapture = Effect.fnUntraced(function* (
   const nextDocument = (url: string): void => {
     if (ended) return;
     document++;
-    if (documentBoundaries.length >= MaxDocumentBoundaries) documentBoundariesTruncated = true;
-    else
-      documentBoundaries.push({
-        document,
-        observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
-        afterSequence: received === 0 ? null : received - 1,
-        url: documentUrl(url),
-      });
+    // The latest boundaries are kept: a live consumer needs the address of what it is showing now.
+    if (documentBoundaries.length >= MaxDocumentBoundaries) {
+      documentBoundaries.shift();
+      documentBoundariesTruncated = true;
+    }
+    documentBoundaries.push({
+      document,
+      observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+      afterSequence: received === 0 ? null : received - 1,
+      url: documentUrl(url),
+    });
   };
 
   let geometry:

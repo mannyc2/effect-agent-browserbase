@@ -45,9 +45,15 @@ export type CaptureSize = typeof CaptureSize.Type;
 export const CaptureOptions = Schema.Struct({
   /** Pin to a page from `session.pages`; omission preserves selected-page behavior. */
   target: Schema.optionalKey(PageInfo),
+  /**
+   * Frames held until the consumer takes them (4 by default, at most 1024), oldest dropped first
+   * and counted as `overflow`. A consumer that delays its output leaves frames here, so this and
+   * `maxBufferedBytes` are the delay's memory bound.
+   */
   maxFrames: Schema.optionalKey(LimitFields.maxFrames),
   maxBufferedBytes: Schema.optionalKey(LimitFields.maxBufferedBytes),
   maxFrameBytes: Schema.optionalKey(LimitFields.maxFrameBytes),
+  /** 60 seconds by default, at most six hours: as long as a session may last. */
   maxDurationMillis: Schema.optionalKey(LimitFields.maxDurationMillis),
   quality: Schema.optionalKey(LimitFields.quality),
   /** Source fit only. Does not resize the viewport or impose an FPS cap. */
@@ -106,7 +112,10 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserCapture
       url: DocumentUrl,
     }),
   ).check(Schema.isMaxLength(64)),
-  /** More navigations were observed than are recorded above. Frames still count them all. */
+  /**
+   * More navigations were observed than are recorded above, so the earliest were let go: the
+   * record keeps the latest 64. Frames still count them all.
+   */
   documentBoundariesTruncated: Schema.Boolean,
   nativeStop: Schema.Literals(["confirmed", "unconfirmed"]),
   /** Package accounting cannot measure frames omitted by Chromium, transport, or the provider. */
