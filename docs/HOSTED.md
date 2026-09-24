@@ -27,6 +27,7 @@ over-budget check fails before anything is spent.
 | `extension-identity` | H3 | a registered MV3 extension keeps its identity and its content script runs |
 | `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |
 | `replay-delivery` | H7 | the replay playlist validates and a segment downloads; recording delivery is reported as observed |
+| `live-capture` | — | frame pacing and still-page delivery at real round trips, a viewport reading under a pass-through container and its cost, and whether a page debug websocket evaluates without credentials; reported as measurements |
 
 The question codes come from the design research that preceded the checks
 (retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1

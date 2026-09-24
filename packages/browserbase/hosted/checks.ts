@@ -159,6 +159,23 @@ export const checks = {
     operator: false,
     media: false,
   },
+  "live-capture": {
+    question: null,
+    claim:
+      "At real round trips: how captured frames are paced while a page scrolls, whether the last picture before the page goes still reaches the host (saved beside a screenshot for comparison), what a viewport reading of a page under a transparent pass-through container returns and costs, and whether a page's debug websocket evaluates without credentials. It reports measurements; it establishes only that frames arrived, intervals stopped cleanly and the reading returned text.",
+    evidence: null,
+    budget: {
+      sessions: 2,
+      browserSeconds: 120,
+      actions: 20,
+      captureSeconds: 12,
+      transferBytes: 0,
+    },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
 } as const satisfies Record<string, Check>;
 
 export type CheckName = keyof typeof checks;
