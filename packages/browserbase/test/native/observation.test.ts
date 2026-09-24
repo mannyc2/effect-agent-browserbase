@@ -79,12 +79,12 @@ it.live("real CDP: a viewport reading holds only what is on screen and says what
 
           expect(viewport.scope).toBe("viewport");
           expect(viewport.text).toContain("visible paragraph");
-          // Below the fold, behind an opaque element, and under one that takes no pointer
-          // events. Hit-testing sees through the last, so it is uncertain rather than visible.
+          // Below the fold, behind an opaque element, and under an opaque one that takes no
+          // pointer events. The browser's own hit test finds the last painting over its words.
           for (const hidden of ["far below words", "covered words", "ghosted words"])
             expect(viewport.text, hidden).not.toContain(hidden);
-          expect(viewport.viewport.coveredText).toBeGreaterThan(0);
-          expect(viewport.viewport.uncertainText).toBeGreaterThan(0);
+          expect(viewport.viewport.coveredText).toBe(2);
+          expect(viewport.viewport.uncertainText).toBe(0);
           // One text node of twenty lines starts at 400px of a 480px viewport: its first lines
           // are evidence, its last are not, and the node is not copied whole for one line.
           expect(viewport.text).toContain("line 0");

@@ -42,9 +42,32 @@ export const PageReadResult = Schema.Struct({
     unreachableControls: Schema.Natural,
     exhausted: Schema.Boolean,
   }),
+  /**
+   * Sampled points that something taking no pointer events lies over, which only the browser's
+   * own hit test can settle. They were counted as uncertain in this reading.
+   */
+  pending: Schema.optionalKey(
+    Schema.Struct({
+      points: Schema.Array(Schema.Tuple([Schema.Int, Schema.Int])).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(256),
+      ),
+      scrollX: Schema.Finite,
+      scrollY: Schema.Finite,
+    }),
+  ),
 });
 
 export type PageReadResult = typeof PageReadResult.Type;
+
+/**
+ * What the browser found on top at one sampled point once pointer events are ignored: the
+ * pointer's own target or something inside it (`self`), a box that paints there (`covered`), or
+ * boxes that paint nothing there (`clear`).
+ */
+export const PointVerdict = Schema.Literals(["self", "covered", "clear"]);
+
+export type PointVerdict = typeof PointVerdict.Type;
 
 export interface PageReadRequest {
   readonly scope: "document" | "viewport";
@@ -64,6 +87,13 @@ export interface PageReadRequest {
   readonly match?: string;
   /** Fresh membership and identity checks for already retained options; values stay private. */
   readonly options?: ReadonlyArray<{ readonly node: Element; readonly value: string }>;
+  /** The browser's answers for the points an earlier reading of this page left pending. */
+  readonly verdicts?: Readonly<Record<string, PointVerdict>>;
+  /**
+   * Classify these points against `top`, the box the browser found above each with pointer
+   * events ignored, instead of reading anything.
+   */
+  readonly classify?: ReadonlyArray<readonly [number, number]>;
 }
 
 /** What makes a control the one that was inspected. Geometry is excluded: scrolling moves it. */
@@ -127,11 +157,18 @@ export const observedControl = (
  *
  * Visibility here is geometry and hit-testing, never a pixel comparison. Text is kept only when
  * its line boxes intersect the viewport and the browser finds its own element at a sampled
- * point. Text under something that takes no pointer events cannot be hit-tested at all, so it is
- * counted as uncertain and left out rather than promoted to visible evidence.
+ * point. Something that takes no pointer events is invisible to that hit test, so a point with
+ * such a box over it is left pending and counted as uncertain. The host then asks the browser
+ * which box is on top there with pointer events ignored, which also finds boxes inside closed
+ * shadow roots, and reads again with the answers: a box that paints at the point covers it, and
+ * a box that paints nothing there does not. Nothing is kept as visible without that answer.
+ *
+ * With `classify`, it instead judges each point against `top`, the box the browser returned for
+ * it, and returns one verdict per point.
  */
 export const readPage = (
   request: PageReadRequest,
+  top?: unknown,
 ): { readonly nodes: Array<Element>; readonly data: unknown } => {
   const { scope, maximumBytes, controlLimit, nodeBudget, only } = request;
   const width = window.innerWidth;
@@ -151,7 +188,9 @@ export const readPage = (
     exhausted: false,
   };
 
-  const intersects = (rect: DOMRect): boolean =>
+  type Box = Pick<DOMRect, "left" | "top" | "right" | "bottom" | "width" | "height">;
+
+  const intersects = (rect: Box): boolean =>
     rect.width > 0 &&
     rect.height > 0 &&
     rect.bottom > 0 &&
@@ -162,36 +201,108 @@ export const readPage = (
   const within = (rect: DOMRect): boolean =>
     rect.top >= 0 && rect.left >= 0 && rect.bottom <= height && rect.right <= width;
 
-  // Boxes of elements that take no pointer events. Hit-testing sees through them, so whatever
-  // lies beneath one cannot be shown to be uncovered.
-  const passThrough: Array<{ readonly element: Element; readonly rect: DOMRect }> = [];
-  let visited = 0;
+  const contains = (rect: Box, x: number, y: number): boolean =>
+    x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 
-  if (only === undefined && scope === "viewport") {
-    const all = document.body?.getElementsByTagName("*") ?? [];
+  /** The flat-tree parent: a shadow root's host rather than the root itself. */
+  const parentOf = (node: Node): Node | null => {
+    const parent = node.parentNode;
 
-    for (let i = 0; i < all.length; i++) {
-      if (++visited > nodeBudget) {
-        evidence.exhausted = true;
-        break;
-      }
-      const element = all[i];
+    return parent instanceof ShadowRoot ? parent.host : parent;
+  };
 
-      if (element === undefined) continue;
-      const style = getComputedStyle(element);
+  /** Whether `inner` is `outer` or lies inside it, across shadow boundaries. */
+  const holds = (outer: Node, inner: Node): boolean => {
+    for (let node: Node | null = inner; node !== null; node = parentOf(node))
+      if (node === outer) return true;
 
-      if (style.pointerEvents !== "none" || style.visibility === "hidden") continue;
-      if (passThrough.some((known) => known.element.contains(element))) continue;
-      const rect = element.getBoundingClientRect();
+    return false;
+  };
 
-      if (intersects(rect) && Number(style.opacity) > 0) passThrough.push({ element, rect });
+  const related = (left: Node, right: Node): boolean => holds(left, right) || holds(right, left);
+
+  /** The alpha of a computed colour; an unparsed format counts as opaque. */
+  const alphaOf = (color: string): number => {
+    if (color === "transparent") return 0;
+    const inside = /\(([^)]*)\)/.exec(color)?.[1];
+
+    if (inside === undefined) return 1;
+    const alpha = inside.includes("/") ? inside.split("/")[1] : inside.split(",")[3];
+
+    if (alpha === undefined) return 1;
+    const value = Number.parseFloat(alpha);
+
+    if (Number.isNaN(value)) return 1;
+
+    return alpha.trim().endsWith("%") ? value / 100 : value;
+  };
+
+  /** Whether a computed style draws anything of its own: a fill, a border, a shadow or an effect. */
+  const draws = (style: CSSStyleDeclaration): boolean =>
+    alphaOf(style.backgroundColor) > 0 ||
+    style.backgroundImage !== "none" ||
+    ["top", "right", "bottom", "left"].some(
+      (side) =>
+        Number.parseFloat(style.getPropertyValue(`border-${side}-width`)) > 0 &&
+        !["none", "hidden"].includes(style.getPropertyValue(`border-${side}-style`)) &&
+        alphaOf(style.getPropertyValue(`border-${side}-color`)) > 0,
+    ) ||
+    style.boxShadow !== "none" ||
+    (style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0) ||
+    style.filter !== "none" ||
+    (style.getPropertyValue("backdrop-filter") || "none") !== "none" ||
+    style.mixBlendMode !== "normal";
+
+  // Elements whose own box shows content, whatever their style says.
+  const replaced = new Set([
+    "IMG",
+    "VIDEO",
+    "CANVAS",
+    "IFRAME",
+    "EMBED",
+    "OBJECT",
+    "INPUT",
+    "SELECT",
+    "TEXTAREA",
+    "BUTTON",
+    "METER",
+    "PROGRESS",
+  ]);
+
+  const pseudoDraws = (element: Element, type: "::before" | "::after"): boolean => {
+    const style = getComputedStyle(element, type);
+
+    return (
+      style.content !== "none" &&
+      style.content !== "normal" &&
+      style.display !== "none" &&
+      (draws(style) || !/^(""|'')$/.test(style.content))
+    );
+  };
+
+  /** Whether `element` has its own text on a line box over the point. */
+  const textAt = (element: Element, x: number, y: number): boolean => {
+    const lines = document.createRange();
+
+    for (const child of element.childNodes) {
+      if (!(child instanceof Text) || child.data.trim() === "") continue;
+      lines.selectNodeContents(child);
+      for (const rect of lines.getClientRects()) if (contains(rect, x, y)) return true;
     }
-  }
 
-  /** Whether the browser finds `owner` at this point, and how far that can be trusted. */
-  const hitTest = (owner: Element, rect: DOMRect): "self" | "covered" | "uncertain" => {
-    const x = Math.min(width - 1, Math.max(0, rect.left + rect.width / 2));
-    const y = Math.min(height - 1, Math.max(0, rect.top + rect.height / 2));
+    return false;
+  };
+
+  /** Whether `element` itself, not a descendant, paints at the point. */
+  const paintsAt = (element: Element, x: number, y: number): boolean =>
+    element.checkVisibility?.({ opacityProperty: true, visibilityProperty: true }) !== false &&
+    (replaced.has(element.tagName) ||
+      element instanceof SVGElement ||
+      draws(getComputedStyle(element)) ||
+      textAt(element, x, y));
+
+  /** The element the pointer would reach at this point, inside open shadow roots. */
+  const pointerAt = (x: number, y: number): Element | null => {
     let hit = document.elementFromPoint(x, y);
 
     while (hit?.shadowRoot) {
@@ -200,20 +311,162 @@ export const readPage = (
       if (inner === null || inner === hit) break;
       hit = inner;
     }
+
+    return hit;
+  };
+
+  if (request.classify !== undefined) {
+    // `top` is an Element, or a CSSPseudoElement that stands for a ::before or ::after box.
+    const pseudo =
+      top instanceof Node || typeof top !== "object" || top === null
+        ? undefined
+        : (top as { readonly element?: unknown; readonly type?: unknown });
+
+    const origin =
+      top instanceof Element
+        ? top
+        : pseudo?.element instanceof Element
+          ? pseudo.element
+          : undefined;
+
+    const verdictAt = ([x, y]: readonly [number, number]): string => {
+      const hit = pointerAt(x, y);
+
+      if (hit === null || origin === undefined) return "unknown";
+      if (pseudo === undefined) {
+        if (related(origin, hit)) return "self";
+      } else {
+        // The pointer's own generated box, or one of something inside it.
+        if (holds(hit, origin)) return "self";
+        if (pseudoDraws(origin, pseudo.type === "::after" ? "::after" : "::before"))
+          return "covered";
+      }
+      // Every box from the top down to the first one that also holds the pointer's target lies
+      // above that target here. Any of them that paints at the point covers it.
+      for (
+        let node: Node | null = origin;
+        node !== null && !holds(node, hit);
+        node = parentOf(node)
+      )
+        if (
+          node instanceof Element &&
+          contains(node.getBoundingClientRect(), x, y) &&
+          paintsAt(node, x, y)
+        )
+          return "covered";
+
+      return "clear";
+    };
+
+    return { nodes: [], data: request.classify.map(verdictAt) };
+  }
+
+  // Boxes of elements that take no pointer events, in the light DOM and open shadow roots.
+  // Hit-testing sees through them, so a point beneath one waits for the browser's own answer.
+  // `painting` keeps those that draw something of their own, with painting pseudo-elements at an
+  // approximated box. The scan has its own budget: an incomplete one leaves every point pending.
+  const boxes: Array<{ readonly element: Element; readonly rect: Box }> = [];
+  const painting: Array<{ readonly element: Element; readonly rect: Box }> = [];
+  let scanned = 0;
+  let scanComplete = true;
+
+  if (only === undefined && scope === "viewport" && document.body !== null) {
+    const roots: Array<ParentNode> = [document.body];
+
+    for (let root = roots.pop(); root !== undefined && scanComplete; root = roots.pop()) {
+      const all = root.querySelectorAll("*");
+
+      for (let i = 0; i < all.length; i++) {
+        const element = all[i];
+
+        if (++scanned > nodeBudget || boxes.length >= 512 || painting.length >= 512) {
+          scanComplete = false;
+          break;
+        }
+        if (element === undefined) continue;
+        if (element.shadowRoot !== null) roots.push(element.shadowRoot);
+        const style = getComputedStyle(element);
+
+        if (style.pointerEvents !== "none" || style.visibility === "hidden") continue;
+        if (Number(style.opacity) <= 0) continue;
+        const rect = element.getBoundingClientRect();
+
+        if (intersects(rect)) {
+          boxes.push({ element, rect });
+          if (
+            replaced.has(element.tagName) ||
+            element instanceof SVGElement ||
+            draws(style) ||
+            [...element.childNodes].some(
+              (child) => child instanceof Text && child.data.trim() !== "",
+            )
+          )
+            painting.push({ element, rect });
+        }
+        for (const type of ["::before", "::after"] as const) {
+          if (!pseudoDraws(element, type)) continue;
+          const generated = getComputedStyle(element, type);
+          let area: Box = rect;
+
+          // A positioned pseudo-element is placed from its host's box; others fill it.
+          if (
+            (generated.position === "absolute" || generated.position === "fixed") &&
+            style.position !== "static"
+          ) {
+            const left = rect.left + (Number.parseFloat(generated.left) || 0);
+            const top = rect.top + (Number.parseFloat(generated.top) || 0);
+            const across = Number.parseFloat(generated.width) || 0;
+            const down = Number.parseFloat(generated.height) || 0;
+
+            area = {
+              left,
+              top,
+              right: left + across,
+              bottom: top + down,
+              width: across,
+              height: down,
+            };
+          }
+          if (intersects(area)) {
+            boxes.push({ element, rect: area });
+            painting.push({ element, rect: area });
+          }
+        }
+      }
+    }
+    if (!scanComplete) evidence.exhausted = true;
+  }
+
+  const pending: Array<readonly [number, number]> = [];
+  const pendingKeys = new Set<string>();
+  let visited = 0;
+
+  /** Whether the browser finds `owner` at this point, and how far that can be trusted. */
+  const hitTest = (owner: Element, rect: DOMRect): "self" | "covered" | "uncertain" => {
+    const x = Math.floor(Math.min(width - 1, Math.max(0, rect.left + rect.width / 2)));
+    const y = Math.floor(Math.min(height - 1, Math.max(0, rect.top + rect.height / 2)));
+    const hit = pointerAt(x, y);
+
     if (hit === null) return "uncertain";
     if (hit !== owner && !owner.contains(hit) && !hit.contains(owner)) return "covered";
 
-    const beneath = passThrough.some(
-      (layer) =>
-        !layer.element.contains(owner) &&
-        !owner.contains(layer.element) &&
-        x >= layer.rect.left &&
-        x < layer.rect.right &&
-        y >= layer.rect.top &&
-        y < layer.rect.bottom,
-    );
+    const over = (layers: ReadonlyArray<{ readonly element: Element; readonly rect: Box }>) =>
+      layers.some((layer) => !related(layer.element, owner) && contains(layer.rect, x, y));
 
-    return beneath ? "uncertain" : "self";
+    if (scanComplete && !over(boxes)) return "self";
+    const key = `${String(x)},${String(y)}`;
+    const verdict = request.verdicts?.[key];
+
+    if (verdict === "self") return "self";
+    if (verdict === "covered") return "covered";
+    // Nothing on top paints here; a painting box beneath the top one could still hide it.
+    if (verdict === "clear") return over(painting) ? "uncertain" : "self";
+    if (request.verdicts === undefined && !pendingKeys.has(key) && pending.length < 256) {
+      pendingKeys.add(key);
+      pending.push([x, y]);
+    }
+
+    return "uncertain";
   };
 
   const factsOf = (node: Element) => {
@@ -577,6 +830,9 @@ export const readPage = (
       controls,
       viewport: evidence,
       ...(selects === undefined ? {} : { selects }),
+      ...(pending.length === 0
+        ? {}
+        : { pending: { points: pending, scrollX: window.scrollX, scrollY: window.scrollY } }),
     },
   };
 };
