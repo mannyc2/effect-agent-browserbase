@@ -52,6 +52,8 @@ For Browserbase, use `BrowserbaseBrowser.open(...)` from `effect-browserbase/bro
 
 [`examples/chromium.ts`](examples/chromium.ts) and [`examples/agent.ts`](examples/agent.ts) use the same [`BrowserAgent.ts`](examples/BrowserAgent.ts) definition. The hosted example also shows human handoff and typed page-to-host callbacks. Both leave the model choice to the caller.
 
+[`examples/livestream`](examples/livestream/README.md) shows an agent's browser to viewers, live or a few seconds behind, inside a drawn browser window with a caption for each step. A separate narrator model writes the captions while each step waits in the delay. It runs on either browser source, and its native test runs it on a local Chromium with scripted models.
+
 The Tools accept `BrowserSession<E>` directly. They retain the owner's dispatch outcome and project its tagged reason into a compact `BrowserToolFailure`; `makeHost` keeps the original error fields in its host-only `toolFailures` snapshot. Concrete provider capabilities remain on the original object. `Browser.scoped(open, use)` owns acquisition and checked cleanup around the application callback; `BrowserTools.run(browser, program, options)` owns only Tool-host lifetime and supervision inside an already-owned browser.
 
 ## Provide InteractiveBrowser directly
