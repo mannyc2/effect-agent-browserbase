@@ -283,7 +283,9 @@ export const makeObservation = (
     if (
       observation !== undefined &&
       scope !== "none" &&
-      (scope === "all" || scope.pageId === observation.target.pageId)
+      (scope === "all" ||
+        (scope.pageId === observation.target.pageId &&
+          (scope.frameId === undefined || scope.frameId === observation.target.frameId)))
     )
       observation.validity = "invalid";
   };
