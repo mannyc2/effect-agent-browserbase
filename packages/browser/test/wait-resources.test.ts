@@ -100,7 +100,6 @@ const fixture = Effect.fnUntraced(function* () {
       mainFrame: true,
     });
 
-  const value = (data: unknown) => ({ jsonValue: async () => data, dispose: async () => {} });
   const selectorEntered = gate<void>();
   const selectorResult = gate<ElementHandle<Element> | null>();
 
@@ -118,7 +117,7 @@ const fixture = Effect.fnUntraced(function* () {
         if (record === undefined) throw new Error("Unknown native node");
 
         return {
-          getProperty: async () => value({ facts: facts(record) }),
+          evaluate: async () => ({ facts: facts(record) }),
           dispose: async () => {},
         };
       }
@@ -127,19 +126,18 @@ const fixture = Effect.fnUntraced(function* () {
       records.push(...sampled);
 
       return {
-        getProperty: async (key: string) =>
-          key === "nodes"
-            ? {
-                getProperty: async (i: string) => sampled[Number(i)]!.handle,
-                dispose: async () => {},
-              }
-            : value({
-                text: "Ready",
-                controls: sampled.map(facts),
-                textTruncated: false,
-                controlsTruncated: false,
-                viewport,
-              }),
+        evaluateHandle: async () => ({
+          getProperties: async () =>
+            new Map(sampled.map((record, i) => [String(i), record.handle] as const)),
+          dispose: async () => {},
+        }),
+        evaluate: async () => ({
+          text: "Ready",
+          controls: sampled.map(facts),
+          textTruncated: false,
+          controlsTruncated: false,
+          viewport,
+        }),
         dispose: async () => {},
       };
     },

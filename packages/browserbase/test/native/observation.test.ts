@@ -709,42 +709,42 @@ it.live(
               }),
             );
 
-            // Delay only the first real node handle after Chromium has returned it. All extraction,
+            // Delay the real node handles after Chromium has returned them. All extraction,
             // cancellation, retirement and the succeeding action run through the public session.
             const evaluate = vi.spyOn(frame, "evaluateHandle");
 
             restore.push(() => evaluate.mockRestore());
             evaluate.mockImplementationOnce(async (...args) => {
               const holder = await evaluateHandle(...args);
-              const getProperty = holder.getProperty.bind(holder);
-              const properties = vi.spyOn(holder, "getProperty");
+              const select = holder.evaluateHandle.bind(holder);
+              const selected = vi.spyOn(holder, "evaluateHandle");
 
-              restore.push(() => properties.mockRestore());
-              properties.mockImplementation(async (key) => {
-                const property = await getProperty(key);
+              restore.push(() => selected.mockRestore());
+              selected.mockImplementationOnce(async (...selectArgs) => {
+                const property = await select(...selectArgs);
+                const getProperties = property.getProperties.bind(property);
+                const nodes = vi.spyOn(property, "getProperties");
 
-                if (key === "nodes") {
-                  const getNode = property.getProperty.bind(property);
-                  const nodes = vi.spyOn(property, "getProperty");
+                restore.push(() => nodes.mockRestore());
+                nodes.mockImplementationOnce(async () => {
+                  const all = await getProperties();
+                  const node = all.get("0");
 
-                  restore.push(() => nodes.mockRestore());
-                  nodes.mockImplementationOnce(async (index) => {
-                    const node = await getNode(index);
-                    const dispose = node.dispose.bind(node);
-                    const release = vi.spyOn(node, "dispose");
+                  assert.ok(node);
+                  const dispose = node.dispose.bind(node);
+                  const release = vi.spyOn(node, "dispose");
 
-                    restore.push(() => release.mockRestore());
-                    release.mockImplementation(async () => {
-                      releases++;
-                      await dispose();
-                      Deferred.doneUnsafe(disposed, Effect.void);
-                    });
-                    Deferred.doneUnsafe(entered, Effect.void);
-                    await extraction;
-
-                    return node;
+                  restore.push(() => release.mockRestore());
+                  release.mockImplementation(async () => {
+                    releases++;
+                    await dispose();
+                    Deferred.doneUnsafe(disposed, Effect.void);
                   });
-                }
+                  Deferred.doneUnsafe(entered, Effect.void);
+                  await extraction;
+
+                  return all;
+                });
 
                 return property;
               });

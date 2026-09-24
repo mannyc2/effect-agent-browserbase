@@ -63,8 +63,6 @@ const fixture = (
     mainFrame: true,
   });
 
-  const value = (data: unknown) => ({ jsonValue: async () => data, dispose: async () => {} });
-
   const frame = {
     evaluateHandle: async (_run: unknown, request: { readonly only?: unknown }) => {
       if (request.only !== undefined) {
@@ -72,10 +70,10 @@ const fixture = (
         await hooks.readFacts?.();
 
         return {
-          getProperty: async () => {
+          evaluate: async () => {
             calls.factsProperties++;
 
-            return value({ facts });
+            return { facts };
           },
           dispose: async () => {},
         };
@@ -95,34 +93,29 @@ const fixture = (
       };
 
       return {
-        getProperty: async (key: string) => {
-          if (key === "nodes")
-            return {
-              getProperty: async () => {
-                if (first) await hooks.extractFirstNode?.();
+        evaluateHandle: async () => ({
+          getProperties: async () => {
+            if (first) await hooks.extractFirstNode?.();
 
-                return handle;
-              },
-              dispose: async () => {},
-            };
-          if (key !== "data") throw new Error(`Unexpected native property ${key}`);
-
-          return value({
-            text: "Action",
-            textTruncated: false,
-            controlsTruncated: false,
-            controls: [facts],
-            viewport: {
-              width: 640,
-              height: 480,
-              clippedText: 0,
-              coveredText: 0,
-              uncertainText: 0,
-              unreachableControls: 0,
-              exhausted: false,
-            },
-          });
-        },
+            return new Map([["0", handle]]);
+          },
+          dispose: async () => {},
+        }),
+        evaluate: async () => ({
+          text: "Action",
+          textTruncated: false,
+          controlsTruncated: false,
+          controls: [facts],
+          viewport: {
+            width: 640,
+            height: 480,
+            clippedText: 0,
+            coveredText: 0,
+            uncertainText: 0,
+            unreachableControls: 0,
+            exhausted: false,
+          },
+        }),
         // The read checked its ticket before releasing this native holder. Cancellation and
         // replacement can happen while that release is still pending.
         dispose: async () => {
