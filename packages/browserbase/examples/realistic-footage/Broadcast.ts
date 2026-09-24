@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
-import { Context, Effect, Layer, PubSub, Ref, Stream } from "effect";
-import type { CapturedFrame } from "effect-browser/capture";
+import { Context, Deferred, Effect, Layer, PubSub, Ref, Stream } from "effect";
+import * as Capture from "effect-browser/capture";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 
 import { Metrics, Telemetry } from "./Telemetry.ts";
@@ -13,36 +13,16 @@ import { Metrics, Telemetry } from "./Telemetry.ts";
  *
  * Each viewer is sent motion JPEG: every captured frame, as it arrives, as one
  * part of a `multipart/x-mixed-replace` response that an `<img>` plays with no
- * script. There is no encoder and no segmenting between the capture and the
- * viewer, so the only latency this adds is one write. A still page sends
- * nothing and the viewer keeps the last picture, which is the right answer for
- * a live view and the reason this needs no constant-rate step.
+ * script (`Capture.multipart`). There is no encoder and no segmenting between
+ * the capture and the viewer, so the only latency this adds is one write. A
+ * still page sends nothing and the viewer keeps the last picture, which is the
+ * right answer for a live view and the reason this needs no constant-rate step.
  *
  * An encoded stream (HLS, RTMP, WHIP) is the other shape. It does need
  * a constant rate, and it cannot wait for the page's next repaint to get one:
  * drive `Reel` from a clock, repeating the held picture every slot, and point
  * FFmpeg at a muxer instead of a file. That buys reach at the cost of seconds.
  */
-
-const Boundary = "footage-frame";
-
-const encoder = new TextEncoder();
-
-/** One multipart part. Its headers let a scripted viewer date each frame on the browser's clock. */
-const part = (frame: CapturedFrame) => {
-  const head = encoder.encode(
-    `--${Boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${String(frame.bytes.byteLength)}\r\n` +
-      `X-Sequence: ${String(frame.sequence)}\r\nX-Source-Time-Millis: ${String(frame.sourceTimeMillis)}\r\n\r\n`,
-  );
-
-  const bytes = new Uint8Array(head.byteLength + frame.bytes.byteLength + 2);
-
-  bytes.set(head, 0);
-  bytes.set(frame.bytes, head.byteLength);
-  bytes.set(encoder.encode("\r\n"), head.byteLength + frame.bytes.byteLength);
-
-  return bytes;
-};
 
 const viewer = `<!doctype html><meta charset="utf-8"><title>Live · realistic footage</title>
 <style>
@@ -74,9 +54,9 @@ setInterval(async () => {
     ["capture latency p50/p95/max", spread(m.capture.latencyMillis)],
     ["clock offset", m.capture.clock ? ms(m.capture.clock.offsetMillis) + " ± " + ms(m.capture.clock.uncertaintyMillis) : "measuring"],
     ["frame gap p50/p95/max", spread(m.capture.interFrameMillis)],
-    ["takes", String(m.takes.length + 1)],
-    ["discarded here", String(m.takes.reduce((sum, take) => sum + take.discarded, 0))],
-    ["uncovered at cuts", m.uncoveredMillis.map(ms).join(", ") || "–"],
+    ["documents", String(m.documents.length)],
+    ["held at navigations", m.documents.flatMap((d) => d.heldMillis === null ? [] : [ms(d.heldMillis)]).join(", ") || "–"],
+    ["discarded here", m.capture.interval ? String(m.capture.interval.discarded) : "–"],
     ["cue round trip p50/p95/max", spread(m.control.cueRoundTripMillis)],
     ["click to next frame", spread(m.control.clickToFrameMillis)],
     ...Object.entries(m.control.actionMillis).map(([kind, d]) => [kind + " p50/p95/max", spread(d)]),
@@ -87,7 +67,7 @@ setInterval(async () => {
 export class Broadcast extends Context.Service<
   Broadcast,
   {
-    readonly publish: (frame: CapturedFrame) => Effect.Effect<void>;
+    readonly publish: (frame: Capture.CapturedFrame) => Effect.Effect<void>;
     /** Where to watch, or `null` when nothing is being served. */
     readonly url: string | null;
     readonly viewers: Effect.Effect<number>;
@@ -110,25 +90,30 @@ export class Broadcast extends Context.Service<
         const telemetry = yield* Telemetry;
         // A viewer slower than the capture skips frames rather than queueing them, and a new
         // viewer is shown the current picture without waiting for the page to repaint.
-        const frames = yield* PubSub.sliding<CapturedFrame>({ capacity: 2, replay: 1 });
+        const frames = yield* PubSub.sliding<Capture.CapturedFrame>({ capacity: 2, replay: 1 });
         const viewers = yield* Ref.make(0);
 
-        const live = Stream.fromPubSub(frames).pipe(
-          Stream.map(part),
-          Stream.onStart(Ref.update(viewers, (count) => count + 1)),
-          Stream.ensuring(Ref.update(viewers, (count) => count - 1)),
+        // A server waits for its open responses, so each one ends before it stops.
+        const closing = yield* Deferred.make<void>();
+
+        const live = Effect.map(
+          Capture.multipart(
+            Stream.fromPubSub(frames).pipe(
+              Stream.onStart(Ref.update(viewers, (count) => count + 1)),
+              Stream.ensuring(Ref.update(viewers, (count) => count - 1)),
+              Stream.interruptWhen(Deferred.await(closing)),
+            ),
+          ),
+          ({ contentType, body }) =>
+            HttpServerResponse.stream(body, {
+              contentType,
+              headers: { "cache-control": "no-store" },
+            }),
         );
 
         const routes = Layer.mergeAll(
           HttpRouter.add("GET", "/", HttpServerResponse.html(viewer)),
-          HttpRouter.add(
-            "GET",
-            "/live.mjpeg",
-            HttpServerResponse.stream(live, {
-              contentType: `multipart/x-mixed-replace; boundary=${Boundary}`,
-              headers: { "cache-control": "no-store" },
-            }),
-          ),
+          HttpRouter.add("GET", "/live.mjpeg", Effect.orDie(live)),
           HttpRouter.add(
             "GET",
             "/metrics",
@@ -142,6 +127,8 @@ export class Broadcast extends Context.Service<
           Broadcast,
           Effect.gen(function* () {
             const server = yield* HttpServer.HttpServer;
+
+            yield* Effect.addFinalizer(() => Deferred.succeed(closing, undefined));
 
             return Broadcast.of({
               publish: (frame) => Effect.asVoid(PubSub.publish(frames, frame)),
