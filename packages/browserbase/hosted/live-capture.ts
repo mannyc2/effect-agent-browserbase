@@ -7,9 +7,10 @@ import { join } from "node:path";
 // pass-through container returns and costs, and whether a page's debug websocket answers
 // without credentials. Pictures are saved for comparison offline; no address, session id or
 // target id is written except in the gate's own allocation record.
-import { Clock, Effect, Fiber, Stream } from "effect";
+import { Clock, Effect, Fiber, Result, Stream } from "effect";
 import { NavigateRequest, PointerMoveRequest, WheelRequest } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
+import type { BrowserError } from "effect-browser/errors";
 import { recipe } from "effect-browserbase/launch";
 
 import { hostedCase } from "./harness.ts";
@@ -168,12 +169,30 @@ const occlusion = Effect.scoped(
     yield* session.navigate(NavigateRequest.make({ url: "https://www.coingecko.com/" }));
     yield* Effect.sleep(7000);
 
-    const timed = <A, E, R>(read: Effect.Effect<A, E, R>) =>
+    // A live page may change its document under a read, which is refused undispatched and
+    // said to be safe to repeat; the attempts are reported with the reading.
+    const timed = <A>(read: Effect.Effect<A, BrowserError>) =>
       Effect.gen(function* () {
-        const started = yield* Clock.monotonicTimeNanos;
-        const result = yield* read;
+        let attempts = 0;
 
-        return { result, millis: millis((yield* Clock.monotonicTimeNanos) - started) };
+        for (;;) {
+          attempts++;
+          const started = yield* Clock.monotonicTimeNanos;
+          const result = yield* read.pipe(Effect.result);
+
+          if (Result.isSuccess(result))
+            return {
+              result: result.success,
+              attempts,
+              millis: millis((yield* Clock.monotonicTimeNanos) - started),
+            };
+          const reason = result.failure.reason._tag;
+
+          if (attempts >= 3 || result.failure.outcome !== "undispatched")
+            return yield* result.failure;
+          if (reason !== "Stale" && reason !== "TargetChanged") return yield* result.failure;
+          yield* Effect.sleep(1000);
+        }
       });
 
     const viewport = yield* timed(
@@ -187,12 +206,14 @@ const occlusion = Effect.scoped(
     return {
       viewport: {
         millis: viewport.millis,
+        attempts: viewport.attempts,
         textBytes: new TextEncoder().encode(viewport.result.text).length,
         controls: viewport.result.controls.length,
         evidence: viewport.result.viewport,
       },
       document: {
         millis: document.millis,
+        attempts: document.attempts,
         textBytes: new TextEncoder().encode(document.result.text).length,
       },
       cleanup: yield* session.close,
