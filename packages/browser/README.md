@@ -625,6 +625,34 @@ The old `dropped` field is removed, not redefined as overflow. A late frame was 
 delivery; that fact does not prove network loss. The same counters appear in live snapshots,
 and `upstreamDrops` remains `"unknown"`. The default frame capacity remains four.
 
+### Watching live or with a delay
+
+A viewer can watch as it happens, or a few seconds behind so that text or other media made about a moment is ready when that moment is shown. Both are the same interval. For a delay, the consumer waits until each frame's `receivedMonotonicNanos` plus the delay before passing it on. While it waits, frames stay in the interval's own buffer, so `maxFrames` (at most 1024) and `maxBufferedBytes` are the delay's memory bound, and anything beyond them is dropped oldest-first and counted as `overflow`. Size them for the delay: five seconds of a busy page at up to 60 frames a second is 300 frames, and a 1280×720 JPEG of dense text is about 200 KB. The same clock stamps `documentBoundaries`, so an address bar drawn beside the frames changes when the frame after a boundary is shown. The record keeps the latest 64 boundaries, so a long stream can still name what it is showing. An interval may last up to six hours (`maxDurationMillis`, 60 seconds by default).
+
+```ts
+import { Clock, Effect, Stream } from "effect";
+
+const interval =
+  yield *
+  Capture.start(session, {
+    lifetime: "page",
+    size: { width: 1280, height: 720 },
+    maxFrames: 400,
+    maxBufferedBytes: 64 * 1024 * 1024,
+    maxDurationMillis: 30 * 60_000,
+  });
+const delayed = interval.frames.pipe(
+  Stream.mapEffect((frame) =>
+    Effect.flatMap(Clock.monotonicTimeNanos, (now) => {
+      const wait = Number(frame.receivedMonotonicNanos + 5_000_000_000n - now) / 1e6;
+      return Effect.as(wait > 0 ? Effect.sleep(wait) : Effect.void, frame);
+    }),
+  ),
+);
+```
+
+`Capture.multipart(frames)` turns frames into one `multipart/x-mixed-replace` response for an `<img>`, the motion JPEG that WHATWG HTML defines for images. It closes each frame with the next part's delimiter and headers at once, because a browser shows a part only when it has read the headers of the one after it: without that, a viewer runs one frame behind and never shows the last picture of a page that has gone still. It writes no metadata, so nothing but pictures reaches a viewer, and it draws a new boundary from `Crypto` for each response. Call it once per viewer, over one fan-out of the interval, for example a sliding `PubSub` with `replay: 1` so that a slow viewer skips frames without slowing anyone else and a new one is shown the current picture. End that fan-out before the HTTP server stops: a server waits for its open responses.
+
 Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. `Capture.start(session, { lifetime: "page" })` instead follows a page's main frame across documents: start it before a navigation and it covers the loading in between. The native screencast is never restarted for a navigation, so a boundary is not a gap this package introduced. Each frame carries the `document` it was received during (0, then one more per navigation), and the summary's bounded `documentBoundaries` give the last sequence before each one and the address it committed, with `initialUrl` for document 0. That is attribution by receipt order, not proof of whose pixels a frame shows: one received just after a navigation can still show the document before it. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined. A definitively closed page releases its capture reservation. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in [the caller encoder example](../browserbase/examples/record-video.ts); the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence. Filming across a navigation with one page-lifetime interval, resampled onto a constant-rate reel with the address of each document reported, is demonstrated in [the footage example](../browserbase/examples/realistic-footage/README.md).
 
 ### Read metadata while capture is running
@@ -639,8 +667,8 @@ const current = yield * interval.snapshot;
 no browser work, consumes no frames, charges no action, and works while the page
 is held. Repeated reads neither stop nor restart capture. `observedMonotonicNanos`
 stamps the read; each boundary retains its own commit observation time. The
-prefix holds at most 64 boundaries; `documentBoundariesTruncated` reports overflow
-and `currentDocument` continues counting. Addresses longer than the existing
+record keeps the latest 64 boundaries; `documentBoundariesTruncated` reports that earlier
+ones were let go, and `currentDocument` continues counting. Addresses longer than the existing
 bound remain `null`. The model should not receive these host-only addresses by
 accident merely because it can inspect the page.
 

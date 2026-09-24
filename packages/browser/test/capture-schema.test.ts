@@ -104,10 +104,10 @@ it("validates optional limits against resolved defaults without materializing de
   expect(Schema.is(Capture.CaptureOptions)({ maxFrameBytes: 32 * 1024 * 1024 })).toBe(false);
   expect(
     Schema.is(Capture.CaptureOptions)({
-      maxFrames: 64,
+      maxFrames: 1024,
       maxBufferedBytes: 64 * 1024 * 1024,
       maxFrameBytes: 64 * 1024 * 1024,
-      maxDurationMillis: 600000,
+      maxDurationMillis: 21_600_000,
       quality: 100,
       size: { width: 16384, height: 16384 },
     }),
@@ -127,10 +127,10 @@ it("rejects invalid numeric controls and keeps the documented upper bounds", () 
     }
   }
   for (const value of [
-    { maxFrames: 65 },
+    { maxFrames: 1025 },
     { maxBufferedBytes: 64 * 1024 * 1024 + 1 },
     { maxFrameBytes: 64 * 1024 * 1024 + 1 },
-    { maxDurationMillis: 600001 },
+    { maxDurationMillis: 21_600_001 },
     { quality: 101 },
     { size: { width: 16385, height: 1 } },
   ])
@@ -164,12 +164,12 @@ it.effect("rejects invalid admission before resolving a native target or reservi
 
       for (const options of [
         { maxFrames: 0 },
-        { maxFrames: 65 },
+        { maxFrames: 1025 },
         { maxBufferedBytes: 1 },
         { maxBufferedBytes: 64 * 1024 * 1024 + 1 },
         { maxFrameBytes: Number.NaN },
         { maxFrameBytes: 32 * 1024 * 1024 },
-        { maxDurationMillis: 600001 },
+        { maxDurationMillis: 21_600_001 },
         { quality: 101 },
       ]) {
         const result = yield* startCapture(parent, options).pipe(Effect.result);

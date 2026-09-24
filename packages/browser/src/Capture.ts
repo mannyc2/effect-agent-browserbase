@@ -1,4 +1,4 @@
-import { Effect, Schema, type Scope, Stream } from "effect";
+import { Crypto, Effect, type PlatformError, Schema, type Scope, Stream } from "effect";
 
 import type { BrowserSession } from "./Browser.ts";
 import { PageInfo } from "./BrowserData.ts";
@@ -84,3 +84,38 @@ export const stream = <E>(
   options: CaptureOptions = {},
 ): Stream.Stream<CapturedFrame, BrowserError> =>
   Stream.unwrap(start(session, options).pipe(Effect.map((interval) => interval.frames)));
+
+/** A `multipart/x-mixed-replace` body and the content type that names its boundary. */
+export interface MultipartBody<E, R> {
+  readonly contentType: string;
+  readonly body: Stream.Stream<Uint8Array, E, R>;
+}
+
+/**
+ * Frames as motion JPEG for an `<img>`: one `multipart/x-mixed-replace` response, as WHATWG HTML
+ * defines it for images. Each frame is followed at once by the next part's delimiter and headers,
+ * because a browser shows a part only when it has read the headers of the one after it; without
+ * that, a still page's last picture would never be shown. Parts carry no metadata, so nothing
+ * but the pictures reaches a viewer. The boundary is drawn from `Crypto` for each response, so a
+ * page cannot shape its pixels into it. Call it once per viewer.
+ */
+export const multipart = <E, R>(
+  frames: Stream.Stream<CapturedFrame, E, R>,
+): Effect.Effect<MultipartBody<E, R>, PlatformError.PlatformError, Crypto.Crypto> =>
+  Effect.map(
+    Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4),
+    (uuid) => {
+      const boundary = `frame-${uuid.replaceAll("-", "")}`;
+      const encoder = new TextEncoder();
+      const opening = encoder.encode(`--${boundary}\r\nContent-Type: image/jpeg\r\n\r\n`);
+      const next = encoder.encode(`\r\n--${boundary}\r\nContent-Type: image/jpeg\r\n\r\n`);
+
+      return {
+        contentType: `multipart/x-mixed-replace; boundary=${boundary}`,
+        body: Stream.make(opening).pipe(
+          Stream.concat(frames.pipe(Stream.flatMap((frame) => Stream.make(frame.bytes, next)))),
+          Stream.concat(Stream.make(encoder.encode(`--${boundary}--\r\n`))),
+        ),
+      };
+    },
+  );

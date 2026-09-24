@@ -1,3 +1,5 @@
+import { CaptureMaxima } from "./Options.ts";
+
 /** Callback-side bounded retention. No Promise, Effect, blocked producer, or per-frame fiber. */
 export class FrameBuffer<A extends { readonly bytes: Uint8Array }> {
   readonly maximumFrames: number;
@@ -13,7 +15,7 @@ export class FrameBuffer<A extends { readonly bytes: Uint8Array }> {
     if (
       !Number.isSafeInteger(maximumFrames) ||
       maximumFrames < 1 ||
-      maximumFrames > 64 ||
+      maximumFrames > CaptureMaxima.frames ||
       !Number.isSafeInteger(maximumBytes) ||
       maximumBytes < 1 ||
       maximumBytes > 64 * 1024 * 1024
