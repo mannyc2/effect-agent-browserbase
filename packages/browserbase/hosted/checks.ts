@@ -200,7 +200,7 @@ export const checks = {
     question: "H1",
     claim:
       "A cookie and a localStorage marker written by a persisting session are readable by a later non-persisting session on the same context after the writer's process was killed with SIGKILL, with no release requested, once the provider reported the writer's session terminal and 10 s passed. The terminal status and how long the provider took to reach it are reported.",
-    evidence: null,
+    evidence: "docs/STATUS.md#the-context-crash-check-24-september-2026",
     budget: { sessions: 2, browserSeconds: 180, actions: 10, captureSeconds: 0, transferBytes: 0 },
     env: [],
     optionalEnv: [],
