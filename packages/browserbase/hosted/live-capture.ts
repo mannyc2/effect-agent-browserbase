@@ -3,9 +3,8 @@ import { join } from "node:path";
 
 // What a delayed or live stream of a hosted browser depends on, measured at real round trips:
 // how captured frames are paced while a page scrolls, whether the last picture before the page
-// goes still reaches the host, what a viewport reading of a page under a transparent
-// pass-through container returns and costs, and whether a page's debug websocket answers
-// without credentials. Pictures are saved for comparison offline; no address, session id or
+// goes still reaches the host, and what a viewport reading of a page under a transparent
+// pass-through container returns and costs. Pictures are saved for comparison offline; no address, session id or
 // target id is written except in the gate's own allocation record.
 import { Clock, Effect, Fiber, Result, Stream } from "effect";
 import { NavigateRequest, PointerMoveRequest, WheelRequest } from "effect-browser/browser-data";
@@ -29,55 +28,6 @@ const spread = (values: ReadonlyArray<number>) => {
   return { count: sorted.length, p50: rank(0.5), p95: rank(0.95), max: sorted.at(-1) ?? null };
 };
 
-/** Opens the page's debug websocket with no credential and asks it to evaluate `1+1`. */
-const unauthenticated = (sessionId: string, targetId: string) =>
-  Effect.promise(
-    () =>
-      new Promise<{ opened: boolean; evaluated: boolean; closeCode: number | null }>((resolve) => {
-        const result = { opened: false, evaluated: false, closeCode: null as number | null };
-
-        const socket = new WebSocket(
-          `wss://connect.browserbase.com/debug/${sessionId}/devtools/page/${targetId}`,
-        );
-
-        const done = () => {
-          clearTimeout(timer);
-          try {
-            socket.close();
-          } catch {
-            // Already closed: the result is what it is.
-          }
-          resolve(result);
-        };
-
-        const timer = setTimeout(done, 8000);
-
-        socket.addEventListener("open", () => {
-          result.opened = true;
-          socket.send(
-            JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { expression: "1+1" } }),
-          );
-        });
-        socket.addEventListener("message", (event) => {
-          try {
-            const reply = JSON.parse(String(event.data)) as {
-              readonly id?: number;
-              readonly result?: { readonly result?: { readonly value?: unknown } };
-            };
-
-            if (reply.id === 1 && reply.result?.result?.value === 2) result.evaluated = true;
-          } catch {
-            // Not a CDP reply: nothing was evaluated.
-          }
-          done();
-        });
-        socket.addEventListener("close", (event) => {
-          result.closeCode = event.code;
-          done();
-        });
-      }),
-  );
-
 const scrolling = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* h.open();
@@ -87,14 +37,6 @@ const scrolling = Effect.scoped(
       NavigateRequest.make({ url: "https://en.wikipedia.org/wiki/Web_browser" }),
     );
     yield* session.pointerMove(PointerMoveRequest.make({ to: { x: 640, y: 400 } }));
-
-    const pages = yield* session.pages;
-    const selected = pages.find((page) => page.selected);
-
-    const authority =
-      selected === undefined
-        ? null
-        : yield* unauthenticated(session.reference.sessionId, selected.targetId);
 
     const cycles = [];
 
@@ -154,7 +96,7 @@ const scrolling = Effect.scoped(
       });
     }
 
-    return { authority, cycles, cleanup: yield* session.close };
+    return { cycles, cleanup: yield* session.close };
   }).pipe(
     Effect.provide(
       h.browser({ launch: recipe({ viewport: { _tag: "Fixed", width: 1280, height: 720 } }) }),

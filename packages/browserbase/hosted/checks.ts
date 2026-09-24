@@ -162,7 +162,7 @@ export const checks = {
   "live-capture": {
     question: null,
     claim:
-      "At real round trips: how captured frames are paced while a page scrolls, whether the last picture before the page goes still reaches the host (saved beside a screenshot for comparison), what a viewport reading of a page under a transparent pass-through container returns and costs, and whether a page's debug websocket evaluates without credentials. It reports measurements; it establishes only that frames arrived, intervals stopped cleanly and the reading returned text.",
+      "At real round trips: how captured frames are paced while a page scrolls, whether the last picture before the page goes still reaches the host (saved beside a screenshot for comparison), and what a viewport reading of a page under a transparent pass-through container returns and costs. It reports measurements; it establishes only that frames arrived, intervals stopped cleanly and the reading returned text.",
     evidence: null,
     budget: {
       sessions: 2,
