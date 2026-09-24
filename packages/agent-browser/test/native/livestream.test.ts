@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Ref, Schedule } from "effect";
+import { Context, Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
@@ -17,7 +17,8 @@ import { Stage } from "../../examples/livestream/Stage.ts";
 import { inspectionReference } from "../fixtures/Inspection.ts";
 
 // The example end to end on a local Chromium, with a scripted agent and a scripted narrator:
-// viewers watch one second behind, and every caption airs over the step it describes.
+// viewers watch one second behind, every caption airs over the step it describes, and the
+// narrator keeps one conversation, so each step reaches it with the captions before it.
 
 const Delay = 1000;
 const Millis = 1_000_000n;
@@ -36,7 +37,10 @@ const site = Effect.acquireRelease(
           response.end(
             request.url === "/pricing"
               ? page("Acme Pricing", "<h1>Plans</h1><p>Starter and Team.</p>")
-              : page("Acme Home", '<h1>Acme</h1><a href="/pricing">Pricing</a>'),
+              : page(
+                  "Acme Home",
+                  '<h1>Acme</h1><input aria-label="Search"> <a href="/pricing">Pricing</a>',
+                ),
           );
         });
 
@@ -78,20 +82,30 @@ const answer = (text: string): ScriptedTurnInput => ({
   onStreamStart: thinking,
 });
 
-const said = (text: string): ScriptedTurnInput => ({
-  _tag: "Generate",
+const said = (caption: string | null): ScriptedTurnInput => ({
+  _tag: "Stream",
   parts: [
-    { type: "text", text },
+    { type: "text-start", id: "caption" },
+    { type: "text-delta", id: "caption", delta: JSON.stringify({ caption }) },
+    { type: "text-end", id: "caption" },
     { type: "finish", reason: "stop", usage },
   ],
+  termination: { _tag: "Complete" },
 });
 
-// The second caption carries markup, as page text reaching a caption could.
+// The second caption carries markup, as page text reaching a caption could. Looking again at a page
+// shows viewers nothing new, and the narrator says nothing.
 const captions = [
   "Opening the Acme home page",
   "Reading <b>the</b> page",
+  "Typing into the search box",
   "Following the Pricing link",
 ];
+
+const narration = [captions[0], captions[1], captions[2], null, captions[3], null] as const;
+
+// What the agent types never reaches the narrator.
+const typed = "team plans";
 
 const scripted = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   Layer.mergeAll(
@@ -106,21 +120,32 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { origin } = yield* site;
+        const search = { elementId: "unobserved" };
         const pricing = { elementId: "unobserved" };
 
         const agentModel = scripted([
           call("navigate", "browser_navigate", { url: `${origin}/` }),
           call("inspect", "browser_inspect", {}),
           {
+            ...call("fill", "browser_fill", { reference: search, value: typed }),
+            assertRequest: (request) => {
+              Object.assign(search, inspectionReference(request, "Search"));
+            },
+          },
+          call("look", "browser_inspect", {}),
+          {
             ...call("click", "browser_click", pricing),
             assertRequest: (request) => {
               Object.assign(pricing, inspectionReference(request, "Pricing"));
             },
           },
+          call("reread", "browser_inspect", {}),
           answer('{"summary":"Opened the pricing page"}'),
         ]);
 
         const aired: Array<AirEvent> = [];
+        // Built here so the test can read what the narrator was sent.
+        const narratorModel = yield* Layer.build(scripted(narration.map(said)));
 
         const seen = yield* Ref.make<
           ReadonlyArray<{ caption: string; markup: boolean; address: string; title: string }>
@@ -185,7 +210,7 @@ it.live(
           Effect.provide(
             Layer.mergeAll(
               Stage.layer({ port: 0 }),
-              Narrator.layer.pipe(Layer.provide(scripted(captions.map(said)))),
+              Narrator.layer.pipe(Layer.provide(Layer.succeedContext(narratorModel))),
               InMemory.layer,
               Chromium.layer({
                 launch: {
@@ -279,6 +304,31 @@ it.live(
           expect(result.requests).not.toContain(text);
           expect(result.text).not.toContain(text);
         }
+
+        // The looks that showed nothing new stay silent; nothing was late and nothing failed.
+        expect(events.flatMap((event) => (event._tag === "Skipped" ? [event.reason] : []))).toEqual(
+          ["silent", "silent"],
+        );
+
+        // One conversation: each step reaches the narrator with the captions before it and with the
+        // page that step left, never another step's.
+        const narrated = (yield* Context.get(narratorModel, ScriptedModel).requests).map(
+          (request) =>
+            JSON.stringify(request, (_key, value) =>
+              typeof value === "bigint" ? String(value) : value,
+            ),
+        );
+
+        expect(narrated).toHaveLength(narration.length);
+        expect(narrated[1]).toContain("Opening the Acme home page");
+        expect(narrated[5]).toContain("Following the Pricing link");
+        expect(narrated[3]).not.toContain("Acme Pricing");
+        expect(narrated[4]).toContain("Acme Pricing");
+        expect(narrated[4]).toContain(`${origin}/pricing`);
+
+        // A fill names its control as a reference: the narrator gets the label, never the value.
+        expect(narrated[2]).toContain("Search");
+        for (const request of narrated) expect(request).not.toContain(typed);
 
         // Capture accounting: nothing this package discarded beyond frames Chromium sent late.
         expect(result.capture.discarded - result.capture.late).toBe(0);
