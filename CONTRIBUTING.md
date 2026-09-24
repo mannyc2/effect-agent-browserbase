@@ -63,7 +63,7 @@ Owned code is held to a stricter lint and compiler policy than upstream. `lint/.
 
 ## Source and package integration
 
-The owned packages share one coordinated version (`0.2.0-beta.0`, released on the `beta` dist-tag) in a fixed release group separate from the unchanged upstream framework group. Shared runtime changes require both Chromium and Browserbase composition checks; adapter changes exercise the same tools with each source.
+The owned packages share one coordinated version (`0.2.0-beta.1`; releases go to the `beta` dist-tag) in a fixed release group separate from the unchanged upstream framework group. Shared runtime changes require both Chromium and Browserbase composition checks; adapter changes exercise the same tools with each source.
 
 Every test belongs to the package whose code it tests. Owner regressions in `packages/browser/test` run the real session owner over the scripted engine, and that package's `test/fixtures/ScriptedOwner.ts` replaces native behaviour only where a test scripts it. Provider regressions in `packages/browserbase/test` compose the real account and browser Layers through `effect-browserbase/testing`. A package's tests reach another package only through its public exports, so a regression that needs both sides uses the public testing entries rather than either package's internals. `effect-browser` and `effect-browserbase` compile with `erasableSyntaxOnly`, so their source stays runnable under Node's type stripping and Bun without a transform.
 
