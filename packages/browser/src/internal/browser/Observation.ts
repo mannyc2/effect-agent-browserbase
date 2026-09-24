@@ -513,18 +513,11 @@ export const makeObservation = (
 
     try {
       check();
-      const data = await holder.getProperty("data");
+      const raw = await holder.evaluate((read) => read.data);
 
-      try {
-        check();
-        const raw: unknown = await data.jsonValue();
+      check();
 
-        check();
-
-        return raw;
-      } finally {
-        await data.dispose();
-      }
+      return raw;
     } finally {
       await holder.dispose();
     }
@@ -821,23 +814,19 @@ export const makeObservation = (
 
     const handles: Array<ElementHandle<Element>> = [];
     let nodesHandle: JSHandle | undefined;
+    // A hosted page can take hundreds of milliseconds to answer each call, so a reading makes a
+    // fixed number of them: one for the data, and one for every node handle at once.
+    let spare: Array<JSHandle> = [];
 
     try {
       let data: PageReadResult;
 
       try {
         check();
-        const dataHandle = await holder.getProperty("data");
+        const raw = await holder.evaluate((read) => read.data);
 
-        try {
-          check();
-          const raw: unknown = await dataHandle.jsonValue();
-
-          check();
-          data = safeDecode(PageReadResult, raw);
-        } finally {
-          await dataHandle.dispose();
-        }
+        check();
+        data = safeDecode(PageReadResult, raw);
         check();
         const textBytes = new TextEncoder().encode(data.text).length;
 
@@ -854,24 +843,32 @@ export const makeObservation = (
             }),
           );
         if (keepNodes) {
-          nodesHandle = await holder.getProperty("nodes");
+          nodesHandle = await holder.evaluateHandle((read) => read.nodes);
           check();
-          for (let i = 0; i < data.controls.length; i++) {
-            const node = await nodesHandle.getProperty(String(i));
-            const element = node.asElement();
+          const nodes = await nodesHandle.getProperties();
 
-            if (element === null) {
-              await node.dispose();
-              throw failure(Reasons.Malformed.make({}));
-            }
+          spare = [...nodes.values()];
+          check();
+          const picked: Array<ElementHandle<Element>> = [];
+
+          for (let i = 0; i < data.controls.length; i++) {
+            const element = nodes.get(String(i))?.asElement() ?? null;
+
+            if (element === null) throw failure(Reasons.Malformed.make({}));
             // Playwright types every property handle as `any`. readPage stores only Elements
             // under `nodes`, and asElement() has already rejected any other value.
             // oxlint-disable-next-line typescript/no-unsafe-argument -- untyped Playwright handle
-            handles.push(element);
-            check();
+            picked.push(element);
           }
+          const kept = new Set<JSHandle>(picked);
+
+          spare = spare.filter((node) => !kept.has(node));
+          handles.push(...picked);
         }
       } finally {
+        await closeWithin(() => Promise.allSettled(spare.map((node) => node.dispose()))).catch(
+          () => {},
+        );
         await nodesHandle?.dispose().catch(() => {});
         await holder.dispose();
       }
