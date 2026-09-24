@@ -137,16 +137,23 @@ export class ObservedControl extends Schema.Class<ObservedControl>("BrowserObser
  * How a viewport reading was bounded and what it left out. These are counts, so they are safe
  * to show a model. Visibility is geometry and hit-testing, never a pixel comparison: text is
  * kept when its line boxes intersect the viewport and the browser finds its own element at a
- * sampled point. `uncertainText` lay under something that takes no pointer events, which
- * hit-testing cannot see through, so it is left out rather than called visible.
+ * sampled point. Something that takes no pointer events is invisible to that test, so the
+ * browser is asked what is on top there with pointer events ignored: a box that paints at the
+ * point covers the text, and one that paints nothing there, such as an empty full-screen
+ * container, does not. Text that could not be settled that way is left out as uncertain.
  */
 export class ViewportEvidence extends Schema.Class<ViewportEvidence>("BrowserViewportEvidence")({
   width: Schema.Finite,
   height: Schema.Finite,
   /** Text that crossed a viewport edge; only its lines on screen were kept. */
   clippedText: Schema.Natural,
-  /** Left out: the browser found another element at the sampled point. */
+  /** Left out: another element is on top at the sampled point, or a box there paints over it. */
   coveredText: Schema.Natural,
+  /**
+   * Left out: something that takes no pointer events lies over it and the browser's own hit test
+   * could not settle whether it paints there, for example beneath another such box, in a child
+   * frame, or after too many such points in one reading.
+   */
   uncertainText: Schema.Natural,
   /** Controls that intersect the viewport but cannot be reached there. */
   unreachableControls: Schema.Natural,

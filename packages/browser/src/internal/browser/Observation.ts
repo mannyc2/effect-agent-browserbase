@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { ElementHandle, JSHandle } from "playwright-core";
+import type { ElementHandle, JSHandle, Page } from "playwright-core";
 
 import { ControlFacts, type ObservedElement, type SelectOptions } from "../../BrowserData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
@@ -18,6 +18,7 @@ import {
   identityOf,
   observedControl,
   PageReadResult,
+  PointVerdict,
   readPage,
   stableIdentityOf,
 } from "./PageRead.ts";
@@ -68,6 +69,124 @@ const SelectionFacts = Schema.Struct({
 
 /** Bounds the page traversal itself, so a huge document costs a bounded read. */
 const NodeBudget = 20_000;
+
+/** Bounds the browser's own hit test for one reading; past it, pending points stay uncertain. */
+const ConfirmMillis = 5000;
+
+const FrameTree = Schema.Struct({
+  frameTree: Schema.Struct({ frame: Schema.Struct({ id: Schema.String }) }),
+});
+
+const Located = Schema.Struct({ backendNodeId: Schema.Int, frameId: Schema.String });
+
+const Resolved = Schema.Struct({ object: Schema.Struct({ objectId: Schema.String }) });
+
+const Classified = Schema.Struct({
+  result: Schema.Struct({
+    value: Schema.Struct({
+      data: Schema.Array(Schema.Union([PointVerdict, Schema.Literal("unknown")])).check(
+        Schema.isMaxLength(256),
+      ),
+    }),
+  }),
+});
+
+/**
+ * Asks the browser which box is on top at each pending point once pointer events are ignored,
+ * then has the page judge whether that box paints there. Chromium's own hit test finds boxes the
+ * page cannot see, such as those inside closed shadow roots. It runs on a short-lived session of
+ * the page's existing connection, reads only, and answers for main-frame boxes; a point whose
+ * top box belongs to another frame, or whose answer does not arrive, gets no verdict.
+ */
+const confirmPending = async (
+  page: Page,
+  pending: NonNullable<PageReadResult["pending"]>,
+  check: () => void,
+): Promise<Record<string, PointVerdict>> => {
+  const cdp = await page.context().newCDPSession(page);
+  const group = "effect-browser-occlusion";
+
+  try {
+    check();
+
+    const [tree, ...located] = await Promise.all([
+      cdp.send("Page.getFrameTree"),
+      ...pending.points.map(([x, y]) =>
+        cdp
+          .send("DOM.getNodeForLocation", {
+            x: x + Math.round(pending.scrollX),
+            y: y + Math.round(pending.scrollY),
+            ignorePointerEventsNone: true,
+          })
+          .then((raw) => safeDecode(Located, raw))
+          .catch(() => undefined),
+      ),
+    ]);
+
+    check();
+    const mainFrame = safeDecode(FrameTree, tree).frameTree.frame.id;
+    const byNode = new Map<number, Array<readonly [number, number]>>();
+
+    pending.points.forEach((point, index) => {
+      const top = located[index];
+
+      if (top === undefined || top.frameId !== mainFrame) return;
+      byNode.set(top.backendNodeId, [...(byNode.get(top.backendNodeId) ?? []), point]);
+    });
+
+    const answers = await Promise.all(
+      [...byNode].map(async ([backendNodeId, points]) => {
+        try {
+          const { object } = safeDecode(
+            Resolved,
+            await cdp.send("DOM.resolveNode", { backendNodeId, objectGroup: group }),
+          );
+
+          check();
+
+          const { result } = safeDecode(
+            Classified,
+            await cdp.send("Runtime.callFunctionOn", {
+              functionDeclaration: String(readPage),
+              objectId: object.objectId,
+              arguments: [
+                {
+                  value: {
+                    scope: "viewport",
+                    maximumBytes: 0,
+                    controlLimit: 0,
+                    nodeBudget: 0,
+                    classify: points,
+                  },
+                },
+                { objectId: object.objectId },
+              ],
+              returnByValue: true,
+            }),
+          );
+
+          return points.map((point, index) => [point, result.value.data[index]] as const);
+        } catch {
+          return [];
+        }
+      }),
+    );
+
+    check();
+    const verdicts: Record<string, PointVerdict> = {};
+
+    for (const [[x, y], verdict] of answers.flat())
+      if (verdict !== undefined && verdict !== "unknown")
+        verdicts[`${String(x)},${String(y)}`] = verdict;
+
+    return verdicts;
+  } finally {
+    await closeWithin(() => cdp.send("Runtime.releaseObjectGroup", { objectGroup: group })).catch(
+      () => {},
+    );
+    await closeWithin(() => cdp.detach()).catch(() => {});
+  }
+};
 
 /** A host's own decision about one control, made on facts read from the page just now. */
 export type AdmissionPolicy = (facts: ControlFacts) => boolean;
@@ -675,15 +794,16 @@ export const makeObservation = (
       return value.text;
     });
 
-  /** One bounded read of the selected frame, and the node handles it names, in order. */
-  const read = async (
+  /** One pass of the page reader over the selected frame, and the node handles it names. */
+  const readOnce = async (
     scope: "document" | "viewport",
     maximumBytes: number,
     controlLimit: number,
     check: () => void,
     keepNodes: boolean,
-    target?: DriverTarget,
-    match?: string,
+    target: DriverTarget | undefined,
+    match: string | undefined,
+    verdicts: Record<string, PointVerdict> | undefined,
   ) => {
     check();
 
@@ -694,6 +814,7 @@ export const makeObservation = (
       nodeBudget: NodeBudget,
       choices: keepNodes,
       ...(match === undefined ? {} : { match }),
+      ...(verdicts === undefined ? {} : { verdicts }),
     });
 
     const handles: Array<ElementHandle<Element>> = [];
@@ -763,6 +884,49 @@ export const makeObservation = (
       check();
       throw error;
     }
+  };
+
+  /**
+   * One bounded read of the selected frame, and the node handles it names, in order. A viewport
+   * read of the main frame that left points pending asks the browser about them and reads once
+   * more with its answers; if that fails, the first reading stands, pending points uncertain.
+   */
+  const read = async (
+    scope: "document" | "viewport",
+    maximumBytes: number,
+    controlLimit: number,
+    check: () => void,
+    keepNodes: boolean,
+    target?: DriverTarget,
+    match?: string,
+  ) => {
+    const first = await readOnce(
+      scope,
+      maximumBytes,
+      controlLimit,
+      check,
+      keepNodes,
+      target,
+      match,
+      undefined,
+    );
+
+    const pending = first.data.pending;
+    const { entry, frame } = current(target);
+
+    if (pending === undefined || frame !== entry.page.mainFrame()) return first;
+    let verdicts: Record<string, PointVerdict> | undefined;
+
+    await closeWithin(async () => {
+      verdicts = await confirmPending(entry.page, pending, check);
+    }, ConfirmMillis).catch(() => {});
+    check();
+    if (verdicts === undefined || Object.keys(verdicts).length === 0) return first;
+    await closeWithin(() =>
+      Promise.allSettled(first.handles.map((handle) => handle.dispose())),
+    ).catch(() => {});
+
+    return readOnce(scope, maximumBytes, controlLimit, check, keepNodes, target, match, verdicts);
   };
 
   const observe = (
