@@ -134,7 +134,7 @@ Chromium identity is `{ provider: "chromium", id }`, identifying this ownership 
 ```ts
 const status = yield * session.status;
 const diagnostics = yield * session.diagnostics;
-// status: { phase, reason, generation, busy, unresolvedDispatch }
+// status: { phase, reason, generation, busy, unresolvedDispatch, actions: { used, maximum } }
 // diagnostics: { records, total, dropped, truncated }
 ```
 
@@ -146,6 +146,16 @@ closed vocabulary includes `faulted` for a known terminal trigger, alongside `ac
 new case. `reason` retains the original terminal trigger through later cleanup. `busy` reports
 active admission or pending policy cleanup. Action-count or host-read exhaustion leaves the owner
 open and is not a terminal failure.
+
+`actions` is the model-reachable allowance as the owner counts it: `maximum` is the policy's
+`maxActions` and `used` the operations admitted against it, whether they then succeeded or not.
+Every step of `fillForm` and its submit is an action, and so is each reading an agent Tool takes
+after its action; a form's verification, `checkpoint`, `controlFacts` and `status` itself are not.
+A refused operation is not counted, so `used` never passes `maximum`, and at `maximum` the next
+action fails `Limit { dimension: "actions" }` undispatched while the owner stays open. A host that
+runs one long session reads `used` instead of counting actions itself. `BrowserPolicy.maxActions`
+accepts 1–1,000,000 (100 by default, like the host-read allowance's bound); a long session raises it
+together with `maxElapsedMillis`.
 
 `unresolvedDispatch` is separate from the trigger. Idle expiry records `expired` without inventing
 an unknown dispatch. Expiry or a fail-session callback overlapping native work retains both the
@@ -469,7 +479,8 @@ Exhaustion reports `Limit { dimension: "host-reads", maximum, observed } / undis
 owner stays open. These operations still obey the same lifetime, bytes, deadline and fail-fast
 concurrency bounds: a checkpoint can execute page script and is not unlimited free work.
 `observe`, `readText`, `screenshot` and `waitFor` continue consuming the model-reachable action
-allowance. Neither budget is a tool parameter, and `maxActions` has not become mutations-only.
+allowance, which `status.actions` reports. Neither budget is a tool parameter, and `maxActions`
+has not become mutations-only.
 
 ### Real pointer and wheel input
 

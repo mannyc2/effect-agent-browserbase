@@ -28,6 +28,7 @@ over-budget check fails before anything is spent.
 | `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |
 | `replay-delivery` | H7 | the replay playlist validates and a segment downloads; recording delivery is reported as observed |
 | `live-capture` | — | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements |
+| `long-session` | — | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
 
 The question codes come from the design research that preceded the checks
 (retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1

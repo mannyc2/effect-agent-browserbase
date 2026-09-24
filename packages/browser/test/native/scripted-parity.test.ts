@@ -208,6 +208,38 @@ const cases: ReadonlyArray<Case> = [
       }),
   },
   {
+    name: "both owners count form steps and readings as actions, and verification and checkpoints not",
+    policy: BrowserPolicy.unrestricted({ maxActions: 6 }),
+    run: (session, origin) =>
+      Effect.gen(function* () {
+        yield* session.navigate({ url: `${origin}/` });
+        const observation = yield* session.observe();
+
+        yield* session.checkpoint({ picture: false });
+
+        const result = yield* session.fillForm({
+          observationId: observation.observationId,
+          fields: [
+            { elementId: named(observation, "Name").elementId, value: "Ada" },
+            { elementId: named(observation, "Newsletter").elementId, checked: true },
+          ],
+          submit: named(observation, "Accept all").elementId,
+        });
+
+        expect(result.submitted).toBe(true);
+        expect((yield* session.status).actions).toEqual({ used: 5, maximum: 6 });
+        yield* session.observe();
+        expect(yield* failure(session.observe())).toEqual({
+          reason: "Limit",
+          outcome: "undispatched",
+        });
+        expect(yield* session.status).toMatchObject({
+          phase: "open",
+          actions: { used: 6, maximum: 6 },
+        });
+      }),
+  },
+  {
     name: "a selector that matches nothing is not found",
     run: (session, origin) =>
       Effect.gen(function* () {

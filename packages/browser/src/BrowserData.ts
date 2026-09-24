@@ -92,6 +92,9 @@ export type SessionReason = typeof SessionReason.Type;
 
 const DiagnosticCounter = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
 
+/** The bound on one session's model-reachable actions, like the host-read allowance's. */
+const ActionAllowance = PositiveInt.check(Schema.isLessThanOrEqualTo(1_000_000));
+
 /** Host-only admission evidence. Neither an admission token nor proof of remote termination. */
 export class SessionStatus extends Schema.Class<SessionStatus>("BrowserSessionStatus")({
   phase: SessionPhase,
@@ -99,6 +102,19 @@ export class SessionStatus extends Schema.Class<SessionStatus>("BrowserSessionSt
   generation: DiagnosticCounter,
   busy: Schema.Boolean,
   unresolvedDispatch: Schema.Boolean,
+  /**
+   * Actions admitted against the policy's `maxActions`, as the owner counted them. Host reads
+   * (`checkpoint`, `controlFacts`) and uncharged reads such as a form's verification are not
+   * actions. `used` equals `maximum` once the allowance is spent; the owner stays open.
+   */
+  actions: Schema.Struct({
+    used: Schema.Natural.check(Schema.isLessThanOrEqualTo(1_000_000)),
+    maximum: ActionAllowance,
+  }).check(
+    Schema.makeFilter((actions) => actions.used <= actions.maximum, {
+      title: "no more actions used than allowed",
+    }),
+  ),
 }) {}
 
 /** Bounded host facts only: no target identity, page content, native exception or consumer cause. */
@@ -238,14 +254,16 @@ export class PageExecutionState extends Schema.Class<PageExecutionState>(
 /** Explicit opt-out: this integration does not claim whole-browser network containment. */
 export class BrowserPolicy extends Schema.Class<BrowserPolicy>("BrowserBrowserPolicy")({
   network: Schema.TaggedStruct("Unrestricted", {}),
-  maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1000)),
+  /** Model-reachable actions for the session's lifetime, 1–1,000,000. `status.actions` reads use. */
+  maxActions: ActionAllowance,
   maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(21_600_000)),
   maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
 }) {
   /**
    * Conservative bounds for trusted host code: 100 actions, five minutes, 2 MiB returned.
    * The network choice is spelled out in the name because this runtime cannot prove a
-   * narrower one; override any bound, never the network.
+   * narrower one; override any bound, never the network. A long session raises `maxActions`
+   * (up to 1,000,000) and `maxElapsedMillis` (up to six hours) together.
    */
   static unrestricted(
     bounds: Partial<

@@ -38,12 +38,15 @@ export interface Check {
   readonly media: boolean;
 }
 
-/** No single check may exceed these, whatever its entry says. */
+/**
+ * No single check may exceed these, whatever its entry says. The browser time, action and
+ * capture ceilings are the long-session soak's own budget; every other check stays far below.
+ */
 export const ceiling: Budget = {
   sessions: 2,
-  browserSeconds: 300,
-  actions: 20,
-  captureSeconds: 15,
+  browserSeconds: 900,
+  actions: 1100,
+  captureSeconds: 900,
   transferBytes: 512 * 1024 * 1024,
 };
 
@@ -169,6 +172,23 @@ export const checks = {
       browserSeconds: 120,
       actions: 20,
       captureSeconds: 12,
+      transferBytes: 0,
+    },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
+  "long-session": {
+    question: null,
+    claim:
+      "At real round trips, one session spends an action allowance above the former 1,000 cap to its maximum while one live capture interval runs throughout: status counts every admitted action, the next action is refused Limit and undispatched with the owner still open, a host read still runs, frames arrive in every quarter of the run, the interval stops cleanly and the session releases. Pace and capture accounting are reported as measurements.",
+    evidence: null,
+    budget: {
+      sessions: 1,
+      browserSeconds: 900,
+      actions: 1100,
+      captureSeconds: 900,
       transferBytes: 0,
     },
     env: [],

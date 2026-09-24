@@ -32,6 +32,7 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
           generation: 1,
           busy: false,
           unresolvedDispatch: false,
+          actions: { used: 0, maximum: 100 },
         }),
       ),
     ),

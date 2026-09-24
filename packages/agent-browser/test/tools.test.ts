@@ -42,6 +42,7 @@ it.effect(
           generation: 1,
           busy: false,
           unresolvedDispatch: false,
+          actions: { used: 0, maximum: 100 },
         });
 
         let reads = 0;
@@ -88,6 +89,7 @@ it.effect(
           generation: 2,
           busy: false,
           unresolvedDispatch: true,
+          actions: { used: 1, maximum: 100 },
         });
         yield* Scope.close(scope, Exit.void);
         const closed = yield* host.toolFailures;
