@@ -183,7 +183,7 @@ export const checks = {
     question: null,
     claim:
       "At real round trips, one session spends an action allowance above the former 1,000 cap to its maximum while one live capture interval runs throughout: status counts every admitted action, the next action is refused Limit and undispatched with the owner still open, a host read still runs, frames arrive in every quarter of the run, the interval stops cleanly and the session releases. Pace and capture accounting are reported as measurements.",
-    evidence: null,
+    evidence: "docs/STATUS.md#the-long-session-check-24-september-2026",
     budget: {
       sessions: 1,
       browserSeconds: 900,

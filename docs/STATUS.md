@@ -191,6 +191,18 @@ The owner supplied Browserbase and OpenRouter credentials and authorized real mo
 
 These are single runs of one task from one account and region.
 
+## The long-session check, 24 September 2026
+
+The owner authorized Browserbase calls for the action-allowance work. `tools/hosted-run.sh` ran the new `long-session` check once, from a bootstrapped workspace at `c7cdd5c`, and it exited 0 with its claim established. One session was allocated and released with `remote: "confirmed"`, provider status `COMPLETED` and no issues; it ran for about two minutes. No model provider was called. Account, project and session identifiers are omitted, as above.
+
+The session's policy allowed 1,100 actions. On two Wikipedia articles at 1280×720 the check ran a fixed cycle of four 400 px wheel steps down, four up, one viewport reading and one heading read, with a navigation every 250 steps, while one page-lifetime capture interval ran from the first navigation to the end:
+- all 1,100 actions succeeded, with no other failure, in 123 s. Wheel steps took 74 ms at the median (95th percentile 100 ms), viewport readings 317 ms (484 ms) and heading reads 75 ms (169 ms);
+- `status.actions.used` matched the host's own count at every hundredth action and ended at `{ used: 1100, maximum: 1100 }`;
+- the 1,101st action was refused `Limit { dimension: "actions", maximum: 1100, observed: 1100 }`, undispatched, and status still said `open` with no reason. A checkpoint then succeeded on its separate allowance;
+- capture delivered 1,584 of 1,586 frames across four documents, between 364 and 428 in each quarter of the run. The 2 it discarded were `late`, `overflow` was 0, the median gap between frames was 61 ms (95th percentile 303 ms, longest 1.2 s) and the native stop was confirmed.
+
+This is one run on public pages from one account and region. It shows that the counter, the refusal and capture hold over more than 1,000 actions at hosted round trips; it does not measure a session of hours, a page that repaints continuously, or memory growth over time.
+
 ## Historical material
 
 Nothing in the tree is needed to reconstruct current source except the tracked packages, `upstream.patch` and the pins; everything historical lives in Git history rather than beside the code.
