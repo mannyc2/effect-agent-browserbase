@@ -4,9 +4,10 @@ import { join } from "node:path";
 
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Ref, Schedule } from "effect";
+import { Effect, Fiber, Layer, Ref, Schedule } from "effect";
 import { ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import { chromium } from "playwright-core";
 
 import { Broadcast } from "../../examples/realistic-footage/Broadcast.ts";
 import { Director } from "../../examples/realistic-footage/Director.ts";
@@ -27,6 +28,7 @@ const watch = (url: string, seen: Ref.Ref<number>) =>
     const response = await fetch(`${url}/live.mjpeg`, { signal });
     const reader = response.body!.getReader();
     const decoder = new TextDecoder("latin1");
+    const header = /Content-Type: image\/jpeg\r\n/g;
     let tail = "";
 
     for (;;) {
@@ -34,13 +36,45 @@ const watch = (url: string, seen: Ref.Ref<number>) =>
 
       if (chunk.done) return;
       // A header can straddle two chunks, so the end of each one is searched again with the next.
+      // Each part's headers follow the frame before it, so every header after the first is a frame.
       const text = tail + decoder.decode(chunk.value);
-      const parts = text.match(/X-Sequence: \d+\r\n/g)?.length ?? 0;
+      const parts = text.match(header)?.length ?? 0;
 
-      tail = text.slice(-32).replace(/X-Sequence: \d+\r\n/g, "");
+      tail = text.slice(-32).replace(header, "");
       if (parts > 0) Effect.runSync(Ref.update(seen, (count) => count + parts));
     }
   }).pipe(Effect.ignore);
+
+/** The viewer's own page, in another browser: its script must render the live numbers. */
+const view = (url: string) =>
+  Effect.acquireRelease(
+    Effect.promise(() => chromium.launch()),
+    (browser) => Effect.promise(() => browser.close()),
+  ).pipe(
+    Effect.flatMap((browser) =>
+      Effect.promise(async () => {
+        const page = await browser.newPage();
+        const errors: Array<string> = [];
+
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(url, { waitUntil: "commit" });
+        await page.waitForFunction(
+          () => document.querySelectorAll("#numbers dt").length >= 10,
+          undefined,
+          {
+            timeout: 30_000,
+          },
+        );
+
+        return {
+          errors,
+          rows: await page.evaluate(() =>
+            [...document.querySelectorAll("#numbers dt")].map((row) => row.textContent ?? ""),
+          ),
+        };
+      }),
+    ),
+  );
 
 it.live(
   "real CDP: the demo storyboard is filmed across a navigation, watched live, and accounted for",
@@ -70,6 +104,9 @@ it.live(
 
             const seen = yield* Ref.make(0);
 
+            const viewed =
+              livePort === undefined ? yield* Effect.forkScoped(view(liveUrl)) : undefined;
+
             if (livePort === undefined) yield* Effect.forkScoped(watch(liveUrl, seen));
             else {
               console.error(`Watch live at ${liveUrl}/ (waiting up to two minutes for a viewer)`);
@@ -92,8 +129,14 @@ it.live(
             const { metrics } = footage;
 
             // Live means during: these frames reached the viewer before the film was finished.
-            if (livePort === undefined) {
+            if (viewed !== undefined) {
               expect(yield* Ref.get(seen)).toBeGreaterThan(metrics.capture.frames / 2);
+              // The viewer's script read the metrics it was served and rendered every row.
+              const page = yield* Fiber.join(viewed);
+
+              expect(page.errors).toEqual([]);
+              expect(page.rows).toContain("documents");
+              expect(page.rows).toContain("discarded here");
             }
 
             // The storyboard's own actions landed: the page says the berth is held.

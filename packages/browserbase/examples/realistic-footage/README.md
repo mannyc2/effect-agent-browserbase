@@ -81,11 +81,13 @@ same session can be watched while it runs. `Broadcast.layer({ port })` serves:
 - `/` is a viewer page: the live picture beside the numbers below, refreshed
   twice a second.
 - `/live.mjpeg` is motion JPEG. Every captured frame is written to every viewer
-  as it arrives, as one part of a `multipart/x-mixed-replace` response, which an
-  `<img>` plays with no script. Nothing is encoded or segmented on the way, so
-  this adds one write of latency. A viewer slower than the capture skips frames
-  instead of queueing them, and a new viewer is shown the current picture at
-  once.
+  as it arrives, as one part of a `multipart/x-mixed-replace` response from
+  `Capture.multipart`, which an `<img>` plays with no script. Each frame is
+  closed by the next part's headers at once, so a viewer shows a still page's
+  last picture rather than the one before it. Nothing is encoded or segmented on
+  the way, so this adds one write of latency. A viewer slower than the capture
+  skips frames instead of queueing them, and a new viewer is shown the current
+  picture at once.
 - `/metrics` is the same `Metrics` value `Footage.record` returns, as JSON.
 
 It binds to loopback by default. A filmed page can show anything the session can

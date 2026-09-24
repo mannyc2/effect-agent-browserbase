@@ -248,7 +248,12 @@ export const film = Effect.fn("Camera.film")(function* <A, E, R>(
   const cut = yield* Deferred.make<bigint>();
 
   const encoder = yield* spawner
-    .spawn(ChildProcess.make("ffmpeg", encoderArguments(options, outputPath)))
+    // A wedged encoder must not hold the scope open: SIGTERM, then SIGKILL after five seconds.
+    .spawn(
+      ChildProcess.make("ffmpeg", encoderArguments(options, outputPath), {
+        forceKillAfter: "5 seconds",
+      }),
+    )
     .pipe(Effect.mapError(encoderFailure("ffmpeg-start")));
 
   const complaints = yield* encoder.stderr.pipe(

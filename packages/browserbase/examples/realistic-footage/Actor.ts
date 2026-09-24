@@ -96,11 +96,10 @@ const glideOnto = Effect.fnUntraced(function* (session: AnySession, found: Locat
   );
 
   yield* cue({ _tag: "Glide", path }, "Played");
-  const target = session;
 
   yield* received(
     "pointerMove",
-    target.pointerMove(
+    session.pointerMove(
       PointerMoveRequest.make({ to: { x: Math.max(0, aim.x), y: Math.max(0, aim.y) } }),
     ),
   );
@@ -125,12 +124,10 @@ const press = <A, E, R>(session: AnySession, selector: string, action: Effect.Ef
   });
 
 export const click = Effect.fn("Actor.click")(function* (session: AnySession, selector: string) {
-  const target = session;
-
   return yield* press(
     session,
     selector,
-    timed("click", target.click(ClickRequest.make({ selector }))),
+    timed("click", session.click(ClickRequest.make({ selector }))),
   );
 });
 
@@ -169,17 +166,15 @@ export const type = Effect.fn("Actor.type")(function* (
 
   for (const stroke of yield* Humanize.keystrokes(text)) {
     yield* Effect.sleep(stroke.afterMillis);
-    const target = session;
-
     yield* received(
       "key",
       stroke._tag === "Backspace"
-        ? target.press(PressRequest.make({ key: "Backspace", into: selector }))
+        ? session.press(PressRequest.make({ key: "Backspace", into: selector }))
         : Humanize.needsShift(stroke.character)
-          ? target.press(
+          ? session.press(
               PressRequest.make({ key: stroke.character, modifiers: ["Shift"], into: selector }),
             )
-          : target.type(TypeRequest.make({ text: stroke.character, into: selector })),
+          : session.type(TypeRequest.make({ text: stroke.character, into: selector })),
     );
   }
 });
