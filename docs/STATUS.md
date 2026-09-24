@@ -142,6 +142,45 @@ Two findings changed source before this run. The provider's upload reply carries
 
 Each check narrows its question. Other storage kinds and flush timing (H1), reconnect from a separate process, duplicate registrations and retired callbacks (H4), worker restart and extension storage (H3), large uploads, downloads, certificates and proxies (H6), and logging, retention, expiry and BYOS (H7) remain open. Handoff was observed for one navigation by one operator; a handoff that ends with the operator still in control, or a Live View that expires mid-handoff, was not exercised.
 
+## Owner-authorized hosted checks, 24 September 2026
+
+The repository owner supplied credentials and authorized paid execution for [#86](https://github.com/mannyc2/effect-agent-browserbase/issues/86). `tools/hosted-run.sh` ran the new `live-capture` check four times, from bootstrapped workspaces. The first three runs failed on the viewport reading, exposing two library defects; the fourth ran at `18bcb5d`, with [#89](https://github.com/mannyc2/effect-agent-browserbase/pull/89) and [#90](https://github.com/mannyc2/effect-agent-browserbase/pull/90) merged, and exited 0.
+
+Between runs 3 and 4 there were two further sessions:
+- a diagnostic run with timing added to the read path, from a modified tree rather than a registered source;
+- the livestream example, run once as an uncommitted probe.
+
+Ten sessions were allocated in total. The nine with cleanup records released with `remote: "confirmed"`, provider status `COMPLETED` and no issues. The probe keeps no record, and the provider listed no running session afterwards. No model provider was called: the probe's agent and narrator were scripted. Account, project and session identifiers are omitted, as above.
+
+**Capture pacing and still pages.** Each run scrolled a Wikipedia article at 1280×720 in three cycles. Each cycle was three 500 px wheel steps 120 ms apart, then 1.5 s still. Across the 12 cycles:
+- 5 to 12 frames arrived per cycle, with the median gap between frames 13–171 ms and the 95th percentile 152–241 ms;
+- every cycle delivered every frame it received, with `discarded` and `late` both 0 and `nativeStop: "confirmed"`;
+- 1 or 2 frames arrived after the last input, and the last one 88–256 ms after it;
+- the last frame matched a screenshot taken once the page was still, to within JPEG noise (mean absolute difference at most 1.52 of 255).
+
+So at hosted round trips the picture a viewer is left with is the settled page. Frames are coarse and uneven, though, not a constant rate.
+
+**Viewport reading under a pass-through container.** CoinGecko's home page was read at 908×602.
+
+| Run | Viewport reading | Cause | Fix |
+| --- | --- | --- | --- |
+| 1, 2 | Failed `Stale` | Child-frame churn retired the whole page's observation | #89 scopes retirement to the observed frame |
+| 3 | Failed `Timeout` (15 s) | See the diagnostic run below | #90 |
+| 4 | 1.35 s: 558 text bytes, 19 controls | — | — |
+
+The diagnostic run measured 7.6 s for the same viewport reading, 6.1 s of it spent fetching the 19 control handles one property at a time, at about 320 ms per call. #90 fetches them, and the data, in a fixed number of calls.
+
+In run 4 the viewport reading reported 2 clipped text runs, 0 covered, 1 uncertain and 3 unreachable controls. In the diagnostic run, the browser's own hit test resolved the page's 47 pending points to a single node in about 0.5 s. A document reading of the same page took 0.53 s (5.5 s before #90) and returned 6,000 bytes, its limit.
+
+**The livestream example.** The example ran on a Browserbase session with a 3,000 ms delay. It opened `https://example.com/`, read it and followed its link:
+- every frame aired 2,998.7–3,000.3 ms after the host received it, 5 frames in all, with a 7.1 s gap while the page was still;
+- each of the three captions aired 2,998.7–3,000.8 ms after its step started, and every frame shown under a caption came from that caption's step;
+- no caption was skipped;
+- the address and title events followed both documents;
+- capture delivered 5 of 5 frames with `nativeStop: "confirmed"`.
+
+These are single runs against three public pages from one account and region. They don't measure a real narrator model's latency within the delay, a viewer on a slow link, or pages that repaint continuously for long periods.
+
 ## Historical material
 
 Nothing in the tree is needed to reconstruct current source except the tracked packages, `upstream.patch` and the pins; everything historical lives in Git history rather than beside the code.

@@ -163,7 +163,7 @@ export const checks = {
     question: null,
     claim:
       "At real round trips: how captured frames are paced while a page scrolls, whether the last picture before the page goes still reaches the host (saved beside a screenshot for comparison), and what a viewport reading of a page under a transparent pass-through container returns and costs. It reports measurements; it establishes only that frames arrived, intervals stopped cleanly and the reading returned text.",
-    evidence: null,
+    evidence: "docs/STATUS.md#owner-authorized-hosted-checks-24-september-2026",
     budget: {
       sessions: 2,
       browserSeconds: 120,
