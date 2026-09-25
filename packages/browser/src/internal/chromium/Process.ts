@@ -27,6 +27,7 @@ export const launchArguments = (options: ChromiumLaunch, directory: string): str
   "--no-default-browser-check",
   "--remote-debugging-address=127.0.0.1",
   "--remote-debugging-port=0",
+  "--remote-debugging-pipe",
   `--user-data-dir=${directory}`,
   ...(options.headless === false ? [] : ["--headless=new"]),
   ...(options.chromiumSandbox === false ? ["--no-sandbox"] : []),
@@ -137,7 +138,10 @@ export const launch = Effect.fnUntraced(function* (
       try {
         spawned = spawn(executable, launchArguments(options, directory), {
           cwd: directory,
-          stdio: ["ignore", "ignore", "ignore"],
+          // Chromium watches fd 3 for EOF and closes the browser when the host dies, including
+          // SIGKILL before connect. Keep its fd 3/4 pipe pair owned by this ChildProcess; send no
+          // commands on it. The shared Playwright driver still controls the loopback endpoint.
+          stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
           detached: true,
         });
       } catch {

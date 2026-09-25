@@ -19,10 +19,10 @@ const hostPath = fileURLToPath(new URL("../fixtures/ChromiumHost.ts", import.met
 // scope-close control also verifies that the process observer can distinguish cleanup from leaks.
 describe.each(["node", "bun"])("%s Chromium host lifetime", (runtime) => {
   describe.each([
-    { phase: "connected", stop: "close", knownFailure: false },
-    { phase: "acquired", stop: "SIGKILL", knownFailure: true },
-    { phase: "connected", stop: "SIGKILL", knownFailure: true },
-  ] as const)("$phase / $stop", ({ phase, stop, knownFailure }) => {
+    { phase: "connected", stop: "close" },
+    { phase: "acquired", stop: "SIGKILL" },
+    { phase: "connected", stop: "SIGKILL" },
+  ] as const)("$phase / $stop", ({ phase, stop }) => {
     let survivors: Awaited<ReturnType<ReturnType<typeof processTree>["sample"]>>;
     let cleanup: (() => Promise<void>) | undefined;
 
@@ -105,11 +105,7 @@ describe.each(["node", "bun"])("%s Chromium host lifetime", (runtime) => {
       await cleanup?.();
     });
 
-    // The detached-port launcher currently fails this invariant on abrupt host death. Remove
-    // knownFailure when the separate library fix lands: an unexpected pass fails this test.
-    // Setup/exit checks and emergency cleanup live in SUITE hooks (beforeEach/afterEach failures
-    // are inverted by `fails` too). Only the independently observed orphan list may fail here.
-    it("leaves no live owned processes after host exit", { fails: knownFailure }, () => {
+    it("leaves no live owned processes after host exit", () => {
       expect(survivors).toEqual([]);
     });
   });
