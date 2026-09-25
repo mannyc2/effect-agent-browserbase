@@ -29,7 +29,6 @@ await Effect.runPromise(
           }),
       );
 
-      if (command === "exit") process.exit(23);
       assert.equal(command, "close");
     }),
   ).pipe(
