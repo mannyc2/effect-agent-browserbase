@@ -190,6 +190,7 @@ export const makePlaywrightDriver = async (
   const pointer = makePointer(targets, actions);
   const keyboard = makeKeyboard(targets, actions, pointer.receipt);
   const captures = makeCaptureSources(targets);
+
   sameDocumentCapture = captures.sameDocumentNavigated;
 
   const pageControl = makePageControl(

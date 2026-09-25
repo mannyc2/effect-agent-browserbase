@@ -93,8 +93,11 @@ it.live("same-document navigation preserves observations and capture document id
     Effect.gen(function* () {
       const site = yield* localSite;
       const session = yield* (yield* Chromium).launch(policy);
+      const firstVisit = site.spaVisit();
 
-      yield* session.navigate({ url: `${site.url}spa` });
+      yield* Effect.addFinalizer(() => Effect.sync(firstVisit.close));
+
+      yield* session.navigate({ url: firstVisit.url });
       const observed = yield* session.observe({ scope: "viewport" });
       const push = observed.controls.find((control) => control.label === "Push route");
 
@@ -102,9 +105,14 @@ it.live("same-document navigation preserves observations and capture document id
 
       const documentCapture = yield* Capture.start(session);
 
+      yield* Effect.promise(() => firstVisit.push.arrived);
+      firstVisit.push.release();
       yield* session.waitFor({ selector: "#pushed", state: "visible" });
+      yield* Effect.promise(() => firstVisit.fragment.arrived);
+      firstVisit.fragment.release();
       yield* session.waitFor({ selector: "#fragmented", state: "visible" });
       yield* session.pages;
+
       const retainedFacts = yield* session.controlFacts(
         ObservedElement.make({
           observationId: observed.observationId,
@@ -122,9 +130,17 @@ it.live("same-document navigation preserves observations and capture document id
       expect((yield* session.readText({ selector: "#section" })).text).toBe("Stable page");
       yield* documentCapture.stop;
 
-      yield* session.navigate({ url: `${site.url}spa` });
+      const secondVisit = site.spaVisit();
+
+      yield* Effect.addFinalizer(() => Effect.sync(secondVisit.close));
+      yield* session.navigate({ url: secondVisit.url });
       const pageCapture = yield* Capture.start(session, { lifetime: "page" });
+
+      yield* Effect.promise(() => secondVisit.push.arrived);
+      secondVisit.push.release();
       yield* session.waitFor({ selector: "#pushed", state: "visible" });
+      yield* Effect.promise(() => secondVisit.fragment.arrived);
+      secondVisit.fragment.release();
       yield* session.waitFor({ selector: "#fragmented", state: "visible" });
       yield* session.pages;
 

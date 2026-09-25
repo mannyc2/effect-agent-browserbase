@@ -142,6 +142,7 @@ export const makeTargets = (
     const watchFrameNavigation = (frame: Frame): void => {
       if (frameNavigationOff.has(frame)) return;
       const emitter = clientNavigationEmitter(frame);
+
       const onNavigated = (event: ClientFrameNavigation) => {
         if (event.error !== undefined || event.newDocument !== undefined) return;
         sameDocumentNavigations.add(frame);
