@@ -394,12 +394,6 @@ export const FillFormOptions = Schema.Struct({
 
 export type FillFormOptions = typeof FillFormOptions.Type;
 
-/** `set` dispatched input; `unchanged` needed none, because a toggle already held its state. */
-export class FormFieldResult extends Schema.Class<FormFieldResult>("BrowserFormFieldResult")({
-  elementId: Identifier,
-  status: Schema.Literals(["set", "unchanged"]),
-}) {}
-
 /**
  * Where a form stopped and why. `error.outcome` says whether this step itself was dispatched;
  * nothing after it was. `elementId` names the control it stopped at, when there is one: a
@@ -416,13 +410,6 @@ export class FormStop extends Schema.Class<FormStop>("BrowserFormStop")({
  * stay set, because a form is not a transaction. `submitted` is true only when the submit click
  * completed; a stop at `submit` with an `unknown` outcome may have sent it.
  */
-export class FillFormResult extends Schema.Class<FillFormResult>("BrowserFillFormResult")({
-  fields: Schema.Array(FormFieldResult).check(Schema.isMaxLength(32)),
-  submitted: Schema.Boolean,
-  url: TargetUrl,
-  stopped: Schema.optionalKey(FormStop),
-}) {}
-
 export class ScrollRequest extends Schema.Class<ScrollRequest>("BrowserScrollRequest")({
   deltaX: Schema.Int.check(Schema.isBetween({ minimum: -100000, maximum: 100000 })),
   deltaY: Schema.Int.check(Schema.isBetween({ minimum: -100000, maximum: 100000 })),
@@ -629,19 +616,38 @@ export class TypeRequest extends Schema.Class<TypeRequest>("BrowserTypeRequest")
 
 /**
  * What native input was dispatched, where and when. `position` is the point this owner
- * commanded, or null when it has not yet placed the pointer on this page. The interval is on
- * the host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`, so input and
+ * commanded, null before it has placed the pointer, or unknown when Playwright chose the click
+ * point internally. For clicks, the interval brackets Playwright's supported click call, which
+ * can include its actionability and navigation waits; the browser's exact dispatch instant is
+ * unavailable. The interval is on the host monotonic clock that stamps
+ * `CapturedFrame.receivedMonotonicNanos`, so input and
  * pixels share one timeline. A wheel event is dispatched, not awaited: the receipt does not
  * claim the page finished scrolling, or that any frame shows it. A receipt never says which
  * key was pressed or what was typed.
  */
 export class InputReceipt extends Schema.Class<InputReceipt>("BrowserInputReceipt")({
   target: Target,
-  kind: Schema.Literals(["pointer-move", "hover", "wheel", "press", "type"]),
+  kind: Schema.Literals(["pointer-move", "hover", "wheel", "click", "press", "type"]),
   position: Schema.NullOr(ViewportPoint),
   delta: Schema.optionalKey(Schema.Struct({ x: WheelDelta, y: WheelDelta })),
   startedMonotonicNanos: Schema.BigInt,
   completedMonotonicNanos: Schema.BigInt,
+}) {}
+
+/** `set` dispatched input; `unchanged` needed none, because a toggle already held its state. */
+export class FormFieldResult extends Schema.Class<FormFieldResult>("BrowserFormFieldResult")({
+  elementId: Identifier,
+  status: Schema.Literals(["set", "unchanged"]),
+  input: Schema.optionalKey(InputReceipt),
+}) {}
+
+/** The bounded receipts for any toggle clicks and the one optional submit click. */
+export class FillFormResult extends Schema.Class<FillFormResult>("BrowserFillFormResult")({
+  fields: Schema.Array(FormFieldResult).check(Schema.isMaxLength(32)),
+  submitted: Schema.Boolean,
+  url: TargetUrl,
+  submitInput: Schema.optionalKey(InputReceipt),
+  stopped: Schema.optionalKey(FormStop),
 }) {}
 
 export class ScreenshotRequest extends Schema.Class<ScreenshotRequest>("BrowserScreenshotRequest")({
@@ -654,6 +660,8 @@ export class NavigationResult extends Schema.Class<NavigationResult>("BrowserNav
 
 export class ActionResult extends Schema.Class<ActionResult>("BrowserActionResult")({
   url: TargetUrl,
+  /** Present for clicks; fill and scripted scroll results have no native input receipt. */
+  input: Schema.optionalKey(InputReceipt),
 }) {}
 
 export class TextResult extends Schema.Class<TextResult>("BrowserTextResult")({

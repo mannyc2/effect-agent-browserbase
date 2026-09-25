@@ -187,6 +187,8 @@ export const makePlaywrightDriver = async (
   );
 
   const pointer = makePointer(targets, actions);
+
+  actions.setPointerInvalidator(pointer.invalidate);
   const keyboard = makeKeyboard(targets, actions, pointer.receipt);
   const captures = makeCaptureSources(targets);
 
