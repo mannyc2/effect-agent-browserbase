@@ -1,9 +1,27 @@
 import { Schema } from "effect";
-import type { BrowserContext, Download, ElementHandle, FileChooser, Frame } from "playwright-core";
+import type {
+  BrowserContext,
+  Download,
+  ElementHandle,
+  FileChooser,
+  Frame,
+  Page,
+} from "playwright-core";
 
-import { type ControlFacts, type ObservedElement, SafeFilename } from "../../BrowserData.ts";
+import {
+  type ControlFacts,
+  type InputReceipt,
+  type ObservedElement,
+  SafeFilename,
+} from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
-import type { Driver, DriverTarget, NativeFileSelection, NavigationControl } from "./Driver.ts";
+import type {
+  Driver,
+  DriverTarget,
+  InputCapture,
+  NativeFileSelection,
+  NavigationControl,
+} from "./Driver.ts";
 import {
   closeWithin,
   failure,
@@ -260,6 +278,11 @@ export const makeActions = (
   isTimeoutError: (error: unknown) => boolean,
 ) => {
   const { current } = targets;
+  let invalidatePointer = (_page: Page): void => {};
+
+  const setPointerInvalidator = (invalidate: (page: Page) => void) => {
+    invalidatePointer = invalidate;
+  };
 
   const navigationControls = new Map<
     string,
@@ -351,19 +374,52 @@ export const makeActions = (
   const readBack = (ticket: Ticket, wanted: number) =>
     Math.min(wanted, Math.max(0, ticket.remainingMillis() - 250));
 
-  const click: Driver["click"] = (target, ticket, policy, browserTarget) =>
+  const clickElement = (
+    page: Page,
+    element: ElementHandle<Element>,
+    ticket: Ticket,
+    capture?: InputCapture,
+  ): Promise<InputReceipt | undefined> => {
+    const dispatch = async () => {
+      invalidatePointer(page);
+      await element.click({ timeout: timeout(ticket) });
+    };
+
+    return capture === undefined
+      ? dispatch().then(() => undefined)
+      : capture(dispatch, { position: null });
+  };
+
+  const click: Driver["click"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
-      await withElement(
+      const { page } = current(browserTarget).entry;
+
+      const input = await withElement(
         target,
         ticket,
-        (element) => element.click({ timeout: timeout(ticket) }),
+        (element) => clickElement(page, element, ticket, capture),
         policy,
         browserTarget,
       );
+
       ticket.check();
 
-      return postUrl(browserTarget);
+      if (input === undefined) throw failure(Reasons.Malformed.make({}), "unknown");
+
+      return { url: postUrl(browserTarget), input };
     });
+
+  const clickWithoutReceipt = async (
+    target: string | ObservedElement,
+    ticket: Ticket,
+  ): Promise<string> => {
+    const { page } = current().entry;
+
+    await withElement(target, ticket, (element) => clickElement(page, element, ticket));
+    ticket.check();
+
+    return postUrl();
+  };
 
   /**
    * A file the provider already stores is named to the browser process, which opens it; this
@@ -496,7 +552,7 @@ export const makeActions = (
    * in the requested state, and a native radio is never asked to clear itself. Options are the
    * issued nodes of the same observation, exactly as `selectOption` sends them.
    */
-  const formStep: Driver["formStep"] = (target, field, ticket, policy, settleMillis) =>
+  const formStep: Driver["formStep"] = (target, field, ticket, policy, settleMillis, capture) =>
     sanitize(async () => {
       const { element, check, facts } = await observation.resolve(
         target,
@@ -510,6 +566,7 @@ export const makeActions = (
       check();
       if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
       let act: (() => Promise<unknown>) | undefined;
+      let input: InputReceipt | undefined;
 
       if (field.options !== undefined) {
         const admitted = await observation.selectOptions(
@@ -537,7 +594,9 @@ export const makeActions = (
           if (!field.checked && facts.inputType === "radio")
             throw failure(Reasons.Unsupported.make({}), "undispatched");
           await refuseInput(element);
-          act = () => element.click({ timeout: timeout(ticket) });
+          act = async () => {
+            input = await clickElement(current().entry.page, element, ticket, capture);
+          };
         }
       } else {
         const text = field.value ?? "";
@@ -578,24 +637,30 @@ export const makeActions = (
           field.checked === undefined || state === undefined || holdsChecked(state, field.checked),
         state,
         url: postUrl(),
+        ...(input === undefined ? {} : { input }),
       };
     });
 
   /** The one submit click, on an exact observed node that may have become enabled. */
-  const formSubmit: Driver["formSubmit"] = (target, ticket, policy) =>
+  const formSubmit: Driver["formSubmit"] = (target, ticket, capture, policy) =>
     sanitize(async () => {
-      await withAdmittedElement(
+      const { page } = current().entry;
+
+      const input = await withAdmittedElement(
         target,
         ticket,
         (element) => refuseInput(element),
-        (element) => element.click({ timeout: timeout(ticket) }),
+        (element) => clickElement(page, element, ticket, capture),
         policy,
         undefined,
         true,
       );
+
       ticket.check();
 
-      return postUrl();
+      if (input === undefined) throw failure(Reasons.Malformed.make({}), "unknown");
+
+      return { url: postUrl(), input };
     });
 
   const selectOption: Driver["selectOption"] = (target, options, ticket, policy) =>
@@ -758,7 +823,7 @@ export const makeActions = (
       };
     });
 
-  const clickAndWait: Driver["clickAndWait"] = (target, ticket) =>
+  const clickAndWait: Driver["clickAndWait"] = (target, ticket, capture) =>
     sanitize(async () => {
       const { entry, frame } = current();
 
@@ -770,12 +835,13 @@ export const makeActions = (
       );
 
       try {
-        await click(target, ticket);
+        const clicked = await click(target, ticket, capture);
+
         await observer.promise;
         await frame.waitForLoadState("domcontentloaded", { timeout: timeout(ticket) });
         ticket.check();
 
-        return postUrl();
+        return { url: postUrl(), input: clicked.input };
       } finally {
         observer.cancel();
       }
@@ -792,7 +858,7 @@ export const makeActions = (
       );
 
       try {
-        await click(target, ticket);
+        await clickWithoutReceipt(target, ticket);
         const download = await observer.promise;
 
         const filename = safeDecode(SafeFilename, download.suggestedFilename());
@@ -841,7 +907,7 @@ export const makeActions = (
       );
 
       try {
-        await click(target, ticket);
+        await clickWithoutReceipt(target, ticket);
         const chooser = await observer.promise;
 
         ticket.check();
@@ -858,6 +924,7 @@ export const makeActions = (
     });
 
   return {
+    setPointerInvalidator,
     withAdmittedElement,
     beginNavigation,
     /** Capture the exact navigation at dialog arrival; acknowledgement never looks it up again. */

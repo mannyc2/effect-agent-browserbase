@@ -122,7 +122,7 @@ const hitPoint = (
 export const makePointer = (targets: Targets, actions: ReturnType<typeof makeActions>) => {
   const { current } = targets;
   // Chromium keeps a pointer position per page; this is only the last one this driver set.
-  const positions = new WeakMap<Page, NativePoint>();
+  const positions = new WeakMap<Page, NativePoint | null>();
 
   const moveTo = async (page: Page, point: NativePoint): Promise<void> => {
     await page.mouse.move(point.x, point.y);
@@ -130,6 +130,10 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
   };
 
   const receipt = (page: Page): NativeInput => ({ position: positions.get(page) ?? null });
+
+  const invalidate = (page: Page): void => {
+    positions.set(page, null);
+  };
 
   const pointerMove = (point: NativePoint, ticket: Ticket, target?: DriverTarget) =>
     sanitize(async () => {
@@ -248,5 +252,5 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       return receipt(page);
     });
 
-  return { pointerMove, hover, wheel, receipt };
+  return { pointerMove, hover, wheel, receipt, invalidate };
 };

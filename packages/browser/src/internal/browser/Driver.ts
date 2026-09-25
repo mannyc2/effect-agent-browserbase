@@ -3,6 +3,7 @@ import type {
   FormField,
   FrameInfo,
   KeyModifier,
+  InputReceipt,
   ObservedControl,
   ObservedElement,
   PageExecutionState,
@@ -20,6 +21,17 @@ import type { CompiledBootstrap } from "./Bootstrap.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Invalidation, ObservationScope, Ticket, WaitTicket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
+
+/** Stamps a successful Playwright click call on the session clock; it may include actionability and navigation waits. */
+export type InputCapture = (
+  dispatch: () => Promise<void>,
+  input: NativeInput,
+) => Promise<InputReceipt>;
+
+export interface ClickResult {
+  readonly url: string;
+  readonly input: InputReceipt;
+}
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
 export interface DriverOptions {
@@ -250,9 +262,10 @@ export interface Driver {
   readonly click: (
     target: string | ObservedElement,
     ticket: Ticket,
+    capture: InputCapture,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
-  ) => Promise<string>;
+  ) => Promise<ClickResult>;
   readonly fill: (
     target: string | ObservedElement,
     value: string,
@@ -279,11 +292,13 @@ export interface Driver {
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
     settleMillis: number,
+    capture: InputCapture,
   ) => Promise<{
     readonly status: "set" | "unchanged";
     readonly reached: boolean;
     readonly state: string | undefined;
     readonly url: string;
+    readonly input?: InputReceipt;
   }>;
   /** Private current states of retained nodes, without identity checks; absent when detached. */
   readonly formState: (
@@ -294,8 +309,9 @@ export interface Driver {
   readonly formSubmit: (
     target: ObservedElement,
     ticket: Ticket,
+    capture: InputCapture,
     policy?: AdmissionPolicy,
-  ) => Promise<string>;
+  ) => Promise<ClickResult>;
   /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (
     deltaX: number,
@@ -356,7 +372,11 @@ export interface Driver {
     ticket: WaitTicket,
     target: DriverTarget,
   ) => Promise<void>;
-  readonly clickAndWait: (target: string | ObservedElement, ticket: Ticket) => Promise<string>;
+  readonly clickAndWait: (
+    target: string | ObservedElement,
+    ticket: Ticket,
+    capture: InputCapture,
+  ) => Promise<ClickResult>;
   readonly clickForDownload: (
     target: string | ObservedElement,
     ticket: Ticket,
