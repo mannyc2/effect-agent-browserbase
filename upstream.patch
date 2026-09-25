@@ -382,9 +382,18 @@ index 95795404..03bf510b 100644
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
 diff --git a/packages/testing/vite.config.ts b/packages/testing/vite.config.ts
-index d726ac05..cc31a75c 100644
+index d726ac05..1bca558a 100644
 --- a/packages/testing/vite.config.ts
 +++ b/packages/testing/vite.config.ts
+@@ -6,7 +6,7 @@ export default defineConfig({
+       test: {
+         // Postgres certification requires a live database and its configured URL.
+         cache: false,
+-        command: "vp test --passWithNoTests",
++        command: "vp test --passWithNoTests --exclude '**/certification-postgres*'",
+       },
+     },
+   },
 @@ -27,5 +27,6 @@ export default defineConfig({
    test: {
      cache: false,
