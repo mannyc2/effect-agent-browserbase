@@ -114,7 +114,7 @@ const makeTarget = (bound: TargetControls): TargetOperations => ({
   click: (request) =>
     checked(ClickRequest, request, "click").pipe(
       Effect.flatMap((value) => bound.click(value.selector)),
-      Effect.flatMap((url) => action({ url })),
+      Effect.flatMap(({ url, input }) => action({ url, input })),
     ),
   fill: (request) =>
     checked(FillRequest, request, "fill").pipe(
@@ -250,7 +250,7 @@ export const makeSession = <E>(
     clickElement: (reference, admission) =>
       checked(ObservedElement, reference, "click").pipe(
         Effect.flatMap((value) => controls.operations.click(value, admission?.admit)),
-        Effect.flatMap(navigate),
+        Effect.flatMap(({ url, input }) => action({ url, input })),
       ),
     fillElement: (reference, value, admission) =>
       checked(ObservedElement, reference, "fill").pipe(
@@ -350,7 +350,7 @@ export const makeSession = <E>(
     clickAndWait: (request) =>
       checked(ClickRequest, request, "click-and-wait").pipe(
         Effect.flatMap((value) => controls.clickAndWait(value.selector)),
-        Effect.flatMap((url) => action({ url })),
+        Effect.flatMap(({ url, input }) => action({ url, input })),
       ),
     ready: controls.readiness.pipe(
       Effect.mapError((error) =>

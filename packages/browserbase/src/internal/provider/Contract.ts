@@ -47,3 +47,26 @@ export const deliberatelyExcluded = [
   "browserSettings.advancedStealth",
   "browserSettings.extensionId",
 ] as const;
+
+/** Pinned SDK shape for GET `/v1/sessions/{id}/debug`; the published spec omits this query. */
+export const sessionDebugParams = ["expiresIn"] as const;
+
+/** Pinned SDK and OpenAPI response keys; parsing consumes only the two fullscreen URLs and IDs. */
+export const sessionLiveUrlsFields = [
+  "debuggerFullscreenUrl",
+  "debuggerUrl",
+  "pages",
+  "wsUrl",
+] as const;
+
+export const sessionLiveUrlsPageFields = [
+  "id",
+  "url",
+  "faviconUrl",
+  "title",
+  "debuggerUrl",
+  "debuggerFullscreenUrl",
+] as const;
+
+/** The current OpenAPI operation declares only the path id, not the SDK's optional query. */
+export const sessionLiveUrlsSpecParameters = [{ name: "id", location: "path" }] as const;

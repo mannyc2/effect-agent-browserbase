@@ -20,7 +20,8 @@ export function blockBody(source, header) {
   let depth = 0;
   for (let index = start + header.length - 1; index < source.length; index++) {
     if (source[index] === "{") depth++;
-    else if (source[index] === "}" && --depth === 0) return source.slice(start + header.length, index);
+    else if (source[index] === "}" && --depth === 0)
+      return source.slice(start + header.length, index);
   }
   return assert.fail(`Unterminated declaration: ${header.trim()}`);
 }
@@ -30,7 +31,8 @@ export function declaredFields(body) {
   const fields = [];
   let depth = 0;
   for (const line of body.split("\n")) {
-    const match = depth === 0 ? /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\??\s*:/.exec(line) : null;
+    const match =
+      depth === 0 ? /^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\??\s*:/.exec(line) : null;
     if (match) fields.push(match[1]);
     for (const character of line) {
       if (character === "{") depth++;
@@ -43,12 +45,21 @@ export function declaredFields(body) {
 const settingsPrefix = "browserSettings.";
 
 const excludedSettings = (deliberatelyExcluded) =>
-  deliberatelyExcluded.filter((entry) => entry.startsWith(settingsPrefix)).map((entry) => entry.slice(settingsPrefix.length));
+  deliberatelyExcluded
+    .filter((entry) => entry.startsWith(settingsPrefix))
+    .map((entry) => entry.slice(settingsPrefix.length));
 
 /** Lines under a key path, delimited by indentation. A bounded reader for one known subtree, not a YAML parser. */
 export function specBlock(lines, path) {
   for (const key of path) {
-    const index = lines.findIndex((line) => line.trim() === `${key}:` || line.trim() === `${JSON.stringify(key)}:`);
+    const matches = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.trim() === `${key}:` || line.trim() === `${JSON.stringify(key)}:`);
+    const shallowest = Math.min(
+      ...matches.map(({ line }) => line.length - line.trimStart().length),
+    );
+    const index =
+      matches.find(({ line }) => line.length - line.trimStart().length === shallowest)?.index ?? -1;
     assert.notEqual(index, -1, `The specification no longer declares: ${path.join(" > ")}`);
     const indent = lines[index].length - lines[index].trimStart().length;
     const body = [];
@@ -73,7 +84,56 @@ export function specKeys(lines) {
     .map((match) => match[1]);
 }
 
-const specProperties = ["paths", "/v1/sessions", "post", "requestBody", "content", "application/json", "schema", "properties"];
+/** Scalar stored on a line below a path of mapping keys. */
+export function specValue(lines, path) {
+  const key = path.at(-1);
+  assert.equal(typeof key, "string", "Expected a non-empty specification path");
+  const parent = specBlock(lines, path.slice(0, -1));
+  const line = parent.find((candidate) => {
+    const trimmed = candidate.trim();
+    return trimmed.startsWith(`${key}:`) || trimmed.startsWith(`${JSON.stringify(key)}:`);
+  });
+  assert.notEqual(line, undefined, `The specification no longer declares: ${path.join(" > ")}`);
+  const trimmed = line.trim();
+  const prefix = trimmed.startsWith(`${key}:`) ? `${key}:` : `${JSON.stringify(key)}:`;
+  const value = trimmed.slice(prefix.length).trim();
+  return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
+}
+
+/** Name/location pairs for OpenAPI operation parameters. */
+export function specParameters(lines) {
+  const parameters = [];
+  for (const line of lines) {
+    const name = /^\s*-\s+name:\s*([A-Za-z_][\w]*)\s*$/.exec(line);
+    if (name !== null) {
+      parameters.push({ name: name[1], location: undefined });
+      continue;
+    }
+    const location = /^\s+in:\s*(path|query|header|cookie)\s*$/.exec(line);
+    if (location !== null && parameters.length > 0)
+      parameters[parameters.length - 1].location = location[1];
+  }
+  return parameters;
+}
+
+/** Values in an OpenAPI `required` sequence. */
+export function specSequence(lines) {
+  return lines
+    .map((line) => /^\s*-\s+([A-Za-z_][\w]*)\s*$/.exec(line))
+    .filter((match) => match !== null)
+    .map((match) => match[1]);
+}
+
+const specProperties = [
+  "paths",
+  "/v1/sessions",
+  "post",
+  "requestBody",
+  "content",
+  "application/json",
+  "schema",
+  "properties",
+];
 
 /**
  * The published specification is the wire contract and is not pinned: a field Browserbase
@@ -84,41 +144,149 @@ const specProperties = ["paths", "/v1/sessions", "post", "requestBody", "content
 export function checkOpenApiContract(spec, contract) {
   const lines = spec.split("\n");
   const create = specKeys(specBlock(lines, specProperties));
-  assert.deepEqual([...create].sort(), [...contract.sessionCreateFields].sort(), "Session create fields drifted from the published specification");
+  assert.deepEqual(
+    [...create].sort(),
+    [...contract.sessionCreateFields].sort(),
+    "Session create fields drifted from the published specification",
+  );
   const settings = specKeys(specBlock(lines, [...specProperties, "browserSettings", "properties"]));
-  assert.deepEqual([...settings].sort(), [...contract.browserSettingsFields, ...excludedSettings(contract.deliberatelyExcluded)].sort(), "Browser settings fields drifted from the published specification");
-  return { create, settings };
+  assert.deepEqual(
+    [...settings].sort(),
+    [...contract.browserSettingsFields, ...excludedSettings(contract.deliberatelyExcluded)].sort(),
+    "Browser settings fields drifted from the published specification",
+  );
+
+  const liveRoute = ["paths", "/v1/sessions/{id}/debug", "get"];
+  const liveUrlParameters = specParameters(specBlock(lines, [...liveRoute, "parameters"]));
+  assert.deepEqual(
+    liveUrlParameters,
+    contract.sessionLiveUrlsSpecParameters,
+    "Session Live URL parameters drifted from the published specification",
+  );
+  const liveUrlSchema = specValue(lines, [
+    ...liveRoute,
+    "responses",
+    "200",
+    "content",
+    "application/json",
+    "schema",
+    "$ref",
+  ]);
+  assert.equal(
+    liveUrlSchema,
+    "#/components/schemas/SessionLiveUrls",
+    "Session Live URL response schema drifted from the published specification",
+  );
+
+  const liveSchema = ["components", "schemas", "SessionLiveUrls"];
+  const liveUrls = specKeys(specBlock(lines, [...liveSchema, "properties"]));
+  assert.deepEqual(
+    [...liveUrls].sort(),
+    [...contract.sessionLiveUrlsFields].sort(),
+    "Session Live URLs fields drifted from the published specification",
+  );
+  assert.deepEqual(
+    [...specSequence(specBlock(lines, [...liveSchema, "required"]))].sort(),
+    [...contract.sessionLiveUrlsFields].sort(),
+    "Session Live URLs required fields drifted from the published specification",
+  );
+
+  const livePageSchema = [...liveSchema, "properties", "pages", "items"];
+  const liveUrlPage = specKeys(specBlock(lines, [...livePageSchema, "properties"]));
+  assert.deepEqual(
+    [...liveUrlPage].sort(),
+    [...contract.sessionLiveUrlsPageFields].sort(),
+    "Session Live URL page fields drifted from the published specification",
+  );
+  assert.deepEqual(
+    [...specSequence(specBlock(lines, [...livePageSchema, "required"]))].sort(),
+    [...contract.sessionLiveUrlsPageFields].sort(),
+    "Session Live URL page required fields drifted from the published specification",
+  );
+
+  return { create, settings, liveUrlParameters, liveUrls, liveUrlPage };
 }
 
 /** Pure comparison, so the parsing rules are covered offline against synthetic sources. */
 export function checkLaunchContract(source, digest, contract) {
-  const { contractSource, sessionCreateFields, browserSettingsFields, deliberatelyExcluded, sessionCreateRenames } = contract;
-  assert.equal(digest, contractSource.sha256, `Pinned ${contractSource.resource} no longer hashes to its recorded digest`);
+  const {
+    contractSource,
+    sessionCreateFields,
+    browserSettingsFields,
+    deliberatelyExcluded,
+    sessionCreateRenames,
+    sessionDebugParams,
+    sessionLiveUrlsFields,
+    sessionLiveUrlsPageFields,
+  } = contract;
+  assert.equal(
+    digest,
+    contractSource.sha256,
+    `Pinned ${contractSource.resource} no longer hashes to its recorded digest`,
+  );
   const stripped = stripComments(source);
   // The SDK spells one argument differently from the wire field it sends; the rename is
   // declared alongside the inventory rather than inferred from a near-matching name.
   const create = declaredFields(blockBody(stripped, "export interface SessionCreateParams {")).map(
     (field) => sessionCreateRenames[field] ?? field,
   );
-  assert.deepEqual([...create].sort(), [...sessionCreateFields].sort(), "Session create fields drifted from the pinned upstream resource");
+  assert.deepEqual(
+    [...create].sort(),
+    [...sessionCreateFields].sort(),
+    "Session create fields drifted from the pinned upstream resource",
+  );
   const settings = declaredFields(
-    blockBody(blockBody(stripped, "export namespace SessionCreateParams {"), "export interface BrowserSettings {"),
+    blockBody(
+      blockBody(stripped, "export namespace SessionCreateParams {"),
+      "export interface BrowserSettings {",
+    ),
   );
   const excluded = excludedSettings(deliberatelyExcluded);
-  assert.deepEqual([...settings].sort(), [...browserSettingsFields, ...excluded].sort(), "Browser settings fields drifted from the pinned upstream resource");
-  return { create, settings, excluded };
+  assert.deepEqual(
+    [...settings].sort(),
+    [...browserSettingsFields, ...excluded].sort(),
+    "Browser settings fields drifted from the pinned upstream resource",
+  );
+
+  const debug = declaredFields(blockBody(stripped, "export interface SessionDebugParams {"));
+  assert.deepEqual(
+    [...debug].sort(),
+    [...sessionDebugParams].sort(),
+    "Session debug parameters drifted from the pinned upstream resource",
+  );
+  const liveUrls = declaredFields(blockBody(stripped, "export interface SessionLiveURLs {"));
+  assert.deepEqual(
+    [...liveUrls].sort(),
+    [...sessionLiveUrlsFields].sort(),
+    "Session Live URLs fields drifted from the pinned upstream resource",
+  );
+  const liveUrlPage = declaredFields(
+    blockBody(blockBody(stripped, "export namespace SessionLiveURLs {"), "export interface Page {"),
+  );
+  assert.deepEqual(
+    [...liveUrlPage].sort(),
+    [...sessionLiveUrlsPageFields].sort(),
+    "Session Live URL page fields drifted from the pinned upstream resource",
+  );
+  return { create, settings, excluded, debug, liveUrls, liveUrlPage };
 }
 
 async function fetchText(url) {
-  const response = await fetch(url, { headers: { "user-agent": "effect-agent-browserbase-launch-contract" } });
+  const response = await fetch(url, {
+    headers: { "user-agent": "effect-agent-browserbase-launch-contract" },
+  });
   assert.ok(response.ok, `Could not read ${url}: HTTP ${response.status}`);
   return await response.text();
 }
 
 export async function verifyLaunchContract({ requireCurrent = false } = {}) {
-  const contract = await import(new URL("../packages/browserbase/src/internal/provider/Contract.ts", import.meta.url).href);
+  const contract = await import(
+    new URL("../packages/browserbase/src/internal/provider/Contract.ts", import.meta.url).href
+  );
   const { repository, revision, resource, version, spec } = contract.contractSource;
-  const source = await fetchText(`https://raw.githubusercontent.com/${repository}/${revision}/${resource}`);
+  const source = await fetchText(
+    `https://raw.githubusercontent.com/${repository}/${revision}/${resource}`,
+  );
   const digest = createHash("sha256").update(source).digest("hex");
   const { create, settings, excluded } = checkLaunchContract(source, digest, contract);
   checkOpenApiContract(await fetchText(spec), contract);
@@ -126,18 +294,41 @@ export async function verifyLaunchContract({ requireCurrent = false } = {}) {
   // staleness is reported separately and an unreachable release API never masks a match.
   let latest = "unknown";
   try {
-    latest = JSON.parse(await fetchText(`https://api.github.com/repos/${repository}/releases/latest`)).tag_name ?? "unknown";
+    latest =
+      JSON.parse(await fetchText(`https://api.github.com/repos/${repository}/releases/latest`))
+        .tag_name ?? "unknown";
   } catch (error) {
     latest = `unavailable: ${error.message}`;
   }
   const current = latest === `v${version}`;
   if (!current) {
-    process.stderr.write(`Notice: pinned ${repository} v${version}; latest release reports ${latest}. Review before adopting.\n`);
-    assert.ok(!requireCurrent, `Pinned ${repository} v${version} is not the latest release (${latest})`);
+    process.stderr.write(
+      `Notice: pinned ${repository} v${version}; latest release reports ${latest}. Review before adopting.\n`,
+    );
+    assert.ok(
+      !requireCurrent,
+      `Pinned ${repository} v${version} is not the latest release (${latest})`,
+    );
   }
-  return { resource: `${repository}@${revision}:${resource}`, digest, spec, version, latest, current, sessionCreateFields: create.length, browserSettingsFields: settings.length, excluded, result: "committed launch contract matches the pinned upstream resource and the published specification" };
+  return {
+    resource: `${repository}@${revision}:${resource}`,
+    digest,
+    spec,
+    version,
+    latest,
+    current,
+    sessionCreateFields: create.length,
+    browserSettingsFields: settings.length,
+    excluded,
+    result:
+      "committed launch contract matches the pinned upstream resource and the published specification",
+  };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.log(JSON.stringify(await verifyLaunchContract({ requireCurrent: process.argv.includes("--require-current") })));
+  console.log(
+    JSON.stringify(
+      await verifyLaunchContract({ requireCurrent: process.argv.includes("--require-current") }),
+    ),
+  );
 }
