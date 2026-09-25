@@ -211,28 +211,55 @@ export const makeOperations = <E>(
   const fillForm = (request: FillFormParameters, call: Call) =>
     browser.fillForm(request, admission, options.form).pipe(
       Effect.mapError((error) => stopped(failureWith(hooks, call)(error), [])),
-      Effect.flatMap((result) =>
-        Effect.forEach(
+      Effect.flatMap((result) => {
+        const completed = result.fields.map(({ elementId, status }) => ({ elementId, status }));
+
+        const stoppedForm =
+          result.stopped === undefined
+            ? undefined
+            : {
+                facts: result.stopped,
+                projected: failureWith(hooks, call)(result.stopped.error),
+              };
+
+        return Effect.forEach(
           [
             ...result.fields.flatMap((field) => (field.input === undefined ? [] : [field.input])),
             ...(result.submitInput === undefined ? [] : [result.submitInput]),
           ],
           (receipt) => hooks.input?.(receipt, call) ?? Effect.void,
           { discard: true },
-        ).pipe(Effect.andThen(Effect.succeed(result))),
-      ),
-      Effect.flatMap((result) => {
-        const completed = result.fields.map(({ elementId, status }) => ({ elementId, status }));
+        ).pipe(
+          Effect.mapError((callbackFailure) => {
+            const projected = stoppedForm?.projected ?? callbackFailure;
 
-        if (result.stopped === undefined)
+            return BrowserFormFailure.make({
+              reason: projected.reason,
+              outcome: projected.outcome,
+              ...(stoppedForm === undefined
+                ? {}
+                : {
+                    stage: stoppedForm.facts.stage,
+                    ...(stoppedForm.facts.elementId === undefined
+                      ? {}
+                      : { elementId: stoppedForm.facts.elementId }),
+                  }),
+              completed,
+            });
+          }),
+          Effect.andThen(Effect.succeed({ result, completed, stoppedForm })),
+        );
+      }),
+      Effect.flatMap(({ result, completed, stoppedForm }) => {
+        if (stoppedForm === undefined)
           return decoded(
             FormFillResult,
             "fill-form",
           )({ fields: completed, submitted: result.submitted, url: result.url }).pipe(
             Effect.mapError((error) => stopped(failureWith(hooks, call)(error), completed)),
           );
-        const { stage, elementId, error } = result.stopped;
-        const projected = failureWith(hooks, call)(error);
+        const { facts, projected } = stoppedForm;
+        const { stage, elementId } = facts;
 
         return Effect.fail(
           BrowserFormFailure.make({

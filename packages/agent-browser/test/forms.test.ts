@@ -5,7 +5,13 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
-import { FillFormResult, FormStop, Observation, Target } from "effect-browser/browser-data";
+import {
+  FillFormResult,
+  FormStop,
+  InputReceipt,
+  Observation,
+  Target,
+} from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { Model, Toolkit } from "effect/unstable/ai";
 
@@ -117,6 +123,118 @@ it.effect("a form that stopped fails with what it completed, where it stopped an
       ]);
     }),
   ),
+);
+
+it.effect("an input callback failure preserves completed fields and the original form stop", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const stop = BrowserError.make({
+        operation: "fill-form",
+        reason: Reasons.Stale.make({}),
+        outcome: "undispatched",
+      });
+
+      const input = InputReceipt.make({
+        target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
+        kind: "click",
+        position: null,
+        startedMonotonicNanos: 1n,
+        completedMonotonicNanos: 2n,
+      });
+
+      const browser = scriptedSession({
+        fillForm: () =>
+          Effect.succeed(
+            FillFormResult.make({
+              fields: [{ ...fields[0]!, input }, fields[1]!],
+              submitted: false,
+              url,
+              stopped: FormStop.make({ stage: "verify", elementId: "element-3", error: stop }),
+            }),
+          ),
+      });
+
+      const callbackError = "PRIVATE-CALLBACK";
+
+      const host = yield* BrowserTools.makeHost(browser, {
+        onInput: () => Effect.fail(callbackError),
+      });
+
+      const ready = yield* tools.pipe(Effect.provide(host.layer));
+
+      expect(yield* fill(ready)).toMatchObject([
+        {
+          isFailure: true,
+          encodedResult: {
+            _tag: "BrowserFormFailure",
+            reason: "stale",
+            outcome: "undispatched",
+            stage: "verify",
+            elementId: "element-3",
+            completed: fields,
+          },
+        },
+      ]);
+      expect((yield* host.toolFailures).failures).toMatchObject([
+        {
+          toolName: "browser_fill_form",
+          toolCallId: "form-call",
+          error: { operation: "fill-form", reason: { _tag: "Stale" }, outcome: "undispatched" },
+        },
+      ]);
+      expect(yield* host.failure.pipe(Effect.flip)).toBe(callbackError);
+    }),
+  ),
+);
+
+it.effect(
+  "a failed receipt callback after form submission reports completed fields as unknown",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const input = InputReceipt.make({
+          target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
+          kind: "click",
+          position: null,
+          startedMonotonicNanos: 1n,
+          completedMonotonicNanos: 2n,
+        });
+
+        let fills = 0;
+
+        const browser = scriptedSession({
+          fillForm: () =>
+            Effect.sync(() => {
+              fills++;
+
+              return FillFormResult.make({
+                fields: [{ ...fields[0]!, input }, fields[1]!],
+                submitted: true,
+                url,
+              });
+            }),
+        });
+
+        const host = yield* BrowserTools.makeHost(browser, {
+          onInput: () => Effect.fail("PRIVATE-CALLBACK"),
+        });
+
+        const ready = yield* tools.pipe(Effect.provide(host.layer));
+
+        expect(yield* fill(ready)).toMatchObject([
+          {
+            isFailure: true,
+            encodedResult: {
+              _tag: "BrowserFormFailure",
+              reason: "failed",
+              outcome: "unknown",
+              completed: fields,
+            },
+          },
+        ]);
+        expect(fills).toBe(1);
+      }),
+    ),
 );
 
 it.effect("a refused first step and a refused lane both report that nothing was completed", () =>
