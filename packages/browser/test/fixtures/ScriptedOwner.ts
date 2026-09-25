@@ -133,7 +133,18 @@ export const fixture = Effect.fnUntraced(function* (options: OwnerOptions = {}) 
 
               return url;
             }
-          : (_target, ticket) => options.onClick!(ticket),
+          : async (_target, ticket, capture) => {
+              let url = "";
+
+              const input = await capture(
+                async () => {
+                  url = await options.onClick!(ticket);
+                },
+                { position: null },
+              );
+
+              return { url, input };
+            },
       ...(options.onNavigate === undefined
         ? {}
         : {

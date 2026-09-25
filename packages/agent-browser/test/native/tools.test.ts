@@ -612,11 +612,18 @@ it.live(
             expect((yield* read(generic)).name).toBe("Vienna");
             expect((yield* read(generic)).keys.every((event) => event.trusted)).toBe(true);
             expect(receipts.map((event) => event.toolCallId)).toEqual([
+              "focus",
               "type-first",
               "press",
               "type-second",
             ]);
-            expect(receipts.map((event) => event.receipt.kind)).toEqual(["type", "press", "type"]);
+            expect(receipts.map((event) => event.receipt.kind)).toEqual([
+              "click",
+              "type",
+              "press",
+              "type",
+            ]);
+            expect(receipts[0]?.receipt.position).toBeNull();
             for (const { receipt } of receipts) {
               expect(receipt).not.toHaveProperty("key");
               expect(receipt).not.toHaveProperty("text");
@@ -636,7 +643,7 @@ it.live(
             expect(denied).toMatchObject([
               { isFailure: true, result: { reason: "denied", outcome: "undispatched" } },
             ]);
-            expect(receipts).toHaveLength(3);
+            expect(receipts).toHaveLength(4);
           }),
         );
       }),
