@@ -39,8 +39,8 @@ runs it on a local Chromium with scripted models for both the agent and the narr
   control acted on, whether it succeeded, and the address and title of the page the step left,
   read when the next model call starts. It never sees the agent's reasoning or any typed value.
   It answers `{ caption }`, or `{ caption: null }` when the step shows viewers nothing new. A
-  step's caption airs with its first presented frame received during that step, and clears before
-  the first presented frame received during the next step. It stays at least as long as it takes
+  step's caption airs only while the latest presented frame was received during that step, and
+  clears before a later-step frame is presented. It stays at least as long as it takes
   to read (20 characters a second, never under 5/6 s) and at most 7 s. A caption still unwritten
   when its step's window has aired is abandoned, which interrupts its Run, and text that would
   not stay long enough inside that window is skipped rather than shown over another step. If the

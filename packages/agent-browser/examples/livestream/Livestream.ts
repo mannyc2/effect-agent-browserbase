@@ -142,6 +142,8 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
   let document = -1;
   let latestFrame: Capture.CapturedFrame | undefined;
   let captioned: StepState | undefined;
+  let latest: StepState | undefined;
+  const pendingFrames = new Set<StepState>();
 
   const airing = yield* interval.frames.pipe(
     Stream.runForEach((frame) =>
@@ -168,12 +170,16 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
 
             yield* stage.show(frame);
             latestFrame = frame;
-            const step = latest;
-
-            // Capture preserves receipt order. Crossing this watermark means every earlier
-            // frame has already been presented, so a caption cannot overtake prior-step footage.
-            if (step !== undefined && frame.receivedMonotonicNanos >= step.startedNanos)
-              yield* Deferred.succeed(step.frameAired, undefined);
+            // Capture preserves receipt order. Wake every still-open step whose window contains
+            // this frame; a later tool call may already be latest while an older frame is airing.
+            for (const step of pendingFrames)
+              if (
+                frame.receivedMonotonicNanos >= step.startedNanos &&
+                (step.nextNanos === null || frame.receivedMonotonicNanos < step.nextNanos)
+              ) {
+                pendingFrames.delete(step);
+                yield* Deferred.succeed(step.frameAired, undefined);
+              }
 
             const airedNanos = yield* Clock.monotonicTimeNanos;
 
@@ -197,7 +203,6 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
 
   const labels = new Map<string, string>();
   const declared = new Map<string, unknown>();
-  let latest: StepState | undefined;
   let finished: { readonly step: StepState; readonly succeeded: boolean } | undefined;
   let summary: unknown = null;
 
@@ -264,6 +269,18 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
             (step.nextNanos !== null && step.nextNanos + delay - now < displayNanos(text))
           )
             return undefined;
+
+          const previousCaption = captioned;
+
+          if (previousCaption !== undefined) {
+            captioned = undefined;
+            yield* stage.update({ caption: null });
+            yield* onAir({
+              _tag: "Clear",
+              step: windowOf(previousCaption),
+              airedNanos: yield* Clock.monotonicTimeNanos,
+            });
+          }
 
           captioned = step;
           yield* stage.update({ caption: text });
@@ -367,6 +384,19 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
           next: yield* Deferred.make<bigint>(),
           frameAired: yield* Deferred.make<void>(),
         };
+        pendingFrames.add(latest);
+        const frame = latestFrame;
+
+        // A frame can finish presentation while this step's event is being assembled. Reconcile
+        // that receipt here so its waiter cannot miss the only frame in a still page.
+        if (
+          frame !== undefined &&
+          frame.receivedMonotonicNanos >= latest.startedNanos &&
+          (latest.nextNanos === null || frame.receivedMonotonicNanos < latest.nextNanos)
+        ) {
+          pendingFrames.delete(latest);
+          yield* Deferred.succeed(latest.frameAired, undefined);
+        }
       } else if (event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed") {
         if (event._tag === "ToolCallSucceeded") {
           const observed = decodeControls(event.result);
