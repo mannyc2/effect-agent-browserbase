@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect, Fiber, FiberSet, Schema, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, FiberSet, Schema, Semaphore, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -83,6 +83,7 @@ interface StepState {
   readonly startedNanos: bigint;
   nextNanos: bigint | null;
   readonly next: Deferred.Deferred<bigint>;
+  readonly frameAired: Deferred.Deferred<void>;
 }
 
 const Controls = Schema.Struct({
@@ -115,6 +116,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
   const stage = yield* Stage;
   const narrator = yield* Narrator;
   const background = yield* FiberSet.make<void, never>();
+  const presentation = yield* Semaphore.make(1);
   const delay = BigInt(options.delayMillis) * Millis;
   const onAir = options.onAir ?? (() => Effect.void);
 
@@ -138,24 +140,61 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
   });
 
   let document = -1;
+  let latestFrame: Capture.CapturedFrame | undefined;
+  let captioned: StepState | undefined;
+  let latest: StepState | undefined;
+  const pendingFrames = new Set<StepState>();
 
   const airing = yield* interval.frames.pipe(
     Stream.runForEach((frame) =>
       Effect.gen(function* () {
         yield* airAt(frame.receivedMonotonicNanos);
-        yield* stage.show(frame);
-        const airedNanos = yield* Clock.monotonicTimeNanos;
+        yield* presentation.withPermits(1)(
+          Effect.gen(function* () {
+            const activeCaption = captioned;
 
-        if (frame.document !== document) {
-          document = frame.document;
-          const { initialUrl, documentBoundaries } = yield* interval.snapshot;
-          const boundary = documentBoundaries.find((known) => known.document === document);
-          const address = addressOf(document === 0 ? initialUrl : (boundary?.url ?? null));
+            // A later step's first picture closes the previous caption before that picture airs.
+            if (
+              activeCaption !== undefined &&
+              activeCaption.nextNanos !== null &&
+              frame.receivedMonotonicNanos >= activeCaption.nextNanos
+            ) {
+              captioned = undefined;
+              yield* stage.update({ caption: null });
+              yield* onAir({
+                _tag: "Clear",
+                step: windowOf(activeCaption),
+                airedNanos: yield* Clock.monotonicTimeNanos,
+              });
+            }
 
-          yield* stage.update({ address });
-          yield* onAir({ _tag: "Address", address, airedNanos });
-        }
-        yield* onAir({ _tag: "Frame", frame, airedNanos });
+            yield* stage.show(frame);
+            latestFrame = frame;
+            // Capture preserves receipt order. Wake every still-open step whose window contains
+            // this frame; a later tool call may already be latest while an older frame is airing.
+            for (const step of pendingFrames)
+              if (
+                frame.receivedMonotonicNanos >= step.startedNanos &&
+                (step.nextNanos === null || frame.receivedMonotonicNanos < step.nextNanos)
+              ) {
+                pendingFrames.delete(step);
+                yield* Deferred.succeed(step.frameAired, undefined);
+              }
+
+            const airedNanos = yield* Clock.monotonicTimeNanos;
+
+            if (frame.document !== document) {
+              document = frame.document;
+              const { initialUrl, documentBoundaries } = yield* interval.snapshot;
+              const boundary = documentBoundaries.find((known) => known.document === document);
+              const address = addressOf(document === 0 ? initialUrl : (boundary?.url ?? null));
+
+              yield* stage.update({ address });
+              yield* onAir({ _tag: "Address", address, airedNanos });
+            }
+            yield* onAir({ _tag: "Frame", frame, airedNanos });
+          }),
+        );
       }),
     ),
     Effect.orElseSucceed(() => undefined),
@@ -164,9 +203,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
 
   const labels = new Map<string, string>();
   const declared = new Map<string, unknown>();
-  let latest: StepState | undefined;
   let finished: { readonly step: StepState; readonly succeeded: boolean } | undefined;
-  let captioned: string | undefined;
   let summary: unknown = null;
 
   const windowOf = (step: StepState): StepWindow => ({
@@ -209,27 +246,76 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
         });
       const text = written.text.slice(0, MaxCaption);
 
-      yield* airAt(step.startedNanos);
-      const shownNanos = yield* Clock.monotonicTimeNanos;
+      const hasFrame = yield* Effect.raceFirst(
+        Deferred.await(step.frameAired).pipe(Effect.as(true)),
+        windowClosed(step).pipe(Effect.as(false)),
+      );
 
-      // Only inside this step's own window, and only if it can stay long enough to be read.
-      if (step.nextNanos !== null && step.nextNanos + delay - shownNanos < displayNanos(text))
+      if (!hasFrame) return yield* onAir({ _tag: "Skipped", step: windowOf(step), reason: "late" });
+
+      yield* airAt(step.startedNanos);
+
+      const shownNanos = yield* presentation.withPermits(1)(
+        Effect.gen(function* () {
+          const frame = latestFrame;
+          const now = yield* Clock.monotonicTimeNanos;
+
+          // Recheck under the same lane as frame presentation; a later step may have aired while
+          // the narrator was writing or waiting for this permit.
+          if (
+            frame === undefined ||
+            frame.receivedMonotonicNanos < step.startedNanos ||
+            (step.nextNanos !== null && frame.receivedMonotonicNanos >= step.nextNanos) ||
+            (step.nextNanos !== null && step.nextNanos + delay - now < displayNanos(text))
+          )
+            return undefined;
+
+          const previousCaption = captioned;
+
+          if (previousCaption !== undefined) {
+            captioned = undefined;
+            yield* stage.update({ caption: null });
+            yield* onAir({
+              _tag: "Clear",
+              step: windowOf(previousCaption),
+              airedNanos: yield* Clock.monotonicTimeNanos,
+            });
+          }
+
+          captioned = step;
+          yield* stage.update({ caption: text });
+          const airedNanos = yield* Clock.monotonicTimeNanos;
+
+          yield* onAir({ _tag: "Caption", text, step: windowOf(step), airedNanos });
+
+          return airedNanos;
+        }),
+      );
+
+      if (shownNanos === undefined)
         return yield* onAir({ _tag: "Skipped", step: windowOf(step), reason: "late" });
-      captioned = step.toolCallId;
-      yield* stage.update({ caption: text });
-      yield* onAir({ _tag: "Caption", text, step: windowOf(step), airedNanos: shownNanos });
+
       yield* windowClosed(step).pipe(Effect.timeoutOption(Number(MaxDisplayNanos) / 1e6));
-      // The next step's caption may already have replaced this one; it must not be cleared.
-      if (captioned === step.toolCallId) {
-        captioned = undefined;
-        yield* stage.update({ caption: null });
-      }
-      yield* onAir({
-        _tag: "Clear",
-        step: windowOf(step),
-        airedNanos: yield* Clock.monotonicTimeNanos,
-      });
-    });
+      yield* presentation.withPermits(1)(
+        Effect.gen(function* () {
+          if (captioned === step) {
+            captioned = undefined;
+            yield* stage.update({ caption: null });
+            yield* onAir({
+              _tag: "Clear",
+              step: windowOf(step),
+              airedNanos: yield* Clock.monotonicTimeNanos,
+            });
+          }
+        }),
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          pendingFrames.delete(step);
+        }),
+      ),
+    );
 
   /**
    * A finished step's facts are complete once the next model call starts, when the page it left
@@ -270,9 +356,14 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
           yield* FiberSet.run(
             background,
             airAt(now).pipe(
-              Effect.andThen(stage.update({ title })),
-              Effect.andThen(Clock.monotonicTimeNanos),
-              Effect.flatMap((airedNanos) => onAir({ _tag: "Title", title, airedNanos })),
+              Effect.andThen(
+                presentation.withPermits(1)(
+                  stage.update({ title }).pipe(
+                    Effect.andThen(Clock.monotonicTimeNanos),
+                    Effect.flatMap((airedNanos) => onAir({ _tag: "Title", title, airedNanos })),
+                  ),
+                ),
+              ),
             ),
           );
         yield* narrateFinished(page);
@@ -297,7 +388,21 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
           startedNanos: now,
           nextNanos: null,
           next: yield* Deferred.make<bigint>(),
+          frameAired: yield* Deferred.make<void>(),
         };
+        pendingFrames.add(latest);
+        const frame = latestFrame;
+
+        // A frame can finish presentation while this step's event is being assembled. Reconcile
+        // that receipt here so its waiter cannot miss the only frame in a still page.
+        if (
+          frame !== undefined &&
+          frame.receivedMonotonicNanos >= latest.startedNanos &&
+          (latest.nextNanos === null || frame.receivedMonotonicNanos < latest.nextNanos)
+        ) {
+          pendingFrames.delete(latest);
+          yield* Deferred.succeed(latest.frameAired, undefined);
+        }
       } else if (event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed") {
         if (event._tag === "ToolCallSucceeded") {
           const observed = decodeControls(event.result);

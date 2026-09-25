@@ -129,6 +129,13 @@ Chromium identity is `{ provider: "chromium", id }`, identifying this ownership 
 
 `launch.proxy: { server, bypass? }` forwards an existing host-operated proxy to Chromium. With a proxy, the default bypass value is `<-loopback>` so Chromium does not silently exclude loopback destinations; a different bypass is an explicit host choice. Additional reviewed native flags, such as disabling QUIC and non-proxied WebRTC UDP, can be supplied through `launch.args`. This module does not implement a proxy or qualify its transport/DNS coverage. Browser policy remains `Unrestricted`; a local endpoint, URL admission or successful local test never establishes whole-browser egress containment. Preserve and test the selected enforcing proxy independently. The Browserbase integration validates its own provider-issued endpoints separately.
 
+Owned Chromium also watches a parent-owned debugging pipe for disconnection. The pipe carries
+no protocol commands; Playwright continues to use the loopback endpoint. If the host exits or is
+killed, including before `connect`, the operating system closes the pipe and Chromium exits.
+Normal scoped cleanup still checks process-group termination and removes the profile. A killed
+host cannot produce a cleanup receipt or remove its temporary profile. Borrowed attachments have
+no such pipe and leave their externally owned browser running.
+
 ## Passive status and native diagnostics
 
 ```ts
