@@ -1,7 +1,7 @@
 import { Cause, DateTime, Effect, Exit, Option, Schema } from "effect";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import type { PlatformError, ProjectError } from "effect-browserbase/errors";
-import type { PageFetchRequest } from "effect-browserbase/page-fetch";
+import { PageFetchRequest } from "effect-browserbase/page-fetch";
 import { BrowserbaseProjects, ProjectUsage } from "effect-browserbase/projects";
 import { Identifier } from "effect-browserbase/references";
 
@@ -9,7 +9,7 @@ import { Identifier } from "effect-browserbase/references";
 export class ProjectUsageObservation extends Schema.Class<ProjectUsageObservation>(
   "ProjectUsageObservation",
 )({
-  source: Schema.Literal("browserbase-project-usage"),
+  source: Schema.tag("browserbase-project-usage"),
   usage: ProjectUsage,
   observedAt: Schema.DateTimeUtcFromString,
 }) {}
@@ -29,16 +29,16 @@ export const sampleProjectUsage = Effect.fn("sampleProjectUsage")(function* <
   const usage = yield* projects.usage;
   const observedAt = yield* DateTime.now;
 
-  const sample = ProjectUsageObservation.make({
-    source: "browserbase-project-usage",
-    usage,
-    observedAt,
-  });
+  const sample = ProjectUsageObservation.make({ usage, observedAt });
 
   yield* write(sample);
 
   return sample;
 });
+
+/** Decoded at the host boundary: a NaN threshold would never alert and a negative one always would. */
+export const BrowserMinutesThreshold = Schema.Natural.pipe(Schema.brand("BrowserMinutesThreshold"));
+export type BrowserMinutesThreshold = typeof BrowserMinutesThreshold.Type;
 
 export type ObservedUsageChange =
   | {
@@ -63,7 +63,7 @@ export type ObservedUsageChange =
 export const observedUsageChange = (
   earlier: ProjectUsageObservation,
   later: ProjectUsageObservation,
-  alertAtBrowserMinutes: number,
+  alertAtBrowserMinutes: BrowserMinutesThreshold,
 ): ObservedUsageChange => {
   if (earlier.usage.projectId !== later.usage.projectId)
     return { _tag: "Unknown", reason: "different-project" };
@@ -87,9 +87,6 @@ export const observedUsageChange = (
   };
 };
 
-export const LocalOperation = Schema.Literals(["search-web", "fetch", "agent-run"]);
-export type LocalOperation = typeof LocalOperation.Type;
-
 /**
  * `api-reply` rather than the issue's `confirmed`: a decoded reply confirms the reply, not a
  * billed call, and the stored word should not suggest otherwise.
@@ -97,26 +94,27 @@ export type LocalOperation = typeof LocalOperation.Type;
 export const LocalOutcome = Schema.Literals(["api-reply", "undispatched", "rejected", "unknown"]);
 export type LocalOutcome = typeof LocalOutcome.Type;
 
-export const RequestedFormat = Schema.Literals(["raw", "json", "markdown"]);
-export type RequestedFormat = typeof RequestedFormat.Type;
-
-/** Only Fetch has requested flags; the union keeps stored records to the shapes a call has. */
+/**
+ * Only Fetch has requested flags; the union keeps stored records to the shapes a call has.
+ * The flags reuse the request's own field schemas, so the stored values cannot drift from it.
+ */
 export const ObservedOperation = Schema.Union([
   Schema.Struct({ operation: Schema.Literals(["search-web", "agent-run"]) }),
   Schema.Struct({
     operation: Schema.Literal("fetch"),
-    requestedFormat: Schema.optionalKey(RequestedFormat),
-    requestedProxies: Schema.optionalKey(Schema.Boolean),
+    requestedFormat: PageFetchRequest.fields.format,
+    requestedProxies: PageFetchRequest.fields.proxies,
   }),
 ]);
 
 export type ObservedOperation = typeof ObservedOperation.Type;
+export type LocalOperation = ObservedOperation["operation"];
 
 /** An API reply or failure is an activity fact, never a billed-call receipt. */
 export class LocalOperationObservation extends Schema.Class<LocalOperationObservation>(
   "LocalOperationObservation",
 )({
-  source: Schema.Literal("host-observed"),
+  source: Schema.tag("host-observed"),
   projectId: Identifier,
   attempt: ObservedOperation,
   observedAt: Schema.DateTimeUtcFromString,
@@ -132,8 +130,8 @@ export const fetchOperation = (request: PageFetchRequest): ObservedOperation => 
 
 const serviceOf = { "search-web": "search", fetch: "fetch", "agent-run": "agents" } as const;
 
-const classify = <A>(
-  exit: Exit.Exit<A, PlatformError>,
+const classify = (
+  exit: Exit.Exit<unknown, PlatformError>,
   operation: LocalOperation,
 ): LocalOutcome => {
   if (Exit.isSuccess(exit)) return "api-reply";
@@ -152,8 +150,8 @@ const classify = <A>(
 };
 
 const settle = Effect.fnUntraced(
-  function* <A, FinishError, FinishRequirements>(
-    exit: Exit.Exit<A, PlatformError>,
+  function* <FinishError, FinishRequirements>(
+    exit: Exit.Exit<unknown, PlatformError>,
     projectId: string,
     attempt: ObservedOperation,
     write: (
@@ -164,7 +162,6 @@ const settle = Effect.fnUntraced(
 
     yield* write(
       LocalOperationObservation.make({
-        source: "host-observed",
         projectId,
         attempt,
         observedAt,
@@ -203,6 +200,9 @@ export interface ObservationJournal<
  * Wraps the host's own Search, Fetch or Agent-run Effect, for example `search.web(query)`.
  * A committed intent with a host Clock start time precedes the POST. `finish` must be
  * idempotent. Unsettled ids remain unknown after a crash; never replay the POST.
+ *
+ * One intent records one attempt, so `call` must be a single call: a retry inside it would
+ * send several POSTs under one intent, and a recovered failure would settle as `api-reply`.
  */
 export const observe = <BeginError, BeginRequirements, FinishError, FinishRequirements>(
   attempt: ObservedOperation,
@@ -229,6 +229,7 @@ export const observe = <BeginError, BeginRequirements, FinishError, FinishRequir
     );
   });
 
+/** Each meter names its unit, so an allowance cannot pair a meter with the wrong unit. */
 export const AllowanceMeter = Schema.Literals([
   "browser-minutes",
   "proxy-bytes",
@@ -237,17 +238,6 @@ export const AllowanceMeter = Schema.Literals([
   "extract-calls",
   "agent-calls",
 ]);
-
-export const AllowanceUnit = Schema.Literals(["minutes", "bytes", "calls"]);
-
-const unitForMeter = {
-  "browser-minutes": "minutes",
-  "proxy-bytes": "bytes",
-  "search-calls": "calls",
-  "fetch-calls": "calls",
-  "extract-calls": "calls",
-  "agent-calls": "calls",
-} as const;
 
 /** Imported billing dates must say which UTC offset the source intended. */
 const ZonedUtcDateTime = Schema.String.check(Schema.isPattern(/(?:Z|[+-][0-9]{2}:[0-9]{2})$/)).pipe(
@@ -266,38 +256,29 @@ export const BillingPeriod = Schema.Struct({
 
 export type BillingPeriod = typeof BillingPeriod.Type;
 
-const scopeFields = {
-  accountOrPlanScope: Schema.NonEmptyString,
-  meter: AllowanceMeter,
-  unit: AllowanceUnit,
-};
-
-const unitMatchesMeter = Schema.makeFilter(
-  ({ meter, unit }: { readonly meter: keyof typeof unitForMeter; readonly unit: string }) =>
-    unit === unitForMeter[meter] ? true : `${meter} is counted in ${unitForMeter[meter]}`,
-);
-
 /**
  * Caller-supplied plan policy, decoded at the host boundary so that a configuration
  * mistake is a decode failure rather than an `Unknown`. An omitted period is one the
  * host does not know.
  */
 export const Allowance = Schema.Struct({
-  ...scopeFields,
+  accountOrPlanScope: Schema.NonEmptyString,
+  meter: AllowanceMeter,
   period: Schema.optionalKey(BillingPeriod),
   includedQuantity: Schema.Natural,
   alertAtConsumedQuantity: Schema.Natural,
-}).check(unitMatchesMeter);
+});
 
 export type Allowance = typeof Allowance.Type;
 
 /** A provider total the host obtained and verified through its own billing channel. */
 export const ProviderPeriodConsumption = Schema.Struct({
   source: Schema.Literal("provider-billing"),
-  ...scopeFields,
+  accountOrPlanScope: Allowance.fields.accountOrPlanScope,
+  meter: AllowanceMeter,
   period: BillingPeriod,
   consumedQuantity: Schema.Natural,
-}).check(unitMatchesMeter);
+});
 
 export type ProviderPeriodConsumption = typeof ProviderPeriodConsumption.Type;
 
@@ -330,7 +311,6 @@ export const assessAllowance = (
   if (
     total.accountOrPlanScope !== allowance.accountOrPlanScope ||
     total.meter !== allowance.meter ||
-    total.unit !== allowance.unit ||
     !samePeriod(total.period, allowance.period)
   )
     return { _tag: "Unknown", reason: "mismatched-provider-total" };

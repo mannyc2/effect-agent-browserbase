@@ -23,6 +23,7 @@ import {
   ProjectUsageObservation,
   sampleProjectUsage,
   type LocalOperationObservation,
+  type ObservedOperation,
 } from "../examples/usage-observation.ts";
 import { BrowserbaseAgents } from "../src/Agents.ts";
 import { BrowserbaseCertificates } from "../src/Certificates.ts";
@@ -797,7 +798,7 @@ it.effect("the example journals typed Search, Fetch and Agent outcomes without r
   });
 
   const journal = {
-    begin: (_projectId: string, attempt: { readonly operation: string }, startedAt: DateTime.Utc) =>
+    begin: (_projectId: string, attempt: ObservedOperation, startedAt: DateTime.Utc) =>
       Effect.sync(() => {
         order.push(`begin:${attempt.operation}`);
         starts.push(DateTime.toEpochMillis(startedAt));
