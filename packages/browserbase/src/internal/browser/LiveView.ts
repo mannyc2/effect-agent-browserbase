@@ -36,18 +36,22 @@ export interface LiveView {
     readonly liveViewPageId: string;
     readonly url: Redacted.Redacted<string>;
   }>;
+  /** Echo of the requested TTL, not a provider-confirmed expiration time. */
   readonly requestedTtlSeconds: number;
 }
 
 /**
- * Issuing a debugger URL is an authorization step, not proof that an operator took control.
- * The URL is redacted here so it cannot be logged or returned as an ordinary model value.
+ * These URLs are bearer capabilities: issuing one is an authorization step, not proof that an
+ * operator took control. Redaction keeps them out of ordinary logs and model-facing values.
  */
 export const issueLiveUrls = Effect.fnUntraced(function* (
   client: BrowserbaseClient["Service"],
   reference: SessionReference,
   expiresInSeconds: number,
 ) {
+  // The pinned SDK documents an optional `expiresIn` with a 21,600 second maximum, but neither
+  // it nor the published debug-route schema specifies a provider minimum. One second is this
+  // adapter's positive-integer input bound, not a claim that Browserbase will accept or honor it.
   if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 21600)
     return yield* ClientError.make({
       operation: "provider-read",
