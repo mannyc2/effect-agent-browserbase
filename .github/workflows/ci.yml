@@ -132,6 +132,18 @@ jobs:
           CI_FORCE_FULL: ${{ inputs.full_acceptance == true || inputs.source_sha != '' }}
           CI_REQUESTED_PROFILE: ${{ inputs.profile || 'full' }}
         run: node tools/ci-plan.mjs write "$BROWSERBASE_WORK_ROOT/ci-plan.json"
+      # The pinned @effect-agent/testing suite certifies the real PostgreSQL adapter.
+      # Only full acceptance runs that upstream suite; focused profiles need no database.
+      - name: Start upstream PostgreSQL fixture
+        if: ${{ steps.plan.outputs.profile == 'full' }}
+        run: |
+          docker run --detach --name effect-agent-test-postgres \
+            --publish 127.0.0.1:55432:5432 \
+            --env POSTGRES_PASSWORD=postgres --env POSTGRES_DB=effect_agent \
+            --health-cmd 'pg_isready -U postgres -d effect_agent' \
+            --health-interval 1s --health-timeout 5s --health-retries 30 \
+            postgres:17-alpine
+          timeout 60s bash -c 'until [ "$(docker inspect --format "{{.State.Health.Status}}" effect-agent-test-postgres)" = healthy ]; do sleep 1; done'
       # The workspace identity, not the candidate, decides whether a stored upstream task
       # result can apply at all: the pinned upstream revision lives in bootstrap.sh, the
       # integration diff in upstream.patch, the runtime in .node-version. Vite Task still
@@ -205,3 +217,9 @@ jobs:
           # Generated evidence only, no checkout/home/credentials. Preserve all files
           # named by SHA256SUMS, including diagnostic dependencies on failed runs.
           include-hidden-files: true
+      - name: Stop upstream PostgreSQL fixture
+        if: ${{ always() && steps.plan.outputs.profile == 'full' }}
+        run: |
+          if docker container inspect effect-agent-test-postgres >/dev/null 2>&1; then
+            docker rm --force effect-agent-test-postgres
+          fi
