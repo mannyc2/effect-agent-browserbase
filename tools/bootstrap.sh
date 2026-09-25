@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reproduce the pinned integration workspace from current source, not a checkpoint.
 set -euo pipefail
-REV=ea53ea6671a94eb44b8019e942cc2c9468786723
+REV=bcc2bb75d83f40c87ff511c6572fd87e14e1d87c
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${1:-$ROOT/.work/upstream}"
 TREE="$WORK/tree"

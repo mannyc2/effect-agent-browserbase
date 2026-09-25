@@ -38,7 +38,7 @@ import { verifyReleaseSet } from "../verify-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const version = "0.2.0-beta.0";
-const frameworkVersion = "0.1.0-beta.102";
+const frameworkVersion = "0.1.0-beta.142";
 const sha = "1234567890abcdef1234567890abcdef12345678";
 
 const versions = {
@@ -58,7 +58,7 @@ const source = (index) => ({
       ? { ".": "./src/index.ts", "./client": "./src/Client.ts" }
       : { ".": "./src/index.ts", "./adapter": "./src/Adapter.ts", "./tools": "./src/Tools.ts" },
   peerDependencies: {
-    effect: "^4.0.0-rc.115",
+    effect: "^4.0.0-rc.117",
     ...(index === 0 ? { "playwright-core": "1.63.0" } : { "effect-browser": "workspace:*" }),
     ...(index === 2 ? { "effect-agent": "workspace:*" } : {}),
   },
@@ -167,16 +167,16 @@ test("normalization strips dev/source/scripts without mutating inputs, and resol
     assert.equal(JSON.stringify(input), original);
   }
   assert.deepEqual(manifest(0).peerDependencies, {
-    effect: "^4.0.0-rc.115",
+    effect: "^4.0.0-rc.117",
     "playwright-core": "1.63.0",
   });
   assert.deepEqual(manifest(0).peerDependenciesMeta, { "playwright-core": { optional: true } });
   assert.deepEqual(manifest(1).peerDependencies, {
-    effect: "^4.0.0-rc.115",
+    effect: "^4.0.0-rc.117",
     "effect-browser": version,
   });
   assert.deepEqual(manifest(2).peerDependencies, {
-    effect: "^4.0.0-rc.115",
+    effect: "^4.0.0-rc.117",
     "effect-browser": version,
     "effect-agent": frameworkVersion,
   });
@@ -390,13 +390,13 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
     receipt = packageReleaseSet(tree, out, sha);
 
   const catalog = {
-    effect: "4.0.0-rc.115",
+    effect: "4.0.0-rc.117",
     "@types/node": "26.1.2",
     typescript: "7.0.2",
     "vite-plus": "0.3.2",
     "playwright-core": "1.63.0",
-    "@effect/vitest": "4.0.0-rc.115",
-    "@effect/platform-node": "4.0.0-rc.115",
+    "@effect/vitest": "4.0.0-rc.117",
+    "@effect/platform-node": "4.0.0-rc.117",
     vitest: "4.1.11",
   };
 
@@ -498,7 +498,7 @@ test("actual npm installs direct host peers and rejects incompatible hosts witho
   const incompatibleBrowser = pack(browserMismatch);
 
   const dependencies = {
-    effect: host("effect", "4.0.0-rc.115"),
+    effect: host("effect", "4.0.0-rc.117"),
     "effect-agent": host("effect-agent", frameworkVersion),
     ...Object.fromEntries(
       receipt.packages.map((entry) => [entry.name, `file:${join(out, entry.filename)}`]),
@@ -677,13 +677,13 @@ for (const declarationExit of [0, 1]) {
         join(tree, "package.json"),
         JSON.stringify({
           catalog: {
-            effect: "4.0.0-rc.115",
+            effect: "4.0.0-rc.117",
             "@types/node": "26.1.2",
             typescript: "7.0.2",
             "vite-plus": "0.3.2",
             "playwright-core": "1.63.0",
-            "@effect/vitest": "4.0.0-rc.115",
-            "@effect/platform-node": "4.0.0-rc.115",
+            "@effect/vitest": "4.0.0-rc.117",
+            "@effect/platform-node": "4.0.0-rc.117",
             vitest: "4.1.11",
           },
         }),

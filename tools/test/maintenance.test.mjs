@@ -93,7 +93,7 @@ test("full acceptance runs upstream's check and build whole, and tests only what
   const acceptance = read("tools/run-acceptance.sh");
   const upstream = acceptance.slice(acceptance.indexOf('UPSTREAM_TESTS="${BROWSERBASE_UPSTREAM_TESTS'), acceptance.indexOf("run release-dry-run"));
 
-  assert.ok(upstream.includes("reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser -F @effect-agent/testing test)"));
+  assert.ok(upstream.includes("reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser test)"));
   // The canary spelling is upstream's own root script, recursion included, not a filter.
   assert.ok(upstream.includes("all) TEST_ARGS=(test)"));
   assert.ok(upstream.includes("run upstream-check timeout 900s ./node_modules/.bin/vp run -v check"));

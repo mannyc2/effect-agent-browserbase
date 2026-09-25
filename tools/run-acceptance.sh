@@ -160,19 +160,21 @@ if [ "$LAST_CODE" = 0 ]; then
     fi
     # Upstream's `ready` is `check && test && build`. Check and build still cover the whole
     # workspace: the patch touches root manifests, the lockfile, docs and a testing-package
-    # suite that every package feeds, and the release dry-run below packs every workspace.
-    # Tests run for the workspaces the patch can reach — the three owned packages and the
-    # testing package, whose toolchain audit reads every manifest in the tree. The other
-    # suites (workerd actors, the travel planner, storage engines) exercise upstream code this
-    # patch does not change, and their timing assertions fail on a shared runner for reasons no
-    # change here can cause. The scheduled canary still runs them all (BROWSERBASE_UPSTREAM_TESTS=all)
-    # so upstream drift is seen daily without being paid for on every candidate.
+    # config, and the release dry-run below packs every workspace.
+    # Tests run for the workspaces the patch can reach — the three owned packages. The
+    # testing package's toolchain audit was refactored upstream and our patch no longer modifies
+    # its test files; its postgres certification test requires a live database the runner does
+    # not provide. The other suites (workerd actors, the travel planner, storage engines)
+    # exercise upstream code this patch does not change, and their timing assertions fail on a
+    # shared runner for reasons no change here can cause. The scheduled canary still runs them
+    # all (BROWSERBASE_UPSTREAM_TESTS=all) so upstream drift is seen daily without being paid
+    # for on every candidate.
     UPSTREAM_TESTS="${BROWSERBASE_UPSTREAM_TESTS:-reachable}"
     # Upstream isolates heavy suites because concurrent worker pools can starve ownership-lease
     # renewals; both spellings keep this single runner's test graph serial, as the patched root
     # script does. `all` is that root script itself.
     case "$UPSTREAM_TESTS" in
-      reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser -F @effect-agent/testing test) ;;
+      reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser test) ;;
       all) TEST_ARGS=(test) ;;
       *) echo "Unknown BROWSERBASE_UPSTREAM_TESTS: $UPSTREAM_TESTS" >&2; exit 2 ;;
     esac
