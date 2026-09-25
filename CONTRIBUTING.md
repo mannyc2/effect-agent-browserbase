@@ -8,9 +8,9 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 | ---------------------- | ------------------------------------------------------------------ |
 | Node                   | 24.14.1 (`.node-version`)                                          |
 | Bun                    | 1.4.2                                                              |
-| Upstream               | `danieljvdm/effect-agent@ea53ea6671a94eb44b8019e942cc2c9468786723` |
-| Effect family          | 4.0.0-rc.115                                                       |
-| effect-agent / testing | 0.1.0-beta.102                                                     |
+| Upstream               | `danieljvdm/effect-agent@bcc2bb75d83f40c87ff511c6572fd87e14e1d87c` |
+| Effect family          | 4.0.0-rc.117                                                       |
+| effect-agent / testing | 0.1.0-beta.142                                                     |
 | Playwright             | playwright-core 1.63.0                                             |
 | TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
 | Effect tsgo / Oxlint   | 0.45.0 / 1.82.0                                                    |

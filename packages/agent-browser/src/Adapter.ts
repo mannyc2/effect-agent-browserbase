@@ -156,6 +156,14 @@ const makeHandle = (
       Effect.flatMap((result) => decode(BrowserActionResult, { url: result.url })),
       Effect.mapError((error) => operationError("scroll", error, implementation)),
     ),
+  selectFile: () =>
+    Effect.fail(
+      InteractiveBrowserUnsupportedError.make({
+        implementation,
+        feature: "select-file",
+        message: "File selection is not supported through the generic browser adapter",
+      }),
+    ),
   screenshot: (request) =>
     target.screenshot(request).pipe(
       Effect.flatMap((result) =>
