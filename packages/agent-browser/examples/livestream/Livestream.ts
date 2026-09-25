@@ -309,7 +309,13 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
           }
         }),
       );
-    });
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          pendingFrames.delete(step);
+        }),
+      ),
+    );
 
   /**
    * A finished step's facts are complete once the next model call starts, when the page it left
