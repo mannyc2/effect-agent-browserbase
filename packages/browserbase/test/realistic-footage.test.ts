@@ -339,6 +339,7 @@ it.effect("each document gets the library's address and commit, and this layer's
         documentBoundaries: [
           {
             document: 1,
+            sameDocument: false,
             observedMonotonicNanos: 15_000_000n,
             afterSequence: 1,
             url: "https://rail.example/routes/vienna-venice",

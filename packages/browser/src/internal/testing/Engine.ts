@@ -342,7 +342,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       const { start } = page.capture;
 
       if (start.document === undefined) start.invalidate("target-changed");
-      else start.document(document.url);
+      else start.document(document.url, false);
     }
     notify(page);
     for (const connection of live) connection.announce(page.pageId);

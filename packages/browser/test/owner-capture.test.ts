@@ -56,7 +56,7 @@ const makeFixture = Effect.fnUntraced(function* (
   owner.state.phase = "open";
   const callbacks = new Map<string, (frame: NativeFrame) => void>();
   const invalidators = new Map<string, (reason: CaptureInvalidation) => void>();
-  const documents = new Map<string, (url: string) => void>();
+  const documents = new Map<string, (url: string, sameDocument: boolean) => void>();
   let starts = 0;
   let stops = 0;
 
@@ -154,7 +154,7 @@ const makeFixture = Effect.fnUntraced(function* (
 
     // An interval that lasts one document registers no hook, and ends instead.
     if (document === undefined) invalidate(pageId, "target-changed");
-    else document(url);
+    else document(url, false);
   };
 
   return {
@@ -776,6 +776,136 @@ const captureCases: ReadonlyArray<Case> = [
       yield* other.stop;
       assert.equal(f.parent.captureLeases.size, 0);
     })),
+  test("a native stop that confirms after its deadline releases its quarantined page", () =>
+    Effect.gen(function* () {
+      const entered = gate<void>();
+      const release = gate<void>();
+      const settled = gate<void>();
+
+      const f = yield* makeFixture({
+        stop: async () => {
+          entered.resolve();
+          await release.promise;
+          settled.resolve();
+        },
+      });
+
+      const interval = yield* startCapture(f.parent, options);
+      const stopping = yield* interval.stop.pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => entered.promise);
+      yield* advance(3000);
+      const timedOut = yield* Fiber.join(stopping);
+
+      assert.equal(timedOut.nativeStop, "unconfirmed");
+      assert.equal(f.parent.captureLeases.size, 1);
+      assert.equal(f.parent.captureReservedBytes, options.maxBufferedBytes);
+
+      release.resolve();
+      yield* Effect.promise(() => settled.promise);
+      yield* Effect.yieldNow;
+
+      assert.equal(f.parent.captureLeases.size, 0);
+      assert.equal(f.parent.captureReservedBytes, 0);
+      const replacement = yield* startCapture(f.parent, options);
+
+      yield* replacement.stop;
+    })),
+  test("a start that settles after cleanup remains quarantined until its late stop confirms", () =>
+    Effect.gen(function* () {
+      const entered = gate<void>();
+      const start = gate<void>();
+      const firstStop = gate<void>();
+      const laterStop = gate<void>();
+      const laterStopEntered = gate<void>();
+      const laterStopSettled = gate<void>();
+      let stops = 0;
+
+      const f = yield* makeFixture({
+        start: async () => {
+          entered.resolve();
+          await start.promise;
+        },
+        stop: async () => {
+          stops++;
+          if (stops === 1) {
+            await firstStop.promise;
+
+            return;
+          }
+          laterStopEntered.resolve();
+          await laterStop.promise;
+          laterStopSettled.resolve();
+        },
+      });
+
+      const starting = yield* startCapture(f.parent, options).pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => entered.promise);
+      const interrupting = yield* Fiber.interrupt(starting).pipe(Effect.forkChild);
+
+      yield* advance(5000);
+      yield* Fiber.join(interrupting);
+      assert.equal(f.parent.captureLeases.size, 1);
+      assert.equal(f.parent.captureReservedBytes, options.maxBufferedBytes);
+
+      start.resolve();
+      yield* Effect.yieldNow;
+      assert.equal(stops, 1);
+      assert.equal(f.parent.captureLeases.size, 1);
+      assert.equal(f.parent.captureReservedBytes, options.maxBufferedBytes);
+
+      firstStop.resolve();
+      yield* Effect.promise(() => laterStopEntered.promise);
+      assert.equal(f.parent.captureLeases.size, 1);
+      assert.equal(f.parent.captureReservedBytes, options.maxBufferedBytes);
+
+      laterStop.resolve();
+      yield* Effect.promise(() => laterStopSettled.promise);
+      yield* Effect.yieldNow;
+
+      assert.equal(f.parent.captureLeases.size, 0);
+      assert.equal(f.parent.captureReservedBytes, 0);
+      assert.equal(stops, 2);
+    })),
+  test("a start that settles during cleanup requires a post-start stop confirmation", () =>
+    Effect.gen(function* () {
+      const entered = gate<void>();
+      const start = gate<void>();
+      const firstStopEntered = gate<void>();
+      const firstStop = gate<void>();
+      let stops = 0;
+
+      const f = yield* makeFixture({
+        start: async () => {
+          entered.resolve();
+          await start.promise;
+        },
+        stop: async () => {
+          if (++stops === 1) {
+            firstStopEntered.resolve();
+            await firstStop.promise;
+          }
+        },
+      });
+
+      const starting = yield* startCapture(f.parent, options).pipe(Effect.forkChild);
+
+      yield* Effect.promise(() => entered.promise);
+      const interrupting = yield* Fiber.interrupt(starting).pipe(Effect.forkChild);
+
+      yield* advance(2000);
+      yield* Effect.promise(() => firstStopEntered.promise);
+      start.resolve();
+      yield* Effect.yieldNow;
+      firstStop.resolve();
+      yield* Fiber.join(interrupting);
+      yield* Effect.yieldNow;
+
+      assert.equal(stops, 2);
+      assert.equal(f.parent.captureLeases.size, 0);
+      assert.equal(f.parent.captureReservedBytes, 0);
+    })),
   test("native stop failure prevents a competing screencast only on that page", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture({
@@ -793,6 +923,27 @@ const captureCases: ReadonlyArray<Case> = [
       assert.equal((yield* other.stop).nativeStop, "unconfirmed");
       assert.equal(f.parent.owner.state.phase, "open");
       assert.equal(f.counts().starts, 2);
+    })),
+  test("a definitive page close releases an unconfirmed capture reservation", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture({
+        stop: async () => {
+          throw new Error("PRIVATE-STOP");
+        },
+      });
+
+      const interval = yield* startCapture(f.parent, options);
+
+      assert.equal((yield* interval.stop).nativeStop, "unconfirmed");
+      assert.equal(f.parent.captureLeases.size, 1);
+      assert.equal(f.parent.captureReservedBytes, options.maxBufferedBytes);
+
+      const lease = f.parent.captureLeases.get("target-page-1");
+
+      assert.ok(lease);
+      lease.invalidate("target-closed");
+      assert.equal(f.parent.captureLeases.size, 0);
+      assert.equal(f.parent.captureReservedBytes, 0);
     })),
   test("consumer cancellation ends capture but does not spend or close browser actions", () =>
     Effect.gen(function* () {

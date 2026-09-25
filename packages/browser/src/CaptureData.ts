@@ -97,8 +97,9 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserCapture
    */
   initialUrl: DocumentUrl,
   /**
-   * Each main-frame navigation a `page` interval observed, in order, with the last frame
-   * received before it and the address the new document committed. The native screencast is
+   * Each main-frame URL change a `page` interval observed, in order, with the last frame
+   * received before it and the address it reached. `sameDocument` is true when the existing
+   * document changed its URL; it retains the current document number. The native screencast is
    * never restarted for one, so a boundary is not a gap this package introduced; what Chromium
    * omitted while loading stays `upstreamDrops`. A boundary is the commit. When that navigation
    * started and when its document finished loading are the caller's to stamp, on this same
@@ -107,6 +108,7 @@ export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserCapture
   documentBoundaries: Schema.Array(
     Schema.Struct({
       document: Schema.Natural,
+      sameDocument: Schema.Boolean,
       observedMonotonicNanos: Schema.BigInt,
       afterSequence: Schema.NullOr(Schema.Natural),
       url: DocumentUrl,

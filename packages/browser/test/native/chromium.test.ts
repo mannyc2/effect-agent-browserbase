@@ -88,6 +88,69 @@ it.live(
     ),
 );
 
+it.live("same-document navigation preserves observations and capture document identity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* localSite;
+      const session = yield* (yield* Chromium).launch(policy);
+
+      yield* session.navigate({ url: `${site.url}spa` });
+      const observed = yield* session.observe({ scope: "viewport" });
+      const push = observed.controls.find((control) => control.label === "Push route");
+
+      expect(push).toBeDefined();
+
+      const documentCapture = yield* Capture.start(session);
+
+      yield* session.waitFor({ selector: "#pushed", state: "visible" });
+      yield* session.waitFor({ selector: "#fragmented", state: "visible" });
+      yield* session.pages;
+      const retainedFacts = yield* session.controlFacts(
+        ObservedElement.make({
+          observationId: observed.observationId,
+          elementId: push?.elementId ?? "",
+        }),
+      );
+
+      expect(retainedFacts.label).toBe("Push route");
+
+      const stillCapturing = yield* documentCapture.snapshot;
+
+      expect(stillCapturing.phase).toBe("capturing");
+      expect(stillCapturing.reason).toBe(null);
+      expect(stillCapturing.nativeStop).toBe(null);
+      expect((yield* session.readText({ selector: "#section" })).text).toBe("Stable page");
+      yield* documentCapture.stop;
+
+      yield* session.navigate({ url: `${site.url}spa` });
+      const pageCapture = yield* Capture.start(session, { lifetime: "page" });
+      yield* session.waitFor({ selector: "#pushed", state: "visible" });
+      yield* session.waitFor({ selector: "#fragmented", state: "visible" });
+      yield* session.pages;
+
+      const sameDocument = yield* pageCapture.snapshot;
+
+      expect(sameDocument.currentDocument).toBe(0);
+      expect(sameDocument.documentBoundaries).toMatchObject([
+        { document: 0, url: `${site.url}spa/route`, sameDocument: true },
+        { document: 0, url: `${site.url}spa/route#section`, sameDocument: true },
+      ]);
+
+      yield* session.navigate({ url: site.url });
+      yield* session.pages;
+      const crossDocument = yield* pageCapture.snapshot;
+
+      expect(crossDocument.currentDocument).toBe(1);
+      expect(crossDocument.documentBoundaries.at(-1)).toMatchObject({
+        document: 1,
+        url: site.url,
+        sameDocument: false,
+      });
+      yield* pageCapture.stop;
+    }),
+  ).pipe(Effect.provide(Chromium.layer({ launch }).pipe(Layer.provide(NodeCrypto.layer)))),
+);
+
 it.live(
   "borrowed local attachments and failed target selection leave the external process usable",
   () =>

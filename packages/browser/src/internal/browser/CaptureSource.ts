@@ -14,7 +14,7 @@ import type { Entry, Targets } from "./Targets.ts";
 interface CaptureWatcher {
   readonly frameId: string;
   readonly invalidate: (reason: CaptureInvalidation) => void;
-  readonly document?: (url: string) => void;
+  readonly document?: (url: string, sameDocument: boolean) => void;
 }
 
 /**
@@ -50,12 +50,25 @@ export const makeCaptureSources = (targets: Targets) => {
         watcher.frameId === mainFrameId
       )
         // Read inside the navigation event itself: this is the address that just committed.
-        watcher.document(frame.url());
+        watcher.document(frame.url(), false);
       else watcher.invalidate(reason);
     }
   };
 
+  const sameDocumentNavigated = (entry: Entry, frame: Frame): void => {
+    const watchers = captureWatchers.get(entry.id);
+
+    if (watchers === undefined || frame !== entry.page.mainFrame()) return;
+    for (const watcher of watchers)
+      if (watcher.frameId === frameId(frame)) watcher.document?.(frame.url(), true);
+  };
+
   const forget = (entry: Entry) => {
+    const watchers = captureWatchers.get(entry.id);
+
+    if (watchers !== undefined)
+      // oxlint-disable-next-line unicorn/no-useless-spread -- invalidation releases watchers from this set
+      for (const watcher of [...watchers]) watcher.invalidate("target-closed");
     captureWatchers.delete(entry.id);
   };
 
@@ -105,28 +118,16 @@ export const makeCaptureSources = (targets: Targets) => {
             watcherSet.add(watcher);
             // No await separates these two lines, so no navigation event can run between them.
             opened?.(captureFrame.url());
-            try {
-              await page.screencast.start({
-                quality,
-                ...(size === undefined ? {} : { size }),
-                onFrame: (frame: NativeFrame) => {
-                  receive(frame);
-                },
-              });
-            } catch (error) {
-              watcherSet.delete(watcher);
-              watcher = undefined;
-              if (watcherSet.size === 0) captureWatchers.delete(entry.id);
-              throw error;
-            }
+            await page.screencast.start({
+              quality,
+              ...(size === undefined ? {} : { size }),
+              onFrame: (frame: NativeFrame) => {
+                receive(frame);
+              },
+            });
           }),
         stop: () =>
           sanitize(async () => {
-            if (watcher !== undefined && watcherSet !== undefined) {
-              watcherSet.delete(watcher);
-              watcher = undefined;
-              if (watcherSet.size === 0) captureWatchers.delete(entry.id);
-            }
             // A closed target cannot produce more frames; its page channel rejects stop.
             if (page.isClosed()) return;
             try {
@@ -136,10 +137,17 @@ export const makeCaptureSources = (targets: Targets) => {
               if (!page.isClosed()) throw error;
             }
           }),
+        release: () => {
+          if (watcher !== undefined && watcherSet !== undefined) {
+            watcherSet.delete(watcher);
+            watcher = undefined;
+            if (watcherSet.size === 0) captureWatchers.delete(entry.id);
+          }
+        },
       };
 
       return { pageId: entry.id, targetId, frameId: watchedFrameId, source };
     });
 
-  return { invalidate, forget, clear, capture };
+  return { invalidate, sameDocumentNavigated, forget, clear, capture };
 };

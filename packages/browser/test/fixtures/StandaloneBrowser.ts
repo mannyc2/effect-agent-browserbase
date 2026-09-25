@@ -50,6 +50,24 @@ export const localSite = Effect.acquireRelease(
 
         return;
       }
+      if (url.pathname === "/spa") {
+        response.end(`<!doctype html><title>Single page navigation</title>
+        <button id=push>Push route</button>
+        <button id=fragment>Change fragment</button>
+        <script>
+          setTimeout(() => {
+            history.pushState({}, '', '/spa/route');
+            document.body.insertAdjacentHTML('beforeend', '<span id=pushed>pushed</span>');
+          }, 100);
+          setTimeout(() => {
+            location.hash = 'section';
+            document.body.insertAdjacentHTML('beforeend', '<span id=fragmented>fragmented</span>');
+          }, 250);
+        </script>
+        <main id=section>Stable page</main>`);
+
+        return;
+      }
       if (url.pathname === "/pinned") {
         const name = url.searchParams.get("name") ?? "page";
 
