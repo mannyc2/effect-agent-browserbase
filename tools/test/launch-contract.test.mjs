@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { blockBody, checkLaunchContract, checkOpenApiContract, declaredFields, specBlock, specKeys, stripComments } from "../verify-launch-contract.mjs";
+import {
+  blockBody,
+  checkLaunchContract,
+  checkOpenApiContract,
+  declaredFields,
+  specBlock,
+  specKeys,
+  stripComments,
+} from "../verify-launch-contract.mjs";
 
 // Synthetic sources of the same shape, not a copy of the upstream resource: these cover
 // the parsing rules offline, while the network check confirms the committed transcription.
@@ -43,18 +51,59 @@ export namespace SessionCreateParams {
     }
   }
 }
+
+export interface SessionDebugParams {
+  expiresIn?: number;
+}
+
+export interface SessionLiveURLs {
+  debuggerFullscreenUrl: string;
+  debuggerUrl: string;
+  pages: Array<SessionLiveURLs.Page>;
+  wsUrl: string;
+}
+
+export namespace SessionLiveURLs {
+  export interface Page {
+    id: string;
+    url: string;
+    faviconUrl: string;
+    title: string;
+    debuggerUrl: string;
+    debuggerFullscreenUrl: string;
+  }
+}
 `;
 
 const contract = () => ({
-  contractSource: { repository: "example/sdk", revision: "a".repeat(40), version: "1.0.0", resource: "src/sessions.ts", sha256: "digest" },
+  contractSource: {
+    repository: "example/sdk",
+    revision: "a".repeat(40),
+    version: "1.0.0",
+    resource: "src/sessions.ts",
+    sha256: "digest",
+  },
   sessionCreateFields: ["browserSettings", "keepAlive", "proxies", "timeout", "userMetadata"],
   browserSettingsFields: ["blockAds", "context", "viewport"],
   deliberatelyExcluded: ["browserSettings.advancedStealth"],
   sessionCreateRenames: { api_timeout: "timeout" },
+  sessionDebugParams: ["expiresIn"],
+  sessionLiveUrlsFields: ["debuggerFullscreenUrl", "debuggerUrl", "pages", "wsUrl"],
+  sessionLiveUrlsPageFields: [
+    "id",
+    "url",
+    "faviconUrl",
+    "title",
+    "debuggerUrl",
+    "debuggerFullscreenUrl",
+  ],
+  sessionLiveUrlsSpecParameters: [{ name: "id", location: "path" }],
 });
 
 test("comments are removed without consuming a protocol separator", () => {
-  const stripped = stripComments("const a = 1; // note\nconst b = 'https://example.test/x';\n/** { */\nconst c = 2;\n");
+  const stripped = stripComments(
+    "const a = 1; // note\nconst b = 'https://example.test/x';\n/** { */\nconst c = 2;\n",
+  );
   assert.equal(stripped.includes("note"), false);
   assert.equal(stripped.includes("https://example.test/x"), true);
   assert.equal(stripped.includes("{"), false);
@@ -68,9 +117,22 @@ test("declarations are delimited by brace depth rather than indentation", () => 
 });
 
 test("only directly declared members are collected", () => {
-  const create = declaredFields(blockBody(stripComments(upstream), "export interface SessionCreateParams {"));
-  assert.deepEqual(create, ["browserSettings", "keepAlive", "proxies", "api_timeout", "userMetadata"]);
-  const settings = declaredFields(blockBody(blockBody(stripComments(upstream), "export namespace SessionCreateParams {"), "export interface BrowserSettings {"));
+  const create = declaredFields(
+    blockBody(stripComments(upstream), "export interface SessionCreateParams {"),
+  );
+  assert.deepEqual(create, [
+    "browserSettings",
+    "keepAlive",
+    "proxies",
+    "api_timeout",
+    "userMetadata",
+  ]);
+  const settings = declaredFields(
+    blockBody(
+      blockBody(stripComments(upstream), "export namespace SessionCreateParams {"),
+      "export interface BrowserSettings {",
+    ),
+  );
   // `width` and `height` belong to the nested viewport type, and `id` to a sibling namespace.
   assert.deepEqual(settings, ["advancedStealth", "blockAds", "context", "viewport"]);
 });
@@ -78,7 +140,23 @@ test("only directly declared members are collected", () => {
 test("a faithful transcription of the pinned bytes is accepted", () => {
   const checked = checkLaunchContract(upstream, "digest", contract());
   assert.deepEqual(checked.excluded, ["advancedStealth"]);
-  assert.deepEqual(checked.create, ["browserSettings", "keepAlive", "proxies", "timeout", "userMetadata"]);
+  assert.deepEqual(checked.create, [
+    "browserSettings",
+    "keepAlive",
+    "proxies",
+    "timeout",
+    "userMetadata",
+  ]);
+  assert.deepEqual(checked.debug, ["expiresIn"]);
+  assert.deepEqual(checked.liveUrls, ["debuggerFullscreenUrl", "debuggerUrl", "pages", "wsUrl"]);
+  assert.deepEqual(checked.liveUrlPage, [
+    "id",
+    "url",
+    "faviconUrl",
+    "title",
+    "debuggerUrl",
+    "debuggerFullscreenUrl",
+  ]);
 });
 
 test("a revision that no longer serves the reviewed bytes is refused", () => {
@@ -87,23 +165,66 @@ test("a revision that no longer serves the reviewed bytes is refused", () => {
 
 test("an added, dropped or wrongly excluded field is drift, not an incidental edit", () => {
   const dropped = contract();
-  dropped.sessionCreateFields = dropped.sessionCreateFields.filter((field) => field !== "keepAlive");
-  assert.throws(() => checkLaunchContract(upstream, "digest", dropped), /Session create fields drifted/);
+  dropped.sessionCreateFields = dropped.sessionCreateFields.filter(
+    (field) => field !== "keepAlive",
+  );
+  assert.throws(
+    () => checkLaunchContract(upstream, "digest", dropped),
+    /Session create fields drifted/,
+  );
 
   const added = contract();
   added.browserSettingsFields = [...added.browserSettingsFields, "solveCaptchas"];
-  assert.throws(() => checkLaunchContract(upstream, "digest", added), /Browser settings fields drifted/);
+  assert.throws(
+    () => checkLaunchContract(upstream, "digest", added),
+    /Browser settings fields drifted/,
+  );
 
   // Excluding a field upstream does not declare would quietly hide a future rename.
   const phantom = contract();
   phantom.deliberatelyExcluded = ["browserSettings.extensionId"];
-  assert.throws(() => checkLaunchContract(upstream, "digest", phantom), /Browser settings fields drifted/);
+  assert.throws(
+    () => checkLaunchContract(upstream, "digest", phantom),
+    /Browser settings fields drifted/,
+  );
 });
 
 test("an unapplied rename is drift rather than a near-matching name", () => {
   const unrenamed = contract();
   unrenamed.sessionCreateRenames = {};
-  assert.throws(() => checkLaunchContract(upstream, "digest", unrenamed), /Session create fields drifted/);
+  assert.throws(
+    () => checkLaunchContract(upstream, "digest", unrenamed),
+    /Session create fields drifted/,
+  );
+});
+
+test("debug and Live View SDK shapes must match the pinned inventory", () => {
+  const addedDebugOption = upstream.replace(
+    "  expiresIn?: number;",
+    "  expiresIn?: number;\n  includeDebug?: boolean;",
+  );
+  assert.throws(
+    () => checkLaunchContract(addedDebugOption, "digest", contract()),
+    /Session debug parameters drifted/,
+  );
+
+  const addedLiveUrl = upstream.replace(
+    "  wsUrl: string;",
+    "  wsUrl: string;\n  websocketUrl: string;",
+  );
+  assert.throws(
+    () => checkLaunchContract(addedLiveUrl, "digest", contract()),
+    /Session Live URLs fields drifted/,
+  );
+
+  const addedPageField = upstream.replace(
+    "    title: string;",
+    "    title: string;\n    targetId: string;",
+  );
+  assert.throws(
+    () => checkLaunchContract(addedPageField, "digest", contract()),
+    /Session Live URL page fields drifted/,
+  );
 });
 
 const specification = `openapi: 3.0.0
@@ -142,43 +263,169 @@ paths:
                           type: string
                     viewport:
                       type: object
+  /v1/sessions/{id}/debug:
+    get:
+      operationId: Sessions_getDebug
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionLiveUrls"
   /v1/contexts:
     post:
       operationId: Contexts_create
+components:
+  schemas:
+    SessionLiveUrls:
+      type: object
+      properties:
+        debuggerFullscreenUrl:
+          type: string
+        debuggerUrl:
+          type: string
+        pages:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              url:
+                type: string
+              faviconUrl:
+                type: string
+              title:
+                type: string
+              debuggerUrl:
+                type: string
+              debuggerFullscreenUrl:
+                type: string
+            required:
+              - id
+              - url
+              - faviconUrl
+              - title
+              - debuggerUrl
+              - debuggerFullscreenUrl
+        wsUrl:
+          type: string
+      required:
+        - debuggerFullscreenUrl
+        - debuggerUrl
+        - pages
+        - wsUrl
 `;
 
-const properties = ["paths", "/v1/sessions", "post", "requestBody", "content", "application/json", "schema", "properties"];
+const properties = [
+  "paths",
+  "/v1/sessions",
+  "post",
+  "requestBody",
+  "content",
+  "application/json",
+  "schema",
+  "properties",
+];
 
 test("a specification subtree is read by indentation and stops at its sibling", () => {
   const block = specBlock(specification.split("\n"), properties);
   // `id` belongs to the nested context object, and the sibling path is not part of the block.
-  assert.deepEqual(specKeys(block), ["timeout", "keepAlive", "proxies", "userMetadata", "browserSettings"]);
-  assert.equal(block.some((line) => line.includes("Contexts_create")), false);
-  assert.throws(() => specBlock(specification.split("\n"), ["paths", "/v1/missing"]), /no longer declares/);
+  assert.deepEqual(specKeys(block), [
+    "timeout",
+    "keepAlive",
+    "proxies",
+    "userMetadata",
+    "browserSettings",
+  ]);
+  assert.equal(
+    block.some((line) => line.includes("Contexts_create")),
+    false,
+  );
+  assert.throws(
+    () => specBlock(specification.split("\n"), ["paths", "/v1/missing"]),
+    /no longer declares/,
+  );
 });
 
 test("the published specification is checked as the wire contract", () => {
   const checked = checkOpenApiContract(specification, contract());
-  assert.deepEqual([...checked.settings].sort(), ["advancedStealth", "blockAds", "context", "viewport"]);
+  assert.deepEqual([...checked.settings].sort(), [
+    "advancedStealth",
+    "blockAds",
+    "context",
+    "viewport",
+  ]);
   // The specification states the request field directly, so no rename is applied to it.
   assert.equal(checked.create.includes("timeout"), true);
+  assert.deepEqual(checked.liveUrlParameters, [{ name: "id", location: "path" }]);
+  assert.deepEqual(checked.liveUrls, ["debuggerFullscreenUrl", "debuggerUrl", "pages", "wsUrl"]);
+  assert.deepEqual(checked.liveUrlPage, [
+    "id",
+    "url",
+    "faviconUrl",
+    "title",
+    "debuggerUrl",
+    "debuggerFullscreenUrl",
+  ]);
+});
+
+test("the debug route cannot silently acquire query or response fields", () => {
+  const queryDrift = specification.replace(
+    "          in: path\n",
+    "          in: path\n        - name: expiresIn\n          in: query\n",
+  );
+  assert.throws(
+    () => checkOpenApiContract(queryDrift, contract()),
+    /Session Live URL parameters drifted/,
+  );
+
+  const responseDrift = specification.replace(
+    "        wsUrl:\n",
+    "        secretUrl:\n          type: string\n        wsUrl:\n",
+  );
+  assert.throws(
+    () => checkOpenApiContract(responseDrift, contract()),
+    /Session Live URLs fields drifted/,
+  );
 });
 
 test("a field the provider adds to the specification is drift, not a silent gap", () => {
-  const added = specification.replace("                keepAlive:\n", "                keepAlive:\n                  type: boolean\n                region:\n");
-  assert.throws(() => checkOpenApiContract(added, contract()), /Session create fields drifted from the published specification/);
+  const added = specification.replace(
+    "                keepAlive:\n",
+    "                keepAlive:\n                  type: boolean\n                region:\n",
+  );
+  assert.throws(
+    () => checkOpenApiContract(added, contract()),
+    /Session create fields drifted from the published specification/,
+  );
 
-  const settings = specification.replace("                    blockAds:\n", "                    blockAds:\n                      type: boolean\n                    solveCaptchas:\n");
-  assert.throws(() => checkOpenApiContract(settings, contract()), /Browser settings fields drifted from the published specification/);
+  const settings = specification.replace(
+    "                    blockAds:\n",
+    "                    blockAds:\n                      type: boolean\n                    solveCaptchas:\n",
+  );
+  assert.throws(
+    () => checkOpenApiContract(settings, contract()),
+    /Browser settings fields drifted from the published specification/,
+  );
 });
 
 test("the committed contract carries a checkable citation", async () => {
-  const contractModule = await import("../../packages/browserbase/src/internal/provider/Contract.ts");
+  const contractModule =
+    await import("../../packages/browserbase/src/internal/provider/Contract.ts");
   assert.match(contractModule.contractSource.sha256, /^[0-9a-f]{64}$/);
   assert.match(contractModule.contractSource.revision, /^[0-9a-f]{40}$/);
   assert.match(contractModule.contractSource.spec, /^https:\/\/.*openapi.*\.yaml$/);
   assert.equal(contractModule.sessionCreateRenames.api_timeout, "timeout");
   assert.equal(contractModule.sessionCreateFields.includes("timeout"), true);
   assert.equal(contractModule.sessionCreateFields.includes("api_timeout"), false);
-  for (const excluded of contractModule.deliberatelyExcluded) assert.match(excluded, /^browserSettings\./);
+  for (const excluded of contractModule.deliberatelyExcluded)
+    assert.match(excluded, /^browserSettings\./);
 });
