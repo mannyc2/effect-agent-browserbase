@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { Browser, CDPSession, Dialog, Page } from "playwright-core";
+import type { Browser, CDPSession, Dialog, Frame, Page } from "playwright-core";
 
 import { Reasons, BrowserError, InitializationError } from "../../Errors.ts";
 import { makeActions } from "./Actions.ts";
@@ -94,6 +94,7 @@ export const makePlaywrightDriver = async (
   let closing = false;
   let initialized = false;
   let browserCdp: CDPSession | undefined;
+  let sameDocumentCapture: (entry: Entry, frame: Frame) => void = () => {};
 
   const targets = makeTargets(browser, context, options, identity.namespace, () => closing, {
     opened: (entry, created) => {
@@ -131,13 +132,13 @@ export const makePlaywrightDriver = async (
         }
       observation.invalidate({ pageId: entry.id });
       pageControl.closed(entry);
-      captures.invalidate(entry, "target-changed");
       captures.forget(entry);
     },
     navigating: (entry, frame) => pageControl.navigating(entry, frame),
     navigated: (entry, frame) => {
       if (initialized) initialization.attachFrame(frame, entry.page);
     },
+    sameDocumentNavigated: (entry, frame) => sameDocumentCapture(entry, frame),
     frameChanged: (entry, frame) => {
       actions.waitChanged(entry, frame);
       // Only the frame an observation read can change what it names.
@@ -191,6 +192,8 @@ export const makePlaywrightDriver = async (
   actions.setPointerInvalidator(pointer.invalidate);
   const keyboard = makeKeyboard(targets, actions, pointer.receipt);
   const captures = makeCaptureSources(targets);
+
+  sameDocumentCapture = captures.sameDocumentNavigated;
 
   const pageControl = makePageControl(
     browser,

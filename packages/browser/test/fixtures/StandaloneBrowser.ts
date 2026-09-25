@@ -18,15 +18,61 @@ const attempt = <A>(operation: string, run: () => Promise<A>) =>
     catch: () => FixtureError.make({ operation }),
   });
 
+const spaBarrier = () => {
+  let arrive = () => {};
+  let release = () => {};
+
+  const arrived = new Promise<void>((resolve) => {
+    arrive = resolve;
+  });
+
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return { arrived, arrive, released, release };
+};
+
+const spaVisitBarrier = () => ({ push: spaBarrier(), fragment: spaBarrier() });
+
 /** Only public page content; no provider endpoints, credentials or session responses. */
 export const localSite = Effect.acquireRelease(
   attempt("start site", async () => {
     const requests: string[] = [];
+    const spaVisits = new Map<string, ReturnType<typeof spaVisitBarrier>>();
+    let spaVisitSerial = 0;
+
+    const closeSpaVisits = () => {
+      for (const visit of spaVisits.values()) {
+        visit.push.release();
+        visit.fragment.release();
+      }
+      spaVisits.clear();
+    };
 
     const server = createServer((request, response) => {
       requests.push(request.url ?? "/");
-      response.writeHead(200, { "content-type": "text/html" });
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+
+      if (url.pathname === "/spa/advance") {
+        const visit = spaVisits.get(url.searchParams.get("visit") ?? "");
+        const step = url.searchParams.get("step");
+
+        const barrier =
+          step === "push" ? visit?.push : step === "fragment" ? visit?.fragment : undefined;
+
+        if (barrier === undefined) {
+          response.writeHead(404).end();
+
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/plain" });
+        barrier.arrive();
+        void barrier.released.then(() => response.end("continue"));
+
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html" });
 
       if (url.pathname === "/pinned-slow") {
         // Intentionally never reaches DOMContentLoaded. The navigation test stops this request.
@@ -47,6 +93,26 @@ export const localSite = Effect.acquireRelease(
         <strong id=frame-name>${url.searchParams.get("name") ?? "child"}</strong>
         <button id=frame-increment onclick="frameCount.textContent=Number(frameCount.textContent)+1">Increment frame</button>
         <span id=frameCount>0</span>`);
+
+        return;
+      }
+      if (url.pathname === "/spa") {
+        response.end(`<!doctype html><title>Single page navigation</title>
+        <button id=push>Push route</button>
+        <button id=fragment>Change fragment</button>
+        <script>
+          const visit = new URLSearchParams(location.search).get('visit');
+          const waitForAdvance = async (step) => (await fetch('/spa/advance?visit=' + visit + '&step=' + step)).ok;
+          (async () => {
+            if (!await waitForAdvance('push')) return;
+            history.pushState({}, '', '/spa/route');
+            document.body.insertAdjacentHTML('beforeend', '<span id=pushed>pushed</span>');
+            if (!await waitForAdvance('fragment')) return;
+            location.hash = 'section';
+            document.body.insertAdjacentHTML('beforeend', '<span id=fragmented>fragmented</span>');
+          })();
+        </script>
+        <main id=section>Stable page</main>`);
 
         return;
       }
@@ -81,8 +147,26 @@ export const localSite = Effect.acquireRelease(
     return {
       url: `http://127.0.0.1:${address.port}/`,
       requests,
+      spaVisit: () => {
+        const id = String(++spaVisitSerial);
+        const barriers = spaVisitBarrier();
+
+        spaVisits.set(id, barriers);
+
+        return {
+          url: `http://127.0.0.1:${address.port}/spa?visit=${id}`,
+          push: { arrived: barriers.push.arrived, release: barriers.push.release },
+          fragment: { arrived: barriers.fragment.arrived, release: barriers.fragment.release },
+          close: () => {
+            barriers.push.release();
+            barriers.fragment.release();
+            spaVisits.delete(id);
+          },
+        };
+      },
       close: () =>
         new Promise<void>((resolve, reject) => {
+          closeSpaVisits();
           // Register listener closure before forcing socket teardown on Node and Bun.
           server.close((error) => (error === undefined ? resolve() : reject(error)));
           server.closeAllConnections();

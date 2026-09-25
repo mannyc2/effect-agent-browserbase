@@ -44,12 +44,41 @@ export interface TargetHooks {
   readonly navigating: (entry: Entry, frame: Frame) => void;
   /** After a navigated frame's document epoch advances. */
   readonly navigated: (entry: Entry, frame: Frame) => void;
+  /** A URL changed inside the current document; no observation or document epoch is retired. */
+  readonly sameDocumentNavigated: (entry: Entry, frame: Frame) => void;
   /** A frame navigated or detached, before any consequence for the selection. */
   readonly frameChanged: (entry: Entry, frame: Frame) => void;
   readonly dialog: (entry: Entry, dialog: Dialog) => void;
   /** Selection changes notify the owner without retiring another page's retained nodes. */
   readonly changed: (reason: "target-changed", scope: ObservationScope) => void;
 }
+
+interface ClientFrameNavigation {
+  readonly newDocument?: unknown;
+  readonly error?: unknown;
+}
+
+interface ClientFrame {
+  readonly _eventEmitter: {
+    readonly on: (event: "navigated", listener: (event: ClientFrameNavigation) => void) => void;
+    readonly off: (event: "navigated", listener: (event: ClientFrameNavigation) => void) => void;
+  };
+}
+
+/**
+ * Playwright 1.63.0's client Frame emits this synchronous private event before the public Page
+ * `framenavigated` event. Its `newDocument` field distinguishes document commits from URL-only
+ * changes. A missing emitter is an unsupported runtime, never a reason to guess from the URL.
+ */
+const clientNavigationEmitter = (frame: Frame): ClientFrame["_eventEmitter"] => {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- accesses the exact pinned client seam described above
+  const emitter = (frame as unknown as ClientFrame)._eventEmitter;
+
+  if (typeof emitter?.on !== "function" || typeof emitter.off !== "function")
+    throw new Error("Playwright 1.63.0 client Frame navigation event is unavailable");
+
+  return emitter;
+};
 
 /**
  * The connection's pages, frames and document epochs, and the one selected target every other
@@ -107,7 +136,30 @@ export const makeTargets = (
       return entry;
     }
     entries.set(entry.id, entry);
-    for (const frame of page.frames()) frameId(frame);
+    const sameDocumentNavigations = new WeakSet<Frame>();
+    const frameNavigationOff = new WeakMap<Frame, () => void>();
+
+    const watchFrameNavigation = (frame: Frame): void => {
+      if (frameNavigationOff.has(frame)) return;
+      const emitter = clientNavigationEmitter(frame);
+
+      const onNavigated = (event: ClientFrameNavigation) => {
+        if (event.error !== undefined || event.newDocument !== undefined) return;
+        sameDocumentNavigations.add(frame);
+        hooks.sameDocumentNavigated(entry, frame);
+      };
+
+      emitter.on("navigated", onNavigated);
+      const off = () => emitter.off("navigated", onNavigated);
+
+      frameNavigationOff.set(frame, off);
+      entry.off.push(off);
+    };
+
+    for (const frame of page.frames()) {
+      frameId(frame);
+      watchFrameNavigation(frame);
+    }
 
     const onClose = () => {
       hooks.closed(entry);
@@ -121,6 +173,8 @@ export const makeTargets = (
     };
 
     const onNavigation = (frame: Frame) => {
+      // The private client event above runs synchronously before this public event.
+      if (sameDocumentNavigations.delete(frame)) return;
       hooks.navigating(entry, frame);
       documentEpochs.set(frame, epochOf(frame) + 1);
       hooks.navigated(entry, frame);
@@ -131,6 +185,13 @@ export const makeTargets = (
     };
 
     const onDetached = (frame: Frame) => {
+      const off = frameNavigationOff.get(frame);
+
+      off?.();
+      const cleanupIndex = off === undefined ? -1 : entry.off.indexOf(off);
+
+      if (cleanupIndex !== -1) entry.off.splice(cleanupIndex, 1);
+      frameNavigationOff.delete(frame);
       hooks.frameChanged(entry, frame);
       if (selection.frame === frame) {
         selection.frame = undefined;
@@ -142,12 +203,19 @@ export const makeTargets = (
       hooks.dialog(entry, dialog);
     };
 
+    const onFrameAttached = (frame: Frame) => {
+      frameId(frame);
+      watchFrameNavigation(frame);
+    };
+
     page.on("close", onClose);
+    page.on("frameattached", onFrameAttached);
     page.on("framenavigated", onNavigation);
     page.on("framedetached", onDetached);
     page.on("dialog", onDialog);
     entry.off.push(
       () => page.off("close", onClose),
+      () => page.off("frameattached", onFrameAttached),
       () => page.off("framenavigated", onNavigation),
       () => page.off("framedetached", onDetached),
       () => page.off("dialog", onDialog),

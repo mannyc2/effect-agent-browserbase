@@ -154,7 +154,7 @@ export interface NativeNavigation {
   ) => Promise<"dispatched" | "settled">;
 }
 
-export type CaptureInvalidation = "target-changed" | "resized";
+export type CaptureInvalidation = "target-changed" | "target-closed" | "resized";
 
 export interface CaptureStart {
   readonly receive: (frame: NativeFrame) => void;
@@ -170,12 +170,14 @@ export interface CaptureStart {
    * Present when the interval follows its page across documents. A main-frame navigation then
    * reports a new document here, with the address it committed, instead of ending the interval.
    */
-  readonly document?: (url: string) => void;
+  readonly document?: (url: string, sameDocument: boolean) => void;
 }
 
 export interface CaptureSource {
   readonly start: (options: CaptureStart) => Promise<void>;
   readonly stop: () => Promise<void>;
+  /** Drops this source's page watcher after stop confirmation or definitive target closure. */
+  readonly release?: () => void;
 }
 
 export interface CaptureTarget {

@@ -119,10 +119,10 @@ export const startCapture = Effect.fnUntraced(function* (
   let documentBoundariesTruncated = false;
   const documentBoundaries: Array<CaptureSummary["documentBoundaries"][number]> = [];
 
-  /** The page navigated and its screencast kept running: later frames belong to a new document. */
-  const nextDocument = (url: string): void => {
+  /** A URL change is recorded; only a new document advances the frame attribution. */
+  const nextDocument = (url: string, sameDocument = false): void => {
     if (ended) return;
-    document++;
+    if (!sameDocument) document++;
     // The latest boundaries are kept: a live consumer needs the address of what it is showing now.
     if (documentBoundaries.length >= MaxDocumentBoundaries) {
       documentBoundaries.shift();
@@ -130,6 +130,7 @@ export const startCapture = Effect.fnUntraced(function* (
     }
     documentBoundaries.push({
       document,
+      sameDocument,
       observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
       afterSequence: received === 0 ? null : received - 1,
       url: documentUrl(url),
@@ -142,6 +143,61 @@ export const startCapture = Effect.fnUntraced(function* (
 
   let nativeStop: CaptureSummary["nativeStop"] = "unconfirmed";
   let lease: CaptureLease | undefined;
+  let reservationReleased = false;
+  let preStartStopConfirmed = false;
+  let postStartStopStarted = false;
+
+  const releaseReservation = () => {
+    if (reservationReleased) return;
+    reservationReleased = true;
+    source?.release?.();
+    if (
+      leaseKey !== undefined &&
+      lease !== undefined &&
+      parent.captureLeases.get(leaseKey) === lease
+    ) {
+      parent.captureLeases.delete(leaseKey);
+      parent.captureReservedBytes = Math.max(0, parent.captureReservedBytes - lease.reservedBytes);
+    }
+  };
+
+  let confirmPostStartStop = () => {};
+
+  const observeStop = (stopping: Promise<void>, afterStart: boolean) => {
+    void stopping.then(
+      () => {
+        if (afterStart) {
+          nativeStop = "confirmed";
+          releaseReservation();
+        } else {
+          preStartStopConfirmed = true;
+          confirmPostStartStop();
+        }
+      },
+      () => {},
+    );
+  };
+
+  confirmPostStartStop = () => {
+    const stoppingSource = source;
+
+    if (
+      !preStartStopConfirmed ||
+      !startSettled ||
+      postStartStopStarted ||
+      stoppingSource === undefined ||
+      leaseKey === undefined ||
+      lease === undefined ||
+      parent.captureLeases.get(leaseKey) !== lease
+    )
+      return;
+
+    postStartStopStarted = true;
+    observeStop(
+      Promise.resolve().then(() => stoppingSource.stop()),
+      true,
+    );
+  };
 
   const finish = (why: string, failure?: BrowserError) => {
     if (ended) return;
@@ -210,10 +266,14 @@ export const startCapture = Effect.fnUntraced(function* (
         }
         if (source !== undefined) {
           const stopping = source;
+          const afterStart = startSettled;
+          const stop = Promise.resolve().then(() => stopping.stop());
+
+          observeStop(stop, afterStart);
 
           const stopped = yield* restore(
             Effect.tryPromise({
-              try: () => stopping.stop(),
+              try: () => stop,
               catch: () =>
                 BrowserError.make({
                   operation: "capture-stop",
@@ -223,21 +283,12 @@ export const startCapture = Effect.fnUntraced(function* (
             }).pipe(Effect.timeout(3000)),
           ).pipe(Effect.exit);
 
-          if (Exit.isSuccess(stopped) && startSettled) nativeStop = "confirmed";
+          if (Exit.isSuccess(stopped) && afterStart) {
+            nativeStop = "confirmed";
+            releaseReservation();
+          }
         } else nativeStop = "confirmed";
-        // No older attachment may clear a replacement. Unconfirmed native cleanup quarantines only this page.
-        if (
-          nativeStop === "confirmed" &&
-          leaseKey !== undefined &&
-          lease !== undefined &&
-          parent.captureLeases.get(leaseKey) === lease
-        ) {
-          parent.captureLeases.delete(leaseKey);
-          parent.captureReservedBytes = Math.max(
-            0,
-            parent.captureReservedBytes - lease.reservedBytes,
-          );
-        }
+        if (nativeStop === "confirmed") releaseReservation();
         cleanupFinished = true;
 
         return snapshot();
@@ -486,16 +537,18 @@ export const startCapture = Effect.fnUntraced(function* (
           lease = {
             reservedBytes: maxBytes,
             stop: stopNative.pipe(Effect.asVoid),
-            invalidate: (why) =>
+            invalidate: (why) => {
+              if (why === "target-closed") releaseReservation();
               finish(
-                why,
+                why === "resized" ? "resized" : "target-changed",
                 BrowserError.make({
                   operation: "capture",
                   reason:
                     why === "resized" ? Reasons.Resized.make({}) : Reasons.TargetChanged.make({}),
                   outcome: "undispatched",
                 }),
-              ),
+              );
+            },
           };
           parent.captureLeases.set(leaseKey, lease);
           parent.captureReservedBytes += maxBytes;
@@ -513,33 +566,30 @@ export const startCapture = Effect.fnUntraced(function* (
           startSettled = false;
           yield* Effect.tryPromise({
             try: () => {
-              startPromise = resolvedSource.start({
-                receive,
-                quality,
-                invalidate: (why) => lease?.invalidate(why),
-                opened: (url) => {
-                  initialUrl = documentUrl(url);
-                },
-                ...(size === undefined ? {} : { size }),
-                ...(options.lifetime === "page" ? { document: nextDocument } : {}),
-              });
-              void startPromise.then(
-                () => {
-                  startSettled = true;
-                  if (
-                    cleanupFinished &&
-                    nativeStop === "unconfirmed" &&
-                    leaseKey !== undefined &&
-                    parent.captureLeases.get(leaseKey) === lease
-                  ) {
-                    // One late acquisition cleanup, not a callback-side worker. Keep the page quarantined.
-                    void resolvedSource.stop().catch(() => {});
-                  }
-                },
-                () => {
-                  startSettled = true;
-                },
-              );
+              try {
+                startPromise = resolvedSource.start({
+                  receive,
+                  quality,
+                  invalidate: (why) => lease?.invalidate(why),
+                  opened: (url) => {
+                    initialUrl = documentUrl(url);
+                  },
+                  ...(size === undefined ? {} : { size }),
+                  ...(options.lifetime === "page" ? { document: nextDocument } : {}),
+                });
+              } catch (error) {
+                startSettled = true;
+
+                throw error;
+              }
+
+              const cleanupAfterLateStart = () => {
+                startSettled = true;
+                // A pre-start stop must settle successfully before a post-start stop is sent.
+                confirmPostStartStop();
+              };
+
+              void startPromise.then(cleanupAfterLateStart, cleanupAfterLateStart);
 
               return startPromise;
             },

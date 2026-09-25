@@ -40,13 +40,15 @@ const registry = (
   const page = () => {
     const index = ++serial;
     let closed = false;
+    const clientNavigationEvents = new EventEmitter();
 
     const frame = {
+      _eventEmitter: clientNavigationEvents,
       isDetached: () => closed,
       parentFrame: () => null,
       url: () => `https://example.test/${index}`,
       name: () => "main",
-    } as Frame;
+    } as unknown as Frame;
 
     const nativePage = Object.assign(new EventEmitter(), {
       frames: () => [frame],
@@ -105,6 +107,7 @@ const registry = (
       closed: () => {},
       navigating: () => {},
       navigated: () => {},
+      sameDocumentNavigated: () => {},
       frameChanged: () => {},
       dialog: () => {},
       changed: (...change) => {
