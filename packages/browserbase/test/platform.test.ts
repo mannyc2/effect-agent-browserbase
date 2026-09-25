@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import {
+  Cause,
   ConfigProvider,
   DateTime,
   Deferred,
@@ -9,7 +10,6 @@ import {
   Exit,
   Fiber,
   Layer,
-  Option,
   Redacted,
   Schema,
 } from "effect";
@@ -18,11 +18,8 @@ import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import {
-  assessAllowance,
-  observeAgentRun,
-  observePageFetch,
-  observeSearch,
-  ProviderPeriodConsumption,
+  fetchOperation,
+  observe,
   ProjectUsageObservation,
   sampleProjectUsage,
   type LocalOperationObservation,
@@ -115,7 +112,7 @@ const provider = (reply: (seen: Seen) => Response | Promise<Response>) => {
   return { seen, run };
 };
 
-const failure = <A, E>(effect: Effect.Effect<A, E>) =>
+const failure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.exit,
     Effect.map((exit) => {
@@ -550,29 +547,6 @@ it.effect("webhooks redact secrets, PATCH updates and refuse insecure endpoints"
   );
 });
 
-it.effect("a cooperative journal settlement timeout leaves the API reply intact", () =>
-  Effect.gen(function* () {
-    const entered = yield* Deferred.make<void>();
-
-    const { seen, run } = provider(() =>
-      Response.json({ requestId: "r-1", query: "effect", results: [] }),
-    );
-
-    const journal = {
-      begin: () => Effect.succeed("intent-1"),
-      finish: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-    };
-
-    const reading = yield* run(observeSearch({ query: "effect" }, journal)).pipe(Effect.forkChild);
-
-    yield* Deferred.await(entered);
-    yield* TestClock.adjust(2_001);
-
-    assert.equal((yield* Fiber.join(reading)).requestId, "r-1");
-    assert.equal(seen.length, 1);
-  }),
-);
-
 it.live("agent runs map context and proxy secrets, never retry, and wait to terminal", () => {
   let polls = 0;
   let failStart = false;
@@ -792,16 +766,22 @@ it.effect("usage samples timestamp the decoded provider reply before the host wr
   }),
 );
 
+// No end-to-end run can force these without a paid call or a crash window: the intent
+// must be durable before the POST, a refusal must not become a replay, and each typed
+// outcome must reach the journal unchanged.
 it.effect("the example journals typed Search, Fetch and Agent outcomes without replay", () => {
   const order: string[] = [];
   const starts: number[] = [];
   const observations: LocalOperationObservation[] = [];
+  let searches = 0;
 
   const { seen, run } = provider(({ path }) => {
     order.push(`request:${path}`);
 
     if (path === "/v1/search")
-      return Response.json({ requestId: "r-1", query: "private query", results: [] });
+      return (searches += 1) === 1
+        ? Response.json({ requestId: "r-1", query: "private query", results: [] })
+        : new Response("{}", { status: 429 });
 
     if (path === "/v1/fetch")
       return Response.json({
@@ -817,59 +797,83 @@ it.effect("the example journals typed Search, Fetch and Agent outcomes without r
   });
 
   const journal = {
-    begin: (identity: { readonly operation: string }, startedAt: DateTime.Utc) =>
+    begin: (_projectId: string, attempt: { readonly operation: string }, startedAt: DateTime.Utc) =>
       Effect.sync(() => {
-        order.push(`begin:${identity.operation}`);
+        order.push(`begin:${attempt.operation}`);
         starts.push(DateTime.toEpochMillis(startedAt));
 
         return `intent-${order.length}`;
       }),
     finish: (_id: string, observation: LocalOperationObservation) =>
       Effect.sync(() => {
-        order.push(`finish:${observation.operation}`);
+        order.push(`finish:${observation.attempt.operation}`);
         observations.push(observation);
       }),
   };
 
   return run(
     Effect.gen(function* () {
+      const search = yield* BrowserbaseSearch;
+      const pageFetch = yield* BrowserbasePageFetch;
+      const agents = yield* BrowserbaseAgents;
+
       yield* TestClock.setTime(123);
 
-      const found = yield* observeSearch({ query: "private query" }, journal);
+      const found = yield* search
+        .web({ query: "private query" })
+        .pipe(observe({ operation: "search-web" }, journal));
 
-      const refused = yield* observePageFetch({ url: "file:///private" }, journal).pipe(
-        Effect.result,
+      const limited = yield* failure(
+        search.web({ query: "private query" }).pipe(observe({ operation: "search-web" }, journal)),
       );
 
-      const fetched = yield* observePageFetch(
-        { url: "https://private.example", format: "markdown", proxies: true },
-        journal,
+      const unsafe = { url: "file:///private" };
+
+      const refused = yield* failure(
+        pageFetch.fetch(unsafe).pipe(observe(fetchOperation(unsafe), journal)),
       );
 
-      const uncertain = yield* observeAgentRun({ task: "private task" }, journal).pipe(
-        Effect.result,
+      const request = {
+        url: "https://private.example",
+        format: "markdown",
+        proxies: true,
+      } as const;
+
+      const fetched = yield* pageFetch
+        .fetch(request)
+        .pipe(observe(fetchOperation(request), journal));
+
+      const uncertain = yield* failure(
+        agents.run({ task: "private task" }).pipe(observe({ operation: "agent-run" }, journal)),
       );
 
       assert.equal(found.requestId, "r-1");
-      assert.equal(refused._tag, "Failure");
-      if (refused._tag === "Failure") assert.equal(refused.failure.outcome, "undispatched");
-      assert.equal(fetched.statusCode, 404);
-      assert.equal(uncertain._tag, "Failure");
-      if (uncertain._tag === "Failure") assert.equal(uncertain.failure.outcome, "unknown");
       assert.deepEqual(
-        observations.map(({ operation, outcome }) => [operation, outcome]),
+        [limited, refused, uncertain].map((error) =>
+          Cause.isTimeoutError(error) ? "timeout" : error.outcome,
+        ),
+        ["rejected", "undispatched", "unknown"],
+      );
+      assert.equal(fetched.statusCode, 404);
+      assert.deepEqual(
+        observations.map(({ attempt, outcome }) => [attempt.operation, outcome]),
         [
           ["search-web", "api-reply"],
+          ["search-web", "rejected"],
           ["fetch", "undispatched"],
           ["fetch", "api-reply"],
           ["agent-run", "unknown"],
         ],
       );
-      assert.deepEqual(
-        [observations[2]?.requestedFormat, observations[2]?.requestedProxies],
-        ["markdown", true],
-      );
+      assert.deepEqual(observations[3]?.attempt, {
+        operation: "fetch",
+        requestedFormat: "markdown",
+        requestedProxies: true,
+      });
       assert.deepEqual(order, [
+        "begin:search-web",
+        "request:/v1/search",
+        "finish:search-web",
         "begin:search-web",
         "request:/v1/search",
         "finish:search-web",
@@ -886,6 +890,7 @@ it.effect("the example journals typed Search, Fetch and Agent outcomes without r
         seen.map(({ method, path }) => [method, path]),
         [
           ["POST", "/v1/search"],
+          ["POST", "/v1/search"],
           ["POST", "/v1/fetch"],
           ["POST", "/v1/agents/runs"],
         ],
@@ -895,67 +900,73 @@ it.effect("the example journals typed Search, Fetch and Agent outcomes without r
 
       const before = seen.length;
 
-      const blocked = yield* observeSearch(
-        { query: "never sent" },
-        { ...journal, begin: () => Effect.fail("journal-unavailable" as const) },
-      ).pipe(Effect.result);
+      const blocked = yield* search
+        .web({ query: "never sent" })
+        .pipe(
+          observe(
+            { operation: "search-web" },
+            { ...journal, begin: () => Effect.fail("journal-unavailable" as const) },
+          ),
+          Effect.result,
+        );
 
       assert.equal(blocked._tag, "Failure");
       if (blocked._tag === "Failure") assert.equal(blocked.failure, "journal-unavailable");
       assert.equal(seen.length, before);
-
-      const malformed = yield* observePageFetch(null as never, journal).pipe(Effect.result);
-
-      assert.equal(malformed._tag, "Failure");
-      if (malformed._tag === "Failure") assert.equal(malformed.failure.outcome, "undispatched");
-      assert.equal(seen.length, before);
     }),
   );
 });
 
-it.effect("a failed journal settlement preserves the original platform failure", () => {
-  const { seen, run } = provider(() => new Response("{}", { status: 502 }));
+// b104a6b ran `begin` in the uninterruptible acquire with no deadline, so a stalled
+// journal write froze the caller and blocked its interruption.
+it.effect("journal deadlines bound a stalled begin and settlement", () => {
+  const { seen, run } = provider(() =>
+    Response.json({ requestId: "r-1", query: "effect", results: [] }),
+  );
 
   return run(
     Effect.gen(function* () {
-      const result = yield* observePageFetch(
-        { url: "file:///private" },
-        {
-          begin: () => Effect.succeed("intent-1"),
-          finish: () => Effect.fail("sink-unavailable" as const),
-        },
-      ).pipe(Effect.result);
+      const search = yield* BrowserbaseSearch;
+      const began = yield* Deferred.make<void>();
 
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") {
-        assert.equal(result.failure.service, "fetch");
-        assert.equal(result.failure.outcome, "undispatched");
-      }
+      const starting = yield* search.web({ query: "effect" }).pipe(
+        observe(
+          { operation: "search-web" },
+          {
+            begin: () => Deferred.succeed(began, undefined).pipe(Effect.andThen(Effect.never)),
+            finish: () => Effect.void,
+          },
+        ),
+        Effect.result,
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(began);
+      yield* TestClock.adjust(2_001);
+
+      const stalled = yield* Fiber.join(starting);
+
+      assert.equal(stalled._tag, "Failure");
+      if (stalled._tag === "Failure") assert.ok(Cause.isTimeoutError(stalled.failure));
       assert.equal(seen.length, 0);
-    }),
-  );
-});
 
-it.effect("a provider refusal is journaled as rejected without inferring billing", () => {
-  const observations: LocalOperationObservation[] = [];
-  const { seen, run } = provider(() => new Response("{}", { status: 429 }));
+      const entered = yield* Deferred.make<void>();
 
-  return run(
-    Effect.gen(function* () {
-      const result = yield* observeSearch(
-        { query: "private query" },
-        {
-          begin: () => Effect.succeed("intent-1"),
-          finish: (_id, observation) =>
-            Effect.sync(() => {
-              observations.push(observation);
-            }),
-        },
-      ).pipe(Effect.result);
+      const reading = yield* search.web({ query: "effect" }).pipe(
+        observe(
+          { operation: "search-web" },
+          {
+            begin: () => Effect.succeed("intent-1"),
+            finish: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+          },
+        ),
+        Effect.forkChild,
+      );
 
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") assert.equal(result.failure.outcome, "rejected");
-      assert.equal(observations[0]?.outcome, "rejected");
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust(2_001);
+
+      assert.equal((yield* Fiber.join(reading)).requestId, "r-1");
       assert.equal(seen.length, 1);
     }),
   );
@@ -967,18 +978,22 @@ it.effect("interruption settles a journal intent as unknown", () => {
 
   return run(
     Effect.gen(function* () {
+      const search = yield* BrowserbaseSearch;
       const began = yield* Deferred.make<void>();
 
-      const fiber = yield* observeSearch(
-        { query: "private query" },
-        {
-          begin: () => Deferred.succeed(began, undefined).pipe(Effect.as("intent-1")),
-          finish: (_id, observation) =>
-            Effect.sync(() => {
-              observations.push(observation);
-            }),
-        },
-      ).pipe(Effect.forkChild);
+      const fiber = yield* search.web({ query: "private query" }).pipe(
+        observe(
+          { operation: "search-web" },
+          {
+            begin: () => Deferred.succeed(began, undefined).pipe(Effect.as("intent-1")),
+            finish: (_id, observation) =>
+              Effect.sync(() => {
+                observations.push(observation);
+              }),
+          },
+        ),
+        Effect.forkChild,
+      );
 
       yield* Deferred.await(began);
       yield* Fiber.interrupt(fiber);
@@ -987,153 +1002,3 @@ it.effect("interruption settles a journal intent as unknown", () => {
     }),
   );
 });
-
-it.effect("allowance assessment needs verified, fresh provider period evidence", () =>
-  Effect.gen(function* () {
-    const allowance = {
-      accountOrPlanScope: "account-plan-1",
-      meter: "fetch-calls",
-      unit: "calls",
-      periodStart: "1970-01-01T00:00:00.000Z",
-      periodEnd: "1970-01-01T00:00:01.000Z",
-      includedQuantity: 1_000,
-      alertAtConsumedQuantity: 700,
-      maxToDateLagMillis: 200,
-    };
-
-    const total = {
-      source: "provider-billing",
-      accountOrPlanScope: "account-plan-1",
-      meter: "fetch-calls",
-      unit: "calls",
-      periodStart: "1970-01-01T00:00:00.000Z",
-      periodEnd: "1970-01-01T00:00:01.000Z",
-      consumedQuantity: 720,
-      measuredThrough: "1970-01-01T00:00:00.400Z",
-      receivedAt: "1970-01-01T00:00:00.450Z",
-      status: "to-date",
-    };
-
-    const decodeTotal = (record: unknown) =>
-      Option.getOrThrow(Schema.decodeUnknownOption(ProviderPeriodConsumption)(record));
-
-    assert.ok(
-      Option.isNone(
-        Schema.decodeUnknownOption(ProviderPeriodConsumption)({
-          ...total,
-          measuredThrough: "1970-01-01T00:00:00.400",
-        }),
-      ),
-    );
-
-    const trustedRecords = new Set<object>();
-
-    const importTrusted = (record: unknown) => {
-      const decoded = decodeTotal(record);
-
-      trustedRecords.add(decoded);
-
-      return decoded;
-    };
-
-    const assess = (plan: unknown, record: unknown) =>
-      assessAllowance(plan, record, (decoded) => Effect.succeed(trustedRecords.has(decoded)));
-
-    const trustedTotal = importTrusted(total);
-
-    yield* TestClock.setTime(500);
-
-    assert.deepEqual(yield* assess(allowance, undefined), {
-      _tag: "Unknown",
-      reason: "missing-provider-total",
-    });
-    assert.deepEqual(yield* assess(allowance, { browserMinutes: 42, proxyBytes: 7 }), {
-      _tag: "Unknown",
-      reason: "invalid-provider-total",
-    });
-    assert.deepEqual(
-      yield* assess(allowance, importTrusted({ ...total, accountOrPlanScope: "other" })),
-      {
-        _tag: "Unknown",
-        reason: "scope-or-unit-mismatch",
-      },
-    );
-    assert.deepEqual(
-      yield* assess(allowance, importTrusted({ ...total, periodEnd: "1970-01-01T00:00:02.000Z" })),
-      { _tag: "Unknown", reason: "period-mismatch" },
-    );
-    assert.deepEqual(yield* assess(allowance, decodeTotal(total)), {
-      _tag: "Unknown",
-      reason: "unverified-provider-total",
-    });
-    assert.deepEqual(yield* assess({ ...allowance, periodStart: null }, trustedTotal), {
-      _tag: "Unknown",
-      reason: "invalid-allowance",
-    });
-    assert.deepEqual(yield* assess(allowance, trustedTotal), {
-      _tag: "Known",
-      source: "provider-billing",
-      assessedAt: DateTime.makeUnsafe(500),
-      measuredThrough: DateTime.makeUnsafe(400),
-      status: "to-date",
-      consumedQuantity: 720,
-      remainingIncluded: 280,
-      overIncluded: 0,
-      alert: true,
-    });
-
-    assert.deepEqual(
-      yield* assessAllowance(allowance, trustedTotal, (decoded) =>
-        TestClock.adjust(101).pipe(Effect.as(trustedRecords.has(decoded))),
-      ),
-      { _tag: "Unknown", reason: "stale-provider-total" },
-    );
-
-    yield* TestClock.setTime(601);
-
-    assert.deepEqual(yield* assess(allowance, trustedTotal), {
-      _tag: "Unknown",
-      reason: "stale-provider-total",
-    });
-
-    const verifying = yield* assessAllowance(allowance, trustedTotal, () => Effect.never).pipe(
-      Effect.forkChild,
-    );
-
-    yield* TestClock.adjust("5 seconds");
-
-    assert.deepEqual(yield* Fiber.join(verifying), {
-      _tag: "Unknown",
-      reason: "verification-timeout",
-    });
-
-    const final = {
-      ...total,
-      status: "final",
-      consumedQuantity: 1_001,
-      measuredThrough: "1970-01-01T00:00:01.000Z",
-      receivedAt: "1970-01-01T00:00:01.100Z",
-    };
-
-    yield* TestClock.setTime(1_200);
-
-    assert.deepEqual(yield* assess(allowance, importTrusted(final)), {
-      _tag: "Known",
-      source: "provider-billing",
-      assessedAt: DateTime.makeUnsafe(1_200),
-      measuredThrough: DateTime.makeUnsafe(1_000),
-      status: "final",
-      consumedQuantity: 1_001,
-      remainingIncluded: 0,
-      overIncluded: 1,
-      alert: true,
-    });
-    assert.deepEqual(
-      yield* assess(
-        allowance,
-        importTrusted({ ...final, measuredThrough: "1970-01-01T00:00:01.001Z" }),
-      ),
-      { _tag: "Unknown", reason: "period-not-final" },
-    );
-  }),
-);
