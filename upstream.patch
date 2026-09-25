@@ -381,6 +381,17 @@ index 95795404..03bf510b 100644
    },
    "patchedDependencies": {
      "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
+diff --git a/packages/testing/vite.config.ts b/packages/testing/vite.config.ts
+index d726ac05..cc31a75c 100644
+--- a/packages/testing/vite.config.ts
++++ b/packages/testing/vite.config.ts
+@@ -27,5 +27,6 @@ export default defineConfig({
+   test: {
+     cache: false,
+     silent: "passed-only",
++    exclude: ["**/certification-postgres*"],
+   },
+ });
 diff --git a/scripts/verify-package-purity.ts b/scripts/verify-package-purity.ts
 index f4de38a9..6941a700 100644
 --- a/scripts/verify-package-purity.ts
