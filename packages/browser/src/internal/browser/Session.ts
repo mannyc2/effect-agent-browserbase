@@ -14,6 +14,7 @@ import {
 import {
   type FillFormRequest,
   type FrameInfo,
+  type InputReceipt,
   type KeyModifier,
   Observation,
   type ObservedElement,
@@ -36,6 +37,7 @@ import type {
   DriverFault,
   DriverOptions,
   DriverTarget,
+  InputCapture,
   NativeFileSelection,
   NavigationControl,
 } from "./Driver.ts";
@@ -76,9 +78,11 @@ export interface FormOutcome {
   readonly fields: ReadonlyArray<{
     readonly elementId: string;
     readonly status: "set" | "unchanged";
+    readonly input?: InputReceipt;
   }>;
   readonly submitted: boolean;
   readonly url: string;
+  readonly submitInput?: InputReceipt;
   readonly stopped?: {
     readonly stage: "field" | "verify" | "submit";
     readonly elementId?: string;
@@ -879,6 +883,22 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
    * Direct operations resolve selection under admission. Retained operations capture selection
    * and generation; pinned operations capture generation and their explicit page/frame only.
    */
+  const captureClickAt =
+    (target: Target): InputCapture =>
+    async (dispatch, dispatched) => {
+      const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+
+      await dispatch();
+
+      return {
+        ...dispatched,
+        target,
+        kind: "click",
+        startedMonotonicNanos,
+        completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+      };
+    };
+
   const makeOperations = (retained?: {
     readonly generation: number;
     readonly selection?: number;
@@ -1222,7 +1242,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           driver.readText(selector, options.maxReturnedBytes, ticket, browserTarget),
         ),
       click: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
-        run("click", (driver, ticket) => driver.click(target, ticket, policy, browserTarget), true),
+        run(
+          "click",
+          (driver, ticket) =>
+            driver.click(target, ticket, captureClickAt(operationTarget()), policy, browserTarget),
+          true,
+        ),
       fill: (target: string | ObservedElement, value: string, policy?: AdmissionPolicy) =>
         run(
           "fill",
@@ -1457,7 +1482,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         };
 
         const body = Effect.gen(function* () {
-          const fields: Array<{ elementId: string; status: "set" | "unchanged" }> = [];
+          const fields: Array<{
+            elementId: string;
+            status: "set" | "unchanged";
+            input?: InputReceipt;
+          }> = [];
+
           const states: Array<string | undefined> = [];
           let url = "";
 
@@ -1483,6 +1513,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     ticket,
                     policy,
                     form.settleMillis,
+                    captureClickAt(capture.target()),
                   ),
                 { mutation: true, mutationScope: kept },
               ),
@@ -1500,7 +1531,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             }
             const step = exit.value;
 
-            fields.push({ elementId: field.elementId, status: step.status });
+            fields.push({
+              elementId: field.elementId,
+              status: step.status,
+              ...(step.input === undefined ? {} : { input: step.input }),
+            });
             states.push(step.state);
             url = step.url;
             if (!step.reached)
@@ -1558,7 +1593,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           const exit = yield* Effect.exit(
             nativeOperation(
               "fill-form",
-              (driver, ticket) => driver.formSubmit(reference(submit), ticket, policy),
+              (driver, ticket) =>
+                driver.formSubmit(
+                  reference(submit),
+                  ticket,
+                  captureClickAt(capture.target()),
+                  policy,
+                ),
               { mutation: true },
             ),
           );
@@ -1570,9 +1611,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
             return stop("submit", error.value, submit);
           }
-          url = exit.value;
+          url = exit.value.url;
 
-          return finish(true);
+          return { ...finish(true), submitInput: exit.value.input };
         });
 
         // The steps kept the observation usable for each other only. A submit that dispatched
@@ -1655,9 +1696,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         request.timeoutMillis,
       ),
     clickAndWait: (target: string | ObservedElement) =>
-      nativeOperation("click-and-wait", (driver, ticket) => driver.clickAndWait(target, ticket), {
-        mutation: true,
-      }),
+      nativeOperation(
+        "click-and-wait",
+        (driver, ticket) => driver.clickAndWait(target, ticket, captureClickAt(capture.target())),
+        { mutation: true },
+      ),
     clickForDownload: (target: string | ObservedElement) =>
       nativeOperation(
         "download-action",

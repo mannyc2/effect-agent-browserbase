@@ -190,7 +190,11 @@ it.live("a form sets text, toggles and options in order, then submits once", () 
         "set",
         "set",
       ]);
-      expect(JSON.stringify(result)).not.toContain("PRIVATE-");
+      expect(
+        JSON.stringify(result, (_key, value) =>
+          typeof value === "bigint" ? value.toString() : value,
+        ),
+      ).not.toContain("PRIVATE-");
       expect(yield* events(page)).toBe(
         "click:remember;submit:email=ada@example.test&password=PRIVATE-SECRET&phone=&remember=on&terms=on&country=PRIVATE-CA&age=42&born=1990-01-15&plan=b;",
       );

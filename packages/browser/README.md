@@ -419,7 +419,7 @@ const result =
     ],
     submit: create,
   });
-// { fields: [{ elementId, status: "set" | "unchanged" }], submitted, url, stopped? }
+// Dispatched toggle fields and the optional submit also carry bounded input receipts.
 ```
 
 Each field gives exactly one of `value`, text that replaces the contents of an input, textarea or content-editable element; `checked`, the state a checkbox, radio or switch should end in, clicked only when it differs, and a native radio is never asked to clear itself; or `options`, issued option IDs of a native select exactly as for `selectOption`. A form has at most 32 fields, each control at most once, and its submit control is not also one of its fields.
@@ -509,7 +509,7 @@ perspective and other unsupported frame mappings are refused rather than guessed
 These reads and native input are separate operations in the browser: page script
 can still change geometry between validation and dispatch.
 
-An `InputReceipt` carries the target it was sent to, the position this owner commanded (null until it has placed the pointer on that page), and an interval on the same host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`. Input and pixels share one timeline, so a compositor can place the pointer on the frame that shows it. A wheel event is dispatched, not awaited: the receipt does not claim the page finished scrolling or that any frame shows it.
+An `InputReceipt` carries the target it was sent to, the position this owner commanded, and an interval on the same host monotonic clock that stamps `CapturedFrame.receivedMonotonicNanos`. Pointer moves, hovers and positioned wheels report their known point. A Playwright-managed click reports `position: null`: Playwright does not expose its chosen click point through the supported API, so the receipt does not guess. The click still uses Playwright's exact-node checks and native hit testing. Its unknown point invalidates the owner's remembered pointer position, so later key receipts also report `null` until a known pointer command places it again. The click interval brackets the supported Playwright call and may include actionability or navigation waits; Playwright does not expose the exact native dispatch instant. Input and pixels share one timeline, so a compositor can place known points on frames that show them. A wheel or click receipt does not claim the page finished work triggered by the input or that any frame shows it.
 
 ### Real key input
 
@@ -701,8 +701,8 @@ guarantee.
 Footage from `capture` is the page surface. It has no pointer, no tab strip and no address bar, so on its own it reads as the inside of a tab rather than as a browser. Drawing those is the application's, exactly as cursor artwork, easing and encoding are: this package has no window-compositing API and will not grow one. What it owes a compositor is the evidence only it can see, on one timeline:
 
 - each frame's `receivedMonotonicNanos`, and the `document` it was received during;
-- an `InputReceipt` for every native pointer and key operation, with the position commanded and an interval on that same clock;
-- an address for every document a frame can name: `initialUrl` for document 0, read in the same turn the watch is installed, and a `url` on each cross-document boundary, read inside the navigation event that committed it. Same-document URL changes are separately marked on their boundaries. An application that samples `observe()` between actions can learn an address, but never when it became the address. One longer than 8192 characters is `null`, never cut into an address the page did not show.
+- an `InputReceipt` for each exposed native pointer, click and key operation, with a known position when the owner has one and an interval on that same clock. Internal download and file-chooser clicks clear the remembered pointer position but do not expose a receipt;
+- an address for every document a frame can name: `initialUrl` for document 0, read in the same turn the watch is installed, and a `url` on each cross-document boundary, read inside the navigation event that committed it. Page-lifetime captures separately mark same-document URL changes without advancing the document number. An application that samples `observe()` between actions can learn an address, but never when it became the address. One longer than 8192 characters is `null`, never cut into an address the page did not show.
 
 A cross-document boundary is the commit, and it is the only moment of a navigation an application cannot see for itself. A same-document boundary records a URL change without claiming that a new document committed. When a cross-document navigation started and when its document finished loading are yours to stamp around the operation that caused it, because you made the call: `startNavigation` returns at dispatch and its `completed` resolves at DOMContentLoaded. The clock is Effect's `Clock`, read where the session was opened and the capture was started, so `Clock.clockWith((clock) => clock.monotonicTimeNanos)` in the same runtime is on the same timeline as every frame and receipt. A title is page state that changes whenever the page likes, not part of a transition: read it with `session.pages` when you need one, and stamp that read yourself.
 

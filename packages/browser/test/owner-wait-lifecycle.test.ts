@@ -38,11 +38,14 @@ it.effect("a pending wait releases admission for host reads while excluding conf
 
             return driver.documentReadiness(ticket);
           },
-          click: async (_selector, ticket, _policy, target) => {
+          click: async (_selector, ticket, capture, _policy, target) => {
             ticket.dispatch();
             inputs.push(target?.pageId ?? driver.selected().pageId);
 
-            return "https://example.test/";
+            return {
+              url: "https://example.test/",
+              input: await capture(async () => {}, { position: null }),
+            };
           },
           observe: async (...args) => {
             observationReads++;

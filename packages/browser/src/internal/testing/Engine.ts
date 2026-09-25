@@ -10,6 +10,7 @@ import {
   ViewportEvidence,
   ViewportRect,
   type FormField,
+  type InputReceipt,
   type KeyModifier,
   type ObservedElement,
   type SelectOptions,
@@ -33,6 +34,7 @@ import type {
   DriverEvents,
   DriverOptions,
   DriverTarget,
+  InputCapture,
   NativeCheckpoint,
   NativeFileSelection,
   NativeNavigation,
@@ -417,6 +419,13 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       pointer = point;
     };
 
+    const invalidatePointer = (pageId: string) => {
+      positions.delete(pageId);
+      if (selectedId === pageId) pointer = null;
+    };
+
+    const dispatchObservers = new WeakMap<MutableCall, () => void>();
+
     const receipt = (pageId: string): NativeInput => ({ position: positions.get(pageId) ?? null });
 
     const select = (pageId: string | undefined) => {
@@ -496,8 +505,10 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const dispatch = (ticket: ReadTicket, record: MutableCall) => {
+      if (record.dispatched) return;
       if (isTicket(ticket)) ticket.dispatch();
       record.dispatched = true;
+      dispatchObservers.get(record)?.();
     };
 
     /** Once the owner aborts the admitted call, its own check names the reason. */
@@ -585,6 +596,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         readonly selector?: string;
       },
       body: (record: MutableCall) => Promise<A>,
+      onDispatch?: () => void,
     ): Promise<A> => {
       const record: MutableCall = {
         sequence: ++sequence,
@@ -597,6 +609,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       };
 
       calls.push(record);
+      if (onDispatch !== undefined) dispatchObservers.set(record, onDispatch);
       try {
         ticket?.check();
         if (ticket !== undefined) await applyArmed(operation, ticket, record);
@@ -843,15 +856,17 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     /** One form step, as the real driver takes it; see `Driver["formStep"]`. */
-    const formStep = (
+    const formStep = async (
       page: Page,
       node: ControlState,
       field: FormField,
       ticket: Ticket,
       record: MutableCall,
+      capture: InputCapture,
     ) => {
       const epoch = page.epoch;
-      let act: (() => void) | undefined;
+      let act: (() => void | Promise<void>) | undefined;
+      let input: InputReceipt | undefined;
 
       if (field.options !== undefined) {
         const options = chosen(node, field.options, "fill-form");
@@ -862,8 +877,15 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         if (node.checked !== field.checked) {
           if (!field.checked && node.script.inputType === "radio")
             throw fail("fill-form", Reasons.Unsupported.make({}));
-          act = () => {
-            activate(page, node);
+          act = async () => {
+            // The scripted engine has no browser cursor point for an element click either.
+            invalidatePointer(page.pageId);
+            input = await capture(
+              async () => {
+                activate(page, node);
+              },
+              { position: null },
+            );
           };
         }
       } else {
@@ -879,7 +901,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       }
       if (act !== undefined) {
         dispatch(ticket, record);
-        act();
+        await act();
       }
 
       // A step that navigated away cannot be read back, which is never a failure of its own.
@@ -896,6 +918,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           state === JSON.stringify(["checked", field.checked]),
         state,
         url: page.document.url,
+        ...(input === undefined ? {} : { input }),
       };
     };
 
@@ -1409,7 +1432,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
           current.revalidated.add(target.elementId);
         }),
-      click: (target, ticket, policy, browserTarget) =>
+      click: (target, ticket, capture, policy, browserTarget) =>
         attempt(
           "click",
           ticket,
@@ -1419,9 +1442,18 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             requireRunning(page, "click");
             dispatch(ticket, record);
+            let url = "";
 
-            return activate(page, node);
+            const input = await capture(
+              async () => {
+                url = activate(page, node);
+              },
+              { position: null },
+            );
+
+            return { url, input };
           },
+          () => invalidatePointer(browserTarget?.pageId ?? selectedId ?? ""),
         ),
       fill: (target, value, ticket, policy, browserTarget) =>
         attempt(
@@ -1454,22 +1486,28 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
           return page.document.url;
         }),
-      formStep: (target, field, ticket, policy) =>
-        attempt("fill-form", ticket, meta(target), async (record) => {
-          const { node, page } = resolve(
-            target,
-            ticket,
-            "fill-form",
-            policy,
-            undefined,
-            false,
-            true,
-          );
+      formStep: (target, field, ticket, policy, _settleMillis, capture) =>
+        attempt(
+          "fill-form",
+          ticket,
+          meta(target),
+          async (record) => {
+            const { node, page } = resolve(
+              target,
+              ticket,
+              "fill-form",
+              policy,
+              undefined,
+              false,
+              true,
+            );
 
-          requireRunning(page, "fill-form");
+            requireRunning(page, "fill-form");
 
-          return formStep(page, node, field, ticket, record);
-        }),
+            return formStep(page, node, field, ticket, record, capture);
+          },
+          field.checked === undefined ? undefined : () => invalidatePointer(selectedId ?? ""),
+        ),
       formState: (targets, ticket) =>
         attempt("fill-form", ticket, {}, async () =>
           targets.map((target) => {
@@ -1479,23 +1517,37 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             return page.document.controls.includes(node) ? fieldState(page, node) : undefined;
           }),
         ),
-      formSubmit: (target, ticket, policy) =>
-        attempt("fill-form", ticket, meta(target), async (record) => {
-          const { node, page } = resolve(
-            target,
-            ticket,
-            "fill-form",
-            policy,
-            undefined,
-            false,
-            true,
-          );
+      formSubmit: (target, ticket, capture, policy) =>
+        attempt(
+          "fill-form",
+          ticket,
+          meta(target),
+          async (record) => {
+            const { node, page } = resolve(
+              target,
+              ticket,
+              "fill-form",
+              policy,
+              undefined,
+              false,
+              true,
+            );
 
-          requireRunning(page, "fill-form");
-          dispatch(ticket, record);
+            requireRunning(page, "fill-form");
+            dispatch(ticket, record);
+            let url = "";
 
-          return activate(page, node);
-        }),
+            const input = await capture(
+              async () => {
+                url = activate(page, node);
+              },
+              { position: null },
+            );
+
+            return { url, input };
+          },
+          () => invalidatePointer(selectedId ?? ""),
+        ),
       scroll: (_deltaX, _deltaY, ticket, target) =>
         attempt("scroll", ticket, { pageId: target?.pageId }, async (record) => {
           const page = current(target, "scroll");
@@ -1674,15 +1726,29 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             );
           },
         ).finally(() => ticket.retire()),
-      clickAndWait: (target, ticket) =>
-        attempt("click-and-wait", ticket, meta(target), async (record) => {
-          const { node, page } = resolve(target, ticket, "click-and-wait");
+      clickAndWait: (target, ticket, capture) =>
+        attempt(
+          "click-and-wait",
+          ticket,
+          meta(target),
+          async (record) => {
+            const { node, page } = resolve(target, ticket, "click-and-wait");
 
-          requireRunning(page, "click-and-wait");
-          dispatch(ticket, record);
+            requireRunning(page, "click-and-wait");
+            dispatch(ticket, record);
+            let url = "";
 
-          return activate(page, node);
-        }),
+            const input = await capture(
+              async () => {
+                url = activate(page, node);
+              },
+              { position: null },
+            );
+
+            return { url, input };
+          },
+          () => invalidatePointer(selectedId ?? ""),
+        ),
       clickForDownload: (target, ticket) =>
         attempt("download-action", ticket, meta(target), async (record) => {
           const { node, page } = resolve(target, ticket, "download-action");
