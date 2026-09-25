@@ -43,8 +43,9 @@ export class PageFetchResult extends Schema.Class<PageFetchResult>("BrowserbaseP
 
 /**
  * Browserbase's Fetch API: one page retrieved by the provider without a browser session.
- * Replies are bounded by the 1 MiB control-plane limit (`reason: "limit"`); each call is
- * billed and never retried. `statusCode` is the target site's status, not the API's.
+ * Replies are bounded by the 1 MiB control-plane limit (`reason: "limit"`); the POST is
+ * never retried. Billing of each outcome is provider-owned. `statusCode` is the target
+ * site's status, not the API's.
  */
 export class BrowserbasePageFetch extends Context.Service<
   BrowserbasePageFetch,

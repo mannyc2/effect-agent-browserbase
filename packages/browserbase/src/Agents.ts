@@ -192,7 +192,8 @@ const now = Clock.monotonicTimeNanos.pipe(Effect.map((value) => Number(value) / 
 
 /**
  * Browserbase Agents: hosted autonomous runs that allocate their own browser sessions and
- * bill inference. Creating or stopping a run is never retried; a lost reply is `unknown`.
+ * can incur inference charges. Creating or stopping a run is never retried; a lost reply is
+ * `unknown`. A run reply is not a charge or completion receipt.
  */
 export class BrowserbaseAgents extends Context.Service<
   BrowserbaseAgents,
