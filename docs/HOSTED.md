@@ -23,6 +23,7 @@ over-budget check fails before anything is spent.
 | `demo` | — | README media only; no correctness claim |
 | `handoff` | — | operator takeover and release through Live View (needs a person at a terminal; never runs in CI) |
 | `context-durability` | H1 | a cookie and localStorage marker survive into a later session on the same context |
+| `context-crash` | H1 | the same markers survive when the writer's process is killed without a release, once the provider reports its session terminal |
 | `keepalive-reconnect` | H4 | a keep-alive session survives detach, and an init script is ready after reconnect |
 | `extension-identity` | H3 | a registered MV3 extension keeps its identity and its content script runs |
 | `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |

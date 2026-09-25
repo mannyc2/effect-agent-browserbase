@@ -203,6 +203,17 @@ The session's policy allowed 1,100 actions. On two Wikipedia articles at 1280×7
 
 This is one run on public pages from one account and region. It shows that the counter, the refusal and capture hold over more than 1,000 actions at hosted round trips; it does not measure a session of hours, a page that repaints continuously, or memory growth over time.
 
+## The context-crash check, 24 September 2026
+
+The owner authorized Browserbase calls for this work. `tools/hosted-run.sh` ran the new `context-crash` check once, from a bootstrapped workspace at `ba415a1`, and it exited 0 with its claim established. Two sessions were allocated, as budgeted. The context was created for the run and deleted afterwards. No model provider was called. Account, project, context and session identifiers are omitted, as above.
+
+- **Writer.** A child process opened a persisting session on the fresh context. Its bootstrap wrote a cookie and a localStorage marker on `https://example.com/`, and it read both back in that document and reported them.
+- **Kill.** The parent then killed the child with SIGKILL, less than a second after the page had written the markers. The process was gone 9 ms after the report. Nothing requested a release, and the child's in-process writer lease never settled.
+- **Provider.** 1.2 s after the kill, the provider reported the writer's session `COMPLETED`, well inside its 120 s provider lifetime: it ended the session on its own once the connection dropped.
+- **Readback.** After the same 10 s that `context-durability` waits following a release, a non-persisting session on the context read both markers. It released with `remote: "confirmed"`.
+
+So when a host process dies, the remote browser does not die with it. Browserbase ends the session on disconnect and keeps what a persisting session wrote, just as it does after a release. No API change follows from this result. The writer's lease is a different matter: a host that crashed leaves its own lease unsettled, and a distributed lease backend still has to decide when another writer may start. This check shows only that the data is there once the session is terminal. It is one run on one page from one account and region. It does not cover a remote browser that crashes itself, other storage kinds, or a kill that lands while the page is still writing.
+
 ## Historical material
 
 Nothing in the tree is needed to reconstruct current source except the tracked packages, `upstream.patch` and the pins; everything historical lives in Git history rather than beside the code.
