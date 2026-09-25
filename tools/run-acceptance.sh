@@ -163,8 +163,8 @@ if [ "$LAST_CODE" = 0 ]; then
     # config, and the release dry-run below packs every workspace.
     # Tests run for the workspaces the patch can reach — the three owned packages. The
     # testing package's toolchain audit was refactored upstream and our patch no longer modifies
-    # its test files; its postgres certification test requires a live database the runner does
-    # not provide. The other suites (workerd actors, the travel planner, storage engines)
+    # its test files; its postgres certification runs with the scheduled canary's database
+    # fixture. The other suites (workerd actors, the travel planner, storage engines)
     # exercise upstream code this patch does not change, and their timing assertions fail on a
     # shared runner for reasons no change here can cause. The scheduled canary still runs them
     # all (BROWSERBASE_UPSTREAM_TESTS=all) so upstream drift is seen daily without being paid
