@@ -669,17 +669,21 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       nativeUncertainty = false;
       policies.clear();
     },
-    status: Effect.sync(() =>
-      Object.freeze(
-        SessionStatus.make({
-          phase: state.phase,
-          reason: terminalReason ?? pauseReason ?? policies.values().next().value?.reason ?? null,
-          generation: state.generation,
-          busy: holdingPermit || policies.size > 0 || waiting !== undefined,
-          unresolvedDispatch: nativeUncertainty || unresolved.size > 0,
-        }),
-      ),
-    ),
+    status: Effect.sync(() => {
+      const status = SessionStatus.make({
+        phase: state.phase,
+        reason: terminalReason ?? pauseReason ?? policies.values().next().value?.reason ?? null,
+        generation: state.generation,
+        busy: holdingPermit || policies.size > 0 || waiting !== undefined,
+        unresolvedDispatch: nativeUncertainty || unresolved.size > 0,
+        actions: { used: state.actions, maximum: limits.maxActions },
+      });
+
+      // Schema construction owns the nested record; freeze the produced snapshot, not its input.
+      Object.freeze(status.actions);
+
+      return Object.freeze(status);
+    }),
     diagnostics: Effect.sync(() => {
       const snapshot = BrowserDiagnostics.make({
         records: [...records],

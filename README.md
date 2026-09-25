@@ -72,6 +72,7 @@ Every agent turn borrows that session. `BrowserTools.run` provides the maintaine
 | Several model fill/click calls for one form                            | `session.fillForm` / `browser_fill_form`: one gated operation that submits only after every field was set and still holds                                               |
 | Tool options checked on every call; `observedResultMaxBytes`           | Options checked once when the host is built; `resultMaxBytes` fits every result. See the [agent guide](packages/agent-browser/README.md#api-migration)                  |
 | Browser Layers and `Allocation.scoped` required no platform service    | `Chromium.layer`, `BrowserbaseBrowser.layer`, `BrowserRuntime.make` and `Allocation.scoped` require Effect's `Crypto`, such as the platform's `NodeServices.layer`      |
+| `maxActions` at most 1000, with no reading of what a session has used  | `BrowserPolicy.maxActions` accepts up to 1,000,000 (default 100), and `status.actions` reports `{ used, maximum }`; code that builds a `SessionStatus` supplies it      |
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 

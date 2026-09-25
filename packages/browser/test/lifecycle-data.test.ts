@@ -17,8 +17,13 @@ type Same<A, B> =
 const statusRead: Same<BrowserSession["status"], Effect.Effect<SessionStatus>> = true;
 const diagnosticRead: Same<BrowserSession["diagnostics"], Effect.Effect<BrowserDiagnostics>> = true;
 
+const actionsRead: Same<
+  SessionStatus["actions"],
+  { readonly used: number; readonly maximum: number }
+> = true;
+
 it("status and bounded diagnostics are host data with no admission or native capability", () => {
-  expect(statusRead && diagnosticRead).toBe(true);
+  expect(statusRead && diagnosticRead && actionsRead).toBe(true);
   for (const phase of [
     "acquiring",
     "open",
@@ -37,6 +42,7 @@ it("status and bounded diagnostics are host data with no admission or native cap
       generation: 3,
       busy: false,
       unresolvedDispatch: false,
+      actions: { used: 100, maximum: 100 },
     });
 
     expect(Schema.decodeSync(SessionStatus)(status)).toEqual(status);
@@ -70,6 +76,7 @@ it("status and bounded diagnostics are host data with no admission or native cap
       generation: 1,
       busy: false,
       unresolvedDispatch: true,
+      actions: { used: 0, maximum: 100 },
     }),
   ).toThrow(Schema.SchemaError);
   expect(() =>
@@ -118,3 +125,48 @@ it.effect(
       ).toThrow(Schema.SchemaError);
     }),
 );
+
+it("the action allowance is bounded like the host-read allowance, and status never overstates use", () => {
+  expect(BrowserPolicy.unrestricted().maxActions).toBe(100);
+  for (const maxActions of [1, 1000, 1001, 1_000_000])
+    expect(BrowserPolicy.unrestricted({ maxActions }).maxActions).toBe(maxActions);
+  const policy = Schema.decodeUnknownSync(BrowserPolicy, { onExcessProperty: "error" });
+
+  for (const maxActions of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 1_000_001]) {
+    expect(() => policy({ ...BrowserPolicy.unrestricted(), maxActions })).toThrow(
+      Schema.SchemaError,
+    );
+    expect(() => BrowserPolicy.unrestricted({ maxActions })).toThrow("Schema validation failed");
+  }
+
+  const decode = Schema.decodeUnknownSync(SessionStatus, { onExcessProperty: "error" });
+
+  const status = (actions: unknown) =>
+    decode({
+      phase: "open",
+      reason: null,
+      generation: 1,
+      busy: false,
+      unresolvedDispatch: false,
+      actions,
+    });
+
+  for (const actions of [
+    { used: 0, maximum: 1 },
+    { used: 1_000_000, maximum: 1_000_000 },
+  ])
+    expect(status(actions).actions).toEqual(actions);
+  for (const actions of [
+    { used: 101, maximum: 100 },
+    { used: -1, maximum: 100 },
+    { used: 0.5, maximum: 100 },
+    { used: 0, maximum: 0 },
+    { used: 0, maximum: 1_000_001 },
+    { used: 0, maximum: 100, hostReads: 3 },
+    { used: 0 },
+  ])
+    expect(() => status(actions)).toThrow(Schema.SchemaError);
+  expect(() =>
+    decode({ phase: "open", reason: null, generation: 1, busy: false, unresolvedDispatch: false }),
+  ).toThrow(Schema.SchemaError);
+});

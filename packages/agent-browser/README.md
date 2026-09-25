@@ -251,7 +251,7 @@ The lane covers input, callback finalizers and then inspection before admitting 
 The observation is sampled afterwards through normal selected-target admission, not atomically
 with input; its target and URL identify what was actually inspected.
 
-The extra `observe` spends one additional model-action allowance, and uses the same `maxTextBytes`,
+The extra `observe` spends one more action from the owner's allowance (`status.actions` counts both), and uses the same `maxTextBytes`,
 `maxControls`, `observationScope` and `observe` settings. The whole encoded action-plus-observation
 result is fitted under `resultMaxBytes`: the reading loses text, then trailing controls, and only a
 reading whose fixed fields alone exceed the bound becomes `Unavailable/limit`; the action remains
