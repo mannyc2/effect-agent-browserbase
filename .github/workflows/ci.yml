@@ -170,8 +170,9 @@ jobs:
           BROWSERBASE_TASK_CACHE: ${{ steps.plan.outputs.profile == 'full' && format('{0}/browserbase-task-cache', runner.temp) || '' }}
           # The nightly canary runs every upstream suite; candidates run the ones the patch reaches.
           BROWSERBASE_UPSTREAM_TESTS: ${{ github.event_name == 'schedule' && 'all' || 'reachable' }}
-        # This is a watchdog, not a performance claim. Normal library feedback targets 3–5 minutes.
-        timeout-minutes: ${{ steps.plan.outputs.profile == 'full' && 55 || 8 }}
+        # This is a watchdog, not a performance claim. A cold library run exceeded eight
+        # minutes while all stages passed; leave room for installation and runner variance.
+        timeout-minutes: ${{ steps.plan.outputs.profile == 'full' && 55 || 12 }}
         run: bash tools/run-acceptance.sh "$ACCEPTANCE_PROFILE"
       # A run that never reached the upstream stages exports nothing; saving the empty directory
       # would store a newer entry that shadows a usable older one under the same prefix.
