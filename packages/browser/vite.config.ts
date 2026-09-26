@@ -25,9 +25,13 @@ export default defineConfig({
       "src/BrowserRuntime.ts",
       "src/Capture.ts",
       "src/CaptureData.ts",
+      "src/CaptureEvidence.ts",
       "src/Chromium.ts",
       "src/Errors.ts",
       "src/PageControl.ts",
+      "src/Recording.ts",
+      "src/RecordingData.ts",
+      "src/RecordingFfmpeg.ts",
       "src/Testing.ts",
     ],
     // Keep root namespaces on the public entry modules; the pinned bundler otherwise

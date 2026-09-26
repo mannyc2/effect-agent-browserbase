@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { PageInfo, Target } from "./BrowserData.ts";
+import { Identifier, PageInfo, Target } from "./BrowserData.ts";
 import { BrowserError } from "./Errors.ts";
 import { Dimension, FrameBudget, LimitFields } from "./internal/capture/Options.ts";
 
@@ -143,3 +143,84 @@ export class CaptureSnapshot extends Schema.Class<CaptureSnapshot>("BrowserCaptu
   /** Null until the native cleanup attempt settles; unconfirmed never means stopped remotely. */
   nativeStop: Schema.NullOr(NativeStop),
 }) {}
+
+/** The native queue, retained latest image and subscriber reservations share this byte bound. */
+export const FrameSourceOptions = Schema.Struct({
+  capture: Schema.optionalKey(CaptureOptions),
+  maxSubscribers: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 })),
+  ),
+  maxBufferedBytes: Schema.optionalKey(LimitFields.maxBufferedBytes),
+  /** Deadline for each readiness wait; waiting does not stop the source on timeout. */
+  readyTimeoutMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60_000 })),
+  ),
+});
+
+export type FrameSourceOptions = typeof FrameSourceOptions.Type;
+
+/** A live viewer may evict old images; a fail-policy consumer retains its prefix and fails. */
+export const FrameSubscriptionOptions = Schema.Struct({
+  policy: Schema.optionalKey(Schema.Literals(["latest", "fail"])),
+  maxFrames: Schema.optionalKey(LimitFields.maxFrames),
+  maxBufferedBytes: Schema.optionalKey(LimitFields.maxBufferedBytes),
+  replayLatest: Schema.optionalKey(Schema.Boolean),
+});
+
+export type FrameSubscriptionOptions = typeof FrameSubscriptionOptions.Type;
+
+/** First valid image received by this source; neither native registration nor presentation. */
+export class FrameReady extends Schema.Class<FrameReady>("BrowserFrameReady")({
+  sourceId: Identifier,
+  target: Target,
+  sequence: Schema.Natural,
+  document: Schema.Natural,
+  sourceTimeMillis: Schema.Finite,
+  sourceClock: Schema.Literal("presentation-unix-millis"),
+  receivedMonotonicNanos: Schema.BigInt,
+  width: Dimension,
+  height: Dimension,
+}) {}
+
+export class FrameSourceSnapshot extends Schema.Class<FrameSourceSnapshot>(
+  "BrowserFrameSourceSnapshot",
+)({
+  sourceId: Identifier,
+  capture: CaptureSnapshot,
+  ready: Schema.NullOr(FrameReady),
+  subscribers: Schema.Natural,
+  reservedBufferedBytes: Schema.Natural,
+  maximumBufferedBytes: Schema.Natural,
+}) {}
+
+/** Frozen source accounting after the native queue has drained; subscriber delivery is separate. */
+export class FrameSourceReport extends Schema.Class<FrameSourceReport>("BrowserFrameSourceReport")({
+  sourceId: Identifier,
+  capture: CaptureSummary,
+  ready: Schema.NullOr(FrameReady),
+}) {}
+
+export class FrameSubscriptionSnapshot extends Schema.Class<FrameSubscriptionSnapshot>(
+  "BrowserFrameSubscriptionSnapshot",
+)({
+  sourceId: Identifier,
+  phase: Schema.Literals(["active", "detached", "completed"]),
+  policy: Schema.Literals(["latest", "fail"]),
+  admitted: Schema.Natural,
+  delivered: Schema.Natural,
+  discarded: Schema.Natural,
+  overflow: Schema.Natural,
+  bufferedFrames: Schema.Natural,
+  bufferedBytes: Schema.Natural,
+  peakBufferedFrames: Schema.Natural,
+  peakBufferedBytes: Schema.Natural,
+  firstSequence: Schema.NullOr(Schema.Natural),
+  lastSequence: Schema.NullOr(Schema.Natural),
+  reason: Schema.NullOr(Schema.Literals(["stopped", "source-ended", "overflow", "interrupted"])),
+  error: Schema.NullOr(BrowserError),
+}) {}
+
+/** A detachment snapshot or the latched final drained/disposed subscription accounting. */
+export class FrameSubscriptionReport extends Schema.Class<FrameSubscriptionReport>(
+  "BrowserFrameSubscriptionReport",
+)(FrameSubscriptionSnapshot.fields) {}

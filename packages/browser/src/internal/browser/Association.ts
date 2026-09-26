@@ -20,6 +20,8 @@ export interface CaptureResolution {
 
 export interface CaptureParent {
   readonly owner: Owner;
+  /** Captured runtime entropy; a source identity is metadata, never a live capability. */
+  readonly newCaptureId: Effect.Effect<string>;
   readonly resolve: (
     ticket: Ticket,
     target?: PageInfo,

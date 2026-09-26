@@ -66,6 +66,9 @@ export const BrowserOperation = Schema.Literals([
   "capture-start",
   "capture-stop",
   "capture-consume",
+  "capture-source",
+  "capture-subscribe",
+  "capture-ready",
 ]);
 
 export type BrowserOperation = typeof BrowserOperation.Type;
@@ -93,6 +96,11 @@ export const LimitDimension = Schema.Literals([
   "width",
   "height",
   "pixels",
+  "subscriber-frames",
+  "subscriber-bytes",
+  "source-discarded-frames",
+  "subscribers",
+  "source-reserved-bytes",
 ]);
 
 const SchemaPath = Schema.String.check(Schema.isMaxLength(512));

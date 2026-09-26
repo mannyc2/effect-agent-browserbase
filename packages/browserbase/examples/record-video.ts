@@ -1,17 +1,14 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
-import { Effect, Schema, Stream } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, Schema } from "effect";
 import type { AnySession } from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
-
-import { CaptureEvidence, captureEvidence } from "./capture-evidence.ts";
+import * as Recording from "effect-browser/recording";
+import * as RecordingFfmpeg from "effect-browser/recording-ffmpeg";
 
 class RecordVideoError extends Schema.TaggedError<RecordVideoError>()("RecordVideoError", {
   operation: Schema.String,
-  evidence: Schema.optionalKey(CaptureEvidence),
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
@@ -24,33 +21,57 @@ const DecodedFrame = Schema.Struct({
 const DecodedFrames = Schema.Struct({
   numerator: Schema.Int.check(Schema.isGreaterThan(0)),
   denominator: Schema.Int.check(Schema.isGreaterThan(0)),
-  frames: Schema.Array(DecodedFrame).check(Schema.isMinLength(2)),
+  frames: Schema.Array(DecodedFrame).check(Schema.isMinLength(2), Schema.isMaxLength(2000)),
 });
 
 const processResult = (command: string, args: ReadonlyArray<string>, cwd?: string) =>
   Effect.tryPromise({
     try: (signal) =>
       new Promise<{ readonly stdout: string; readonly stderr: string }>((resolve, reject) => {
-        const child = spawn(command, args, { cwd, signal, stdio: ["ignore", "pipe", "pipe"] });
+        const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "";
+        let stdoutBytes = 0;
         let stderr = "";
+        let failure: RecordVideoError | undefined;
+        let force: ReturnType<typeof setTimeout> | undefined;
 
+        const terminate = (reason: string, cause?: unknown) => {
+          if (failure !== undefined) return;
+          failure = RecordVideoError.make({
+            operation: reason,
+            ...(cause === undefined ? {} : { cause }),
+          });
+          child.kill("SIGTERM");
+          force = setTimeout(() => child.kill("SIGKILL"), 1000);
+        };
+
+        const interrupted = () => terminate("verification-interrupted");
+        const deadline = setTimeout(() => terminate("verification-timeout"), 20_000);
+
+        signal.addEventListener("abort", interrupted, { once: true });
+        if (signal.aborted) interrupted();
         child.stdout.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString();
+          stdoutBytes += chunk.byteLength;
+          if (stdoutBytes > 2 * 1024 * 1024) terminate("verification-output-limit");
+          else stdout += chunk.toString();
         });
         child.stderr.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString();
+          stderr = (stderr + chunk.toString()).slice(-2000);
         });
-        child.once("error", reject);
-        child.once("close", (code) =>
-          code === 0
-            ? resolve({ stdout, stderr })
-            : reject(
-                RecordVideoError.make({
-                  operation: `${command} exited ${String(code)}: ${stderr.slice(-2000)}`,
-                }),
-              ),
-        );
+        child.stdout.on("error", (cause) => terminate("verification-stdout", cause));
+        child.stderr.on("error", (cause) => terminate("verification-stderr", cause));
+        child.once("error", (cause) => terminate("verification-process", cause));
+        child.once("close", (code) => {
+          clearTimeout(deadline);
+          clearTimeout(force);
+          signal.removeEventListener("abort", interrupted);
+          if (failure !== undefined) reject(failure);
+          else if (code === 0) resolve({ stdout, stderr });
+          else
+            reject(
+              RecordVideoError.make({ operation: `${command} exited ${String(code)}: ${stderr}` }),
+            );
+        });
       }),
     catch: (cause) => RecordVideoError.make({ operation: "media-process", cause }),
   });
@@ -65,91 +86,34 @@ const processResult = (command: string, args: ReadonlyArray<string>, cwd?: strin
 export const recordInterval = (session: AnySession, outputPath: string, durationMillis = 5_000) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const directory = yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: () => mkdtemp(join(tmpdir(), "browserbase-capture-")),
-          catch: (cause) => RecordVideoError.make({ operation: "capture-directory", cause }),
-        }),
-        (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
+      const duration = yield* Schema.decodeEffect(
+        Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60_000 })),
+      )(durationMillis).pipe(
+        Effect.mapError(() => new RecordVideoError({ operation: "duration" })),
       );
 
-      const captureStarted = yield* Effect.sync(() => process.hrtime.bigint());
-
-      const interval = yield* Capture.start(session, {
-        maxFrames: 64,
-        maxBufferedBytes: 32 * 1024 * 1024,
-        maxFrameBytes: 4 * 1024 * 1024,
-        maxDurationMillis: durationMillis,
-        quality: 80,
+      const source = yield* Capture.openFrames(session, {
+        capture: {
+          maxFrames: 64,
+          maxBufferedBytes: 16 * 1024 * 1024,
+          maxFrameBytes: 4 * 1024 * 1024,
+          maxDurationMillis: duration + 10_000,
+          quality: 80,
+        },
       });
 
-      const frames = Array.from(yield* interval.frames.pipe(Stream.runCollect));
-      const summary = yield* interval.completed;
-
-      if (frames.length < 2) {
-        const captureCompleted = yield* Effect.sync(() => process.hrtime.bigint());
-
-        return yield* RecordVideoError.make({
-          operation: "insufficient-frames",
-          evidence: captureEvidence(
-            frames,
-            summary,
-            durationMillis,
-            captureStarted,
-            captureCompleted,
-          ),
-        });
-      }
-
-      const lines: string[] = [];
-
-      for (const [index, frame] of frames.entries()) {
-        const name = `frame-${String(index).padStart(6, "0")}.jpg`;
-
-        yield* Effect.tryPromise({
-          try: () => writeFile(join(directory, name), frame.bytes),
-          catch: (cause) => RecordVideoError.make({ operation: "write-frame", cause }),
-        });
-        lines.push(`file '${name}'`);
-        const next = frames[index + 1];
-
-        if (next !== undefined) {
-          const seconds = Math.max(0.001, (next.sourceTimeMillis - frame.sourceTimeMillis) / 1000);
-
-          lines.push(`duration ${seconds.toFixed(6)}`);
-        }
-      }
-      // concat requires the final file again so its duration is represented.
-      lines.push(`file 'frame-${String(frames.length - 1).padStart(6, "0")}.jpg'`);
-      yield* Effect.tryPromise({
-        try: () =>
-          writeFile(
-            join(directory, "frames.ffconcat"),
-            "ffconcat version 1.0\n" + lines.join("\n") + "\n",
-          ),
-        catch: (cause) => RecordVideoError.make({ operation: "write-manifest", cause }),
-      });
-      yield* processResult(
-        "ffmpeg",
-        [
-          "-hide_banner",
-          "-loglevel",
-          "error",
-          "-y",
-          "-f",
-          "concat",
-          "-safe",
-          "0",
-          "-i",
-          "frames.ffconcat",
-          "-vsync",
-          "vfr",
-          "-pix_fmt",
-          "yuv420p",
-          outputPath,
-        ],
-        directory,
+      const job = yield* Recording.start(
+        source,
+        RecordingFfmpeg.open({ outputPath, maxDurationMillis: duration + 10_000 }),
+        { maxFrames: 64, maxBufferedBytes: 16 * 1024 * 1024 },
       );
+
+      // Measure this same recording after an actual first write, without warming and replacing it.
+      yield* job.ready;
+      yield* Effect.sleep(duration);
+      const summary = (yield* source.stop).capture;
+      const artifact = yield* job.artifact;
+      const recording = yield* job.completed;
 
       const probe = yield* processResult("ffprobe", [
         "-v",
@@ -210,6 +174,6 @@ export const recordInterval = (session: AnySession, outputPath: string, duration
         checksum: frame.checksum,
       }));
 
-      return { summary, decoded, decodedFrames };
+      return { summary, recording, artifact, decoded, decodedFrames };
     }),
-  );
+  ).pipe(Effect.provide(NodeServices.layer));

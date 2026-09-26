@@ -3,9 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, it } from "@effect/vitest";
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Schema } from "effect";
 import { NavigateRequest } from "effect-browser/browser-data";
-import * as Capture from "effect-browser/capture";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 
 import { recordInterval } from "../../examples/record-video.ts";
@@ -44,32 +43,7 @@ it.live(
 
             yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
 
-            // Spend Chromium's screencast startup outside the measured interval.
-            // Pinned Playwright's Screencast.addClient calls _startScreencast
-            // without awaiting it, which calls delegate.startScreencast without
-            // awaiting it either, so a resolved Capture.start means the client is
-            // registered — not that Page.startScreencast was acknowledged, and not
-            // that a frame exists. Measured at that exact boundary on two loaded
-            // cores: the first frame arrives after 34ms at the median and 41ms at
-            // p90, but with a 1,939ms tail, and 4 of 16 2,000ms windows produced
-            // no frame at all. Charged against a 2,000ms budget that is what left
-            // the interval below the two frames an encoder needs (#19).
-            //
-            // Taking one frame proves the pipeline is delivering; ending the stream
-            // stops this throwaway interval and releases its lease, so the measured
-            // interval below starts on an already-warm page. The duration bounds
-            // the wait, so a page that never produces a frame still reaches the
-            // assertions below with the same values as before.
-            yield* Effect.scoped(
-              Effect.gen(function* () {
-                const warm = yield* Capture.start(session, {
-                  maxFrames: 2,
-                  maxDurationMillis: 4_000,
-                });
-
-                yield* warm.frames.pipe(Stream.take(1), Stream.runDrain);
-              }),
-            );
+            // #19: recordInterval awaits a real first write on the measured recording.
             const result = yield* recordInterval(session, output, 2_000);
 
             // Malformed ffprobe output is a fixture defect: it dies rather than widening the error type.
@@ -96,7 +70,7 @@ it.live(
             ).toBeGreaterThan(250);
             const times = result.decodedFrames.map((frame) => frame.presentationTimeMillis);
             const decodedSpan = Math.max(...times) - Math.min(...times);
-            const sourceSpan = result.summary.sourceLastMillis - result.summary.sourceFirstMillis;
+            const sourceSpan = result.artifact.sourceLastMillis - result.artifact.sourceFirstMillis;
 
             const distinctFrames = new Set(result.decodedFrames.map((frame) => frame.checksum))
               .size;
@@ -107,8 +81,8 @@ it.live(
               true,
             );
             expect(decodedSpan).toBeGreaterThan(250);
-            // The concat demuxer quantizes JPEG durations to 25 Hz. Allow four
-            // ticks for endpoint rounding, not seconds of fabricated timing.
+            // The maintained writer resamples source time onto a 25 Hz timeline. Allow
+            // four ticks for endpoint rounding, not seconds of fabricated timing.
             expect(Math.abs(decodedSpan - sourceSpan)).toBeLessThan(160);
             expect((yield* Effect.promise(() => stat(output))).size).toBeGreaterThan(1_000);
             const evidenceDirectory = process.env.BROWSERBASE_VIDEO_EVIDENCE_DIR;

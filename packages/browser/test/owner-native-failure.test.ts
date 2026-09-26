@@ -16,7 +16,7 @@ const limits = {
 
 it("an operation is a closed vocabulary, so a misspelling is refused rather than merely compiled", () => {
   expect(Schema.is(BrowserOperation)("navigate")).toBe(true);
-  for (const drifted of ["navigation", "capture-source", "target-count", "", "PRIVATE"])
+  for (const drifted of ["navigation", "target-count", "", "PRIVATE"])
     expect(Schema.is(BrowserOperation)(drifted)).toBe(false);
   expect(() =>
     Schema.decodeUnknownSync(BrowserError)({

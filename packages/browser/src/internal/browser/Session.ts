@@ -305,6 +305,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const capture: CaptureParent = {
     owner,
+    newCaptureId: uuid,
     target: () => {
       if (driver === undefined)
         throw BrowserError.make({
