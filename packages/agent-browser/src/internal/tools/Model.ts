@@ -3,6 +3,7 @@ import { BrowserActionResult, BrowserNavigationResult } from "effect-agent/inter
 import {
   FillRequest,
   Identifier,
+  KeyModifier,
   KeyStroke,
   Observation,
   WaitForElementRequest,
@@ -104,11 +105,22 @@ const optionalParameter = <S extends Schema.Constraint>(schema: S, description: 
     }),
   );
 
+// A custom filter's refusal is its returned message; without one a model reads "Expected
+// <filter>", which says neither what was wrong nor what to send instead.
+
+/** The first value that occurs twice, which a refusal names. */
+const repeated = <A>(values: ReadonlyArray<A>): A | undefined =>
+  values.find((value, index) => values.indexOf(value) !== index);
+
 /** `ReadingMatch`; the browser checks it again when it reads. */
 const FindParameter = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(256),
-  Schema.makeFilter((value) => value.trim().length > 0, { title: "not only whitespace" }),
+  Schema.makeFilter(
+    (value) =>
+      value.trim().length > 0 ||
+      "only whitespace; send the text to look for, or null to keep everything",
+  ),
 );
 
 /** `SelectOptions`, described when it stands alone. */
@@ -116,9 +128,22 @@ const optionsParameter = (description?: string) => {
   const bounded = Schema.Array(Identifier).check(Schema.isMinLength(1), Schema.isMaxLength(64));
 
   return (description === undefined ? bounded : bounded.annotate({ description })).check(
-    Schema.makeFilter((ids) => new Set(ids).size === ids.length, { title: "each at most once" }),
+    Schema.makeFilter((ids) => {
+      const twice = repeated(ids);
+
+      return twice === undefined || `option ${twice} is listed twice; list each option once`;
+    }),
   );
 };
+
+/** `KeyStroke`'s modifiers; the browser checks them again when it presses. */
+const ModifiersParameter = Schema.Array(KeyModifier).check(
+  Schema.makeFilter((held) => {
+    const twice = repeated(held);
+
+    return twice === undefined || `${twice} is listed twice; hold each modifier once`;
+  }),
+);
 
 /** What a model may ask of one reading; the host decides the bounds and the default scope. */
 export const InspectRequest = Schema.Struct({
@@ -152,7 +177,7 @@ export const PressParameters = Schema.Struct({
   reference: ElementReference,
   key: KeyStroke.fields.key,
   modifiers: optionalParameter(
-    KeyStroke.fields.modifiers.schema,
+    ModifiersParameter,
     "Modifier keys held down while the key is pressed, each at most once. null presses the key alone",
   ),
 });
@@ -245,14 +270,21 @@ const FormFieldParameter = Schema.Struct({
       "One control and exactly one of value, checked or options for it; the other two are null",
   })
   .check(
-    Schema.makeFilter(
-      (field) =>
-        Number(field.value !== undefined) +
-          Number(field.checked !== undefined) +
-          Number(field.options !== undefined) ===
-        1,
-      { title: "exactly one of value, checked or options" },
-    ),
+    Schema.makeFilter((field) => {
+      const set = (["value", "checked", "options"] as const).filter(
+        (key) => field[key] !== undefined,
+      );
+
+      const found =
+        set.length === 0
+          ? "none of value, checked or options is set"
+          : `${set.join(" and ")} are set`;
+
+      return (
+        set.length === 1 ||
+        `${found}; set exactly one of value, checked or options for this control, and null for the others`
+      );
+    }),
   );
 
 /** Several controls of one observation, set in order, then at most one submit click. */
@@ -262,10 +294,13 @@ export const FillFormParameters = Schema.Struct({
     .check(Schema.isMinLength(1), Schema.isMaxLength(32))
     .annotate({ description: "The controls to set, in the order to set them" })
     .check(
-      Schema.makeFilter(
-        (fields) => new Set(fields.map((field) => field.elementId)).size === fields.length,
-        { title: "each elementId at most once" },
-      ),
+      Schema.makeFilter((fields) => {
+        const twice = repeated(fields.map((field) => field.elementId));
+
+        return (
+          twice === undefined || `${twice} is listed twice; set each control once, in one field`
+        );
+      }),
     ),
   submit: optionalParameter(
     Identifier,
@@ -275,8 +310,8 @@ export const FillFormParameters = Schema.Struct({
   Schema.makeFilter(
     (request) =>
       request.submit === undefined ||
-      !request.fields.some((field) => field.elementId === request.submit),
-    { title: "a submit control that is not also a field" },
+      !request.fields.some((field) => field.elementId === request.submit) ||
+      `submit ${request.submit} is also a field; a control is either set or clicked to send the form, so drop that field or make submit null`,
   ),
 );
 

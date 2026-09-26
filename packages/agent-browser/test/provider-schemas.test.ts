@@ -317,3 +317,63 @@ it("browser_type says how much text one call types and refuses more with the len
     });
   }
 });
+
+it("a refused parameter says what is wrong and what to send instead", () => {
+  const form = BrowserTools.formToolkit.tools.browser_fill_form;
+
+  const field = (elementId: string, set: Record<string, unknown>) => ({
+    elementId,
+    value: null,
+    checked: null,
+    options: null,
+    ...set,
+  });
+
+  const refusals: ReadonlyArray<readonly [Tool.Any, unknown, RegExp]> = [
+    [
+      BrowserTools.toolkit.tools.browser_inspect,
+      { find: "   ", scope: null },
+      /^only whitespace; .* null to keep everything/,
+    ],
+    [
+      form,
+      { observationId: "o1", fields: [field("e3", { value: "gm", checked: false })], submit: null },
+      /^value and checked are set; set exactly one of value, checked or options/,
+    ],
+    [
+      form,
+      { observationId: "o1", fields: [field("e3", {})], submit: null },
+      /^none of value, checked or options is set; set exactly one/,
+    ],
+    [
+      form,
+      {
+        observationId: "o1",
+        fields: [field("e3", { value: "a" }), field("e3", { value: "b" })],
+        submit: null,
+      },
+      /^e3 is listed twice; set each control once/,
+    ],
+    [
+      form,
+      { observationId: "o1", fields: [field("e3", { value: "a" })], submit: "e3" },
+      /^submit e3 is also a field; .* null/,
+    ],
+    [
+      BrowserTools.selectionToolkit.tools.browser_select_option,
+      { reference, options: ["e5", "e6", "e5"] },
+      /^option e5 is listed twice; list each option once/,
+    ],
+    [
+      BrowserTools.keyboardToolkit.tools.browser_press,
+      { reference, key: "a", modifiers: ["Shift", "Control", "Shift"] },
+      /^Shift is listed twice; hold each modifier once/,
+    ],
+  ];
+
+  expect(
+    refusals.map(([tool, sent]) => ({ tool: tool.name, refusal: outcome(tool, sent) })),
+  ).toEqual(
+    refusals.map(([tool, , says]) => ({ tool: tool.name, refusal: expect.stringMatching(says) })),
+  );
+});

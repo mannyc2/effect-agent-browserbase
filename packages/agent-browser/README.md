@@ -367,6 +367,11 @@ description says what null does: the handlers, an approval predicate such as
 test runs each Tool through both providers' own schema transforms and decodes what they send with
 the Tool's own schema, as Effect Agent does.
 
+Effect Agent returns a refused parameter to the model in the same run, so the Tools' own checks
+say what was wrong and what to send instead: a form field that sets both `value` and `checked`, a
+control listed twice, a submit control that is also a field, or text longer than one call types,
+with its length and the limit.
+
 ## Testing an agent without a browser process
 
 `effect-browser/testing` opens the real session owner over a scripted page, so an Agent composition runs the maintained Toolkit, host supervision and adapter against deterministic pages with no Chromium process, no provider account and no credentials. Observations are numbered `observation-1`, `observation-2`, … and a control's script `id` is its `elementId`, so a `ScriptedModel` turn from `@effect-agent/testing` can name the node it clicks statically instead of parsing a tool result.
