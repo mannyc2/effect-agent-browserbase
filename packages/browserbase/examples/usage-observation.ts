@@ -36,8 +36,11 @@ export const sampleProjectUsage = Effect.fn("sampleProjectUsage")(function* <
   return sample;
 });
 
-/** Decoded at the host boundary: a NaN threshold would never alert and a negative one always would. */
-export const BrowserMinutesThreshold = Schema.Natural.pipe(Schema.brand("BrowserMinutesThreshold"));
+/** Decoded at the host boundary: a NaN threshold would never alert, and zero or a negative one always would. */
+export const BrowserMinutesThreshold = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+  Schema.brand("BrowserMinutesThreshold"),
+);
+
 export type BrowserMinutesThreshold = typeof BrowserMinutesThreshold.Type;
 
 export type ObservedUsageChange =
