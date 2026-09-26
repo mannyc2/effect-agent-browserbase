@@ -1,12 +1,13 @@
-import { Schema } from "effect";
+import { Option, Predicate, Schema, SchemaGetter } from "effect";
 import { BrowserActionResult, BrowserNavigationResult } from "effect-agent/interactive-browser";
 import {
   FillRequest,
   Identifier,
+  KeyModifier,
   KeyStroke,
   Observation,
-  TypeRequest,
   WaitForElementRequest,
+  WheelRequest,
 } from "effect-browser/browser-data";
 import type { BrowserError } from "effect-browser/errors";
 
@@ -89,31 +90,70 @@ export type ElementReference = typeof ElementReference.Type;
 // A description attaches to a schema's last check, and a custom filter has no JSON Schema form.
 // Parameters are therefore described before their custom filters, or a provider never sees it.
 
-/** `ReadingMatch`, described; the browser checks it again when it reads. */
-const FindParameter = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
-  .annotate({
-    description:
-      "Case-insensitive text to look for. Only controls whose label contains it, and text lines containing it, are returned; matches are kept even when earlier content would fill the reading",
-  })
-  .check(Schema.makeFilter((value) => value.trim().length > 0, { title: "not only whitespace" }));
+/**
+ * An optional parameter a model may also send as null. Effect's OpenAI and Anthropic
+ * structured-output codecs make every key required and nullable, so a model sends null for each
+ * parameter it leaves out. Null decodes as the absent key, so the host, an approval predicate
+ * and the recorded call all see the request the model meant. The description sits on the
+ * nullable value the provider shows, and says what null does.
+ */
+const optionalParameter = <S extends Schema.Constraint>(schema: S, description: string) =>
+  Schema.optionalKey(Schema.NullOr(schema).annotate({ description })).pipe(
+    Schema.decodeTo(Schema.optionalKey(Schema.toType(schema)), {
+      decode: SchemaGetter.transformOptional(Option.filter(Predicate.isNotNull)),
+      encode: SchemaGetter.passthroughSubtype(),
+    }),
+  );
 
-/** `SelectOptions`, described. */
-const optionsParameter = (description: string) =>
-  Schema.Array(Identifier)
-    .check(Schema.isMinLength(1), Schema.isMaxLength(64))
-    .annotate({ description })
-    .check(
-      Schema.makeFilter((ids) => new Set(ids).size === ids.length, { title: "each at most once" }),
-    );
+// A custom filter's refusal is its returned message; without one a model reads "Expected
+// <filter>", which says neither what was wrong nor what to send instead.
+
+/** The first value that occurs twice, which a refusal names. */
+const repeated = <A>(values: ReadonlyArray<A>): A | undefined =>
+  values.find((value, index) => values.indexOf(value) !== index);
+
+/** `ReadingMatch`; the browser checks it again when it reads. */
+const FindParameter = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(256),
+  Schema.makeFilter(
+    (value) =>
+      value.trim().length > 0 ||
+      "only whitespace; send the text to look for, or null to keep everything",
+  ),
+);
+
+/** `SelectOptions`, described when it stands alone. */
+const optionsParameter = (description?: string) => {
+  const bounded = Schema.Array(Identifier).check(Schema.isMinLength(1), Schema.isMaxLength(64));
+
+  return (description === undefined ? bounded : bounded.annotate({ description })).check(
+    Schema.makeFilter((ids) => {
+      const twice = repeated(ids);
+
+      return twice === undefined || `option ${twice} is listed twice; list each option once`;
+    }),
+  );
+};
+
+/** `KeyStroke`'s modifiers; the browser checks them again when it presses. */
+const ModifiersParameter = Schema.Array(KeyModifier).check(
+  Schema.makeFilter((held) => {
+    const twice = repeated(held);
+
+    return twice === undefined || `${twice} is listed twice; hold each modifier once`;
+  }),
+);
 
 /** What a model may ask of one reading; the host decides the bounds and the default scope. */
 export const InspectRequest = Schema.Struct({
-  find: Schema.optionalKey(FindParameter),
-  scope: Schema.optionalKey(
-    Schema.Literals(["viewport", "document"]).annotate({
-      description:
-        "viewport reads what is on screen now; scroll to see more. document reads the whole page in document order; combine it with find to search the page",
-    }),
+  find: optionalParameter(
+    FindParameter,
+    "Case-insensitive text to look for. Only controls whose label contains it, and text lines containing it, are returned; matches are kept even when earlier content would fill the reading. null keeps everything in scope",
+  ),
+  scope: optionalParameter(
+    Schema.Literals(["viewport", "document"]),
+    "viewport reads what is on screen now; scroll to see more. document reads the whole page in document order; combine it with find to search the page. null reads the default scope",
   ),
 });
 
@@ -135,18 +175,63 @@ export const SelectOptionParameters = Schema.Struct({
 
 export const PressParameters = Schema.Struct({
   reference: ElementReference,
-  ...KeyStroke.fields,
+  key: KeyStroke.fields.key,
+  modifiers: optionalParameter(
+    ModifiersParameter,
+    "Modifier keys held down while the key is pressed, each at most once. null presses the key alone",
+  ),
 });
+
+/** How many characters one `browser_type` call sends, as `TypeRequest` allows. */
+const typedCharacters = 256;
+
+/** `TypeRequest`'s text, described; the browser checks it again when it types. */
+const TextParameter = Schema.NonEmptyString.annotate({
+  description: `The text to type, at most ${typedCharacters} characters (about 40 words): each character is a real key stroke, and one call's strokes share one action timeout. Type a longer passage over several calls. A line break or other control character is refused; press Enter or Tab as a key of its own`,
+}).check(
+  // Counted in characters, not UTF-16 units, because that is how many strokes it costs.
+  Schema.makeFilter((text) => {
+    const characters = [...text].length;
+
+    return (
+      characters <= typedCharacters ||
+      `${characters} characters; one call types at most ${typedCharacters} (about 40 words), so type the rest in another call`
+    );
+  }),
+  Schema.makeFilter(
+    (text) =>
+      [...text].every((character) => {
+        const point = character.codePointAt(0) ?? 0;
+
+        // An unpaired surrogate is not a character, and would not survive the wire as one.
+        return point > 0x1f && point !== 0x7f && (point < 0xd800 || point > 0xdfff);
+      }) ||
+      "a line break or other control character, or a broken character; type plain text and press Enter or Tab as a key of its own",
+  ),
+);
 
 export const TypeParameters = Schema.Struct({
   reference: ElementReference,
-  text: TypeRequest.fields.text,
+  text: TextParameter,
+});
+
+/** `WheelRequest`, which the browser checks again when it sends the event. */
+export const WheelParameters = Schema.Struct({
+  deltaX: WheelRequest.fields.deltaX,
+  deltaY: WheelRequest.fields.deltaY,
+  at: optionalParameter(
+    WheelRequest.fields.at.schema,
+    "The main-frame viewport point to move the pointer to before the wheel event. null sends it where the pointer already is",
+  ),
 });
 
 export const WaitForParameters = Schema.Struct({
   reference: ElementReference,
   state: WaitForElementRequest.fields.state,
-  timeoutMillis: WaitForElementRequest.fields.timeoutMillis,
+  timeoutMillis: optionalParameter(
+    WaitForElementRequest.fields.timeoutMillis.schema,
+    "How long to wait, in milliseconds; it can shorten the host's deadline, never extend it. null waits until the host's deadline",
+  ),
 });
 
 export const ReadMoreRequest = Schema.Struct({ observationId: ObservationIdParameter });
@@ -167,31 +252,39 @@ export type ReadMoreResult = typeof ReadMoreResult.Type;
 
 const FormFieldParameter = Schema.Struct({
   elementId: ElementIdParameter,
-  value: Schema.optionalKey(
-    FillRequest.fields.value.annotate({
-      description: "Text that replaces the contents of an input or textarea",
-    }),
+  value: optionalParameter(
+    FillRequest.fields.value,
+    "Text that replaces the contents of an input or textarea. null when this field sets checked or options",
   ),
-  checked: Schema.optionalKey(
-    Schema.Boolean.annotate({
-      description:
-        "The state a checkbox, radio or switch should end in; it is clicked only when it differs",
-    }),
+  checked: optionalParameter(
+    Schema.Boolean,
+    "The state a checkbox, radio or switch should end in; it is clicked only when it differs. null when this field sets value or options",
   ),
-  options: Schema.optionalKey(
-    optionsParameter("elementIds of the options to select in a native select"),
+  options: optionalParameter(
+    optionsParameter(),
+    "elementIds of the options to select in a native select. null when this field sets value or checked",
   ),
 })
-  .annotate({ description: "One control and exactly one of value, checked or options for it" })
+  .annotate({
+    description:
+      "One control and exactly one of value, checked or options for it; the other two are null",
+  })
   .check(
-    Schema.makeFilter(
-      (field) =>
-        Number(field.value !== undefined) +
-          Number(field.checked !== undefined) +
-          Number(field.options !== undefined) ===
-        1,
-      { title: "exactly one of value, checked or options" },
-    ),
+    Schema.makeFilter((field) => {
+      const set = (["value", "checked", "options"] as const).filter(
+        (key) => field[key] !== undefined,
+      );
+
+      const found =
+        set.length === 0
+          ? "none of value, checked or options is set"
+          : `${set.join(" and ")} are set`;
+
+      return (
+        set.length === 1 ||
+        `${found}; set exactly one of value, checked or options for this control, and null for the others`
+      );
+    }),
   );
 
 /** Several controls of one observation, set in order, then at most one submit click. */
@@ -201,23 +294,24 @@ export const FillFormParameters = Schema.Struct({
     .check(Schema.isMinLength(1), Schema.isMaxLength(32))
     .annotate({ description: "The controls to set, in the order to set them" })
     .check(
-      Schema.makeFilter(
-        (fields) => new Set(fields.map((field) => field.elementId)).size === fields.length,
-        { title: "each elementId at most once" },
-      ),
+      Schema.makeFilter((fields) => {
+        const twice = repeated(fields.map((field) => field.elementId));
+
+        return (
+          twice === undefined || `${twice} is listed twice; set each control once, in one field`
+        );
+      }),
     ),
-  submit: Schema.optionalKey(
-    Identifier.annotate({
-      description:
-        "elementId of the control to click once every field is set, such as the form's submit button. Omit it to leave the form unsent",
-    }),
+  submit: optionalParameter(
+    Identifier,
+    "elementId of the control to click once every field is set, such as the form's submit button. null leaves the form unsent",
   ),
 }).check(
   Schema.makeFilter(
     (request) =>
       request.submit === undefined ||
-      !request.fields.some((field) => field.elementId === request.submit),
-    { title: "a submit control that is not also a field" },
+      !request.fields.some((field) => field.elementId === request.submit) ||
+      `submit ${request.submit} is also a field; a control is either set or clicked to send the form, so drop that field or make submit null`,
   ),
 );
 

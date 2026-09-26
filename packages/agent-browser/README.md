@@ -110,7 +110,7 @@ const handlers = BrowserTools.handlers(browser, {
 });
 ```
 
-Observations read the viewport by default: what a person would see, and what `browser_scroll` moves. `browser_inspect` takes two optional parameters. `scope` asks for the whole document or the viewport for one reading. `find` keeps only controls whose label contains its text, and lines containing it, and it is applied inside the page before `maxControls` and `maxTextBytes` are spent, so a crowded header cannot hide the control a model is looking for. A matched reading names its `match`: what it leaves out is not evidence of absence. Neither parameter can widen the host's bounds, and references still come from the reading itself.
+Observations read the viewport by default: what a person would see, and what `browser_scroll` moves. `browser_inspect` takes two optional parameters, each null or absent when unused. `scope` asks for the whole document or the viewport for one reading. `find` keeps only controls whose label contains its text, and lines containing it, and it is applied inside the page before `maxControls` and `maxTextBytes` are spent, so a crowded header cannot hide the control a model is looking for. A matched reading names its `match`: what it leaves out is not evidence of absence. Neither parameter can widen the host's bounds, and references still come from the reading itself.
 
 Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof.
 
@@ -147,7 +147,7 @@ Every action on a page retires the observation its references came from, so a mo
     { elementId, checked: true }, // the state a toggle should end in
     { elementId, options: [optionId] }, // a native select's issued options
   ],
-  submit: buttonId, // optional; clicked once every field is set and still holds
+  submit: buttonId, // clicked once every field is set and still holds; null or absent leaves it unsent
 }
 ```
 
@@ -159,9 +159,9 @@ It runs on `effect-browser`'s `fillForm`: every step is the exact-node action it
 
 `nativeToolkit` adds `browser_pointer_move`, `browser_hover` and `browser_wheel`. `keyboardToolkit` separately adds `browser_press` and `browser_type`; existing native-tool opt-ins therefore do not silently gain keyboard authority. Merge only the Toolkits the agent should see. `host.layer` can provide every handler service at once because an Effect AI agent can call only Tools declared in its own Toolkit.
 
-Pointer requests use the generic `PointerMoveRequest` and wheel requests use `WheelRequest`: CSS pixels in the main-frame viewport. Hover takes an `ObservedElement` and applies the same exact-node admission as click/fill. It never scrolls an off-screen element into view. A wheel event reaches the nested container or page the browser hit-tests under the pointer. `browser_scroll` remains an instantaneous scripted scroll with no wheel event.
+Pointer requests use the generic `PointerMoveRequest` and wheel requests `WheelRequest`'s fields, with a null `at` meaning the current pointer: CSS pixels in the main-frame viewport. Hover takes an `ObservedElement` and applies the same exact-node admission as click/fill. It never scrolls an off-screen element into view. A wheel event reaches the nested container or page the browser hit-tests under the pointer. `browser_scroll` remains an instantaneous scripted scroll with no wheel event.
 
-Keyboard Tools also take an exact `ObservedElement`. That node must already have focus; the Tool never focuses or searches for a replacement. `browser_press` accepts the generic `KeyStroke`, and `browser_type` uses the browser package's bounded text schema (at most 256 characters, with control characters refused). Both apply the same fresh `admission` policy as click/fill/hover.
+Keyboard Tools also take an exact `ObservedElement`. That node must already have focus; the Tool never focuses or searches for a replacement. `browser_press` accepts the generic `KeyStroke`, with null `modifiers` for none, and `browser_type` takes the browser package's bounded text: at most 256 characters, with control characters refused. No JSON Schema keyword carries a character count, so its description gives the limit in characters and words, and a longer text is refused with its own length so the model can split it. Both apply the same fresh `admission` policy as click/fill/hover.
 
 Real-input model results contain only `{ dispatched: true }`. They do not claim scrolling, focus-driven page work or a website action has settled. Observe again for the result. `makeHost`'s `onInput` receives the unmodified `InputReceipt` and optional tool-call ID for exposed pointer, click and key input, including target, known position/delta and host-monotonic interval. Playwright-managed clicks report a null position because their internal hit-tested point is not exposed. Internal download and file-chooser clicks clear the remembered pointer position but do not produce a receipt. A receipt never includes the key or typed text. Receipt times, private capabilities and callback output never enter the model result. The host owns pacing, easing and drawing; these Tools add none and never replay failed input.
 
@@ -207,7 +207,7 @@ the default five-tool toolkit nor the pointer or keyboard toolkits gain selectio
 `waitToolkit` adds `browser_wait_for` with `{ reference, state, timeoutMillis? }`. Its reference
 comes from an actual inspection; the state is `visible`, `hidden`, `enabled` or `disabled`, and
 the optional deadline is 1–60,000 ms, shortened by the host's action timeout and remaining
-browser lifetime. No CSS selector, JavaScript or arbitrary sleep is a Tool parameter. Hidden
+browser lifetime; null or absent waits until that deadline. No CSS selector, JavaScript or arbitrary sleep is a Tool parameter. Hidden
 includes disappearance of the original node; it never re-finds a replacement. Document or frame
 replacement fails. Success is `{ satisfied: true }`, a sampled condition rather than a guarantee
 about a later action. Reinspect when state has changed before sending input.
@@ -359,8 +359,18 @@ example `toRunApprovalHook(...)` from `effect-agent/run-hooks`. Unlike a synchro
 refusal, an explicit denial fails the run with `AgentApprovalDenied` rather than returning a
 failure to the model.
 
-Every Tool's parameters are an object schema with described fields, and a conformance test runs
-each through the pinned OpenAI and Anthropic providers' own schema transforms and wire round trip.
+Every Tool's parameters are an object schema with described fields. The pinned OpenAI and
+Anthropic providers make every key required and nullable, so a model sends null for each optional
+parameter it leaves out. Every optional parameter therefore takes null as the absent key, and its
+description says what null does: the handlers, an approval predicate such as
+`params.submit !== undefined` and the recorded call see the request the model meant. A conformance
+test runs each Tool through both providers' own schema transforms and decodes what they send with
+the Tool's own schema, as Effect Agent does.
+
+Effect Agent returns a refused parameter to the model in the same run, so the Tools' own checks
+say what was wrong and what to send instead: a form field that sets both `value` and `checked`, a
+control listed twice, a submit control that is also a field, or text longer than one call types,
+with its length and the limit.
 
 ## Testing an agent without a browser process
 
@@ -453,7 +463,7 @@ The common adapter and Tools support both self-managed Chromium and Browserbase.
 
 Use the frozen Vite+ workspace described in [Contributing](../../CONTRIBUTING.md). Both owners are exercised with the actual public AgentRuntime and Toolkit, using a scripted model and real Chromium, and `test/scripted-agent.test.ts` runs the same AgentRuntime and Toolkit over the scripted engine with no browser process. The `agent` installed consumer includes Chromium and the common Tools with no Browserbase installation. The `agent-hosted` consumer adds Browserbase and exercises provider acquisition/cleanup composition through scripted provider HTTP. They preserve typed callback errors, one session identity and capture after agent execution.
 
-Native framework tests prove that the adapter Layer captures configured services while each acquired browser closes with its caller's Scope, even while the Layer remains alive. Tool regressions cover direct BrowserSession dispatch classification, exact-node pointer and keyboard input, host callback/fail-session supervision, host-scope cancellation, viewport policy and capture on the same owner. Native AgentRuntime tests also fill a whole form in one call, reach a crowded-out control with `find`, read on with `browser_read_more`, run browser calls in declared order, and show that a batched response ends a run under the engine's default failure limit but not under `BrowserTools.policy`. Every Tool's parameters are checked against the pinned OpenAI and Anthropic schema transforms, which a scripted model never exercises. A local native pass is not hosted Browserbase or paid-model evidence.
+Native framework tests prove that the adapter Layer captures configured services while each acquired browser closes with its caller's Scope, even while the Layer remains alive. Tool regressions cover direct BrowserSession dispatch classification, exact-node pointer and keyboard input, host callback/fail-session supervision, host-scope cancellation, viewport policy and capture on the same owner. Native AgentRuntime tests also fill a whole form in one call, reach a crowded-out control with `find`, read on with `browser_read_more`, run browser calls in declared order, and show that a batched response ends a run under the engine's default failure limit but not under `BrowserTools.policy`. Every Tool's parameters are checked against the pinned OpenAI and Anthropic schema transforms, which a scripted model never exercises, and the scripted AgentRuntime sends the null-for-none calls those providers' models make. A local native pass is not hosted Browserbase or paid-model evidence.
 
 ## API migration
 

@@ -5,7 +5,7 @@ import {
   BrowserNavigationResult,
   BrowserScrollRequest,
 } from "effect-agent/interactive-browser";
-import { Observation, PointerMoveRequest, WheelRequest } from "effect-browser/browser-data";
+import { Observation, PointerMoveRequest } from "effect-browser/browser-data";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {
@@ -28,6 +28,7 @@ import {
   TypeParameters,
   WaitForParameters,
   WaitResult,
+  WheelParameters,
 } from "./Model.ts";
 
 const oneAction =
@@ -108,7 +109,7 @@ export const Hover = Tool.make("browser_hover", {
 export const Wheel = Tool.make("browser_wheel", {
   description:
     "Send one real wheel event at the current pointer, or at the supplied main-frame viewport point. The browser chooses the nested container or page that scrolls. Success acknowledges dispatch only; inspect again to observe the result.",
-  parameters: WheelRequest,
+  parameters: WheelParameters,
   success: NativeInputResult,
   failure: BrowserToolFailure,
   failureMode: "return",
