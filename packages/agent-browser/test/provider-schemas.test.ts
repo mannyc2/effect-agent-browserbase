@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
-import { Predicate, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
+import { TypeRequest } from "effect-browser/browser-data";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
@@ -264,4 +265,55 @@ it("parameter fields tell the model what they mean", () => {
   expect(described(BrowserTools.selectionToolkit.tools.browser_select_option, "options")).toMatch(
     /selectElementId/,
   );
+});
+
+it("browser_type says how much text one call types and refuses more with the length it got", () => {
+  const typing: ReadonlyArray<Tool.Any> = [
+    BrowserTools.keyboardToolkit.tools.browser_type,
+    BrowserTools.observedKeyboardToolkit.tools.browser_type_and_inspect,
+  ];
+
+  /** What a model learns of `text`: its description, and what a call of each kind returns. */
+  const seen = (tool: Tool.Any) => ({
+    tool: tool.name,
+    described: providers.map(([provider, transformer]) => [
+      provider,
+      descriptionsIn(
+        propertiesIn(Tool.getJsonSchema(tool, { transformer }), tool.name).find(
+          ([path]) => path === `${tool.name}.text`,
+        )?.[1],
+      ).join(" "),
+    ]),
+    // Counted in characters, as the key strokes are: each of these is two UTF-16 code units.
+    atLimit: outcome(tool, { reference, text: "😀".repeat(256) }),
+    overLimit: outcome(tool, { reference, text: "😀".repeat(300) }),
+    lineBreak: outcome(tool, { reference, text: "Dear team,\nhello" }),
+  });
+
+  expect(typing.map(seen)).toEqual(
+    typing.map((tool) => ({
+      tool: tool.name,
+      described: providers.map(([provider]) => [
+        provider,
+        expect.stringMatching(/at most 256 characters \(about 40 words\)/),
+      ]),
+      atLimit: { reference, text: "😀".repeat(256) },
+      overLimit: expect.stringMatching(
+        /^300 characters; one call types at most 256 \(about 40 words\)/,
+      ),
+      lineBreak: expect.stringMatching(/line break or other control character.*press/),
+    })),
+  );
+
+  // The Tool restates the browser's rule, so it accepts exactly the text the browser types.
+  const browserTypes = Schema.decodeUnknownOption(TypeRequest);
+
+  for (const text of ["", "é", "😀".repeat(256), "😀".repeat(257), "a\tb", "\u007f", "\ud83d"]) {
+    const refusal = outcome(BrowserTools.keyboardToolkit.tools.browser_type, { reference, text });
+
+    expect({ text, accepted: typeof refusal !== "string" }).toEqual({
+      text,
+      accepted: Option.isSome(browserTypes({ text })),
+    });
+  }
 });

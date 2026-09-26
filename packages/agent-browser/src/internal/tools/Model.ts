@@ -5,7 +5,6 @@ import {
   Identifier,
   KeyStroke,
   Observation,
-  TypeRequest,
   WaitForElementRequest,
   WheelRequest,
 } from "effect-browser/browser-data";
@@ -158,9 +157,37 @@ export const PressParameters = Schema.Struct({
   ),
 });
 
+/** How many characters one `browser_type` call sends, as `TypeRequest` allows. */
+const typedCharacters = 256;
+
+/** `TypeRequest`'s text, described; the browser checks it again when it types. */
+const TextParameter = Schema.NonEmptyString.annotate({
+  description: `The text to type, at most ${typedCharacters} characters (about 40 words): each character is a real key stroke, and one call's strokes share one action timeout. Type a longer passage over several calls. A line break or other control character is refused; press Enter or Tab as a key of its own`,
+}).check(
+  // Counted in characters, not UTF-16 units, because that is how many strokes it costs.
+  Schema.makeFilter((text) => {
+    const characters = [...text].length;
+
+    return (
+      characters <= typedCharacters ||
+      `${characters} characters; one call types at most ${typedCharacters} (about 40 words), so type the rest in another call`
+    );
+  }),
+  Schema.makeFilter(
+    (text) =>
+      [...text].every((character) => {
+        const point = character.codePointAt(0) ?? 0;
+
+        // An unpaired surrogate is not a character, and would not survive the wire as one.
+        return point > 0x1f && point !== 0x7f && (point < 0xd800 || point > 0xdfff);
+      }) ||
+      "a line break or other control character, or a broken character; type plain text and press Enter or Tab as a key of its own",
+  ),
+);
+
 export const TypeParameters = Schema.Struct({
   reference: ElementReference,
-  text: TypeRequest.fields.text,
+  text: TextParameter,
 });
 
 /** `WheelRequest`, which the browser checks again when it sends the event. */
