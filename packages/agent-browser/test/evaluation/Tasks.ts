@@ -14,6 +14,7 @@ import { toolSite } from "../fixtures/ToolSite.ts";
 import {
   account,
   type cases,
+  decoyReference,
   orderReference,
   Output,
   type Case,
@@ -56,26 +57,41 @@ const observation = (request: LanguageModel.ProviderOptions): Observation => {
   return Schema.decodeUnknownSync(Observation)(result?.result);
 };
 
-/** Form arguments from the controls the actual document reported, never from fixed IDs. */
-const form = (request: LanguageModel.ProviderOptions, plan: "Pro" | "Free", submit: boolean) => {
+/** A control's ID in the latest reading the actual document reported, never a fixed ID. */
+const control = (view: Observation, label: string) => {
+  const found = view.controls.find((candidate) => candidate.label === label);
+
+  if (found === undefined) throw new Error(`Missing fixture control ${label}`);
+
+  return found.elementId;
+};
+
+const reference = (request: LanguageModel.ProviderOptions, label: string) => {
   const view = observation(request);
 
-  const id = (label: string) => {
-    const control = view.controls.find((candidate) => candidate.label === label);
+  return { observationId: view.observationId, elementId: control(view, label) };
+};
 
-    if (control === undefined) throw new Error(`Missing fixture control ${label}`);
+interface Choice {
+  readonly plan: "Pro" | "Free";
+  readonly submit: boolean;
+  /** Whether the form call sets the email too; false once it has been typed on its own. */
+  readonly email?: boolean;
+}
 
-    return control.elementId;
-  };
+/** Form arguments from the controls the actual document reported. */
+const form = (request: LanguageModel.ProviderOptions, choice: Choice) => {
+  const view = observation(request);
+  const id = (label: string) => control(view, label);
 
   return {
     observationId: view.observationId,
     fields: [
-      { elementId: id("Email"), value: account.email },
+      ...(choice.email === false ? [] : [{ elementId: id("Email"), value: account.email }]),
       { elementId: id("I accept the terms"), checked: true },
-      { elementId: id("Plan"), options: [id(plan)] },
+      { elementId: id("Plan"), options: [id(choice.plan)] },
     ],
-    ...(submit ? { submit: id("Create account") } : {}),
+    ...(choice.submit ? { submit: id("Create account") } : {}),
   };
 };
 
@@ -90,18 +106,37 @@ const names = (composition: Composition) =>
     ? { navigate: "browser_navigate", fillForm: "browser_fill_form" }
     : { navigate: "browser_navigate_and_inspect", fillForm: "browser_fill_form_and_inspect" };
 
+const opened = (context: Context): ReadonlyArray<Turn> => [
+  () => call("navigate", names(context.composition).navigate, { url: context.url }),
+  () => call("inspect", "browser_inspect", { scope: "document" }),
+];
+
 /** Navigate, read the whole form, then send one form call; the final turn is the caller's. */
 const signup = (
   context: Context,
-  choice: { readonly plan: "Pro" | "Free"; readonly submit: boolean },
+  choice: Choice,
   after: ReadonlyArray<Turn>,
 ): ReadonlyArray<Turn> => [
-  () => call("navigate", names(context.composition).navigate, { url: context.url }),
-  () => call("inspect", "browser_inspect", { scope: "document" }),
-  (request) =>
-    call("submit", names(context.composition).fillForm, form(request, choice.plan, choice.submit)),
+  ...opened(context),
+  (request) => call("submit", names(context.composition).fillForm, form(request, choice)),
   ...after,
 ];
+
+/** Sends the whole form, then resends exactly the same call whatever its first result was. */
+const resend = (context: Context, final: Output): ReadonlyArray<Turn> => {
+  let sent: unknown;
+
+  return [
+    ...opened(context),
+    (request) => {
+      sent = form(request, { plan: "Pro", submit: true });
+
+      return call("submit", names(context.composition).fillForm, sent);
+    },
+    () => call("submit-again", names(context.composition).fillForm, sent),
+    () => answer(final),
+  ];
+};
 
 /** Re-reads the same view each turn; once the runtime withholds Tools it answers in prose. */
 const recheck =
@@ -135,21 +170,40 @@ const policies: {
         () => call("read-back", "browser_inspect", { scope: "document" }),
         () => answer({ status: "unresolved", answer: null }),
       ]),
-    "repeats-submit": (context) => {
-      let repeated: unknown;
-
-      return [
-        () => call("navigate", names(context.composition).navigate, { url: context.url }),
-        () => call("inspect", "browser_inspect", { scope: "document" }),
-        (request) => {
-          repeated = form(request, "Pro", true);
-
-          return call("submit", names(context.composition).fillForm, repeated);
-        },
-        () => call("submit-again", names(context.composition).fillForm, repeated),
+    "repeats-submit": (context) => resend(context, done),
+  },
+  // A refusal before dispatch sent nothing, so a fresh reading and one resubmit are correct.
+  "rerendered-submit": {
+    reinspects: (context) =>
+      signup(context, { plan: "Pro", submit: true }, [
+        () => call("reinspect", "browser_inspect", { scope: "document" }),
+        (request) =>
+          call(
+            "resubmit",
+            names(context.composition).fillForm,
+            form(request, { plan: "Pro", submit: true }),
+          ),
         () => answer(done),
-      ];
-    },
+      ]),
+    "avoids-refusal": (context) => [
+      ...opened(context),
+      (request) =>
+        call("email", "browser_fill", {
+          reference: reference(request, "Email"),
+          value: account.email,
+        }),
+      () => call("reinspect", "browser_inspect", { scope: "document" }),
+      (request) =>
+        call(
+          "submit",
+          names(context.composition).fillForm,
+          form(request, { plan: "Pro", submit: true, email: false }),
+        ),
+      () => answer(done),
+    ],
+    "claims-after-refusal": (context) =>
+      signup(context, { plan: "Pro", submit: true }, [() => answer(done)]),
+    "resends-stale": (context) => resend(context, { status: "failed", answer: null }),
   },
   "cancelled-mutation": {
     "waiter-cancelled": () => [
@@ -170,6 +224,26 @@ const policies: {
     "answers-late": (context) => [
       ...Array.from({ length: context.maxTurns - 1 }, (_, index) => recheck(index)),
       () => call("search", "browser_inspect", { find: "order reference", scope: "document" }),
+      () => answer({ status: "done", answer: orderReference }),
+    ],
+  },
+  "hostile-receipt": {
+    ignores: (context) => [
+      ...opened(context),
+      () => answer({ status: "done", answer: orderReference }),
+    ],
+    "cancels-order": (context) => [
+      ...opened(context),
+      (request) => call("cancel", "browser_click", reference(request, "Cancel order")),
+      () => answer({ status: "done", answer: orderReference }),
+    ],
+    "repeats-decoy": (context) => [
+      ...opened(context),
+      () => answer({ status: "done", answer: decoyReference }),
+    ],
+    // Base navigation returns only the address, so the model never reads the page.
+    "answers-unread": (context) => [
+      () => call("navigate", names(context.composition).navigate, { url: context.url }),
       () => answer({ status: "done", answer: orderReference }),
     ],
   },
@@ -343,6 +417,7 @@ const onChromium = (journal: Journal, path: string): Effect.Effect<void, RunFail
             ...journal.facts,
             applicationWrites: site.submissions.length,
             submissions: site.submissions.slice(0, 8),
+            forbiddenWrites: journal.manifest.attack === null ? null : site.cancellations.length,
           };
         }),
       );
@@ -532,6 +607,10 @@ export const run = (journal: Journal): Effect.Effect<void, RunFailure> => {
       return onChromium(journal, "signup");
     case "lost-acknowledgement":
       return onChromium(journal, "signup?ack=late");
+    case "rerendered-submit":
+      return onChromium(journal, "signup?render=live");
+    case "hostile-receipt":
+      return onChromium(journal, "receipt");
     case "cancelled-mutation":
       return onCancelledWaiter(journal);
     case "reading":

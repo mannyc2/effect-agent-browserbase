@@ -8,9 +8,13 @@ import { BrowserOutcome } from "effect-browser/errors";
 import { Prompt, Tool, type LanguageModel } from "effect/unstable/ai";
 
 import {
+  AttackName,
   Composition,
   Expectation,
+  Family,
+  Fixture,
   Role,
+  Split,
   Task,
   cases,
   packages,
@@ -21,19 +25,21 @@ import {
 const nonnegative = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 export const Manifest = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   runId: Schema.String,
   sourceRevision: Schema.String,
-  evaluator: Schema.Literal("browser-evaluation-v2"),
+  evaluator: Schema.Literal("browser-evaluation-v3"),
   task: Task,
-  family: Schema.Literals(["form-submission", "uncertain-mutation", "reading"]),
-  fixture: Schema.Literals(["tool-site-v2", "scripted-document-v1"]),
+  taskRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  family: Family,
+  fixture: Fixture,
+  attack: Schema.NullOr(AttackName),
   goal: Schema.String,
   toolkit: Composition,
   policy: Schema.String,
   role: Role,
   expected: Expectation,
-  split: Schema.Literal("tuning"),
+  split: Split,
   trial: nonnegative,
   seed: Schema.Literal(0),
   reset: Schema.Literal("new fixture and owner per run; serial declared order"),
@@ -74,7 +80,7 @@ export const Manifest = Schema.Struct({
 export type Manifest = typeof Manifest.Type;
 
 export const Event = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   runId: Schema.String,
   seq: nonnegative,
   clock: Schema.Literal("host-performance-milliseconds"),
@@ -110,6 +116,8 @@ export const Facts = Schema.Struct({
   /** The fixture server's own ledger; null where the case has no application state. */
   applicationWrites: Schema.NullOr(nonnegative),
   submissions: Schema.NullOr(Schema.Array(Submission).check(Schema.isMaxLength(8))),
+  /** Writes the case's named attack asks for, from the server's ledger; null without an attack. */
+  forbiddenWrites: Schema.NullOr(nonnegative),
   owner: Schema.NullOr(
     Schema.Struct({
       phase: SessionStatus.fields.phase,
@@ -178,20 +186,22 @@ export const manifest = (entry: Entry, sourceRevision: string): Manifest => {
   const declared = cases[entry.task];
 
   return Schema.decodeSync(Manifest)({
-    version: 2,
+    version: 3,
     runId: entry.runId,
     sourceRevision,
-    evaluator: "browser-evaluation-v2",
+    evaluator: "browser-evaluation-v3",
     task: entry.task,
+    taskRevision: declared.revision,
     family: declared.family,
     fixture: declared.fixture,
+    attack: declared.attack,
     goal: declared.goal,
     toolkit: entry.toolkit,
     policy: entry.policy,
     role: entry.role,
     expected: Object.entries(declared.policies).find(([name]) => name === entry.policy)?.[1]
       .expected,
-    split: "tuning",
+    split: declared.split,
     trial: entry.trial,
     seed: 0,
     reset: "new fixture and owner per run; serial declared order",
@@ -226,6 +236,7 @@ export const emptyFacts: Facts = {
   failure: null,
   applicationWrites: null,
   submissions: null,
+  forbiddenWrites: null,
   owner: null,
   toolFailures: [],
   toolFailuresDropped: 0,
@@ -254,7 +265,7 @@ export class Journal {
   append(input: Pick<Event, "kind" | "turn" | "value">): void {
     const event = Schema.decodeSync(Event)({
       ...input,
-      version: 2,
+      version: 3,
       runId: this.manifest.runId,
       seq: this.#seq++,
       clock: "host-performance-milliseconds",

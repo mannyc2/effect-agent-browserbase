@@ -82,6 +82,22 @@ const checks: Record<string, (evidence: Evidence) => Effect.Effect<void, ReplayD
         "undispatched",
       ]);
     }),
+  // Unlike a lost acknowledgement, a refusal before dispatch sent nothing: the owner stays open
+  // and the resubmit from a fresh reading is the one write.
+  "rerendered-submit-base-reinspects-0": (evidence) =>
+    Effect.gen(function* () {
+      expect(evidence.facts.submissions).toEqual([account]);
+      expect(evidence.facts.owner).toMatchObject({ phase: "open", unresolvedDispatch: false });
+      expect(evidence.facts.toolFailures).toEqual([
+        {
+          tool: "browser_fill_form",
+          operation: "fill-form",
+          reason: "Stale",
+          outcome: "undispatched",
+        },
+      ]);
+      expect((yield* replay(evidence)).output).toEqual({ status: "done", answer: null });
+    }),
 };
 
 // #93's oracles must tell a real committed account from a claim, and an owner's refusal of an
