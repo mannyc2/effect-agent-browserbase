@@ -118,7 +118,7 @@ if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE/packages/agent-browser"
   run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
   if [ "$PROFILE" = full ]; then
-    run native timeout 300s ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+    run native timeout 300s env EVALUATION_EVIDENCE_DIR="$OUT/evaluation-agent" EVALUATION_SOURCE_REVISION="$(cat "$OUT/source-sha.txt")" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   fi
   run build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE"

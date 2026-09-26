@@ -25,6 +25,7 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
+    "evaluation": "bun test/evaluation/Main.ts",
     "install:test-browser": "playwright-core install --with-deps chromium",
     "test:native": "vp test --config vite.native.config.ts --run"
   },

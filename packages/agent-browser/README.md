@@ -484,3 +484,16 @@ Native framework tests prove that the adapter Layer captures configured services
 | Browser calls run concurrently, ordered only by the lane                                    | `host.run` schedules them sequentially in declared order; `scheduling: "lane"` restores the previous behaviour.                                                 |
 
 Common-operation helpers may accept `AnySession`; helpers such as the example's `turns<E>` that supervise browser failure stay generic in `E`. Binding bounds now have validated defaults, while explicit bounds retain their meaning. `NavigateRequest.timeoutMillis` is a host option and does not add a model-selected timeout to the existing URL-only navigation Tool. Added observation state is bounded and does not include field values or destinations. The earlier `Browser.scoped` inference fix changes explicit curried generic argument lists from five to four outer parameters and two to three inner parameters; ordinary call syntax remains.
+
+## Unpaid evaluation
+
+The unpublished [evaluation runner](test/evaluation/README.md) records actual
+AgentRuntime model-boundary inputs, projected tool results and independent
+application or owner state for four resettable cases: form submission, a write
+whose acknowledgement is lost, a cancelled waiter and a long reading. Scripted
+reference and known-bad policies, with retained-evidence tests, check its
+deterministic oracles, which grade task success, output, claims, duplicate
+writes, retries after an unknown outcome, termination and cleanup separately. Offline grading and
+compatible-action replay need no model calls. These scripted cases establish
+integration contracts; paid comparisons for #93 remain separately authorized
+work.

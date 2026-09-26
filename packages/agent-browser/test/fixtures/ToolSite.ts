@@ -60,12 +60,39 @@ export const toolSite = Effect.acquireRelease(
       const events = new Set<ServerResponse>();
       const slow = new Set<ServerResponse>();
       const requests: string[] = [];
+      const submissions: Array<{ email: string; plan: string; terms: boolean }> = [];
+      const late = new Set<ReturnType<typeof setTimeout>>();
 
       const server = createServer((request, response) => {
         const path = request.url ?? "/";
 
         requests.push(path);
-        if (path === "/events") {
+        if (path.startsWith("/signup/commit?") && request.method !== "POST") {
+          response.writeHead(405);
+          response.end();
+        } else if (path.startsWith("/signup/commit?")) {
+          const values = new URL(path, "http://fixture.test").searchParams;
+
+          submissions.push({
+            email: values.get("email") ?? "",
+            plan: values.get("plan") ?? "",
+            terms: values.get("terms") === "true",
+          });
+          // The write is committed now and acknowledged only after an owner's action deadline.
+          if (values.get("ack") === "late") {
+            const timer = setTimeout(() => {
+              late.delete(timer);
+              response.writeHead(204);
+              response.end();
+            }, 4000);
+
+            late.add(timer);
+
+            return;
+          }
+          response.writeHead(204);
+          response.end();
+        } else if (path === "/events") {
           response.writeHead(200, {
             "content-type": "text/event-stream",
             "cache-control": "no-cache",
@@ -96,7 +123,7 @@ export const toolSite = Effect.acquireRelease(
                 if (event.data === 'remove') button.remove();
               });
             </script>`);
-        } else if (path === "/signup") {
+        } else if (path === "/signup" || path === "/signup?ack=late") {
           response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           response.end(`<!doctype html><meta charset=utf-8><title>Sign up</title>
             <nav>${Array.from({ length: 24 }, (_, i) => `<a href="/section-${i}">Section ${i}</a>`).join(" ")}</nav>
@@ -116,6 +143,12 @@ export const toolSite = Effect.acquireRelease(
               document.querySelector('#signup').addEventListener('submit', event => {
                 event.preventDefault();
                 const form = new FormData(event.target);
+                // The server ledger is the oracle; a rendered success message alone proves no write.
+                const values = new URLSearchParams({ email: form.get('email'), plan: form.get('plan'), terms: String(form.has('terms')) });
+                if (location.search === '?ack=late') values.set('ack', 'late');
+                const commit = new XMLHttpRequest();
+                commit.open('POST', '/signup/commit?' + values, false);
+                commit.send();
                 document.querySelector('#result').textContent =
                   'Created ' + form.get('email') + ' on ' + form.get('plan') + (form.get('terms') ? ' with terms' : '');
               });
@@ -152,6 +185,7 @@ export const toolSite = Effect.acquireRelease(
       return {
         url: `http://127.0.0.1:${address.port}/`,
         requests,
+        submissions,
         change: (change: "type" | "replace" | "destination" | "enable" | "hide" | "remove") => {
           for (const response of events) response.write(`data: ${change}\n\n`);
         },
@@ -159,6 +193,7 @@ export const toolSite = Effect.acquireRelease(
           for (const response of slow) response.end("<p>COMPLETE DOCUMENT</p>");
         },
         close: async () => {
+          for (const timer of late) clearTimeout(timer);
           server.closeAllConnections();
           await new Promise<void>((resolve) => {
             server.close(() => resolve());
