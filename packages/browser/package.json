@@ -22,9 +22,13 @@
     "./browser-runtime": "./src/BrowserRuntime.ts",
     "./capture": "./src/Capture.ts",
     "./capture-data": "./src/CaptureData.ts",
+    "./capture-evidence": "./src/CaptureEvidence.ts",
     "./chromium": "./src/Chromium.ts",
     "./errors": "./src/Errors.ts",
     "./page-control": "./src/PageControl.ts",
+    "./recording": "./src/Recording.ts",
+    "./recording-data": "./src/RecordingData.ts",
+    "./recording-ffmpeg": "./src/RecordingFfmpeg.ts",
     "./testing": "./src/Testing.ts"
   },
   "publishConfig": {

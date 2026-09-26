@@ -4,5 +4,8 @@ export * as BrowserData from "./BrowserData.ts";
 export * as BrowserRuntime from "./BrowserRuntime.ts";
 export * as Capture from "./Capture.ts";
 export * as CaptureData from "./CaptureData.ts";
+export * as CaptureEvidence from "./CaptureEvidence.ts";
 export * as Errors from "./Errors.ts";
 export * as PageControl from "./PageControl.ts";
+export * as Recording from "./Recording.ts";
+export * as RecordingData from "./RecordingData.ts";

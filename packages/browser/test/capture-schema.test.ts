@@ -3,6 +3,8 @@ import { Effect, Schema, type Scope, Stream } from "effect";
 import { type PageInfo, Target } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import type { BrowserError } from "effect-browser/errors";
+import * as Recording from "effect-browser/recording";
+import type { RecordingError } from "effect-browser/recording-data";
 
 import type { CaptureParent } from "../src/internal/browser/Association.ts";
 import type { NativeFrame } from "../src/internal/browser/Driver.ts";
@@ -46,6 +48,36 @@ const error: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserError> 
 const scope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const decoderEnvironment: Same<typeof Capture.CapturedFrame.DecodingServices, never> = true;
 
+// Runtime workflows cannot detect erased callback errors or dependency requirements.
+const recordingComposition = (
+  source: Capture.FrameSource,
+  writer: Effect.Effect<
+    Recording.FrameWriter<string, { readonly _tag: "WriterFailure" }>,
+    { readonly _tag: "AcquireFailure" },
+    Scope.Scope | { readonly _tag: "WriterDependency" }
+  >,
+  body: Effect.Effect<
+    number,
+    { readonly _tag: "BodyFailure" },
+    Scope.Scope | { readonly _tag: "BodyDependency" }
+  >,
+) =>
+  Recording.scoped(Recording.start(source, writer), (job) => job.ready.pipe(Effect.andThen(body)));
+
+const recordingErrors: Same<
+  Effect.Error<ReturnType<typeof recordingComposition>>,
+  | BrowserError
+  | RecordingError
+  | { readonly _tag: "AcquireFailure" }
+  | { readonly _tag: "WriterFailure" }
+  | { readonly _tag: "BodyFailure" }
+> = true;
+
+const recordingRequirements: Same<
+  Requirements<ReturnType<typeof recordingComposition>>,
+  { readonly _tag: "WriterDependency" } | { readonly _tag: "BodyDependency" }
+> = true;
+
 const frame: Capture.CapturedFrame = {
   bytes: jpeg(),
   mediaType: "image/jpeg",
@@ -61,8 +93,16 @@ const frame: Capture.CapturedFrame = {
   viewportHeight: 600,
 };
 
-it("adds data schemas without changing structural public shapes or capture E/R", () => {
-  expect(frameShape && optionsShape && error && scope && decoderEnvironment).toBe(true);
+it("preserves structural public shapes and capture/recording E/R", () => {
+  expect(
+    frameShape &&
+      optionsShape &&
+      error &&
+      scope &&
+      decoderEnvironment &&
+      recordingErrors &&
+      recordingRequirements,
+  ).toBe(true);
   const encoded = Schema.encodeSync(Capture.CapturedFrame)(frame);
   const decoded = Schema.decodeSync(Capture.CapturedFrame)(encoded);
 
@@ -152,6 +192,7 @@ it.effect("rejects invalid admission before resolving a native target or reservi
 
       const parent: CaptureParent = {
         owner,
+        newCaptureId: Effect.succeed("00000000-0000-4000-8000-000000000001"),
         target: () => frame.target,
         resolve: () => {
           resolutions++;
@@ -206,6 +247,7 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
 
       const parent: CaptureParent = {
         owner,
+        newCaptureId: Effect.succeed("00000000-0000-4000-8000-000000000001"),
         target: () => target,
         resolve: () =>
           Effect.succeed({
@@ -278,6 +320,7 @@ it.effect(
 
         const parent: CaptureParent = {
           owner,
+          newCaptureId: Effect.succeed("00000000-0000-4000-8000-000000000001"),
           target: () => target,
           resolve: () =>
             Effect.succeed({

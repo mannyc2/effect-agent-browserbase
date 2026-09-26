@@ -669,7 +669,7 @@ const delayed = interval.frames.pipe(
 );
 ```
 
-`Capture.multipart(frames)` turns frames into one `multipart/x-mixed-replace` response for an `<img>`, the motion JPEG that WHATWG HTML defines for images. It closes each frame with the next part's delimiter and headers at once, because a browser shows a part only when it has read the headers of the one after it: without that, a viewer runs one frame behind and never shows the last picture of a page that has gone still. It writes no metadata, so nothing but pictures reaches a viewer, and it draws a new boundary from `Crypto` for each response. Call it once per viewer, over one fan-out of the interval, for example a sliding `PubSub` with `replay: 1` so that a slow viewer skips frames without slowing anyone else and a new one is shown the current picture. End that fan-out before the HTTP server stops: a server waits for its open responses.
+`Capture.multipart(frames)` turns frames into one `multipart/x-mixed-replace` response for an `<img>`, the motion JPEG that WHATWG HTML defines for images. It closes each frame with the next part's delimiter and headers at once, because a browser shows a part only when it has read the headers of the one after it: without that, a viewer runs one frame behind and never shows the last picture of a page that has gone still. It writes no metadata, so nothing but pictures reaches a viewer, and it draws a new boundary from `Crypto` for each response. Call it once per viewer over a separately scoped `source.subscribe()` from `Capture.openFrames`. Stop the source before the HTTP server stops: a server waits for its open responses.
 
 Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. `Capture.start(session, { lifetime: "page" })` instead follows a page's main frame across documents: start it before a navigation and it covers the loading in between. Same-document URL changes leave document-lifetime capture and observations active. A page-lifetime interval records those changes with `sameDocument: true` and keeps the current document number; only a cross-document commit advances it. The native screencast is never restarted for a navigation, so a boundary is not a gap this package introduced. Each frame carries the `document` it was received during (0, then one more per new document), and the summary's bounded `documentBoundaries` give the last sequence before each URL change and the address it reached, with `initialUrl` for document 0. That is attribution by receipt order, not proof of whose pixels a frame shows: one received just after a navigation can still show the document before it. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined until a late stop confirms or the page definitively closes. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in [the caller encoder example](../browserbase/examples/record-video.ts); the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence. Filming across a navigation with one page-lifetime interval, resampled onto a constant-rate reel with the address of each document reported, is demonstrated in [the footage example](../browserbase/examples/realistic-footage/README.md).
 
@@ -703,9 +703,100 @@ when reconciling earlier snapshots. `late` is one disjoint component of `discard
 `upstreamDrops` remains `"unknown"`; live metadata adds no stronger pixel or loss
 guarantee.
 
+### One source, independent viewers and recorders
+
+`Capture.openFrames(session, options)` owns one native interval and drains it continuously. Its
+scope owns capture; each subscription owns only its delivery queue. A viewer finishing or failing
+releases that subscription. Calling `source.stop` stops capture and lets subscribers drain their
+admitted frames. Scope closure also disposes remaining subscriptions. Native stop quarantine
+continues to belong to the original browser owner.
+
+```ts
+const source =
+  yield *
+  Capture.openFrames(session, {
+    capture: { lifetime: "page", maxDurationMillis: 60_000 },
+  });
+const viewer = yield * source.subscribe({ policy: "latest", maxFrames: 2 });
+yield * source.ready;
+// Consume viewer.frames in the viewer's scope, e.g. Capture.multipart(viewer.frames).
+```
+
+`ready` means the first valid frame arrived. It does not mean a viewer painted it or an encoder
+decoded it. The readiness deadline bounds each wait and does not stop the source. A quiet page
+may legitimately produce no new frames. `latest` evicts old queued frames; `fail` retains an
+admitted prefix and then fails on overflow, including newly observed source queue loss. Neither
+policy makes the browser produce fewer images. Each delivered `Uint8Array` is a separate copy,
+so one consumer cannot modify another consumer's image or the latest replay.
+
+The source reserves its native queue, one latest image and every subscription's configured
+byte allowance under `maxBufferedBytes` (64 MiB by default), with at most eight subscriptions
+by default. Detached queues retain their reservation until drained or disposed. This bounds
+package-held image buffers; returned frames retained by callers and writer memory are additional.
+`source.completed` is latched after the host source queue drains and the native cleanup attempt
+settles. Its `nativeStop` retains whether cleanup was confirmed. Later subscriber drainage and
+late native acknowledgements cannot rewrite that report. Subscription reports account for their
+own delivery.
+
+`source.observe()` atomically registers a bounded metadata queue and returns its current
+`baseline`. Its single-use `events` stream starts after `baseline.revision`. Receipts carry a
+unique `sourceId`, target generation, sequence, geometry and both explicitly named clocks.
+They omit pixels, addresses, credentials and live authority. Count and byte reservations apply
+independently of image queues: each event reserves 4096 metadata bytes, with at most 16 observers.
+An overflow fails that observer after its admitted prefix; it never blocks capture or invents
+missing history. A fresh observation returns the current baseline, including ended state.
+`effect-browser/capture-evidence` supplies `FrameReceiptJson`, `EventJson` and `BaselineJson`
+codecs; canonical JSON encodes bigint clocks as decimal strings and decoding restores bigint.
+These capture events cover frames and termination, not all browser operations.
+
+### Supervised recording and progressive MP4
+
+`Recording.start(source, acquireWriter)` acquires a writer and a separate `fail` subscription.
+Writer dependencies are captured at acquisition; writes stay sequential and are never retried.
+`job.ready` waits for the first successful write. `job.stop` detaches that subscription, drains
+its admitted prefix and finalizes once. It leaves the borrowed source and other viewers running.
+Recorder subscriptions begin with newly received samples; a source that has gone still can hit
+the readiness deadline. Write, readiness, drain and finalization deadlines have distinct typed failures.
+
+```ts
+import * as Recording from "effect-browser/recording";
+import * as RecordingFfmpeg from "effect-browser/recording-ffmpeg";
+
+const artifact =
+  yield *
+  Recording.scoped(
+    Recording.start(source, RecordingFfmpeg.open({ outputPath: "/tmp/session.mp4" })),
+    (job) =>
+      Effect.gen(function* () {
+        yield* job.ready;
+        yield* performRecordedActions;
+        yield* job.stop;
+        return yield* job.artifact;
+      }),
+  );
+```
+
+`Recording.scoped` supervises writer failure alongside the body, closes the body's child scope
+before draining, and checks the recording outcome even when the body fails. `start` gives hosts
+an independently supervised job when recording failure should be handled separately. Total
+`stop`/`completed` reports retain status and capture/subscription counters; `artifact` and
+`checkCompleted` retain the original typed failure. A finalized prefix can be available through
+`retainedArtifact` even when checked completion fails. Unknown upstream loss stays unknown.
+
+The explicit FFmpeg adapter requires the host's `FileSystem`, `Path` and `ChildProcessSpawner`
+services and an installed FFmpeg with `libx264`. It writes fragmented MP4 progressively, pads
+odd dimensions for H.264, includes no audio, and refuses to overwrite an existing path. Its
+configured output frame rate resamples source timestamps onto the nearest output tick. A sample
+in an occupied tick stays pending; replacing it before emission counts as superseded. Gaps hold
+the latest retained image, and only additional emissions of that image count as repeats. Finish
+emits the final pending sample, which can place it up to 1.5 ticks after its source time. The
+duration limit bounds source span; output includes quantization and the final sample's tick.
+Finalization requires successful encoder exit and a nonempty file. Abort leaves any partial file
+for the host to inspect or remove.
+
 ### What a compositor is given, and what it owns
 
-Footage from `capture` is the page surface. It has no pointer, no tab strip and no address bar, so on its own it reads as the inside of a tab rather than as a browser. Drawing those is the application's, exactly as cursor artwork, easing and encoding are: this package has no window-compositing API and will not grow one. What it owes a compositor is the evidence only it can see, on one timeline:
+Footage from `capture` is the page surface. It has no pointer, no tab strip and no address bar. Applications choose their window presentation, cursor artwork and input pacing, and can use a recording writer for encoding. A compositor receives the evidence capture can observe on one timeline:
 
 - each frame's `receivedMonotonicNanos`, and the `document` it was received during;
 - an `InputReceipt` for each exposed native pointer, click and key operation, with a known position when the owner has one and an interval on that same clock. Internal download and file-chooser clicks clear the remembered pointer position but do not expose a receipt;
@@ -807,19 +898,22 @@ The native driver, action permits, mutable capture leases and registry lookup ar
 
 ## Public entry points
 
-| Entry point              | Responsibility                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `browser`                | Common session, bound target, navigation operation and host admission types           |
-| `browser-data`, `errors` | Credential-free schemas and expected browser/initialization errors                    |
-| `bootstrap`              | Typed bindings, init/permission plans, readiness and host diagnostics                 |
-| `capture`                | Bounded live frame intervals, snapshots and final accounting; reexports frame schemas |
-| `capture-data`           | Capture options, binary frame and result schemas without session operations           |
-| `page-control`           | Explicit host-owned page holds and receipt-based resume                               |
-| `chromium`               | Self-managed Chromium launch, borrowed loopback attachment and process cleanup        |
-| `browser-runtime`        | Supported construction for integrations supplying browser lifetimes                   |
-| `testing`                | The real owner over a scripted engine: scripts, armed outcomes, a call recorder       |
+| Entry point                   | Responsibility                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| `browser`                     | Common session, bound target, navigation operation and host admission types              |
+| `browser-data`, `errors`      | Credential-free schemas and expected browser/initialization errors                       |
+| `bootstrap`                   | Typed bindings, init/permission plans, readiness and host diagnostics                    |
+| `capture`                     | Owned shared sources, bounded subscriptions, intervals, readiness and capture accounting |
+| `capture-data`                | Capture options, binary frame and result schemas without session operations              |
+| `capture-evidence`            | Metadata observations, immutable receipts and canonical JSON codecs                      |
+| `recording`, `recording-data` | Supervised recording jobs, typed outcomes and result schemas                             |
+| `recording-ffmpeg`            | Explicit host FFmpeg writer for progressive H.264 MP4                                    |
+| `page-control`                | Explicit host-owned page holds and receipt-based resume                                  |
+| `chromium`                    | Self-managed Chromium launch, borrowed loopback attachment and process cleanup           |
+| `browser-runtime`             | Supported construction for integrations supplying browser lifetimes                      |
+| `testing`                     | The real owner over a scripted engine: scripts, armed outcomes, a call recorder          |
 
-The root intentionally excludes the Chromium namespace. Import its entry point explicitly.
+The root intentionally excludes the Chromium and FFmpeg integrations. Import their entry points explicitly.
 
 ## Validation
 

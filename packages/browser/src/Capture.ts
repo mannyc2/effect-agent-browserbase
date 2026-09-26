@@ -7,10 +7,19 @@ import type {
   CaptureOptions,
   CaptureSnapshot,
   CaptureSummary,
+  FrameReady,
+  FrameSourceOptions,
+  FrameSourceReport,
+  FrameSourceSnapshot,
+  FrameSubscriptionOptions,
+  FrameSubscriptionReport,
+  FrameSubscriptionSnapshot,
 } from "./CaptureData.ts";
+import type { Observation, ObservationError, ObservationOptions } from "./CaptureEvidence.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
 import { captureParent } from "./internal/browser/Association.ts";
 import { startCapture } from "./internal/capture/Capture.ts";
+import { openFrameSource } from "./internal/capture/Source.ts";
 
 export {
   CapturedFrame,
@@ -18,6 +27,13 @@ export {
   CaptureSize,
   CaptureSnapshot,
   CaptureSummary,
+  FrameReady,
+  FrameSourceOptions,
+  FrameSourceReport,
+  FrameSourceSnapshot,
+  FrameSubscriptionOptions,
+  FrameSubscriptionReport,
+  FrameSubscriptionSnapshot,
 } from "./CaptureData.ts";
 
 /** Live stream/Effect capabilities intentionally have no data schema or serialization contract. */
@@ -32,6 +48,59 @@ export interface CaptureInterval {
   readonly stop: Effect.Effect<CaptureSummary>;
   readonly completed: Effect.Effect<CaptureSummary>;
 }
+
+/** One independent, bounded, single-consumer view of a shared image source. */
+export interface FrameSubscription {
+  readonly sourceId: string;
+  /** Each delivered image owns its byte copy; retaining it is the consumer's memory responsibility. */
+  readonly frames: Stream.Stream<CapturedFrame, BrowserError>;
+  readonly snapshot: Effect.Effect<FrameSubscriptionSnapshot>;
+  /** Detach now and preserve admitted images for draining. Does not wait for that drain. */
+  readonly stop: Effect.Effect<FrameSubscriptionReport>;
+  /** Available once admitted images have drained or this subscription's scope has disposed them. */
+  readonly completed: Effect.Effect<FrameSubscriptionReport>;
+}
+
+/** A source owns native capture; subscribers own only their independent delivery windows. */
+export interface FrameSource {
+  readonly sourceId: string;
+  readonly subscribe: (
+    options?: FrameSubscriptionOptions,
+  ) => Effect.Effect<FrameSubscription, BrowserError, Scope.Scope>;
+  readonly observe: (
+    options?: ObservationOptions,
+  ) => Effect.Effect<Observation, ObservationError, Scope.Scope>;
+  readonly ready: Effect.Effect<FrameReady, BrowserError>;
+  readonly snapshot: Effect.Effect<FrameSourceSnapshot>;
+  readonly stop: Effect.Effect<FrameSourceReport>;
+  readonly completed: Effect.Effect<FrameSourceReport>;
+}
+
+/**
+ * Acquire one source over this exact browser owner. Acquisition installs capture; `ready`
+ * separately waits for the first valid sample. It makes no promise about future paint coverage.
+ * Ending a subscriber leaves the source and its siblings running until the source ends.
+ */
+export const openFrames = <E>(
+  session: BrowserSession<E>,
+  options: FrameSourceOptions = {},
+): Effect.Effect<FrameSource, BrowserError, Scope.Scope> =>
+  Effect.suspend(() => {
+    const parent = captureParent(session);
+
+    if (parent === undefined)
+      return Effect.fail(
+        BrowserError.make({
+          operation: "capture",
+          reason: Reasons.UnregisteredSession.make({}),
+          outcome: "undispatched",
+        }),
+      );
+
+    return Effect.flatMap(parent.newCaptureId, (sourceId) =>
+      openFrameSource((captureOptions) => start(session, captureOptions), options, sourceId),
+    );
+  });
 
 /**
  * Capture one remote page independently of the session's selected page.
