@@ -6,6 +6,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
+import type { BrowserError, InitializationError } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
 import { type LanguageModel, Toolkit } from "effect/unstable/ai";
 
@@ -94,7 +95,15 @@ const chromium = (journal: Journal) =>
     viewport: { width: 640, height: 480 },
   }).pipe(Layer.provide(NodeCrypto.layer));
 
-export const signup = Effect.fn("Evaluation.signup")(function* (journal: Journal) {
+type SignupError =
+  | Effect.Error<typeof toolSite>
+  | BrowserError
+  | InitializationError
+  | AgentRuntime.AgentRuntimeFailure<ReturnType<typeof agent>, Schema.SchemaError>;
+
+export const signup = Effect.fn("Evaluation.signup")(function* (
+  journal: Journal,
+): Effect.fn.Return<void, SignupError> {
   yield* Effect.scoped(
     Effect.gen(function* () {
       const site = yield* toolSite;
