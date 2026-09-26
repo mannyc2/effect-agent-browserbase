@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Option, Predicate, Schema, SchemaGetter } from "effect";
 import { BrowserActionResult, BrowserNavigationResult } from "effect-agent/interactive-browser";
 import {
   FillRequest,
@@ -7,6 +7,7 @@ import {
   Observation,
   TypeRequest,
   WaitForElementRequest,
+  WheelRequest,
 } from "effect-browser/browser-data";
 import type { BrowserError } from "effect-browser/errors";
 
@@ -89,31 +90,46 @@ export type ElementReference = typeof ElementReference.Type;
 // A description attaches to a schema's last check, and a custom filter has no JSON Schema form.
 // Parameters are therefore described before their custom filters, or a provider never sees it.
 
-/** `ReadingMatch`, described; the browser checks it again when it reads. */
-const FindParameter = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))
-  .annotate({
-    description:
-      "Case-insensitive text to look for. Only controls whose label contains it, and text lines containing it, are returned; matches are kept even when earlier content would fill the reading",
-  })
-  .check(Schema.makeFilter((value) => value.trim().length > 0, { title: "not only whitespace" }));
+/**
+ * An optional parameter a model may also send as null. Effect's OpenAI and Anthropic
+ * structured-output codecs make every key required and nullable, so a model sends null for each
+ * parameter it leaves out. Null decodes as the absent key, so the host, an approval predicate
+ * and the recorded call all see the request the model meant. The description sits on the
+ * nullable value the provider shows, and says what null does.
+ */
+const optionalParameter = <S extends Schema.Constraint>(schema: S, description: string) =>
+  Schema.optionalKey(Schema.NullOr(schema).annotate({ description })).pipe(
+    Schema.decodeTo(Schema.optionalKey(Schema.toType(schema)), {
+      decode: SchemaGetter.transformOptional(Option.filter(Predicate.isNotNull)),
+      encode: SchemaGetter.passthroughSubtype(),
+    }),
+  );
 
-/** `SelectOptions`, described. */
-const optionsParameter = (description: string) =>
-  Schema.Array(Identifier)
-    .check(Schema.isMinLength(1), Schema.isMaxLength(64))
-    .annotate({ description })
-    .check(
-      Schema.makeFilter((ids) => new Set(ids).size === ids.length, { title: "each at most once" }),
-    );
+/** `ReadingMatch`; the browser checks it again when it reads. */
+const FindParameter = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(256),
+  Schema.makeFilter((value) => value.trim().length > 0, { title: "not only whitespace" }),
+);
+
+/** `SelectOptions`, described when it stands alone. */
+const optionsParameter = (description?: string) => {
+  const bounded = Schema.Array(Identifier).check(Schema.isMinLength(1), Schema.isMaxLength(64));
+
+  return (description === undefined ? bounded : bounded.annotate({ description })).check(
+    Schema.makeFilter((ids) => new Set(ids).size === ids.length, { title: "each at most once" }),
+  );
+};
 
 /** What a model may ask of one reading; the host decides the bounds and the default scope. */
 export const InspectRequest = Schema.Struct({
-  find: Schema.optionalKey(FindParameter),
-  scope: Schema.optionalKey(
-    Schema.Literals(["viewport", "document"]).annotate({
-      description:
-        "viewport reads what is on screen now; scroll to see more. document reads the whole page in document order; combine it with find to search the page",
-    }),
+  find: optionalParameter(
+    FindParameter,
+    "Case-insensitive text to look for. Only controls whose label contains it, and text lines containing it, are returned; matches are kept even when earlier content would fill the reading. null keeps everything in scope",
+  ),
+  scope: optionalParameter(
+    Schema.Literals(["viewport", "document"]),
+    "viewport reads what is on screen now; scroll to see more. document reads the whole page in document order; combine it with find to search the page. null reads the default scope",
   ),
 });
 
@@ -135,7 +151,11 @@ export const SelectOptionParameters = Schema.Struct({
 
 export const PressParameters = Schema.Struct({
   reference: ElementReference,
-  ...KeyStroke.fields,
+  key: KeyStroke.fields.key,
+  modifiers: optionalParameter(
+    KeyStroke.fields.modifiers.schema,
+    "Modifier keys held down while the key is pressed, each at most once. null presses the key alone",
+  ),
 });
 
 export const TypeParameters = Schema.Struct({
@@ -143,10 +163,23 @@ export const TypeParameters = Schema.Struct({
   text: TypeRequest.fields.text,
 });
 
+/** `WheelRequest`, which the browser checks again when it sends the event. */
+export const WheelParameters = Schema.Struct({
+  deltaX: WheelRequest.fields.deltaX,
+  deltaY: WheelRequest.fields.deltaY,
+  at: optionalParameter(
+    WheelRequest.fields.at.schema,
+    "The main-frame viewport point to move the pointer to before the wheel event. null sends it where the pointer already is",
+  ),
+});
+
 export const WaitForParameters = Schema.Struct({
   reference: ElementReference,
   state: WaitForElementRequest.fields.state,
-  timeoutMillis: WaitForElementRequest.fields.timeoutMillis,
+  timeoutMillis: optionalParameter(
+    WaitForElementRequest.fields.timeoutMillis.schema,
+    "How long to wait, in milliseconds; it can shorten the host's deadline, never extend it. null waits until the host's deadline",
+  ),
 });
 
 export const ReadMoreRequest = Schema.Struct({ observationId: ObservationIdParameter });
@@ -167,22 +200,23 @@ export type ReadMoreResult = typeof ReadMoreResult.Type;
 
 const FormFieldParameter = Schema.Struct({
   elementId: ElementIdParameter,
-  value: Schema.optionalKey(
-    FillRequest.fields.value.annotate({
-      description: "Text that replaces the contents of an input or textarea",
-    }),
+  value: optionalParameter(
+    FillRequest.fields.value,
+    "Text that replaces the contents of an input or textarea. null when this field sets checked or options",
   ),
-  checked: Schema.optionalKey(
-    Schema.Boolean.annotate({
-      description:
-        "The state a checkbox, radio or switch should end in; it is clicked only when it differs",
-    }),
+  checked: optionalParameter(
+    Schema.Boolean,
+    "The state a checkbox, radio or switch should end in; it is clicked only when it differs. null when this field sets value or options",
   ),
-  options: Schema.optionalKey(
-    optionsParameter("elementIds of the options to select in a native select"),
+  options: optionalParameter(
+    optionsParameter(),
+    "elementIds of the options to select in a native select. null when this field sets value or checked",
   ),
 })
-  .annotate({ description: "One control and exactly one of value, checked or options for it" })
+  .annotate({
+    description:
+      "One control and exactly one of value, checked or options for it; the other two are null",
+  })
   .check(
     Schema.makeFilter(
       (field) =>
@@ -206,11 +240,9 @@ export const FillFormParameters = Schema.Struct({
         { title: "each elementId at most once" },
       ),
     ),
-  submit: Schema.optionalKey(
-    Identifier.annotate({
-      description:
-        "elementId of the control to click once every field is set, such as the form's submit button. Omit it to leave the form unsent",
-    }),
+  submit: optionalParameter(
+    Identifier,
+    "elementId of the control to click once every field is set, such as the form's submit button. null leaves the form unsent",
   ),
 }).check(
   Schema.makeFilter(
