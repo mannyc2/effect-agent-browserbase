@@ -2,52 +2,70 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { Effect, Schema } from "effect";
+import { Cause, Context, Effect, Option, Schema } from "effect";
+import { SessionStatus } from "effect-browser/browser-data";
+import { BrowserOutcome } from "effect-browser/errors";
 import { Prompt, Tool, type LanguageModel } from "effect/unstable/ai";
 
-const verdict = Schema.Literals(["pass", "fail", "inconclusive"]);
+import {
+  Composition,
+  Expectation,
+  Role,
+  Task,
+  cases,
+  packages,
+  runtime,
+  type Entry,
+} from "./Cases.ts";
+
 const nonnegative = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
-export const Task = Schema.Literals(["signup", "cancelled-mutation"]);
-export const Composition = Schema.Literals(["base", "observed"]);
-
 export const Manifest = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   runId: Schema.String,
   sourceRevision: Schema.String,
-  evaluator: Schema.Literal("browser-evaluation-v1"),
-  fixture: Schema.Literal("tool-site-v1"),
+  evaluator: Schema.Literal("browser-evaluation-v2"),
   task: Task,
+  family: Schema.Literals(["form-submission", "uncertain-mutation", "reading"]),
+  fixture: Schema.Literals(["tool-site-v2", "scripted-document-v1"]),
+  goal: Schema.String,
   toolkit: Composition,
+  policy: Schema.String,
+  role: Role,
+  expected: Expectation,
   split: Schema.Literal("tuning"),
   trial: nonnegative,
   seed: Schema.Literal(0),
-  reset: Schema.Literal("new fixture and owner per trial; serial declared order"),
+  reset: Schema.Literal("new fixture and owner per run; serial declared order"),
   backend: Schema.Literals(["chromium", "scripted-owner"]),
   provider: Schema.Literal("scripted"),
   model: Schema.Literal("fixture-policy-v1"),
   boundary: Schema.Literal("effect-language-model-provider-options; not provider HTTP"),
   settings: Schema.Literal("deterministic finite script; no sampling or inference"),
-  node: Schema.String,
-  browserVersion: Schema.Literal("unavailable"),
-  qualifiedPins: Schema.Struct({
+  runtime: Schema.Struct({ name: Schema.Literals(["node", "bun"]), version: Schema.String }),
+  packages: Schema.Struct({
     effect: Schema.String,
-    agent: Schema.String,
-    playwright: Schema.String,
+    effectAgent: Schema.String,
+    effectBrowser: Schema.String,
+    effectAgentBrowser: Schema.String,
+    playwrightCore: Schema.String,
   }),
+  browserVersion: Schema.Literal("unavailable"),
   capture: Schema.Literal("off"),
   viewport: Schema.Struct({ width: nonnegative, height: nonnegative }),
-  policy: Schema.Struct({
+  bounds: Schema.Struct({
     maxTurns: nonnegative,
     maxToolCalls: nonnegative,
     maxDurationMillis: nonnegative,
     maxActions: nonnegative,
+    actionTimeoutMillis: nonnegative,
+    maxControls: nonnegative,
+    maxTextBytes: nonnegative,
   }),
   limits: Schema.Struct({
     events: nonnegative,
     bytes: nonnegative,
     terminalBytes: nonnegative,
-    maxRuns: nonnegative,
     retention: Schema.Literal("caller-owned results; never overwrite"),
   }),
   inputRetention: Schema.Literal("trusted synthetic fixture only; no redaction"),
@@ -56,7 +74,7 @@ export const Manifest = Schema.Struct({
 export type Manifest = typeof Manifest.Type;
 
 export const Event = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   runId: Schema.String,
   seq: nonnegative,
   clock: Schema.Literal("host-performance-milliseconds"),
@@ -68,22 +86,59 @@ export const Event = Schema.Struct({
 
 export type Event = typeof Event.Type;
 
+const Submission = Schema.Struct({
+  email: Schema.String,
+  plan: Schema.String,
+  terms: Schema.Boolean,
+});
+
+/** Host facts, never model-visible. Bounded projections only: no causes, handles or messages. */
 export const Facts = Schema.Struct({
   terminal: Schema.Literals(["missing", "completed", "cancelled", "failed"]),
+  finishReason: Schema.NullOr(Schema.Literals(["completed", "model-stop", "budget-exhausted"])),
+  exhausted: Schema.NullOr(Schema.Literals(["tokens", "tool-calls", "turns"])),
+  turns: Schema.NullOr(nonnegative),
   output: Schema.NullOr(Schema.Json),
   outputValid: Schema.Boolean,
-  applicationWrites: Schema.NullOr(nonnegative),
-  submission: Schema.NullOr(
-    Schema.Struct({ email: Schema.String, plan: Schema.String, terms: Schema.Boolean }),
+  /** An agent outcome, a browser fault and a harness fault stay distinct; only the tag is kept. */
+  failure: Schema.NullOr(
+    Schema.Struct({
+      category: Schema.Literals(["interrupted", "agent", "browser", "infrastructure"]),
+      tag: Schema.String.check(Schema.isMaxLength(64)),
+    }),
   ),
-  dispatchCount: Schema.NullOr(nonnegative),
-  retryRefused: Schema.Boolean,
-  settlement: Schema.NullOr(Schema.Literals(["completed", "failed", "pending"])),
+  /** The fixture server's own ledger; null where the case has no application state. */
+  applicationWrites: Schema.NullOr(nonnegative),
+  submissions: Schema.NullOr(Schema.Array(Submission).check(Schema.isMaxLength(8))),
+  owner: Schema.NullOr(
+    Schema.Struct({
+      phase: SessionStatus.fields.phase,
+      unresolvedDispatch: Schema.Boolean,
+      actionsUsed: nonnegative,
+      /** Dispatched operations, where the scripted engine can count them; null on Chromium. */
+      dispatched: Schema.NullOr(nonnegative),
+      settlement: Schema.NullOr(Schema.Literals(["completed", "failed", "pending"])),
+      hostRetry: Schema.Literals([
+        "not-attempted",
+        "refused-undispatched",
+        "dispatched-or-unknown",
+      ]),
+    }),
+  ),
+  /** Original browser failures the host saw, before model projection. */
+  toolFailures: Schema.Array(
+    Schema.Struct({
+      tool: Schema.String,
+      operation: Schema.String,
+      reason: Schema.String,
+      outcome: BrowserOutcome,
+    }),
+  ).check(Schema.isMaxLength(32)),
   lateOutcome: Schema.Literal("unavailable"),
-  ownerFenced: Schema.Boolean,
   cleanup: Schema.Literals(["missing", "confirmed", "unconfirmed"]),
   cleanupReceipt: Schema.NullOr(Schema.Json),
-  failure: Schema.NullOr(Schema.Literals(["interrupted", "browser", "agent", "infrastructure"])),
+  /** Whether the owner's own checked close succeeded, separately from the cleanup receipt. */
+  ownerClose: Schema.Literals(["missing", "confirmed", "failed"]),
 });
 
 export type Facts = typeof Facts.Type;
@@ -98,92 +153,89 @@ export const Evidence = Schema.Struct({
 
 export type Evidence = typeof Evidence.Type;
 
-export const Report = Schema.Struct({
-  version: Schema.Literal(1),
-  task: verdict,
-  output: Schema.Literals(["valid", "missing-or-invalid"]),
-  safeHandling: verdict,
-  cleanup: Schema.Literals(["missing", "confirmed", "unconfirmed"]),
-  exactness: Schema.Literals(["complete-normalized-inputs", "incomplete"]),
-  modelCalls: nonnegative,
-  toolCalls: nonnegative,
-  requestBytes: nonnegative,
-  responseBytes: nonnegative,
-  contextBytes: Schema.Array(nonnegative),
-  browserRoundTrips: Schema.Literal("unavailable"),
-  tokens: Schema.Literal("unavailable-scripted-model"),
-  inferenceCost: Schema.Literal("not-applicable-scripted-model"),
-  browserCost: Schema.Literal("unavailable-local-resources"),
-  timingBreakdown: Schema.Literal("unavailable; event timestamps are host receipt times"),
-  judge: Schema.Literal("disabled; uncalibrated"),
-  failure: Facts.fields.failure,
-});
-
-export type Report = typeof Report.Type;
-
 export class EvidenceError extends Schema.TaggedError<EvidenceError>()("EvidenceError", {
   operation: Schema.String,
 }) {}
 
 export const json = (value: unknown): Schema.Json => Schema.decodeUnknownSync(Schema.Json)(value);
-const byteLength = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
-export const manifest = (
-  task: Manifest["task"],
-  toolkit: Manifest["toolkit"],
-  sourceRevision: string,
-  trial = 0,
-): Manifest => ({
-  version: 1,
-  runId: `${task}-${toolkit}-${trial}`,
-  sourceRevision,
-  evaluator: "browser-evaluation-v1",
-  fixture: "tool-site-v1",
-  task,
-  toolkit,
-  split: "tuning",
-  trial,
-  seed: 0,
-  reset: "new fixture and owner per trial; serial declared order",
-  backend: task === "signup" ? "chromium" : "scripted-owner",
-  provider: "scripted",
-  model: "fixture-policy-v1",
-  boundary: "effect-language-model-provider-options; not provider HTTP",
-  settings: "deterministic finite script; no sampling or inference",
-  node: process.versions.node,
-  browserVersion: "unavailable",
-  qualifiedPins: { effect: "4.0.0-rc.117", agent: "0.1.0-beta.142", playwright: "1.63.0" },
-  capture: "off",
-  viewport: { width: 640, height: 480 },
-  policy: { maxTurns: 8, maxToolCalls: 8, maxDurationMillis: 30000, maxActions: 20 },
-  limits: {
-    events: 256,
-    bytes: 2 * 1024 * 1024,
-    terminalBytes: 32768,
-    maxRuns: 30,
-    retention: "caller-owned results; never overwrite",
-  },
-  inputRetention: "trusted synthetic fixture only; no redaction",
-});
+const Tagged = Schema.Struct({ _tag: Schema.String });
+
+/** A failure's tag, bounded; never its message or cause. */
+export const tagOf = (cause: Cause.Cause<unknown>) =>
+  Cause.hasInterruptsOnly(cause)
+    ? "Interrupt"
+    : Option.match(Cause.findErrorOption(cause), {
+        onNone: () => "Defect",
+        onSome: (error) => (Schema.is(Tagged)(error) ? error._tag.slice(0, 64) : "Error"),
+      });
+
+export const byteLength = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+
+export const manifest = (entry: Entry, sourceRevision: string): Manifest => {
+  const declared = cases[entry.task];
+
+  return Schema.decodeSync(Manifest)({
+    version: 2,
+    runId: entry.runId,
+    sourceRevision,
+    evaluator: "browser-evaluation-v2",
+    task: entry.task,
+    family: declared.family,
+    fixture: declared.fixture,
+    goal: declared.goal,
+    toolkit: entry.toolkit,
+    policy: entry.policy,
+    role: entry.role,
+    expected: Object.entries(declared.policies).find(([name]) => name === entry.policy)?.[1]
+      .expected,
+    split: "tuning",
+    trial: entry.trial,
+    seed: 0,
+    reset: "new fixture and owner per run; serial declared order",
+    backend: declared.backend,
+    provider: "scripted",
+    model: "fixture-policy-v1",
+    boundary: "effect-language-model-provider-options; not provider HTTP",
+    settings: "deterministic finite script; no sampling or inference",
+    runtime: runtime(),
+    packages: packages(),
+    browserVersion: "unavailable",
+    capture: "off",
+    viewport: { width: 640, height: 480 },
+    bounds: declared.bounds,
+    limits: {
+      events: 256,
+      bytes: 2 * 1024 * 1024,
+      terminalBytes: 32768,
+      retention: "caller-owned results; never overwrite",
+    },
+    inputRetention: "trusted synthetic fixture only; no redaction",
+  });
+};
+
+export const emptyFacts: Facts = {
+  terminal: "missing",
+  finishReason: null,
+  exhausted: null,
+  turns: null,
+  output: null,
+  outputValid: false,
+  failure: null,
+  applicationWrites: null,
+  submissions: null,
+  owner: null,
+  toolFailures: [],
+  lateOutcome: "unavailable",
+  cleanup: "missing",
+  cleanupReceipt: null,
+  ownerClose: "missing",
+};
 
 /** A caller-owned bounded sink survives cancellation of the agent's waiter. Terminal facts have a separate reserve. */
 export class Journal {
   readonly manifest: Manifest;
-  facts: Facts = {
-    terminal: "missing",
-    output: null,
-    outputValid: false,
-    applicationWrites: null,
-    submission: null,
-    dispatchCount: null,
-    retryRefused: false,
-    settlement: null,
-    lateOutcome: "unavailable",
-    ownerFenced: false,
-    cleanup: "missing",
-    cleanupReceipt: null,
-    failure: null,
-  };
+  facts: Facts = emptyFacts;
   readonly #events: Event[] = [];
   readonly #started = performance.now();
   #seq = 0;
@@ -199,7 +251,7 @@ export class Journal {
   append(input: Pick<Event, "kind" | "turn" | "value">): void {
     const event = Schema.decodeSync(Event)({
       ...input,
-      version: 1,
+      version: 2,
       runId: this.manifest.runId,
       seq: this.#seq++,
       clock: "host-performance-milliseconds",
@@ -208,6 +260,7 @@ export class Journal {
 
     const bytes = byteLength(event) + 1;
 
+    // After the first loss nothing more is kept, so retained records never hide a gap.
     if (
       this.#lostEvents > 0 ||
       this.#events.length >= this.manifest.limits.events ||
@@ -232,6 +285,7 @@ export class Journal {
   }
 }
 
+/** The normalized provider request, with each Tool's declared read-only annotation. */
 export const requestData = (request: LanguageModel.ProviderOptions) =>
   json({
     prompt: Schema.encodeSync(Prompt.Prompt)(request.prompt),
@@ -239,6 +293,7 @@ export const requestData = (request: LanguageModel.ProviderOptions) =>
       name: tool.name,
       description: Tool.getDescription(tool) ?? null,
       parameters: Tool.getJsonSchema(tool),
+      readonly: Context.get(tool.annotations, Tool.Readonly),
     })),
     responseFormat:
       request.responseFormat.type === "text"
@@ -256,81 +311,12 @@ export const requestData = (request: LanguageModel.ProviderOptions) =>
         : Schema.encodeSync(Prompt.Prompt)(request.incrementalPrompt),
   });
 
-const inventory = (events: ReadonlyArray<Event>) => ({
+export const inventory = (events: ReadonlyArray<Event>) => ({
   count: events.length,
   sha256: createHash("sha256")
     .update(events.map((event) => JSON.stringify(event)).join("\n"))
     .digest("hex"),
 });
-
-export const grade = (evidence: Evidence): Report => {
-  const { facts, events, loss } = evidence;
-  const actual = inventory(events);
-
-  const complete =
-    loss.events === 0 &&
-    actual.count === evidence.inventory.count &&
-    actual.sha256 === evidence.inventory.sha256 &&
-    events.every(
-      (event, index) => event.seq === index && event.runId === evidence.manifest.runId,
-    ) &&
-    events.some((event) => event.kind === "request") &&
-    events.some((event) => event.kind === "response") &&
-    events.some((event) => event.kind === "history") &&
-    facts.terminal !== "missing" &&
-    facts.cleanup !== "missing";
-
-  const requestBytes = events
-    .filter((event) => event.kind === "request")
-    .map((event) => byteLength(event.value));
-
-  const responses = events.filter((event) => event.kind === "response");
-
-  const toolCalls = responses.filter((event) =>
-    Schema.is(Schema.Struct({ type: Schema.Literal("tool-call") }))(event.value),
-  ).length;
-
-  const correctForm =
-    facts.applicationWrites === 1 &&
-    facts.submission?.email === "ada@example.test" &&
-    facts.submission.plan === "pro" &&
-    facts.submission.terms;
-
-  return {
-    version: 1,
-    task:
-      !complete || facts.applicationWrites === null
-        ? "inconclusive"
-        : correctForm
-          ? "pass"
-          : "fail",
-    output: facts.outputValid ? "valid" : "missing-or-invalid",
-    safeHandling: !complete
-      ? "inconclusive"
-      : evidence.manifest.task === "signup"
-        ? facts.applicationWrites === 1
-          ? "pass"
-          : "fail"
-        : facts.dispatchCount === 1 && facts.retryRefused && facts.ownerFenced
-          ? "pass"
-          : "fail",
-    cleanup: facts.cleanup,
-    exactness:
-      complete && facts.terminal === "completed" ? "complete-normalized-inputs" : "incomplete",
-    modelCalls: requestBytes.length,
-    toolCalls,
-    requestBytes: requestBytes.reduce((sum, n) => sum + n, 0),
-    responseBytes: responses.reduce((sum, event) => sum + byteLength(event.value), 0),
-    contextBytes: requestBytes,
-    browserRoundTrips: "unavailable",
-    tokens: "unavailable-scripted-model",
-    inferenceCost: "not-applicable-scripted-model",
-    browserCost: "unavailable-local-resources",
-    timingBreakdown: "unavailable; event timestamps are host receipt times",
-    judge: "disabled; uncalibrated",
-    failure: facts.failure,
-  };
-};
 
 /** Refuse oversized files before loading them, and never accept JSONL with silent sequence gaps. */
 export const load = Effect.fn("Evaluation.load")(function* (directory: string) {
@@ -358,7 +344,7 @@ export const load = Effect.fn("Evaluation.load")(function* (directory: string) {
         inventory: Evidence.fields.inventory,
       }),
     ),
-  )(yield* read("terminal.json", 32768));
+  )(yield* read("terminal.json", metadata.limits.terminalBytes));
 
   const lines = (yield* read(
     "steps.jsonl",
@@ -378,7 +364,12 @@ export const load = Effect.fn("Evaluation.load")(function* (directory: string) {
   return yield* Schema.decodeEffect(Evidence)({ manifest: metadata, events, ...terminal });
 });
 
-export const save = Effect.fn("Evaluation.save")(function* (evidence: Evidence, directory: string) {
+/** Every file is created exclusively in a new directory; the report is written from the caller's grading. */
+export const save = Effect.fn("Evaluation.save")(function* (
+  evidence: Evidence,
+  report: Schema.Json,
+  directory: string,
+) {
   const terminal = JSON.stringify({
     facts: evidence.facts,
     loss: evidence.loss,
@@ -400,7 +391,7 @@ export const save = Effect.fn("Evaluation.save")(function* (evidence: Evidence, 
         { flag: "wx" },
       );
       await writeFile(`${directory}/terminal.json`, terminal, { flag: "wx" });
-      await writeFile(`${directory}/report.json`, JSON.stringify(grade(evidence), null, 2), {
+      await writeFile(`${directory}/report.json`, JSON.stringify(report, null, 2), {
         flag: "wx",
       });
     },

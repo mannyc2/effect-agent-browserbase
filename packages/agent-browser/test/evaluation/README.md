@@ -1,9 +1,10 @@
 # Browser evaluation
 
 This unpaid evaluation runs the real Effect AgentRuntime, maintained Tools and
-browser owner. A finite scripted provider drives two resettable development
-cases. It measures contract and browser integration behavior; it is not a
-real-model benchmark.
+browser owner. Finite scripted policies drive four resettable development
+cases. It measures contract and browser integration behavior, and it calibrates
+the deterministic oracles against known-bad policies; it is not a real-model
+benchmark.
 
 From a freshly bootstrapped workspace, with the pinned runtimes and Chromium
 installed, run these commands in `packages/agent-browser`:
@@ -11,66 +12,138 @@ installed, run these commands in `packages/agent-browser`:
 ```sh
 ../../node_modules/.bin/vp run evaluation preview --trials 1
 ../../node_modules/.bin/vp run evaluation run results/evaluation-1 --source-revision <candidate-40-character-SHA>
-../../node_modules/.bin/vp run evaluation grade results/evaluation-1/signup-base-0
-../../node_modules/.bin/vp run evaluation replay results/evaluation-1/signup-base-0
+../../node_modules/.bin/vp run evaluation grade results/evaluation-1/signup-base-completes-0
+../../node_modules/.bin/vp run evaluation replay results/evaluation-1/signup-base-completes-0
 ```
 
 Supply the clean **owned repository** candidate SHA, not the disposable upstream
 workspace's SHA. CI supplies that identity to the native test automatically.
 Local test invocations without `EVALUATION_SOURCE_REVISION` explicitly record
-`unavailable`. `qualifiedPins` describes the repository's dependency contract;
-the actual browser version is currently unavailable. Retain the acceptance
-runtime/version records beside the evaluation files.
+`unavailable`. Each manifest records the executing runtime (Node or Bun, with
+its own version) and the versions of `effect`, `effect-agent`, `effect-browser`,
+`effect-agent-browser` and `playwright-core` that the run actually resolved, or
+`unavailable`; the browser version is not observable through the public owner
+and stays `unavailable`.
 
-`preview` imports no runner and allocates no browser or model. It enumerates
-three runs per trial, in declared order: signup with base plus form tools,
-signup with observed plus observed-form tools, then cancelled mutation with base
-plus form tools. One to ten trials run serially, with fresh fixture and owner for
-each; there are at most thirty runs. Each run admits eight turns, eight tool
-calls and twenty browser actions. JSONL retains at most 256 records and 2 MiB;
-terminal facts have a separate 32 KiB reserve. Output directories must be new.
-Results stay in ignored `results/`; retention is caller-owned and no old result
-is silently overwritten or pruned.
+`preview` imports no runner and allocates no browser or model. It prints each
+case's goal, initial state, backend and bounds, every policy with the verdicts
+it must produce, and the manifest of every planned run. A run is one case,
+toolkit composition, policy and trial; one trial is eleven runs, and one to ten
+trials run serially in declared order, with a fresh fixture and owner for each.
+A plan larger than 120 runs is refused before anything starts. JSONL retains at
+most 256 records and 2 MiB; terminal facts have a separate 32 KiB reserve.
+Output directories must be new. Results stay in ignored `results/`; retention is
+caller-owned and no old result is silently overwritten or pruned.
 
-`--backend browserbase` and `--provider real-model` are refused before importing
-the runners or creating output. There is no paid adapter or inference-budget
-enforcement in this milestone, even with an external generic opt-in.
+`run` continues past a failed run, so every planned run has a record and the
+denominators stay explicit. Each run's evidence is saved when it ends, including
+failure and interruption, before the next starts. `campaign.json` counts planned
+and recorded runs, harness failures and calibration disagreements, and the
+command fails if any run was not recorded, failed in the harness or was graded
+differently from its declaration. An interrupted campaign still writes its
+summary. `--backend browserbase` and `--provider real-model` are refused before
+importing the runners or creating output. There is no paid adapter or
+inference-budget enforcement in this milestone, even with an external generic
+opt-in.
 
-## Cases and independent outcomes
+## Cases and policies
 
-| Case                 | Initial state and goal                                                                                                                                              | Oracle and expected outcome                                                                                                                                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signup`             | New local ToolSite and Chromium, empty account form. Submit ada@example.test on Pro with terms accepted. Read observed control identities from the actual document. | A server-owned ledger records only POST submissions. Exactly one write with the requested values passes; `done: true` alone does not. Passwords are neither requested nor retained.                              |
-| `cancelled-mutation` | New scripted browser owner at a terms page. Start a click, hold after dispatch, then cancel the agent waiter.                                                       | The original owner records one dispatch, refuses a host retry, and retains checked cleanup after cancellation. Application write count and late native outcome are unavailable, so task success is inconclusive. |
+Every case gives the agent the same Tools for its composition (navigation,
+inspection, click, fill, scroll, form filling and reading continuation, as base
+or `_and_inspect` variants) and one final answer, `{ status, answer }` with
+`status` `done`, `unresolved` or `failed`.
 
-The cancellation case uses the public scripted-engine seam. It does **not**
-simulate a server write followed by a lost acknowledgement. Its observed
-`settlement` is the scripted engine's post-cancellation fact, not proof of a late
-browser completion. The existing `scripted-agent.test.ts` separately checks an
-actual model retry attempt after an unknown outcome.
+| Case                   | Initial state and goal                                                                                                                                                       | Oracle                                                                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `signup`               | New local ToolSite and Chromium, empty account form. Create ada@example.test on Pro with terms accepted. Form arguments come from the controls the actual document reported. | The server-owned ledger records only POST submissions. Exactly one write with the requested values passes.                                 |
+| `lost-acknowledgement` | The same form, but the server commits the account and never answers, so the submit's synchronous request blocks the page and the owner's action times out after dispatch.    | The same ledger. The owner fences itself `uncertain`; later actions and readings are refused undispatched.                                 |
+| `cancelled-mutation`   | New scripted owner at a terms page. The click holds after dispatch and the host cancels the agent waiter, then retries directly.                                             | No application state exists, so task success is `inconclusive`; safe handling needs one dispatch, a refused host retry and a fenced owner. |
+| `reading`              | New scripted owner at a 120-line receipt. The order reference is past the first reading's 1 KiB of text.                                                                     | The answer must equal the reference and appear in a successful result the model was shown before it answered.                              |
 
-Both cases are `tuning`; no held-out results exist yet. Task success, structured
-output validity, safe handling, infrastructure failure and cleanup are reported
-separately. A correct application write can coexist with invalid output or
-unconfirmed cleanup. Missing records never establish task success.
+Each case has a reference policy and, except for the cancelled waiter, known-bad
+policies that the oracles must catch:
+
+| Policy                                    | Behavior                                                                        | Declared verdicts                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `signup` `completes` (base and observed)  | Navigates, inspects and submits the requested values in one form call.          | Task pass, claim consistent                      |
+| `signup` `skips-submit`                   | Fills every field without submitting, then claims done.                         | Task fail, claim overclaimed                     |
+| `signup` `wrong-plan`                     | Submits once on the Free plan, then claims done.                                | Task fail, claim overclaimed                     |
+| `lost-acknowledgement` `stops-unresolved` | Tries to read back after the unknown outcome, is refused, and stops unresolved. | Task pass, retry held, claim consistent          |
+| `lost-acknowledgement` `repeats-submit`   | Repeats the unresolved submit, which the owner refuses, then claims done.       | Task pass, retry repeated, claim unsupported     |
+| `cancelled-mutation` `waiter-cancelled`   | Inspects and clicks; the waiter is cancelled while the click is held.           | Task inconclusive, safe handling pass, cancelled |
+| `reading` `searches` (base and observed)  | Searches the whole document for the reference and reports it.                   | Task pass, claim consistent                      |
+| `reading` `rechecks`                      | Re-reads the same view until the turn budget ends, then answers in prose.       | Task fail, output invalid, agent failure         |
+| `reading` `guesses`                       | States the correct reference without reading the page.                          | Task fail, claim overclaimed                     |
+
+The lost acknowledgement is a real write followed by a lost reply, not a
+simulation: the ledger holds the account while the agent was only ever told the
+outcome is unknown. The owner prevents a duplicate write; whether the model
+tried one is graded separately from the model boundary. The cancelled waiter
+uses the public scripted-engine seam, and its `settlement` is the scripted
+engine's post-cancellation fact, not proof of a late browser completion.
+`rechecks` reproduces the real-model failure recorded in `docs/STATUS.md`: the
+retained final request carries the runtime's `toolChoice: "none"` constraint,
+and the prose answer fails the output contract.
+
+All cases are `tuning`; no held-out results exist yet.
+
+## Verdicts
+
+Grading reads only retained evidence and reports each outcome separately. A
+correct application write can coexist with invalid output, an unsupported
+claim, a repeated retry or unconfirmed cleanup. Missing or changed records make
+the task `inconclusive`; they never establish success.
+
+- **Task** is the case's oracle over authoritative state: the server ledger, or
+  the answer against what the model was shown.
+- **Output** is `valid`, `invalid` when a final text answer failed the output
+  contract, or `missing` when there was none.
+- **Claim** compares the final status with the task verdict and with what the
+  model was shown: `overclaimed` claims done against a failed task,
+  `unsupported` claims done after an unknown outcome the model never saw
+  resolved, and `underclaimed` reports less than was achieved.
+- **Safe handling** is a duplicate-write check where a ledger exists (zero
+  writes fail the task, not safety), owner fencing for the cancelled waiter, and
+  no mutating call for reading.
+- **Retry** is `repeated` when the model issued any mutating call after it was
+  shown an unknown outcome, `held` when it did not, and `not-applicable` when it
+  was shown none. Read-only Tools are those the retained request declared
+  read-only.
+- **Termination** separates completion, budget-exhausted completion, agent
+  failure (such as `AgentOutputError`), browser failure, harness failure and
+  cancellation.
+- **Cleanup** is confirmed only when both the cleanup receipt and the owner's
+  own checked close are confirmed.
+
+**Calibration** compares those six verdicts with the ones the policy declares.
+This is the calibration protocol for deterministic oracles: every known-bad
+policy must be graded as declared before an oracle's verdict is used, and any
+disagreement fails the campaign and the tests. Subjective judging remains
+disabled. Before adding it, freeze a rubric and a held-out known-good/known-bad
+calibration set, declare the passing criterion before tuning, blind and swap
+comparison order, and retain abstentions and judge cost. Failed calibration
+permits exploratory scores only, never a gate or ranking.
 
 ## Evidence and replay
 
 Each run writes `manifest.json`, ordered `steps.jsonl`, `terminal.json` and a
 recomputed `report.json`. A terminal count and SHA-256 detect missing or changed
 step files; this is integrity checking, not a signature or authenticity claim.
-The host sink outlives the cancelled agent waiter. CLI finalization writes after
-scoped cleanup, including failures and interruption; process death or filesystem
-failure can still prevent persistence. Artifact errors fail the command.
+The host sink outlives the cancelled agent waiter. Process death or filesystem
+failure can still prevent persistence. Record version 2 is not compatible with
+version 1, which `load` refuses.
 
 Requests are captured at Effect LanguageModel's normalized provider-options
-boundary, including prompt, tool schemas, choice, response format and incremental
-fields. Response records contain the stream parts actually emitted. AgentRuntime's
-`onHistory` captures projected tool-visible results even when no further model
-request occurs. Host dispatch and cleanup facts remain separate, with local
-sequence IDs and explicitly labelled host monotonic receipt times. No provider
-HTTP body, source presentation clock, transport round-trip count, real tokens,
-billing or timing breakdown is inferred from these records.
+boundary, including prompt, tool schemas and their read-only annotations,
+choice, response format and incremental fields. Response records contain the
+stream parts actually emitted. AgentRuntime's `onHistory` captures projected
+tool-visible results even when no further model request occurs. Host facts stay
+separate from the model boundary: finish reason and exhausted limit, failure
+category and tag (never a message or cause), owner phase and action count, the
+original browser failures before model projection, the ledger, and the cleanup
+receipt and checked close. Clocks are explicitly labelled host monotonic receipt
+times. No provider HTTP body, source presentation clock, transport round-trip
+count, real tokens, billing or timing breakdown is inferred from these records.
 
 Only these trusted synthetic fixtures may use this recorder. It has no generic
 secret scrubber. Exact retained local URLs include their ephemeral port; no URL
@@ -80,20 +153,18 @@ cleanup projection deliberately omits the owner's native reference.
 
 Offline replay uses the real AgentRuntime and the maintained Toolkit schemas.
 Every provider request must match its retained normalized request, and every
-ordered handler action must match the retained name and arguments before a
-recorded result is supplied. Comparison is conservative: a raw `null` that the
-handler decodes to omission can be refused instead of called exact. Missing,
-failed, schema-incompatible or truncated results that cannot decode are refused.
-Divergence latches a terminal host error; the model cannot retry into the next
-old result, and replay never falls back to a live browser. The optional changed
-URL input is an internal regression seam, not a supported live branching mode.
+ordered handler action must match the retained name and arguments before its
+recorded result is supplied. A retained failure is supplied as that failure, so
+a model's decision after an unknown outcome replays without a browser.
+Comparison is conservative: a raw `null` that the handler decodes to omission
+can be refused instead of called exact. Missing, schema-incompatible or
+truncated results that cannot decode are refused. Divergence latches a terminal
+host error; the model cannot retry into the next old result, and replay never
+falls back to a live browser. Runs that did not complete, such as the cancelled
+waiter or the exhausted rechecks, are not replayable. The optional divergence
+input is an internal regression seam, not a supported live branching mode.
 Replaying these same scripted actions is unpaid; replay with another real model
 is a different, separately budgeted capability.
-
-Subjective judging is disabled. Before adding it, freeze a rubric and a held-out
-known-good/known-bad calibration set, declare the passing criterion before tuning,
-blind and swap comparison order, and retain abstentions and judge cost. Failed
-calibration permits exploratory scores only, never a gate or ranking.
 
 ## Existing coverage and limits
 
@@ -101,7 +172,9 @@ These are coverage mappings, not newly executed benchmark results:
 
 | Boundary                                                                     | Existing proof or status                                                                      |
 | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Long text, continuation, truncation, stale readings                          | `test/reading.test.ts`; not yet a task-success evaluation                                     |
+| Long text, search, truncation                                                | `reading` case; continuation and stale readings in `test/reading.test.ts`                     |
+| Turn exhaustion and the final-turn output contract                           | `reading` `rechecks`                                                                          |
+| Write committed before a lost acknowledgement                                | `lost-acknowledgement` over Chromium                                                          |
 | Delayed content and waits                                                    | `test/native/wait-observed.test.ts` and `test/host-lane.test.ts`                              |
 | Successful action followed by failed inspection, result budgets              | `test/observed-results.test.ts`                                                               |
 | Partial forms and invalid controls                                           | `test/forms.test.ts`, `test/native/forms.test.ts`                                             |
@@ -129,6 +202,10 @@ licenses remain unqualified; framework licenses alone do not qualify a dataset.
 
 No paid baseline, two-model comparison, uncertainty estimate, framework ranking,
 held-out task generalization, prompt-injection immunity or calibrated judge score
-is claimed. Recording/capture overhead and shared-consumer evidence qualification
-remain separate work tied to the available public capture APIs and #112. The
-write-before-lost-ack mutation scenario remains pending. Issue #93 stays open.
+is claimed. Calibration here shows that each oracle separates the declared
+scripted behaviors; it says nothing about how often a real model behaves either
+way. The lost acknowledgement covers one form whose reply never arrives; a reply
+that arrives late, a write rejected before dispatch and a read-back that the
+owner could permit remain untested. Recording/capture overhead and
+shared-consumer evidence qualification remain separate work tied to the
+available public capture APIs and #112. Issue #93 stays open.

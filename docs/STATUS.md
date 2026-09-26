@@ -47,6 +47,15 @@ order the model declared them. `effect-browser` adds a gated `fillForm`, which
 what Playwright would otherwise refuse only after it. This is unpaid local evidence against
 Chromium with a scripted model: no model provider has been called and no hosted session run.
 
+The unpaid evaluation foundation for [#93](https://github.com/mannyc2/effect-agent-browserbase/issues/93)
+lives in `effect-agent-browser`'s unpublished tests. It retains bounded model-boundary records and
+host facts for four cases (form submission, a write whose acknowledgement is lost over Chromium, a
+cancelled waiter and a long reading) and grades task success, output, claims, duplicate writes,
+retries after an unknown outcome, termination and cleanup separately. Scripted known-bad policies
+calibrate each deterministic oracle, and compatible actions replay offline, retained failures
+included. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md) lists what it
+does not prove; no real model, paid campaign or hosted session has been run for it.
+
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 
 Current maintenance uses `Library CI` and a separate, manual, default-off npm OIDC workflow. Check the exact current PR/commit's Actions results; the historical acceptance record is not a claim that later changes were tested. Release procedures and required account configuration are in [RELEASING.md](RELEASING.md).

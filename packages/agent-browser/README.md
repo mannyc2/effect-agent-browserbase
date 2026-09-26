@@ -488,9 +488,12 @@ Common-operation helpers may accept `AnySession`; helpers such as the example's 
 ## Unpaid evaluation
 
 The unpublished [evaluation runner](test/evaluation/README.md) records actual
-AgentRuntime model-boundary inputs, projected tool results and independent fixture
-state. Its no-spend preview and bounded local runs compare base and observed
-toolkits on a resettable form, and retain original-owner cancellation evidence.
-Offline validation/regrading and compatible-action replay need no model calls.
-These scripted cases establish integration contracts; paid comparisons for #93
-remain separately authorized work.
+AgentRuntime model-boundary inputs, projected tool results and independent
+application or owner state for four resettable cases: form submission, a write
+whose acknowledgement is lost, a cancelled waiter and a long reading. Scripted
+reference and known-bad policies calibrate its deterministic oracles, which
+grade task success, output, claims, duplicate writes, retries after an unknown
+outcome, termination and cleanup separately. Offline grading and
+compatible-action replay need no model calls. These scripted cases establish
+integration contracts; paid comparisons for #93 remain separately authorized
+work.

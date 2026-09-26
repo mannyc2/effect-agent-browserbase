@@ -6,9 +6,10 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import { Prompt } from "effect/unstable/ai";
 
-import { type Evidence, grade, Journal, json, requestData } from "./Evidence.ts";
+import { type Evidence, Journal, json, requestData } from "./Evidence.ts";
+import { grade } from "./Grading.ts";
 import { history, model, type Turn } from "./Model.ts";
-import { agent, goal } from "./Tasks.ts";
+import { agent } from "./Tasks.ts";
 
 export class ReplayDivergence extends Schema.TaggedError<ReplayDivergence>()("ReplayDivergence", {
   reason: Schema.Literals(["incomplete", "schema", "action", "result", "remaining", "request"]),
@@ -25,14 +26,18 @@ const Request = Schema.Struct({
   tools: Schema.Array(Schema.Struct({ name: Schema.String, parameters: Schema.Json })),
 });
 
-/** Offline replay returns retained results only for an identical ordered action. It never opens an owner. */
+/**
+ * Offline replay returns a retained result, success or failure, only for an identical ordered
+ * action. It never opens an owner. `diverge` replaces one retained call's arguments, as a
+ * regression seam for the divergence refusal; it is not a live branching mode.
+ */
 export const replay = Effect.fn("Evaluation.replay")(function* (
   evidence: Evidence,
-  changeFirstUrl?: string,
+  diverge?: { readonly call: string; readonly params: Schema.Json },
 ) {
   if (grade(evidence).exactness !== "complete-normalized-inputs")
     return yield* new ReplayDivergence({ reason: "incomplete" });
-  const composition = evidence.manifest.toolkit;
+  const { toolkit: composition, bounds, goal } = evidence.manifest;
   const requests = evidence.events.filter((event) => event.kind === "request");
   const lastHistory = evidence.events.findLast((event) => event.kind === "history");
 
@@ -59,7 +64,7 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
     return Effect.die(divergence);
   };
 
-  const value = (name: string, params: unknown) =>
+  const retained = (name: string, params: unknown) =>
     Effect.suspend(() => {
       if (divergence !== undefined) return Effect.die(divergence);
       const expected = calls[cursor];
@@ -72,70 +77,78 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
         return reject("action");
       const result = results.find((part) => part.id === expected.id && part.name === name);
 
-      if (result === undefined || result.isFailure) return reject("result");
+      if (result === undefined) return reject("result");
       cursor++;
 
-      return Effect.succeed(result.result);
+      return Effect.succeed(result);
     });
+
+  /** The retained result decoded by the maintained Tool's own schemas, never trusted raw. */
+  const serve =
+    <S, F>(
+      name: string,
+      schemas: {
+        readonly successSchema: Schema.Decoder<S>;
+        readonly failureSchema: Schema.Decoder<F>;
+      },
+    ) =>
+    (params: unknown): Effect.Effect<S, F> =>
+      retained(name, params).pipe(
+        Effect.flatMap((result) =>
+          result.isFailure
+            ? Schema.decodeUnknownEffect(schemas.failureSchema)(result.result).pipe(
+                Effect.catch(() => reject("result")),
+                Effect.flatMap((failure) => Effect.fail(failure)),
+              )
+            : Schema.decodeUnknownEffect(schemas.successSchema)(result.result).pipe(
+                Effect.catch(() => reject("result")),
+              ),
+        ),
+      );
 
   const base = BrowserTools.toolkit.tools;
   const observed = BrowserTools.observedToolkit.tools;
   const form = BrowserTools.formToolkit.tools.browser_fill_form;
   const observedForm = BrowserTools.observedFormToolkit.tools.browser_fill_form_and_inspect;
-
-  const decode = <A, I>(schema: Schema.Codec<A, I>, input: Effect.Effect<unknown>) =>
-    input.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-      Effect.catch(() => reject("result")),
-    );
+  const readMore = BrowserTools.readingToolkit.tools.browser_read_more;
 
   const handlers = Layer.mergeAll(
     BrowserTools.toolkit.toLayer({
-      browser_navigate: (params) =>
-        decode(base.browser_navigate.successSchema, value("browser_navigate", params)),
-      browser_inspect: (params) =>
-        decode(base.browser_inspect.successSchema, value("browser_inspect", params)),
-      browser_click: (params) =>
-        decode(base.browser_click.successSchema, value("browser_click", params)),
-      browser_fill: (params) =>
-        decode(base.browser_fill.successSchema, value("browser_fill", params)),
-      browser_scroll: (params) =>
-        decode(base.browser_scroll.successSchema, value("browser_scroll", params)),
+      browser_navigate: serve("browser_navigate", base.browser_navigate),
+      browser_inspect: serve("browser_inspect", base.browser_inspect),
+      browser_click: serve("browser_click", base.browser_click),
+      browser_fill: serve("browser_fill", base.browser_fill),
+      browser_scroll: serve("browser_scroll", base.browser_scroll),
     }),
     BrowserTools.observedToolkit.toLayer({
-      browser_navigate_and_inspect: (params) =>
-        decode(
-          observed.browser_navigate_and_inspect.successSchema,
-          value("browser_navigate_and_inspect", params),
-        ),
-      browser_inspect: (params) =>
-        decode(base.browser_inspect.successSchema, value("browser_inspect", params)),
-      browser_click_and_inspect: (params) =>
-        decode(
-          observed.browser_click_and_inspect.successSchema,
-          value("browser_click_and_inspect", params),
-        ),
-      browser_fill_and_inspect: (params) =>
-        decode(
-          observed.browser_fill_and_inspect.successSchema,
-          value("browser_fill_and_inspect", params),
-        ),
-      browser_scroll_and_inspect: (params) =>
-        decode(
-          observed.browser_scroll_and_inspect.successSchema,
-          value("browser_scroll_and_inspect", params),
-        ),
+      browser_navigate_and_inspect: serve(
+        "browser_navigate_and_inspect",
+        observed.browser_navigate_and_inspect,
+      ),
+      browser_inspect: serve("browser_inspect", base.browser_inspect),
+      browser_click_and_inspect: serve(
+        "browser_click_and_inspect",
+        observed.browser_click_and_inspect,
+      ),
+      browser_fill_and_inspect: serve(
+        "browser_fill_and_inspect",
+        observed.browser_fill_and_inspect,
+      ),
+      browser_scroll_and_inspect: serve(
+        "browser_scroll_and_inspect",
+        observed.browser_scroll_and_inspect,
+      ),
     }),
-    BrowserTools.formToolkit.toLayer({
-      browser_fill_form: (params) => decode(form.successSchema, value("browser_fill_form", params)),
-    }),
+    BrowserTools.formToolkit.toLayer({ browser_fill_form: serve("browser_fill_form", form) }),
     BrowserTools.observedFormToolkit.toLayer({
-      browser_fill_form_and_inspect: (params) =>
-        decode(observedForm.successSchema, value("browser_fill_form_and_inspect", params)),
+      browser_fill_form_and_inspect: serve("browser_fill_form_and_inspect", observedForm),
+    }),
+    BrowserTools.readingToolkit.toLayer({
+      browser_read_more: serve("browser_read_more", readMore),
     }),
   );
 
-  const turns: Turn[] = requests.map((request, index) => (actual) => {
+  const turns: Turn[] = requests.map((request) => (actual) => {
     consumedRequests++;
     const retainedTools = Schema.decodeUnknownSync(Request)(request.value);
     const actualTools = Schema.decodeUnknownSync(Request)(requestData(actual));
@@ -154,15 +167,15 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
       .map((event) => {
         const part = Schema.decodeUnknownSync(ScriptedStreamPart)(event.value);
 
-        return index === 0 && changeFirstUrl !== undefined && part.type === "tool-call"
-          ? { ...part, params: { url: changeFirstUrl } }
+        return diverge !== undefined && part.type === "tool-call" && part.id === diverge.call
+          ? { ...part, params: diverge.params }
           : part;
       });
   });
 
   const journal = new Journal(evidence.manifest);
 
-  const result = yield* AgentRuntime.run(agent(composition), goal, {
+  const result = yield* AgentRuntime.run(agent(composition, bounds), goal, {
     onHistory: history(journal),
   }).pipe(
     Effect.provide(Layer.mergeAll(handlers, model(journal, turns))),

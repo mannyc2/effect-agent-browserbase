@@ -77,6 +77,8 @@ export const toolSite = Effect.acquireRelease(
             plan: values.get("plan") ?? "",
             terms: values.get("terms") === "true",
           });
+          // A lost acknowledgement: the write is committed and the reply is never sent.
+          if (values.get("ack") === "lost") return;
           response.writeHead(204);
           response.end();
         } else if (path === "/events") {
@@ -110,7 +112,7 @@ export const toolSite = Effect.acquireRelease(
                 if (event.data === 'remove') button.remove();
               });
             </script>`);
-        } else if (path === "/signup") {
+        } else if (path === "/signup" || path === "/signup?ack=lost") {
           response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           response.end(`<!doctype html><meta charset=utf-8><title>Sign up</title>
             <nav>${Array.from({ length: 24 }, (_, i) => `<a href="/section-${i}">Section ${i}</a>`).join(" ")}</nav>
@@ -132,6 +134,7 @@ export const toolSite = Effect.acquireRelease(
                 const form = new FormData(event.target);
                 // The server ledger is the oracle; a rendered success message alone proves no write.
                 const values = new URLSearchParams({ email: form.get('email'), plan: form.get('plan'), terms: String(form.has('terms')) });
+                if (location.search === '?ack=lost') values.set('ack', 'lost');
                 const commit = new XMLHttpRequest();
                 commit.open('POST', '/signup/commit?' + values, false);
                 commit.send();

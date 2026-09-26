@@ -3,6 +3,7 @@ import { Effect, Layer, Schema, Stream } from "effect";
 import * as InMemory from "effect-agent/in-memory";
 import { AiError, LanguageModel, Model, Prompt } from "effect/unstable/ai";
 
+import type { Output } from "./Cases.ts";
 import { type Journal, json, requestData } from "./Evidence.ts";
 
 export type Turn = (request: LanguageModel.ProviderOptions) => ReadonlyArray<ScriptedStreamPart>;
@@ -17,12 +18,17 @@ export const call = (
   { type: "finish", reason: "tool-calls", usage },
 ];
 
-export const answer: ReadonlyArray<ScriptedStreamPart> = [
+const text = (delta: string): ReadonlyArray<ScriptedStreamPart> => [
   { type: "text-start", id: "answer" },
-  { type: "text-delta", id: "answer", delta: '{"done":true}' },
+  { type: "text-delta", id: "answer", delta },
   { type: "text-end", id: "answer" },
   { type: "finish", reason: "stop", usage },
 ];
+
+export const answer = (output: Output) => text(JSON.stringify(output));
+
+/** A final turn that ignores the output contract, as a real model did when its turns ran out. */
+export const prose = (delta: string) => text(delta);
 
 const modelError = () =>
   AiError.AiError.make({
