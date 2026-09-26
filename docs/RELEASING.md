@@ -2,7 +2,7 @@
 
 Publication is not performed by ordinary CI. This workflow prepares three independently published browser packages from the pinned upstream integration workspace; it does **not** publish the rest of the Effect Agent monorepo.
 
-The published names are `effect-browser`, `effect-browserbase` and `effect-agent-browser`. This workflow released all three, with provenance, as `0.2.0-beta.0` from tag `v0.2.0-beta.0` (`089a6ea`), `0.2.0-beta.1` from `v0.2.0-beta.1` (`f7b9b7b`), `0.2.0-beta.2` from `v0.2.0-beta.2` (`1fec922`) and `0.2.0-beta.3` from `v0.2.0-beta.3` (`fdaa2d2`). The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`; `v0.1.0-beta.103` was tagged but never published. Repository changes do not register names or perform first-publication account setup. Keep historical prepared-state and journal refs intact for recovery of the releases that created them.
+The published names are `effect-browser`, `effect-browserbase` and `effect-agent-browser`. This workflow released all three, with provenance, as `0.2.0-beta.0` from tag `v0.2.0-beta.0` (`089a6ea`), `0.2.0-beta.1` from `v0.2.0-beta.1` (`f7b9b7b`), `0.2.0-beta.2` from `v0.2.0-beta.2` (`1fec922`), `0.2.0-beta.3` from `v0.2.0-beta.3` (`fdaa2d2`) and `0.2.0-beta.4` from `v0.2.0-beta.4` (`a1c3f1f`). The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`; `v0.1.0-beta.103` was tagged but never published. Repository changes do not register names or perform first-publication account setup. Keep historical prepared-state and journal refs intact for recovery of the releases that created them.
 
 ## Configure npm trusted publishing
 
