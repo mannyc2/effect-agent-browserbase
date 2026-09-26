@@ -6,6 +6,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, Observation, type SessionStatus } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
+import type { BrowserError, InitializationError } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
 import { type LanguageModel, Toolkit } from "effect/unstable/ai";
 
@@ -122,6 +123,10 @@ const policies: {
       signup(context, { plan: "Pro", submit: false }, [() => answer(done)]),
     "wrong-plan": (context) =>
       signup(context, { plan: "Free", submit: true }, [() => answer(done)]),
+    understates: (context) =>
+      signup(context, { plan: "Pro", submit: true }, [
+        () => answer({ status: "failed", answer: null }),
+      ]),
   },
   "lost-acknowledgement": {
     // Reading back is the right move after an unknown outcome; a fenced owner refuses it.
@@ -162,6 +167,11 @@ const policies: {
     rechecks: (context) =>
       Array.from({ length: context.maxTurns + 1 }, (_, index) => recheck(index)),
     guesses: () => [() => answer({ status: "done", answer: orderReference })],
+    "answers-late": (context) => [
+      ...Array.from({ length: context.maxTurns - 1 }, (_, index) => recheck(index)),
+      () => call("search", "browser_inspect", { find: "order reference", scope: "document" }),
+      () => answer({ status: "done", answer: orderReference }),
+    ],
   },
 };
 
@@ -239,6 +249,7 @@ const owner = (
         hostRetry: "not-attempted",
         ...scripted,
       },
+      toolFailuresDropped: snapshot.dropped,
       toolFailures: snapshot.failures.map((entry) => ({
         tool: entry.toolName,
         operation: entry.error.operation,
@@ -320,7 +331,7 @@ const runAgent = (journal: Journal, turns: ReadonlyArray<Turn>) =>
   ).pipe(Effect.provide(model(journal, turns)));
 
 /** ToolSite cases: the server's ledger is read after Chromium has been released. */
-const onChromium = (journal: Journal, path: string) =>
+const onChromium = (journal: Journal, path: string): Effect.Effect<void, RunFailure> =>
   Effect.scoped(
     Effect.gen(function* () {
       const site = yield* toolSite;
@@ -379,8 +390,20 @@ const receipt: Testing.Script = {
   ],
 };
 
-/** A long scripted receipt; nothing on it can be mutated, so any dispatch is unsafe. */
-const onReceipt = (journal: Journal) =>
+/** Scripted operations that change page state; scrolling, pointer moves and navigation do not. */
+const changesPage: ReadonlySet<string> = new Set([
+  "click",
+  "click-and-wait",
+  "fill",
+  "fill-form",
+  "select-option",
+  "select-files",
+  "press",
+  "type",
+]);
+
+/** A long scripted receipt; reading it needs no state-changing operation. */
+const onReceipt = (journal: Journal): Effect.Effect<void, RunFailure> =>
   Effect.gen(function* () {
     const turns = yield* script(journal, "https://fixture.test/receipt");
 
@@ -394,7 +417,8 @@ const onReceipt = (journal: Journal) =>
         const calls = yield* browser.control.calls;
 
         yield* owner(journal, browser.status, host.toolFailures, {
-          dispatched: calls.filter((entry) => entry.dispatched).length,
+          dispatched: calls.filter((entry) => entry.dispatched && changesPage.has(entry.operation))
+            .length,
         });
       }),
     ).pipe(
@@ -406,7 +430,7 @@ const onReceipt = (journal: Journal) =>
   });
 
 /** The scripted public seam proves cancellation and fencing, not a write-before-lost-ack application state. */
-const onCancelledWaiter = (journal: Journal) =>
+const onCancelledWaiter = (journal: Journal): Effect.Effect<void, RunFailure> =>
   Effect.gen(function* () {
     const turns = yield* script(journal, "https://fixture.test/");
 
@@ -431,9 +455,10 @@ const onCancelledWaiter = (journal: Journal) =>
           const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
           const running = yield* host.run(runAgent(journal, turns)).pipe(Effect.forkChild);
 
+          // Either way the gate is missed, the run cannot show a held dispatch: a harness fault.
           yield* gate.reached.pipe(
             Effect.raceFirst(
-              Fiber.join(running).pipe(
+              Fiber.await(running).pipe(
                 Effect.andThen(
                   Effect.fail(
                     new EvidenceError({ operation: "agent completed before dispatched gate" }),
@@ -441,7 +466,11 @@ const onCancelledWaiter = (journal: Journal) =>
                 ),
               ),
             ),
-            Effect.timeout(5000),
+            Effect.timeoutOrElse({
+              duration: 5000,
+              orElse: () =>
+                Effect.fail(new EvidenceError({ operation: "dispatched gate not reached" })),
+            }),
           );
           yield* Fiber.interrupt(running);
 
@@ -489,10 +518,12 @@ const onCancelledWaiter = (journal: Journal) =>
     );
   });
 
+/** Harness faults only; the agent's own outcome is recorded as facts, never raised. */
 type RunFailure =
-  | Effect.Error<ReturnType<typeof onChromium>>
-  | Effect.Error<ReturnType<typeof onReceipt>>
-  | Effect.Error<ReturnType<typeof onCancelledWaiter>>;
+  | Effect.Error<typeof toolSite>
+  | EvidenceError
+  | BrowserError
+  | InitializationError;
 
 /** Run one declared case into its journal; only a harness fault fails the returned Effect. */
 export const run = (journal: Journal): Effect.Effect<void, RunFailure> => {
@@ -500,7 +531,7 @@ export const run = (journal: Journal): Effect.Effect<void, RunFailure> => {
     case "signup":
       return onChromium(journal, "signup");
     case "lost-acknowledgement":
-      return onChromium(journal, "signup?ack=lost");
+      return onChromium(journal, "signup?ack=late");
     case "cancelled-mutation":
       return onCancelledWaiter(journal);
     case "reading":

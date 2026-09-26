@@ -52,8 +52,8 @@ lives in `effect-agent-browser`'s unpublished tests. It retains bounded model-bo
 host facts for four cases (form submission, a write whose acknowledgement is lost over Chromium, a
 cancelled waiter and a long reading) and grades task success, output, claims, duplicate writes,
 retries after an unknown outcome, termination and cleanup separately. Scripted known-bad policies
-calibrate each deterministic oracle, and compatible actions replay offline, retained failures
-included. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md) lists what it
+must be graded as declared, and retained-evidence tests cover the safe-handling failures a correct
+owner cannot be driven into; compatible actions replay offline, retained failures included. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md) lists what it
 does not prove; no real model, paid campaign or hosted session has been run for it.
 
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).

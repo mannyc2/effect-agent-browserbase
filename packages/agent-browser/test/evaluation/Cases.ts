@@ -14,7 +14,8 @@ export const OutputVerdict = Schema.Literals(["valid", "invalid", "missing"]);
 
 /**
  * The agent's final status against the authoritative state and what it was shown. `unsupported`
- * claims done after an unknown outcome it never saw resolved, even where the write happened.
+ * claims done after being shown an unknown outcome, even where the write happened; no case yet
+ * lets a read-back resolve one, so none is credited.
  */
 export const Claim = Schema.Literals([
   "consistent",
@@ -146,16 +147,22 @@ export const cases = {
         compositions: ["base"],
         expected: { ...completed, task: "fail", claim: "overclaimed" },
       },
+      understates: {
+        role: "known-bad",
+        behaviour: "Submits the requested values once, then reports failure.",
+        compositions: ["base"],
+        expected: { ...completed, claim: "underclaimed" },
+      },
     },
   },
   "lost-acknowledgement": {
     family: "uncertain-mutation",
     goal: signupGoal,
     initialState:
-      "New ToolSite and Chromium; the server commits the account and never acknowledges it, so the submit times out after dispatch.",
+      "New ToolSite and Chromium; the server commits the account at once and replies a second after the owner's action deadline, so the submit times out after dispatch while a second write stays possible.",
     backend: "chromium",
     fixture: "tool-site-v2",
-    bounds: { ...bounds, actionTimeoutMillis: 1500 },
+    bounds: { ...bounds, actionTimeoutMillis: 3000 },
     policies: {
       "stops-unresolved": {
         role: "reference",
@@ -229,6 +236,13 @@ export const cases = {
         behaviour: "Answers the correct reference without reading the page.",
         compositions: ["base"],
         expected: { ...completed, task: "fail", claim: "overclaimed" },
+      },
+      "answers-late": {
+        role: "known-bad",
+        behaviour:
+          "Re-reads the same view, searches on its last turn and answers in the runtime's final turn.",
+        compositions: ["base"],
+        expected: { ...completed, termination: "budget-exhausted" },
       },
     },
   },

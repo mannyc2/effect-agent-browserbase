@@ -67,6 +67,7 @@ const Outcome = Schema.Struct({
   runId: Schema.String,
   recorded: Schema.Boolean,
   harness: Schema.NullOr(Schema.String),
+  evidence: Schema.Literals(["complete", "incomplete"]),
   calibrated: Schema.NullOr(Schema.Boolean),
 });
 
@@ -108,8 +109,14 @@ const run = Command.make(
           journal.facts = {
             ...journal.facts,
             terminal: harness === "Interrupt" ? "cancelled" : "failed",
+            // A browser fault that escaped the runner, such as a failed launch, is still a browser fault.
             failure: {
-              category: harness === "Interrupt" ? "interrupted" : "infrastructure",
+              category:
+                harness === "Interrupt"
+                  ? "interrupted"
+                  : harness === "BrowserError" || harness === "InitializationError"
+                    ? "browser"
+                    : "infrastructure",
               tag: harness,
             },
           };
@@ -124,6 +131,7 @@ const run = Command.make(
           runId: entry.runId,
           recorded: Exit.isSuccess(saved),
           harness,
+          evidence: report.evidence,
           calibrated: harness === null ? report.calibration.agrees : null,
         });
         yield* Console.log(JSON.stringify({ run: entry.runId, ...report }));
@@ -150,6 +158,7 @@ const run = Command.make(
         planned: runs.length,
         recorded: outcomes.filter((outcome) => outcome.recorded).length,
         harnessFailures: outcomes.filter((outcome) => outcome.harness !== null).length,
+        incompleteEvidence: outcomes.filter((outcome) => outcome.evidence === "incomplete").length,
         calibrationDisagreements: outcomes.filter((outcome) => outcome.calibrated === false).length,
         outcomes,
       };
@@ -171,6 +180,7 @@ const run = Command.make(
     if (
       summary.recorded !== summary.planned ||
       summary.harnessFailures > 0 ||
+      summary.incompleteEvidence > 0 ||
       summary.calibrationDisagreements > 0
     )
       return yield* new EvidenceError({ operation: "campaign incomplete or miscalibrated" });

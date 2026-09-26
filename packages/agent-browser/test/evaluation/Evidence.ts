@@ -115,7 +115,7 @@ export const Facts = Schema.Struct({
       phase: SessionStatus.fields.phase,
       unresolvedDispatch: Schema.Boolean,
       actionsUsed: nonnegative,
-      /** Dispatched operations, where the scripted engine can count them; null on Chromium. */
+      /** Dispatched state-changing operations, where the scripted engine counts them; null on Chromium. */
       dispatched: Schema.NullOr(nonnegative),
       settlement: Schema.NullOr(Schema.Literals(["completed", "failed", "pending"])),
       hostRetry: Schema.Literals([
@@ -134,6 +134,8 @@ export const Facts = Schema.Struct({
       outcome: BrowserOutcome,
     }),
   ).check(Schema.isMaxLength(32)),
+  /** Failures the host's bounded window evicted; a later check cannot recover them. */
+  toolFailuresDropped: nonnegative,
   lateOutcome: Schema.Literal("unavailable"),
   cleanup: Schema.Literals(["missing", "confirmed", "unconfirmed"]),
   cleanupReceipt: Schema.NullOr(Schema.Json),
@@ -226,6 +228,7 @@ export const emptyFacts: Facts = {
   submissions: null,
   owner: null,
   toolFailures: [],
+  toolFailuresDropped: 0,
   lateOutcome: "unavailable",
   cleanup: "missing",
   cleanupReceipt: null,
