@@ -45,7 +45,7 @@ index 04fb1b69..97573ffa 100644
      },
 +    "packages/agent-browser": {
 +      "name": "effect-agent-browser",
-+      "version": "0.2.0-beta.4",
++      "version": "0.2.0-beta.5",
 +      "devDependencies": {
 +        "@effect-agent/testing": "workspace:*",
 +        "@effect/platform-bun": "catalog:",
@@ -75,7 +75,7 @@ index 04fb1b69..97573ffa 100644
      },
 +    "packages/browser": {
 +      "name": "effect-browser",
-+      "version": "0.2.0-beta.4",
++      "version": "0.2.0-beta.5",
 +      "devDependencies": {
 +        "@effect/platform-bun": "catalog:",
 +        "@effect/platform-node": "catalog:",
@@ -96,7 +96,7 @@ index 04fb1b69..97573ffa 100644
 +    },
 +    "packages/browserbase": {
 +      "name": "effect-browserbase",
-+      "version": "0.2.0-beta.4",
++      "version": "0.2.0-beta.5",
 +      "devDependencies": {
 +        "@effect/platform-bun": "catalog:",
 +        "@effect/platform-node": "catalog:",
