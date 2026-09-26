@@ -30,7 +30,7 @@ export class SearchResults extends Schema.Class<SearchResults>("BrowserbaseSearc
   results: Schema.Array(SearchResult).check(Schema.isMaxLength(25)),
 }) {}
 
-/** Browserbase web search. Each call is billed and is never retried. */
+/** Browserbase web search. The POST is never retried; billing of each outcome is provider-owned. */
 export class BrowserbaseSearch extends Context.Service<
   BrowserbaseSearch,
   {
