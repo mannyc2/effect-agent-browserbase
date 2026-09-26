@@ -98,8 +98,11 @@ describe.each(["node", "bun"])("%s Chromium host lifetime", (runtime) => {
       }
       assert.equal(host.signalCode, stop === "SIGKILL" ? stop : null);
       assert.equal(host.exitCode, stop === "close" ? 0 : null);
-      survivors = await tree.waitForExit(3000);
-    });
+      // Pipe EOF requests Chromium's orderly shutdown, rather than the owner's bounded
+      // TERM/KILL escalation. Startup and shutdown can overlap in the acquired case, and
+      // a loaded host can take longer than three seconds to drain the process group.
+      survivors = await tree.waitForExit(15000);
+    }, 60000);
 
     afterAll(async () => {
       await cleanup?.();
