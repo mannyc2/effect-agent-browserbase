@@ -1,6 +1,6 @@
 # Browser tools for Effect Agent
 
-`effect-agent-browser` connects [`effect-browser`](../browser/README.md) to Effect Agent. One adapter, maintained Toolkit and host callback implementation support both self-managed Chromium and Browserbase. The host supplies its required peers explicitly: `effect-browser@0.2.0-beta.3` and `effect-agent@0.1.0-beta.142` for this release. These exact prerelease peers express the qualified combination; supply matching versions and keep one runtime instance across the application and adapter. The Effect peer is `^4.0.0-rc.117`, with rc.117 qualified. The adapter does not install Browserbase or own a Playwright peer.
+`effect-agent-browser` connects [`effect-browser`](../browser/README.md) to Effect Agent. One adapter, maintained Toolkit and host callback implementation support both self-managed Chromium and Browserbase. The host supplies its required peers explicitly: `effect-browser@0.2.0-beta.4` and `effect-agent@0.1.0-beta.142` for this release. These exact prerelease peers express the qualified combination; supply matching versions and keep one runtime instance across the application and adapter. The Effect peer is `^4.0.0-rc.117`, with rc.117 qualified. The adapter does not install Browserbase or own a Playwright peer.
 
 ## Public entry points
 
