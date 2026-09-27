@@ -13,17 +13,17 @@ test("all maintained shell entry points parse without executing any commands", (
   }
 });
 
-test("bootstrap uses a single current patch and frozen installs, not historical inputs", () => {
-  const bootstrap = read("tools/bootstrap.sh");
-  assert.equal((bootstrap.match(/--frozen-lockfile/g) ?? []).length, 2);
-  assert.ok(bootstrap.includes('apply --check "$ROOT/upstream.patch"'));
-  // The patch integrates the packages into upstream; their source arrives by copy, never by diff.
-  for (const owned of ["browser", "browserbase", "agent-browser"]) {
-    assert.ok(!read("upstream.patch").includes(`diff --git a/packages/${owned}/`));
-  }
-  assert.ok(!existsSync(join(root, "tools/canonicalize-candidate.sh")));
-  assert.ok(!existsSync(join(root, "tools/fetch-inputs.py")));
-  assert.equal(JSON.parse(read("package.json")).private, true);
+test("the workspace installs the committed tree from a frozen lockfile, not historical inputs", () => {
+  const workspace = read("tools/workspace.sh");
+  assert.equal((workspace.match(/bun install --frozen-lockfile --ignore-scripts/g) ?? []).length, 1);
+  assert.ok(existsSync(join(root, "bun.lock")));
+  // Effect Agent is an npm dependency; nothing reconstructs its workspace.
+  for (const retired of ["tools/bootstrap.sh", "upstream.patch", "tools/canonicalize-candidate.sh", "tools/fetch-inputs.py"])
+    assert.ok(!existsSync(join(root, retired)), retired);
+  const manifest = JSON.parse(read("package.json"));
+  assert.equal(manifest.private, true);
+  assert.deepEqual(manifest.workspaces, ["packages/*"]);
+  assert.equal(manifest.catalog, undefined);
 });
 
 test("ordinary acceptance has no live publisher, hosted opt-in or write-enabled workflow", () => {
@@ -89,39 +89,20 @@ test("the step that marks a run as full release evidence exists and is full-only
   assert.match(step.slice(0, 200), /if: \$\{\{ success\(\) && steps\.plan\.outputs\.profile == 'full' \}\}/);
 });
 
-test("full acceptance runs upstream's check and build whole, and tests only what the patch reaches", () => {
+test("full acceptance adds only the in-source native suites to library", () => {
   const acceptance = read("tools/run-acceptance.sh");
-  const upstream = acceptance.slice(acceptance.indexOf('UPSTREAM_TESTS="${BROWSERBASE_UPSTREAM_TESTS'), acceptance.indexOf("run release-dry-run"));
-
-  assert.ok(upstream.includes("reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser test)"));
-  // The canary spelling is upstream's own root script, recursion included, not a filter.
-  assert.ok(upstream.includes("all) TEST_ARGS=(test)"));
-  assert.ok(upstream.includes("run upstream-check timeout 900s ./node_modules/.bin/vp run -v check"));
-  assert.ok(upstream.includes("run upstream-build timeout 900s ./node_modules/.bin/vp run -v build"));
-  assert.ok(upstream.includes('"$OUT/upstream-tests.txt"'));
-  // Only the scheduled drift canary pays for upstream's unrelated suites.
   const ci = read(".github/workflows/ci.yml");
 
-  assert.match(ci, /BROWSERBASE_UPSTREAM_TESTS: \$\{\{ github\.event_name == 'schedule' && 'all' \|\| 'reachable' \}\}/);
+  for (const text of [acceptance, ci]) assert.doesNotMatch(text, /upstream|TASK_CACHE|task-cache|postgres/i);
+  for (const stage of ["browser-native", "generic-native", "native"])
+    assert.match(acceptance, new RegExp(`if \\[ "\\$PROFILE" = full \\]; then\\n    run ${stage} timeout`));
 });
 
-test("the upstream task cache is seeded only after every stage with external effects", () => {
-  const acceptance = read("tools/run-acceptance.sh");
-  const seed = acceptance.indexOf('cp -a "$SEED/." "$TASK_CACHE/"');
-
-  assert.ok(seed > acceptance.indexOf("run packed-consumer"));
-  assert.ok(seed > acceptance.indexOf("run package-dry-run"));
-  assert.ok(seed > acceptance.lastIndexOf("install_native"));
-  assert.ok(seed < acceptance.indexOf("run upstream-check"));
-  assert.ok(acceptance.indexOf('cp -a "$TASK_CACHE/." "$SEED/"') > acceptance.indexOf("run release-dry-run"));
-  const ci = read(".github/workflows/ci.yml");
-
-  assert.ok(ci.includes("if: ${{ steps.plan.outputs.profile == 'full' }}"));
-  assert.ok(ci.includes("steps.exported.outputs.present == 'true'"));
-  // The nightly canary discards the restored cache before acceptance, and still saves afterwards.
-  const cold = ci.indexOf("- name: Keep the scheduled gate cold");
-
-  assert.ok(cold > ci.indexOf("- name: Restore upstream task cache"));
-  assert.ok(cold < ci.indexOf("- name: Execute recorded acceptance profile"));
-  assert.match(ci.slice(cold, cold + 200), /if: \$\{\{ github\.event_name == 'schedule' \}\}/);
+test("every manifest names one version of each registry dependency", async () => {
+  const { readPackageSet, workspacePins } = await import("../packages.mjs");
+  // The packages' own contracts, including the exact framework peer and its development edge.
+  readPackageSet(root);
+  const pins = workspacePins(root);
+  assert.match(pins["effect-agent"], /^0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
+  assert.equal(pins["@effect-agent/testing"], pins["effect-agent"]);
 });

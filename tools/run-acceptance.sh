@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Explicit unpaid profiles. Full remains the default and the release prerequisite.
-# Library runs every owned native test against the real tarballs, not three times.
+# Explicit unpaid profiles. Full remains the default and the release prerequisite: it adds the
+# in-source native suites to library, which runs every owned native test against the real tarballs.
 set -euo pipefail
 PROFILE="${1:-full}"
 case "$PROFILE" in full|library|docs) ;; *) echo "Unknown acceptance profile: $PROFILE" >&2; exit 2 ;; esac
@@ -73,7 +73,7 @@ trap 'exit 143' TERM
 fast_reject() { if [ "$PROFILE" != full ] && [ "$FAILED" != 0 ]; then exit 1; fi; }
 install_native() {
   cd "$TREE"
-  # This external installation always executes, never replays a task-cache success.
+  # This external installation always executes; --no-cache stops Vite Task replaying a success.
   run install-browser timeout 300s ./node_modules/.bin/vp run --no-cache -F effect-browser install:test-browser
   run install-media-tools timeout 300s bash -lc 'if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg; fi; ffmpeg -version && ffprobe -version'
 }
@@ -87,15 +87,15 @@ if [ "$PROFILE" = docs ]; then
   run diff-check git diff --check "$BASE" HEAD --
   exit "$FAILED"
 fi
-run bootstrap timeout 600s bash tools/bootstrap.sh "$WORK_ROOT/upstream"
-TREE="$WORK_ROOT/upstream/tree"
+run workspace timeout 600s bash tools/workspace.sh "$WORK_ROOT/workspace"
+TREE="$WORK_ROOT/workspace"
 if [ "$LAST_CODE" = 0 ]; then
   cd "$TREE"
   cp bun.lock "$OUT/bun.lock"
   # Fail a spacing/type regression before downloading Chromium or starting a browser.
-  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browser packages/browserbase packages/agent-browser lint
-  # Oxlint runs with this repository's own config, not upstream's. Every warning blocks, and a
-  # disable directive that suppresses nothing fails, so every exception stays necessary.
+  run format timeout 120s ./node_modules/.bin/vp fmt --check packages/browser packages/browserbase packages/agent-browser lint scripts vite.config.ts
+  # Every warning blocks, and a disable directive that suppresses nothing fails, so every
+  # exception stays necessary.
   run lint timeout 180s ./node_modules/.bin/oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages/browser packages/browserbase packages/agent-browser
   fast_reject
   run browser-typecheck timeout 180s ./node_modules/.bin/vp run -F effect-browser check
@@ -136,75 +136,9 @@ if [ "$LAST_CODE" = 0 ]; then
     run release-identity node tools/verify-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST"
     run package-dry-run timeout 300s node tools/publish-release.mjs "$OUT" "$(cat "$OUT/source-sha.txt")" "v$VERSION" "$DIGEST" --dry-run
   fi
-  cd "$TREE"
-  if [ "$PROFILE" = full ]; then
-    # Upstream CI transfers node_modules/.vite/task-cache between runs; do the same for the
-    # two upstream stages below, which are where a full run's time goes. Vite Task keys each
-    # result by that task's own inputs, so a restored entry is replayed only when those inputs
-    # match, and each upstream stage's log keeps every task's hit/miss decision.
-    #
-    # Seed HERE, never earlier. A replayed result restores workspace files, not effects outside
-    # the workspace: Chromium lives in ~/.cache/ms-playwright, so everything above (browser
-    # install, native suites, packed consumers) has already run for real on this candidate.
-    TASK_CACHE="$TREE/node_modules/.vite/task-cache"
-    SEED="${BROWSERBASE_TASK_CACHE:-}"
-    if [ -n "$SEED" ] && [ -d "$SEED" ]; then
-      mkdir -p "$TASK_CACHE"
-      cp -a "$SEED/." "$TASK_CACHE/"
-      # A lock file belongs to the run that made it.
-      find "$TASK_CACHE" -name '*.lock' -delete
-      printf 'seeded from %s: %s files, %s\n' "$SEED" "$(find "$TASK_CACHE" -type f | wc -l)" \
-        "$(du -sh "$TASK_CACHE" | cut -f1)" > "$OUT/task-cache.txt"
-    else
-      printf 'no seed (%s)\n' "${SEED:-BROWSERBASE_TASK_CACHE unset}" > "$OUT/task-cache.txt"
-    fi
-    # Upstream's `ready` is `check && test && build`. Check and build still cover the whole
-    # workspace: the patch touches root manifests, the lockfile, docs and a testing-package
-    # config, and the release dry-run below packs every workspace.
-    # Tests run for the workspaces the patch can reach — the three owned packages. The
-    # testing package's toolchain audit was refactored upstream and our patch no longer modifies
-    # its test files; its postgres certification runs with the scheduled canary's database
-    # fixture. The other suites (workerd actors, the travel planner, storage engines)
-    # exercise upstream code this patch does not change, and their timing assertions fail on a
-    # shared runner for reasons no change here can cause. The scheduled canary still runs them
-    # all (BROWSERBASE_UPSTREAM_TESTS=all) so upstream drift is seen daily without being paid
-    # for on every candidate.
-    UPSTREAM_TESTS="${BROWSERBASE_UPSTREAM_TESTS:-reachable}"
-    # Upstream isolates heavy suites because concurrent worker pools can starve ownership-lease
-    # renewals; both spellings keep this single runner's test graph serial, as the patched root
-    # script does. `all` is that root script itself.
-    case "$UPSTREAM_TESTS" in
-      reachable) TEST_ARGS=(--parallel --concurrency-limit 1 --fail-if-no-match -F effect-browser -F effect-browserbase -F effect-agent-browser test) ;;
-      all) TEST_ARGS=(test) ;;
-      *) echo "Unknown BROWSERBASE_UPSTREAM_TESTS: $UPSTREAM_TESTS" >&2; exit 2 ;;
-    esac
-    printf '%s\n' "$UPSTREAM_TESTS" > "$OUT/upstream-tests.txt"
-    run upstream-check timeout 900s ./node_modules/.bin/vp run -v check
-    run upstream-test timeout 900s ./node_modules/.bin/vp run -v "${TEST_ARGS[@]}"
-    run upstream-build timeout 900s ./node_modules/.bin/vp run -v build
-    # Upstream's own release adapter builds and inspects npm-ready manifests without publishing.
-    run release-dry-run timeout 900s ./node_modules/.bin/vp run release:publish --dry-run
-    # Hand results back even after a failure above: a task that passed produced a legitimate
-    # result. Copy over the seed rather than replacing it, so no caller path is deleted.
-    if [ -n "$SEED" ] && [ -d "$TASK_CACHE" ]; then
-      mkdir -p "$SEED"
-      cp -a "$TASK_CACHE/." "$SEED/"
-      find "$SEED" -name '*.lock' -delete
-      printf 'exported to %s: %s files, %s\n' "$SEED" "$(find "$SEED" -type f | wc -l)" \
-        "$(du -sh "$SEED" | cut -f1)" >> "$OUT/task-cache.txt"
-    fi
-    # How much the seed saved, from vp's own per-task decisions, so the gain stays measured.
-    grep -hoiE 'cache (hit|miss)' "$OUT"/upstream-{check,test,build}.log "$OUT/release-dry-run.log" 2>/dev/null \
-      | tr '[:upper:]' '[:lower:]' | sort | uniq -c >> "$OUT/task-cache.txt" || true
-  fi
-  # Only candidate source files belong in the review patch. Native CDP can leave
-  # generated downloads below the package; a directory-wide add would include them.
-  git -C "$SOURCE_ROOT" ls-files -z -- packages/browser packages/browserbase packages/agent-browser lint | \
-    git --literal-pathspecs add -N --pathspec-from-file=- --pathspec-file-nul
-  git add -N .changeset/browserbase-interactive.md .changeset/config.json docs/guide/browser.md package.json
-  run review-check git diff --check
-
-  git diff --binary > "$OUT/review.patch"
-  tar -czf "$OUT/package-source.tar.gz" --exclude=node_modules --exclude=dist --exclude=downloads packages/browser packages/browserbase packages/agent-browser lint
+  # Whitespace errors anywhere in the owned source, checked against the empty tree so every
+  # line counts, not only the lines this candidate changed.
+  run review-check git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- packages/browser packages/browserbase packages/agent-browser lint scripts
+  tar -czf "$OUT/package-source.tar.gz" -C "$TREE" --exclude=node_modules --exclude=dist --exclude=downloads packages/browser packages/browserbase packages/agent-browser lint scripts
 fi
 exit "$FAILED"

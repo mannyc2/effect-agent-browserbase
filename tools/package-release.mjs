@@ -4,9 +4,9 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkManifest, distTag, packages, readJson, readPackageSet, regularFile, repositoryUrl } from "./packages.mjs";
+import { checkManifest, distTag, packages, readPackageSet, regularFile, repositoryUrl, workspacePins } from "./packages.mjs";
 
-export function publicationManifest(source, catalog, workspaceVersions) {
+export function publicationManifest(source, workspaceVersions) {
   checkManifest(source);
   const manifest = {};
   for (const key of ["name", "version", "description", "license", "repository", "type", "sideEffects", "engines", "dependencies", "peerDependencies", "peerDependenciesMeta"]) {
@@ -22,7 +22,7 @@ export function publicationManifest(source, catalog, workspaceVersions) {
   }
   for (const section of ["dependencies", "peerDependencies"]) {
     for (const [name, value] of Object.entries(manifest[section] ?? {})) {
-      const resolved = value === "workspace:*" ? workspaceVersions[name] : value === "catalog:" ? catalog[name] : value;
+      const resolved = value === "workspace:*" ? workspaceVersions[name] : value;
       assert.equal(typeof resolved, "string", `Unresolved dependency ${name}`);
       assert.match(resolved, /^[~^]?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/, `Non-registry dependency ${name}`);
       manifest[section][name] = resolved;
@@ -77,12 +77,11 @@ export function releaseSetDigest(directory) {
 export function packageReleaseSet(tree, out, sourceSha) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/, "Expected immutable source commit");
   const sources = readPackageSet(tree);
-  const catalog = readJson(join(tree, "package.json")).catalog;
-  const frameworkVersion = readJson(join(tree, "packages/effect-agent/package.json")).version;
+  const frameworkVersion = workspacePins(tree)["effect-agent"];
   distTag(frameworkVersion);
   const version = sources[0].version;
   const workspaceVersions = { ...Object.fromEntries(sources.map((source) => [source.name, source.version])), "effect-agent": frameworkVersion };
-  const manifests = sources.map((source) => publicationManifest(source, catalog, workspaceVersions));
+  const manifests = sources.map((source) => publicationManifest(source, workspaceVersions));
   const stageRoot = join(out, "packed-stage");
   assert.ok(!existsSync(stageRoot) && !existsSync(join(out, "release-set.json")) && !existsSync(join(out, "release.json")), "Refusing an existing package stage or receipt");
   // Validate all members before npm packs anything. Failure leaves no success receipt.

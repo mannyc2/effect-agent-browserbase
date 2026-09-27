@@ -116,17 +116,17 @@ Actions artifact for 14 days. To publish a demo recording, follow
 ## Running locally instead
 
 Nothing needs GitHub. If you would rather not store a key at all, run from a
-trusted workstation against a bootstrapped workspace. `handoff` can only run
+trusted workstation against an installed workspace. `handoff` can only run
 this way, because it shows a Live View URL to the person at the terminal:
 
 ```sh
-bash tools/bootstrap.sh
+bash tools/workspace.sh .work/workspace
 export EFFECT_AGENT_BROWSERBASE_LIVE=1
 export BROWSERBASE_API_KEY=...        # not BROWSER_BASE_API_KEY
 export BROWSERBASE_PROJECT_ID=...
 # Only checks that retrieve provider media need approved delivery origins.
 export BROWSERBASE_ARTIFACT_ORIGINS=https://...
-bash tools/hosted-run.sh .work/upstream/tree .work/hosted demo acceptance
+bash tools/hosted-run.sh .work/workspace .work/hosted demo acceptance
 ```
 
 The `demo` check needs caller-installed FFmpeg, the same way

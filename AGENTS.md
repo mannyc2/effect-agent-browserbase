@@ -1,6 +1,6 @@
 # Repository guide
 
-This repository owns three packages, `packages/browser` (`effect-browser`), `packages/browserbase` (`effect-browserbase`) and `packages/agent-browser` (`effect-agent-browser`), and ships them into a pinned upstream Effect Agent workspace. Upstream is a compatibility harness, not something to change. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
+This repository owns three packages, `packages/browser` (`effect-browser`), `packages/browserbase` (`effect-browserbase`) and `packages/agent-browser` (`effect-agent-browser`), as one Bun workspace. The adapter builds on Effect Agent, which is an npm dependency like any other: `effect-agent` and `@effect-agent/testing` are pinned exactly and updated through Dependabot. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
 
 ## Contracts
 
@@ -8,7 +8,7 @@ This repository owns three packages, `packages/browser` (`effect-browser`), `pac
 - Keep the actual Effect, AgentRuntime and Playwright integration. Do not substitute contracts or native engines to satisfy tests.
 - Keep public exports deliberate. Provider credentials and native SDK values are not durable or model-facing values.
 - Never replay an unresolved mutation, and never weaken the unsupported network policies to make them appear supported.
-- Use the coordinated pins in `.node-version`, `package.json`, `upstream.patch` and `CONTRIBUTING.md`. A version upgrade needs source review and fresh acceptance.
+- Use the coordinated pins in `.node-version`, the root and package `package.json` files, `bun.lock` and `CONTRIBUTING.md`. Every manifest names one exact version of each dependency, and the tooling tests refuse a disagreement. A version upgrade needs source review and fresh acceptance; `agent-browser`'s exact `effect-agent` peer moves with its development version.
 
 ## Package boundaries
 
@@ -19,8 +19,8 @@ This repository owns three packages, `packages/browser` (`effect-browser`), `pac
 
 ## Working
 
-- A session often starts on a host whose Node and Bun differ from the pins, where bootstrap and acceptance refuse to run. Install the pinned runtimes first: `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions.
-- `bash tools/bootstrap.sh <new directory>` builds the pinned workspace from clean upstream, `upstream.patch` and the tracked package files; stage new files first, because only tracked paths are copied. Work in that workspace with Vite+ commands, follow its `AGENTS.md` and `docs/TOOLCHAIN.md`, and read `node_modules/effect/AGENTS.md` completely before writing Effect code. Edit this repository's `packages/`, never only the disposable tree.
+- A session often starts on a host whose Node and Bun differ from the pins, where the workspace installer and acceptance refuse to run. Install the pinned runtimes first: `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"`. Never relax a version assertion or accept the host's versions.
+- `bun install --frozen-lockfile --ignore-scripts && ./node_modules/.bin/vp run patch:tsgo` installs this checkout; work in it with Vite+ commands and read `node_modules/effect/AGENTS.md` completely before writing Effect code. `bash tools/workspace.sh <new directory>` installs the committed HEAD into a fresh directory, as acceptance and the hosted workflow do.
 - Formatting comes from the workspace's own Oxfmt: `vp fmt` for whitespace, and `oxlint -c lint/.oxlintrc.json --fix <file>` for the stylistic rules that `fmt` leaves alone. Scope `--fix` to the files you touched. Do not hand-write formatting to satisfy a gate.
 - Owned code follows the strict policy in `lint/.oxlintrc.json` and the owned tsconfigs; `CONTRIBUTING.md` describes it. Fix a lint finding or Effect diagnostic rather than suppress it. A genuine exception states its reason, and acceptance rejects an Oxlint directive that no longer suppresses anything.
 - The maintenance tools are dependency-free Node scripts: `npm_config_offline=true node --test tools/test/*.test.mjs`. `tools/release` is an isolated ts-release application: `bun install --frozen-lockfile --ignore-scripts`, then `bun test`. Both are host-only tools, not public runtime APIs.

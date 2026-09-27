@@ -123,10 +123,8 @@ for (const [directory, manifest] of [
 }
 
 test("unpaid acceptance cannot silently omit the generic package", () => {
-  assert.match(
-    read("tools/bootstrap.sh"),
-    /'packages\/browser', 'packages\/browserbase', 'packages\/agent-browser', 'lint'\n\]/,
-  );
+  // The workspace is the whole committed tree, not a list of copied paths.
+  assert.match(read("tools/workspace.sh"), /git -C "\$ROOT" archive --format=tar HEAD \| tar -x -C "\$TREE"/);
   const acceptance = read("tools/run-acceptance.sh");
 
   for (const gate of [
@@ -141,35 +139,25 @@ test("unpaid acceptance cannot silently omit the generic package", () => {
   }
   assert.match(
     acceptance,
-    /ls-files -z -- packages\/browser packages\/browserbase packages\/agent-browser lint \|/,
+    /run review-check git diff --check .* -- packages\/browser packages\/browserbase packages\/agent-browser lint scripts\n/,
   );
 });
 
-test("bootstrap's lock and guide describe the canonical adapter rather than retired reexports", () => {
-  const patch = read("upstream.patch");
-  const start = patch.indexOf('+    "packages/agent-browser": {');
-  const end = patch.indexOf("+    },", start) + "+    },".length;
+test("the lockfile describes the canonical adapter rather than retired reexports", () => {
+  // bun.lock is JSON with trailing commas.
+  const lock = JSON.parse(read("bun.lock").replace(/,(\s*[}\]])/g, "$1"));
+  const workspace = lock.workspaces["packages/agent-browser"];
 
-  assert.ok(start > 0 && end > start, "the pinned patch contains the adapter workspace inventory");
-  const workspace = patch.slice(start, end).replace(/^\+/gm, "");
-
-  assert.doesNotMatch(workspace, /"dependencies":/);
-
-  const development = workspace.slice(
-    workspace.indexOf('"devDependencies"'),
-    workspace.indexOf('"peerDependencies"'),
-  );
-
-  assert.match(development, /"effect-browser": "workspace:\*"/);
-  assert.match(development, /"effect-agent": "workspace:\*"/);
-  const peers = workspace.slice(workspace.indexOf('"peerDependencies"'));
-
-  assert.match(peers, /"effect-browser": "workspace:\*"/);
-  assert.match(peers, /"effect-agent": "workspace:\*"/);
-  assert.doesNotMatch(peers, /effect-browserbase/);
-  assert.doesNotMatch(peers, /playwright-core|optionalPeers/);
-  assert.match(patch, /`effect-browser` owns modeled browser sessions/);
-  assert.match(patch, /reaches the isolated Chromium process module/);
-  assert.doesNotMatch(patch, /The adapter also exposes independent `recordings`/);
-  assert.match(patch, /fromSession\(session\)/);
+  assert.ok(workspace, "the lockfile contains the adapter workspace inventory");
+  assert.equal(workspace.dependencies, undefined);
+  assert.equal(workspace.devDependencies["effect-browser"], "workspace:*");
+  assert.match(workspace.devDependencies["effect-agent"], /^0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
+  assert.equal(workspace.peerDependencies["effect-browser"], "workspace:*");
+  assert.equal(workspace.peerDependencies["effect-agent"], workspace.devDependencies["effect-agent"]);
+  assert.equal(workspace.peerDependencies["effect-browserbase"], undefined);
+  assert.equal(workspace.peerDependencies["playwright-core"], undefined);
+  assert.equal(workspace.optionalPeers, undefined);
+  // The framework is a registry release, never a workspace a later install could substitute.
+  assert.match(lock.packages["effect-agent"][0], /^effect-agent@0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
+  assert.match(read("scripts/verify-package-purity.ts"), /reaches the isolated Chromium process module/);
 });

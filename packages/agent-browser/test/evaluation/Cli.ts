@@ -298,7 +298,7 @@ const campaignCommand = ({
     {
       specification,
       directory,
-      // The checkout the workspace was bootstrapped from; its commit is read, not stated.
+      // The checkout the workspace was installed from; its commit is read, not stated.
       sourceRoot: Flag.String("source-root"),
       approve: Flag.String("approve").pipe(Flag.optional),
     },
@@ -485,7 +485,7 @@ type Hosting = (
   apiKey: Redacted.Redacted<string>,
 ) => BrowserbaseBackend;
 
-/** The bootstrapped workspace this module runs in. */
+/** The installed workspace this module runs in. */
 const workspace = fileURLToPath(new URL("../../../../", import.meta.url));
 
 interface Options {

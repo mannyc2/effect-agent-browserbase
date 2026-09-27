@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # The single guarded entry point for paid hosted checks. NOT run by ordinary CI.
 #
-#   bash tools/hosted-run.sh <patched-worktree> <new-output-dir> <check>...
+#   bash tools/hosted-run.sh <installed-workspace> <new-output-dir> <check>...
+#
+# The workspace is a clean checkout after `bun install --frozen-lockfile`, or a directory that
+# tools/workspace.sh installed.
 #
 # Every check, its budget, the settings it needs and the one claim it supports are declared in
 # packages/browserbase/hosted/checks.ts. Names not listed there are refused, and every
@@ -15,7 +18,7 @@ test "${EFFECT_AGENT_BROWSERBASE_LIVE:-}" = 1 || {
 : "${BROWSERBASE_API_KEY:?BROWSERBASE_API_KEY is required}"
 : "${BROWSERBASE_PROJECT_ID:?BROWSERBASE_PROJECT_ID is required}"
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TREE="$(cd "${1:?pass the patched effect-agent worktree}" && pwd)"
+TREE="$(cd "${1:?pass an installed workspace}" && pwd)"
 OUT="${2:?pass a new output directory}"
 shift 2
 REGISTRY="$TREE/packages/browserbase/hosted/checks.ts"

@@ -183,7 +183,7 @@ export function checkDependencyBoundary(
         name === browser.name ? browserVersion : frameworkVersion,
         `Host peer ${name} does not match the qualified workspace`,
       );
-    } else {
+    } else if (name === browser.name) {
       assert.equal(
         manifest.peerDependencies[name],
         "workspace:*",
@@ -193,6 +193,18 @@ export function checkDependencyBoundary(
         manifest.devDependencies?.[name],
         "workspace:*",
         `Host peer ${name} requires a workspace development dependency`,
+      );
+    } else {
+      // The framework comes from npm: the release qualifies the exact version it was tested with.
+      assert.match(
+        manifest.peerDependencies[name],
+        versionPattern,
+        `Host peer ${name} must be exact`,
+      );
+      assert.equal(
+        manifest.devDependencies?.[name],
+        manifest.peerDependencies[name],
+        `Host peer ${name} must be developed against the version it requires`,
       );
     }
   }
@@ -254,4 +266,49 @@ export function readPackageSet(tree) {
   }
 
   return sources;
+}
+
+/**
+ * One version of every registry dependency across the root and package manifests. There is no
+ * catalog: each manifest names its versions, so an update that reaches only some of them is
+ * refused here rather than installed as two copies.
+ */
+export function workspacePins(tree) {
+  const manifests = [
+    ["package.json", readJson(join(tree, "package.json"))],
+    ...packages.map((item) => [
+      `${item.directory}/package.json`,
+      readJson(join(tree, item.directory, "package.json")),
+    ]),
+  ];
+  const pins = {};
+  const owners = {};
+
+  for (const [path, manifest] of manifests) {
+    assert.equal(manifest.catalog, undefined, `${path} must name versions, not a catalog`);
+    for (const section of ["dependencies", "devDependencies"]) {
+      for (const [name, value] of Object.entries(manifest[section] ?? {})) {
+        if (value === "workspace:*" && packages.some((item) => item.name === name)) continue;
+        assert.ok(
+          /^(?:npm:(?:@[a-z0-9-]+\/)?[a-z0-9.-]+@)?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(value),
+          `${path} must pin ${name} to an exact registry version`,
+        );
+        assert.ok(
+          pins[name] === undefined || pins[name] === value,
+          `${name} is ${pins[name]} in ${owners[name]} but ${value} in ${path}`,
+        );
+        pins[name] = value;
+        owners[name] ??= path;
+      }
+    }
+  }
+  // Each testing release depends on exactly the framework release it was published with.
+  if (pins["@effect-agent/testing"] !== undefined)
+    assert.equal(
+      pins["@effect-agent/testing"],
+      pins["effect-agent"],
+      "@effect-agent/testing must be the effect-agent release",
+    );
+
+  return pins;
 }

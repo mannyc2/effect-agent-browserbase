@@ -16,14 +16,21 @@ import { EvidenceError } from "./Evidence.ts";
 
 const run = promisify(execFile);
 
-/** The paths the bootstrapped workspace copies from this repository. */
-const owned = ["packages/browser", "packages/browserbase", "packages/agent-browser", "lint"];
+/** The paths that decide what a campaign runs: the packages, their lint policy and the lockfile. */
+const owned = [
+  "packages/browser",
+  "packages/browserbase",
+  "packages/agent-browser",
+  "lint",
+  "package.json",
+  "bun.lock",
+];
 
 const refuse = (message: string) => new CampaignRefusal({ reason: "provenance", message });
 
 /**
  * The commit a campaign runs from: `source` must be a clean checkout, and every tracked file it
- * copies into a workspace must be byte-identical in `tree`, the workspace that runs.
+ * decides must be byte-identical in `tree`, the workspace that runs.
  */
 export const provenance = Effect.fn("Evaluation.provenance")(function* (
   source: string,
@@ -58,7 +65,7 @@ export const provenance = Effect.fn("Evaluation.provenance")(function* (
     });
 
     if (!same)
-      return yield* refuse(`The workspace's ${file} is not the source commit's; bootstrap again.`);
+      return yield* refuse(`The workspace's ${file} is not the source commit's; install again.`);
   }
 
   return head;

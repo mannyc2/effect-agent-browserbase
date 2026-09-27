@@ -100,7 +100,7 @@ const captions = [
   "Reading <b>the</b> page",
   "Typing into the search box",
   "Following the Pricing link",
-];
+] as const;
 
 const narration = [captions[0], captions[1], captions[2], null, captions[3], null] as const;
 

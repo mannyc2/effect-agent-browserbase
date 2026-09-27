@@ -16,7 +16,7 @@ An action with an unknown outcome must not be replayed automatically. Local disc
 
 ## Supply chain
 
-PR CI has read-only GitHub permissions and does not receive hosted/model credentials. Actions are pinned by commit and dependency installation is frozen. Package output is allowlisted and checked in an external consumer. Published artifacts contain emitted runtime/declarations, README and license—not fixtures, recovery tools, credentials or lifecycle scripts.
+PR CI has read-only GitHub permissions and does not receive hosted/model credentials. Actions are pinned by commit and dependency installation is frozen: the whole npm dependency graph, Effect Agent included, is this repository's committed `bun.lock`, installed with lifecycle scripts disabled. Package output is allowlisted and checked in an external consumer. Published artifacts contain emitted runtime/declarations, README and license—not fixtures, recovery tools, credentials or lifecycle scripts.
 
 The optional hosted Browserbase workflow is manual and default-off, and is designed to use a protected environment for provider credentials. It has no `pull_request`, `pull_request_target` or `schedule` trigger; both jobs require a manual dispatch from `main`, and checkout pins that event's commit. These source guards do not replace required reviewers and a main-only deployment policy on the branch-restricted protected environment. Configure those controls before enabling it. Ordinary PR CI remains unable to allocate a session. Rotate a Browserbase key that has been exposed outside GitHub's secret store. See [hosted runs](docs/HOSTED.md).
 

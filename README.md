@@ -106,12 +106,12 @@ And footage meant to be watched: a storyboard performed with a drawn pointer, pa
 
 ## Development
 
-Read [Contributing](CONTRIBUTING.md), the applicable package guide and [AGENTS.md](AGENTS.md). The repository builds into a pinned upstream Effect Agent compatibility workspace. All three owned packages use one coordinated version; the upstream framework pins remain separate.
+Read [Contributing](CONTRIBUTING.md), the applicable package guide and [AGENTS.md](AGENTS.md). The repository is one Bun workspace with a committed lockfile. All three owned packages use one coordinated version; Effect Agent is an exactly pinned npm dependency, updated through Dependabot.
 
 ```sh
 # Use pinned Node 24.14.1 and Bun 1.4.2.
-bash tools/bootstrap.sh
-cd .work/upstream/tree
+bun install --frozen-lockfile --ignore-scripts
+./node_modules/.bin/vp run patch:tsgo
 ./node_modules/.bin/vp run -F effect-browser check
 ./node_modules/.bin/vp run -F effect-browserbase check
 ./node_modules/.bin/vp run -F effect-agent-browser check

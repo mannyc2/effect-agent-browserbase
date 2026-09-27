@@ -77,8 +77,8 @@ jobs:
         with:
           bun-version: '1.4.2'
           no-cache: true
-      - name: Restore the pinned integration workspace
-        run: bash tools/bootstrap.sh "$BROWSERBASE_WORK_ROOT/upstream"
+      - name: Install the frozen workspace
+        run: bash tools/workspace.sh "$BROWSERBASE_WORK_ROOT/workspace"
       - name: Install the caller-owned media tools
         if: ${{ contains(format(' {0} ', inputs.checks), ' demo ') }}
         run: sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg
@@ -95,7 +95,7 @@ jobs:
           test -n "${BROWSERBASE_DEMO_URL}" || unset BROWSERBASE_DEMO_URL
           test -n "${BROWSERBASE_ARTIFACT_ORIGINS}" || unset BROWSERBASE_ARTIFACT_ORIGINS
           read -ra names <<< "$CHECKS"
-          bash tools/hosted-run.sh "$BROWSERBASE_WORK_ROOT/upstream/tree" "$BROWSERBASE_WORK_ROOT/hosted" "${names[@]}"
+          bash tools/hosted-run.sh "$BROWSERBASE_WORK_ROOT/workspace" "$BROWSERBASE_WORK_ROOT/hosted" "${names[@]}"
       - name: Retain the recording, records and checksums
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

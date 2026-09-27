@@ -144,7 +144,7 @@ measured.
 ## Running it
 
 FFmpeg and ffprobe must be on `PATH`; encoding is deliberately not a package
-dependency. From a bootstrapped workspace:
+dependency. From an installed workspace:
 
 ```sh
 cd packages/browserbase
