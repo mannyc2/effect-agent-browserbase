@@ -38,6 +38,15 @@ const types = (items: unknown): ReadonlyArray<unknown> =>
 type OpenAiPayload = Parameters<OpenAiClient.Service["createResponseStream"]>[0];
 
 /**
+ * Through OpenRouter, only the vendor's own endpoint may serve a request, with no fallback, so
+ * the vendor's listed rates are the ones charged. The field is part of the admitted bytes.
+ */
+const routing = (subject: Subject) =>
+  subject.settings.gateway === "openrouter"
+    ? { provider: { only: [subject.provider], allow_fallbacks: false } }
+    : {};
+
+/**
  * Stored conversations, referenced items, files and images, hosted tools and non-standard tiers
  * bill tokens the request's bytes do not bound, or at other rates.
  */
@@ -137,9 +146,11 @@ export const admitOpenAi = (
   ...native,
   createResponse: () => Effect.suspend(() => Effect.fail(allowance.refuse("contract"))),
   createEmbedding: () => Effect.suspend(() => Effect.fail(allowance.refuse("contract"))),
-  createResponseStream: (payload) =>
-    Effect.suspend(() =>
-      openAiPriced(payload, subject)
+  createResponseStream: (original) =>
+    Effect.suspend(() => {
+      const payload = { ...original, ...routing(subject) };
+
+      return openAiPriced(payload, subject)
         ? admitted(
             allowance,
             gate,
@@ -152,8 +163,8 @@ export const admitOpenAi = (
                 ),
               ),
           )
-        : Effect.fail(allowance.refuse("contract")),
-    ),
+        : Effect.fail(allowance.refuse("contract"));
+    }),
 });
 
 /**
@@ -180,6 +191,7 @@ const forGateway = (request: AnthropicRequest, subject: Subject): AnthropicReque
         ...request,
         payload: {
           ...request.payload,
+          ...routing(subject),
           messages: request.payload.messages.map(
             (message) => withoutNullCacheControl(message) as typeof message,
           ),
@@ -378,26 +390,40 @@ const endpoints = {
  * OpenRouter ends a stream with `data: [DONE]`, which is not an event of either format and
  * arrives in the same chunk as the last one. Only that line is dropped.
  */
-const withoutDone = (client: HttpClient.HttpClient) =>
+export const withoutDone = (client: HttpClient.HttpClient) =>
   client.pipe(
     HttpClient.transformResponse(
-      Effect.map((response) =>
-        HttpClientResponse.fromWeb(
+      Effect.map((response) => {
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+        // Nothing is read until the body is: an unread response keeps its own cleanup.
+        const body = new ReadableStream<Uint8Array>(
+          {
+            pull: async (controller) => {
+              reader ??= Stream.toReadableStream(
+                response.stream.pipe(
+                  Stream.decodeText,
+                  Stream.splitLines,
+                  Stream.filter((line) => line !== "data: [DONE]"),
+                  Stream.map((line) => `${line}\n`),
+                  Stream.encodeText,
+                ),
+              ).getReader();
+              const next = await reader.read();
+
+              if (next.done) controller.close();
+              else controller.enqueue(next.value);
+            },
+            cancel: (reason) => reader?.cancel(reason),
+          },
+          { highWaterMark: 0 },
+        );
+
+        return HttpClientResponse.fromWeb(
           response.request,
-          new Response(
-            Stream.toReadableStream(
-              response.stream.pipe(
-                Stream.decodeText,
-                Stream.splitLines,
-                Stream.filter((line) => line !== "data: [DONE]"),
-                Stream.map((line) => `${line}\n`),
-                Stream.encodeText,
-              ),
-            ),
-            { status: response.status, headers: response.headers },
-          ),
-        ),
-      ),
+          new Response(body, { status: response.status, headers: response.headers }),
+        );
+      }),
     ),
   );
 

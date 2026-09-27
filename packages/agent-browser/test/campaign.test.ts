@@ -8,8 +8,10 @@ import { join } from "node:path";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { ConfigProvider, Effect, Exit, Redacted } from "effect";
+import { Cause, ConfigProvider, Effect, Exit, Redacted, Stream } from "effect";
+import { AgentPolicyError } from "effect-agent/agent-error";
 import { Command } from "effect/unstable/cli";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import {
   authorize,
@@ -21,10 +23,16 @@ import {
 } from "./evaluation/Campaign.ts";
 import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
-import { Journal, manifest } from "./evaluation/Evidence.ts";
+import { diagnose, Journal, manifest } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
 import { provenance } from "./evaluation/Provenance.ts";
-import { admitAnthropic, admitOpenAi, guarded, measured } from "./evaluation/Provider.ts";
+import {
+  admitAnthropic,
+  admitOpenAi,
+  guarded,
+  measured,
+  withoutDone,
+} from "./evaluation/Provider.ts";
 import { replay } from "./evaluation/Replay.ts";
 import { Ledger } from "./evaluation/Spend.ts";
 import { ownerPolicy, run } from "./evaluation/Tasks.ts";
@@ -101,6 +109,8 @@ it.effect("a real-model plan shows its whole matrix and bounds before anything r
     expect(new Set(shown.runs.map((entry) => entry.backend))).toEqual(
       new Set(["chromium", "scripted-owner"]),
     );
+    // The plan shows the time bound measured runs use, not the script's.
+    expect(shown.cases.signup?.bounds.maxDurationMillis).toBe(180_000);
     expect(shown.budget).toMatchObject({
       perRunMicrousd: 250_000,
       campaignMicrousd: 4_000_000,
@@ -865,8 +875,13 @@ it.effect("a measured run can reach either provider through OpenRouter", () =>
       "https://openrouter.ai/api/v1/responses",
       "https://openrouter.ai/api/v1/responses",
     ]);
+    // Only the vendor's own endpoint serves it, so its listed rates are the ones charged.
     for (const body of openai.bodies) {
-      expect(body).toMatchObject({ model: "openai/gpt-test", store: false });
+      expect(body).toMatchObject({
+        model: "openai/gpt-test",
+        store: false,
+        provider: { only: ["openai"], allow_fallbacks: false },
+      });
       expect(body).not.toHaveProperty("service_tier");
     }
 
@@ -879,7 +894,11 @@ it.effect("a measured run can reach either provider through OpenRouter", () =>
       { url: "https://openrouter.ai/api/v1/messages", credentials: ["authorization", "x-api-key"] },
     ]);
     for (const body of anthropic.bodies) {
-      expect(body).toMatchObject({ model: "anthropic/claude-test", max_tokens: 2048 });
+      expect(body).toMatchObject({
+        model: "anthropic/claude-test",
+        max_tokens: 2048,
+        provider: { only: ["anthropic"], allow_fallbacks: false },
+      });
       expect(body).not.toHaveProperty("service_tier");
       // OpenRouter refuses a null `cache_control`, which the provider package sends and
       // Anthropic's own API reads as absent.
@@ -1083,3 +1102,50 @@ it.effect("a campaign's source revision is a clean checkout matching the workspa
     expect(yield* reason(provenance(root, tree))).toBe("provenance");
   }),
 );
+
+// OpenRouter's closing `data: [DONE]` line is dropped however the stream is chunked: split
+// multi-byte characters, CRLF line ends and every other event survive intact.
+it.effect("the OpenRouter stream keeps every event but its closing line", () =>
+  Effect.gen(function* () {
+    const events = [
+      'event: response.output_text.delta\r\ndata: {"delta":"Grüße, 世界"}\r\n\r\n',
+      'event: response.completed\r\ndata: {"type":"response.completed"}\r\n\r\n',
+      "data: [DONE]\r\n\r\n",
+    ].join("");
+
+    const bytes = new TextEncoder().encode(events);
+
+    const client = HttpClient.make((request) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          new Response(
+            new ReadableStream({
+              start: (controller) => {
+                // Five-byte chunks split the multi-byte characters and the CRLF pairs.
+                for (let offset = 0; offset < bytes.length; offset += 5)
+                  controller.enqueue(bytes.slice(offset, offset + 5));
+                controller.close();
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+
+    const response = yield* withoutDone(client).execute(
+      HttpClientRequest.get("https://openrouter.ai/api/v1/responses"),
+    );
+
+    const text = yield* response.stream.pipe(Stream.decodeText, Stream.mkString);
+
+    // Only that one line goes; lines are rejoined with LF, which SSE reads as CRLF.
+    expect(text.split(/\r?\n/)).toEqual(events.replace("data: [DONE]\r\n", "").split(/\r?\n/));
+  }),
+);
+
+it("a policy stop is recorded by the limit it names", () => {
+  expect(
+    diagnose(Cause.fail(AgentPolicyError.make({ limit: "duration", message: "stopped" }))),
+  ).toMatchObject({ reason: "duration", status: null });
+});

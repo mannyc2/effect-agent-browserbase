@@ -302,7 +302,8 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
             initialState: declared.initialState,
             backend: declared.backend,
             fixture: declared.fixture,
-            bounds: declared.bounds,
+            // A measured run's time bound is the campaign's, not the script's.
+            bounds: { ...declared.bounds, maxDurationMillis: spec.budget.maxRunSeconds * 1000 },
           },
         ];
       }),

@@ -209,7 +209,10 @@ export const Facts = Schema.Struct({
     Schema.Struct({
       category: Schema.Literals(["interrupted", "agent", "browser", "infrastructure", "budget"]),
       tag: Schema.String.check(Schema.isMaxLength(64)),
-      /** A provider failure's reason and HTTP status, never its message, body or headers. */
+      /**
+       * A provider failure's reason and HTTP status, or the limit a policy stop names; never a
+       * message, body or header.
+       */
       reason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
       status: Schema.optionalKey(Schema.NullOr(Schema.Int)),
     }),
