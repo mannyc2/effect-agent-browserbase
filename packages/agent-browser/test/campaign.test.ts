@@ -12,12 +12,12 @@ import { Command } from "effect/unstable/cli";
 import { authorize, allowance, measuredManifest, plan, type Plan } from "./evaluation/Campaign.ts";
 import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
-import { Journal } from "./evaluation/Evidence.ts";
+import { Journal, manifest } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
 import { admitAnthropic, admitOpenAi, guarded, measured } from "./evaluation/Provider.ts";
 import { replay } from "./evaluation/Replay.ts";
 import { Ledger } from "./evaluation/Spend.ts";
-import { run } from "./evaluation/Tasks.ts";
+import { ownerPolicy, run } from "./evaluation/Tasks.ts";
 import { anthropicWire, openAiWire, type WireTurn } from "./fixtures/ProviderWire.ts";
 
 const rates = {
@@ -866,5 +866,30 @@ it.effect("a provider refusal is recorded by reason and status, never by its mes
     });
     expect(grade(evidence).termination).toBe("infrastructure-failure");
     expect(JSON.stringify(evidence)).not.toContain("SECRET");
+  }),
+);
+
+// A real model's calls take seconds each: the browser must outlive the agent's own run bound, or
+// its later actions meet a closed session and the model is graded for the harness's timeout.
+it.effect("the browser owner outlives a measured run's time bound", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(readingSpec);
+    const measuredRun = measuredManifest(shown, shown.runs[0]!, "b".repeat(40));
+
+    expect(ownerPolicy(measuredRun).maxElapsedMillis).toBe(210_000);
+
+    const scripted = manifest(
+      {
+        runId: "signup-base-completes-0",
+        task: "signup",
+        toolkit: "base",
+        policy: "completes",
+        role: "reference",
+        trial: 0,
+      },
+      "unavailable",
+    );
+
+    expect(ownerPolicy(scripted).maxElapsedMillis).toBe(60_000);
   }),
 );

@@ -364,6 +364,17 @@ const owner = (
     };
   });
 
+/**
+ * The owner's own bounds. It outlives the agent's run bound by 30 seconds, so a slow real model
+ * meets its own time limit rather than a closed browser, and the host can still read what the
+ * run left: a script's 30-second bound keeps the owner's 60.
+ */
+export const ownerPolicy = (manifest: Journal["manifest"]) =>
+  BrowserPolicy.unrestricted({
+    maxActions: manifest.bounds.maxActions,
+    maxElapsedMillis: manifest.bounds.maxDurationMillis + 30_000,
+  });
+
 const closed = (journal: Journal, result: "confirmed" | "failed") =>
   Effect.sync(() => {
     journal.facts = { ...journal.facts, ownerClose: result };
@@ -400,10 +411,7 @@ const chromium = (journal: Journal) =>
   }).pipe(Layer.provide(NodeCrypto.layer));
 
 const scriptedOptions = (journal: Journal) => ({
-  policy: BrowserPolicy.unrestricted({
-    maxActions: journal.manifest.bounds.maxActions,
-    maxElapsedMillis: 60000,
-  }),
+  policy: ownerPolicy(journal.manifest),
   viewport: journal.manifest.viewport,
   onCleanup: (receipt: Testing.ScriptedCleanupResult) =>
     Effect.sync(() => {
@@ -470,22 +478,15 @@ const onChromium = (
         }),
       );
 
-      yield* Browser.scoped(
-        Chromium.launch(
-          BrowserPolicy.unrestricted({
-            maxActions: journal.manifest.bounds.maxActions,
-            maxElapsedMillis: 60000,
-          }),
-        ),
-        (browser) =>
-          Effect.gen(function* () {
-            const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+      yield* Browser.scoped(Chromium.launch(ownerPolicy(journal.manifest)), (browser) =>
+        Effect.gen(function* () {
+          const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
 
-            yield* host
-              .run(runAgent(journal, driver, start))
-              .pipe(Effect.exit, Effect.flatMap(settle(journal)));
-            yield* owner(journal, browser.status, host.toolFailures);
-          }),
+          yield* host
+            .run(runAgent(journal, driver, start))
+            .pipe(Effect.exit, Effect.flatMap(settle(journal)));
+          yield* owner(journal, browser.status, host.toolFailures);
+        }),
       ).pipe(
         Effect.provide(chromium(journal)),
         Effect.andThen(closed(journal, "confirmed")),
