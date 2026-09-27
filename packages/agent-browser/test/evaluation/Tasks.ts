@@ -22,7 +22,7 @@ import {
   type Composition,
   type Task,
 } from "./Cases.ts";
-import { EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
+import { diagnose, EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
 import { answer, call, type Driver, prose, scripted, type Turn } from "./Model.ts";
 
 /** Every case offers the same Tools per composition, so comparisons hold the action space fixed. */
@@ -281,7 +281,7 @@ const driverFor = (journal: Journal, url: string, measured: Driver | undefined) 
 const settle =
   (journal: Journal) =>
   (exit: Exit.Exit<AgentRuntime.AgentResult<Output>, unknown>): Effect.Effect<void> =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       if (Exit.isSuccess(exit)) {
         journal.facts = {
           ...journal.facts,
@@ -293,10 +293,11 @@ const settle =
           outputValid: true,
         };
 
-        return;
+        return Effect.void;
       }
       const tag = tagOf(exit.cause);
       const refused = tag === "AiError" && (journal.facts.usage?.refused ?? null) !== null;
+      const provider = tag === "AiError" && !refused ? diagnose(exit.cause) : undefined;
 
       journal.facts = {
         ...journal.facts,
@@ -313,8 +314,21 @@ const settle =
                       ? "infrastructure"
                       : "agent",
               tag,
+              ...(provider === undefined
+                ? {}
+                : { reason: provider.reason, status: provider.status }),
             },
       };
+
+      // The provider's own description goes to the operator's console, never to the record.
+      return provider === undefined
+        ? Effect.void
+        : Effect.logWarning("Provider request failed", {
+            run: journal.manifest.runId,
+            reason: provider.reason,
+            status: provider.status,
+            description: provider.description,
+          });
     });
 
 /** Host-only owner state and the original failures, read after the agent and before close. */

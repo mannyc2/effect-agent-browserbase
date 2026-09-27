@@ -9,7 +9,9 @@ import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unsta
 
 export type WireTurn =
   | { readonly call: string; readonly params: unknown; readonly usage: WireUsage }
-  | { readonly text: string; readonly usage: WireUsage };
+  | { readonly text: string; readonly usage: WireUsage }
+  /** The provider refuses the request with this HTTP status and a message naming a secret. */
+  | { readonly refuse: number };
 
 export interface WireUsage {
   readonly input: number;
@@ -38,7 +40,9 @@ const events = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], lines
     ),
   );
 
-const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: WireTurn, index: number) => string) => {
+type Reply = Exclude<WireTurn, { readonly refuse: number }>;
+
+const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: Reply, index: number) => string) => {
   const bodies: Array<Readonly<Record<string, Schema.Json>>> = [];
   /** Where each request went, and which credential headers it carried (never their values). */
   const sent: Array<{ readonly url: string; readonly credentials: ReadonlyArray<string> }> = [];
@@ -59,6 +63,19 @@ const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: WireTurn, index: num
         const turn = turns[index];
 
         if (turn === undefined) return yield* Effect.die("Provider script exhausted");
+        if ("refuse" in turn)
+          return HttpClientResponse.fromWeb(
+            request,
+            HttpServerResponse.toWeb(
+              HttpServerResponse.jsonUnsafe(
+                {
+                  type: "error",
+                  error: { type: "invalid_request_error", message: "Rejected field SECRET" },
+                },
+                { status: turn.refuse, headers },
+              ),
+            ),
+          );
 
         return events(request, reply(turn, index));
       }).pipe(Effect.orDie),

@@ -209,6 +209,9 @@ export const Facts = Schema.Struct({
     Schema.Struct({
       category: Schema.Literals(["interrupted", "agent", "browser", "infrastructure", "budget"]),
       tag: Schema.String.check(Schema.isMaxLength(64)),
+      /** A provider failure's reason and HTTP status, never its message, body or headers. */
+      reason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
+      status: Schema.optionalKey(Schema.NullOr(Schema.Int)),
     }),
   ),
   /** The fixture server's own ledger; null where the case has no application state. */
@@ -279,6 +282,28 @@ export const tagOf = (cause: Cause.Cause<unknown>) =>
         onNone: () => "Defect",
         onSome: (error) => (Schema.is(Tagged)(error) ? error._tag.slice(0, 64) : "Error"),
       });
+
+const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+
+/**
+ * A provider failure's reason tag and HTTP status, and its description for the operator's
+ * console only: provider text never enters a record.
+ */
+export const diagnose = (cause: Cause.Cause<unknown>) => {
+  const reason = record(record(Option.getOrUndefined(Cause.findErrorOption(cause)))?.reason);
+  const tag = reason?._tag;
+
+  if (typeof tag !== "string") return undefined;
+  const status = record(record(reason?.http)?.response)?.status;
+  const description = reason?.description;
+
+  return {
+    reason: tag.slice(0, 64),
+    status: typeof status === "number" && Number.isInteger(status) ? status : null,
+    description: typeof description === "string" ? description.slice(0, 500) : null,
+  };
+};
 
 export const byteLength = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 

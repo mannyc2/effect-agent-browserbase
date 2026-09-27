@@ -837,3 +837,26 @@ it.effect("a measured run can reach either provider through OpenRouter", () =>
     expect(JSON.stringify([viaOpenAi, viaAnthropic])).not.toContain("SECRET");
   }),
 );
+
+// A provider's refusal is kept as its reason and HTTP status. Its message is provider text, so it
+// stays out of the record, and the reservation for a request whose billing is unknown is kept.
+it.effect("a provider refusal is recorded by reason and status, never by its message", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(readingSpec);
+    const evidence = yield* measure(shown, "claude", anthropicWire([{ refuse: 400 }]));
+
+    expect(evidence.facts.failure).toEqual({
+      category: "infrastructure",
+      tag: "AiError",
+      reason: "InvalidRequestError",
+      status: 400,
+    });
+    expect(evidence.facts.usage).toMatchObject({
+      admitted: 1,
+      settled: 0,
+      status: "includes-retained-reservations",
+    });
+    expect(grade(evidence).termination).toBe("infrastructure-failure");
+    expect(JSON.stringify(evidence)).not.toContain("SECRET");
+  }),
+);
