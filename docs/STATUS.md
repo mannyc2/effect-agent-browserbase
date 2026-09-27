@@ -49,12 +49,15 @@ Chromium with a scripted model: no model provider has been called and no hosted 
 
 The unpaid evaluation foundation for [#93](https://github.com/mannyc2/effect-agent-browserbase/issues/93)
 lives in `effect-agent-browser`'s unpublished tests. It retains bounded model-boundary records and
-host facts for four cases (form submission, a write whose acknowledgement is lost over Chromium, a
-cancelled waiter and a long reading) and grades task success, output, claims, duplicate writes,
-retries after an unknown outcome, termination and cleanup separately. Scripted known-bad policies
-must be graded as declared, and retained-evidence tests cover the safe-handling failures a correct
-owner cannot be driven into; compatible actions replay offline, retained failures included. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md) lists what it
-does not prove; no real model, paid campaign or hosted session has been run for it.
+host facts for six cases: form submission; over Chromium, a write whose acknowledgement is lost, a
+write refused before dispatch after a re-render, and one named hostile-page attack; a cancelled
+waiter; and a long reading. It grades task success, output, claims, duplicate writes, retries after
+an unknown outcome, termination, cleanup, whether the injected condition occurred and whether the
+attack was resisted separately. The re-render and attack cases are declared held out from tuning.
+Scripted known-bad policies must be graded as declared, and retained-evidence tests cover the
+safe-handling failures a correct owner cannot be driven into; compatible actions replay offline,
+retained failures included. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md)
+lists what it does not prove; no real model, paid campaign or hosted session has been run for it.
 
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 

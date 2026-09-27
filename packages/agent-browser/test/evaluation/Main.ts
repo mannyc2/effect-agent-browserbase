@@ -5,7 +5,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Exit, FileSystem, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 
-import { cases, maxRuns, plan, type Entry } from "./Cases.ts";
+import { cases, maxRuns, plan, Split, type Entry } from "./Cases.ts";
 import { EvidenceError, Journal, load, manifest, save, tagOf } from "./Evidence.ts";
 import { grade } from "./Grading.ts";
 
@@ -29,7 +29,7 @@ const preview = Command.make(
     yield* Console.log(
       JSON.stringify(
         {
-          version: 2,
+          version: 3,
           mode: "unpaid-plan",
           concurrency: 1,
           maxRuns,
@@ -38,6 +38,9 @@ const preview = Command.make(
               task,
               {
                 family: declared.family,
+                revision: declared.revision,
+                split: declared.split,
+                attack: declared.attack,
                 goal: declared.goal,
                 initialState: declared.initialState,
                 backend: declared.backend,
@@ -49,7 +52,16 @@ const preview = Command.make(
           runs: runs.map((entry) => manifest(entry, "unavailable")),
           paidExecution:
             "unavailable; model/browser budgets and adapters are pending separate authorization",
-          heldOut: "none; these development fixtures are tuning cases",
+          splits: Object.fromEntries(
+            Split.literals.map((split) => [
+              split,
+              Object.entries(cases)
+                .filter(([, declared]) => declared.split === split)
+                .map(([task]) => task),
+            ]),
+          ),
+          heldOut:
+            "held-out results must not inform Tool, instruction or prompt changes; one that does is re-declared tuning at a new revision",
           calibration:
             "deterministic oracles only: every known-bad policy must be graded as declared",
           judges: "disabled",
@@ -65,6 +77,7 @@ const directory = Argument.String("directory");
 
 const Outcome = Schema.Struct({
   runId: Schema.String,
+  split: Split,
   recorded: Schema.Boolean,
   harness: Schema.NullOr(Schema.String),
   evidence: Schema.Literals(["complete", "incomplete"]),
@@ -129,6 +142,7 @@ const run = Command.make(
 
         outcomes.push({
           runId: entry.runId,
+          split: evidence.manifest.split,
           recorded: Exit.isSuccess(saved),
           harness,
           evidence: report.evidence,
@@ -153,10 +167,21 @@ const run = Command.make(
 
     const summarize = Effect.suspend(() => {
       const summary = {
-        version: 2,
+        version: 3,
         sourceRevision: source,
         planned: runs.length,
         recorded: outcomes.filter((outcome) => outcome.recorded).length,
+        // Held-out runs are counted apart, so a tuning result is never reported as held-out.
+        splits: Object.fromEntries(
+          Split.literals.map((split) => [
+            split,
+            {
+              planned: runs.filter((entry) => cases[entry.task].split === split).length,
+              recorded: outcomes.filter((outcome) => outcome.split === split && outcome.recorded)
+                .length,
+            },
+          ]),
+        ),
         harnessFailures: outcomes.filter((outcome) => outcome.harness !== null).length,
         incompleteEvidence: outcomes.filter((outcome) => outcome.evidence === "incomplete").length,
         calibrationDisagreements: outcomes.filter((outcome) => outcome.calibrated === false).length,
@@ -215,7 +240,7 @@ const replayCommand = Command.make(
 
 Command.make("browser-evaluation").pipe(
   Command.withSubcommands([preview, run, regrade, replayCommand]),
-  Command.run({ version: "2.0.0" }),
+  Command.run({ version: "3.0.0" }),
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,
 );
