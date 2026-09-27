@@ -288,7 +288,7 @@ and spend a campaign may use.
 ../../node_modules/.bin/vp run evaluation plan pilot.json
 EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1 OPENROUTER_API_KEY=... \
   ../../node_modules/.bin/vp run evaluation campaign pilot.json results/pilot-1 \
-  --source-revision <candidate-40-character-SHA> --approve <digest from plan>
+  --source-root <this repository's checkout> --approve <digest from plan>
 ```
 
 `plan` is the dry run. It reads no credential, imports no runner and spends
@@ -301,8 +301,10 @@ own duration bound, which is sized for a script's milliseconds per turn, not a
 real model's seconds. It refuses, rather than truncates, a plan it cannot
 bound:
 
-- **Browserbase:** a hosted browser cannot reach the loopback fixture these
-  cases serve, and no hosted fixture is declared.
+- **Browserbase for reading or the lost acknowledgement:** reading uses the
+  scripted owner, and the lost acknowledgement's late write reaches a hosted
+  fixture's host only after the owner has fenced the page (see
+  [Browserbase](#browserbase)).
 - **`cancelled-mutation`:** the host interrupts the agent at a scripted dispatch
   gate, so the case measures the owner's fencing, not a model's decision.
 - **Too many runs:** more than 120.
@@ -321,17 +323,20 @@ vendor's listed rates are the ones charged. A variant (`:free`, `:batch`) routes
 and prices differently, so it is refused. A key with its own provider keys
 (BYOK) is billed on those accounts' terms instead, and is not supported.
 
-`backends` names the browsers a campaign may use; each case still runs on its
-own backend, which the plan shows per run, so `reading` runs on the scripted
-owner.
+`backends` names the browsers a campaign may use. `chromium` runs each case on
+its own backend, which the plan shows per run, so `reading` runs on the scripted
+owner; `browserbase` runs the served cases on the hosted fixture, one hosted
+session per run.
 
 `campaign` needs `EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1`, the digest `plan`
 printed for the same specification, and each credential the plan names, read
 through Effect `Config` and kept redacted. All three are checked before its directory exists, a runner is
 loaded, a browser starts or a model is called; a refusal never prints the
-digest, so approving means having read the plan. Runs are serial, in the plan's
-order, over local Chromium or the scripted owner, with each case's bounds except
-its time bound, which is `maxRunSeconds`.
+digest, so approving means having read the plan. A plan with Browserbase runs
+also needs `EFFECT_AGENT_BROWSERBASE_LIVE=1`, the opt-in Browserbase's guarded
+checks use, and `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID`. Runs are
+serial, in the plan's order, with each case's bounds except its time bound, which
+is `maxRunSeconds`.
 
 The CLI logs warnings and above to stderr, apart from the JSON it prints. That
 includes a failed run's provider description and response body, and the
@@ -368,6 +373,19 @@ processing, are not modeled: the specification's rates must be the ones that
 apply to the account. Nothing is retried: a refused or failed request ends its
 run, and an unresolved mutation is never repeated.
 
+**Provenance.** A campaign reads its source revision from `--source-root`, the
+checkout the workspace was bootstrapped from. The checkout must be clean, and
+every file it copies into a workspace (`packages/browser`,
+`packages/browserbase`, `packages/agent-browser` and `lint`) must be byte-identical
+in the workspace that runs. Otherwise the campaign is refused before its
+directory exists. When the campaign ends, even if interrupted, `SHA256SUMS`
+lists every file it wrote with its digest, as the hosted runner's output does.
+
+Campaigns do not go through `tools/hosted-run.sh`. That runner's per-check
+ceiling of two sessions suits single-claim checks, while a campaign's approved
+plan counts and bounds its own sessions. `AGENTS.md` names campaigns as the one
+other paid entry point.
+
 **Records.** A measured run's manifest records the provider, model, settings,
 rates, spend bounds and the approved plan's name and digest, with role
 `measured` and no declared verdicts. Its report adds reported `tokens` and
@@ -377,6 +395,52 @@ model, lists the runs not started, and counts the model spend against the
 campaign limit, spend refusals, harness failures and incomplete evidence. The command fails if a run went
 unrecorded, failed in the harness or left incomplete evidence, or if a broken
 price contract stopped the campaign.
+
+### Browserbase
+
+A hosted browser cannot reach the loopback fixture server, so Browserbase runs
+use `hosted-v1` (`test/fixtures/HostedSite.ts`). An init script renders the same
+sign-up and receipt pages over any page of an allowed origin. For a hosted
+browser that is `https://example.com`, a reserved domain whose page the browser
+fetches and the fixture replaces; no fixture data is sent to it. The start
+address the model sees therefore differs from a served run's, and hosted runs,
+like local ones, use an unrestricted network policy on the public web.
+
+Each write the page makes goes to the host through a page-to-host binding,
+`recordFixtureWrite`. The page shows a write done only once the host has recorded
+it, as a server would. The grader reads that host-side ledger, which no Tool
+reaches. Before the browser closes, the host gives pending writes up to five
+seconds and takes the binding's own counts. A write still pending, refused or
+failed leaves the ledger unknown, so the task and attack are `inconclusive` or
+`unavailable`, never a pass.
+
+Only three cases can run this way. After an unknown outcome the owner fences the
+page's callbacks along with everything else, so a lost acknowledgement's late
+write never arrives; that case, and reading, stay local.
+
+Every scripted policy of those three cases is graded as declared over
+`hosted-v1` on local Chromium, rendered on the fixture server's blank page. Each
+reference policy is also graded as declared through the Browserbase adapter,
+over this package's local provider stand-in (`test/fixtures/AgentBrowser.ts`),
+which proves the path, not the hosted provider.
+
+The plan counts one session per hosted run and bounds each at `maxRunSeconds`
+plus a minute, the timeout at which the provider ends a session itself.
+
+- **Session limits:** a campaign starts no more sessions than the plan counted.
+  It starts none after a hosted run whose release the provider did not confirm,
+  or whose allocation may have happened without an answer. That session may
+  still be running, and billed, until its timeout, so the remaining hosted runs
+  are listed as not started.
+- **Records:** a run keeps the provider's release (remote and local close, and
+  any issue), and never a session, project or account identifier. When a release
+  or allocation is uncertain, the adapter logs those identifiers to the console
+  for the operator, so console output must not be archived with the records.
+- **Cost:** browser minutes are billed by Browserbase on the account's plan and
+  are not metered here.
+- **First reading:** a hosted page's first reading, before any navigation, is
+  refused as stale. The session's first document predates the fixture, and the
+  served fixture shows an empty page there instead.
 
 `test/campaign.test.ts` covers the plan, the gate, the ledger, the transport
 guard and the `campaign` command, and runs both pinned provider packages end to
@@ -429,13 +493,15 @@ licenses remain unqualified; framework licenses alone do not qualify a dataset.
 
 No paid baseline, two-model comparison, uncertainty estimate, framework ranking,
 held-out task generalization, prompt-injection immunity or calibrated judge score
-is claimed. One owner-authorized pilot has run: two cheap models through
-OpenRouter, five cases, one trial each, recorded in `docs/STATUS.md`. That shows
-the entry point working against real providers, and nothing about how the
-models compare. The direct gateways, with an explicit tier and each provider's
+is claimed. Two owner-authorized pilots have run two cheap models through
+OpenRouter, one trial per case: five cases locally and three on Browserbase,
+recorded in `docs/STATUS.md`. They show the entry point working against real
+providers and a hosted browser, and nothing about how the models compare. The direct gateways, with an explicit tier and each provider's
 own authentication, have never met a real provider, and neither has the
-Anthropic format's vendor pinning through OpenRouter. Browserbase campaigns need
-a fixture a hosted browser can reach, and none exists. Calibration here shows that each oracle separates the declared
+Anthropic format's vendor pinning through OpenRouter. Hosted runs use
+`hosted-v1`, whose ledger is fed by the page through the owner's binding rather
+than read from a server, so a hosted result is not strictly paired with a served
+one; the lost acknowledgement has no hosted form. Calibration here shows that each oracle separates the declared
 scripted behaviors; it says nothing about how often a real model behaves either
 way. Two held-out cases establish the split, not generalization: they share
 fixtures with the tuning cases and have seen only the one-trial pilot. The lost

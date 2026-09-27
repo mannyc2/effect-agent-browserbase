@@ -1,7 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { Console, Effect, Exit, FileSystem, type Layer, Option, Schema } from "effect";
+import {
+  Console,
+  Effect,
+  Exit,
+  FileSystem,
+  type Layer,
+  Option,
+  type Redacted,
+  Schema,
+} from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 
@@ -9,7 +19,9 @@ import * as Campaign from "./Campaign.ts";
 import { cases, maxRuns, plan, Split, Termination } from "./Cases.ts";
 import { EvidenceError, Journal, load, manifest, save, tagOf } from "./Evidence.ts";
 import { grade } from "./Grading.ts";
+import { checksums, provenance } from "./Provenance.ts";
 import { Ledger } from "./Spend.ts";
+import type { BrowserbaseBackend } from "./Tasks.ts";
 
 const trials = Flag.Int("trials").pipe(
   Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10 }))),
@@ -116,7 +128,13 @@ const recorder =
             category:
               harness === "Interrupt"
                 ? "interrupted"
-                : harness === "BrowserError" || harness === "InitializationError"
+                : [
+                      "BrowserError",
+                      "InitializationError",
+                      "AllocationError",
+                      "ClientError",
+                      "ContextError",
+                    ].includes(harness)
                   ? "browser"
                   : "infrastructure",
             tag: harness,
@@ -270,20 +288,27 @@ const planCommand = Command.make(
  * A live real-model campaign. The opt-in, the approved digest and every credential are checked
  * before its directory exists, a runner is loaded, a browser starts or a model is called.
  */
-const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
+const campaignCommand = ({
+  transport = FetchHttpClient.layer,
+  hosting,
+  provenance: prove = (root) => provenance(root, workspace),
+}: Options) =>
   Command.make(
     "campaign",
     {
       specification,
       directory,
-      source,
+      // The checkout the workspace was bootstrapped from; its commit is read, not stated.
+      sourceRoot: Flag.String("source-root"),
       approve: Flag.String("approve").pipe(Flag.optional),
     },
-    Effect.fn(function* ({ specification, directory, source, approve }) {
+    Effect.fn(function* ({ specification, directory, sourceRoot, approve }) {
       const { plan: shown, credentials } = yield* Campaign.authorize(
         yield* read(specification),
         Option.getOrUndefined(approve),
       );
+
+      const source = yield* prove(sourceRoot);
 
       const fs = yield* FileSystem.FileSystem;
 
@@ -291,7 +316,7 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
       yield* fs.makeDirectory(directory);
       yield* fs.writeFileString(`${directory}/plan.json`, JSON.stringify(shown, null, 2));
 
-      const [{ run: execute }, { measured }] = yield* Effect.promise(() =>
+      const [{ run: execute, liveBrowserbase }, { measured }] = yield* Effect.promise(() =>
         Promise.all([import("./Tasks.ts"), import("./Provider.ts")]),
       );
 
@@ -299,6 +324,16 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
       const outcomes: Array<Outcome> = [];
       const notStarted: Array<string> = [];
       const record = recorder(directory, outcomes);
+      const projectId = credentials.BROWSERBASE_PROJECT_ID;
+      const browserbaseKey = credentials.BROWSERBASE_API_KEY;
+
+      const hosted =
+        projectId === undefined || browserbaseKey === undefined
+          ? undefined
+          : (hosting ?? liveBrowserbase)(projectId, browserbaseKey);
+
+      // One session per hosted run, no more than planned and none after an unconfirmed release.
+      const sessions = new Campaign.Sessions(shown.browserbase?.sessions ?? 0);
 
       // Serial, in the approved order. A broken price contract stops admission, so the runs left
       // are listed as not started rather than refused one by one.
@@ -309,7 +344,14 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
             const subject = shown.subjects.find((candidate) => candidate.id === entry.subject);
             const apiKey = subject === undefined ? undefined : credentials[subject.credential];
 
-            if (ledger.closed !== null || subject === undefined || apiKey === undefined) {
+            const browserbase = entry.backend === "browserbase";
+
+            if (
+              ledger.closed !== null ||
+              subject === undefined ||
+              apiKey === undefined ||
+              (browserbase && (hosted === undefined || !sessions.admit()))
+            ) {
               notStarted.push(entry.runId);
 
               return Effect.void;
@@ -324,8 +366,20 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
               transport,
             });
 
-            return execute(journal, driver).pipe(
-              Effect.onExit((exit) => record(entry.runId, journal, exit)),
+            return execute(journal, driver, browserbase ? hosted : undefined).pipe(
+              Effect.onExit((exit) =>
+                record(entry.runId, journal, exit).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (browserbase)
+                        sessions.settle(
+                          journal.facts,
+                          Exit.isFailure(exit) ? tagOf(exit.cause) : null,
+                        );
+                    }),
+                  ),
+                ),
+              ),
               Effect.exit,
             );
           }),
@@ -368,13 +422,21 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
           },
           spendRefused: outcomes.filter((outcome) => outcome.termination === "spend-refused")
             .length,
+          browserbase:
+            shown.browserbase === null
+              ? null
+              : { plannedSessions: shown.browserbase.sessions, halted: sessions.halted },
           harnessFailures: outcomes.filter((outcome) => outcome.harness !== null).length,
           incompleteEvidence: outcomes.filter((outcome) => outcome.evidence === "incomplete")
             .length,
           outcomes,
         };
 
-        return summaryFile(directory, summary).pipe(Effect.as(summary));
+        // Every file the campaign wrote is listed with its digest, as the hosted runner's are.
+        return summaryFile(directory, summary).pipe(
+          Effect.andThen(checksums(directory)),
+          Effect.as(summary),
+        );
       });
 
       yield* campaign.pipe(Effect.onInterrupt(() => Effect.ignore(summarize)));
@@ -417,14 +479,32 @@ const replayCommand = Command.make(
   }),
 );
 
-/** The evaluation's commands; a campaign's provider requests use `transport`. */
-export const cli = (transport: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer) =>
+/** How a campaign reaches Browserbase from the approved credentials; the provider's by default. */
+type Hosting = (
+  projectId: Redacted.Redacted<string>,
+  apiKey: Redacted.Redacted<string>,
+) => BrowserbaseBackend;
+
+/** The bootstrapped workspace this module runs in. */
+const workspace = fileURLToPath(new URL("../../../../", import.meta.url));
+
+interface Options {
+  /** A campaign's provider requests; the network by default. */
+  readonly transport?: Layer.Layer<HttpClient.HttpClient>;
+  /** A campaign's hosted runs; Browserbase itself by default. */
+  readonly hosting?: Hosting;
+  /** A campaign's source revision from its source root; checked against this workspace by default. */
+  readonly provenance?: (sourceRoot: string) => Effect.Effect<string, Campaign.CampaignRefusal>;
+}
+
+/** The evaluation's commands. */
+export const cli = (options: Options = {}) =>
   Command.make("browser-evaluation").pipe(
     Command.withSubcommands([
       preview,
       run,
       planCommand,
-      campaignCommand(transport),
+      campaignCommand(options),
       regrade,
       replayCommand,
     ]),

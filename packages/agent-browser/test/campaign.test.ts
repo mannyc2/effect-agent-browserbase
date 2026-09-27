@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,11 +13,19 @@ import { AgentPolicyError } from "effect-agent/agent-error";
 import { Command } from "effect/unstable/cli";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-import { authorize, allowance, measuredManifest, plan, type Plan } from "./evaluation/Campaign.ts";
+import {
+  authorize,
+  allowance,
+  measuredManifest,
+  plan,
+  Sessions,
+  type Plan,
+} from "./evaluation/Campaign.ts";
 import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
 import { diagnose, Journal, manifest } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
+import { provenance } from "./evaluation/Provenance.ts";
 import {
   admitAnthropic,
   admitOpenAi,
@@ -126,7 +136,12 @@ it.effect("a real-model plan shows its whole matrix and bounds before anything r
 
 it.effect("a real-model plan is refused, not truncated, when it cannot be bounded", () =>
   Effect.gen(function* () {
+    // Reading runs on the scripted owner, which no hosted browser replaces.
     expect(yield* reason(plan({ ...spec, backends: ["chromium", "browserbase"] }))).toBe("backend");
+    // A lost acknowledgement's late write never reaches a hosted fixture's host.
+    expect(
+      yield* reason(plan({ ...spec, backends: ["browserbase"], tasks: ["lost-acknowledgement"] })),
+    ).toBe("backend");
     expect(yield* reason(plan({ ...spec, tasks: ["signup", "cancelled-mutation"] }))).toBe("task");
     expect(
       yield* reason(
@@ -202,12 +217,13 @@ it.effect("a refused live campaign creates no directory and loads no runner", ()
     const { digest } = yield* plan(spec);
     const start = Command.runWith(cli(), { version: "test" });
 
+    // The source is a directory the campaign reads its commit from, not a stated revision.
     const args = (directory: string, approve: string) => [
       "campaign",
       path,
       directory,
-      "--source-revision",
-      "a".repeat(40),
+      "--source-root",
+      root,
       "--approve",
       approve,
     ];
@@ -235,6 +251,15 @@ it.effect("a refused live campaign creates no directory and loads no runner", ()
 
     expect(keyless).toMatchObject({ _tag: "CampaignRefusal", reason: "credentials" });
     expect(existsSync(join(root, "keyless"))).toBe(false);
+
+    // Not a clean checkout whose packages match the ones that would run.
+    const unproven = yield* start(args(join(root, "unproven"), digest)).pipe(
+      withEnv(live),
+      Effect.flip,
+    );
+
+    expect(unproven).toMatchObject({ _tag: "CampaignRefusal", reason: "provenance" });
+    expect(existsSync(join(root, "unproven"))).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -753,15 +778,12 @@ it.effect(
           yield* Effect.promise(() => writeFile(path, JSON.stringify(specification)));
           const { digest } = yield* plan(specification);
 
-          return yield* Command.runWith(cli(transport.layer), { version: "test" })([
-            "campaign",
-            path,
-            join(root, out),
-            "--source-revision",
-            "a".repeat(40),
-            "--approve",
-            digest,
-          ]).pipe(withEnv(live));
+          return yield* Command.runWith(
+            cli({ transport: transport.layer, provenance: () => Effect.succeed("a".repeat(40)) }),
+            { version: "test" },
+          )(["campaign", path, join(root, out), "--source-root", root, "--approve", digest]).pipe(
+            withEnv(live),
+          );
         });
 
       const summary = (out: string): unknown =>
@@ -771,6 +793,27 @@ it.effect(
 
       yield* start(one, openAiWire(reading), "done");
       expect(existsSync(join(root, "done", "plan.json"))).toBe(true);
+
+      // Every file the campaign wrote is listed with its digest, as the hosted runner's are.
+      const sums = readFileSync(join(root, "done", "SHA256SUMS"), "utf8")
+        .trim()
+        .split("\n");
+
+      expect(sums.map((line) => line.split("  ")[1])).toEqual(
+        expect.arrayContaining(["campaign.json", "plan.json", "gpt-reading-base-0/report.json"]),
+      );
+      for (const line of sums) {
+        const [digestHex, file] = line.split("  ");
+
+        expect(
+          createHash("sha256")
+            .update(readFileSync(join(root, "done", file!)))
+            .digest("hex"),
+        ).toBe(digestHex);
+      }
+      expect(JSON.parse(readFileSync(join(root, "done", "campaign.json"), "utf8"))).toMatchObject({
+        sourceRevision: "a".repeat(40),
+      });
       expect(summary("done")).toMatchObject({
         planned: 1,
         recorded: 1,
@@ -910,6 +953,153 @@ it.effect("the browser owner outlives a measured run's time bound", () =>
     );
 
     expect(ownerPolicy(scripted).maxElapsedMillis).toBe(60_000);
+  }),
+);
+
+const hosted = {
+  ...spec,
+  backends: ["chromium", "browserbase"],
+  tasks: ["signup", "hostile-receipt"],
+  toolkits: ["base"],
+  trials: 1,
+};
+
+const browserbaseLive = {
+  ...live,
+  EFFECT_AGENT_BROWSERBASE_LIVE: "1",
+  BROWSERBASE_API_KEY: "bb-SECRET",
+  BROWSERBASE_PROJECT_ID: "project-SECRET",
+};
+
+// A hosted campaign's sessions are counted and bounded in the plan it is approved by, and need
+// Browserbase's own opt-in and credentials as well as the evaluation's.
+it.effect("a Browserbase campaign plans its sessions and needs Browserbase's opt-in", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(hosted);
+
+    expect(shown.runs.map((entry) => [entry.runId, entry.backend])).toEqual([
+      ["gpt-signup-base-0", "chromium"],
+      ["claude-signup-base-0", "chromium"],
+      ["gpt-signup-base-browserbase-0", "browserbase"],
+      ["claude-signup-base-browserbase-0", "browserbase"],
+      ["gpt-hostile-receipt-base-0", "chromium"],
+      ["claude-hostile-receipt-base-0", "chromium"],
+      ["gpt-hostile-receipt-base-browserbase-0", "browserbase"],
+      ["claude-hostile-receipt-base-browserbase-0", "browserbase"],
+    ]);
+    expect(shown.runs.map((entry) => entry.fixture)).toEqual([
+      "tool-site-v3",
+      "tool-site-v3",
+      "hosted-v1",
+      "hosted-v1",
+      "tool-site-v3",
+      "tool-site-v3",
+      "hosted-v1",
+      "hosted-v1",
+    ]);
+    expect(shown.browserbase).toMatchObject({
+      sessions: 4,
+      sessionSeconds: 240,
+      origin: "https://example.com",
+      optIn: "EFFECT_AGENT_BROWSERBASE_LIVE=1",
+    });
+    expect(shown.credentials).toEqual([
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "BROWSERBASE_API_KEY",
+      "BROWSERBASE_PROJECT_ID",
+    ]);
+    expect(measuredManifest(shown, shown.runs[2]!, "b".repeat(40))).toMatchObject({
+      fixture: "hosted-v1",
+      backend: "browserbase",
+    });
+    expect(measuredManifest(shown, shown.runs[0]!, "b".repeat(40))).toMatchObject({
+      fixture: "tool-site-v3",
+      backend: "chromium",
+    });
+
+    // Chromium alone needs neither.
+    expect((yield* plan({ ...hosted, backends: ["chromium"] })).browserbase).toBeNull();
+
+    expect(yield* reason(authorize(hosted, shown.digest).pipe(withEnv(live)))).toBe("opt-in");
+    expect(
+      yield* reason(
+        authorize(hosted, shown.digest).pipe(
+          withEnv({ ...browserbaseLive, BROWSERBASE_PROJECT_ID: "" }),
+        ),
+      ),
+    ).toBe("credentials");
+
+    const granted = yield* authorize(hosted, shown.digest).pipe(withEnv(browserbaseLive));
+
+    expect(Redacted.value(granted.credentials.BROWSERBASE_API_KEY!)).toBe("bb-SECRET");
+  }),
+);
+
+// Sessions start one at a time, no more than planned, and none after a release the provider did
+// not confirm: that session may still be running, and billed.
+it("hosted sessions stop at the plan's count and after any unconfirmed release", () => {
+  const sessions = new Sessions(3);
+
+  expect(sessions.admit()).toBe(true);
+  sessions.settle({ cleanup: "confirmed", ownerClose: "confirmed" }, null);
+  expect(sessions.admit()).toBe(true);
+  sessions.settle({ cleanup: "unconfirmed", ownerClose: "confirmed" }, null);
+  expect(sessions.admit()).toBe(false);
+  expect(sessions.halted).toBe("release unconfirmed");
+
+  const counted = new Sessions(1);
+
+  expect(counted.admit()).toBe(true);
+  counted.settle({ cleanup: "confirmed", ownerClose: "confirmed" }, null);
+  expect(counted.admit()).toBe(false);
+
+  const failed = new Sessions(2);
+
+  failed.admit();
+  failed.settle({ cleanup: "missing", ownerClose: "missing" }, "AllocationError");
+  expect(failed.admit()).toBe(false);
+  expect(failed.halted).toBe("release unconfirmed");
+});
+
+// A campaign's source revision is read from a clean checkout whose owned packages are the ones
+// in the workspace that runs, never taken on trust.
+it.effect("a campaign's source revision is a clean checkout matching the workspace", () =>
+  Effect.gen(function* () {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "provenance-")));
+    const source = join(root, "source");
+    const tree = join(root, "tree");
+
+    for (const base of [source, tree])
+      yield* Effect.promise(async () => {
+        await mkdir(join(base, "packages", "agent-browser"), { recursive: true });
+        await writeFile(join(base, "packages", "agent-browser", "Harness.ts"), "export {};\n");
+      });
+
+    const git = (...args: ReadonlyArray<string>) =>
+      execFileSync("git", ["-C", source, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        encoding: "utf8",
+      }).trim();
+
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-q", "-m", "source");
+    const head = git("rev-parse", "HEAD");
+
+    expect(yield* provenance(source, tree)).toBe(head);
+
+    // The workspace runs something else than the commit says.
+    yield* Effect.promise(() =>
+      writeFile(join(tree, "packages", "agent-browser", "Harness.ts"), "export const x = 1;\n"),
+    );
+    expect(yield* reason(provenance(source, tree))).toBe("provenance");
+
+    // The checkout itself has changes no commit names.
+    yield* Effect.promise(() =>
+      writeFile(join(source, "packages", "agent-browser", "Harness.ts"), "export const x = 1;\n"),
+    );
+    expect(yield* reason(provenance(source, tree))).toBe("provenance");
+    expect(yield* reason(provenance(root, tree))).toBe("provenance");
   }),
 );
 

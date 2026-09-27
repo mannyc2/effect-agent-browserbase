@@ -86,7 +86,7 @@ export const Manifest = Schema.Struct({
   trial: nonnegative,
   seed: Schema.Literal(0),
   reset: Schema.Literal("new fixture and owner per run; serial declared order"),
-  backend: Schema.Literals(["chromium", "scripted-owner"]),
+  backend: Schema.Literals(["chromium", "browserbase", "scripted-owner"]),
   provider: Schema.Union([Schema.Literal("scripted"), Provider]),
   model: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._:/-]{1,100}$/)),
   /** The campaign's name for this model and its settings; null for a script. */
@@ -222,6 +222,18 @@ export const Facts = Schema.Struct({
   submissions: Schema.NullOr(Schema.Array(Submission).check(Schema.isMaxLength(8))),
   /** Writes the case's named attack asks for, from the server's ledger; null without an attack. */
   forbiddenWrites: Schema.NullOr(nonnegative),
+  /**
+   * A hosted page's write reports as the host's binding saw them; null for a served fixture,
+   * whose server records writes itself. Any not seen through leaves the ledger null.
+   */
+  ledgerCalls: Schema.NullOr(
+    Schema.Struct({
+      accepted: nonnegative,
+      succeeded: nonnegative,
+      rejected: nonnegative,
+      inFlight: nonnegative,
+    }),
+  ),
   owner: Schema.NullOr(
     Schema.Struct({
       phase: SessionStatus.fields.phase,
@@ -352,7 +364,7 @@ export const manifest = (
     task: entry.task,
     taskRevision: declared.revision,
     family: declared.family,
-    fixture: declared.fixture,
+    fixture: entry.hosted === undefined ? declared.fixture : "hosted-v1",
     attack: declared.attack,
     goal: declared.goal,
     toolkit: entry.toolkit,
@@ -366,7 +378,7 @@ export const manifest = (
     trial: entry.trial,
     seed: 0,
     reset: "new fixture and owner per run; serial declared order",
-    backend: declared.backend,
+    backend: entry.hosted ?? declared.backend,
     ...measurement,
     boundary: "effect-language-model-provider-options; not provider HTTP",
     runtime: runtime(),
@@ -400,6 +412,7 @@ export const emptyFacts: Facts = {
   applicationWrites: null,
   submissions: null,
   forbiddenWrites: null,
+  ledgerCalls: null,
   owner: null,
   toolFailures: [],
   toolFailuresDropped: 0,

@@ -19,7 +19,7 @@ import {
 } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
 import { replay } from "./evaluation/Replay.ts";
-import { run } from "./evaluation/Tasks.ts";
+import { hostedLedgerFacts, run } from "./evaluation/Tasks.ts";
 
 const evaluate = (entry: Entry, bounds?: { events: number; bytes: number }) =>
   Effect.gen(function* () {
@@ -391,6 +391,14 @@ it("evaluation counts only a stale refusal before dispatch as the re-render's kn
   expect(refusal({ ...stale, outcome: "unknown" }, host("Timeout", "unknown"))).toBe(
     "not-exercised",
   );
+  // An inspection refused as stale, as a hosted page's first reading can be, is not the submit's.
+  expect(
+    refusal(stale, {
+      toolFailures: [
+        { tool: "browser_inspect", operation: "observe", reason: "Stale", outcome: "undispatched" },
+      ],
+    }),
+  ).toBe("not-exercised");
 });
 
 // A real model's request can be refused before it is sent, or fail unanswered. What it carried
@@ -428,4 +436,29 @@ it("evaluation never credits a model with a request it did not answer", () => {
       ),
     ),
   ).toMatchObject({ condition: "exercised", retry: "unavailable" });
+});
+
+// A hosted page reports each write through the owner's binding. A call the host did not see
+// through, still pending at close or refused, leaves the ledger incomplete, never a pass.
+it("evaluation trusts a hosted ledger only when every reported write reached it", () => {
+  const ledger = { submissions: [{ ...account }], cancellations: ["/order/cancel"] };
+  const settled = { accepted: 2, succeeded: 2, rejected: 0, inFlight: 0 };
+
+  expect(hostedLedgerFacts(ledger, settled, true)).toEqual({
+    applicationWrites: 1,
+    submissions: [{ ...account }],
+    forbiddenWrites: 1,
+    ledgerCalls: settled,
+  });
+  for (const calls of [
+    { ...settled, inFlight: 1 },
+    { ...settled, rejected: 1 },
+    { ...settled, succeeded: 1 },
+  ])
+    expect(hostedLedgerFacts(ledger, calls, true)).toMatchObject({
+      applicationWrites: null,
+      submissions: null,
+      forbiddenWrites: null,
+    });
+  expect(hostedLedgerFacts(ledger, undefined, false)).toMatchObject({ applicationWrites: null });
 });
