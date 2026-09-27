@@ -833,6 +833,9 @@ it.effect("a measured run can reach either provider through OpenRouter", () =>
     for (const body of anthropic.bodies) {
       expect(body).toMatchObject({ model: "anthropic/claude-test", max_tokens: 2048 });
       expect(body).not.toHaveProperty("service_tier");
+      // OpenRouter refuses a null `cache_control`, which the provider package sends and
+      // Anthropic's own API reads as absent.
+      expect(JSON.stringify(body)).not.toContain('"cache_control":null');
     }
     expect(JSON.stringify([viaOpenAi, viaAnthropic])).not.toContain("SECRET");
   }),

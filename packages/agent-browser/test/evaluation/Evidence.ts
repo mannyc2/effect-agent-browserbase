@@ -295,13 +295,14 @@ export const diagnose = (cause: Cause.Cause<unknown>) => {
   const tag = reason?._tag;
 
   if (typeof tag !== "string") return undefined;
-  const status = record(record(reason?.http)?.response)?.status;
-  const description = reason?.description;
+  const http = record(reason?.http);
+  const status = record(http?.response)?.status;
+  const description = [reason?.description, http?.body].filter((text) => typeof text === "string");
 
   return {
     reason: tag.slice(0, 64),
     status: typeof status === "number" && Number.isInteger(status) ? status : null,
-    description: typeof description === "string" ? description.slice(0, 500) : null,
+    description: description.length === 0 ? null : description.join(" ").slice(0, 800),
   };
 };
 

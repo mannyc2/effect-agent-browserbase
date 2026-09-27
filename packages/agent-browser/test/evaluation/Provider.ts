@@ -156,6 +156,44 @@ export const admitOpenAi = (
     ),
 });
 
+/**
+ * A null `cache_control` means absent to Anthropic, but OpenRouter's validator refuses it, so it
+ * is dropped. Tool schemas and a model's own tool input are left untouched.
+ */
+const withoutNullCacheControl = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(withoutNullCacheControl)
+    : isRecord(value)
+      ? Object.fromEntries(
+          Object.entries(value)
+            .filter(([key, field]) => !(key === "cache_control" && field === null))
+            .map(([key, field]) => [
+              key,
+              key === "input_schema" || key === "input" ? field : withoutNullCacheControl(field),
+            ]),
+        )
+      : value;
+
+const forGateway = (request: AnthropicRequest, subject: Subject): AnthropicRequest =>
+  subject.settings.gateway === "openrouter"
+    ? {
+        ...request,
+        payload: {
+          ...request.payload,
+          messages: request.payload.messages.map(
+            (message) => withoutNullCacheControl(message) as typeof message,
+          ),
+          ...(request.payload.system === undefined
+            ? {}
+            : {
+                system: withoutNullCacheControl(
+                  request.payload.system,
+                ) as typeof request.payload.system,
+              }),
+        },
+      }
+    : request;
+
 export const admitAnthropic = (
   native: AnthropicClient.Service,
   allowance: Allowance,
@@ -165,9 +203,11 @@ export const admitAnthropic = (
   ...native,
   streamRequest: () => () => Stream.die("Only admitted message streams are sent"),
   createMessage: () => Effect.suspend(() => Effect.fail(allowance.refuse("contract"))),
-  createMessageStream: (request) =>
-    Effect.suspend(() =>
-      anthropicPriced(request, subject)
+  createMessageStream: (original) =>
+    Effect.suspend(() => {
+      const request = forGateway(original, subject);
+
+      return anthropicPriced(request, subject)
         ? admitted(
             allowance,
             gate,
@@ -181,8 +221,8 @@ export const admitAnthropic = (
                 ]),
               ),
           )
-        : Effect.fail(allowance.refuse("contract")),
-    ),
+        : Effect.fail(allowance.refuse("contract"));
+    }),
 });
 
 /** Run-local names for provider-issued identifiers, in order of first appearance. */
