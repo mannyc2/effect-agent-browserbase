@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +23,7 @@ import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
 import { Journal, manifest } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
+import { provenance } from "./evaluation/Provenance.ts";
 import { admitAnthropic, admitOpenAi, guarded, measured } from "./evaluation/Provider.ts";
 import { replay } from "./evaluation/Replay.ts";
 import { Ledger } from "./evaluation/Spend.ts";
@@ -204,12 +207,13 @@ it.effect("a refused live campaign creates no directory and loads no runner", ()
     const { digest } = yield* plan(spec);
     const start = Command.runWith(cli(), { version: "test" });
 
+    // The source is a directory the campaign reads its commit from, not a stated revision.
     const args = (directory: string, approve: string) => [
       "campaign",
       path,
       directory,
-      "--source-revision",
-      "a".repeat(40),
+      "--source-root",
+      root,
       "--approve",
       approve,
     ];
@@ -237,6 +241,15 @@ it.effect("a refused live campaign creates no directory and loads no runner", ()
 
     expect(keyless).toMatchObject({ _tag: "CampaignRefusal", reason: "credentials" });
     expect(existsSync(join(root, "keyless"))).toBe(false);
+
+    // Not a clean checkout whose packages match the ones that would run.
+    const unproven = yield* start(args(join(root, "unproven"), digest)).pipe(
+      withEnv(live),
+      Effect.flip,
+    );
+
+    expect(unproven).toMatchObject({ _tag: "CampaignRefusal", reason: "provenance" });
+    expect(existsSync(join(root, "unproven"))).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -755,15 +768,12 @@ it.effect(
           yield* Effect.promise(() => writeFile(path, JSON.stringify(specification)));
           const { digest } = yield* plan(specification);
 
-          return yield* Command.runWith(cli(transport.layer), { version: "test" })([
-            "campaign",
-            path,
-            join(root, out),
-            "--source-revision",
-            "a".repeat(40),
-            "--approve",
-            digest,
-          ]).pipe(withEnv(live));
+          return yield* Command.runWith(
+            cli({ transport: transport.layer, provenance: () => Effect.succeed("a".repeat(40)) }),
+            { version: "test" },
+          )(["campaign", path, join(root, out), "--source-root", root, "--approve", digest]).pipe(
+            withEnv(live),
+          );
         });
 
       const summary = (out: string): unknown =>
@@ -773,6 +783,27 @@ it.effect(
 
       yield* start(one, openAiWire(reading), "done");
       expect(existsSync(join(root, "done", "plan.json"))).toBe(true);
+
+      // Every file the campaign wrote is listed with its digest, as the hosted runner's are.
+      const sums = readFileSync(join(root, "done", "SHA256SUMS"), "utf8")
+        .trim()
+        .split("\n");
+
+      expect(sums.map((line) => line.split("  ")[1])).toEqual(
+        expect.arrayContaining(["campaign.json", "plan.json", "gpt-reading-base-0/report.json"]),
+      );
+      for (const line of sums) {
+        const [digestHex, file] = line.split("  ");
+
+        expect(
+          createHash("sha256")
+            .update(readFileSync(join(root, "done", file!)))
+            .digest("hex"),
+        ).toBe(digestHex);
+      }
+      expect(JSON.parse(readFileSync(join(root, "done", "campaign.json"), "utf8"))).toMatchObject({
+        sourceRevision: "a".repeat(40),
+      });
       expect(summary("done")).toMatchObject({
         planned: 1,
         recorded: 1,
@@ -1011,3 +1042,44 @@ it("hosted sessions stop at the plan's count and after any unconfirmed release",
   expect(failed.admit()).toBe(false);
   expect(failed.halted).toBe("release unconfirmed");
 });
+
+// A campaign's source revision is read from a clean checkout whose owned packages are the ones
+// in the workspace that runs, never taken on trust.
+it.effect("a campaign's source revision is a clean checkout matching the workspace", () =>
+  Effect.gen(function* () {
+    const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "provenance-")));
+    const source = join(root, "source");
+    const tree = join(root, "tree");
+
+    for (const base of [source, tree])
+      yield* Effect.promise(async () => {
+        await mkdir(join(base, "packages", "agent-browser"), { recursive: true });
+        await writeFile(join(base, "packages", "agent-browser", "Harness.ts"), "export {};\n");
+      });
+
+    const git = (...args: ReadonlyArray<string>) =>
+      execFileSync("git", ["-C", source, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        encoding: "utf8",
+      }).trim();
+
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-q", "-m", "source");
+    const head = git("rev-parse", "HEAD");
+
+    expect(yield* provenance(source, tree)).toBe(head);
+
+    // The workspace runs something else than the commit says.
+    yield* Effect.promise(() =>
+      writeFile(join(tree, "packages", "agent-browser", "Harness.ts"), "export const x = 1;\n"),
+    );
+    expect(yield* reason(provenance(source, tree))).toBe("provenance");
+
+    // The checkout itself has changes no commit names.
+    yield* Effect.promise(() =>
+      writeFile(join(source, "packages", "agent-browser", "Harness.ts"), "export const x = 1;\n"),
+    );
+    expect(yield* reason(provenance(source, tree))).toBe("provenance");
+    expect(yield* reason(provenance(root, tree))).toBe("provenance");
+  }),
+);

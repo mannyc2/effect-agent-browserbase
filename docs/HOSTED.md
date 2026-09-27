@@ -15,7 +15,12 @@ check before the first one allocates. Every check passes through the same gate,
 `hosted/harness.ts`, which owns the opt-in, credentials, account,
 policy budgets, session count and JSON record. Ordinary unpaid CI holds each
 entry to the registry's ceiling (`tools/test/hosted.test.mjs`), so an
-over-budget check fails before anything is spent.
+over-budget check fails before anything is spent. Evaluation campaigns in
+`packages/agent-browser` are the one other entry point that allocates hosted
+sessions. They carry the same opt-in and add their own: each campaign's
+approved plan counts and bounds its sessions, as the
+[evaluation guide](../packages/agent-browser/test/evaluation/README.md#browserbase)
+describes.
 
 | Check | Question | What a passing run supports |
 | --- | --- | --- |

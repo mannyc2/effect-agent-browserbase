@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   Console,
@@ -18,6 +19,7 @@ import * as Campaign from "./Campaign.ts";
 import { cases, maxRuns, plan, Split, Termination } from "./Cases.ts";
 import { EvidenceError, Journal, load, manifest, save, tagOf } from "./Evidence.ts";
 import { grade } from "./Grading.ts";
+import { checksums, provenance } from "./Provenance.ts";
 import { Ledger } from "./Spend.ts";
 import type { BrowserbaseBackend } from "./Tasks.ts";
 
@@ -286,20 +288,27 @@ const planCommand = Command.make(
  * A live real-model campaign. The opt-in, the approved digest and every credential are checked
  * before its directory exists, a runner is loaded, a browser starts or a model is called.
  */
-const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?: Hosting) =>
+const campaignCommand = ({
+  transport = FetchHttpClient.layer,
+  hosting,
+  provenance: prove = (root) => provenance(root, workspace),
+}: Options) =>
   Command.make(
     "campaign",
     {
       specification,
       directory,
-      source,
+      // The checkout the workspace was bootstrapped from; its commit is read, not stated.
+      sourceRoot: Flag.String("source-root"),
       approve: Flag.String("approve").pipe(Flag.optional),
     },
-    Effect.fn(function* ({ specification, directory, source, approve }) {
+    Effect.fn(function* ({ specification, directory, sourceRoot, approve }) {
       const { plan: shown, credentials } = yield* Campaign.authorize(
         yield* read(specification),
         Option.getOrUndefined(approve),
       );
+
+      const source = yield* prove(sourceRoot);
 
       const fs = yield* FileSystem.FileSystem;
 
@@ -423,7 +432,11 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?
           outcomes,
         };
 
-        return summaryFile(directory, summary).pipe(Effect.as(summary));
+        // Every file the campaign wrote is listed with its digest, as the hosted runner's are.
+        return summaryFile(directory, summary).pipe(
+          Effect.andThen(checksums(directory)),
+          Effect.as(summary),
+        );
       });
 
       yield* campaign.pipe(Effect.onInterrupt(() => Effect.ignore(summarize)));
@@ -472,20 +485,26 @@ type Hosting = (
   apiKey: Redacted.Redacted<string>,
 ) => BrowserbaseBackend;
 
-/**
- * The evaluation's commands. A campaign's provider requests use `transport`, and its hosted runs
- * `hosting`, which defaults to Browserbase itself.
- */
-export const cli = (
-  transport: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer,
-  hosting?: Hosting,
-) =>
+/** The bootstrapped workspace this module runs in. */
+const workspace = fileURLToPath(new URL("../../../../", import.meta.url));
+
+interface Options {
+  /** A campaign's provider requests; the network by default. */
+  readonly transport?: Layer.Layer<HttpClient.HttpClient>;
+  /** A campaign's hosted runs; Browserbase itself by default. */
+  readonly hosting?: Hosting;
+  /** A campaign's source revision from its source root; checked against this workspace by default. */
+  readonly provenance?: (sourceRoot: string) => Effect.Effect<string, Campaign.CampaignRefusal>;
+}
+
+/** The evaluation's commands. */
+export const cli = (options: Options = {}) =>
   Command.make("browser-evaluation").pipe(
     Command.withSubcommands([
       preview,
       run,
       planCommand,
-      campaignCommand(transport, hosting),
+      campaignCommand(options),
       regrade,
       replayCommand,
     ]),

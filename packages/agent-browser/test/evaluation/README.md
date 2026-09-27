@@ -287,7 +287,7 @@ and spend a campaign may use.
 ../../node_modules/.bin/vp run evaluation plan pilot.json
 EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1 OPENROUTER_API_KEY=... \
   ../../node_modules/.bin/vp run evaluation campaign pilot.json results/pilot-1 \
-  --source-revision <candidate-40-character-SHA> --approve <digest from plan>
+  --source-root <this repository's checkout> --approve <digest from plan>
 ```
 
 `plan` is the dry run. It reads no credential, imports no runner and spends
@@ -362,6 +362,19 @@ request can overshoot this way. Account-level surcharges, such as regional
 processing, are not modeled: the specification's rates must be the ones that
 apply to the account. Nothing is retried: a refused or failed request ends its
 run, and an unresolved mutation is never repeated.
+
+**Provenance.** A campaign reads its source revision from `--source-root`, the
+checkout the workspace was bootstrapped from. The checkout must be clean, and
+every file it copies into a workspace (`packages/browser`,
+`packages/browserbase`, `packages/agent-browser` and `lint`) must be byte-identical
+in the workspace that runs. Otherwise the campaign is refused before its
+directory exists. When the campaign ends, even if interrupted, `SHA256SUMS`
+lists every file it wrote with its digest, as the hosted runner's output does.
+
+Campaigns do not go through `tools/hosted-run.sh`. That runner's per-check
+ceiling of two sessions suits single-claim checks, while a campaign's approved
+plan counts and bounds its own sessions. `AGENTS.md` names campaigns as the one
+other paid entry point.
 
 **Records.** A measured run's manifest records the provider, model, settings,
 rates, spend bounds and the approved plan's name and digest, with role

@@ -41,6 +41,7 @@ export class CampaignRefusal extends Schema.TaggedError<CampaignRefusal>()("Camp
     "opt-in",
     "approval",
     "credentials",
+    "provenance",
   ]),
   /** A fixed explanation naming only declared values, never a credential. */
   message: Schema.String,
