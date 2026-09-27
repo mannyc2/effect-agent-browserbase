@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { Schema } from "effect";
 
+import type { HostedRoute } from "../fixtures/HostedSite.ts";
 import { receipt } from "../fixtures/ToolSite.ts";
 
 /**
@@ -103,7 +104,21 @@ export const Family = Schema.Literals([
   "hostile-page",
 ]);
 
-export const Fixture = Schema.Literals(["tool-site-v3", "scripted-document-v1"]);
+/**
+ * `hosted-v1` shows `tool-site-v3`'s pages through an init script on any origin, with a
+ * host-side ledger fed by a page-to-host binding, for a browser that cannot reach this host.
+ */
+export const Fixture = Schema.Literals(["tool-site-v3", "scripted-document-v1", "hosted-v1"]);
+
+/**
+ * Where each served case is shown by the hosted fixture. The lost acknowledgement has none: its
+ * late write reaches the host only after the owner has fenced the page's callbacks.
+ */
+export const hostedRoutes: Partial<Record<Task, HostedRoute>> = {
+  signup: "signup",
+  "rerendered-submit": "signup-live",
+  "hostile-receipt": "receipt",
+};
 
 /**
  * `held-out` results must not inform Tool, instruction or prompt changes. A held-out case that
@@ -435,6 +450,8 @@ export interface Entry {
   readonly policy: string;
   readonly role: typeof Role.Type;
   readonly trial: number;
+  /** A served case shown by the hosted fixture on this backend instead. */
+  readonly hosted?: "chromium" | "browserbase";
 }
 
 export const plan = (trials: number): ReadonlyArray<Entry> =>
@@ -452,6 +469,19 @@ export const plan = (trials: number): ReadonlyArray<Entry> =>
       ),
     ),
   ).flat();
+
+/** The served cases' scripted runs, shown by the hosted fixture on `backend`. */
+export const hostedPlan = (
+  trials: number,
+  backend: "chromium" | "browserbase",
+): ReadonlyArray<Entry> =>
+  plan(trials)
+    .filter((entry) => hostedRoutes[entry.task] !== undefined)
+    .map((entry) => ({
+      ...entry,
+      hosted: backend,
+      runId: `${entry.task}-${entry.toolkit}-${entry.policy}-${backend === "chromium" ? "hosted" : "browserbase"}-${entry.trial}`,
+    }));
 
 /** The version a module actually resolves, or `unavailable`; never the declared pin. */
 const installed = (name: string) => {

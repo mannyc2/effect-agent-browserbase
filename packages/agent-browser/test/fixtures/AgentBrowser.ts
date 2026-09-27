@@ -18,6 +18,7 @@ import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { FetchHttpClient } from "effect/unstable/http";
 import { chromium } from "playwright-core";
 
+import type { BrowserbaseBackend } from "../evaluation/Tasks.ts";
 import { renderReady } from "./RenderReady.ts";
 
 /**
@@ -268,6 +269,29 @@ export const openAgentBrowser = Effect.fnUntraced(function* (policy: Interactive
 });
 
 /** Typed bootstrap acquisition uses this one generic owner. */
+/** The Browserbase adapter over this fixture's local provider, for a hosted evaluation run. */
+export const localBrowserbase = (
+  fixture: Effect.Success<typeof localAgentBrowser>,
+): BrowserbaseBackend => ({
+  origin: undefined,
+  // The provider's fetch is given to the client as it is built, so no request leaves the host.
+  layer: ({ onCleanup, actionTimeoutMillis, remoteTimeoutSeconds, viewport }) =>
+    BrowserbaseBrowser.layer({
+      launch: {
+        ...launch,
+        remoteTimeoutSeconds,
+        viewport: { _tag: "Fixed", width: viewport.width, height: viewport.height },
+      },
+      actionTimeoutMillis,
+      onCleanup,
+    }).pipe(
+      Layer.provide(NodeCrypto.layer),
+      Layer.provide(accounts),
+      Layer.provide(fixture.binding),
+      Layer.provideMerge(Layer.succeed(FetchHttpClient.Fetch, fixture.fetch)),
+    ),
+});
+
 export const withGenericAgentBrowser = <A, E, R>(
   fixture: Effect.Success<typeof localAgentBrowser>,
   effect: Effect.Effect<A, E, R>,

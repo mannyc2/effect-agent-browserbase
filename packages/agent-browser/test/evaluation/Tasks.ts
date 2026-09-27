@@ -8,13 +8,23 @@ import { BrowserPolicy, Observation, type SessionStatus } from "effect-browser/b
 import { Chromium } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
+import type { CleanupResult } from "effect-browserbase/cleanup";
+import type { AllocationError, ClientError, ContextError } from "effect-browserbase/errors";
 import { type LanguageModel, Toolkit } from "effect/unstable/ai";
 
+import {
+  emptyLedger,
+  hostedFixture,
+  hostedUrl,
+  type HostedLedger,
+} from "../fixtures/HostedSite.ts";
 import { toolSite } from "../fixtures/ToolSite.ts";
 import {
   account,
   type cases,
   decoyReference,
+  hostedRoutes,
   input,
   orderReference,
   Output,
@@ -455,6 +465,41 @@ const runAgent = (journal: Journal, driver: Driver, start: string | null) =>
     ),
   );
 
+/** The application's own writes, read after the browser has been released. */
+const ledgerFacts = (journal: Journal, ledger: HostedLedger) =>
+  Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      journal.facts = {
+        ...journal.facts,
+        applicationWrites: ledger.submissions.length,
+        submissions: ledger.submissions.slice(0, 8),
+        forbiddenWrites: journal.manifest.attack === null ? null : ledger.cancellations.length,
+      };
+    }),
+  );
+
+/** One agent run on an open browser: the host's Tools, the run, then the owner's facts. */
+const drive =
+  (journal: Journal, driver: Driver, start: string) =>
+  <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
+    Effect.gen(function* () {
+      const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+
+      yield* host
+        .run(runAgent(journal, driver, start))
+        .pipe(Effect.exit, Effect.flatMap(settle(journal)));
+      yield* owner(journal, browser.status, host.toolFailures);
+    });
+
+/** The owner's own checked close is a fact; any other browser failure is the harness's. */
+const closing = <A, R>(effect: Effect.Effect<A, RunFailure, R>, journal: Journal) =>
+  effect.pipe(
+    Effect.andThen(closed(journal, "confirmed")),
+    Effect.catchTag("BrowserError", (error) =>
+      error.operation === "close" ? closed(journal, "failed") : Effect.fail(error),
+    ),
+  );
+
 /** ToolSite cases: the server's ledger is read after Chromium has been released. */
 const onChromium = (
   journal: Journal,
@@ -467,32 +512,104 @@ const onChromium = (
       const start = `${site.url}${path}`;
       const driver = yield* driverFor(journal, start, measured);
 
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          journal.facts = {
-            ...journal.facts,
-            applicationWrites: site.submissions.length,
-            submissions: site.submissions.slice(0, 8),
-            forbiddenWrites: journal.manifest.attack === null ? null : site.cancellations.length,
-          };
-        }),
+      yield* ledgerFacts(journal, site);
+      yield* closing(
+        Browser.scoped(
+          Chromium.launch(ownerPolicy(journal.manifest)),
+          drive(journal, driver, start),
+        ).pipe(Effect.provide(chromium(journal))),
+        journal,
       );
+    }),
+  );
 
-      yield* Browser.scoped(Chromium.launch(ownerPolicy(journal.manifest)), (browser) =>
-        Effect.gen(function* () {
-          const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+/**
+ * How a hosted run reaches Browserbase: the origin its browser renders the fixture on, and the
+ * adapter, which reports the provider's release to the run. Credentials stay in the layer.
+ */
+export interface BrowserbaseBackend {
+  /** The public origin a hosted browser renders on; absent, the local site's, for a local provider. */
+  readonly origin: string | undefined;
+  readonly layer: (options: {
+    readonly onCleanup: (result: CleanupResult) => Effect.Effect<void>;
+    readonly actionTimeoutMillis: number;
+    readonly remoteTimeoutSeconds: number;
+    readonly viewport: { readonly width: number; readonly height: number };
+  }) => Layer.Layer<BrowserbaseBrowser, BrowserError | ClientError>;
+}
 
-          yield* host
-            .run(runAgent(journal, driver, start))
-            .pipe(Effect.exit, Effect.flatMap(settle(journal)));
-          yield* owner(journal, browser.status, host.toolFailures);
-        }),
-      ).pipe(
-        Effect.provide(chromium(journal)),
-        Effect.andThen(closed(journal, "confirmed")),
-        Effect.catchTag("BrowserError", (error) =>
-          error.operation === "close" ? closed(journal, "failed") : Effect.fail(error),
+/** The provider's release, without its session reference or any provider identifier. */
+const released = (journal: Journal) => (result: CleanupResult) =>
+  Effect.sync(() => {
+    journal.facts = {
+      ...journal.facts,
+      cleanup:
+        result.remote === "confirmed" && result.local === "closed" && result.issues.length === 0
+          ? "confirmed"
+          : "unconfirmed",
+      cleanupReceipt: json({
+        remote: result.remote,
+        local: result.local,
+        releaseRequested: result.releaseRequested,
+        issues: result.issues.map(({ step, reason }) => ({ step, reason })),
+      }),
+    };
+  });
+
+/**
+ * The hosted fixture: its pages rendered by an init script, its writes reported by a binding.
+ * Over local Chromium it renders on the local site's blank page; through Browserbase, on the
+ * backend's public origin, or the local site's for a local provider.
+ */
+const onHosted = (
+  journal: Journal,
+  measured: Driver | undefined,
+  browserbase: BrowserbaseBackend | undefined,
+): Effect.Effect<void, RunFailure> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { manifest } = journal;
+      const route = hostedRoutes[manifest.task];
+
+      if (route === undefined || (manifest.backend === "browserbase" && browserbase === undefined))
+        return yield* new EvidenceError({ operation: "hosted fixture on this backend" });
+      const site = yield* toolSite;
+
+      const origin =
+        (manifest.backend === "browserbase" ? browserbase?.origin : undefined) ??
+        new URL(site.url).origin;
+
+      const start = hostedUrl(origin, route);
+      const driver = yield* driverFor(journal, start, measured);
+      const ledger = emptyLedger();
+      const bootstrap = hostedFixture(origin, ledger);
+
+      yield* ledgerFacts(journal, ledger);
+      if (manifest.backend !== "browserbase" || browserbase === undefined)
+        return yield* closing(
+          Browser.scoped(
+            Chromium.launch(ownerPolicy(manifest), { bootstrap }),
+            drive(journal, driver, start),
+          ).pipe(Effect.provide(chromium(journal))),
+          journal,
+        );
+
+      return yield* closing(
+        Browser.scoped(
+          BrowserbaseBrowser.open(ownerPolicy(manifest), { bootstrap }),
+          drive(journal, driver, start),
+        ).pipe(
+          Effect.provide(
+            browserbase.layer({
+              onCleanup: released(journal),
+              actionTimeoutMillis: manifest.bounds.actionTimeoutMillis,
+              // The provider ends the session itself if the host never releases it.
+              remoteTimeoutSeconds: Math.ceil(manifest.bounds.maxDurationMillis / 1000) + 60,
+              viewport: manifest.viewport,
+            }),
+          ),
         ),
+        journal,
       );
     }),
   );
@@ -653,13 +770,21 @@ type RunFailure =
   | Effect.Error<typeof toolSite>
   | EvidenceError
   | BrowserError
-  | InitializationError;
+  | InitializationError
+  | AllocationError
+  | ClientError
+  | ContextError;
 
 /**
  * Run one declared case into its journal; only a harness fault fails the returned Effect. A
  * scripted run plays its policy's script; a measured run needs the real model's driver.
  */
-export const run = (journal: Journal, measured?: Driver): Effect.Effect<void, RunFailure> => {
+export const run = (
+  journal: Journal,
+  measured?: Driver,
+  browserbase?: BrowserbaseBackend,
+): Effect.Effect<void, RunFailure> => {
+  if (journal.manifest.fixture === "hosted-v1") return onHosted(journal, measured, browserbase);
   switch (journal.manifest.task) {
     case "signup":
       return onChromium(journal, "signup", measured);

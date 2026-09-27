@@ -116,7 +116,13 @@ const recorder =
             category:
               harness === "Interrupt"
                 ? "interrupted"
-                : harness === "BrowserError" || harness === "InitializationError"
+                : [
+                      "BrowserError",
+                      "InitializationError",
+                      "AllocationError",
+                      "ClientError",
+                      "ContextError",
+                    ].includes(harness)
                   ? "browser"
                   : "infrastructure",
             tag: harness,

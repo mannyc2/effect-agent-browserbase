@@ -1,20 +1,21 @@
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { account, cases, plan, type Entry } from "../evaluation/Cases.ts";
+import { account, cases, hostedPlan, plan, type Entry } from "../evaluation/Cases.ts";
 import { type Evidence, Journal, manifest, save } from "../evaluation/Evidence.ts";
 import { grade } from "../evaluation/Grading.ts";
 import { type ReplayDivergence, replay } from "../evaluation/Replay.ts";
-import { run } from "../evaluation/Tasks.ts";
+import { run, type BrowserbaseBackend } from "../evaluation/Tasks.ts";
+import { localAgentBrowser, localBrowserbase } from "../fixtures/AgentBrowser.ts";
 
 /** Each run is saved even when an assertion fails, so CI keeps the evidence it judged. */
-const evaluate = (entry: Entry) =>
+const evaluate = (entry: Entry, browserbase?: BrowserbaseBackend) =>
   Effect.gen(function* () {
     const journal = new Journal(
       manifest(entry, process.env.EVALUATION_SOURCE_REVISION ?? "unavailable"),
     );
 
-    yield* run(journal).pipe(
+    yield* run(journal, undefined, browserbase).pipe(
       Effect.ensuring(
         Effect.suspend(() => {
           const evidence = journal.snapshot();
@@ -114,4 +115,44 @@ for (const planned of plan(1).filter((candidate) => cases[candidate.task].backen
 
       if (check !== undefined) yield* check(evidence);
     }),
+  );
+
+// The hosted fixture shows the same pages through an init script on any origin, a public one for
+// a hosted browser, and records writes through a page-to-host binding instead of a server. Every
+// scripted policy must be graded exactly as over the served fixture.
+for (const planned of hostedPlan(1, "chromium"))
+  it.live(`evaluation grades ${planned.runId} as declared over the hosted fixture`, () =>
+    Effect.gen(function* () {
+      const evidence = yield* evaluate(planned);
+      const report = grade(evidence);
+
+      expect(evidence.manifest).toMatchObject({ fixture: "hosted-v1", backend: "chromium" });
+      expect(report.calibration).toEqual({ role: planned.role, agrees: true, mismatches: [] });
+      expect(report.cleanup).toBe("confirmed");
+      // The host's ledger, fed by the page's binding, holds the account the reference created.
+      if (planned.runId === "signup-base-completes-hosted-0")
+        expect(evidence.facts.submissions).toEqual([account]);
+    }),
+  );
+
+// Through the Browserbase adapter, over this package's local provider: the session is allocated,
+// bootstrapped with the hosted fixture, driven and released as a hosted one would be. This is
+// not hosted-provider evidence; it proves the path a hosted campaign takes.
+for (const planned of hostedPlan(1, "browserbase").filter((entry) => entry.role === "reference"))
+  it.live(`evaluation grades ${planned.runId} as declared through the Browserbase adapter`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* localAgentBrowser;
+        const evidence = yield* evaluate(planned, localBrowserbase(fixture));
+        const report = grade(evidence);
+
+        expect(evidence.manifest).toMatchObject({ fixture: "hosted-v1", backend: "browserbase" });
+        expect(report.calibration).toEqual({ role: planned.role, agrees: true, mismatches: [] });
+        // The provider confirmed the release; its session identifiers are not retained.
+        expect(report.cleanup).toBe("confirmed");
+        expect(evidence.facts.cleanupReceipt).toMatchObject({ remote: "confirmed" });
+        expect(fixture.releaseIds).toHaveLength(1);
+        expect(JSON.stringify(evidence)).not.toContain(fixture.releaseIds[0]);
+      }),
+    ),
   );
