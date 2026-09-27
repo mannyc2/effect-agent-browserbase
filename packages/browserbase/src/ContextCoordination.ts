@@ -1,7 +1,8 @@
 import { Clock, Effect, Exit, Schema, type Scope } from "effect";
 
-import { ContextError } from "./Errors.ts";
+import { ContextError, type SessionError } from "./Errors.ts";
 import {
+  claimReconciliation,
   makeContextWriterPermit,
   closeContextWriterPermit,
   isContextWriterBusy,
@@ -12,6 +13,8 @@ import type {
   WriterOptions,
 } from "./internal/session/WriterFacts.ts";
 import { ContextReference } from "./References.ts";
+import { isTerminalSessionStatus } from "./SessionData.ts";
+import { BrowserbaseSessions } from "./Sessions.ts";
 
 export {
   PersistenceEvidence,
@@ -23,10 +26,19 @@ export {
   type WriterOptions,
 } from "./internal/session/WriterFacts.ts";
 
+const decodeReference = (reference: ContextReference, operation: "writer" | "writer-reconcile") =>
+  Schema.decodeEffect(ContextReference)(reference, { onExcessProperty: "error" }).pipe(
+    Effect.mapError(() =>
+      ContextError.make({ operation, reason: "configuration", outcome: "undispatched" }),
+    ),
+  );
+
 /**
  * Owns the backend lease, child browser scopes, and exact attempt evidence. The backend must
  * handle uncertain distributed lease acquisition itself. It must persist quarantine facts;
- * a local Scope closing is never permission to admit another remote writer.
+ * a local Scope closing is never permission to admit another remote writer. A writer that
+ * settles as anything but a release leaves its Context refused in this process until
+ * `reconcile` succeeds.
  */
 export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = never>(
   backend: ContextWriterBackend<LeaseE, LeaseR>,
@@ -41,17 +53,7 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
   Effect.scoped(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const ref = yield* Schema.decodeEffect(ContextReference)(reference, {
-          onExcessProperty: "error",
-        }).pipe(
-          Effect.mapError(() =>
-            ContextError.make({
-              operation: "writer",
-              reason: "configuration",
-              outcome: "undispatched",
-            }),
-          ),
-        );
+        const ref = yield* decodeReference(reference, "writer");
 
         const timeout = options.settlementTimeoutMillis ?? 5000;
 
@@ -71,7 +73,10 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
         const acquired = yield* restore(backend.acquire(ref)).pipe(Effect.exit);
 
         if (Exit.isFailure(acquired)) {
-          closeContextWriterPermit(permit, false);
+          // `use` never received the permit, so no allocation was attempted under it and this
+          // process admitted no remote writer. What the failed acquisition left uncertain
+          // remotely is the backend's to resolve.
+          closeContextWriterPermit(permit, true);
 
           return yield* Effect.failCause(acquired.cause);
         }
@@ -131,4 +136,57 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
         return body.value;
       }),
     ),
+  );
+
+/**
+ * Lifts this process's quarantine on a Context once no writer it admitted can still write:
+ * the provider reports every session the quarantined writer recorded as terminal, and then
+ * the consumer's readback of the Context passes. The Context stays held throughout, so no
+ * writer is admitted against evidence still being gathered; a live writer is refused rather
+ * than waited for. An allocation whose outcome stayed unknown names no session to check, so
+ * its Context stays refused. Ending a session is the caller's explicit request; this only
+ * reads status. With no quarantine held here, only the readback runs. The backend keeps its
+ * own quarantine until the consumer reports this reconciliation to it.
+ */
+export const reconcile = <E, R>(
+  reference: ContextReference,
+  readback: Effect.Effect<void, E, R>,
+): Effect.Effect<
+  void,
+  E | ContextError | SessionError,
+  BrowserbaseSessions | Exclude<R, Scope.Scope>
+> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const ref = yield* decodeReference(reference, "writer-reconcile");
+      const sessions = yield* BrowserbaseSessions;
+      const claim = yield* claimReconciliation(ref);
+
+      const checked = yield* restore(
+        Effect.gen(function* () {
+          for (const entry of yield* claim.attempts) {
+            // A rejected creation made no session. Any other attempt must name a session the
+            // provider has ended, and the readback must come after every one of them.
+            if (entry.state === "rejected") continue;
+
+            const ended =
+              entry.session !== undefined &&
+              isTerminalSessionStatus((yield* sessions.retrieve(entry.session)).status);
+
+            if (!ended) {
+              return yield* ContextError.make({
+                operation: "writer-reconcile",
+                reason: "active",
+                outcome: "undispatched",
+              });
+            }
+          }
+          yield* Effect.scoped(readback);
+        }),
+      ).pipe(Effect.exit);
+
+      claim.finish(Exit.isSuccess(checked));
+
+      return yield* checked;
+    }),
   );

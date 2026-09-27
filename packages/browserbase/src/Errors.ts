@@ -68,6 +68,7 @@ export class ContextError extends Schema.TaggedError<ContextError>()(
     "writer-authority",
     "writer-readback",
     "writer-settle",
+    "writer-reconcile",
   ]),
 ) {}
 
