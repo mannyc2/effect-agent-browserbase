@@ -57,6 +57,8 @@ const openAiPriced = (payload: OpenAiPayload, subject: Subject) =>
 
 type AnthropicRequest = Parameters<AnthropicClient.Service["createMessageStream"]>[0];
 
+type MessageStream = Effect.Success<ReturnType<AnthropicClient.Service["createMessageStream"]>>;
+
 /**
  * Betas can change the price, so only these are sent: the provider package adds strict tool
  * schemas for every Tool.
@@ -82,11 +84,12 @@ const anthropicPriced = ({ payload, params }: AnthropicRequest, subject: Subject
   );
 
 /** One admission lets exactly one request through the transport. */
-interface Gate {
+export interface Gate {
   armed: boolean;
 }
 
-const guarded = (gate: Gate) => (client: HttpClient.HttpClient) =>
+/** The provider client's transport: it sends a request only when admission armed it. */
+export const guarded = (gate: Gate) => (client: HttpClient.HttpClient) =>
   HttpClient.transform(client, (effect) =>
     Effect.suspend(() => {
       if (!gate.armed) return Effect.die("A provider request was not admitted");
@@ -96,6 +99,10 @@ const guarded = (gate: Gate) => (client: HttpClient.HttpClient) =>
     }),
   );
 
+/**
+ * Reserve, arm the transport for this one request and send it. The arm never outlives the send,
+ * and a failed send ends the request's flight; a successful one ends with its stream.
+ */
 const admitted = <A, E, R>(
   allowance: Allowance,
   gate: Gate,
@@ -108,9 +115,18 @@ const admitted = <A, E, R>(
         gate.armed = true;
 
         return send;
-      }),
+      }).pipe(
+        Effect.onError(() => Effect.sync(() => allowance.release())),
+        Effect.ensuring(
+          Effect.sync(() => {
+            gate.armed = false;
+          }),
+        ),
+      ),
     ),
   );
+
+const landed = (allowance: Allowance) => Stream.ensuring(Effect.sync(() => allowance.release()));
 
 export const admitOpenAi = (
   native: OpenAiClient.Service,
@@ -124,7 +140,18 @@ export const admitOpenAi = (
   createResponseStream: (payload) =>
     Effect.suspend(() =>
       openAiPriced(payload, subject)
-        ? admitted(allowance, gate, bytes(payload), native.createResponseStream(payload))
+        ? admitted(
+            allowance,
+            gate,
+            bytes(payload),
+            native
+              .createResponseStream(payload)
+              .pipe(
+                Effect.map(
+                  ([response, stream]) => [response, stream.pipe(landed(allowance))] as const,
+                ),
+              ),
+          )
         : Effect.fail(allowance.refuse("contract")),
     ),
 });
@@ -141,7 +168,19 @@ export const admitAnthropic = (
   createMessageStream: (request) =>
     Effect.suspend(() =>
       anthropicPriced(request, subject)
-        ? admitted(allowance, gate, bytes(request.payload), native.createMessageStream(request))
+        ? admitted(
+            allowance,
+            gate,
+            bytes(request.payload),
+            native
+              .createMessageStream(request)
+              .pipe(
+                Effect.map(([response, stream]): MessageStream => [
+                  response,
+                  stream.pipe(landed(allowance)),
+                ]),
+              ),
+          )
         : Effect.fail(allowance.refuse("contract")),
     ),
 });

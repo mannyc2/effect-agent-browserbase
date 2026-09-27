@@ -1,8 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Exit, Redacted } from "effect";
@@ -13,7 +14,7 @@ import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
 import { Journal } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
-import { admitAnthropic, admitOpenAi, measured } from "./evaluation/Provider.ts";
+import { admitAnthropic, admitOpenAi, guarded, measured } from "./evaluation/Provider.ts";
 import { replay } from "./evaluation/Replay.ts";
 import { Ledger } from "./evaluation/Spend.ts";
 import { run } from "./evaluation/Tasks.ts";
@@ -132,6 +133,10 @@ it.effect("a real-model plan is refused, not truncated, when it cannot be bounde
     expect(yield* reason(plan({ ...spec, models: [gpt, { ...claude, id: "gpt" }] }))).toBe(
       "specification",
     );
+    // A fine-tuned model's ID names the account that owns it, so it cannot enter a record.
+    expect(
+      yield* reason(plan({ ...spec, models: [{ ...gpt, model: "ft:gpt-test:acme::abc123" }] })),
+    ).toBe("specification");
     expect(
       yield* reason(
         plan({ ...spec, models: [{ ...gpt, rates: { ...rates, inputUsdPerMillion: 0.0000001 } }] }),
@@ -170,7 +175,7 @@ it.effect("a refused live campaign creates no directory and loads no runner", ()
 
     yield* Effect.promise(() => writeFile(path, JSON.stringify(spec)));
     const { digest } = yield* plan(spec);
-    const start = Command.runWith(cli, { version: "test" });
+    const start = Command.runWith(cli(), { version: "test" });
 
     const args = (directory: string, approve: string) => [
       "campaign",
@@ -197,6 +202,14 @@ it.effect("a refused live campaign creates no directory and loads no runner", ()
 
     expect(unapproved).toMatchObject({ _tag: "CampaignRefusal", reason: "approval" });
     expect(existsSync(join(root, "unapproved"))).toBe(false);
+
+    const keyless = yield* start(args(join(root, "keyless"), digest)).pipe(
+      withEnv({ ...live, OPENAI_API_KEY: "" }),
+      Effect.flip,
+    );
+
+    expect(keyless).toMatchObject({ _tag: "CampaignRefusal", reason: "credentials" });
+    expect(existsSync(join(root, "keyless"))).toBe(false);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -289,7 +302,8 @@ it.effect("usage beyond what was reserved closes the whole campaign", () =>
       outputTokens: { total: 10, text: 10, reasoning: 0 },
     });
     expect(ledger.closed).toBe("contract");
-    expect(first.usage()).toMatchObject({ refused: "contract", costMicrousd: 10_500 });
+    // Nothing was refused: the request was sent, and used more than was reserved for it.
+    expect(first.usage()).toMatchObject({ refused: null, overrun: true, costMicrousd: 10_500 });
 
     const next = ledger.allowance({
       limitMicrousd: 100_000,
@@ -314,6 +328,69 @@ it.effect("usage beyond what was reserved closes the whole campaign", () =>
       costMicrousd: 10_500,
       status: "includes-retained-reservations",
     });
+  }),
+);
+
+it.effect("a run admits one request at a time, each priced at its dearest input rate", () =>
+  Effect.gen(function* () {
+    const one = new Ledger(1_000_000).allowance({
+      limitMicrousd: 100_000,
+      rates: microusd,
+      maxOutputTokens: 1000,
+    });
+
+    yield* one.admit(976);
+    expect(Exit.isFailure(yield* Effect.exit(one.admit(976)))).toBe(true);
+    expect(one.usage()).toMatchObject({ admitted: 1, refused: "concurrent", costMicrousd: 10_500 });
+    // Its stream ended without usage: the next request is admitted, and the first retained whole.
+    one.release();
+    yield* one.admit(976);
+    expect(one.usage()).toMatchObject({
+      admitted: 2,
+      costMicrousd: 21_000,
+      retainedMicrousd: 21_000,
+    });
+
+    // A cache-read rate above the others prices the reservation: 2,000 tokens at 2, plus 8,000.
+    const dear = new Ledger(1_000_000).allowance({
+      limitMicrousd: 100_000,
+      rates: { ...microusd, cacheRead: 2_000_000 },
+      maxOutputTokens: 1000,
+    });
+
+    yield* dear.admit(976);
+    expect(dear.usage().costMicrousd).toBe(12_000);
+
+    // Usage for a request that was never admitted means one bypassed admission.
+    const ledger = new Ledger(1_000_000);
+
+    const stray = ledger.allowance({
+      limitMicrousd: 100_000,
+      rates: microusd,
+      maxOutputTokens: 1000,
+    });
+
+    expect(stray.settle({ inputTokens: { total: 1 }, outputTokens: { total: 1 } })).toBe(0);
+    expect(ledger.closed).toBe("contract");
+    expect(stray.usage()).toMatchObject({ overrun: true });
+  }),
+);
+
+it.effect("the transport sends only a request that was admitted", () =>
+  Effect.gen(function* () {
+    const wire = openAiWire(reading);
+
+    const native = yield* OpenAiClient.make({
+      apiKey: Redacted.make("key-SECRET"),
+      transformClient: guarded({ armed: false }),
+    }).pipe(Effect.provide(wire.layer));
+
+    const exit = yield* Effect.exit(
+      native.createResponseStream({ model: "gpt-test", input: [] } as never),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(wire.bodies).toEqual([]);
   }),
 );
 
@@ -366,6 +443,18 @@ it.effect("a provider request outside the priced contract is refused before disp
       { ...priced, previous_response_id: "resp_1" },
       { ...priced, input: [{ type: "item_reference", id: "rs_1" }] },
       { ...priced, tools: [{ type: "web_search" }] },
+      { ...priced, conversation: "conv_1" },
+      { ...priced, background: true },
+      {
+        ...priced,
+        input: [
+          { role: "user", content: [{ type: "input_image", image_url: "https://x.invalid/a" }] },
+        ],
+      },
+      {
+        ...priced,
+        input: [{ role: "user", content: [{ type: "input_file", file_id: "file_1" }] }],
+      },
     ]) {
       const account = fresh();
 
@@ -422,6 +511,22 @@ it.effect("a provider request outside the priced contract is refused before disp
       { payload: { ...message, thinking: { type: "enabled", budget_tokens: 1024 } } },
       { payload: { ...message, tools: [{ type: "web_search_20250305", name: "web_search" }] } },
       { payload: message, params: { "anthropic-beta": "context-1m-2025-08-07" } },
+      { payload: { ...message, speed: "fast" } },
+      { payload: { ...message, inference_geo: "us" } },
+      { payload: { ...message, container: "container_1" } },
+      { payload: { ...message, context_management: { edits: [] } } },
+      { payload: { ...message, mcp_servers: [] } },
+      {
+        payload: {
+          ...message,
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "document", source: { type: "url", url: "https://x.invalid/a" } }],
+            },
+          ],
+        },
+      },
     ]) {
       const account = fresh();
 
@@ -603,4 +708,71 @@ it.effect("a request the run cannot afford is refused before it is sent", () =>
     expect(evidence.facts.failure).toEqual({ category: "budget", tag: "SpendRefused" });
     expect(grade(evidence)).toMatchObject({ termination: "spend-refused", output: "missing" });
   }),
+);
+
+it.effect(
+  "a live campaign records every planned run and stops admitting once a contract breaks",
+  () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "campaign-")));
+
+      const start = (
+        specification: unknown,
+        transport: ReturnType<typeof openAiWire>,
+        out: string,
+      ) =>
+        Effect.gen(function* () {
+          const path = join(root, `${out}.json`);
+
+          yield* Effect.promise(() => writeFile(path, JSON.stringify(specification)));
+          const { digest } = yield* plan(specification);
+
+          return yield* Command.runWith(cli(transport.layer), { version: "test" })([
+            "campaign",
+            path,
+            join(root, out),
+            "--source-revision",
+            "a".repeat(40),
+            "--approve",
+            digest,
+          ]).pipe(withEnv(live));
+        });
+
+      const summary = (out: string): unknown =>
+        JSON.parse(readFileSync(join(root, out, "campaign.json"), "utf8"));
+
+      const one = { ...readingSpec, models: [gpt] };
+
+      yield* start(one, openAiWire(reading), "done");
+      expect(existsSync(join(root, "done", "plan.json"))).toBe(true);
+      expect(summary("done")).toMatchObject({
+        planned: 1,
+        recorded: 1,
+        notStarted: [],
+        spendRefused: 0,
+        harnessFailures: 0,
+        incompleteEvidence: 0,
+        subjects: { gpt: { planned: 1, recorded: 1, costMicrousd: 2680 } },
+        spend: { spentMicrousd: 2680, closed: null },
+      });
+
+      // The first request reports far more input than its bytes allow: the campaign closes, that
+      // run's next request is refused, and the second run never starts.
+      const broken = openAiWire([
+        { ...reading[0]!, usage: { input: 200_000, output: 80 } },
+        reading[1]!,
+      ]);
+
+      const failure = yield* start({ ...one, trials: 2 }, broken, "stopped").pipe(Effect.flip);
+
+      expect(failure).toMatchObject({ _tag: "EvidenceError" });
+      expect(broken.bodies).toHaveLength(1);
+      expect(summary("stopped")).toMatchObject({
+        planned: 2,
+        recorded: 1,
+        notStarted: ["gpt-reading-base-1"],
+        spendRefused: 1,
+        spend: { closed: "contract" },
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
 );

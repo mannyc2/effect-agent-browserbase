@@ -29,6 +29,7 @@ const descriptions: Record<Refusal, string> = {
   "campaign-budget": "The request's reservation would pass the campaign's spend limit.",
   closed: "An earlier request broke its price contract, so the campaign admits nothing more.",
   contract: "The request is outside the contract it was priced under.",
+  concurrent: "A run sends one request at a time, and its last is still in flight.",
 };
 
 /** Fixed descriptions only: never provider text, request content or credentials. */
@@ -65,13 +66,18 @@ export class Ledger {
   }
 }
 
-/** One run's share of the campaign: serial requests, each reserved before it is sent. */
+/**
+ * One run's share of the campaign: one request at a time, each reserved before it is sent. A
+ * request is in flight from admission until its stream ends or its usage settles it.
+ */
 export class Allowance {
   readonly #ledger: Ledger;
   readonly #limit: number;
   readonly #rates: Prices;
   readonly #maxOutputTokens: number;
   #pending: Reservation | null = null;
+  #inFlight = false;
+  #overrun = false;
   #admitted = 0;
   #settled = 0;
   #refused: Refusal | null = null;
@@ -108,7 +114,12 @@ export class Allowance {
 
     return refusal(reason);
   }
+  /** The admitted request's stream has ended; its reservation waits for settlement. */
+  release(): void {
+    this.#inFlight = false;
+  }
   #admit(bytes: number): Refusal | null {
+    if (this.#inFlight) return this.#refuse("concurrent");
     // A request that never settled is charged whole before the next is considered.
     this.#retain();
     if (this.#ledger.closed !== null) return this.#refuse("closed");
@@ -116,7 +127,7 @@ export class Allowance {
     const outputTokens = this.#maxOutputTokens;
 
     const microusd = Math.ceil(
-      (inputTokens * Math.max(this.#rates.input, this.#rates.cacheWrite) +
+      (inputTokens * Math.max(this.#rates.input, this.#rates.cacheRead, this.#rates.cacheWrite) +
         outputTokens * this.#rates.output) /
         1_000_000,
     );
@@ -131,6 +142,7 @@ export class Allowance {
     this.#pending = { microusd, inputTokens, outputTokens };
     this.#ledger.pendingMicrousd += microusd;
     this.#admitted++;
+    this.#inFlight = true;
 
     return null;
   }
@@ -152,10 +164,11 @@ export class Allowance {
   settle(usage: Pick<Response.Usage, "inputTokens" | "outputTokens">): number {
     const pending = this.#pending;
 
+    this.#inFlight = false;
     // Usage with nothing admitted means a request bypassed admission.
     if (pending === null) {
       this.#ledger.closed = "contract";
-      this.#refused ??= "contract";
+      this.#overrun = true;
 
       return 0;
     }
@@ -204,13 +217,14 @@ export class Allowance {
     this.#ledger.spentMicrousd += charged;
     if (broken) {
       this.#ledger.closed = "contract";
-      this.#refused ??= "contract";
+      this.#overrun = true;
     }
 
     return charged;
   }
   /** End the run: a reservation still pending is retained in full. */
   finish(): Usage {
+    this.#inFlight = false;
     this.#retain();
 
     return this.usage();
@@ -223,6 +237,7 @@ export class Allowance {
       admitted: this.#admitted,
       settled: this.#settled,
       refused: this.#refused,
+      overrun: this.#overrun,
       inputTokens: this.#tokens.input,
       cacheReadInputTokens: this.#tokens.cacheRead,
       cacheWriteInputTokens: this.#tokens.cacheWrite,

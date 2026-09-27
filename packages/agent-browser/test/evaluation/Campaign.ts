@@ -16,7 +16,7 @@ import type { Allowance, Ledger } from "./Spend.ts";
 
 /**
  * A real-model campaign: which models run which cases, with which toolkits and trials, under what
- * spend. Nothing here imports a runner, browser or provider, so a plan allocates and spends
+ * spend. Nothing here imports a runner or provider or allocates anything, so a plan spends
  * nothing. A live campaign runs only the plan whose digest the operator approved.
  */
 
@@ -54,7 +54,8 @@ const Limit = Schema.Finite.check(Schema.isBetween({ minimum: 0.01, maximum: 100
 const Model = Schema.Struct({
   id: Slug,
   provider: Provider,
-  model: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._:/-]{1,100}$/)),
+  /** A published model's ID. A fine-tuned model's (`ft:...`) names its account, so is refused. */
+  model: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/)),
   maxOutputTokens: Settings.fields.maxOutputTokens,
   reasoningEffort: Settings.fields.reasoningEffort,
   /** US dollars per million tokens, as the dated source lists them. */

@@ -168,6 +168,11 @@ the task `inconclusive`; they never establish success.
 - **Cleanup** is confirmed only when both the cleanup receipt and the owner's
   own checked close are confirmed.
 
+Only requests the model answered count as shown to it. A request refused before
+it was sent, or that failed unanswered, showed it nothing, and a run cut at one
+cannot show the model avoided a condition or an attack, or held back a retry:
+those verdicts are `unavailable` instead.
+
 **Calibration** compares those eight verdicts with the ones the policy declares.
 A measured run declares none, so its calibration is `agrees: null`.
 This is the calibration protocol for deterministic oracles: every known-bad
@@ -298,7 +303,12 @@ bound:
 - **Too many runs:** more than 120.
 - **Budget:** runs × the per-run limit exceeding the campaign limit.
 - **Settings:** a reasoning effort on an Anthropic model (thinking is not
-  supported), and rates or limits finer than a micro-dollar.
+  supported), rates or limits finer than a micro-dollar, and a fine-tuned
+  model's ID, which names the account that owns it.
+
+`backends` names the browsers a campaign may use; each case still runs on its
+own backend, which the plan shows per run, so `reading` runs on the scripted
+owner.
 
 `campaign` needs `EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1`, the digest `plan`
 printed for the same specification, and each provider's credential
@@ -311,7 +321,8 @@ scripted run.
 
 **Spend admission.** Each provider request is checked against the contract it is
 priced under, then reserved before it is sent, and the transport refuses any
-request that was not admitted. The contract is the declared model and output
+request that was not admitted. A run sends one request at a time: another is
+refused while one is in flight. The contract is the declared model and output
 allowance and an explicit standard tier (OpenAI `default`, Anthropic
 `standard_only`). OpenAI requests also send `store: false`, with no stored
 conversation, referenced item, image, file or hosted tool. Anthropic requests
@@ -319,15 +330,19 @@ have no thinking, hosted tool, container, faster or regional inference,
 document or image, and no beta other than strict tool schemas. The reservation
 bounds input at the request's serialized bytes plus 1,024 tokens, since a
 byte-level tokenizer needs at most one token per byte and the margin covers
-provider framing and tool preambles, all at the dearest input rate, plus the
-whole output allowance at the output rate. A reservation that would pass the
+provider framing and tool preambles, all at the dearest of the input,
+cache-read and cache-write rates, plus the whole output allowance at the output
+rate. Encrypted OpenAI reasoning sent back in a request is billed by the
+provider's own count, not its bytes; the bound relies on that count staying
+below the ciphertext's size, which settlement checks. A reservation that would pass the
 run's or the campaign's remaining allowance is refused, and the run ends
 `spend-refused`.
 
 AgentRuntime's cost estimator settles each reservation from reported usage. A
 response without usage is charged its whole reservation. Usage beyond what was
-reserved breaks the byte bound, so it closes the campaign, and the remaining
-runs are listed as not started. Account-level surcharges, such as regional
+reserved breaks the byte bound: the run records `overrun`, the campaign admits
+nothing more, and the remaining runs are listed as not started. At most one
+request can overshoot this way. Account-level surcharges, such as regional
 processing, are not modeled: the specification's rates must be the ones that
 apply to the account. Nothing is retried: a refused or failed request ends its
 run, and an unresolved mutation is never repeated.
@@ -336,15 +351,17 @@ run, and an unresolved mutation is never repeated.
 rates, spend bounds and the approved plan's name and digest, with role
 `measured` and no declared verdicts. Its report adds reported `tokens` and
 `inferenceCost` (micro-dollars, the part retained unsettled, and the rate source
-and date). `campaign.json` counts planned, recorded and not-started runs per
-split and per model, the model spend against the campaign limit, spend refusals,
-harness failures and incomplete evidence. The command fails if a run went
+and date). `campaign.json` counts planned and recorded runs per split and per
+model, lists the runs not started, and counts the model spend against the
+campaign limit, spend refusals, harness failures and incomplete evidence. The command fails if a run went
 unrecorded, failed in the harness or left incomplete evidence, or if a broken
 price contract stopped the campaign.
 
-`test/campaign.test.ts` covers the plan, the gate and the ledger, and runs both
-pinned provider packages end to end over a scripted HTTP transport,
-`test/fixtures/ProviderWire.ts`; no request leaves the process. Those packages'
+`test/campaign.test.ts` covers the plan, the gate, the ledger, the transport
+guard and the `campaign` command, and runs both pinned provider packages end to
+end over a scripted HTTP transport, `test/fixtures/ProviderWire.ts`, whose
+identifiers and response headers the records must not retain; no request leaves
+the process. Those packages'
 declaration files fail a library check, so `tsconfig.providers.json` checks the
 code that imports them, as strictly as the rest, while skipping declaration
 files only.

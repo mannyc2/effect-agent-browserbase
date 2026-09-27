@@ -21,10 +21,21 @@ export interface WireUsage {
 
 const Body = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
+/** Response headers carry request and account identifiers, as a provider's do. */
+const headers = {
+  "x-request-id": "req_SECRET",
+  "request-id": "req_SECRET",
+  "openai-organization": "org-SECRET",
+  "openai-project": "proj_SECRET",
+  "anthropic-organization-id": "org-SECRET",
+};
+
 const events = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], lines: string) =>
   HttpClientResponse.fromWeb(
     request,
-    HttpServerResponse.toWeb(HttpServerResponse.text(lines, { contentType: "text/event-stream" })),
+    HttpServerResponse.toWeb(
+      HttpServerResponse.text(lines, { contentType: "text/event-stream", headers }),
+    ),
   );
 
 const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: WireTurn, index: number) => string) => {

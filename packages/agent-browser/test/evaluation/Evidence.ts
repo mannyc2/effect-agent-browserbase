@@ -161,7 +161,11 @@ export const Usage = Schema.Struct({
   admitted: nonnegative,
   settled: nonnegative,
   /** Why a request was refused before it was sent, if one was. */
-  refused: Schema.NullOr(Schema.Literals(["run-budget", "campaign-budget", "closed", "contract"])),
+  refused: Schema.NullOr(
+    Schema.Literals(["run-budget", "campaign-budget", "closed", "contract", "concurrent"]),
+  ),
+  /** A request used more than was reserved for it, which closed the campaign. */
+  overrun: Schema.Boolean,
   inputTokens: nonnegative,
   cacheReadInputTokens: nonnegative,
   cacheWriteInputTokens: nonnegative,
