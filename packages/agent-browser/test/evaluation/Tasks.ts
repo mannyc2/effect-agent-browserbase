@@ -15,14 +15,15 @@ import {
   account,
   type cases,
   decoyReference,
+  input,
   orderReference,
   Output,
   type Case,
   type Composition,
   type Task,
 } from "./Cases.ts";
-import { EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
-import { answer, call, history, model, prose, type Turn } from "./Model.ts";
+import { diagnose, EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
+import { answer, call, type Driver, prose, scripted, type Turn } from "./Model.ts";
 
 /** Every case offers the same Tools per composition, so comparisons hold the action space fixed. */
 export const toolkit = (composition: Composition) =>
@@ -249,7 +250,10 @@ const policies: {
   },
 };
 
-const script = (journal: Journal, url: string) => {
+const script = (
+  journal: Journal,
+  url: string,
+): Effect.Effect<ReadonlyArray<Turn>, EvidenceError> => {
   const { task, policy, toolkit: composition, bounds } = journal.manifest;
 
   const found = Object.entries<(context: Context) => ReadonlyArray<Turn>>(policies[task]).find(
@@ -261,14 +265,23 @@ const script = (journal: Journal, url: string) => {
     : Effect.succeed(found({ composition, url, maxTurns: bounds.maxTurns }));
 };
 
+/** A scripted run's policy script; a measured run brings its own real model. */
+const driverFor = (journal: Journal, url: string, measured: Driver | undefined) =>
+  journal.manifest.provider === "scripted"
+    ? script(journal, url).pipe(Effect.map((turns) => scripted(journal, turns)))
+    : measured === undefined
+      ? Effect.fail(new EvidenceError({ operation: "measured run without a model" }))
+      : Effect.succeed(measured);
+
 /**
- * An agent run's own outcome. Host browser faults and a provider (here, script) failure are kept
- * apart from agent failures such as an exhausted policy or an invalid final answer.
+ * An agent run's own outcome. Host browser faults and a provider (or script) failure are kept
+ * apart from agent failures such as an exhausted policy or an invalid final answer, and a request
+ * refused for spend before it was sent is kept apart from both.
  */
 const settle =
   (journal: Journal) =>
   (exit: Exit.Exit<AgentRuntime.AgentResult<Output>, unknown>): Effect.Effect<void> =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       if (Exit.isSuccess(exit)) {
         journal.facts = {
           ...journal.facts,
@@ -280,25 +293,43 @@ const settle =
           outputValid: true,
         };
 
-        return;
+        return Effect.void;
       }
       const tag = tagOf(exit.cause);
+      const refused = tag === "AiError" && (journal.facts.usage?.refused ?? null) !== null;
+      const diagnosis = refused ? undefined : diagnose(exit.cause);
 
       journal.facts = {
         ...journal.facts,
         terminal: tag === "Interrupt" ? "cancelled" : "failed",
-        failure: {
-          category:
-            tag === "Interrupt"
-              ? "interrupted"
-              : tag === "BrowserError" || tag === "InitializationError"
-                ? "browser"
-                : tag === "AiError" || tag === "Defect"
-                  ? "infrastructure"
-                  : "agent",
-          tag,
-        },
+        failure: refused
+          ? { category: "budget", tag: "SpendRefused" }
+          : {
+              category:
+                tag === "Interrupt"
+                  ? "interrupted"
+                  : tag === "BrowserError" || tag === "InitializationError"
+                    ? "browser"
+                    : tag === "AiError" || tag === "Defect"
+                      ? "infrastructure"
+                      : "agent",
+              tag,
+              ...(diagnosis === undefined
+                ? {}
+                : { reason: diagnosis.reason, status: diagnosis.status }),
+            },
       };
+
+      // The description goes to the operator's console, never to the record.
+      return diagnosis === undefined
+        ? Effect.void
+        : Effect.logWarning("Run failed", {
+            run: journal.manifest.runId,
+            tag,
+            reason: diagnosis.reason,
+            status: diagnosis.status,
+            description: diagnosis.description,
+          });
     });
 
 /** Host-only owner state and the original failures, read after the agent and before close. */
@@ -331,6 +362,17 @@ const owner = (
         outcome: entry.error.outcome,
       })),
     };
+  });
+
+/**
+ * The owner's own bounds. It outlives the agent's run bound by 30 seconds, so a slow real model
+ * meets its own time limit rather than a closed browser, and the host can still read what the
+ * run left: a script's 30-second bound keeps the owner's 60.
+ */
+export const ownerPolicy = (manifest: Journal["manifest"]) =>
+  BrowserPolicy.unrestricted({
+    maxActions: manifest.bounds.maxActions,
+    maxElapsedMillis: manifest.bounds.maxDurationMillis + 30_000,
   });
 
 const closed = (journal: Journal, result: "confirmed" | "failed") =>
@@ -369,10 +411,7 @@ const chromium = (journal: Journal) =>
   }).pipe(Layer.provide(NodeCrypto.layer));
 
 const scriptedOptions = (journal: Journal) => ({
-  policy: BrowserPolicy.unrestricted({
-    maxActions: journal.manifest.bounds.maxActions,
-    maxElapsedMillis: 60000,
-  }),
+  policy: ownerPolicy(journal.manifest),
   viewport: journal.manifest.viewport,
   onCleanup: (receipt: Testing.ScriptedCleanupResult) =>
     Effect.sync(() => {
@@ -395,21 +434,38 @@ const hostOptions = (journal: Journal) => ({
   maxTextBytes: journal.manifest.bounds.maxTextBytes,
 });
 
-const runAgent = (journal: Journal, turns: ReadonlyArray<Turn>) =>
-  AgentRuntime.run(
-    agent(journal.manifest.toolkit, journal.manifest.bounds),
-    journal.manifest.goal,
-    {
-      onHistory: history(journal),
-    },
-  ).pipe(Effect.provide(model(journal, turns)));
+/** The agent's input and spend are recorded as facts, on interruption too. */
+const runAgent = (journal: Journal, driver: Driver, start: string | null) =>
+  Effect.suspend(() => {
+    const given = input(journal.manifest.goal, start);
+
+    journal.facts = { ...journal.facts, input: given };
+
+    return driver.provide(
+      AgentRuntime.run(agent(journal.manifest.toolkit, journal.manifest.bounds), given, {
+        onHistory: driver.history,
+        ...(driver.estimate === undefined ? {} : { estimateCostMicrousd: driver.estimate }),
+      }),
+    );
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        journal.facts = { ...journal.facts, usage: driver.finish() };
+      }),
+    ),
+  );
 
 /** ToolSite cases: the server's ledger is read after Chromium has been released. */
-const onChromium = (journal: Journal, path: string): Effect.Effect<void, RunFailure> =>
+const onChromium = (
+  journal: Journal,
+  path: string,
+  measured: Driver | undefined,
+): Effect.Effect<void, RunFailure> =>
   Effect.scoped(
     Effect.gen(function* () {
       const site = yield* toolSite;
-      const turns = yield* script(journal, `${site.url}${path}`);
+      const start = `${site.url}${path}`;
+      const driver = yield* driverFor(journal, start, measured);
 
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
@@ -422,22 +478,15 @@ const onChromium = (journal: Journal, path: string): Effect.Effect<void, RunFail
         }),
       );
 
-      yield* Browser.scoped(
-        Chromium.launch(
-          BrowserPolicy.unrestricted({
-            maxActions: journal.manifest.bounds.maxActions,
-            maxElapsedMillis: 60000,
-          }),
-        ),
-        (browser) =>
-          Effect.gen(function* () {
-            const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+      yield* Browser.scoped(Chromium.launch(ownerPolicy(journal.manifest)), (browser) =>
+        Effect.gen(function* () {
+          const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
 
-            yield* host
-              .run(runAgent(journal, turns))
-              .pipe(Effect.exit, Effect.flatMap(settle(journal)));
-            yield* owner(journal, browser.status, host.toolFailures);
-          }),
+          yield* host
+            .run(runAgent(journal, driver, start))
+            .pipe(Effect.exit, Effect.flatMap(settle(journal)));
+          yield* owner(journal, browser.status, host.toolFailures);
+        }),
       ).pipe(
         Effect.provide(chromium(journal)),
         Effect.andThen(closed(journal, "confirmed")),
@@ -478,16 +527,19 @@ const changesPage: ReadonlySet<string> = new Set([
 ]);
 
 /** A long scripted receipt; reading it needs no state-changing operation. */
-const onReceipt = (journal: Journal): Effect.Effect<void, RunFailure> =>
+const onReceipt = (
+  journal: Journal,
+  measured: Driver | undefined,
+): Effect.Effect<void, RunFailure> =>
   Effect.gen(function* () {
-    const turns = yield* script(journal, "https://fixture.test/receipt");
+    const driver = yield* driverFor(journal, "https://fixture.test/receipt", measured);
 
     yield* Browser.scoped(Testing.open(receipt, scriptedOptions(journal)), (browser) =>
       Effect.gen(function* () {
         const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
 
         yield* host
-          .run(runAgent(journal, turns))
+          .run(runAgent(journal, driver, null))
           .pipe(Effect.exit, Effect.flatMap(settle(journal)));
         const calls = yield* browser.control.calls;
 
@@ -505,9 +557,12 @@ const onReceipt = (journal: Journal): Effect.Effect<void, RunFailure> =>
   });
 
 /** The scripted public seam proves cancellation and fencing, not a write-before-lost-ack application state. */
-const onCancelledWaiter = (journal: Journal): Effect.Effect<void, RunFailure> =>
+const onCancelledWaiter = (
+  journal: Journal,
+  measured: Driver | undefined,
+): Effect.Effect<void, RunFailure> =>
   Effect.gen(function* () {
-    const turns = yield* script(journal, "https://fixture.test/");
+    const driver = yield* driverFor(journal, "https://fixture.test/", measured);
 
     yield* Browser.scoped(
       Testing.open(
@@ -528,7 +583,7 @@ const onCancelledWaiter = (journal: Journal): Effect.Effect<void, RunFailure> =>
 
           yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
           const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
-          const running = yield* host.run(runAgent(journal, turns)).pipe(Effect.forkChild);
+          const running = yield* host.run(runAgent(journal, driver, null)).pipe(Effect.forkChild);
 
           // Either way the gate is missed, the run cannot show a held dispatch: a harness fault.
           yield* gate.reached.pipe(
@@ -600,20 +655,23 @@ type RunFailure =
   | BrowserError
   | InitializationError;
 
-/** Run one declared case into its journal; only a harness fault fails the returned Effect. */
-export const run = (journal: Journal): Effect.Effect<void, RunFailure> => {
+/**
+ * Run one declared case into its journal; only a harness fault fails the returned Effect. A
+ * scripted run plays its policy's script; a measured run needs the real model's driver.
+ */
+export const run = (journal: Journal, measured?: Driver): Effect.Effect<void, RunFailure> => {
   switch (journal.manifest.task) {
     case "signup":
-      return onChromium(journal, "signup");
+      return onChromium(journal, "signup", measured);
     case "lost-acknowledgement":
-      return onChromium(journal, "signup?ack=late");
+      return onChromium(journal, "signup?ack=late", measured);
     case "rerendered-submit":
-      return onChromium(journal, "signup?render=live");
+      return onChromium(journal, "signup?render=live", measured);
     case "hostile-receipt":
-      return onChromium(journal, "receipt");
+      return onChromium(journal, "receipt", measured);
     case "cancelled-mutation":
-      return onCancelledWaiter(journal);
+      return onCancelledWaiter(journal, measured);
     case "reading":
-      return onReceipt(journal);
+      return onReceipt(journal, measured);
   }
 };
