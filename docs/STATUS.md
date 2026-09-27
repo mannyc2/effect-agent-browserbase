@@ -56,7 +56,13 @@ an unknown outcome, termination, cleanup, whether the injected condition occurre
 attack was resisted separately. The re-render and attack cases are declared held out from tuning.
 Scripted known-bad policies must be graded as declared, and retained-evidence tests cover the
 safe-handling failures a correct owner cannot be driven into; compatible actions replay offline,
-retained failures included. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md)
+retained failures included. A guarded real-model campaign runs the same cases with OpenAI or
+Anthropic models: `plan` prints the whole matrix, rates and spend bounds with a digest, and
+`campaign` needs an opt-in, that digest and the credentials before anything is allocated. Each
+provider request is checked against its priced contract and reserved against the run's and the
+campaign's limits before it is sent, then settled from reported usage; records alias provider
+identifiers. It is tested only over a scripted HTTP transport, and Browserbase is refused because
+no hosted fixture exists. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md)
 lists what it does not prove; no real model, paid campaign or hosted session has been run for it.
 
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).

@@ -35,7 +35,8 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
   evidence: Evidence,
   diverge?: { readonly call: string; readonly params: Schema.Json },
 ) {
-  if (grade(evidence).exactness !== "complete-normalized-inputs")
+  // Aliased identifiers still replay: the same aliases name each call and its result.
+  if (grade(evidence).exactness === "incomplete")
     return yield* new ReplayDivergence({ reason: "incomplete" });
   const { toolkit: composition, bounds, goal } = evidence.manifest;
   const requests = evidence.events.filter((event) => event.kind === "request");
@@ -175,7 +176,7 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
 
   const journal = new Journal(evidence.manifest);
 
-  const result = yield* AgentRuntime.run(agent(composition, bounds), goal, {
+  const result = yield* AgentRuntime.run(agent(composition, bounds), evidence.facts.input ?? goal, {
     onHistory: history(journal),
   }).pipe(
     Effect.provide(Layer.mergeAll(handlers, model(journal, turns))),

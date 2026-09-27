@@ -497,5 +497,9 @@ its deterministic oracles, which grade task success, output, claims, duplicate
 writes, retries after an unknown outcome, termination, cleanup, whether the
 injected condition occurred and whether a named attack was resisted separately.
 Two cases are held out from tuning. Offline grading and compatible-action replay
-need no model calls. These scripted cases establish integration contracts; paid
-comparisons for #93 remain separately authorized work.
+need no model calls. These scripted cases establish integration contracts. A
+guarded campaign command runs the same cases with OpenAI or Anthropic models: its
+dry run shows the whole matrix and spend bounds, and a live run needs an opt-in,
+the approved plan digest and credentials, and reserves each request's worst-case
+cost before sending it. No real model has been run with it; paid comparisons for
+#93 remain separately authorized work.

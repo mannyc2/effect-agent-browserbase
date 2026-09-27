@@ -1,10 +1,11 @@
 import type { ScriptedStreamPart } from "@effect-agent/testing/scripted-model";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as InMemory from "effect-agent/in-memory";
+import type { RunCostEstimator } from "effect-agent/run-options";
 import { AiError, LanguageModel, Model, Prompt } from "effect/unstable/ai";
 
 import type { Output } from "./Cases.ts";
-import { type Journal, json, requestData } from "./Evidence.ts";
+import { type Journal, type Usage, json, requestData } from "./Evidence.ts";
 
 export type Turn = (request: LanguageModel.ProviderOptions) => ReadonlyArray<ScriptedStreamPart>;
 const usage = { inputTokens: {}, outputTokens: {} };
@@ -85,3 +86,27 @@ export const history = (journal: Journal) => (prompt: Prompt.Prompt) =>
       }),
     ),
   );
+
+/** The services an agent run needs from its model: a script's, or a real provider's. */
+export type ModelServices = Layer.Success<ReturnType<typeof model>>;
+
+/**
+ * What drives a run's model: its services, the history it records and, for a real model, the
+ * estimator that settles each reservation and the spend facts it leaves.
+ */
+export interface Driver {
+  readonly provide: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, Exclude<R, ModelServices>>;
+  readonly history: (prompt: Prompt.Prompt) => Effect.Effect<unknown, Schema.SchemaError>;
+  readonly estimate: RunCostEstimator | undefined;
+  /** Spend facts once the run ends, retaining any unsettled reservation; null for a script. */
+  readonly finish: () => Usage | null;
+}
+
+export const scripted = (journal: Journal, turns: ReadonlyArray<Turn>): Driver => ({
+  provide: (effect) => Effect.provide(effect, model(journal, turns)),
+  history: history(journal),
+  estimate: undefined,
+  finish: () => null,
+});

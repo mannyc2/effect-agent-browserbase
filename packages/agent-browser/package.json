@@ -24,13 +24,15 @@
   },
   "scripts": {
     "build": "vp pack",
-    "check": "tsc --noEmit -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.providers.json",
     "evaluation": "bun test/evaluation/Main.ts",
     "install:test-browser": "playwright-core install --with-deps chromium",
     "test:native": "vp test --config vite.native.config.ts --run"
   },
   "devDependencies": {
     "@effect-agent/testing": "workspace:*",
+    "@effect/ai-anthropic": "catalog:",
+    "@effect/ai-openai": "catalog:",
     "@effect/platform-bun": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",

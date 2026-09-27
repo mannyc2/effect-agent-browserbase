@@ -11,5 +11,11 @@
     "allowUnusedLabels": false,
     "plugins": [{ "name": "@effect/language-service", "diagnostics": false }]
   },
-  "include": ["src", "test", "examples", "vite.config.ts"]
+  "include": ["src", "test", "examples", "vite.config.ts"],
+  "exclude": [
+    "test/campaign.test.ts",
+    "test/evaluation/Cli.ts",
+    "test/evaluation/Main.ts",
+    "test/evaluation/Provider.ts"
+  ]
 }

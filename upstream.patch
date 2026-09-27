@@ -26,7 +26,7 @@ index 1d57ed57..188e053a 100644
    "linked": [],
    "access": "public",
 diff --git a/bun.lock b/bun.lock
-index 04fb1b69..97573ffa 100644
+index 04fb1b69..1beb0615 100644
 --- a/bun.lock
 +++ b/bun.lock
 @@ -39,7 +39,8 @@
@@ -39,7 +39,7 @@ index 04fb1b69..97573ffa 100644
          "typescript": "catalog:",
          "typescript-twoslash": "catalog:",
          "vite": "catalog:",
-@@ -97,6 +98,29 @@
+@@ -97,6 +98,31 @@
          "vite-plus": "catalog:",
        },
      },
@@ -48,6 +48,8 @@ index 04fb1b69..97573ffa 100644
 +      "version": "0.2.0-beta.5",
 +      "devDependencies": {
 +        "@effect-agent/testing": "workspace:*",
++        "@effect/ai-anthropic": "catalog:",
++        "@effect/ai-openai": "catalog:",
 +        "@effect/platform-bun": "catalog:",
 +        "@effect/platform-node": "catalog:",
 +        "@effect/vitest": "catalog:",
@@ -69,7 +71,7 @@ index 04fb1b69..97573ffa 100644
      "packages/ai-decision": {
        "name": "@effect-agent/ai-decision",
        "version": "0.1.0-beta.142",
-@@ -111,6 +135,46 @@
+@@ -111,6 +137,46 @@
          "effect": "^4.0.0-rc.117",
        },
      },
@@ -116,7 +118,7 @@ index 04fb1b69..97573ffa 100644
      "packages/effect-agent": {
        "name": "effect-agent",
        "version": "0.1.0-beta.142",
-@@ -549,6 +613,7 @@
+@@ -549,6 +615,7 @@
      "lucide-react": "1.27.0",
      "memfs": "4.71.0",
      "miniflare": "5.20260811.1-alpha",
@@ -124,7 +126,7 @@ index 04fb1b69..97573ffa 100644
      "puppeteer-core": "24.29.0",
      "react": "19.2.8",
      "react-dom": "19.2.8",
-@@ -1209,43 +1274,43 @@
+@@ -1209,43 +1276,43 @@
  
      "@oxlint-tsgolint/win32-x64": ["@oxlint-tsgolint/win32-x64@7.0.2001", "", { "os": "win32", "cpu": "x64" }, "sha512-FkDRm8hx9OwzGQqyWG1tO5QrTLRApff9DzSgpz9QZau37BR8d1VYKOxMLGf6shPZntJFoTwIIJYT68VndYDCog=="],
  
@@ -187,7 +189,7 @@ index 04fb1b69..97573ffa 100644
  
      "@oxlint/plugins": ["@oxlint/plugins@1.79.0", "", {}, "sha512-S0uyoxakDINJ4DPgqxGlEEvrdSMeQb7Z2lKVjxoY2gwsbZbfg2Xr8Klfeo5ZeraHmmdBCELFUHkSe6KEmBpMvg=="],
  
-@@ -2029,6 +2094,12 @@
+@@ -2029,6 +2096,12 @@
  
      "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
  
@@ -200,7 +202,7 @@ index 04fb1b69..97573ffa 100644
      "effect-cf": ["effect-cf@0.44.1", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.115", "@effect/sql-pg": "^4.0.0-rc.115", "@effect/sql-sqlite-do": "^4.0.0-rc.115", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.115" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-xEd7ysud5CHqClt1PeABZdX4LXipldNlw8MFpDa81wmTicFjhi7JwMIVFbs6XXj8i21AJxDxrm6TQh87FzOafA=="],
  
      "electron-to-chromium": ["electron-to-chromium@1.5.398", "", {}, "sha512-AsvhAxopJGh6museTDMIjn6JpDYOfgu4RLlygomt87MUwBUqTfd/1EiPtx10/LZE8xpTvkP2E9Gafq7lkLtodQ=="],
-@@ -2561,7 +2632,7 @@
+@@ -2561,7 +2634,7 @@
  
      "oxfmt": ["oxfmt@0.64.0", "", { "dependencies": { "tinypool": "2.1.0" }, "optionalDependencies": { "@oxfmt/binding-android-arm-eabi": "0.64.0", "@oxfmt/binding-android-arm64": "0.64.0", "@oxfmt/binding-darwin-arm64": "0.64.0", "@oxfmt/binding-darwin-x64": "0.64.0", "@oxfmt/binding-freebsd-x64": "0.64.0", "@oxfmt/binding-linux-arm-gnueabihf": "0.64.0", "@oxfmt/binding-linux-arm-musleabihf": "0.64.0", "@oxfmt/binding-linux-arm64-gnu": "0.64.0", "@oxfmt/binding-linux-arm64-musl": "0.64.0", "@oxfmt/binding-linux-ppc64-gnu": "0.64.0", "@oxfmt/binding-linux-riscv64-gnu": "0.64.0", "@oxfmt/binding-linux-riscv64-musl": "0.64.0", "@oxfmt/binding-linux-s390x-gnu": "0.64.0", "@oxfmt/binding-linux-x64-gnu": "0.64.0", "@oxfmt/binding-linux-x64-musl": "0.64.0", "@oxfmt/binding-openharmony-arm64": "0.64.0", "@oxfmt/binding-win32-arm64-msvc": "0.64.0", "@oxfmt/binding-win32-ia32-msvc": "0.64.0", "@oxfmt/binding-win32-x64-msvc": "0.64.0" }, "peerDependencies": { "svelte": "^5.0.0", "vite-plus": "*" }, "optionalPeers": ["svelte", "vite-plus"], "bin": { "oxfmt": "bin/oxfmt" } }, "sha512-XZ4GFBN/PLbXKq+0zrgpQfPKYuJlUuj+nzZJY7UpIbFMNyefNLCdN9EwViycNqnYcv0wrn0jXcQLlqJp8RCKBg=="],
  
@@ -209,7 +211,7 @@ index 04fb1b69..97573ffa 100644
  
      "oxlint-tsgolint": ["oxlint-tsgolint@7.0.2001", "", { "optionalDependencies": { "@oxlint-tsgolint/darwin-arm64": "7.0.2001", "@oxlint-tsgolint/darwin-x64": "7.0.2001", "@oxlint-tsgolint/linux-arm64": "7.0.2001", "@oxlint-tsgolint/linux-x64": "7.0.2001", "@oxlint-tsgolint/win32-arm64": "7.0.2001", "@oxlint-tsgolint/win32-x64": "7.0.2001" }, "bin": { "tsgolint": "./bin/tsgolint.js" } }, "sha512-KjK/XLcXr1DSyonKhsuFqJRiuKqcyG9j3LJ8nkOsrLzGvodBPqzHOKauy10asLMDI0sUpvb+1sxlzff3udZvfg=="],
  
-@@ -2615,6 +2686,8 @@
+@@ -2615,6 +2688,8 @@
  
      "platform": ["platform@1.3.6", "", {}, "sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg=="],
  
@@ -218,7 +220,7 @@ index 04fb1b69..97573ffa 100644
      "pngjs": ["pngjs@7.0.0", "", {}, "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow=="],
  
      "points-on-curve": ["points-on-curve@0.2.0", "", {}, "sha512-0mYKnYYe9ZcqMCWhUjItv/oHjvgEsfKvnUTg8sAtnHr3GVy7rGkXCb6d5cSyqrWqL4k81b9CPg3urd+T7aop3A=="],
-@@ -3207,8 +3280,6 @@
+@@ -3207,8 +3282,6 @@
  
      "vite-plus/oxfmt": ["oxfmt@0.67.0", "", { "dependencies": { "tinypool": "2.1.2" }, "optionalDependencies": { "@oxfmt/binding-android-arm-eabi": "0.67.0", "@oxfmt/binding-android-arm64": "0.67.0", "@oxfmt/binding-darwin-arm64": "0.67.0", "@oxfmt/binding-darwin-x64": "0.67.0", "@oxfmt/binding-freebsd-x64": "0.67.0", "@oxfmt/binding-linux-arm-gnueabihf": "0.67.0", "@oxfmt/binding-linux-arm-musleabihf": "0.67.0", "@oxfmt/binding-linux-arm64-gnu": "0.67.0", "@oxfmt/binding-linux-arm64-musl": "0.67.0", "@oxfmt/binding-linux-ppc64-gnu": "0.67.0", "@oxfmt/binding-linux-riscv64-gnu": "0.67.0", "@oxfmt/binding-linux-riscv64-musl": "0.67.0", "@oxfmt/binding-linux-s390x-gnu": "0.67.0", "@oxfmt/binding-linux-x64-gnu": "0.67.0", "@oxfmt/binding-linux-x64-musl": "0.67.0", "@oxfmt/binding-openharmony-arm64": "0.67.0", "@oxfmt/binding-win32-arm64-msvc": "0.67.0", "@oxfmt/binding-win32-ia32-msvc": "0.67.0", "@oxfmt/binding-win32-x64-msvc": "0.67.0" }, "peerDependencies": { "svelte": "^5.0.0", "vite-plus": "*" }, "optionalPeers": ["svelte", "vite-plus"], "bin": { "oxfmt": "bin/oxfmt" } }, "sha512-vV7sSiPsaO0mSxdoUdayipVDFPzW/UQ+hrezEHa20+Tx1dnMdZLSRHMT0PdS67FFbhd74M1n08asW21aLGeCrA=="],
  
@@ -227,7 +229,7 @@ index 04fb1b69..97573ffa 100644
      "vitepress/shiki": ["shiki@4.4.1", "", { "dependencies": { "@shikijs/core": "4.4.1", "@shikijs/engine-javascript": "4.4.1", "@shikijs/engine-oniguruma": "4.4.1", "@shikijs/langs": "4.4.1", "@shikijs/themes": "4.4.1", "@shikijs/types": "4.4.1", "@shikijs/vscode-textmate": "^10.0.2", "@types/hast": "^3.0.5" } }, "sha512-rFP+iYKzjLEIqiMiKANhARqiAbk4deDhWnBtnUO/K0D0dPxMGDH4N0FVfBY/VeI+lPrV4wNGCHQZp7EOr7NNBw=="],
  
      "vitepress/vite": ["vite@8.2.0", "", { "dependencies": { "lightningcss": "^1.33.0", "picomatch": "^4.0.5", "postcss": "^8.5.23", "rolldown": "~1.2.0", "tinyglobby": "^0.2.17" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "@vitejs/devtools": "^0.4.0", "esbuild": "^0.27.0 || ^0.28.0", "jiti": ">=1.21.0", "less": "^4.0.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "@vitejs/devtools", "esbuild", "jiti", "less", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-pn+CFpM0lwDeKwmOq1ZaBK/9sjorZcgqxki6MbY/jPEVd9vichIlmlD4HmQ5wdP5EgqQCFRaACBxMC7uEGc6lQ=="],
-@@ -3429,44 +3500,6 @@
+@@ -3429,44 +3502,6 @@
  
      "vite-plus/oxfmt/tinypool": ["tinypool@2.1.2", "", {}, "sha512-9YodfrxS9g9IbFr/KOjE5bAeJ0p61n3bW6mqvy0jtoeKd1kTW1Cxm0oulm6KX2lyM9Gl6WIe8nEbY7LWv5ZJww=="],
  
