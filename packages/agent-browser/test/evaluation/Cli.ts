@@ -307,7 +307,7 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
         (entry) =>
           Effect.suspend(() => {
             const subject = shown.subjects.find((candidate) => candidate.id === entry.subject);
-            const apiKey = subject === undefined ? undefined : credentials[subject.provider];
+            const apiKey = subject === undefined ? undefined : credentials[subject.credential];
 
             if (ledger.closed !== null || subject === undefined || apiKey === undefined) {
               notStarted.push(entry.runId);

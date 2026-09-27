@@ -40,6 +40,8 @@ const events = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], lines
 
 const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: WireTurn, index: number) => string) => {
   const bodies: Array<Readonly<Record<string, Schema.Json>>> = [];
+  /** Where each request went, and which credential headers it carried (never their values). */
+  const sent: Array<{ readonly url: string; readonly credentials: ReadonlyArray<string> }> = [];
 
   const layer = Layer.succeed(
     HttpClient.HttpClient,
@@ -47,6 +49,12 @@ const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: WireTurn, index: num
       Effect.gen(function* () {
         if (request.body._tag !== "Uint8Array") return yield* Effect.die("Expected a JSON body");
         bodies.push(yield* Schema.decodeEffect(Body)(new TextDecoder().decode(request.body.body)));
+        sent.push({
+          url: request.url,
+          credentials: ["authorization", "x-api-key"].filter(
+            (name) => request.headers[name] !== undefined,
+          ),
+        });
         const index = bodies.length - 1;
         const turn = turns[index];
 
@@ -57,7 +65,7 @@ const wire = (turns: ReadonlyArray<WireTurn>, reply: (turn: WireTurn, index: num
     ),
   );
 
-  return { layer, bodies };
+  return { layer, bodies, sent };
 };
 
 const sse = (items: ReadonlyArray<Readonly<Record<string, unknown>>>, sequence: boolean) =>
@@ -68,8 +76,14 @@ const sse = (items: ReadonlyArray<Readonly<Record<string, unknown>>>, sequence: 
     )
     .join("");
 
-/** OpenAI Responses: a reasoning item precedes each reply, as a reasoning model's would. */
-export const openAiWire = (turns: ReadonlyArray<WireTurn>) =>
+/**
+ * OpenAI Responses: a reasoning item precedes each reply, as a reasoning model's would. OpenRouter
+ * closes the stream with `data: [DONE]`, in the same chunk as the last event.
+ */
+export const openAiWire = (
+  turns: ReadonlyArray<WireTurn>,
+  options: { readonly done?: boolean } = {},
+) =>
   wire(turns, (turn, index) => {
     const reasoning = {
       type: "reasoning",
@@ -112,33 +126,35 @@ export const openAiWire = (turns: ReadonlyArray<WireTurn>) =>
       },
     };
 
-    return sse(
-      [
-        { type: "response.created", response: { ...response, output: [], usage: null } },
-        { type: "response.output_item.added", output_index: 0, item: reasoning },
-        { type: "response.output_item.done", output_index: 0, item: reasoning },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item:
-            "call" in turn
-              ? { ...item, arguments: "", status: "in_progress" }
-              : { ...item, status: "in_progress", content: [] },
-        },
-        // Text streams in small deltas, as a provider's does.
-        ...("text" in turn
-          ? (turn.text.match(/.{1,8}/gs) ?? []).map((delta) => ({
-              type: "response.output_text.delta",
-              item_id: item.id,
-              output_index: 1,
-              content_index: 0,
-              delta,
-            }))
-          : []),
-        { type: "response.output_item.done", output_index: 1, item },
-        { type: "response.completed", response },
-      ],
-      true,
+    return (
+      sse(
+        [
+          { type: "response.created", response: { ...response, output: [], usage: null } },
+          { type: "response.output_item.added", output_index: 0, item: reasoning },
+          { type: "response.output_item.done", output_index: 0, item: reasoning },
+          {
+            type: "response.output_item.added",
+            output_index: 1,
+            item:
+              "call" in turn
+                ? { ...item, arguments: "", status: "in_progress" }
+                : { ...item, status: "in_progress", content: [] },
+          },
+          // Text streams in small deltas, as a provider's does.
+          ...("text" in turn
+            ? (turn.text.match(/.{1,8}/gs) ?? []).map((delta) => ({
+                type: "response.output_text.delta",
+                item_id: item.id,
+                output_index: 1,
+                content_index: 0,
+                delta,
+              }))
+            : []),
+          { type: "response.output_item.done", output_index: 1, item },
+          { type: "response.completed", response },
+        ],
+        true,
+      ) + (options.done === true ? "data: [DONE]\n\n" : "")
     );
   });
 

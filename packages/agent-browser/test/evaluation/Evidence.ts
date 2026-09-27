@@ -30,13 +30,24 @@ export type Provider = typeof Provider.Type;
 
 export const ReasoningEffort = Schema.Literals(["none", "minimal", "low", "medium", "high"]);
 
+/**
+ * How requests reach the provider: its own API, or OpenRouter, which serves the same request
+ * formats under one credential and prices by its own list.
+ */
+export const Gateway = Schema.Literals(["direct", "openrouter"]);
+export type Gateway = typeof Gateway.Type;
+
 /** Settings a real model runs with; each is sent on every request and checked before it is. */
 export const Settings = Schema.Struct({
+  gateway: Gateway,
   maxOutputTokens: Schema.Int.check(Schema.isBetween({ minimum: 256, maximum: 32768 })),
   /** OpenAI's reasoning effort; null leaves the provider's default, and is required for Anthropic. */
   reasoningEffort: Schema.NullOr(ReasoningEffort),
-  /** The standard tier, sent explicitly so an account default cannot change the price. */
-  serviceTier: Schema.Literals(["default", "standard_only"]),
+  /**
+   * The standard tier, sent explicitly so an account default cannot change the price. Null
+   * through OpenRouter, which prices by its own list and sends no tier.
+   */
+  serviceTier: Schema.NullOr(Schema.Literals(["default", "standard_only"])),
 });
 
 /** Integer micro-dollars per million tokens, with the dated source they were read from. */

@@ -5,6 +5,7 @@ import { Config, Effect, Option, type Redacted, Schema } from "effect";
 import { cases, Composition, maxRuns, Task, unmeasured } from "./Cases.ts";
 import {
   admission,
+  Gateway,
   manifest,
   Provider,
   Rates,
@@ -42,10 +43,12 @@ const refuse = (reason: CampaignRefusal["reason"], message: string) =>
 /** Paid calls need this set to `1`, as well as the approved digest and each credential. */
 export const optIn = "EFFECT_AGENT_BROWSER_EVALUATION_LIVE";
 
-export const credential: Record<ProviderName, string> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-};
+const credential = (provider: ProviderName, gateway: Gateway) =>
+  gateway === "openrouter"
+    ? "OPENROUTER_API_KEY"
+    : provider === "openai"
+      ? "OPENAI_API_KEY"
+      : "ANTHROPIC_API_KEY";
 
 const Slug = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,39}$/));
 const Usd = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1000 }));
@@ -54,8 +57,13 @@ const Limit = Schema.Finite.check(Schema.isBetween({ minimum: 0.01, maximum: 100
 const Model = Schema.Struct({
   id: Slug,
   provider: Provider,
-  /** A published model's ID. A fine-tuned model's (`ft:...`) names its account, so is refused. */
-  model: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/)),
+  gateway: Gateway,
+  /**
+   * A published model's ID, prefixed through OpenRouter by its vendor (`openai/...`). A
+   * fine-tuned model's (`ft:...`) names its account, and a variant (`:free`, `:batch`) routes and
+   * prices differently, so both are refused.
+   */
+  model: Schema.String.check(Schema.isPattern(/^(?:[a-z]+\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/)),
   maxOutputTokens: Settings.fields.maxOutputTokens,
   reasoningEffort: Settings.fields.reasoningEffort,
   /** US dollars per million tokens, as the dated source lists them. */
@@ -157,6 +165,15 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
         "specification",
         `${model.id}: rates must be whole micro-dollars per million tokens.`,
       );
+    if (
+      model.gateway === "openrouter"
+        ? !model.model.startsWith(`${model.provider}/`)
+        : model.model.includes("/")
+    )
+      return yield* refuse(
+        "specification",
+        `${model.id}: through OpenRouter a model is named ${model.provider}/<model>; directly, without a vendor.`,
+      );
     if (model.provider === "anthropic" && model.reasoningEffort !== null)
       return yield* refuse(
         "settings",
@@ -167,9 +184,15 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       provider: model.provider,
       model: model.model,
       settings: {
+        gateway: model.gateway,
         maxOutputTokens: model.maxOutputTokens,
         reasoningEffort: model.reasoningEffort,
-        serviceTier: model.provider === "openai" ? "default" : "standard_only",
+        serviceTier:
+          model.gateway === "openrouter"
+            ? null
+            : model.provider === "openai"
+              ? "default"
+              : "standard_only",
       },
       rates: {
         inputPerMillionMicrousd: input,
@@ -179,7 +202,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
         source: model.rates.source,
         retrieved: model.rates.retrieved,
       },
-      credential: credential[model.provider],
+      credential: credential(model.provider, model.gateway),
     });
   }
   if (spec.backends.includes("browserbase"))
@@ -301,16 +324,14 @@ export const authorize = Effect.fn("Campaign.authorize")(function* (
       "approval",
       "Pass --approve with the digest `plan` prints for this specification, after reviewing it.",
     );
-  const credentials: Partial<Record<ProviderName, Redacted.Redacted<string>>> = {};
+  // Keyed by the environment variable each subject names.
+  const credentials: Record<string, Redacted.Redacted<string>> = {};
 
-  for (const provider of new Set(shown.subjects.map((subject) => subject.provider))) {
-    const key = yield* Config.option(Config.Redacted(credential[provider])).pipe(
-      Effect.orElseSucceed(Option.none),
-    );
+  for (const name of shown.credentials) {
+    const key = yield* Config.option(Config.Redacted(name)).pipe(Effect.orElseSucceed(Option.none));
 
-    if (Option.isNone(key))
-      return yield* refuse("credentials", `${credential[provider]} is required for ${provider}.`);
-    credentials[provider] = key.value;
+    if (Option.isNone(key)) return yield* refuse("credentials", `${name} is required.`);
+    credentials[name] = key.value;
   }
 
   return { plan: shown, credentials };

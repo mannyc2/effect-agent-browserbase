@@ -259,7 +259,8 @@ and spend a campaign may use.
     {
       "id": "gpt",
       "provider": "openai",
-      "model": "<model ID>",
+      "gateway": "openrouter",
+      "model": "openai/<model ID>",
       "maxOutputTokens": 4096,
       "reasoningEffort": "low",
       "rates": {
@@ -267,7 +268,7 @@ and spend a campaign may use.
         "cacheReadUsdPerMillion": 0.1,
         "cacheWriteUsdPerMillion": 1,
         "outputUsdPerMillion": 8,
-        "source": "https://<the provider's pricing page>",
+        "source": "https://openrouter.ai/api/v1/models",
         "retrieved": "2026-09-27"
       }
     }
@@ -283,7 +284,7 @@ and spend a campaign may use.
 
 ```sh
 ../../node_modules/.bin/vp run evaluation plan pilot.json
-EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... \
+EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1 OPENROUTER_API_KEY=... \
   ../../node_modules/.bin/vp run evaluation campaign pilot.json results/pilot-1 \
   --source-revision <candidate-40-character-SHA> --approve <digest from plan>
 ```
@@ -306,14 +307,19 @@ bound:
   supported), rates or limits finer than a micro-dollar, and a fine-tuned
   model's ID, which names the account that owns it.
 
+Each model names its `provider`, whose request format it uses, and its `gateway`:
+`direct` to the provider's own API with `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`,
+or `openrouter`, which serves both formats under `OPENROUTER_API_KEY`, names
+models by vendor (`openai/...`, `anthropic/...`) and prices by its own list. A
+variant (`:free`, `:batch`) routes and prices differently, so it is refused.
+
 `backends` names the browsers a campaign may use; each case still runs on its
 own backend, which the plan shows per run, so `reading` runs on the scripted
 owner.
 
 `campaign` needs `EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1`, the digest `plan`
-printed for the same specification, and each provider's credential
-(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), read through Effect `Config` and kept
-redacted. All three are checked before its directory exists, a runner is
+printed for the same specification, and each credential the plan names, read
+through Effect `Config` and kept redacted. All three are checked before its directory exists, a runner is
 loaded, a browser starts or a model is called; a refusal never prints the
 digest, so approving means having read the plan. Runs are serial, in the plan's
 order, over local Chromium or the scripted owner, with the case bounds of a
@@ -323,8 +329,10 @@ scripted run.
 priced under, then reserved before it is sent, and the transport refuses any
 request that was not admitted. A run sends one request at a time: another is
 refused while one is in flight. The contract is the declared model and output
-allowance and an explicit standard tier (OpenAI `default`, Anthropic
-`standard_only`). OpenAI requests also send `store: false`, with no stored
+allowance and, directly, an explicit standard tier (OpenAI `default`, Anthropic
+`standard_only`); through OpenRouter no tier is sent. OpenRouter also ends a
+stream with `data: [DONE]`, which is neither format's event, so that one line is
+dropped before decoding. OpenAI requests also send `store: false`, with no stored
 conversation, referenced item, image, file or hosted tool. Anthropic requests
 have no thinking, hosted tool, container, faster or regional inference,
 document or image, and no beta other than strict tool schemas. The reservation

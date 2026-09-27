@@ -1,9 +1,9 @@
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Effect, Layer, type Redacted, Schema, Stream } from "effect";
+import { Effect, Layer, Redacted, Schema, Stream } from "effect";
 import * as InMemory from "effect-agent/in-memory";
 import { type LanguageModel, Prompt, Telemetry } from "effect/unstable/ai";
-import { HttpClient } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import type { Subject } from "./Campaign.ts";
 import { type Journal, json, requestData } from "./Evidence.ts";
@@ -44,7 +44,7 @@ type OpenAiPayload = Parameters<OpenAiClient.Service["createResponseStream"]>[0]
 const openAiPriced = (payload: OpenAiPayload, subject: Subject) =>
   payload.model === subject.model &&
   payload.store === false &&
-  payload.service_tier === subject.settings.serviceTier &&
+  payload.service_tier === (subject.settings.serviceTier ?? undefined) &&
   payload.max_output_tokens === subject.settings.maxOutputTokens &&
   (payload.reasoning?.effort ?? null) === subject.settings.reasoningEffort &&
   absent(payload.previous_response_id) &&
@@ -69,7 +69,7 @@ const betas: ReadonlySet<string> = new Set(["structured-outputs-2025-11-13"]);
 const anthropicPriced = ({ payload, params }: AnthropicRequest, subject: Subject) =>
   payload.model === subject.model &&
   payload.max_tokens === subject.settings.maxOutputTokens &&
-  payload.service_tier === subject.settings.serviceTier &&
+  payload.service_tier === (subject.settings.serviceTier ?? undefined) &&
   (absent(payload.thinking) || payload.thinking?.type === "disabled") &&
   absent(payload.speed) &&
   absent(payload.inference_geo) &&
@@ -328,6 +328,39 @@ const recorder = (journal: Journal, aliases: Aliases): Telemetry.SpanTransformer
   };
 };
 
+/** Where each request format is served, directly and through OpenRouter. */
+const endpoints = {
+  direct: { openai: "https://api.openai.com/v1", anthropic: "https://api.anthropic.com" },
+  openrouter: { openai: "https://openrouter.ai/api/v1", anthropic: "https://openrouter.ai/api" },
+} as const;
+
+/**
+ * OpenRouter ends a stream with `data: [DONE]`, which is not an event of either format and
+ * arrives in the same chunk as the last one. Only that line is dropped.
+ */
+const withoutDone = (client: HttpClient.HttpClient) =>
+  client.pipe(
+    HttpClient.transformResponse(
+      Effect.map((response) =>
+        HttpClientResponse.fromWeb(
+          response.request,
+          new Response(
+            Stream.toReadableStream(
+              response.stream.pipe(
+                Stream.decodeText,
+                Stream.splitLines,
+                Stream.filter((line) => line !== "data: [DONE]"),
+                Stream.map((line) => `${line}\n`),
+                Stream.encodeText,
+              ),
+            ),
+            { status: response.status, headers: response.headers },
+          ),
+        ),
+      ),
+    ),
+  );
+
 /**
  * A measured run's model: the subject's provider with admission in front of every request, the
  * recorder, and the estimator that settles each reservation from reported usage.
@@ -342,20 +375,33 @@ export const measured = (options: {
   const { subject, allowance, apiKey, journal, transport } = options;
   const gate: Gate = { armed: false };
   const aliases = new Aliases();
-  const { maxOutputTokens, reasoningEffort, serviceTier } = subject.settings;
+  const { gateway, maxOutputTokens, reasoningEffort, serviceTier } = subject.settings;
+  const apiUrl = endpoints[gateway][subject.provider];
+
+  // OpenRouter reads a bearer token for either format; admission still wraps everything.
+  const transformClient = (client: HttpClient.HttpClient) =>
+    gateway === "openrouter"
+      ? guarded(gate)(
+          withoutDone(
+            client.pipe(
+              HttpClient.mapRequest(HttpClientRequest.bearerToken(Redacted.value(apiKey))),
+            ),
+          ),
+        )
+      : guarded(gate)(client);
 
   const model =
     subject.provider === "openai"
       ? OpenAiLanguageModel.model(subject.model, {
           store: false,
-          service_tier: "default",
+          ...(serviceTier === null ? {} : { service_tier: "default" }),
           max_output_tokens: maxOutputTokens,
           ...(reasoningEffort === null ? {} : { reasoning: { effort: reasoningEffort } }),
         }).pipe(
           Layer.provide(
             Layer.effect(
               OpenAiClient.OpenAiClient,
-              OpenAiClient.make({ apiKey, transformClient: guarded(gate) }).pipe(
+              OpenAiClient.make({ apiKey, apiUrl, transformClient }).pipe(
                 Effect.map((native) => admitOpenAi(native, allowance, subject, gate)),
               ),
             ),
@@ -363,12 +409,12 @@ export const measured = (options: {
         )
       : AnthropicLanguageModel.model(subject.model, {
           max_tokens: maxOutputTokens,
-          service_tier: serviceTier === "standard_only" ? "standard_only" : "auto",
+          ...(serviceTier === null ? {} : { service_tier: "standard_only" }),
         }).pipe(
           Layer.provide(
             Layer.effect(
               AnthropicClient.AnthropicClient,
-              AnthropicClient.make({ apiKey, transformClient: guarded(gate) }).pipe(
+              AnthropicClient.make({ apiKey, apiUrl, transformClient }).pipe(
                 Effect.map((native) => admitAnthropic(native, allowance, subject, gate)),
               ),
             ),

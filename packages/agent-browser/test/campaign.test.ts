@@ -32,6 +32,7 @@ const rates = {
 const gpt = {
   id: "gpt",
   provider: "openai",
+  gateway: "direct",
   model: "gpt-test",
   maxOutputTokens: 2048,
   reasoningEffort: "low",
@@ -41,6 +42,7 @@ const gpt = {
 const claude = {
   id: "claude",
   provider: "anthropic",
+  gateway: "direct",
   model: "claude-test",
   maxOutputTokens: 2048,
   reasoningEffort: null,
@@ -137,6 +139,15 @@ it.effect("a real-model plan is refused, not truncated, when it cannot be bounde
     expect(
       yield* reason(plan({ ...spec, models: [{ ...gpt, model: "ft:gpt-test:acme::abc123" }] })),
     ).toBe("specification");
+    // Through OpenRouter a model is named by its vendor, which must be the provider's; directly,
+    // it is not. A variant such as `:free` or `:batch` routes and prices differently.
+    for (const model of [
+      { ...gpt, gateway: "openrouter" },
+      { ...gpt, gateway: "openrouter", model: "anthropic/gpt-test" },
+      { ...gpt, gateway: "openrouter", model: "openai/gpt-test:batch" },
+      { ...gpt, model: "openai/gpt-test" },
+    ])
+      expect(yield* reason(plan({ ...spec, models: [model] }))).toBe("specification");
     expect(
       yield* reason(
         plan({ ...spec, models: [{ ...gpt, rates: { ...rates, inputUsdPerMillion: 0.0000001 } }] }),
@@ -163,8 +174,8 @@ it.effect("a live campaign needs its opt-in, the approved digest and every crede
     const granted = yield* authorize(spec, digest).pipe(withEnv(live));
 
     expect(granted.plan.digest).toBe(digest);
-    expect(Redacted.value(granted.credentials.openai!)).toBe("sk-SECRET");
-    expect(Redacted.value(granted.credentials.anthropic!)).toBe("ak-SECRET");
+    expect(Redacted.value(granted.credentials.OPENAI_API_KEY!)).toBe("sk-SECRET");
+    expect(Redacted.value(granted.credentials.ANTHROPIC_API_KEY!)).toBe("ak-SECRET");
   }),
 );
 
@@ -775,4 +786,54 @@ it.effect(
         spend: { closed: "contract" },
       });
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+// OpenRouter serves the same OpenAI and Anthropic request formats under one credential. Its
+// Responses stream ends with `data: [DONE]`, which is not an OpenAI event, and it prices by its
+// own list, so no provider tier is sent.
+it.effect("a measured run can reach either provider through OpenRouter", () =>
+  Effect.gen(function* () {
+    const routed = {
+      ...readingSpec,
+      models: [
+        { ...gpt, gateway: "openrouter", model: "openai/gpt-test", reasoningEffort: null },
+        { ...claude, gateway: "openrouter", model: "anthropic/claude-test" },
+      ],
+    };
+
+    const shown = yield* plan(routed);
+
+    expect(shown.credentials).toEqual(["OPENROUTER_API_KEY"]);
+    expect(shown.subjects[0]).toMatchObject({
+      credential: "OPENROUTER_API_KEY",
+      settings: { gateway: "openrouter", serviceTier: null },
+    });
+
+    const openai = openAiWire(reading, { done: true });
+    const viaOpenAi = yield* measure(shown, "gpt", openai);
+
+    expect(grade(viaOpenAi)).toMatchObject({ task: "pass", termination: "completed" });
+    expect(openai.sent.map((request) => request.url)).toEqual([
+      "https://openrouter.ai/api/v1/responses",
+      "https://openrouter.ai/api/v1/responses",
+    ]);
+    for (const body of openai.bodies) {
+      expect(body).toMatchObject({ model: "openai/gpt-test", store: false });
+      expect(body).not.toHaveProperty("service_tier");
+    }
+
+    const anthropic = anthropicWire(reading);
+    const viaAnthropic = yield* measure(shown, "claude", anthropic);
+
+    expect(grade(viaAnthropic)).toMatchObject({ task: "pass", termination: "completed" });
+    expect(anthropic.sent).toEqual([
+      { url: "https://openrouter.ai/api/v1/messages", credentials: ["authorization", "x-api-key"] },
+      { url: "https://openrouter.ai/api/v1/messages", credentials: ["authorization", "x-api-key"] },
+    ]);
+    for (const body of anthropic.bodies) {
+      expect(body).toMatchObject({ model: "anthropic/claude-test", max_tokens: 2048 });
+      expect(body).not.toHaveProperty("service_tier");
+    }
+    expect(JSON.stringify([viaOpenAi, viaAnthropic])).not.toContain("SECRET");
+  }),
 );
