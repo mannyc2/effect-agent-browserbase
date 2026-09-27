@@ -30,24 +30,24 @@
     "test:native": "vp test --config vite.native.config.ts --run"
   },
   "devDependencies": {
-    "@effect-agent/testing": "workspace:*",
-    "@effect/ai-anthropic": "catalog:",
-    "@effect/ai-openai": "catalog:",
-    "@effect/platform-bun": "catalog:",
-    "@effect/platform-node": "catalog:",
-    "@effect/vitest": "catalog:",
-    "@types/node": "catalog:",
-    "effect": "catalog:",
-    "effect-agent": "workspace:*",
+    "@effect-agent/testing": "0.1.0-beta.142",
+    "@effect/ai-anthropic": "4.0.0-rc.117",
+    "@effect/ai-openai": "4.0.0-rc.117",
+    "@effect/platform-bun": "4.0.0-rc.117",
+    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/vitest": "4.0.0-rc.117",
+    "@types/node": "26.1.2",
+    "effect": "4.0.0-rc.117",
+    "effect-agent": "0.1.0-beta.142",
     "effect-browser": "workspace:*",
     "effect-browserbase": "workspace:*",
-    "playwright-core": "catalog:",
-    "typescript": "catalog:",
-    "vite-plus": "catalog:"
+    "playwright-core": "1.63.0",
+    "typescript": "7.0.2",
+    "vite-plus": "0.3.2"
   },
   "peerDependencies": {
     "effect": "^4.0.0-rc.117",
-    "effect-agent": "workspace:*",
+    "effect-agent": "0.1.0-beta.142",
     "effect-browser": "workspace:*"
   },
   "engines": {

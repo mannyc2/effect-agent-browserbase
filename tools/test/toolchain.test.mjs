@@ -23,7 +23,8 @@ test("the Bun pin agrees with acceptance and the contributor toolchain table", (
   const declared = toolchain.match(/^BUN_VERSION=(\S+)$/m)?.[1];
   assert.match(declared ?? "", /^\d+\.\d+\.\d+$/);
   assert.ok(read("tools/run-acceptance.sh").includes(`test "$(bun --version)" = ${declared}`));
-  assert.ok(read("tools/bootstrap.sh").includes(`test "$(bun --version)" = ${declared}`));
+  assert.ok(read("tools/workspace.sh").includes(`test "$(bun --version)" = ${declared}`));
+  assert.equal(JSON.parse(read("package.json")).packageManager, `bun@${declared}`);
   const documented = read("CONTRIBUTING.md").split("\n")
     .map((line) => line.split("|").map((cell) => cell.trim()))
     .filter((cells) => cells[1] === "Bun");

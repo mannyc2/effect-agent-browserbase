@@ -29,13 +29,12 @@ const strictCompilerOptions = {
   // Oxlint reports Effect's diagnostics; the patched `tsc` only typechecks.
   plugins: [{ name: "@effect/language-service", diagnostics: false }],
 };
-// Compiler options apply to a whole program. effect-agent-browser's program compiles upstream's
-// effect-agent source, which is not written for noUncheckedIndexedAccess, so there the flag
-// would report upstream code rather than ours.
+// Compiler options apply to a whole program. effect-agent-browser's program reads effect-agent's
+// published declarations, not its source, so the same flags report only our code.
 const ownedProjects = {
   "packages/browser/tsconfig.json": { noUncheckedIndexedAccess: true },
   "packages/browserbase/tsconfig.json": { noUncheckedIndexedAccess: true },
-  "packages/agent-browser/tsconfig.json": { noUncheckedIndexedAccess: undefined },
+  "packages/agent-browser/tsconfig.json": { noUncheckedIndexedAccess: true },
 };
 
 test("every owned TypeScript project opts into the same strict compiler checks", () => {
@@ -79,17 +78,20 @@ test("overrides reach only owned paths, and each one either tightens or relaxes"
   }
 });
 
-test("the lint config reaches bootstrap and acceptance, beside upstream's own", () => {
-  const patch = read("upstream.patch");
+test("the lint config reaches the workspace and acceptance", () => {
+  const manifest = JSON.parse(read("package.json"));
   // Effect's Oxlint rules exist only in the patched Oxlint binding and tsgolint, and plain Oxlint
   // finds tsgolint only as a root dependency.
-  assert.match(patch, /^\+ {4}"patch:tsgo": "effect-tsgo patch --typescript --oxlint",$/m);
-  assert.match(patch, /^\+ {4}"oxlint-tsgolint": "\d+\.\d+\.\d+",$/m);
-  // Upstream's root config lints upstream; nothing here reaches into it.
-  assert.doesNotMatch(patch, /^diff --git a\/vite\.config\.ts /m);
-  assert.match(read("tools/bootstrap.sh"), /'packages\/agent-browser', 'lint'\n/);
+  assert.equal(manifest.scripts["patch:tsgo"], "effect-tsgo patch --typescript --oxlint");
+  assert.match(manifest.devDependencies["oxlint-tsgolint"], /^\d+\.\d+\.\d+$/);
+  assert.match(read("tools/workspace.sh"), /\n\.\/node_modules\/\.bin\/vp run patch:tsgo\n/);
+  // The adapted plugins live beside the config that loads them.
+  assert.deepEqual(
+    config.jsPlugins.filter(({ specifier }) => specifier.startsWith(".")).map(({ specifier }) => specifier),
+    ["./plugins/style.js", "./plugins/exports.ts"],
+  );
   const acceptance = read("tools/run-acceptance.sh");
-  assert.match(acceptance, /run format timeout \d+s \.\/node_modules\/\.bin\/vp fmt --check [^\n]* packages\/agent-browser lint\n/);
+  assert.match(acceptance, /run format timeout \d+s \.\/node_modules\/\.bin\/vp fmt --check [^\n]* packages\/agent-browser lint scripts vite\.config\.ts\n/);
   assert.match(
     acceptance,
     /run lint timeout \d+s \.\/node_modules\/\.bin\/oxlint -c lint\/\.oxlintrc\.json --deny-warnings --report-unused-disable-directives-severity=error packages\/browser packages\/browserbase packages\/agent-browser\n/,
@@ -97,8 +99,7 @@ test("the lint config reaches bootstrap and acceptance, beside upstream's own", 
 });
 
 test("the Oxlint and tsgolint pins agree with the contributor toolchain table", () => {
-  const patch = read("upstream.patch");
-  const pinned = (name) => patch.match(new RegExp(`^\\+ {4}"${name}": "([^"]+)",$`, "m"))?.[1];
+  const pinned = (name) => JSON.parse(read("package.json")).devDependencies[name];
   const documented = (tool) =>
     read("CONTRIBUTING.md")
       .split("\n")

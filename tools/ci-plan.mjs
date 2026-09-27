@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sha = /^[a-f0-9]{40}$/;
-const integration = new Set(["upstream.patch", ".node-version", "package.json", "tools/bootstrap.sh", "tools/pinned-toolchain.sh"]);
+const integration = new Set([".node-version", "package.json", "bun.lock", "tools/workspace.sh", "tools/pinned-toolchain.sh"]);
 const rootDocs = new Set(["README.md", "CONTRIBUTING.md", "AGENTS.md", "SECURITY.md", "CHANGELOG.md"]);
 const documentation = (path) => rootDocs.has(path) || /^docs\/.*\.md$/.test(path);
 const owned = (path) => /^(?:packages\/(?:browser|browserbase|agent-browser)\/|tools\/|\.github\/|docs\/)/.test(path);

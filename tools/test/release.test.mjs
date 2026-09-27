@@ -60,19 +60,19 @@ const source = (index) => ({
   peerDependencies: {
     effect: "^4.0.0-rc.117",
     ...(index === 0 ? { "playwright-core": "1.63.0" } : { "effect-browser": "workspace:*" }),
-    ...(index === 2 ? { "effect-agent": "workspace:*" } : {}),
+    ...(index === 2 ? { "effect-agent": frameworkVersion } : {}),
   },
   ...(index === 0 ? { peerDependenciesMeta: { "playwright-core": { optional: true } } } : {}),
   devDependencies: {
-    typescript: "catalog:",
+    typescript: "7.0.2",
     ...(index === 0 ? {} : { "effect-browser": "workspace:*" }),
-    ...(index === 2 ? { "effect-agent": "workspace:*" } : {}),
+    ...(index === 2 ? { "effect-agent": frameworkVersion } : {}),
   },
   scripts: { build: "vp pack" },
   files: ["dist", "src"],
 });
 
-const manifest = (index) => publicationManifest(source(index), {}, versions);
+const manifest = (index) => publicationManifest(source(index), versions);
 
 const paths = (value) => [
   "package/package.json",
@@ -95,13 +95,9 @@ function workspace(t, modify) {
     tree = join(directory, "tree"),
     out = join(directory, "output");
 
-  mkdirSync(join(tree, "packages/effect-agent"), { recursive: true });
+  mkdirSync(tree, { recursive: true });
   mkdirSync(out);
-  writeFileSync(join(tree, "package.json"), JSON.stringify({ catalog: {} }));
-  writeFileSync(
-    join(tree, "packages/effect-agent/package.json"),
-    JSON.stringify({ version: frameworkVersion }),
-  );
+  writeFileSync(join(tree, "package.json"), JSON.stringify({ devDependencies: {} }));
   for (const [index, item] of packages.entries()) {
     const pkg = join(tree, item.directory);
 
@@ -133,14 +129,13 @@ test("only the three canonical packages may enter the dependency-ordered release
   );
   assert.equal(manifest(0).repository.url, repositoryUrl);
   assert.throws(
-    () => publicationManifest({ ...source(0), name: "effect-agent" }, {}, versions),
+    () => publicationManifest({ ...source(0), name: "effect-agent" }, versions),
     /Only this repository/,
   );
   assert.throws(
     () =>
       publicationManifest(
         { ...source(0), repository: { ...source(0).repository, url: "https://elsewhere.invalid" } },
-        {},
         versions,
       ),
     /OIDC identity/,
@@ -152,7 +147,7 @@ test("normalization strips dev/source/scripts without mutating inputs, and resol
     const input = source(index),
       original = JSON.stringify(input);
 
-    const output = publicationManifest(input, {}, versions);
+    const output = publicationManifest(input, versions);
 
     assert.deepEqual(output.files, ["dist"]);
     assert.equal(output.scripts, undefined);
@@ -193,18 +188,17 @@ test("host peers require matching development edges and cannot publish optional 
 
     delete input.devDependencies[name];
     assert.throws(
-      () => publicationManifest(input, {}, versions),
-      /workspace development dependency/,
+      () => publicationManifest(input, versions),
+      /workspace development dependency|developed against the version it requires/,
     );
     const required = source(index);
 
     delete required.peerDependencies[name];
-    assert.throws(() => publicationManifest(required, {}, versions), /peer dependency edge/);
+    assert.throws(() => publicationManifest(required, versions), /peer dependency edge/);
     assert.throws(
       () =>
         publicationManifest(
           { ...source(index), dependencies: { [name]: "workspace:*" } },
-          {},
           versions,
         ),
       /regular dependency edge/,
@@ -212,7 +206,6 @@ test("host peers require matching development edges and cannot publish optional 
     assert.throws(() =>
       publicationManifest(
         { ...source(index), peerDependenciesMeta: { [name]: { optional: true } } },
-        {},
         versions,
       ),
     );
@@ -228,14 +221,13 @@ test("host peers require matching development edges and cannot publish optional 
 
 test("framework leakage, native peer on adapter, private packages and unexpected edges are rejected", () => {
   assert.throws(
-    () => publicationManifest({ ...source(0), private: true }, {}, versions),
+    () => publicationManifest({ ...source(0), private: true }, versions),
     /private/,
   );
   assert.throws(
     () =>
       publicationManifest(
         { ...source(0), devDependencies: { "@effect-agent/testing": "workspace:*" } },
-        {},
         versions,
       ),
     /Generic package/,
@@ -244,7 +236,6 @@ test("framework leakage, native peer on adapter, private packages and unexpected
     () =>
       publicationManifest(
         { ...source(0), dependencies: { "effect-agent": version } },
-        {},
         versions,
       ),
     /regular dependency/,
@@ -256,17 +247,15 @@ test("framework leakage, native peer on adapter, private packages and unexpected
           ...source(2),
           peerDependencies: { ...source(2).peerDependencies, "playwright-core": "1.63.0" },
         },
-        {},
         versions,
       ),
     /peer dependency/,
   );
-  assert.throws(() => publicationManifest(source(1), {}, {}), /Unresolved/);
+  assert.throws(() => publicationManifest(source(1), {}), /Unresolved/);
   assert.throws(
     () =>
       publicationManifest(
         { ...source(1), dependencies: { ...source(1).dependencies, other: "workspace:*" } },
-        {},
         versions,
       ),
     /regular dependency/,
@@ -281,7 +270,6 @@ test("legacy exports, wildcard/private paths and duplicate aliases cannot enter 
           ...source(2),
           exports: { ...source(2).exports, "./interactive-browser": "./src/InteractiveBrowser.ts" },
         },
-        {},
         versions,
       ),
     /only the canonical/,
@@ -292,7 +280,7 @@ test("legacy exports, wildcard/private paths and duplicate aliases cannot enter 
     { ".": "./src/index.ts", "./alias": "./src/index.ts" },
     { ".": "./src/index.ts", "./*": "./src/index.ts" },
   ])
-    assert.throws(() => publicationManifest({ ...source(0), exports }, {}, versions));
+    assert.throws(() => publicationManifest({ ...source(0), exports }, versions));
 
   const value = manifest(0),
     members = paths(value);
@@ -389,7 +377,7 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
   const { tree, out } = workspace(t),
     receipt = packageReleaseSet(tree, out, sha);
 
-  const catalog = {
+  const pins = {
     effect: "4.0.0-rc.117",
     "@types/node": "26.1.2",
     typescript: "7.0.2",
@@ -401,9 +389,9 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
   };
 
   for (const profile of consumerProfiles)
-    checkConsumerHostPeers(profile, consumerManifest(profile, receipt, out, catalog), receipt, out);
+    checkConsumerHostPeers(profile, consumerManifest(profile, receipt, out, pins), receipt, out);
 
-  const original = consumerManifest("agent", receipt, out, catalog);
+  const original = consumerManifest("agent", receipt, out, pins);
 
   assert.throws(
     () => checkConsumerHostPeers("agent", original, { ...receipt, version: "0.2.0-beta.1" }, out),
@@ -676,7 +664,7 @@ for (const declarationExit of [0, 1]) {
       writeFileSync(
         join(tree, "package.json"),
         JSON.stringify({
-          catalog: {
+          devDependencies: {
             effect: "4.0.0-rc.117",
             "@types/node": "26.1.2",
             typescript: "7.0.2",

@@ -2,6 +2,3 @@
 *.gif binary
 *.mp4 binary
 *.patch -text
-# A patch's blank context line is one required space. Validate the applied
-# source with git diff --check in acceptance, rather than trimming patch syntax.
-upstream.patch whitespace=-blank-at-eol

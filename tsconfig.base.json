@@ -1,0 +1,53 @@
+// Copied from danieljvdm/effect-agent@bcc2bb7 under the MIT License; see LICENSE-effect-agent.
+{
+  "$schema": "./node_modules/@effect/tsgo/schema.json",
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnosticSeverity": {
+          "allOfMapToForEach": "warning",
+          "anyUnknownInErrorContext": "suggestion",
+          "catchAllTagDispatchToCatchTag": "warning",
+          "catchConditionalRefailToCatchIf": "warning",
+          "flatMapConditionalToFilterOrFail": "warning",
+          "instanceOfSchema": "suggestion",
+          "nestedEffectGenYield": "suggestion",
+          "newSchemaClass": "suggestion",
+          "optionMatchToFromOption": "warning",
+          "preferSchemaTypeProperty": "suggestion",
+          "preferTypedSchemaDecoder": "warning",
+          "provideLayerSucceedToProvideService": "warning",
+          "runOfExitToRunExit": "warning",
+          "timeoutCatchTagToTimeoutOrElse": "warning",
+          "unsafeEffectTypeAssertion": "suggestion"
+        },
+        "overrides": [
+          {
+            "include": ["**/src/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "nodeBuiltinImport": "warning",
+                "preferSchemaOverJson": "suggestion"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

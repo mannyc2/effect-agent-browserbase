@@ -79,22 +79,22 @@ function fixture() {
   temporaryDirectories.push(directory);
   const tree = join(directory, "tree");
   const out = join(directory, "output");
-  mkdirSync(join(tree, "packages/effect-agent"), { recursive: true });
+  mkdirSync(tree, { recursive: true });
   mkdirSync(out);
   const sources = packages.map((item) => readJson(join(root, item.directory, "package.json")));
   const version = sources[0].version;
   const tag = `v${version}`;
-  const frameworkVersion = "0.1.0-beta.102";
+  // The framework release these sources qualify, as the adapter's exact peer names it.
+  const frameworkVersion = sources[2].peerDependencies["effect-agent"];
   const versions = { ...Object.fromEntries(packages.map((item) => [item.name, version])), "effect-agent": frameworkVersion };
-  writeJson(join(tree, "package.json"), { catalog: {} });
-  writeJson(join(tree, "packages/effect-agent/package.json"), { version: frameworkVersion });
+  writeJson(join(tree, "package.json"), { devDependencies: {} });
   for (const [index, item] of packages.entries()) {
     const pkg = join(tree, item.directory);
     mkdirSync(join(pkg, "dist"), { recursive: true });
     writeJson(join(pkg, "package.json"), sources[index]);
     writeFileSync(join(pkg, "README.md"), "# Offline release fixture\n");
     cpSync(join(root, "LICENSE"), join(pkg, "LICENSE"));
-    const manifest = publicationManifest(sources[index], {}, versions);
+    const manifest = publicationManifest(sources[index], versions);
     for (const path of Object.values(manifest.exports).flatMap(Object.values)) {
       const target = join(pkg, path);
       mkdirSync(dirname(target), { recursive: true });

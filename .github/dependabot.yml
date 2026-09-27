@@ -8,5 +8,25 @@ updates:
     groups:
       actions:
         patterns: ['*']
-# npm packages use the coordinated pinned upstream catalog. Upgrade that catalog
-# and its integration lockfile together, then run full acceptance; no auto-merge.
+  # Effect Agent and the Effect prerelease it peers on move together, in one weekly PR that full
+  # acceptance checks; nothing merges automatically. Versions are written in each manifest rather
+  # than a Bun catalog, which Dependabot does not maintain. If a PR updates a development version
+  # but not agent-browser's exact effect-agent peer, the tooling stage refuses it until the peer
+  # is updated too. Other dependencies stay coordinated by hand.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    versioning-strategy: increase
+    allow:
+      - dependency-name: effect
+      - dependency-name: '@effect/*'
+      - dependency-name: effect-agent
+      - dependency-name: '@effect-agent/*'
+    ignore:
+      # @effect/tsgo is pinned to the oxlint and oxlint-tsgolint versions it supports.
+      - dependency-name: '@effect/tsgo'
+    groups:
+      effect:
+        patterns: ['effect', '@effect/*', 'effect-agent', '@effect-agent/*']

@@ -1,0 +1,4 @@
+[install]
+# Only explicit workspace: dependencies use local package source; every other
+# version comes from the registry through the frozen bun.lock.
+linkWorkspacePackages = false

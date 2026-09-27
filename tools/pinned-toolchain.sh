@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Materialize the pinned Node and Bun on a host that ships different versions.
-# bootstrap.sh and run-acceptance.sh both assert these exact versions before doing
-# anything, so a session without them cannot bootstrap, format or run acceptance.
+# workspace.sh and run-acceptance.sh both assert these exact versions before doing
+# anything, so a session without them cannot install, format or run acceptance.
 # Print a PATH prefix on stdout; everything else goes to stderr so callers can use
 # toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env".
 set -euo pipefail
@@ -23,7 +23,7 @@ test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64 || {
 }
 for tool in curl tar unzip sha256sum; do command -v "$tool" >/dev/null; done
 
-# PATH must remain usable after entering the bootstrapped workspace.
+# PATH must remain usable after entering an installed workspace.
 mkdir -p "$DEST"
 DEST="$(cd "$DEST" && pwd)"
 

@@ -9,8 +9,8 @@ import {
   checkManifest,
   consumerPackageSet,
   packages,
-  readJson,
   readPackageSet,
+  workspacePins,
 } from "./packages.mjs";
 import { stageConsumer } from "./stage-consumer.mjs";
 import { verifyReleaseSet } from "./verify-release.mjs";
@@ -49,7 +49,7 @@ function selectFiles(mode, kind, files) {
   );
 }
 
-export function consumerManifest(mode, receipt, out, catalog) {
+export function consumerManifest(mode, receipt, out, pins) {
   const profilePackages = consumerPackageSet(mode);
 
   const file = (item) => {
@@ -60,12 +60,12 @@ export function consumerManifest(mode, receipt, out, catalog) {
     return `file:${join(resolve(out), entry.filename)}`;
   };
 
-  const dependencies = { effect: catalog.effect };
+  const dependencies = { effect: pins.effect };
 
   const devDependencies = {
-    "@types/node": catalog["@types/node"],
-    typescript: catalog.typescript,
-    "vite-plus": catalog["vite-plus"],
+    "@types/node": pins["@types/node"],
+    typescript: pins.typescript,
+    "vite-plus": pins["vite-plus"],
   };
 
   for (const item of profilePackages) {
@@ -75,15 +75,15 @@ export function consumerManifest(mode, receipt, out, catalog) {
     target[item.name] = file(item);
   }
   if (mode !== "resources") {
-    dependencies["playwright-core"] = catalog["playwright-core"];
-    devDependencies["@effect/vitest"] = catalog["@effect/vitest"];
-    devDependencies.vitest = catalog.vitest;
+    dependencies["playwright-core"] = pins["playwright-core"];
+    devDependencies["@effect/vitest"] = pins["@effect/vitest"];
+    devDependencies.vitest = pins.vitest;
   }
   // Every consumer that launches a real browser supplies the platform's Crypto, as any host
   // would. The generic consumer also compiles and runs every example; realistic-footage spawns
   // its encoder and serves its stage through Effect's Node platform services.
   if (mode !== "resources")
-    devDependencies["@effect/platform-node"] = catalog["@effect/platform-node"];
+    devDependencies["@effect/platform-node"] = pins["@effect/platform-node"];
   if (mode.startsWith("agent")) {
     dependencies["effect-agent"] = receipt.frameworkVersion;
     devDependencies["@effect-agent/testing"] = receipt.frameworkVersion;
@@ -103,8 +103,8 @@ export function consumerManifest(mode, receipt, out, catalog) {
     // proves compatibility; the separate strict npm fixture uses no overrides.
     overrides: {
       ...(mode === "browser" ? {} : { "effect-browser": dependencies["effect-browser"] }),
-      effect: catalog.effect,
-      ...(mode === "resources" ? {} : { vitest: catalog.vitest }),
+      effect: pins.effect,
+      ...(mode === "resources" ? {} : { vitest: pins.vitest }),
     },
   };
 }
@@ -170,7 +170,7 @@ export function checkConsumerHostPeers(mode, manifest, receipt, out) {
 
 export function packedConsumers(tree, out, sha) {
   const sources = readPackageSet(tree),
-    catalog = readJson(join(tree, "package.json")).catalog;
+    pins = workspacePins(tree);
 
   const receipt = packageReleaseSet(tree, out, sha),
     setDigest = releaseSetDigest(out);
@@ -224,7 +224,7 @@ export function packedConsumers(tree, out, sha) {
 
       mkdirSync(directory);
       const profilePackages = consumerPackageSet(mode.name);
-      const manifest = consumerManifest(mode.name, receipt, out, catalog);
+      const manifest = consumerManifest(mode.name, receipt, out, pins);
 
       checkConsumerHostPeers(mode.name, manifest, receipt, out);
       writeFileSync(join(directory, "package.json"), JSON.stringify(manifest, null, 2) + "\n");

@@ -1,6 +1,6 @@
 # Releasing the canonical three-package set
 
-Publication is not performed by ordinary CI. This workflow prepares three independently published browser packages from the pinned upstream integration workspace; it does **not** publish the rest of the Effect Agent monorepo.
+Publication is not performed by ordinary CI. This workflow prepares three independently published browser packages from this repository's workspace. Effect Agent is published by its own project; `effect-agent-browser` peers on the exact release it was accepted with.
 
 The published names are `effect-browser`, `effect-browserbase` and `effect-agent-browser`. This workflow released all three, with provenance, as `0.2.0-beta.0` from tag `v0.2.0-beta.0` (`089a6ea`), `0.2.0-beta.1` from `v0.2.0-beta.1` (`f7b9b7b`), `0.2.0-beta.2` from `v0.2.0-beta.2` (`1fec922`), `0.2.0-beta.3` from `v0.2.0-beta.3` (`fdaa2d2`), `0.2.0-beta.4` from `v0.2.0-beta.4` (`a1c3f1f`) and `0.2.0-beta.5` from `v0.2.0-beta.5` (`0c8411d`). The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`; `v0.1.0-beta.103` was tagged but never published. Repository changes do not register names or perform first-publication account setup. Keep historical prepared-state and journal refs intact for recovery of the releases that created them.
 
@@ -29,7 +29,7 @@ Official references: [npm trusted publishers](https://docs.npmjs.com/trusted-pub
 
 ## Prepare a release
 
-Update all three coordinated package versions and the relevant integration lockfile/changeset entries in one PR. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The three owned packages form their own exact fixed release group. The upstream framework fixed group and compatibility versions remain unchanged; both inventories are enforced.
+Update all three coordinated package versions in one PR, and run `bun install --ignore-scripts` so `bun.lock` records them; a frozen install refuses a lockfile that disagrees. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The three owned packages form their own exact fixed release group, and the adapter's `effect-agent` peer is the exact version its development dependency installs; both are enforced.
 
 After that PR is merged and acceptance passes, create an immutable `v<package-version>` tag on its commit. This document describes the maintainer release procedure; neither creating a tag nor publishing is part of automated maintenance work.
 
@@ -71,4 +71,3 @@ The integration tests exercise the actual native npm provider and real Git journ
 
 `tools/verify-release.mjs` checks the whole source-bound set. `tools/publish-release.mjs` remains its dependency-free dry-run caller; it no longer authorizes publication. `tools/release` is the only publisher and pins `@mannyc1/ts-release` and `@mannyc1/ts-release-npm` to 0.4.1 with Effect 4.0.0-rc.115. That release carries the engine's own fixes for npm's OIDC exchange response and for npm's acknowledgement of a publish (HTTP 200, with public visibility following asynchronously), so a release completes in one dispatch and no patched dependency remains. All remain host-only repository tooling; the OIDC job installs no dependencies and executes no package lifecycle scripts. `tools/packed-consumers.mjs` stages only approved test/example dependency closures, never production source or workspace aliases, and verifies installed member bytes against their candidate archives.
 
-The upstream `release:publish --dry-run` remains an integration check only. Do **not** run its non-dry-run form from this repository: that command owns the upstream multi-package release train, not this repository's three-package publisher.

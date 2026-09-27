@@ -8,7 +8,7 @@ guarded [real-model campaign](#real-model-campaigns) runs the same cases, oracle
 and records with a real model, under spend bounds admitted before every request.
 One owner-authorized pilot has run through it, with two cheap models.
 
-From a freshly bootstrapped workspace, with the pinned runtimes and Chromium
+From a freshly installed workspace, with the pinned runtimes and Chromium
 installed, run these commands in `packages/agent-browser`:
 
 ```sh
@@ -18,8 +18,8 @@ installed, run these commands in `packages/agent-browser`:
 ../../node_modules/.bin/vp run evaluation replay results/evaluation-1/signup-base-completes-0
 ```
 
-Supply the clean **owned repository** candidate SHA, not the disposable upstream
-workspace's SHA. CI supplies that identity to the native test automatically.
+Supply the clean candidate SHA of this repository. CI supplies that identity to
+the native test automatically.
 Local test invocations without `EVALUATION_SOURCE_REVISION` explicitly record
 `unavailable`. Each manifest records the executing runtime (Node or Bun, with
 its own version) and the versions of `effect`, `effect-agent`, `effect-browser`,
@@ -374,10 +374,10 @@ apply to the account. Nothing is retried: a refused or failed request ends its
 run, and an unresolved mutation is never repeated.
 
 **Provenance.** A campaign reads its source revision from `--source-root`, the
-checkout the workspace was bootstrapped from. The checkout must be clean, and
-every file it copies into a workspace (`packages/browser`,
-`packages/browserbase`, `packages/agent-browser` and `lint`) must be byte-identical
-in the workspace that runs. Otherwise the campaign is refused before its
+checkout the workspace was installed from, which may be the workspace itself. The
+checkout must be clean, and every file that decides what runs (`packages/browser`,
+`packages/browserbase`, `packages/agent-browser`, `lint`, `package.json` and
+`bun.lock`) must be byte-identical in the workspace that runs. Otherwise the campaign is refused before its
 directory exists. When the campaign ends, even if interrupted, `SHA256SUMS`
 lists every file it wrote with its digest, as the hosted runner's output does.
 
@@ -482,7 +482,7 @@ inform provenance, reset and bounded trial records. They own a separate Gym
 browser environment; no replacement runtime is installed.
 [Stagehand's preview and trial controls](https://github.com/browserbase/stagehand/blob/main/packages/evals/README.md)
 are a useful comparison design, but its prompts and action space need a matched
-fixture adapter and approved spend. Pinned upstream Cloudflare Browser Run uses
+fixture adapter and approved spend. Effect Agent's Cloudflare Browser Run uses
 Puppeteer and the framework InteractiveBrowser, not this package's browser owner;
 an equivalent controlled comparison needs a separate adapter/account/runtime.
 [WebArena-Verified's network evaluator](https://servicenow.github.io/webarena-verified/dev/evaluation/network_event_based_evaluation/)

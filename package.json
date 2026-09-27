@@ -2,5 +2,32 @@
   "name": "effect-agent-browserbase-repository",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.2"
+  "workspaces": [
+    "packages/*"
+  ],
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "patch:tsgo": "effect-tsgo patch --typescript --oxlint",
+    "check:exports": "tsc --noEmit -p scripts/tsconfig.json && bun scripts/verify-package-exports.ts",
+    "verify:package-purity": "bun scripts/verify-package-purity.ts"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/tsgo": "0.45.0",
+    "@stylistic/eslint-plugin": "5.10.0",
+    "@types/node": "26.1.2",
+    "effect": "4.0.0-rc.117",
+    "esbuild": "0.28.1",
+    "oxfmt": "0.64.0",
+    "oxlint": "1.82.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "7.0.2",
+    "typescript-twoslash": "npm:typescript@6.0.3",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.2",
+    "vite-plus": "0.3.2",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  }
 }

@@ -7,15 +7,15 @@
   "$schema": "../node_modules/@effect/tsgo/oxlint-schema.json",
   "extends": ["../node_modules/@effect/tsgo/oxlint-presets/recommended.json"],
   "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest", "effecttsgo"],
-  // Upstream's own lint plugins, from the pinned tree this file is copied into.
+  // Effect Agent's own lint plugins, adapted into ./plugins.
   "jsPlugins": [
-    { "name": "stylistic", "specifier": "../oxlint/plugin-style.js" },
-    { "name": "exports", "specifier": "../oxlint/plugin-exports.ts" },
+    { "name": "stylistic", "specifier": "./plugins/style.js" },
+    { "name": "exports", "specifier": "./plugins/exports.ts" },
     { "name": "vite-plus", "specifier": "vite-plus/oxlint-plugin" }
   ],
   "options": { "typeAware": true },
   "rules": {
-    // Upstream's root config also ran these on our packages.
+    // Carried over from Effect Agent's root config, which used to lint these packages.
     "eqeqeq": "error",
     "import/no-cycle": "error",
     "import/no-duplicates": ["error", { "preferInline": true }],
@@ -41,7 +41,7 @@
     ],
     "typescript/no-explicit-any": "error",
     // Rebuilding a Schema class instance through `make` spreads it, and code-point limits spread
-    // strings, both on purpose. Upstream turns this rule off for the same reason.
+    // strings, both on purpose. Effect Agent turns this rule off for the same reason.
     "typescript/no-misused-spread": "off",
     "unicorn/prefer-node-protocol": "error",
     "vite-plus/prefer-vite-plus-imports": "error",

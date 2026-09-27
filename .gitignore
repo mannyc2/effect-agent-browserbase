@@ -12,5 +12,3 @@ downloads/
 .env.*
 !.env.example
 *.log
-effect-agent-work/
-upstream.git/
