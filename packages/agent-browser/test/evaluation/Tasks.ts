@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Duration, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Redacted, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -8,15 +8,18 @@ import { BrowserPolicy, Observation, type SessionStatus } from "effect-browser/b
 import { Chromium } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
+import * as Account from "effect-browserbase/account";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { CleanupResult } from "effect-browserbase/cleanup";
 import type { AllocationError, ClientError, ContextError } from "effect-browserbase/errors";
+import { recipe } from "effect-browserbase/launch";
 import { type LanguageModel, Toolkit } from "effect/unstable/ai";
 
 import {
   emptyLedger,
   hostedFixture,
   hostedUrl,
+  publicOrigin,
   type HostedLedger,
 } from "../fixtures/HostedSite.ts";
 import { toolSite } from "../fixtures/ToolSite.ts";
@@ -537,6 +540,32 @@ export interface BrowserbaseBackend {
     readonly viewport: { readonly width: number; readonly height: number };
   }) => Layer.Layer<BrowserbaseBrowser, BrowserError | ClientError>;
 }
+
+/**
+ * Browserbase itself, for a live campaign: the account from the approved credentials, and the
+ * fixture on the public origin. Building it allocates nothing.
+ */
+export const liveBrowserbase = (
+  projectId: Redacted.Redacted<string>,
+  apiKey: Redacted.Redacted<string>,
+): BrowserbaseBackend => ({
+  origin: publicOrigin,
+  layer: ({ onCleanup, actionTimeoutMillis, remoteTimeoutSeconds, viewport }) =>
+    BrowserbaseBrowser.layer({
+      launch: recipe({ remoteTimeoutSeconds, viewport: { _tag: "Fixed", ...viewport } }),
+      actionTimeoutMillis,
+      onCleanup,
+    }).pipe(
+      Layer.provide(NodeCrypto.layer),
+      Layer.provide(
+        Account.layer({
+          projectId: Redacted.value(projectId),
+          apiKey,
+          requestTimeoutMillis: 15_000,
+        }),
+      ),
+    ),
+});
 
 /** The provider's release, without its session reference or any provider identifier. */
 const released = (journal: Journal) => (result: CleanupResult) =>

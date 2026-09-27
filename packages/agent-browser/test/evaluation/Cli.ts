@@ -1,7 +1,16 @@
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { Console, Effect, Exit, FileSystem, type Layer, Option, Schema } from "effect";
+import {
+  Console,
+  Effect,
+  Exit,
+  FileSystem,
+  type Layer,
+  Option,
+  type Redacted,
+  Schema,
+} from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 
@@ -10,6 +19,7 @@ import { cases, maxRuns, plan, Split, Termination } from "./Cases.ts";
 import { EvidenceError, Journal, load, manifest, save, tagOf } from "./Evidence.ts";
 import { grade } from "./Grading.ts";
 import { Ledger } from "./Spend.ts";
+import type { BrowserbaseBackend } from "./Tasks.ts";
 
 const trials = Flag.Int("trials").pipe(
   Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10 }))),
@@ -276,7 +286,7 @@ const planCommand = Command.make(
  * A live real-model campaign. The opt-in, the approved digest and every credential are checked
  * before its directory exists, a runner is loaded, a browser starts or a model is called.
  */
-const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
+const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?: Hosting) =>
   Command.make(
     "campaign",
     {
@@ -297,7 +307,7 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
       yield* fs.makeDirectory(directory);
       yield* fs.writeFileString(`${directory}/plan.json`, JSON.stringify(shown, null, 2));
 
-      const [{ run: execute }, { measured }] = yield* Effect.promise(() =>
+      const [{ run: execute, liveBrowserbase }, { measured }] = yield* Effect.promise(() =>
         Promise.all([import("./Tasks.ts"), import("./Provider.ts")]),
       );
 
@@ -305,6 +315,16 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
       const outcomes: Array<Outcome> = [];
       const notStarted: Array<string> = [];
       const record = recorder(directory, outcomes);
+      const projectId = credentials.BROWSERBASE_PROJECT_ID;
+      const browserbaseKey = credentials.BROWSERBASE_API_KEY;
+
+      const hosted =
+        projectId === undefined || browserbaseKey === undefined
+          ? undefined
+          : (hosting ?? liveBrowserbase)(projectId, browserbaseKey);
+
+      // Each hosted run allocates one session; no more start than the plan counted.
+      let sessions = 0;
 
       // Serial, in the approved order. A broken price contract stops admission, so the runs left
       // are listed as not started rather than refused one by one.
@@ -315,11 +335,20 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
             const subject = shown.subjects.find((candidate) => candidate.id === entry.subject);
             const apiKey = subject === undefined ? undefined : credentials[subject.credential];
 
-            if (ledger.closed !== null || subject === undefined || apiKey === undefined) {
+            const browserbase = entry.backend === "browserbase";
+
+            if (
+              ledger.closed !== null ||
+              subject === undefined ||
+              apiKey === undefined ||
+              (browserbase &&
+                (hosted === undefined || sessions >= (shown.browserbase?.sessions ?? 0)))
+            ) {
               notStarted.push(entry.runId);
 
               return Effect.void;
             }
+            if (browserbase) sessions++;
             const journal = new Journal(Campaign.measuredManifest(shown, entry, source));
 
             const driver = measured({
@@ -330,7 +359,7 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>) =>
               transport,
             });
 
-            return execute(journal, driver).pipe(
+            return execute(journal, driver, browserbase ? hosted : undefined).pipe(
               Effect.onExit((exit) => record(entry.runId, journal, exit)),
               Effect.exit,
             );
@@ -423,14 +452,26 @@ const replayCommand = Command.make(
   }),
 );
 
-/** The evaluation's commands; a campaign's provider requests use `transport`. */
-export const cli = (transport: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer) =>
+/** How a campaign reaches Browserbase from the approved credentials; the provider's by default. */
+type Hosting = (
+  projectId: Redacted.Redacted<string>,
+  apiKey: Redacted.Redacted<string>,
+) => BrowserbaseBackend;
+
+/**
+ * The evaluation's commands. A campaign's provider requests use `transport`, and its hosted runs
+ * `hosting`, which defaults to Browserbase itself.
+ */
+export const cli = (
+  transport: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer,
+  hosting?: Hosting,
+) =>
   Command.make("browser-evaluation").pipe(
     Command.withSubcommands([
       preview,
       run,
       planCommand,
-      campaignCommand(transport),
+      campaignCommand(transport, hosting),
       regrade,
       replayCommand,
     ]),

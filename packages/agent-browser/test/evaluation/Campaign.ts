@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 
 import { Config, Effect, Option, type Redacted, Schema } from "effect";
 
-import { cases, Composition, maxRuns, Task, unmeasured } from "./Cases.ts";
+import { publicOrigin } from "../fixtures/HostedSite.ts";
+import { cases, Composition, hostedRoutes, maxRuns, Task, unmeasured } from "./Cases.ts";
 import {
   admission,
   Gateway,
@@ -111,7 +112,8 @@ export interface Measured {
   readonly task: Task;
   readonly toolkit: Composition;
   readonly trial: number;
-  readonly backend: "chromium" | "scripted-owner";
+  /** Browserbase runs a served case on the hosted fixture; Chromium, on its declared backend. */
+  readonly backend: "chromium" | "browserbase" | "scripted-owner";
 }
 
 /** Whole micro-dollars, or undefined for a value finer than one. */
@@ -210,10 +212,16 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       credential: credential(model.provider, model.gateway),
     });
   }
-  if (spec.backends.includes("browserbase"))
+
+  // A hosted browser runs the hosted fixture, which shows the served cases it can report.
+  const unhosted = spec.backends.includes("browserbase")
+    ? spec.tasks.filter((task) => hostedRoutes[task] === undefined)
+    : [];
+
+  if (unhosted.length > 0)
     return yield* refuse(
       "backend",
-      "A hosted browser cannot reach the loopback fixture these cases serve, and no hosted fixture is declared.",
+      `Browserbase cannot run ${unhosted.join(", ")}: reading uses the scripted owner, and a lost acknowledgement's late write reaches the host only after the owner has fenced the page.`,
     );
   const excluded = spec.tasks.filter((task) => unmeasured[task] !== undefined);
 
@@ -223,21 +231,26 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       excluded.map((task) => `${task}: ${unmeasured[task] ?? ""}`).join(" "),
     );
 
-  // Every model runs the same case back to back, so drift during a campaign affects each alike.
+  // Every model runs the same case back to back, on each backend in turn, so drift during a
+  // campaign affects each alike.
   const runs: ReadonlyArray<Measured> = Array.from({ length: spec.trials }, (_, trial) =>
     spec.tasks.flatMap((task) =>
       spec.toolkits.flatMap((toolkit) =>
-        subjects.map((subject) => ({
-          runId: `${subject.id}-${task}-${toolkit}-${trial}`,
-          subject: subject.id,
-          task,
-          toolkit,
-          trial,
-          backend: cases[task].backend,
-        })),
+        spec.backends.flatMap((backend) =>
+          subjects.map((subject) => ({
+            runId: `${subject.id}-${task}-${toolkit}${backend === "browserbase" ? "-browserbase" : ""}-${trial}`,
+            subject: subject.id,
+            task,
+            toolkit,
+            trial,
+            backend: backend === "browserbase" ? ("browserbase" as const) : cases[task].backend,
+          })),
+        ),
       ),
     ),
   ).flat();
+
+  const sessions = runs.filter((entry) => entry.backend === "browserbase").length;
 
   if (runs.length > maxRuns)
     return yield* refuse("runs", `${runs.length} runs exceed the ${maxRuns}-run bound.`);
@@ -292,14 +305,28 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       admission,
     },
     browser:
-      "local only: a new Chromium, or the scripted owner, for each run, closed before the next starts",
+      "a new local Chromium, scripted owner or Browserbase session for each run, closed before the next starts",
+    // One provider session per hosted run, which the provider ends itself if never released.
+    browserbase:
+      sessions === 0
+        ? null
+        : {
+            sessions,
+            sessionSeconds: spec.budget.maxRunSeconds + 60,
+            origin: publicOrigin,
+            optIn: "EFFECT_AGENT_BROWSERBASE_LIVE=1",
+            cost: "billed by Browserbase per browser minute on the account's plan; not metered here",
+          },
     retries:
       "none: a refused, failed or unresolved request is recorded and never retried, and a broken price contract stops the campaign",
     judges: "disabled",
     heldOut:
       "held-out results must not inform Tool, instruction or prompt changes; one that does is re-declared tuning at a new revision",
     optIn: `${optIn}=1`,
-    credentials: [...new Set(subjects.map((subject) => subject.credential))],
+    credentials: [
+      ...new Set(subjects.map((subject) => subject.credential)),
+      ...(sessions === 0 ? [] : ["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"]),
+    ],
   };
 
   return {
@@ -330,7 +357,16 @@ export const authorize = Effect.fn("Campaign.authorize")(function* (
       "approval",
       "Pass --approve with the digest `plan` prints for this specification, after reviewing it.",
     );
-  // Keyed by the environment variable each subject names.
+  // Hosted sessions need Browserbase's own opt-in, as its guarded checks do.
+  if (shown.browserbase !== null) {
+    const hosted = yield* Config.option(Config.String("EFFECT_AGENT_BROWSERBASE_LIVE")).pipe(
+      Effect.orElseSucceed(Option.none),
+    );
+
+    if (Option.getOrUndefined(hosted) !== "1")
+      return yield* refuse("opt-in", "Browserbase sessions need EFFECT_AGENT_BROWSERBASE_LIVE=1.");
+  }
+  // Keyed by the environment variable that names each credential.
   const credentials: Record<string, Redacted.Redacted<string>> = {};
 
   for (const name of shown.credentials) {
@@ -357,6 +393,7 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
       policy: "measured",
       role: "measured",
       trial: run.trial,
+      ...(run.backend === "browserbase" ? { hosted: "browserbase" as const } : {}),
     },
     sourceRevision,
     {

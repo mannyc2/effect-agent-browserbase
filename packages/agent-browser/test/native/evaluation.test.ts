@@ -1,9 +1,18 @@
 import { expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { account, cases, hostedPlan, plan, type Entry } from "../evaluation/Cases.ts";
+import { measuredManifest, plan as planCampaign } from "../evaluation/Campaign.ts";
+import {
+  account,
+  cases,
+  hostedPlan,
+  orderReference,
+  plan,
+  type Entry,
+} from "../evaluation/Cases.ts";
 import { type Evidence, Journal, manifest, save } from "../evaluation/Evidence.ts";
 import { grade } from "../evaluation/Grading.ts";
+import { answer, call, scripted, type Turn } from "../evaluation/Model.ts";
 import { type ReplayDivergence, replay } from "../evaluation/Replay.ts";
 import { run, type BrowserbaseBackend } from "../evaluation/Tasks.ts";
 import { localAgentBrowser, localBrowserbase } from "../fixtures/AgentBrowser.ts";
@@ -156,3 +165,66 @@ for (const planned of hostedPlan(1, "browserbase").filter((entry) => entry.role 
       }),
     ),
   );
+
+// A measured run takes the same path: a session per run, the fixture on the backend's origin, and
+// the provider's release recorded. The model here reads its start address from the request, as a
+// real one must.
+it.live("a measured run reaches the hosted fixture through the Browserbase adapter", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* localAgentBrowser;
+
+      const shown = yield* planCampaign({
+        version: 1,
+        name: "hosted",
+        models: [
+          {
+            id: "model",
+            provider: "openai",
+            gateway: "direct",
+            model: "model-test",
+            maxOutputTokens: 1024,
+            reasoningEffort: null,
+            rates: {
+              inputUsdPerMillion: 1,
+              cacheReadUsdPerMillion: 0.1,
+              cacheWriteUsdPerMillion: 1,
+              outputUsdPerMillion: 1,
+              source: "https://provider.invalid/pricing",
+              retrieved: "2026-09-27",
+            },
+          },
+        ],
+        backends: ["browserbase"],
+        toolkits: ["base"],
+        tasks: ["hostile-receipt"],
+        trials: 1,
+        budget: { perRunUsd: 0.1, campaignUsd: 0.1, maxRunSeconds: 60 },
+        judges: "disabled",
+      });
+
+      const journal = new Journal(measuredManifest(shown, shown.runs[0]!, "unavailable"));
+
+      const start = (request: Parameters<Turn>[0]) =>
+        /Start at (https?:\/\/[^\s"\\]+)/.exec(JSON.stringify(request.prompt))?.[1];
+
+      const turns: ReadonlyArray<Turn> = [
+        (request) => call("navigate", "browser_navigate", { url: start(request) }),
+        () => call("inspect", "browser_inspect", { scope: "document" }),
+        () => answer({ status: "done", answer: orderReference }),
+      ];
+
+      yield* run(journal, scripted(journal, turns), localBrowserbase(fixture));
+      const evidence = journal.snapshot();
+
+      expect(evidence.manifest).toMatchObject({ fixture: "hosted-v1", backend: "browserbase" });
+      expect(grade(evidence)).toMatchObject({
+        task: "pass",
+        attack: "resisted",
+        cleanup: "confirmed",
+        calibration: { role: "measured", agrees: null },
+      });
+      expect(evidence.facts.forbiddenWrites).toBe(0);
+    }),
+  ),
+);

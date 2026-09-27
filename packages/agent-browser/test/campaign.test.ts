@@ -116,7 +116,12 @@ it.effect("a real-model plan shows its whole matrix and bounds before anything r
 
 it.effect("a real-model plan is refused, not truncated, when it cannot be bounded", () =>
   Effect.gen(function* () {
+    // Reading runs on the scripted owner, which no hosted browser replaces.
     expect(yield* reason(plan({ ...spec, backends: ["chromium", "browserbase"] }))).toBe("backend");
+    // A lost acknowledgement's late write never reaches a hosted fixture's host.
+    expect(
+      yield* reason(plan({ ...spec, backends: ["browserbase"], tasks: ["lost-acknowledgement"] })),
+    ).toBe("backend");
     expect(yield* reason(plan({ ...spec, tasks: ["signup", "cancelled-mutation"] }))).toBe("task");
     expect(
       yield* reason(
@@ -891,5 +896,75 @@ it.effect("the browser owner outlives a measured run's time bound", () =>
     );
 
     expect(ownerPolicy(scripted).maxElapsedMillis).toBe(60_000);
+  }),
+);
+
+const hosted = {
+  ...spec,
+  backends: ["chromium", "browserbase"],
+  tasks: ["signup", "hostile-receipt"],
+  toolkits: ["base"],
+  trials: 1,
+};
+
+const browserbaseLive = {
+  ...live,
+  EFFECT_AGENT_BROWSERBASE_LIVE: "1",
+  BROWSERBASE_API_KEY: "bb-SECRET",
+  BROWSERBASE_PROJECT_ID: "project-SECRET",
+};
+
+// A hosted campaign's sessions are counted and bounded in the plan it is approved by, and need
+// Browserbase's own opt-in and credentials as well as the evaluation's.
+it.effect("a Browserbase campaign plans its sessions and needs Browserbase's opt-in", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(hosted);
+
+    expect(shown.runs.map((entry) => [entry.runId, entry.backend])).toEqual([
+      ["gpt-signup-base-0", "chromium"],
+      ["claude-signup-base-0", "chromium"],
+      ["gpt-signup-base-browserbase-0", "browserbase"],
+      ["claude-signup-base-browserbase-0", "browserbase"],
+      ["gpt-hostile-receipt-base-0", "chromium"],
+      ["claude-hostile-receipt-base-0", "chromium"],
+      ["gpt-hostile-receipt-base-browserbase-0", "browserbase"],
+      ["claude-hostile-receipt-base-browserbase-0", "browserbase"],
+    ]);
+    expect(shown.browserbase).toMatchObject({
+      sessions: 4,
+      sessionSeconds: 240,
+      origin: "https://example.com",
+      optIn: "EFFECT_AGENT_BROWSERBASE_LIVE=1",
+    });
+    expect(shown.credentials).toEqual([
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "BROWSERBASE_API_KEY",
+      "BROWSERBASE_PROJECT_ID",
+    ]);
+    expect(measuredManifest(shown, shown.runs[2]!, "b".repeat(40))).toMatchObject({
+      fixture: "hosted-v1",
+      backend: "browserbase",
+    });
+    expect(measuredManifest(shown, shown.runs[0]!, "b".repeat(40))).toMatchObject({
+      fixture: "tool-site-v3",
+      backend: "chromium",
+    });
+
+    // Chromium alone needs neither.
+    expect((yield* plan({ ...hosted, backends: ["chromium"] })).browserbase).toBeNull();
+
+    expect(yield* reason(authorize(hosted, shown.digest).pipe(withEnv(live)))).toBe("opt-in");
+    expect(
+      yield* reason(
+        authorize(hosted, shown.digest).pipe(
+          withEnv({ ...browserbaseLive, BROWSERBASE_PROJECT_ID: "" }),
+        ),
+      ),
+    ).toBe("credentials");
+
+    const granted = yield* authorize(hosted, shown.digest).pipe(withEnv(browserbaseLive));
+
+    expect(Redacted.value(granted.credentials.BROWSERBASE_API_KEY!)).toBe("bb-SECRET");
   }),
 );
