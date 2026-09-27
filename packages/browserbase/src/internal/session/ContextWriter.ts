@@ -29,8 +29,19 @@ export interface ContextWriterPermitInternal extends ContextWriterPermit {
   readonly snapshot: Effect.Effect<WriterSettlementFacts>;
 }
 
+/** A writer retired without release. Its permit keeps collecting late evidence for reconciliation. */
+interface Quarantine {
+  readonly _tag: "Quarantined";
+  readonly permit: ContextWriterPermitInternal;
+}
+
+/** Holds a Context while reconciliation checks it, so no writer is admitted against that evidence. */
+interface Reconciliation {
+  readonly _tag: "Reconciling";
+}
+
 const authentic = new WeakMap<ContextWriterPermit, ContextWriterPermitInternal>();
-const active = new Map<string, ContextWriterPermitInternal | "quarantined">();
+const active = new Map<string, ContextWriterPermitInternal | Quarantine | Reconciliation>();
 const key = (ref: ContextReference) => `${ref.projectId}/${ref.contextId}`;
 
 export const isContextWriterBusy = (ref: ContextReference): boolean => active.has(key(ref));
@@ -218,7 +229,7 @@ export const makeContextWriterPermit = (
       closed = true;
       if (active.get(key(owned)) !== permit) return;
       if (released) active.delete(key(owned));
-      else active.set(key(owned), "quarantined");
+      else active.set(key(owned), { _tag: "Quarantined", permit });
     });
 
     return Effect.succeed(permit);
@@ -230,6 +241,49 @@ export const closeContextWriterPermit = (
   permit: ContextWriterPermitInternal,
   released: boolean,
 ): void => retirement.get(permit)?.(released);
+
+export interface ReconciliationClaim {
+  /** What the quarantined writer has recorded by now; empty when this process holds no quarantine. */
+  readonly attempts: Effect.Effect<ReadonlyArray<WriterAttemptFacts>>;
+  /** Lifts the quarantine, or puts it back when reconciliation did not succeed. */
+  readonly finish: (reconciled: boolean) => void;
+}
+
+export const claimReconciliation = (
+  reference: ContextReference,
+): Effect.Effect<ReconciliationClaim, ContextError> =>
+  Effect.suspend(() => {
+    const held = active.get(key(reference));
+
+    if (
+      held?._tag === "ContextWriterPermit" ||
+      held?._tag === "Reconciling" ||
+      (held === undefined && active.size >= 2048)
+    ) {
+      return Effect.fail(
+        ContextError.make({
+          operation: "writer-reconcile",
+          reason: "active",
+          outcome: "undispatched",
+        }),
+      );
+    }
+    const claim: Reconciliation = { _tag: "Reconciling" };
+
+    active.set(key(reference), claim);
+
+    return Effect.succeed({
+      attempts:
+        held === undefined
+          ? Effect.succeed([])
+          : held.permit.snapshot.pipe(Effect.map((facts) => facts.attempts)),
+      finish: (reconciled) => {
+        if (active.get(key(reference)) !== claim) return;
+        if (reconciled || held === undefined) active.delete(key(reference));
+        else active.set(key(reference), held);
+      },
+    });
+  });
 
 export const requireContextWriterPermit = (
   permit: ContextWriterPermit,

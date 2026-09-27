@@ -29,6 +29,8 @@ const account = Account.layerConfig({
 
 `ContextCoordination.withWriter` accepts a consumer-owned distributed lease backend and preserves the consumer's Effect error and environment types. A persisting allocation authenticates that live permit and reports its exact attempt, session and cleanup receipt before settlement. Unknown writers and unconfirmed persistence are quarantined. A terminal session does not establish that Context data finished synchronizing.
 
+A quarantined Context stays refused in the process until `ContextCoordination.reconcile(reference, readback)` succeeds. It reads the provider's status for every session the quarantined writer recorded, requires each to be terminal, then runs your readback of the Context, and only then admits a writer again. It refuses a live writer, and no writer is admitted while it runs. It never ends a session: request the release yourself, wait for it to end, then reconcile. An allocation whose outcome stayed unknown names no session to check, so its Context stays refused until the process ends. Report the reconciliation to your backend afterwards: its own quarantine is separate. A lease `acquire` that fails leaves the Context free locally, because no allocation was attempted; the backend resolves whatever that failure left uncertain.
+
 ## Start with the result you need
 
 For the simplest post-session video path, opt in to Browserbase recording in the launch recipe:

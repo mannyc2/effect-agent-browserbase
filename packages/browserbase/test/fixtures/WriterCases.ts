@@ -1,13 +1,25 @@
 import assert from "node:assert/strict";
 
-import { Context, Deferred, Effect, Fiber, Schema, type Scope } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Context, Deferred, Effect, Fiber, Layer, Redacted, Schema, type Scope } from "effect";
+import type { BrowserError } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
+import { FetchHttpClient } from "effect/unstable/http";
 
+import { layer as accountLayer } from "../../src/Account.ts";
+import * as Allocation from "../../src/Allocation.ts";
 import { CleanupResult } from "../../src/Cleanup.ts";
-import { withWriter, type WriterSettlementFacts } from "../../src/ContextCoordination.ts";
-import type { ContextError } from "../../src/Errors.ts";
+import {
+  type ContextWriterPermit,
+  reconcile,
+  withWriter,
+  type WriterSettlementFacts,
+} from "../../src/ContextCoordination.ts";
+import type { AllocationError, ClientError, ContextError, SessionError } from "../../src/Errors.ts";
 import { requireContextWriterPermit } from "../../src/internal/session/ContextWriter.ts";
+import { recipe } from "../../src/Launch.ts";
 import { AllocationAttempt, ContextReference, SessionReference } from "../../src/References.ts";
+import * as Testing from "../../src/Testing.ts";
 
 const reference = () =>
   ContextReference.make({
@@ -70,15 +82,89 @@ class ApplicationService extends Context.Service<
   ApplicationService,
   { readonly read: Effect.Effect<number, ApplicationFailure> }
 >()("writer-test/ApplicationService") {}
+class ReadbackFailed extends Schema.TaggedError<ReadbackFailed>()("WriterReadbackFailed", {}) {}
+
+type Failure = ContextError | ClientError | AllocationError | SessionError | BrowserError;
+
 interface Case {
   readonly name: string;
-  readonly run: Effect.Effect<void, ContextError>;
+  readonly run: Effect.Effect<void, Failure>;
 }
 
-const test = (name: string, run: Effect.Effect<void, ContextError, Scope.Scope>): Case => ({
+const test = (name: string, run: Effect.Effect<void, Failure, Scope.Scope>): Case => ({
   name,
   run: Effect.scoped(run),
 });
+
+/**
+ * The real account services and allocation path over the scripted control plane, with one
+ * Context to write. `write` allocates one persisting session under the permit and releases it.
+ */
+const scriptedWriter = (script: Testing.ProviderScript = {}) =>
+  Effect.gen(function* () {
+    const { fetch, control } = yield* Testing.provider(script);
+
+    const services = Layer.merge(
+      accountLayer({
+        projectId: control.projectId,
+        apiKey: Redacted.make(control.secrets.apiKey),
+      }).pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))),
+      NodeCrypto.layer,
+    );
+
+    const context = ContextReference.make({
+      provider: "browserbase",
+      projectId: control.projectId,
+      contextId: globalThis.crypto.randomUUID(),
+    });
+
+    const write = (permit: ContextWriterPermit) =>
+      Effect.scoped(
+        Allocation.scoped(recipe({ context: { reference: context, persist: true } }), {
+          contextWriter: permit,
+        }),
+      );
+
+    const run = <A, E, R>(program: Effect.Effect<A, E, R>) =>
+      program.pipe(Effect.provide(services));
+
+    return { control, context, write, run };
+  });
+
+/** Counts the backend's acquisitions, so a local refusal is told apart from the backend's. */
+const counted = () => {
+  const settlements: WriterSettlementFacts[] = [];
+  let acquired = 0;
+
+  return {
+    settlements,
+    acquired: () => acquired,
+    backend: {
+      acquire: () =>
+        Effect.sync(() => {
+          acquired++;
+
+          return {
+            settle: (facts: WriterSettlementFacts) =>
+              Effect.sync(() => {
+                settlements.push(facts);
+              }),
+          };
+        }),
+    },
+  };
+};
+
+/** Cleanup waits on the Effect clock for a terminal read; advance it until the program ends. */
+const polled = <A, E>(program: Effect.Effect<A, E>) =>
+  Effect.gen(function* () {
+    const fiber = yield* program.pipe(Effect.forkChild);
+
+    for (let poll = 0; poll < 64 && fiber.pollUnsafe() === undefined; poll++)
+      yield* TestClock.adjust(250);
+
+    return yield* Fiber.join(fiber);
+  });
 
 export const writerCases: ReadonlyArray<Case> = [
   test(
@@ -390,6 +476,227 @@ export const writerCases: ReadonlyArray<Case> = [
 
       assert.equal(failure._tag, "Failure");
       if (failure._tag === "Failure") assert.equal(failure.failure.reason, "timeout");
+    }),
+  ),
+  test(
+    "an unacknowledged flush keeps its Context refused until its session is terminal and a readback passes",
+    Effect.gen(function* () {
+      const f = yield* scriptedWriter(),
+        lease = counted();
+
+      yield* f.run(withWriter(lease.backend, f.context, f.write));
+      assert.equal(lease.settlements[0]!.disposition, "quarantine");
+      assert.equal(
+        (yield* expectFailure(withWriter(lease.backend, f.context, () => Effect.void))).reason,
+        "active",
+      );
+
+      const failed = yield* expectFailure(
+        f.run(reconcile(f.context, Effect.fail(ReadbackFailed.make({})))),
+      );
+
+      assert.equal(failed._tag, "WriterReadbackFailed");
+      assert.equal(
+        (yield* expectFailure(withWriter(lease.backend, f.context, () => Effect.void))).reason,
+        "active",
+      );
+      assert.equal(lease.acquired(), 1);
+
+      const prior = (yield* f.control.calls).length;
+
+      let before: ReadonlyArray<Testing.ProviderCall> = [];
+
+      yield* f.run(
+        reconcile(
+          f.context,
+          f.control.calls.pipe(
+            Effect.map((calls) => {
+              before = calls.slice(prior);
+            }),
+          ),
+        ),
+      );
+      // The readback ran after a fresh terminal read of the writer's own session.
+      assert.deepEqual(before, [{ method: "GET", path: "/v1/sessions/session-1" }]);
+      assert.equal(yield* withWriter(lease.backend, f.context, () => Effect.succeed(7)), 7);
+      assert.equal(lease.acquired(), 2);
+      assert.equal(lease.settlements[1]!.disposition, "release");
+    }),
+  ),
+  test(
+    "a session the provider has not ended keeps its Context refused without a readback",
+    Effect.gen(function* () {
+      const f = yield* scriptedWriter({ release: "pending" }),
+        lease = counted();
+
+      let readbacks = 0;
+
+      const readback = Effect.sync(() => {
+        readbacks++;
+      });
+
+      yield* polled(f.run(withWriter(lease.backend, f.context, f.write)));
+      assert.equal(lease.settlements[0]!.attempts[0]!.cleanup?.remote, "pending");
+
+      const refused = yield* expectFailure(f.run(reconcile(f.context, readback)));
+
+      assert.equal(refused._tag, "ContextError");
+      assert.equal(refused.reason, "active");
+      assert.equal(readbacks, 0);
+      assert.equal(
+        (yield* expectFailure(withWriter(lease.backend, f.context, () => Effect.void))).reason,
+        "active",
+      );
+
+      // The provider ends it on its own lifetime; reconciliation follows the provider, not a guess.
+      yield* f.control.setStatus("session-1", "TIMED_OUT");
+      yield* f.run(reconcile(f.context, readback));
+      assert.equal(readbacks, 1);
+      yield* withWriter(lease.backend, f.context, () => Effect.void);
+      assert.equal(lease.acquired(), 2);
+    }),
+  ),
+  test(
+    "an allocation whose outcome stayed unknown keeps its Context refused",
+    Effect.gen(function* () {
+      const f = yield* scriptedWriter({ create: { _tag: "Lost" } }),
+        lease = counted();
+
+      let readbacks = 0;
+
+      yield* expectFailure(f.run(withWriter(lease.backend, f.context, f.write)));
+      assert.equal(lease.settlements[0]!.attempts[0]!.state, "unknown");
+
+      const refused = yield* expectFailure(
+        f.run(
+          reconcile(
+            f.context,
+            Effect.sync(() => {
+              readbacks++;
+            }),
+          ),
+        ),
+      );
+
+      assert.equal(refused.reason, "active");
+      assert.equal(readbacks, 0);
+      assert.equal(
+        (yield* expectFailure(withWriter(lease.backend, f.context, () => Effect.void))).reason,
+        "active",
+      );
+    }),
+  ),
+  test(
+    "reconciliation refuses a live writer, and admits none while it runs",
+    Effect.gen(function* () {
+      const f = yield* scriptedWriter(),
+        lease = counted(),
+        entered = yield* Deferred.make<void>(),
+        release = yield* Deferred.make<void>();
+
+      yield* withWriter(lease.backend, f.context, () =>
+        Effect.gen(function* () {
+          const refused = yield* expectFailure(f.run(reconcile(f.context, Effect.void)));
+
+          assert.equal(refused.reason, "active");
+        }),
+      );
+      assert.equal(lease.settlements[0]!.disposition, "release");
+
+      const reconciling = yield* f
+        .run(
+          reconcile(
+            f.context,
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        )
+        .pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      assert.equal(
+        (yield* expectFailure(withWriter(lease.backend, f.context, () => Effect.void))).reason,
+        "active",
+      );
+      assert.equal(
+        (yield* expectFailure(f.run(reconcile(f.context, Effect.void)))).reason,
+        "active",
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(reconciling);
+      yield* withWriter(lease.backend, f.context, () => Effect.void);
+      assert.equal(lease.acquired(), 2);
+    }),
+  ),
+  test(
+    "an interrupted reconciliation leaves its Context quarantined",
+    Effect.gen(function* () {
+      const f = yield* scriptedWriter(),
+        lease = counted(),
+        entered = yield* Deferred.make<void>();
+
+      yield* f.run(withWriter(lease.backend, f.context, f.write));
+      assert.equal(lease.settlements[0]!.disposition, "quarantine");
+
+      const reconciling = yield* f
+        .run(
+          reconcile(
+            f.context,
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+          ),
+        )
+        .pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(reconciling);
+      assert.equal(
+        (yield* expectFailure(withWriter(lease.backend, f.context, () => Effect.void))).reason,
+        "active",
+      );
+      assert.equal(lease.acquired(), 1);
+
+      yield* f.run(reconcile(f.context, Effect.void));
+      yield* withWriter(lease.backend, f.context, () => Effect.void);
+      assert.equal(lease.acquired(), 2);
+    }),
+  ),
+  test(
+    "a failed lease acquisition leaves the Context free for the next writer",
+    Effect.gen(function* () {
+      const ref = reference(),
+        facts: WriterSettlementFacts[] = [];
+
+      let acquired = 0;
+
+      const failure = yield* expectFailure(
+        withWriter(
+          {
+            acquire: () =>
+              Effect.suspend(() => {
+                acquired++;
+
+                return Effect.fail(ApplicationFailure.make({ code: "lease-unanswered" }));
+              }),
+          },
+          ref,
+          () => Effect.void,
+        ),
+      );
+
+      assert.equal(failure._tag, "WriterApplicationFailure");
+      yield* withWriter(
+        {
+          acquire: () =>
+            Effect.suspend(() => {
+              acquired++;
+
+              return backend(facts).acquire();
+            }),
+        },
+        ref,
+        () => Effect.void,
+      );
+      assert.equal(acquired, 2);
+      assert.equal(facts[0]!.disposition, "release");
     }),
   ),
 ];
