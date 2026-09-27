@@ -3,7 +3,15 @@ import { createHash } from "node:crypto";
 import { Config, Effect, Option, type Redacted, Schema } from "effect";
 
 import { publicOrigin } from "../fixtures/HostedSite.ts";
-import { cases, Composition, hostedRoutes, maxRuns, Task, unmeasured } from "./Cases.ts";
+import {
+  cases,
+  Composition,
+  type Fixture,
+  hostedRoutes,
+  maxRuns,
+  Task,
+  unmeasured,
+} from "./Cases.ts";
 import {
   admission,
   Gateway,
@@ -114,6 +122,7 @@ export interface Measured {
   readonly trial: number;
   /** Browserbase runs a served case on the hosted fixture; Chromium, on its declared backend. */
   readonly backend: "chromium" | "browserbase" | "scripted-owner";
+  readonly fixture: typeof Fixture.Type;
 }
 
 /** Whole micro-dollars, or undefined for a value finer than one. */
@@ -244,6 +253,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
             toolkit,
             trial,
             backend: backend === "browserbase" ? ("browserbase" as const) : cases[task].backend,
+            fixture: backend === "browserbase" ? ("hosted-v1" as const) : cases[task].fixture,
           })),
         ),
       ),
@@ -273,7 +283,8 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
     name: spec.name,
     evaluator: "browser-evaluation-v4",
     concurrency: 1,
-    order: "trial, then task, toolkit and model: every model runs the same case back to back",
+    order:
+      "trial, then task, toolkit, backend and model: every model runs the same case back to back",
     subjects,
     cases: Object.fromEntries(
       spec.tasks.map((task) => {
@@ -417,6 +428,33 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
     bounds: { ...declared.bounds, maxDurationMillis: shown.budget.maxRunMillis },
   };
 };
+
+/**
+ * Hosted sessions, one per run: no more start than the plan counted, and none after a run whose
+ * release the provider did not confirm, or whose allocation may have happened: that session may
+ * still be running, and billed, until its own timeout.
+ */
+export class Sessions {
+  readonly #planned: number;
+  #started = 0;
+  halted: "release unconfirmed" | null = null;
+  constructor(planned: number) {
+    this.#planned = planned;
+  }
+  admit(): boolean {
+    if (this.halted !== null || this.#started >= this.#planned) return false;
+    this.#started++;
+
+    return true;
+  }
+  settle(
+    facts: { readonly cleanup: string; readonly ownerClose: string },
+    harness: string | null,
+  ): void {
+    if (facts.cleanup !== "confirmed" || facts.ownerClose !== "confirmed" || harness !== null)
+      this.halted = "release unconfirmed";
+  }
+}
 
 /** A run's allowance at its subject's prices, drawn from the campaign's ledger. */
 export const allowance = (ledger: Ledger, shown: Plan, subject: Subject): Allowance =>

@@ -13,6 +13,7 @@ import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { CleanupResult } from "effect-browserbase/cleanup";
 import type { AllocationError, ClientError, ContextError } from "effect-browserbase/errors";
 import { recipe } from "effect-browserbase/launch";
+import type { AllocationAttempt } from "effect-browserbase/references";
 import { type LanguageModel, Toolkit } from "effect/unstable/ai";
 
 import {
@@ -481,6 +482,57 @@ const ledgerFacts = (journal: Journal, ledger: HostedLedger) =>
     }),
   );
 
+type LedgerCalls = NonNullable<Journal["facts"]["ledgerCalls"]>;
+
+/**
+ * A hosted page's writes as facts. The ledger counts only if the host saw every reported write
+ * through: one still pending at close, refused, or failed leaves it unknown, never a pass.
+ */
+export const hostedLedgerFacts = (
+  ledger: HostedLedger,
+  calls: LedgerCalls | undefined,
+  attack: boolean,
+) => {
+  const whole =
+    calls !== undefined &&
+    calls.inFlight === 0 &&
+    calls.rejected === 0 &&
+    calls.succeeded === calls.accepted;
+
+  return {
+    applicationWrites: whole ? ledger.submissions.length : null,
+    submissions: whole ? ledger.submissions.slice(0, 8) : null,
+    forbiddenWrites: whole && attack ? ledger.cancellations.length : null,
+    ledgerCalls: calls ?? null,
+  };
+};
+
+/**
+ * Before the browser closes, give the page's reported writes up to five seconds to reach the
+ * host, then take the binding's own counts of them.
+ */
+const writesSettled = <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
+  Effect.gen(function* () {
+    let calls: LedgerCalls | undefined;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const diagnostics = yield* browser.bindingDiagnostics;
+      const binding = diagnostics.bindings.find((entry) => entry.name === "recordFixtureWrite");
+
+      if (binding === undefined) return undefined;
+      calls = {
+        accepted: binding.accepted,
+        succeeded: binding.succeeded,
+        rejected: binding.rejected,
+        inFlight: binding.inFlight + binding.pendingNative,
+      };
+      if (calls.inFlight === 0) return calls;
+      yield* Effect.sleep(100);
+    }
+
+    return calls;
+  });
+
 /** One agent run on an open browser: the host's Tools, the run, then the owner's facts. */
 const drive =
   (journal: Journal, driver: Driver, start: string) =>
@@ -535,6 +587,7 @@ export interface BrowserbaseBackend {
   readonly origin: string | undefined;
   readonly layer: (options: {
     readonly onCleanup: (result: CleanupResult) => Effect.Effect<void>;
+    readonly onAllocationUncertain: (attempt: AllocationAttempt) => Effect.Effect<void>;
     readonly actionTimeoutMillis: number;
     readonly remoteTimeoutSeconds: number;
     readonly viewport: { readonly width: number; readonly height: number };
@@ -550,11 +603,18 @@ export const liveBrowserbase = (
   apiKey: Redacted.Redacted<string>,
 ): BrowserbaseBackend => ({
   origin: publicOrigin,
-  layer: ({ onCleanup, actionTimeoutMillis, remoteTimeoutSeconds, viewport }) =>
+  layer: ({
+    onCleanup,
+    onAllocationUncertain,
+    actionTimeoutMillis,
+    remoteTimeoutSeconds,
+    viewport,
+  }) =>
     BrowserbaseBrowser.layer({
       launch: recipe({ remoteTimeoutSeconds, viewport: { _tag: "Fixed", ...viewport } }),
       actionTimeoutMillis,
       onCleanup,
+      onAllocationUncertain,
     }).pipe(
       Layer.provide(NodeCrypto.layer),
       Layer.provide(
@@ -566,6 +626,19 @@ export const liveBrowserbase = (
       ),
     ),
 });
+
+/**
+ * An allocation whose outcome is unknown may have started a session: the run's cleanup cannot be
+ * confirmed, which stops the campaign starting another. The attempt's identifiers are not kept.
+ */
+const uncertain = (journal: Journal) => () =>
+  Effect.sync(() => {
+    journal.facts = {
+      ...journal.facts,
+      cleanup: "unconfirmed",
+      cleanupReceipt: json({ allocation: "unknown" }),
+    };
+  });
 
 /** The provider's release, without its session reference or any provider identifier. */
 const released = (journal: Journal) => (result: CleanupResult) =>
@@ -612,25 +685,48 @@ const onHosted = (
       const driver = yield* driverFor(journal, start, measured);
       const ledger = emptyLedger();
       const bootstrap = hostedFixture(origin, ledger);
+      let calls: LedgerCalls | undefined;
 
-      yield* ledgerFacts(journal, ledger);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          journal.facts = {
+            ...journal.facts,
+            ...hostedLedgerFacts(ledger, calls, manifest.attack !== null),
+          };
+        }),
+      );
+
+      const hostedRun = <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
+        drive(
+          journal,
+          driver,
+          start,
+        )(browser).pipe(
+          Effect.andThen(writesSettled(browser)),
+          Effect.tap((settled) =>
+            Effect.sync(() => {
+              calls = settled;
+            }),
+          ),
+        );
+
       if (manifest.backend !== "browserbase" || browserbase === undefined)
         return yield* closing(
-          Browser.scoped(
-            Chromium.launch(ownerPolicy(manifest), { bootstrap }),
-            drive(journal, driver, start),
-          ).pipe(Effect.provide(chromium(journal))),
+          Browser.scoped(Chromium.launch(ownerPolicy(manifest), { bootstrap }), hostedRun).pipe(
+            Effect.provide(chromium(journal)),
+          ),
           journal,
         );
 
       return yield* closing(
         Browser.scoped(
           BrowserbaseBrowser.open(ownerPolicy(manifest), { bootstrap }),
-          drive(journal, driver, start),
+          hostedRun,
         ).pipe(
           Effect.provide(
             browserbase.layer({
               onCleanup: released(journal),
+              onAllocationUncertain: uncertain(journal),
               actionTimeoutMillis: manifest.bounds.actionTimeoutMillis,
               // The provider ends the session itself if the host never releases it.
               remoteTimeoutSeconds: Math.ceil(manifest.bounds.maxDurationMillis / 1000) + 60,

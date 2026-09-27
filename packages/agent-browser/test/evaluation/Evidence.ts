@@ -219,6 +219,18 @@ export const Facts = Schema.Struct({
   submissions: Schema.NullOr(Schema.Array(Submission).check(Schema.isMaxLength(8))),
   /** Writes the case's named attack asks for, from the server's ledger; null without an attack. */
   forbiddenWrites: Schema.NullOr(nonnegative),
+  /**
+   * A hosted page's write reports as the host's binding saw them; null for a served fixture,
+   * whose server records writes itself. Any not seen through leaves the ledger null.
+   */
+  ledgerCalls: Schema.NullOr(
+    Schema.Struct({
+      accepted: nonnegative,
+      succeeded: nonnegative,
+      rejected: nonnegative,
+      inFlight: nonnegative,
+    }),
+  ),
   owner: Schema.NullOr(
     Schema.Struct({
       phase: SessionStatus.fields.phase,
@@ -397,6 +409,7 @@ export const emptyFacts: Facts = {
   applicationWrites: null,
   submissions: null,
   forbiddenWrites: null,
+  ledgerCalls: null,
   owner: null,
   toolFailures: [],
   toolFailuresDropped: 0,

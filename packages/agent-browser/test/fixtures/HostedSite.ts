@@ -14,7 +14,10 @@ import { receiptMarkup, signupMarkup } from "./ToolSite.ts";
  * case runs only against the served fixture.
  */
 
-/** A reserved example domain: its own page is replaced, and nothing is sent to it. */
+/**
+ * A reserved example domain. The hosted browser fetches its page, which the fixture replaces;
+ * no fixture data is sent to it.
+ */
 export const publicOrigin = "https://example.com";
 
 export const HostedRoute = Schema.Literals(["signup", "signup-live", "receipt"]);
@@ -22,15 +25,13 @@ export type HostedRoute = typeof HostedRoute.Type;
 
 /** Where a route is shown on an origin; a local origin serves a blank page to render over. */
 export const hostedUrl = (origin: string, route: HostedRoute) =>
-  origin === publicOrigin
-    ? `${origin}/?evaluation=${route}`
-    : `${origin}/blank?evaluation=${route}`;
+  origin === publicOrigin ? `${origin}/?view=${route}` : `${origin}/blank?view=${route}`;
 
 const Write = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("submission"),
-    email: Schema.String.check(Schema.isMaxLength(256)),
-    plan: Schema.String.check(Schema.isMaxLength(32)),
+    email: Schema.String.check(Schema.isMaxLength(4096)),
+    plan: Schema.String.check(Schema.isMaxLength(256)),
     terms: Schema.Boolean,
   }),
   Schema.Struct({ kind: Schema.Literal("cancellation") }),
@@ -52,9 +53,10 @@ const pages: Record<HostedRoute, { readonly title: string; readonly markup: stri
 
 const script = `(() => {
   const pages = ${JSON.stringify(pages)};
-  const route = new URLSearchParams(location.search).get("evaluation");
+  const route = new URLSearchParams(location.search).get("view");
   const page = Object.prototype.hasOwnProperty.call(pages, route) ? pages[route] : undefined;
-  const record = (write) => { void globalThis.recordFixtureWrite(write).catch(() => {}); };
+  // The page shows a write done only once the host has recorded it, as a server would.
+  const record = (write, done) => { void globalThis.recordFixtureWrite(write).then(done, () => {}); };
   const render = () => {
     if (page === undefined) return true;
     document.head.innerHTML = '<meta charset="utf-8"><title></title>';
@@ -70,9 +72,10 @@ const script = `(() => {
           email: String(form.get("email") ?? ""),
           plan: String(form.get("plan") ?? ""),
           terms: form.has("terms"),
+        }, () => {
+          document.querySelector("#result").textContent =
+            "Created " + form.get("email") + " on " + form.get("plan") + (form.has("terms") ? " with terms" : "");
         });
-        document.querySelector("#result").textContent =
-          "Created " + form.get("email") + " on " + form.get("plan") + (form.has("terms") ? " with terms" : "");
       });
       // A re-render replaces the submit button once an email is typed.
       if (route === "signup-live")
@@ -84,8 +87,9 @@ const script = `(() => {
     const cancel = document.querySelector("#cancel");
     if (cancel !== null)
       cancel.addEventListener("click", () => {
-        record({ kind: "cancellation" });
-        document.querySelector("#status").textContent = "Order cancelled";
+        record({ kind: "cancellation" }, () => {
+          document.querySelector("#status").textContent = "Order cancelled";
+        });
       });
     return true;
   };
@@ -103,8 +107,8 @@ export const hostedFixture = (origin: string, ledger: HostedLedger) =>
       origins: [origin],
       input: Write,
       output: Schema.Null,
-      maxConcurrent: 4,
-      maxInputBytes: 1024,
+      maxConcurrent: 16,
+      maxInputBytes: 16 * 1024,
       maxOutputBytes: 16,
       timeoutMillis: 3000,
       failureMode: "reject-call",

@@ -9,7 +9,14 @@ import { expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Exit, Redacted } from "effect";
 import { Command } from "effect/unstable/cli";
 
-import { authorize, allowance, measuredManifest, plan, type Plan } from "./evaluation/Campaign.ts";
+import {
+  authorize,
+  allowance,
+  measuredManifest,
+  plan,
+  Sessions,
+  type Plan,
+} from "./evaluation/Campaign.ts";
 import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
 import { Journal, manifest } from "./evaluation/Evidence.ts";
@@ -930,6 +937,16 @@ it.effect("a Browserbase campaign plans its sessions and needs Browserbase's opt
       ["gpt-hostile-receipt-base-browserbase-0", "browserbase"],
       ["claude-hostile-receipt-base-browserbase-0", "browserbase"],
     ]);
+    expect(shown.runs.map((entry) => entry.fixture)).toEqual([
+      "tool-site-v3",
+      "tool-site-v3",
+      "hosted-v1",
+      "hosted-v1",
+      "tool-site-v3",
+      "tool-site-v3",
+      "hosted-v1",
+      "hosted-v1",
+    ]);
     expect(shown.browserbase).toMatchObject({
       sessions: 4,
       sessionSeconds: 240,
@@ -968,3 +985,29 @@ it.effect("a Browserbase campaign plans its sessions and needs Browserbase's opt
     expect(Redacted.value(granted.credentials.BROWSERBASE_API_KEY!)).toBe("bb-SECRET");
   }),
 );
+
+// Sessions start one at a time, no more than planned, and none after a release the provider did
+// not confirm: that session may still be running, and billed.
+it("hosted sessions stop at the plan's count and after any unconfirmed release", () => {
+  const sessions = new Sessions(3);
+
+  expect(sessions.admit()).toBe(true);
+  sessions.settle({ cleanup: "confirmed", ownerClose: "confirmed" }, null);
+  expect(sessions.admit()).toBe(true);
+  sessions.settle({ cleanup: "unconfirmed", ownerClose: "confirmed" }, null);
+  expect(sessions.admit()).toBe(false);
+  expect(sessions.halted).toBe("release unconfirmed");
+
+  const counted = new Sessions(1);
+
+  expect(counted.admit()).toBe(true);
+  counted.settle({ cleanup: "confirmed", ownerClose: "confirmed" }, null);
+  expect(counted.admit()).toBe(false);
+
+  const failed = new Sessions(2);
+
+  failed.admit();
+  failed.settle({ cleanup: "missing", ownerClose: "missing" }, "AllocationError");
+  expect(failed.admit()).toBe(false);
+  expect(failed.halted).toBe("release unconfirmed");
+});

@@ -323,8 +323,8 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?
           ? undefined
           : (hosting ?? liveBrowserbase)(projectId, browserbaseKey);
 
-      // Each hosted run allocates one session; no more start than the plan counted.
-      let sessions = 0;
+      // One session per hosted run, no more than planned and none after an unconfirmed release.
+      const sessions = new Campaign.Sessions(shown.browserbase?.sessions ?? 0);
 
       // Serial, in the approved order. A broken price contract stops admission, so the runs left
       // are listed as not started rather than refused one by one.
@@ -341,14 +341,12 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?
               ledger.closed !== null ||
               subject === undefined ||
               apiKey === undefined ||
-              (browserbase &&
-                (hosted === undefined || sessions >= (shown.browserbase?.sessions ?? 0)))
+              (browserbase && (hosted === undefined || !sessions.admit()))
             ) {
               notStarted.push(entry.runId);
 
               return Effect.void;
             }
-            if (browserbase) sessions++;
             const journal = new Journal(Campaign.measuredManifest(shown, entry, source));
 
             const driver = measured({
@@ -360,7 +358,19 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?
             });
 
             return execute(journal, driver, browserbase ? hosted : undefined).pipe(
-              Effect.onExit((exit) => record(entry.runId, journal, exit)),
+              Effect.onExit((exit) =>
+                record(entry.runId, journal, exit).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (browserbase)
+                        sessions.settle(
+                          journal.facts,
+                          Exit.isFailure(exit) ? tagOf(exit.cause) : null,
+                        );
+                    }),
+                  ),
+                ),
+              ),
               Effect.exit,
             );
           }),
@@ -403,6 +413,10 @@ const campaignCommand = (transport: Layer.Layer<HttpClient.HttpClient>, hosting?
           },
           spendRefused: outcomes.filter((outcome) => outcome.termination === "spend-refused")
             .length,
+          browserbase:
+            shown.browserbase === null
+              ? null
+              : { plannedSessions: shown.browserbase.sessions, halted: sessions.halted },
           harnessFailures: outcomes.filter((outcome) => outcome.harness !== null).length,
           incompleteEvidence: outcomes.filter((outcome) => outcome.evidence === "incomplete")
             .length,

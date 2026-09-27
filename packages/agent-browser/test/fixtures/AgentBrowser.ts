@@ -274,8 +274,15 @@ export const localBrowserbase = (
   fixture: Effect.Success<typeof localAgentBrowser>,
 ): BrowserbaseBackend => ({
   origin: undefined,
-  // The provider's fetch is given to the client as it is built, so no request leaves the host.
-  layer: ({ onCleanup, actionTimeoutMillis, remoteTimeoutSeconds, viewport }) =>
+  // This fixture's own account and client, built with its local fetch, so no request leaves
+  // the host and nothing is shared with another fixture.
+  layer: ({
+    onCleanup,
+    onAllocationUncertain,
+    actionTimeoutMillis,
+    remoteTimeoutSeconds,
+    viewport,
+  }) =>
     BrowserbaseBrowser.layer({
       launch: {
         ...launch,
@@ -284,11 +291,22 @@ export const localBrowserbase = (
       },
       actionTimeoutMillis,
       onCleanup,
+      onAllocationUncertain,
     }).pipe(
       Layer.provide(NodeCrypto.layer),
-      Layer.provide(accounts),
+      Layer.provide(
+        BrowserbaseSessions.layer.pipe(
+          Layer.provideMerge(
+            BrowserbaseClient.layer({
+              projectId: "project-1",
+              apiKey: Redacted.make("fixture-key-not-a-credential"),
+              requestTimeoutMillis: allocationBudgetMillis + 5000,
+            }),
+          ),
+          Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fixture.fetch)),
+        ),
+      ),
       Layer.provide(fixture.binding),
-      Layer.provideMerge(Layer.succeed(FetchHttpClient.Fetch, fixture.fetch)),
     ),
 });
 

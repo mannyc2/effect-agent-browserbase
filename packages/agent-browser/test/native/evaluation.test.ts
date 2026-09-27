@@ -138,9 +138,17 @@ for (const planned of hostedPlan(1, "chromium"))
       expect(evidence.manifest).toMatchObject({ fixture: "hosted-v1", backend: "chromium" });
       expect(report.calibration).toEqual({ role: planned.role, agrees: true, mismatches: [] });
       expect(report.cleanup).toBe("confirmed");
-      // The host's ledger, fed by the page's binding, holds the account the reference created.
-      if (planned.runId === "signup-base-completes-hosted-0")
+      // The host's ledger, fed by the page's binding, holds the account the reference created,
+      // and every write the page reported reached it.
+      if (planned.runId === "signup-base-completes-hosted-0") {
         expect(evidence.facts.submissions).toEqual([account]);
+        expect(evidence.facts.ledgerCalls).toEqual({
+          accepted: 1,
+          succeeded: 1,
+          rejected: 0,
+          inFlight: 0,
+        });
+      }
     }),
   );
 
@@ -162,6 +170,8 @@ for (const planned of hostedPlan(1, "browserbase").filter((entry) => entry.role 
         expect(evidence.facts.cleanupReceipt).toMatchObject({ remote: "confirmed" });
         expect(fixture.releaseIds).toHaveLength(1);
         expect(JSON.stringify(evidence)).not.toContain(fixture.releaseIds[0]);
+        expect(JSON.stringify(evidence)).not.toContain("project-1");
+        expect(evidence.facts.ledgerCalls).toMatchObject({ rejected: 0, inFlight: 0 });
       }),
     ),
   );

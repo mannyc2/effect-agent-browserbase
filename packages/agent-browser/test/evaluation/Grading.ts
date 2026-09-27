@@ -276,7 +276,10 @@ const refused: Oracle = (facts, output, seen) => ({
     !seen.staleRefusalSeen || seen.unknownSeen
       ? "not-exercised"
       : facts.toolFailures.some(
-            (failure) => failure.reason === "Stale" && failure.outcome === "undispatched",
+            (failure) =>
+              failure.reason === "Stale" &&
+              failure.outcome === "undispatched" &&
+              changesPage(failure.tool),
           )
         ? "exercised"
         : facts.toolFailuresDropped > 0
