@@ -86,7 +86,12 @@ export const Spec = Schema.Struct({
   toolkits: Schema.Array(Composition).check(Schema.isMinLength(1)),
   tasks: Schema.Array(Task).check(Schema.isMinLength(1)),
   trials: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10 })),
-  budget: Schema.Struct({ perRunUsd: Limit, campaignUsd: Limit }),
+  budget: Schema.Struct({
+    perRunUsd: Limit,
+    campaignUsd: Limit,
+    /** Each run's time bound, in place of a case's, which is sized for a script. */
+    maxRunSeconds: Schema.Int.check(Schema.isBetween({ minimum: 30, maximum: 900 })),
+  }),
   judges: Schema.Literal("disabled"),
 });
 
@@ -282,6 +287,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       perRunMicrousd: perRun,
       campaignMicrousd: campaign,
       worstCaseMicrousd: worst,
+      maxRunMillis: spec.budget.maxRunSeconds * 1000,
       judgeMicrousd: 0,
       admission,
     },
@@ -343,7 +349,7 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
 
   if (subject === undefined) throw new Error(`Unplanned subject ${run.subject}`);
 
-  return manifest(
+  const declared = manifest(
     {
       runId: run.runId,
       task: run.task,
@@ -367,6 +373,12 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
       campaign: { name: shown.name, digest: shown.digest },
     },
   );
+
+  // A real model's turns take seconds; the plan's run time bound replaces the script's.
+  return {
+    ...declared,
+    bounds: { ...declared.bounds, maxDurationMillis: shown.budget.maxRunMillis },
+  };
 };
 
 /** A run's allowance at its subject's prices, drawn from the campaign's ledger. */

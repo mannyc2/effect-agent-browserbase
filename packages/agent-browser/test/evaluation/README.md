@@ -277,7 +277,7 @@ and spend a campaign may use.
   "toolkits": ["base", "observed"],
   "tasks": ["signup", "lost-acknowledgement", "rerendered-submit", "hostile-receipt", "reading"],
   "trials": 3,
-  "budget": { "perRunUsd": 0.5, "campaignUsd": 30 },
+  "budget": { "perRunUsd": 0.5, "campaignUsd": 30, "maxRunSeconds": 180 },
   "judges": "disabled"
 }
 ```
@@ -293,8 +293,10 @@ EFFECT_AGENT_BROWSER_EVALUATION_LIVE=1 OPENROUTER_API_KEY=... \
 nothing. It prints every run in order (trial, then task, toolkit and model, so
 each model runs the same case back to back), each model's settings and integer
 micro-dollar rates with their source and date, each case's goal, bounds,
-revision and split, the per-run and campaign limits with the worst case, and a
-SHA-256 digest of all of it. It refuses, rather than truncates, a plan it cannot
+revision and split, the per-run and campaign limits with the worst case, the run
+time bound, and a SHA-256 digest of all of it. `maxRunSeconds` replaces a case's
+own duration bound, which is sized for a script's milliseconds per turn, not a
+real model's seconds. It refuses, rather than truncates, a plan it cannot
 bound:
 
 - **Browserbase:** a hosted browser cannot reach the loopback fixture these

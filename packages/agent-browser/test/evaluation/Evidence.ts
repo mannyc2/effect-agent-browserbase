@@ -287,11 +287,20 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
 
 /**
- * A provider failure's reason tag and HTTP status, and its description for the operator's
- * console only: provider text never enters a record.
+ * Why a run failed, beyond its tag: a provider failure's reason and HTTP status, or the limit an
+ * agent policy stop names. The description is for the operator's console only: provider text
+ * never enters a record.
  */
 export const diagnose = (cause: Cause.Cause<unknown>) => {
-  const reason = record(record(Option.getOrUndefined(Cause.findErrorOption(cause)))?.reason);
+  const error = record(Option.getOrUndefined(Cause.findErrorOption(cause)));
+
+  if (error?._tag === "AgentPolicyError" && typeof error.limit === "string")
+    return {
+      reason: error.limit.slice(0, 64),
+      status: null,
+      description: typeof error.message === "string" ? error.message.slice(0, 800) : null,
+    };
+  const reason = record(error?.reason);
   const tag = reason?._tag;
 
   if (typeof tag !== "string") return undefined;

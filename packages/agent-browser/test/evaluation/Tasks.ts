@@ -297,7 +297,7 @@ const settle =
       }
       const tag = tagOf(exit.cause);
       const refused = tag === "AiError" && (journal.facts.usage?.refused ?? null) !== null;
-      const provider = tag === "AiError" && !refused ? diagnose(exit.cause) : undefined;
+      const diagnosis = refused ? undefined : diagnose(exit.cause);
 
       journal.facts = {
         ...journal.facts,
@@ -314,20 +314,21 @@ const settle =
                       ? "infrastructure"
                       : "agent",
               tag,
-              ...(provider === undefined
+              ...(diagnosis === undefined
                 ? {}
-                : { reason: provider.reason, status: provider.status }),
+                : { reason: diagnosis.reason, status: diagnosis.status }),
             },
       };
 
-      // The provider's own description goes to the operator's console, never to the record.
-      return provider === undefined
+      // The description goes to the operator's console, never to the record.
+      return diagnosis === undefined
         ? Effect.void
-        : Effect.logWarning("Provider request failed", {
+        : Effect.logWarning("Run failed", {
             run: journal.manifest.runId,
-            reason: provider.reason,
-            status: provider.status,
-            description: provider.description,
+            tag,
+            reason: diagnosis.reason,
+            status: diagnosis.status,
+            description: diagnosis.description,
           });
     });
 

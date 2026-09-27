@@ -57,7 +57,7 @@ const spec = {
   toolkits: ["base", "observed"],
   tasks: ["signup", "reading"],
   trials: 2,
-  budget: { perRunUsd: 0.25, campaignUsd: 4 },
+  budget: { perRunUsd: 0.25, campaignUsd: 4, maxRunSeconds: 180 },
   judges: "disabled",
 };
 
@@ -95,6 +95,8 @@ it.effect("a real-model plan shows its whole matrix and bounds before anything r
       perRunMicrousd: 250_000,
       campaignMicrousd: 4_000_000,
       worstCaseMicrousd: 4_000_000,
+      // A real model's turns take seconds, not a script's milliseconds.
+      maxRunMillis: 180_000,
     });
     expect(shown.subjects[0]).toMatchObject({
       id: "gpt",
@@ -116,16 +118,18 @@ it.effect("a real-model plan is refused, not truncated, when it cannot be bounde
   Effect.gen(function* () {
     expect(yield* reason(plan({ ...spec, backends: ["chromium", "browserbase"] }))).toBe("backend");
     expect(yield* reason(plan({ ...spec, tasks: ["signup", "cancelled-mutation"] }))).toBe("task");
-    expect(yield* reason(plan({ ...spec, budget: { perRunUsd: 0.25, campaignUsd: 3.99 } }))).toBe(
-      "budget",
-    );
+    expect(
+      yield* reason(
+        plan({ ...spec, budget: { perRunUsd: 0.25, campaignUsd: 3.99, maxRunSeconds: 180 } }),
+      ),
+    ).toBe("budget");
     expect(
       yield* reason(
         plan({
           ...spec,
           tasks: ["signup", "reading", "lost-acknowledgement", "hostile-receipt"],
           trials: 8,
-          budget: { perRunUsd: 0.25, campaignUsd: 100 },
+          budget: { perRunUsd: 0.25, campaignUsd: 100, maxRunSeconds: 180 },
         }),
       ),
     ).toBe("runs");
@@ -624,6 +628,7 @@ it.effect("a measured run records sanitized model-boundary evidence and its sett
         rateRetrieved: rates.retrieved,
       },
     });
+    expect(evidence.manifest.bounds.maxDurationMillis).toBe(180_000);
     expect(evidence.manifest).toMatchObject({
       provider: "openai",
       model: "gpt-test",
@@ -698,7 +703,7 @@ it.effect("a request the run cannot afford is refused before it is sent", () =>
           },
         },
       ],
-      budget: { perRunUsd: 0.02, campaignUsd: 0.02 },
+      budget: { perRunUsd: 0.02, campaignUsd: 0.02, maxRunSeconds: 180 },
     });
 
     const transport = openAiWire([
