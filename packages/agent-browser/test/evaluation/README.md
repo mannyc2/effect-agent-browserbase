@@ -6,7 +6,7 @@ contract and browser integration behavior and calibrate the deterministic
 oracles against known-bad policies; they are not a real-model benchmark. A
 guarded [real-model campaign](#real-model-campaigns) runs the same cases, oracles
 and records with a real model, under spend bounds admitted before every request.
-No real model has been run through it yet.
+One owner-authorized pilot has run through it, with two cheap models.
 
 From a freshly bootstrapped workspace, with the pinned runtimes and Chromium
 installed, run these commands in `packages/agent-browser`:
@@ -116,7 +116,8 @@ Each case records a revision and a split. `tuning` cases may shape Tools,
 instructions and prompts. `held-out` results must not. A held-out case whose
 results do shape them is re-declared `tuning` at a new revision, and a fresh case
 replaces it. The two held-out cases have been run only with these scripted
-policies; no real model has been evaluated on either split. The four ToolSite
+policies and in that one pilot, whose results have informed no Tool, instruction or
+prompt change. The four ToolSite
 cases are at revision 2: the agent's input now names the fixture's start
 address after the goal, which a real model needs and a script never did.
 
@@ -418,13 +419,14 @@ licenses remain unqualified; framework licenses alone do not qualify a dataset.
 
 No paid baseline, two-model comparison, uncertainty estimate, framework ranking,
 held-out task generalization, prompt-injection immunity or calibrated judge score
-is claimed. The campaign command has run only against scripted HTTP; no real
-model, credential or paid request has been used, so neither the providers' real
-streams nor the byte bound has met a real tokenizer. Browserbase campaigns need a
+is claimed. One owner-authorized pilot has run: two cheap models through
+OpenRouter, five cases, one trial each, recorded in `docs/STATUS.md`. That shows
+the entry point working against real providers, and nothing about how the
+models compare. Browserbase campaigns need a
 fixture a hosted browser can reach, and none exists. Calibration here shows that each oracle separates the declared
 scripted behaviors; it says nothing about how often a real model behaves either
 way. Two held-out cases establish the split, not generalization: they share
-fixtures with the tuning cases and have seen no real model. The lost
+fixtures with the tuning cases and have seen only the one-trial pilot. The lost
 acknowledgement covers one form whose reply arrives after the deadline, and the
 known rejection one re-rendered submit. A late reply the owner observes and a
 read-back that the owner could permit remain untested, so no claim is yet

@@ -501,5 +501,5 @@ need no model calls. These scripted cases establish integration contracts. A
 guarded campaign command runs the same cases with OpenAI or Anthropic models: its
 dry run shows the whole matrix and spend bounds, and a live run needs an opt-in,
 the approved plan digest and credentials, and reserves each request's worst-case
-cost before sending it. No real model has been run with it; paid comparisons for
-#93 remain separately authorized work.
+cost before sending it. One owner-authorized pilot has run two cheap models
+through it, once per case; comparisons for #93 remain separately authorized work.
