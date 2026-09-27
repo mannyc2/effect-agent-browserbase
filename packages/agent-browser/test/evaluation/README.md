@@ -209,7 +209,8 @@ choice, response format and incremental fields. Response records contain the
 stream parts actually emitted. AgentRuntime's `onHistory` captures projected
 tool-visible results even when no further model request occurs. Host facts stay
 separate from the model boundary: finish reason and exhausted limit, failure
-category and tag (never a message or cause), owner phase and action count, the
+category and tag, with a provider failure's reason and HTTP status or the limit a
+policy stop names (never a message or cause), owner phase and action count, the
 original browser failures before model projection with the number the host
 evicted, the ledger and its forbidden writes, and the cleanup receipt and checked
 close. A report marks
@@ -313,8 +314,12 @@ bound:
 Each model names its `provider`, whose request format it uses, and its `gateway`:
 `direct` to the provider's own API with `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`,
 or `openrouter`, which serves both formats under `OPENROUTER_API_KEY`, names
-models by vendor (`openai/...`, `anthropic/...`) and prices by its own list. A
-variant (`:free`, `:batch`) routes and prices differently, so it is refused.
+models by vendor (`openai/...`, `anthropic/...`) and prices by its own list.
+Each request sent through OpenRouter pins it to the vendor's own endpoint with no
+fallback (`provider: { only: [vendor], allow_fallbacks: false }`), so the
+vendor's listed rates are the ones charged. A variant (`:free`, `:batch`) routes
+and prices differently, so it is refused. A key with its own provider keys
+(BYOK) is billed on those accounts' terms instead, and is not supported.
 
 `backends` names the browsers a campaign may use; each case still runs on its
 own backend, which the plan shows per run, so `reading` runs on the scripted
@@ -325,8 +330,13 @@ printed for the same specification, and each credential the plan names, read
 through Effect `Config` and kept redacted. All three are checked before its directory exists, a runner is
 loaded, a browser starts or a model is called; a refusal never prints the
 digest, so approving means having read the plan. Runs are serial, in the plan's
-order, over local Chromium or the scripted owner, with the case bounds of a
-scripted run.
+order, over local Chromium or the scripted owner, with each case's bounds except
+its time bound, which is `maxRunSeconds`.
+
+The CLI logs warnings and above to stderr, apart from the JSON it prints. That
+includes a failed run's provider description and response body, and the
+runtime's per-call warnings, which name provider-issued call identifiers.
+Stderr is the operator's and must not be archived with the records.
 
 **Spend admission.** Each provider request is checked against the contract it is
 priced under, then reserved before it is sent, and the transport refuses any
@@ -422,8 +432,10 @@ held-out task generalization, prompt-injection immunity or calibrated judge scor
 is claimed. One owner-authorized pilot has run: two cheap models through
 OpenRouter, five cases, one trial each, recorded in `docs/STATUS.md`. That shows
 the entry point working against real providers, and nothing about how the
-models compare. Browserbase campaigns need a
-fixture a hosted browser can reach, and none exists. Calibration here shows that each oracle separates the declared
+models compare. The direct gateways, with an explicit tier and each provider's
+own authentication, have never met a real provider, and neither has the
+Anthropic format's vendor pinning through OpenRouter. Browserbase campaigns need
+a fixture a hosted browser can reach, and none exists. Calibration here shows that each oracle separates the declared
 scripted behaviors; it says nothing about how often a real model behaves either
 way. Two held-out cases establish the split, not generalization: they share
 fixtures with the tuning cases and have seen only the one-trial pilot. The lost
