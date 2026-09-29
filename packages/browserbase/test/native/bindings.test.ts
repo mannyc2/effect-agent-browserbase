@@ -222,6 +222,8 @@ it.live(
             origins: [first],
             input: authorizedInput,
             output: Schema.String,
+            // Regression for ecbb6c8: an unauthorized document must not apply fail-session.
+            failureMode: "fail-session",
             handle: ({ label }) =>
               Effect.sync(() => {
                 privateCalls.push(label);

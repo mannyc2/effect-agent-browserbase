@@ -363,6 +363,19 @@ export const makeNativeBindings = (
           });
         };
 
+        // Reject authorization failures at the native document boundary. In particular, do not
+        // submit them to fail-session supervision: an untrusted origin has no authority to fault
+        // the owner merely because a context-wide init script made the callable name visible.
+        if (!binding.origins.includes(document.origin)) {
+          void reply({ ok: false })
+            .catch(() => {})
+            .finally(() => {
+              replies--;
+            });
+
+          return;
+        }
+
         // Runtime admission is synchronous before a consumer fiber or native validation starts.
         // Both branches stay observed even when the source document disappears while settling.
         void binding
