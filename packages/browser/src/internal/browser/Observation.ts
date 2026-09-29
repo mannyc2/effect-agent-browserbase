@@ -199,21 +199,44 @@ const privateState = (node: Element): string | null => {
   if (!node.isConnected || node.ownerDocument !== document) return null;
   const role = node.getAttribute("role");
 
+  const encode = (
+    state: readonly [string, string | boolean | ReadonlyArray<string>] | readonly [string],
+  ): string | null => {
+    // Form input is capped at 64 KiB. Bound both page-controlled source text and its escaped JSON
+    // representation before Playwright copies the state into the host process.
+    const maximumSourceCharacters = 65_536;
+    const maximumEncodedCharacters = 400_000;
+    const values = state.flat();
+    let sourceCharacters = 0;
+
+    for (const value of values) {
+      if (typeof value !== "string") continue;
+      sourceCharacters += value.length;
+      if (sourceCharacters > maximumSourceCharacters) return null;
+    }
+    const encoded = JSON.stringify(state);
+
+    return encoded.length <= maximumEncodedCharacters ? encoded : null;
+  };
+
   if (node instanceof HTMLInputElement && (node.type === "checkbox" || node.type === "radio"))
-    return JSON.stringify(["checked", node.checked]);
+    return encode(["checked", node.checked]);
   if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)
-    return JSON.stringify(["value", node.value]);
-  if (node instanceof HTMLSelectElement)
-    return JSON.stringify(["options", Array.from(node.selectedOptions, (option) => option.value)]);
+    return encode(["value", node.value]);
+  if (node instanceof HTMLSelectElement) {
+    if (node.selectedOptions.length > 64) return null;
+
+    return encode(["options", Array.from(node.selectedOptions, (option) => option.value)]);
+  }
   if (
     role !== null &&
     ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)
   )
-    return JSON.stringify(["checked", node.getAttribute("aria-checked") === "true"]);
+    return encode(["checked", node.getAttribute("aria-checked") === "true"]);
   if (node instanceof HTMLElement && node.isContentEditable)
-    return JSON.stringify(["text", node.textContent ?? ""]);
+    return encode(["text", node.textContent ?? ""]);
 
-  return JSON.stringify(["other"]);
+  return encode(["other"]);
 };
 
 /**

@@ -50,7 +50,7 @@ const form = `<!doctype html><title>Form steps</title>
 </script>`;
 
 /** Page behaviour a test installs after loading the form and before observing it. */
-type Behaviour = "rerender" | "reset" | "mask" | "enable" | "refuse";
+type Behaviour = "rerender" | "reset" | "mask" | "oversize" | "enable" | "refuse";
 
 const install = (page: Page, behaviour: Behaviour) =>
   Effect.promise(() =>
@@ -75,6 +75,9 @@ const install = (page: Page, behaviour: Behaviour) =>
                 ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
                 : digits;
           });
+          break;
+        case "oversize":
+          $("email").addEventListener("input", () => ($("email").value = "x".repeat(1_000_000)));
           break;
         case "enable":
           ($("submit") as unknown as HTMLButtonElement).disabled = true;
@@ -334,6 +337,33 @@ it.live("verification stops a submit after an asynchronous reset and passes a ma
         }),
       ).toMatchObject({ submitted: true });
       expect(yield* events(reset.page)).toContain("phone=(555) 123-4567");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("form state reads reject oversized page-controlled values", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const oversized = yield* fixture("oversize");
+      const observed = yield* oversized.session.observe({ maxControls: 64 });
+
+      expect(
+        yield* oversized.session.fillForm({
+          observationId: observed.observationId,
+          fields: [text(observed, "Email", "a@b.test")],
+          submit: id(observed, "Sign up"),
+        }),
+      ).toMatchObject({
+        fields: [{ status: "set" }],
+        submitted: false,
+        stopped: {
+          stage: "verify",
+          elementId: id(observed, "Email"),
+          error: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+        },
+      });
+      expect(yield* events(oversized.page)).toBe("");
+      expect((yield* oversized.session.status).phase).toBe("open");
     }),
   ).pipe(Effect.provide(layer)),
 );
