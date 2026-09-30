@@ -4,7 +4,13 @@ import { BrowserError, BrowserOperation, Reasons } from "effect-browser/errors";
 
 import { fromNativeAttempt } from "../src/internal/browser/Binding.ts";
 import type { Driver } from "../src/internal/browser/Driver.ts";
-import { failure, publicError, safeDecode, sanitize } from "../src/internal/browser/NativeCalls.ts";
+import {
+  failure,
+  nativeDetail,
+  publicError,
+  safeDecode,
+  sanitize,
+} from "../src/internal/browser/NativeCalls.ts";
 import { makeOwner, native } from "../src/internal/browser/Owner.ts";
 
 const limits = {
@@ -99,6 +105,45 @@ it("no raw native exception crosses the private boundary, and a typed one passes
   );
 });
 
+it("a raw native failure keeps what the engine said, cut to one line and to origins", async () => {
+  const navigation = new Error(
+    [
+      "page.goto: net::ERR_CONNECTION_REFUSED at https://user:pass@shop.test:8443/reset/TOKEN?key=SECRET",
+      "Call log:",
+      '\u001b[2m  - navigating to "https://shop.test/reset/TOKEN?key=SECRET"\u001b[22m',
+    ].join("\n"),
+  );
+
+  await expect(sanitize(() => Promise.reject(navigation))).rejects.toMatchObject({
+    _tag: "NativeFailure",
+    reason: {
+      _tag: "Provider",
+      detail: "page.goto: net::ERR_CONNECTION_REFUSED at https://shop.test:8443/…",
+    },
+  });
+  // A DevTools endpoint's browser id is a capability to drive the browser.
+  expect(
+    nativeDetail(
+      new Error(
+        "\u001b[2mbrowserType.connectOverCDP: WebSocket error: ws://127.0.0.1:9222/devtools/browser/GUID closed\u001b[22m",
+      ),
+    ),
+  ).toBe("browserType.connectOverCDP: WebSocket error: ws://127.0.0.1:9222/… closed");
+  expect(
+    nativeDetail(new Error("cdpSession.send: Protocol error (Target.createTarget): nope")),
+  ).toBe("cdpSession.send: Protocol error (Target.createTarget): nope");
+  expect(nativeDetail(new Error("x".repeat(2000)))).toHaveLength(512);
+  // Only an engine's own error speaks; an arbitrary value, or a blank message, says nothing.
+  expect(nativeDetail({ message: "PRIVATE" })).toBeUndefined();
+  expect(nativeDetail(new Error("\n"))).toBeUndefined();
+  await expect(sanitize(() => Promise.reject(new Error("")))).rejects.toMatchObject({
+    reason: { _tag: "Provider" },
+  });
+  await expect(sanitize(() => Promise.reject(new Error("")))).rejects.not.toHaveProperty(
+    "reason.detail",
+  );
+});
+
 it.effect("the owner stamps the admitted operation on whatever the native step raised", () =>
   Effect.gen(function* () {
     const owner = yield* makeOwner(limits);
@@ -136,7 +181,7 @@ it.effect("the owner stamps the admitted operation on whatever the native step r
 
     expect(lost).toMatchObject({
       operation: "navigate",
-      reason: { _tag: "Provider" },
+      reason: { _tag: "Provider", detail: "PRIVATE" },
       outcome: "unknown",
     });
   }),

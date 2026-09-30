@@ -9,7 +9,7 @@ import {
 } from "../../BrowserData.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
-import { publicError } from "./NativeCalls.ts";
+import { providerReason, publicError } from "./NativeCalls.ts";
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
@@ -428,10 +428,25 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly timeoutMillis?: number;
       /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
       readonly waitUntil?: number;
+      /**
+       * Wait for the permit rather than refuse `busy`, within the one deadline the operation
+       * would have had from the moment it was asked for.
+       */
+      readonly queue?: boolean;
     } = {},
   ): Effect.Effect<A, E | BrowserError, R> =>
     Effect.suspend(() => {
       let admitted: Ticket | undefined;
+
+      const waitUntil =
+        options.waitUntil ??
+        (options.queue === true
+          ? Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 +
+            Math.min(
+              options.timeoutMillis ?? limits.actionTimeoutMillis,
+              limits.actionTimeoutMillis,
+            )
+          : undefined);
 
       const work = Effect.gen(function* () {
         holdingPermit = true;
@@ -461,7 +476,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         }
 
         const deadline = Math.min(
-          options.waitUntil ?? now + limits.actionTimeoutMillis,
+          waitUntil ?? now + limits.actionTimeoutMillis,
           options.timeoutMillis === undefined
             ? Number.POSITIVE_INFINITY
             : now + options.timeoutMillis,
@@ -606,16 +621,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         ),
       );
 
-      if (options.waitUntil !== undefined)
-        return within(
-          semaphore.withPermits(1)(work),
-          Math.min(options.waitUntil, lifetimeDeadline),
-          () =>
-            BrowserError.make({
-              operation,
-              reason: Reasons.Timeout.make({}),
-              outcome: admitted?.dispatched === true ? "unknown" : "undispatched",
-            }),
+      if (waitUntil !== undefined)
+        return within(semaphore.withPermits(1)(work), Math.min(waitUntil, lifetimeDeadline), () =>
+          BrowserError.make({
+            operation,
+            reason: Reasons.Timeout.make({}),
+            outcome: admitted?.dispatched === true ? "unknown" : "undispatched",
+          }),
         );
 
       return semaphore
@@ -711,8 +723,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 export type Owner = Effect.Success<ReturnType<typeof makeOwner>>;
 
 /** Without a native answer, whether the step was sent is all the owner knows about it. */
-const unsettled = (ticket: Ticket): Pick<BrowserError, "reason" | "outcome"> => ({
-  reason: Reasons.Provider.make({}),
+const unsettled = (ticket: Ticket, error: unknown): Pick<BrowserError, "reason" | "outcome"> => ({
+  reason: providerReason(error),
   outcome: ticket.dispatched ? "unknown" : "undispatched",
 });
 
@@ -757,13 +769,13 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
         (error: unknown) => {
           if (!done) {
             cleanup();
-            resume(Effect.fail(publicError(error, operation, unsettled(ticket))));
+            resume(Effect.fail(publicError(error, operation, unsettled(ticket, error))));
           }
         },
       );
     } catch (error) {
       cleanup();
-      resume(Effect.fail(publicError(error, operation, unsettled(ticket))));
+      resume(Effect.fail(publicError(error, operation, unsettled(ticket, error))));
     }
 
     return Effect.sync(cleanup);

@@ -1150,6 +1150,10 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       },
       selectedTargetId: async () => selectedPage().targetId,
       listPages: (ticket) => attempt("list-pages", ticket, {}, async () => openPages().map(info)),
+      describePage: (page, ticket) =>
+        attempt("describe-page", ticket, { pageId: page.pageId }, async () =>
+          info(pageOf(page, "describe-page")),
+        ),
       resolvePage: async (page, ticket) => {
         ticket.check();
         const target = pageOf(page, "target");

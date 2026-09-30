@@ -783,6 +783,83 @@ it.effect("pages can be created, pinned, selected and closed", () =>
   ),
 );
 
+it.effect("opening a page waits its turn behind another operation rather than refusing busy", () =>
+  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+    Effect.gen(function* () {
+      const gate = yield* browser.control.gate;
+
+      yield* browser.control.next("read-text", { _tag: "Hold", gate, dispatched: false });
+      const reading = yield* browser.readText({}).pipe(Effect.forkScoped);
+
+      yield* gate.reached;
+      // Everything else is still refused while the read holds the owner.
+      expect(yield* browser.pages.pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Busy" },
+        outcome: "undispatched",
+      });
+      const opening = yield* browser.createPage.pipe(Effect.forkScoped);
+
+      yield* TestClock.adjust("1 second");
+      expect(opening.pollUnsafe()).toBeUndefined();
+      yield* gate.open;
+      expect((yield* Fiber.join(reading)).text).toBe("Welcome. We use cookies.");
+      expect(yield* Fiber.join(opening)).toMatchObject({ selected: false });
+      expect(yield* browser.pages).toHaveLength(2);
+    }),
+  ),
+);
+
+it.effect("a page still waiting for its turn at its deadline opens nothing", () =>
+  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+    Effect.gen(function* () {
+      const gate = yield* browser.control.gate;
+
+      yield* browser.control.next("read-text", { _tag: "Hold", gate, dispatched: false });
+      const reading = yield* browser.readText({}).pipe(Effect.forkScoped);
+
+      yield* gate.reached;
+      const opening = yield* browser.createPage.pipe(Effect.forkScoped);
+
+      yield* TestClock.adjust("5 seconds");
+      expect(yield* Fiber.join(opening).pipe(Effect.flip)).toMatchObject({
+        operation: "new-page",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+      });
+      yield* gate.open;
+      yield* Fiber.join(reading).pipe(Effect.ignore);
+      expect(yield* browser.pages).toHaveLength(1);
+      expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+    }),
+  ),
+);
+
+it.effect("one page's address and title are read without reading any other page", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const created = yield* browser.createPage;
+
+      yield* (yield* browser.pinPage(created)).navigate({ url: `${origin}/?consent=1` });
+      const before = (yield* browser.control.calls).length;
+
+      expect(yield* browser.describePage(created)).toMatchObject({
+        pageId: created.pageId,
+        targetId: created.targetId,
+        url: `${origin}/?consent=1`,
+        selected: false,
+      });
+      expect((yield* browser.control.calls).slice(before)).toMatchObject([
+        { operation: "describe-page", pageId: created.pageId, dispatched: false },
+      ]);
+      yield* browser.closePage(created);
+      expect(yield* browser.describePage(created).pipe(Effect.flip)).toMatchObject({
+        operation: "describe-page",
+        outcome: "undispatched",
+      });
+    }),
+  ),
+);
+
 it.effect("an in-flight navigation can be watched, stopped, or time out under the test clock", () =>
   Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
     Effect.gen(function* () {

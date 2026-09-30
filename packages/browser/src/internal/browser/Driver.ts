@@ -218,6 +218,7 @@ export interface Driver {
   readonly selected: () => { readonly pageId: string; readonly frameId: string };
   readonly selectedTargetId: () => Promise<string>;
   readonly listPages: (ticket: Ticket) => Promise<ReadonlyArray<PageInfo>>;
+  readonly describePage: (page: PageInfo, ticket: Ticket) => Promise<PageInfo>;
   readonly resolvePage: (page: PageInfo, ticket: Ticket) => Promise<DriverTarget>;
   readonly selectPage: (page: PageInfo, ticket: Ticket) => Promise<void>;
   readonly newPage: (ticket: Ticket) => Promise<PageInfo>;

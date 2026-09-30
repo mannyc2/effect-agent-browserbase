@@ -53,6 +53,27 @@ export interface TargetHooks {
   readonly changed: (reason: "target-changed", scope: ObservationScope) => void;
 }
 
+/**
+ * Where the pages this driver opens come from. Chromium paints only the front tab of a window,
+ * so a screenshot of a tab behind it waits seconds for a compositor frame, or never gets one. A
+ * page in a window of its own is painted whether or not another page is in front.
+ */
+export interface Windows {
+  /**
+   * Asks the browser for a blank page in a new window, and returns its target id with the sizing
+   * of that window still in flight. Undefined when the browser refused the window, which means it
+   * created nothing: a tab is then the only page it offers.
+   */
+  readonly open: () => Promise<OpenedWindow | undefined>;
+}
+
+export interface OpenedWindow {
+  readonly targetId: string;
+  readonly sized: Promise<void>;
+  /** Closes the window's page by its target id, for a page this driver never adopted. */
+  readonly discard: () => Promise<void>;
+}
+
 interface ClientFrameNavigation {
   readonly newDocument?: unknown;
   readonly error?: unknown;
@@ -95,6 +116,7 @@ export const makeTargets = (
   connectionNamespace: string,
   closing: () => boolean,
   hooks: TargetHooks,
+  windows: Windows,
 ) => {
   const entries = new Map<string, Entry>();
   const byPage = new WeakMap<Page, Entry>();
@@ -109,6 +131,8 @@ export const makeTargets = (
     frameSerial = 0;
 
   let creatingPage = false;
+  // Told of every page registered while this driver opens one, since the event brings it here.
+  const arrivals = new Set<(entry: Entry) => void>();
 
   const epochOf = (frame: Frame): number => documentEpochs.get(frame) ?? 0;
 
@@ -130,6 +154,7 @@ export const makeTargets = (
     const entry: Entry = { id: `page-${connectionNamespace}-${++serial}`, page, off: [] };
 
     byPage.set(page, entry);
+    for (const arrived of arrivals) arrived(entry);
     if (entries.size >= options.maxPages) {
       hooks.overflow(entry);
 
@@ -276,6 +301,64 @@ export const makeTargets = (
 
   const urlOf = (frame: Frame) => safeDecode(URLText, frame.url());
 
+  /**
+   * Opens one page: in a window of its own when the browser opens one, else as a tab. The window's
+   * page arrives through the context's page event like any other, and its target id tells it
+   * apart from a popup arriving at the same time. It is registered, and sized, when this returns.
+   */
+  const open = async (signal: AbortSignal): Promise<Entry> => {
+    const arrived: Entry[] = [];
+    let wake = () => {};
+
+    const arrival = (entry: Entry) => {
+      arrived.push(entry);
+      wake();
+    };
+
+    const next = () =>
+      new Promise<void>((resolve, reject) => {
+        const abort = () => reject(failure(Reasons.Interrupted.make({}), "unknown"));
+
+        if (signal.aborted) {
+          abort();
+
+          return;
+        }
+        signal.addEventListener("abort", abort, { once: true });
+        wake = () => {
+          signal.removeEventListener("abort", abort);
+          resolve();
+        };
+      });
+
+    const adopt = async (created: string): Promise<Entry> => {
+      for (let index = 0; ; index++) {
+        while (arrived.length <= index) await next();
+        const candidate = arrived[index];
+
+        if (candidate !== undefined && (await targetId(candidate)) === created) return candidate;
+      }
+    };
+
+    arrivals.add(arrival);
+    try {
+      const opened = await windows.open();
+
+      if (opened === undefined) return register(await context.newPage());
+      try {
+        const [entry] = await Promise.all([adopt(opened.targetId), opened.sized]);
+
+        return entry;
+      } catch (error) {
+        // Whatever went wrong after the browser opened the window, that window is not kept.
+        await closeWithin(opened.discard).catch(() => {});
+        throw error;
+      }
+    } finally {
+      arrivals.delete(arrival);
+    }
+  };
+
   const selectedUrl = () => urlOf(selectedCurrent().frame);
   const url = (target?: DriverTarget) => urlOf(current(target).frame);
 
@@ -287,7 +370,7 @@ export const makeTargets = (
     if (options.newPage || entries.size === 0) {
       creatingPage = true;
       try {
-        selection.entry = register(await context.newPage());
+        selection.entry = await open(AbortSignal.timeout(15000));
       } finally {
         creatingPage = false;
       }
@@ -336,14 +419,12 @@ export const makeTargets = (
     });
   };
 
+  /** Each page's title is its own round trip, so they are read together rather than in turn. */
   const listPages = (ticket: Ticket) =>
     sanitize(async () => {
       ticket.check();
-      const output: PageInfo[] = [];
 
-      for (const entry of entries.values()) output.push(await pageInfo(entry, ticket));
-
-      return output;
+      return Promise.all([...entries.values()].map((entry) => pageInfo(entry, ticket)));
     });
 
   const explicitPage = async (page: PageInfo, ticket: Ticket): Promise<Entry> => {
@@ -360,6 +441,9 @@ export const makeTargets = (
 
     return entry;
   };
+
+  const describePage = (page: PageInfo, ticket: Ticket) =>
+    sanitize(async () => pageInfo(await explicitPage(page, ticket), ticket));
 
   const resolvePage = (page: PageInfo, ticket: Ticket) =>
     sanitize(async () => {
@@ -396,14 +480,12 @@ export const makeTargets = (
       let entry: Entry;
 
       try {
-        const page = await context.newPage();
+        entry = await open(ticket.signal);
 
         if (ticket.signal.aborted) {
-          await closeWithin(() => page.close()).catch(() => {});
+          await closeWithin(() => entry.page.close()).catch(() => {});
           ticket.check();
         }
-
-        entry = register(page);
       } finally {
         creatingPage = false;
       }
@@ -495,6 +577,7 @@ export const makeTargets = (
     selected,
     selectedTargetId,
     listPages,
+    describePage,
     resolvePage,
     selectPage,
     newPage,

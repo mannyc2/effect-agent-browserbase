@@ -284,7 +284,8 @@ it.effect(
         expect(Exit.isFailure(first)).toBe(true);
         expect(second).toEqual(first);
         expect(sends).toBe(1);
-        expect(JSON.stringify(first)).not.toContain("PRIVATE-ACKNOWLEDGEMENT-FAILURE");
+        // What the engine said about the failed acknowledgement stays with the host.
+        expect(JSON.stringify(first)).toContain('"detail":"PRIVATE-ACKNOWLEDGEMENT-FAILURE"');
         expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },

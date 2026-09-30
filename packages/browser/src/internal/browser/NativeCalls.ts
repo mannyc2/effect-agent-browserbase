@@ -52,9 +52,51 @@ export const safeDecode = <A>(codec: Schema.Codec<A, unknown, never, never>, raw
   return decoded.value;
 };
 
+// oxlint-disable-next-line no-control-regex -- matches the terminal escape codes Playwright colours its call log with
+const escapes = /\u001b\[[0-9;]*m/g;
+
+const addresses = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]*/gi;
+
 /**
- * No raw exception from Playwright crosses this private boundary. A ticket's own fence is
- * already a public error and passes through with the operation the owner gave it.
+ * An address keeps only its origin: a path, query or user name can carry a credential, such as
+ * a DevTools endpoint's browser id or a provider's signed connection URL.
+ */
+const originOf = (address: string): string => {
+  try {
+    const parsed = new URL(address);
+
+    return parsed.host === "" ? `${parsed.protocol}…` : `${parsed.protocol}//${parsed.host}/…`;
+  } catch {
+    return "…";
+  }
+};
+
+/**
+ * The first line of what the engine said, which names the call and its reason. Playwright's
+ * call log below it repeats addresses, selectors and endpoints, so it never leaves.
+ */
+export const nativeDetail = (error: unknown): string | undefined => {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+
+  const line = message?.replace(escapes, "").split("\n", 1)[0]?.trim();
+
+  if (line === undefined || line === "") return undefined;
+
+  return line.replace(addresses, originOf).slice(0, 512);
+};
+
+/** A raw failure the engine raised, with what it said about it. */
+export const providerReason = (error: unknown) => {
+  const detail = nativeDetail(error);
+
+  return Reasons.Provider.make(detail === undefined ? {} : { detail });
+};
+
+/**
+ * No raw exception from Playwright crosses this private boundary: only its sanitized first line
+ * does, as the provider reason's detail. A ticket's own fence is already a public error and
+ * passes through with the operation the owner gave it.
  */
 export const sanitize = <A>(action: () => Promise<A>): Promise<A> =>
   Promise.resolve()
@@ -62,7 +104,7 @@ export const sanitize = <A>(action: () => Promise<A>): Promise<A> =>
     .catch((error: unknown) => {
       throw Schema.is(BrowserError)(error) || Schema.is(NativeFailure)(error)
         ? error
-        : failure(Reasons.Provider.make({}));
+        : failure(providerReason(error));
     });
 
 export const closeWithin = async (

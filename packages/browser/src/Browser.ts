@@ -212,6 +212,12 @@ export interface BrowserSession<E = never> extends TargetOperations {
     options?: FillFormOptions,
   ) => Effect.Effect<FillFormResult, BrowserError>;
   readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
+  /**
+   * One exact page's address and title as they are now, and whether it is selected, without
+   * reading every other page as `pages` does. An identity that no longer names an open page
+   * fails undispatched.
+   */
+  readonly describePage: (page: PageInfo) => Effect.Effect<PageInfo, BrowserError>;
   readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
   /** List frames on one exact page without selecting it. */
   readonly framesOf: (page: PageInfo) => Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
@@ -224,7 +230,12 @@ export interface BrowserSession<E = never> extends TargetOperations {
   ) => Effect.Effect<PinnedTarget, BrowserError>;
   readonly selectPage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
   readonly selectFrame: (frameId: string) => Effect.Effect<void, BrowserError>;
-  /** Create a tab without selecting it and return that exact tab's checked identity. */
+  /**
+   * Open a page in its own window, sized like the others, without selecting it, and return that
+   * exact page's checked identity. Chromium paints every window, so any page can be pictured
+   * and read at speed, not only the one in front. It waits its turn behind other operations,
+   * within its action timeout, rather than failing `busy`.
+   */
   readonly createPage: Effect.Effect<PageInfo, BrowserError>;
   readonly closePage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
   readonly resizeViewport: (viewport: Viewport) => Effect.Effect<void, BrowserError>;

@@ -778,6 +778,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly charge?: boolean | "host-read";
       /** Opening or closing a tab is independent of the selected page's document. */
       readonly anyPage?: boolean;
+      /** Waits its turn for the permit instead of refusing `busy`. */
+      readonly queue?: boolean;
       readonly mutationScope?: () => ObservationScope;
       readonly preflight?: Effect.Effect<void, BrowserError>;
     } = {},
@@ -1640,6 +1642,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     pages: nativeOperation("list-pages", (driver, ticket) => driver.listPages(ticket), {
       charge: false,
     }),
+    describePage: (page: PageInfo) =>
+      nativeOperation("describe-page", (driver, ticket) => driver.describePage(page, ticket), {
+        charge: false,
+      }),
     frames: nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket), {
       charge: false,
     }),
@@ -1668,12 +1674,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         },
         { charge: false },
       ),
+    /** No other page's work conflicts with opening one, so it waits its turn rather than refusing. */
     createPage: () =>
       nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), {
         mutation: true,
         mutationScope: () => "none",
         charge: false,
         anyPage: true,
+        queue: true,
       }),
     closePage: (page: PageInfo) =>
       nativeOperation("close-page", (driver, ticket) => driver.closePage(page, ticket), {
