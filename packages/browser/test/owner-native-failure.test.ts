@@ -220,3 +220,46 @@ it.effect("a refused connection keeps the reason the native attempt gave", () =>
     });
   }),
 );
+
+it.effect("a contained page takes the navigation its own operation reserved with it", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner(limits);
+
+    owner.state.phase = "open";
+
+    // The navigation was dispatched and reserved, and then the operation gave up on it.
+    const abandoned = yield* owner
+      .guard(
+        "navigate",
+        (ticket) =>
+          native("navigate", ticket, async () => {
+            ticket.dispatch();
+            owner.reserve("page-b");
+            throw new Error("page.goto: Target crashed");
+          }),
+        {
+          mutation: true,
+          contain: () => ({ pageId: "page-b", close: Effect.succeed(true) }),
+        },
+      )
+      .pipe(Effect.flip);
+
+    expect(abandoned).toMatchObject({ operation: "navigate", outcome: "unknown" });
+    expect(owner.reserved("page-b")).toBe(false);
+    expect(yield* owner.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+
+    // A page that does not close fences, as every unknown outcome did before.
+    yield* owner
+      .guard(
+        "click",
+        (ticket) =>
+          native("click", ticket, async () => {
+            ticket.dispatch();
+            throw new Error("elementHandle.click: Target crashed");
+          }),
+        { mutation: true, contain: () => ({ pageId: "page-c", close: Effect.succeed(false) }) },
+      )
+      .pipe(Effect.flip);
+    expect(yield* owner.status).toMatchObject({ phase: "uncertain", unresolvedDispatch: true });
+  }),
+);

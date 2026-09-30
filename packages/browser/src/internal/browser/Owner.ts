@@ -434,11 +434,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
        */
       readonly queue?: boolean;
       /**
-       * Where this operation's own page can absorb an unknown outcome: asks the browser to close
-       * that page once the outcome is unknown, and says whether it did. Undefined, or a page
-       * that did not close, fences.
+       * Where this operation's own page can absorb an unknown outcome: the page, and a request
+       * that the browser close it, made once the outcome is unknown, which says whether it did.
+       * Undefined, or a page that did not close, fences.
        */
-      readonly contain?: () => Effect.Effect<boolean> | undefined;
+      readonly contain?: () =>
+        | { readonly pageId: string; readonly close: Effect.Effect<boolean> }
+        | undefined;
     } = {},
   ): Effect.Effect<A, E | BrowserError, R> =>
     Effect.suspend(() => {
@@ -589,11 +591,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           Effect.suspend(() => {
             if (!abandoned) return Effect.void;
             abandoned = false;
-            const closing = current() ? options.contain?.() : undefined;
+            const page = current() ? options.contain?.() : undefined;
 
-            if (closing === undefined) return Effect.sync(() => fence("uncertain", "uncertain"));
+            if (page === undefined) return Effect.sync(() => fence("uncertain", "uncertain"));
 
-            return closing.pipe(
+            return page.close.pipe(
               Effect.map((closed) => {
                 if (!closed || !current()) {
                   fence("uncertain", "uncertain");
@@ -601,6 +603,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                   return;
                 }
                 unresolved.delete(controller);
+                // A navigation this operation dispatched, and reserved, ended with its page.
+                const reservation = reservations.get(page.pageId);
+
+                if (reservation !== undefined) {
+                  reservations.delete(page.pageId);
+                  unresolved.delete(reservation);
+                  reservation.abort();
+                }
                 record("page-contained", "confirmed");
               }),
             );

@@ -33,7 +33,10 @@ const CreatedTarget = Schema.Struct({ targetId: Identifier });
  * the browser's answer that it did not do what was asked; anything else leaves that unknown.
  */
 const refusedBy = (method: string, error: unknown): boolean =>
-  error instanceof Error && error.message.includes(`Protocol error (${method})`);
+  error instanceof Error &&
+  error.message.includes(`Protocol error (${method})`) &&
+  // Playwright's own rejection of a call still pending when its session closed.
+  !error.message.includes("session closed");
 
 /**
  * Connects to an already validated or host-resolved CDP endpoint and builds the one driver. The
@@ -134,6 +137,12 @@ export const makePlaywrightDriver = async (
           });
         if (initialized) initialization.attachPage(entry.page);
         if (initialized && !created && options.popupPolicy === "pause") events.pause("popup");
+      },
+      external: (entry) => {
+        if (!initialized) return;
+        if (options.popupPolicy === "close")
+          void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
+        else if (options.popupPolicy === "pause") events.pause("popup");
       },
       overflow: (entry) => {
         if (options.popupPolicy === "close")

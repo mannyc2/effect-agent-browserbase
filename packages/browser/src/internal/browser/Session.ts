@@ -763,26 +763,29 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
    * go on working. The selected page's own outcome still fences, since direct operations follow
    * it and nothing could be selected in its place.
    */
-  const containment = (pageId: string): Effect.Effect<boolean> | undefined => {
+  const containment = (pageId: string) => {
     const current = driver;
 
     if (current === undefined) return undefined;
-    let selected: string | undefined;
+    let selected: string;
 
     try {
       selected = current.selected().pageId;
     } catch {
-      // Nothing is selected: the page is not the selected one.
+      // Without a selection it can read, the owner cannot tell this page is not the selected one.
+      return undefined;
     }
+    if (selected === pageId) return undefined;
 
-    return selected === pageId
-      ? undefined
-      : Effect.promise(() =>
-          current.containPage(pageId).then(
-            () => true,
-            () => false,
-          ),
-        );
+    return {
+      pageId,
+      close: Effect.promise(() =>
+        current.containPage(pageId).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    };
   };
 
   const waitFree = (operation: BrowserOperation, pageId?: string) =>

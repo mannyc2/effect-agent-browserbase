@@ -36,6 +36,11 @@ export interface Selection {
 export interface TargetHooks {
   /** A tracked page was registered; `created` while this driver is opening the page itself. */
   readonly opened: (entry: Entry, created: boolean) => void;
+  /**
+   * A page registered while this driver was opening one, which turned out to be another page:
+   * a popup, say. It is now treated as any page from outside is.
+   */
+  readonly external: (entry: Entry) => void;
   /** An excess page is never admitted to this registry; its configured policy owns cleanup. */
   readonly overflow: (entry: Entry) => void;
   /** Before a closed page leaves the registry. */
@@ -335,23 +340,43 @@ export const makeTargets = (
       for (let index = 0; ; index++) {
         while (arrived.length <= index) await next();
         const candidate = arrived[index];
+        // A page whose id cannot be read, such as a popup already closing, is not this one.
+        const id = candidate === undefined ? undefined : await targetId(candidate).catch(() => {});
 
-        if (candidate !== undefined && (await targetId(candidate)) === created) return candidate;
+        if (candidate !== undefined && id === created) return candidate;
       }
+    };
+
+    /** Every other page that arrived meanwhile is from outside, and its policy applies now. */
+    const settle = (isOurs: (entry: Entry) => boolean) => {
+      for (const entry of arrived)
+        if (!isOurs(entry) && entries.get(entry.id) === entry) hooks.external(entry);
     };
 
     arrivals.add(arrival);
     try {
       const opened = await windows.open();
 
-      if (opened === undefined) return register(await context.newPage());
+      if (opened === undefined) {
+        const entry = register(await context.newPage());
+
+        settle((candidate) => candidate === entry);
+
+        return entry;
+      }
       try {
         const [entry] = await Promise.all([adopt(opened.targetId), opened.sized]);
+
+        settle((candidate) => candidate === entry);
 
         return entry;
       } catch (error) {
         // Whatever went wrong after the browser opened the window, that window is not kept.
         await closeWithin(opened.discard).catch(() => {});
+        // Only a page known to be another one is let through; the window may be any unread one.
+        settle(
+          (candidate) => candidate.targetId === undefined || candidate.targetId === opened.targetId,
+        );
         throw error;
       }
     } finally {
@@ -508,7 +533,7 @@ export const makeTargets = (
 
     // A closed page has already left the registry.
     if (entry === undefined) return;
-    await closeWithin(() => entry.page.close({ runBeforeUnload: false }), 5000);
+    await closeWithin(() => entry.page.close({ runBeforeUnload: false }));
     if (!entry.page.isClosed()) throw failure(Reasons.Failed.make({}));
   };
 
