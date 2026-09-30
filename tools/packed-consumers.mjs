@@ -105,6 +105,12 @@ export function consumerManifest(mode, receipt, out, pins) {
       ...(mode === "browser" ? {} : { "effect-browser": dependencies["effect-browser"] }),
       effect: pins.effect,
       ...(mode === "resources" ? {} : { vitest: pins.vitest }),
+      // @effect/platform-node takes any later shared prerelease, and each one needs the Effect
+      // released with it: 4.0.0-rc.118's imports `effect/process/ChildProcess`, which
+      // 4.0.0-rc.117 lacks. The two are released together, at one version.
+      ...(mode === "resources"
+        ? {}
+        : { "@effect/platform-node-shared": pins["@effect/platform-node"] }),
     },
   };
 }
