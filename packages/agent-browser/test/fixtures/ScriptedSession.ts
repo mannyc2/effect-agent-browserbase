@@ -63,6 +63,7 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
     pressElement: () => unexpected,
     typeElement: () => unexpected,
     pages: unexpected,
+    describePage: () => unexpected,
     frames: unexpected,
     framesOf: () => unexpected,
     pinPage: () => unexpected,

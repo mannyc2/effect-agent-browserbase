@@ -757,6 +757,37 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         : Effect.void;
     });
 
+  /**
+   * A page other than the selected one can take an unknown outcome of its own mutation with it:
+   * closing it ends everything still bound for it, where the selected page and every other one
+   * go on working. The selected page's own outcome still fences, since direct operations follow
+   * it and nothing could be selected in its place.
+   */
+  const containment = (pageId: string) => {
+    const current = driver;
+
+    if (current === undefined) return undefined;
+    let selected: string;
+
+    try {
+      selected = current.selected().pageId;
+    } catch {
+      // Without a selection it can read, the owner cannot tell this page is not the selected one.
+      return undefined;
+    }
+    if (selected === pageId) return undefined;
+
+    return {
+      pageId,
+      close: Effect.promise(() =>
+        current.containPage(pageId).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    };
+  };
+
   const waitFree = (operation: BrowserOperation, pageId?: string) =>
     Effect.suspend(() =>
       owner.waitPending(pageId)
@@ -778,6 +809,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly charge?: boolean | "host-read";
       /** Opening or closing a tab is independent of the selected page's document. */
       readonly anyPage?: boolean;
+      /** Waits its turn for the permit instead of refusing `busy`. */
+      readonly queue?: boolean;
       readonly mutationScope?: () => ObservationScope;
       readonly preflight?: Effect.Effect<void, BrowserError>;
     } = {},
@@ -944,6 +977,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           preflight: mutation
             ? Effect.suspend(check).pipe(Effect.andThen(unreserved(operation, browserTarget)))
             : Effect.suspend(check),
+          ...(browserTarget === undefined
+            ? {}
+            : { contain: () => containment(browserTarget.pageId) }),
         },
       );
 
@@ -1050,6 +1086,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             browserTarget,
             control,
           );
+
+          // A continuation that outlived its permit takes no reservation: whatever gave that
+          // permit up has already decided this dispatch's outcome.
+          ticket.check();
 
           return {
             target,
@@ -1640,6 +1680,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     pages: nativeOperation("list-pages", (driver, ticket) => driver.listPages(ticket), {
       charge: false,
     }),
+    describePage: (page: PageInfo) =>
+      nativeOperation("describe-page", (driver, ticket) => driver.describePage(page, ticket), {
+        charge: false,
+      }),
     frames: nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket), {
       charge: false,
     }),
@@ -1668,12 +1712,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         },
         { charge: false },
       ),
+    /** No other page's work conflicts with opening one, so it waits its turn rather than refusing. */
     createPage: () =>
       nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), {
         mutation: true,
         mutationScope: () => "none",
         charge: false,
         anyPage: true,
+        queue: true,
       }),
     closePage: (page: PageInfo) =>
       nativeOperation("close-page", (driver, ticket) => driver.closePage(page, ticket), {

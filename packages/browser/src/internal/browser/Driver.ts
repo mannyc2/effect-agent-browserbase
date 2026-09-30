@@ -218,10 +218,16 @@ export interface Driver {
   readonly selected: () => { readonly pageId: string; readonly frameId: string };
   readonly selectedTargetId: () => Promise<string>;
   readonly listPages: (ticket: Ticket) => Promise<ReadonlyArray<PageInfo>>;
+  readonly describePage: (page: PageInfo, ticket: Ticket) => Promise<PageInfo>;
   readonly resolvePage: (page: PageInfo, ticket: Ticket) => Promise<DriverTarget>;
   readonly selectPage: (page: PageInfo, ticket: Ticket) => Promise<void>;
   readonly newPage: (ticket: Ticket) => Promise<PageInfo>;
   readonly closePage: (page: PageInfo, ticket: Ticket) => Promise<void>;
+  /**
+   * Closes a page whose last mutation has an unknown outcome, and settles only once the browser
+   * has closed it; a page already closed settles at once. Never asked of the selected page.
+   */
+  readonly containPage: (pageId: string) => Promise<void>;
   readonly listFrames: (ticket: Ticket, page?: PageInfo) => Promise<ReadonlyArray<FrameInfo>>;
   readonly resolveFrame: (
     page: PageInfo,

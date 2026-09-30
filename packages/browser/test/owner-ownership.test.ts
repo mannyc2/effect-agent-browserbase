@@ -450,7 +450,9 @@ const ownershipCases: ReadonlyArray<Case> = [
           (ticket) =>
             native("fill", ticket, async () => {
               ticket.dispatch();
-              throw new Error("PRIVATE-FILL-SECRET private-page-content wss://private-url");
+              throw new Error(
+                "locator.fill: Target closed at wss://private-url/devtools/browser/SECRET?token=SECRET\nCall log:\n  - PRIVATE-CALL-LOG",
+              );
             }),
           { mutation: true },
         )
@@ -464,8 +466,14 @@ const ownershipCases: ReadonlyArray<Case> = [
         ).pipe(Effect.orDie);
 
         assert.ok(encoded.includes('"unknown"'));
+        // The engine's first line is kept; its addresses keep only their origin, and its call
+        // log stays behind.
+        assert.ok(
+          encoded.includes('"detail":"locator.fill: Target closed at wss://private-url/…"'),
+        );
+        assert.ok(!encoded.includes("SECRET"));
         assert.ok(!encoded.includes("PRIVATE"));
-        assert.ok(!String(result.failure.stack).includes("PRIVATE"));
+        assert.ok(!String(result.failure.stack).includes("SECRET"));
       }
     })),
   test("wall-clock movement does not spend the monotonic lifetime budget", () =>

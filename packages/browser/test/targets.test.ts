@@ -29,13 +29,35 @@ let connections = 0;
 
 /** Only the native registry boundary is scripted. Each registry owns its real identity checks. */
 const registry = (
-  options: { readonly failMetadata?: boolean; readonly maxPages?: number } = {},
+  options: {
+    readonly failMetadata?: boolean;
+    readonly maxPages?: number;
+    /** The browser opens windows; by default it refuses, and a page is a tab. */
+    readonly windows?: {
+      /** A popup reaches the context's page event before the window's own page does. */
+      readonly popupFirst?: boolean;
+      /** That popup's target id cannot be read, as when it is already closing. */
+      readonly popupUnreadable?: boolean;
+      readonly failSizing?: boolean;
+    };
+  } = {},
 ) => {
   let serial = 0;
   const identities = new WeakMap<Page, string>();
-  const calls = { created: 0, closed: 0, detached: 0, titles: [] as number[] };
+
+  const calls = {
+    created: 0,
+    windows: 0,
+    discarded: [] as string[],
+    closed: 0,
+    detached: 0,
+    titles: [] as number[],
+  };
+
   const changes: Array<Parameters<TargetHooks["changed"]>> = [];
   const overflows: Array<Parameters<TargetHooks["overflow"]>[0]> = [];
+  const externals: Array<Parameters<TargetHooks["external"]>[0]> = [];
+  const unreadable = new WeakSet<Page>();
 
   const page = () => {
     const index = ++serial;
@@ -83,12 +105,16 @@ const registry = (
 
         return page();
       },
-      newCDPSession: async (page: Page) => ({
-        send: async () => ({ targetInfo: { type: "page", targetId: identities.get(page) } }),
-        detach: async () => {
-          calls.detached++;
-        },
-      }),
+      newCDPSession: async (page: Page) => {
+        if (unreadable.has(page)) throw new Error("Protocol error (Target.attachToTarget): gone");
+
+        return {
+          send: async () => ({ targetInfo: { type: "page", targetId: identities.get(page) } }),
+          detach: async () => {
+            calls.detached++;
+          },
+        };
+      },
     } as unknown as BrowserContext,
     {
       viewport: { width: 640, height: 480 },
@@ -101,6 +127,9 @@ const registry = (
     () => false,
     {
       opened: () => {},
+      external: (entry) => {
+        externals.push(entry);
+      },
       overflow: (entry) => {
         overflows.push(entry);
       },
@@ -114,6 +143,35 @@ const registry = (
         changes.push(change);
       },
     },
+    {
+      open: async () => {
+        if (options.windows === undefined) return undefined;
+        calls.windows++;
+        const opened = page();
+        const targetId = identities.get(opened)!;
+
+        // The window's page reaches the registry later, through the context's page event.
+        setTimeout(() => {
+          if (options.windows?.popupFirst) {
+            const popup = page();
+
+            if (options.windows.popupUnreadable) unreadable.add(popup);
+            targets.register(popup);
+          }
+          targets.register(opened);
+        }, 1);
+
+        return {
+          targetId,
+          sized: options.windows.failSizing
+            ? Promise.reject(new Error("Protocol error (Browser.setContentsSize): refused"))
+            : Promise.resolve(),
+          discard: async () => {
+            calls.discarded.push(targetId);
+          },
+        };
+      },
+    },
   );
 
   const initial = targets.register(page());
@@ -121,7 +179,14 @@ const registry = (
   targets.selection.entry = initial;
   targets.selection.frame = initial.page.mainFrame();
 
-  return { targets, calls, changes, overflows, popup: () => targets.register(page()) };
+  return {
+    targets,
+    calls,
+    changes,
+    overflows,
+    externals,
+    popup: () => targets.register(page()),
+  };
 };
 
 it("independent registries refuse foreign page metadata and mismatched native target IDs before close", async () => {
@@ -202,6 +267,42 @@ it.effect(
       expect(owner.state.phase).toBe("uncertain");
     }),
 );
+
+it("a page opened in its own window is adopted by target id, even behind a popup", async () => {
+  const f = registry({ windows: { popupFirst: true } });
+  const [initial] = await f.targets.listPages(ticket());
+  const created = await f.targets.newPage(ticket());
+
+  // The popup arrived first and is a page from outside, under its own policy; creation returns
+  // the window.
+  expect(created).toMatchObject({ targetId: "native-2", selected: false });
+  expect(f.externals.map((entry) => entry.targetId)).toEqual(["native-3"]);
+  expect(f.calls).toMatchObject({ windows: 1, created: 0 });
+  expect([...f.targets.entries.values()].map((entry) => entry.targetId)).toEqual([
+    initial!.targetId,
+    "native-3",
+    "native-2",
+  ]);
+  expect(f.targets.selected().pageId).toBe(initial!.pageId);
+});
+
+it("a popup whose id cannot be read does not stop the window being adopted", async () => {
+  const f = registry({ windows: { popupFirst: true, popupUnreadable: true } });
+
+  expect(await f.targets.newPage(ticket())).toMatchObject({ targetId: "native-2" });
+  expect(f.externals).toHaveLength(1);
+});
+
+it("a window the driver opened but could not size is discarded, and its outcome is unknown", async () => {
+  const f = registry({ windows: { failSizing: true } });
+  const admission = ticket();
+
+  await expect(f.targets.newPage(admission)).rejects.toMatchObject({
+    reason: { _tag: "Provider", detail: "Protocol error (Browser.setContentsSize): refused" },
+  });
+  expect(admission.dispatched).toBe(true);
+  expect(f.calls.discarded).toEqual(["native-2"]);
+});
 
 it("page capacity reports its actual count and configured maximum without dispatch", async () => {
   const f = registry({ maxPages: 1 });
