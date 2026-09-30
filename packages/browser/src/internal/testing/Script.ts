@@ -173,6 +173,7 @@ export const ScriptableOperation = Schema.Literals([
   "press",
   "type",
   "list-pages",
+  "describe-page",
   "list-frames",
   "select-page",
   "select-frame",

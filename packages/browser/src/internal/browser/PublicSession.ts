@@ -315,6 +315,8 @@ export const makeSession = <E>(
         Effect.flatMap((input) => typed({ ...input, kind: "type" })),
       ),
     pages: controls.pages,
+    describePage: (page) =>
+      checked(PageInfo, page, "describe-page").pipe(Effect.flatMap(controls.describePage)),
     frames: controls.frames,
     framesOf: (page) =>
       checked(PageInfo, page, "list-frames").pipe(Effect.flatMap(controls.framesOf)),

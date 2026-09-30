@@ -86,6 +86,7 @@ export const SessionReason = Schema.Literals([
   "handoff",
   "detached",
   "closed",
+  "page-contained",
 ]);
 
 export type SessionReason = typeof SessionReason.Type;

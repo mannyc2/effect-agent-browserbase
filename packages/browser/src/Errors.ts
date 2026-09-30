@@ -21,6 +21,7 @@ export const BrowserOperation = Schema.Literals([
   "target",
   "handle",
   "list-pages",
+  "describe-page",
   "list-frames",
   "select-page",
   "select-frame",
@@ -97,6 +98,12 @@ export const LimitDimension = Schema.Literals([
 
 const SchemaPath = Schema.String.check(Schema.isMaxLength(512));
 
+/**
+ * What the native engine said about a failure it raised: its first line, without escape codes,
+ * with every address cut to its origin. A host diagnostic, never part of the model projection.
+ */
+const NativeDetail = Schema.String.check(Schema.isMaxLength(512));
+
 /** Validated constructors for host reasons. The model receives a separate bounded projection. */
 export const Reasons = {
   Configuration: Schema.TaggedStruct("Configuration", { path: Schema.optionalKey(SchemaPath) }),
@@ -115,7 +122,10 @@ export const Reasons = {
   }),
   Timeout: Schema.TaggedStruct("Timeout", {}),
   Transport: Schema.TaggedStruct("Transport", { status: Schema.optionalKey(Schema.Int) }),
-  Provider: Schema.TaggedStruct("Provider", { status: Schema.optionalKey(Schema.Int) }),
+  Provider: Schema.TaggedStruct("Provider", {
+    status: Schema.optionalKey(Schema.Int),
+    detail: Schema.optionalKey(NativeDetail),
+  }),
   Authorization: Schema.TaggedStruct("Authorization", {}),
   RateLimited: Schema.TaggedStruct("RateLimited", {
     retryAfterMillis: Schema.optionalKey(Schema.Natural),
