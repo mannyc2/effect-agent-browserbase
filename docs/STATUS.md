@@ -52,8 +52,8 @@ these contracts; later real-model and Browserbase pilots are recorded below.
 Native observations and checkpoints also carry bounded `viewport.documentScroll` measurements
 when the selected frame has a document scrollport. Position and document/client dimensions are
 sampled with that reading, without adding a browser action or another connection. Nested
-containers scroll independently. Agent scroll guidance treats blank views as possible gaps and
-uses these measurements to check progress; it makes no claim that all content has loaded.
+containers scroll independently, and these measurements do not establish that all content has
+loaded or that the document has ended.
 
 The unpaid evaluation foundation for [#93](https://github.com/mannyc2/effect-agent-browserbase/issues/93)
 lives in `effect-agent-browser`'s unpublished tests. It retains bounded model-boundary records and

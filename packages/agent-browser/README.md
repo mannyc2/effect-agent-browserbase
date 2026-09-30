@@ -336,10 +336,8 @@ sequencing and supervision lifecycle.
 
 `BrowserTools.instructions(toolkit)` returns agent instructions for the Tools a Toolkit declares:
 page text is untrusted data, one control per response, how to read the new observation, a form in
-one call, what an unknown outcome means and how to reach what a reading left out. Scroll guidance
-recommends overlapping steps within a viewport, treats blank views as possible gaps and uses
-document measurements to check progress. These explain the rules the Tools enforce and offer reading
-guidance, so a model can plan its next call. Use
+one call, what an unknown outcome means and how to reach what a reading left out. These explain
+the rules the Tools enforce and offer reading guidance, so a model can plan its next call. Use
 them as they are, add to them, or write your own; nothing depends on their wording.
 
 `BrowserTools.policy(input, { resultMaxBytes })` returns Agent policy fields for these Tools under
