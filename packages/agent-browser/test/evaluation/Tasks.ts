@@ -1,10 +1,11 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { Duration, Effect, Exit, Fiber, Layer, Redacted, Schema } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Redacted, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, Observation, type SessionStatus } from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
 import { Chromium } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
@@ -44,7 +45,7 @@ import {
   type Composition,
   type Task,
 } from "./Cases.ts";
-import { diagnose, EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
+import { diagnose, EvidenceError, type Journal, json, tagOf, type Recording } from "./Evidence.ts";
 import { answer, call, type Driver, prose, scripted, type Turn } from "./Model.ts";
 import { commentaryToolkit, feedRecorder, visibleObservations } from "./Understanding.ts";
 
@@ -712,6 +713,149 @@ const writesSettled = <OwnerError>(browser: Browser.BrowserSession<OwnerError>) 
   });
 
 /** One agent run on an open browser: the host's Tools, the run, then the owner's facts. */
+const filming = Effect.fnUntraced(function* <A, E, R, OwnerError>(
+  journal: Journal,
+  browser: Browser.BrowserSession<OwnerError>,
+  effect: Effect.Effect<A, E, R>,
+) {
+  const profile = journal.manifest.capture;
+
+  if (profile === "off") return yield* effect;
+
+  const recording: Recording = {
+    ...profile,
+    frames: [],
+    startedAt: journal.elapsedMillis(),
+    endedAt: journal.elapsedMillis(),
+    stoppedAt: null,
+    nativeStop: "missing",
+    stopReason: null,
+    overflowFrames: 0,
+    totalBytes: 0,
+    discardedFrames: 0,
+    discardedBytes: 0,
+    limitReached: null,
+    error: null,
+    summary: null,
+  };
+
+  journal.recording = recording;
+
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const interval = yield* Capture.start(browser, {
+        lifetime: "page",
+        maxFrames: 8,
+        maxBufferedBytes: Math.min(profile.maxBytes, 4 * 1024 * 1024),
+        maxFrameBytes: Math.min(profile.maxBytes, 1024 * 1024),
+        maxDurationMillis: profile.maxDurationMillis,
+        quality: profile.quality,
+        size: journal.manifest.viewport,
+      }).pipe(
+        Effect.onError((cause) =>
+          Effect.sync(() => {
+            recording.error = tagOf(cause);
+            recording.endedAt = journal.elapsedMillis();
+          }),
+        ),
+      );
+
+      yield* interval.completed.pipe(
+        Effect.tap((summary) =>
+          Effect.sync(() => {
+            recording.stoppedAt ??= journal.elapsedMillis();
+            recording.nativeStop = summary.nativeStop;
+            recording.stopReason = summary.reason;
+          }),
+        ),
+        Effect.forkScoped,
+      );
+
+      const consumer = yield* interval.frames.pipe(
+        Stream.runForEach((frame) =>
+          Effect.suspend(() => {
+            if (recording.limitReached !== null) {
+              recording.discardedFrames++;
+              recording.discardedBytes += frame.bytes.byteLength;
+
+              return Effect.void;
+            }
+            if (recording.totalBytes + frame.bytes.byteLength > profile.maxBytes) {
+              recording.limitReached = "bytes";
+              recording.discardedFrames++;
+              recording.discardedBytes += frame.bytes.byteLength;
+
+              return interval.stop.pipe(Effect.asVoid);
+            }
+            recording.frames.push({
+              bytes: frame.bytes,
+              sourceTimeMillis: frame.sourceTimeMillis,
+              sourceClock: frame.sourceClock,
+              receivedAt: journal.elapsedMillis(),
+              receivedMonotonicNanos: String(frame.receivedMonotonicNanos),
+              sequence: frame.sequence,
+              document: frame.document,
+              width: frame.width,
+              height: frame.height,
+              viewportWidth: frame.viewportWidth,
+              viewportHeight: frame.viewportHeight,
+            });
+            recording.totalBytes += frame.bytes.byteLength;
+            if (recording.frames.length >= profile.maxFrames) {
+              recording.limitReached = "frames";
+
+              return interval.stop.pipe(Effect.asVoid);
+            }
+
+            return Effect.void;
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            recording.error = tagOf(cause);
+          }),
+        ),
+        Effect.forkScoped,
+      );
+
+      return yield* effect.pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            yield* interval.stop;
+            yield* Fiber.await(consumer);
+            const summary = yield* interval.completed;
+            const { error, ...counts } = summary;
+
+            recording.endedAt = journal.elapsedMillis();
+            recording.stoppedAt ??= recording.endedAt;
+            recording.nativeStop = summary.nativeStop;
+            recording.stopReason = summary.reason;
+            recording.overflowFrames = summary.overflow;
+            if (error !== undefined) recording.error ??= error._tag;
+            if (summary.reason === "duration-limit") recording.limitReached ??= "duration";
+            recording.summary = json({
+              ...counts,
+              target: { ...summary.target },
+              documentBoundaries: summary.documentBoundaries.map((boundary) => ({
+                ...boundary,
+                observedMonotonicNanos: String(boundary.observedMonotonicNanos),
+              })),
+              error:
+                error === undefined
+                  ? null
+                  : {
+                      operation: error.operation,
+                      reason: error.reason._tag,
+                      outcome: error.outcome,
+                    },
+            });
+          }),
+        ),
+      );
+    }),
+  );
+});
+
 const drive =
   (journal: Journal, driver: Driver, start: string) =>
   <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
@@ -723,10 +867,16 @@ const drive =
         ...(journal.manifest.task === "feed-commentary" ? { observe: commentary.observe } : {}),
       });
 
-      yield* host
-        .run(runAgent(journal, driver, start).pipe(Effect.provide(commentary.layer)))
-        .pipe(Effect.exit, Effect.flatMap(settle(journal)));
-      yield* owner(journal, browser.status, host.toolFailures);
+      yield* filming(
+        journal,
+        browser,
+        Effect.gen(function* () {
+          yield* host
+            .run(runAgent(journal, driver, start).pipe(Effect.provide(commentary.layer)))
+            .pipe(Effect.exit, Effect.flatMap(settle(journal)));
+          yield* owner(journal, browser.status, host.toolFailures);
+        }),
+      );
     });
 
 /** The owner's own checked close is a fact; any other browser failure is the harness's. */

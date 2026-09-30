@@ -15,6 +15,7 @@ import {
 import {
   admission,
   ChatSettings,
+  CaptureRequest,
   decisionAdmission,
   Gateway,
   JevSettings,
@@ -109,6 +110,7 @@ export const Spec = Schema.Struct({
     maxRunSeconds: Schema.Int.check(Schema.isBetween({ minimum: 30, maximum: 900 })),
   }),
   judges: Schema.Literal("disabled"),
+  capture: Schema.optionalKey(CaptureRequest),
 });
 
 /** A model as a plan runs it: its settings, integer prices and the credential it needs. */
@@ -312,6 +314,16 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
 
   const sessions = runs.filter((entry) => entry.backend === "browserbase").length;
 
+  if (spec.capture !== undefined) {
+    if (runs.some((entry) => entry.backend !== "chromium"))
+      return yield* refuse("backend", "Filming requires each run's original local Chromium owner.");
+    if (spec.budget.maxRunSeconds > 300)
+      return yield* refuse(
+        "budget",
+        "Filmed runs are bounded to five minutes plus capture cleanup.",
+      );
+  }
+
   if (runs.length > maxRuns)
     return yield* refuse("runs", `${runs.length} runs exceed the ${maxRuns}-run bound.`);
   const perRun = micro(spec.budget.perRunUsd);
@@ -397,6 +409,11 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       ...new Set(subjects.map((subject) => subject.credential)),
       ...(sessions === 0 ? [] : ["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"]),
     ],
+    ...(spec.capture === undefined
+      ? {}
+      : {
+          capture: { ...spec.capture, maxDurationMillis: spec.budget.maxRunSeconds * 1000 + 5000 },
+        }),
   };
 
   return {
@@ -485,6 +502,7 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
   return {
     ...declared,
     bounds: { ...declared.bounds, maxDurationMillis: shown.budget.maxRunMillis },
+    capture: shown.capture ?? "off",
   };
 };
 

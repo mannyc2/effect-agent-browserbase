@@ -160,7 +160,8 @@ Measured runs print each caption as `[commentary <postId>] <caption>` when the
 handler receives it; scripted calibrations stay quiet. Captions and the final
 summary are generated prose whose quality remains ungraded. Commentary
 timestamps are host receipt times, not model inference duration or broadcast
-airtime; this case does not capture or air video.
+airtime. A campaign can explicitly request a captioned browser recording as
+described below; it does not broadcast video.
 
 Each case records a revision and a split. `tuning` cases may shape Tools,
 instructions and prompts. `held-out` results must not. A held-out case whose
@@ -458,6 +459,45 @@ campaign limit, spend refusals, harness failures and incomplete evidence. The co
 unrecorded, failed in the harness or left incomplete evidence, or if a broken
 price contract stopped the campaign.
 
+### Captioned browser recordings
+
+Recording is off by default. A local Chromium campaign can opt in by adding
+this field to its specification before generating and approving its plan:
+
+```json
+"capture": {
+  "format": "jpeg-frames-v1",
+  "maxFrames": 1200,
+  "maxBytes": 33554432,
+  "quality": 70
+}
+```
+
+The approved digest binds those limits and a capture duration of
+`maxRunSeconds` plus five seconds. Recording refuses a scripted owner or
+Browserbase backend, and filmed runs are limited to 300 seconds. The caller
+must provide FFmpeg and ffprobe. Capture uses the exact browser already owned
+by the run, stops before its checked cleanup, and bounds total retained JPEGs
+and bytes separately from the capture queue. It adds no model input or Tool.
+Specifications without `capture` retain their original plan digests and
+`"off"` manifests.
+
+Each filmed run retains the source JPEGs, native capture accounting, timing
+anchors, a raw MP4, subtitles and an MP4 with a commentary panel. Captions are
+the actual `browser_commentary` handler receipts, assembled onto the footage
+after the run. The presentation preserves pauses and holds the final browser
+image through the recorded end; its output frame rate does not measure native
+capture frequency. Source presentation times determine browser-frame intervals,
+and the first frame's host receipt bridges captions onto that timeline.
+Transport latency and upstream frame loss remain unknown. Task failures are
+retained, and recording or encoding failures are reported separately. The
+campaign checksums the recording artifacts alongside the normal evidence.
+
+This supplies actual browser footage with on-screen commentary. It does not
+test model vision, spoken narration, livestream delivery or broadcast timing.
+Capture overhead is part of a filmed run, so its timings are not directly
+comparable to recordings made with capture off.
+
 ### Jev decision baseline
 
 `typesafe` uses the direct [System One API](https://docs.typesafe.ai/api), pinned
@@ -666,6 +706,7 @@ read-back that the owner could permit remain untested, so no claim is yet
 credited as resolved by a read-back. The attack is one fixture with two forbidden
 channels, and its output check is a verbatim match: a reworded decoy escapes it,
 and a refused attempt at the forbidden action is `inconclusive` rather than
-`violated`, since which control a refused call named is not graded. Recording/capture overhead and
-shared-consumer evidence qualification remain separate work tied to the
-available public capture APIs and #112. Issue #93 stays open.
+`violated`, since which control a refused call named is not graded. Optional local
+recordings do not qualify capture overhead or shared-consumer evidence; those
+remain separate work tied to the public capture APIs and #112. Issue #93 stays
+open.

@@ -166,7 +166,39 @@ it.effect("a real-model plan shows its whole matrix and bounds before anything r
     });
     // Approval binds the exact plan: the same specification has the same digest, any change another.
     expect((yield* plan(spec)).digest).toBe(shown.digest);
+    // Enabling filming must not silently change a previously approved unfilmed plan.
+    expect(shown.digest).toBe("160d0eead644bbdb8640bc6939a30843f5fab54225058a49f09a679bc3d0e3cf");
     expect((yield* plan({ ...spec, trials: 1 })).digest).not.toBe(shown.digest);
+  }),
+);
+
+// Requested filming seam: approval must bind capture bounds, and capture cannot substitute an owner.
+it.effect("filming is explicitly approved and refused for a non-Chromium owner", () =>
+  Effect.gen(function* () {
+    const capture = {
+      format: "jpeg-frames-v1",
+      maxFrames: 1200,
+      maxBytes: 32 * 1024 * 1024,
+      quality: 70,
+    };
+
+    const input = { ...spec, models: [gpt], tasks: ["feed-commentary"], trials: 1 };
+    const plain = yield* plan(input);
+    const filmed = yield* plan({ ...input, capture });
+
+    expect(filmed.digest).not.toBe(plain.digest);
+    expect(filmed).toMatchObject({ capture: { ...capture, maxDurationMillis: 185_000 } });
+    expect(measuredManifest(filmed, filmed.runs[0]!, "unavailable").capture).toEqual(
+      filmed.capture,
+    );
+    expect(measuredManifest(plain, plain.runs[0]!, "unavailable").capture).toBe("off");
+    expect((yield* plan({ ...input, capture: { ...capture, maxFrames: 1000 } })).digest).not.toBe(
+      filmed.digest,
+    );
+    expect(yield* reason(plan({ ...spec, capture }))).toBe("backend");
+    expect(
+      yield* reason(plan({ ...input, capture: { ...capture, maxBytes: 128 * 1024 * 1024 } })),
+    ).toBe("specification");
   }),
 );
 

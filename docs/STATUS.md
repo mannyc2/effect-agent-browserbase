@@ -81,6 +81,11 @@ the Tool's receipt acknowledges delivery without correctness or answer feedback.
 expose chart source grounding and feed coverage, freshness, scroll transitions, order and correction checks; their success
 flags require complete evidence. Timestamps are host
 receipt times, not inference duration or video airtime, and prose quality is ungraded. The local
+campaign can opt into bounded capture on its original Chromium owner, retaining source JPEGs,
+timing anchors and raw and captioned MP4s alongside checksummed evidence. Captions use the live
+commentary handler receipts and are rendered after the run; this does not establish model vision
+or livestream delivery. Recording is off by default, and its bounds are part of the approved plan.
+The local
 navigation case also admits a pinned
 `jev-1.13.0` decision policy, selecting observed links and text lines under an approved
 confidence threshold. Evidence v5 distinguishes its host-assembled output from generated

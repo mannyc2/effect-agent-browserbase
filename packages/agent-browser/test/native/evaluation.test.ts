@@ -130,6 +130,41 @@ const checks: Record<string, (evidence: Evidence) => Effect.Effect<void, ReplayD
     }),
 };
 
+// Requested filming seam: a total-frame stop must leave the same real agent/browser task intact.
+it.live("evaluation filming is bounded and stops before the original Chromium owner closes", () =>
+  Effect.gen(function* () {
+    const entry = plan(1).find(
+      (candidate) => candidate.runId === "feed-commentary-observed-comments-0",
+    )!;
+
+    const journal = new Journal({
+      ...manifest(entry, "unavailable"),
+      capture: {
+        format: "jpeg-frames-v1",
+        maxFrames: 1,
+        maxBytes: 4 * 1024 * 1024,
+        quality: 70,
+        maxDurationMillis: 15000,
+      },
+    });
+
+    yield* run(journal);
+    const evidence = journal.snapshot();
+    const recording = journal.recording;
+
+    expect(grade(evidence)).toMatchObject({ task: "pass", cleanup: "confirmed" });
+    expect(evidence.facts.ownerClose).toBe("confirmed");
+    expect(recording).toBeDefined();
+    expect(recording!.frames).toHaveLength(1);
+    expect(recording!.totalBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(recording!.limitReached).toBe("frames");
+    expect(recording!.summary).toMatchObject({ nativeStop: "confirmed" });
+    expect(recording!.frames[0]!.receivedAt).toBeGreaterThanOrEqual(recording!.startedAt);
+    expect(recording!.endedAt).toBeGreaterThanOrEqual(recording!.frames[0]!.receivedAt);
+    expect((yield* replay(evidence)).output).toEqual(evidence.facts.output);
+  }),
+);
+
 // #93's oracles must tell a real committed account from a claim, and an owner's refusal of an
 // unresolved mutation from the model's decision to repeat it, over real Chromium.
 for (const planned of plan(1).filter((candidate) => cases[candidate.task].backend === "chromium"))

@@ -24,6 +24,52 @@ import {
 
 const nonnegative = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
+/** Artifact-only capture limits. Omission from a campaign preserves its earlier approved digest. */
+export const CaptureRequest = Schema.Struct({
+  format: Schema.Literal("jpeg-frames-v1"),
+  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1800 })),
+  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1024 * 1024, maximum: 64 * 1024 * 1024 })),
+  quality: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
+});
+
+export const CaptureProfile = Schema.Struct({
+  ...CaptureRequest.fields,
+  maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 305000 })),
+});
+
+export type CaptureProfile = typeof CaptureProfile.Type;
+
+export interface RecordingFrame {
+  readonly bytes: Uint8Array;
+  readonly sourceTimeMillis: number;
+  readonly sourceClock: "presentation-unix-millis";
+  readonly receivedAt: number;
+  readonly receivedMonotonicNanos: string;
+  readonly sequence: number;
+  readonly document: number;
+  readonly width: number;
+  readonly height: number;
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+}
+
+/** Binary artifacts stay outside model events, terminal facts and offline replay. */
+export interface Recording extends CaptureProfile {
+  readonly frames: Array<RecordingFrame>;
+  readonly startedAt: number;
+  endedAt: number;
+  stoppedAt: number | null;
+  nativeStop: "missing" | "confirmed" | "unconfirmed";
+  stopReason: string | null;
+  overflowFrames: number;
+  totalBytes: number;
+  discardedFrames: number;
+  discardedBytes: number;
+  limitReached: "frames" | "bytes" | "duration" | null;
+  error: string | null;
+  summary: Schema.Json | null;
+}
+
 /** The model behind a run: a finite script, or a real provider named by a campaign plan. */
 export const Provider = Schema.Literals(["openai", "anthropic", "typesafe"]);
 export type Provider = typeof Provider.Type;
@@ -138,7 +184,7 @@ export const Manifest = Schema.Struct({
     playwrightCore: Schema.String,
   }),
   browserVersion: Schema.Literal("unavailable"),
-  capture: Schema.Literal("off"),
+  capture: Schema.Union([Schema.Literal("off"), CaptureProfile]),
   viewport: Schema.Struct({ width: nonnegative, height: nonnegative }),
   bounds: Schema.Struct({
     maxTurns: nonnegative,
@@ -448,6 +494,7 @@ export const emptyFacts: Facts = {
 /** A caller-owned bounded sink survives cancellation of the agent's waiter. Terminal facts have a separate reserve. */
 export class Journal {
   readonly manifest: Manifest;
+  recording: Recording | undefined;
   facts: Facts = emptyFacts;
   readonly #events: Event[] = [];
   readonly #started = performance.now();
@@ -461,6 +508,10 @@ export class Journal {
       limits: { ...input.limits, ...bounds },
     });
   }
+  /** Frame sinks use the same receipt clock as host commentary; source clocks remain separate. */
+  elapsedMillis(): number {
+    return performance.now() - this.#started;
+  }
   append(input: Pick<Event, "kind" | "turn" | "value">): void {
     const event = Schema.decodeSync(Event)({
       ...input,
@@ -468,7 +519,7 @@ export class Journal {
       runId: this.manifest.runId,
       seq: this.#seq++,
       clock: "host-performance-milliseconds",
-      at: performance.now() - this.#started,
+      at: this.elapsedMillis(),
     });
 
     const bytes = byteLength(event) + 1;
