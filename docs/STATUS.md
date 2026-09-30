@@ -68,15 +68,17 @@ identifiers. Scripted HTTP tests calibrate admission and transport behavior; own
 pilots have run against real providers locally and on Browserbase, recorded below. `hosted-v1`
 serves the sign-up, re-rendered submit and hostile-receipt cases through a page-to-host binding.
 The [evaluation guide](../packages/agent-browser/test/evaluation/README.md) lists what it does not
-prove. One scripted trial now contains 39 runs; three complete trials total 117 within the 120-run cap.
+prove. One scripted trial now contains 40 runs; three complete trials fill the 120-run cap.
 The chart shows an SVG and accessible source table: structured arithmetic, unit and nonzero-axis
 facts are graded against host truth and model-visible source values, while explanation quality
 is ungraded. The feed forces viewport reads and records fresh claims, full-post quotes matched
 after whitespace normalization, and generated captions for six posts, including a later correction.
+Five successful nonzero browser Tool scrolls must separate successive comments, with matching
+results shown to the model; fragment navigation alone fails the task.
 Its 24-turn, 24-Tool-call bounds cover
 reading, commentary and scrolling. Measured runs print captions when the handler receives them;
 the Tool's receipt acknowledges delivery without correctness or answer feedback. Task-specific reports
-expose chart source grounding and feed coverage, freshness, order and correction checks; their success
+expose chart source grounding and feed coverage, freshness, scroll transitions, order and correction checks; their success
 flags require complete evidence. Timestamps are host
 receipt times, not inference duration or video airtime, and prose quality is ungraded. The local
 navigation case also admits a pinned

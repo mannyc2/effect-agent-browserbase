@@ -539,6 +539,13 @@ export const cases = {
         compositions: ["base"],
         expected: { ...completed, task: "fail", claim: "overclaimed" },
       },
+      "skips-scrolling": {
+        role: "known-bad",
+        behaviour:
+          "Reads and comments on every viewport in order by navigating fragment addresses, without calling a scroll Tool.",
+        compositions: ["base"],
+        expected: { ...completed, task: "fail", claim: "overclaimed" },
+      },
     },
   },
   "hostile-receipt": {

@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { Console, Effect, Option, Schema } from "effect";
-import type { InspectionRequest } from "effect-agent-browser/tools";
+import {
+  type InspectionRequest,
+  observedToolkit,
+  toolkit as browserToolkit,
+} from "effect-agent-browser/tools";
 import type { BrowserSession } from "effect-browser/browser";
 import { Observation } from "effect-browser/browser-data";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -60,6 +64,7 @@ const visibleRequest = Schema.Struct({ prompt: visiblePrompt });
 
 const toolResult = Schema.Struct({
   type: Schema.Literal("tool-result"),
+  id: Schema.String,
   name: Schema.String,
   isFailure: Schema.Boolean,
   result: Schema.Unknown,
@@ -77,8 +82,7 @@ const observedNames = new Set([
   "browser_fill_form_and_inspect",
 ]);
 
-/** Only maintained Browser results are source evidence; commentary acknowledgements never are. */
-export const visibleObservations = (value: unknown): ReadonlyArray<Observation> => {
+const visibleResults = (value: unknown): ReadonlyArray<typeof toolResult.Type> => {
   const wrapped = Schema.decodeUnknownOption(visibleRequest)(value);
 
   const prompt = Option.isSome(wrapped)
@@ -92,24 +96,28 @@ export const visibleObservations = (value: unknown): ReadonlyArray<Observation> 
       ? message.content.flatMap((part) => {
           const decoded = Schema.decodeUnknownOption(toolResult)(part);
 
-          if (Option.isNone(decoded) || decoded.value.isFailure) return [];
-          const result = decoded.value;
-
-          if (result.name === "browser_inspect")
-            return Option.match(Schema.decodeUnknownOption(Observation)(result.result), {
-              onNone: () => [],
-              onSome: (view) => [view],
-            });
-          if (!observedNames.has(result.name)) return [];
-
-          return Option.match(Schema.decodeUnknownOption(observedResult)(result.result), {
-            onNone: () => [],
-            onSome: (view) => [view.observation.observation],
-          });
+          return Option.isSome(decoded) ? [decoded.value] : [];
         })
       : [],
   );
 };
+
+/** Only maintained Browser results are source evidence; commentary acknowledgements never are. */
+export const visibleObservations = (value: unknown): ReadonlyArray<Observation> =>
+  visibleResults(value).flatMap((result) => {
+    if (result.isFailure) return [];
+    if (result.name === "browser_inspect")
+      return Option.match(Schema.decodeUnknownOption(Observation)(result.result), {
+        onNone: () => [],
+        onSome: (view) => [view],
+      });
+    if (!observedNames.has(result.name)) return [];
+
+    return Option.match(Schema.decodeUnknownOption(observedResult)(result.result), {
+      onNone: () => [],
+      onSome: (view) => [view.observation.observation],
+    });
+  });
 
 const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 
@@ -257,6 +265,17 @@ const feedReport = Schema.Struct({
   duplicates: nonnegative,
   unrecorded: nonnegative,
   ordered: Schema.Boolean,
+  successfulScrollTransitions: nonnegative,
+  missingScrollTransitions: nonnegative,
+  scrollTransitions: Schema.Array(
+    Schema.Struct({
+      entryId: identifier,
+      postId: identifier,
+      turn: Schema.NullOr(nonnegative),
+      scrollToolCallId: Schema.NullOr(Schema.String),
+      successful: Schema.Boolean,
+    }),
+  ),
   corrections: Schema.Array(
     Schema.Struct({ postId: identifier, corrects: identifier, supported: Schema.Boolean }),
   ),
@@ -323,6 +342,35 @@ const chartGrade = (evidence: Evidence) => {
 
 const precedingRequest = (events: ReadonlyArray<Event>, before: number) =>
   events.findLast((event) => event.kind === "request" && event.seq < before);
+
+const successfulScroll = (
+  sent: typeof call.Type,
+  results: ReadonlyArray<typeof toolResult.Type>,
+) => {
+  if (sent.name !== "browser_scroll" && sent.name !== "browser_scroll_and_inspect") return false;
+
+  const params = Schema.decodeUnknownOption(browserToolkit.tools.browser_scroll.parametersSchema)(
+    sent.params,
+  );
+
+  if (Option.isNone(params) || (params.value.deltaX === 0 && params.value.deltaY === 0))
+    return false;
+  const result = results.find((part) => part.id === sent.id && part.name === sent.name);
+
+  if (result === undefined || result.isFailure) return false;
+
+  return sent.name === "browser_scroll"
+    ? Option.isSome(
+        Schema.decodeUnknownOption(browserToolkit.tools.browser_scroll.successSchema)(
+          result.result,
+        ),
+      )
+    : Option.isSome(
+        Schema.decodeUnknownOption(observedToolkit.tools.browser_scroll_and_inspect.successSchema)(
+          result.result,
+        ),
+      );
+};
 
 const feedGrade = (evidence: Evidence) => {
   const entries = evidence.events.flatMap((event) =>
@@ -404,6 +452,44 @@ const feedGrade = (evidence: Evidence) => {
     feedPosts.map((post) => post.id),
   );
 
+  const scrollTransitions = entries.flatMap(({ event, record }, index) => {
+    const previous = entries[index - 1];
+
+    if (previous === undefined) return [];
+    const previousCall = calls.find(({ sent }) => sent.id === previous.record.toolCallId);
+    const after = previousCall?.event.seq ?? previous.event.seq;
+    const matched = calls.find(({ sent }) => sent.id === record.toolCallId);
+    const request = precedingRequest(evidence.events, matched?.event.seq ?? event.seq);
+    const results = visibleResults(request?.value);
+
+    const scroll = evidence.events
+      .flatMap((candidate) =>
+        request !== undefined &&
+        candidate.kind === "response" &&
+        candidate.seq > after &&
+        candidate.seq < request.seq
+          ? Option.match(Schema.decodeUnknownOption(call)(candidate.value), {
+              onNone: () => [],
+              onSome: (sent) => (successfulScroll(sent, results) ? [sent] : []),
+            })
+          : [],
+      )
+      .at(-1);
+
+    return [
+      {
+        entryId: record.entryId,
+        postId: record.params.postId,
+        turn: request?.turn ?? null,
+        scrollToolCallId: scroll?.id ?? null,
+        successful: scroll !== undefined,
+      },
+    ];
+  });
+
+  const successfulScrollTransitions = scrollTransitions.filter((entry) => entry.successful).length;
+  const missingScrollTransitions = scrollTransitions.length - successfulScrollTransitions;
+
   const corrections = commentary.flatMap((entry, index) =>
     entry.claim.corrects === null
       ? []
@@ -434,6 +520,8 @@ const feedGrade = (evidence: Evidence) => {
       duplicates === 0 &&
       unrecorded === 0 &&
       ordered &&
+      successfulScrollTransitions === feedPosts.length - 1 &&
+      missingScrollTransitions === 0 &&
       correctionObserved,
     expectedPosts: 6,
     observedPosts,
@@ -445,6 +533,9 @@ const feedGrade = (evidence: Evidence) => {
     duplicates,
     unrecorded,
     ordered,
+    successfulScrollTransitions,
+    missingScrollTransitions,
+    scrollTransitions,
     corrections,
     correctionObserved,
     prose: "ungraded",

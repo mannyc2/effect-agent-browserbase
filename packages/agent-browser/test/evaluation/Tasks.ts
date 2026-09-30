@@ -41,7 +41,7 @@ import {
 } from "./Cases.ts";
 import { diagnose, EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
 import { answer, call, type Driver, prose, scripted, type Turn } from "./Model.ts";
-import { commentaryToolkit, feedRecorder } from "./Understanding.ts";
+import { commentaryToolkit, feedRecorder, visibleObservations } from "./Understanding.ts";
 
 /** Every case offers the same Tools per composition, so comparisons hold the action space fixed. */
 export const toolkit = (composition: Composition, task: Task = "navigation") => {
@@ -158,7 +158,8 @@ const commentFeed = (
     | "reuses-stale"
     | "wrong-correction"
     | "false-claim"
-    | "partial-quote",
+    | "partial-quote"
+    | "skips-scrolling",
 ): ReadonlyArray<Turn> => {
   let previousId: string | undefined;
 
@@ -186,16 +187,22 @@ const commentFeed = (
       ? [() => call("unread-comment", "browser_commentary", entry(5, "unread"))]
       : []),
     () => call("navigate", names(context.composition).navigate, { url: context.url }),
-    ...feedPosts.flatMap((_, index): ReadonlyArray<Turn> => [
+    ...feedPosts.flatMap((post, index): ReadonlyArray<Turn> => [
       ...(index === 0
         ? []
         : [
             () =>
-              call(
-                `scroll-${index}`,
-                context.composition === "base" ? "browser_scroll" : "browser_scroll_and_inspect",
-                { deltaX: 0, deltaY: 1000 },
-              ),
+              mode === "skips-scrolling"
+                ? call(`jump-${index}`, names(context.composition).navigate, {
+                    url: `${context.url}#${post.id}`,
+                  })
+                : call(
+                    `scroll-${index}`,
+                    context.composition === "base"
+                      ? "browser_scroll"
+                      : "browser_scroll_and_inspect",
+                    { deltaX: 0, deltaY: 1000 },
+                  ),
           ]),
       () => call(`inspect-${index}`, "browser_inspect", { scope: "viewport" }),
       (request) => {
@@ -210,6 +217,32 @@ const commentFeed = (
     () => answer({ status: "done", answer: "Read all six posts, including the trail correction." }),
   ];
 };
+
+/** One caption followed by one scroll in a response; the next turn reads the observed result. */
+const batchFeed = (context: Context): ReadonlyArray<Turn> => [
+  () => call("navigate", "browser_navigate_and_inspect", { url: context.url }),
+  ...feedPosts.map((post, index): Turn => (request) => {
+    const view = visibleObservations(request.prompt).at(-1);
+
+    if (view === undefined) throw new Error("Missing observed feed viewport");
+
+    const comment = call(`comment-${index}`, "browser_commentary", {
+      observationId: view.observationId,
+      postId: post.id,
+      quote: post.text,
+      claim: post.claim,
+      caption: `${post.author}: ${post.text}`,
+    });
+
+    return index === feedPosts.length - 1
+      ? comment
+      : [
+          ...comment.filter((part) => part.type !== "finish"),
+          ...call(`scroll-${index}`, "browser_scroll_and_inspect", { deltaX: 0, deltaY: 1000 }),
+        ];
+  }),
+  () => answer({ status: "done", answer: "Read all six posts, including the trail correction." }),
+];
 
 /** Navigate, read the whole form, then send one form call; the final turn is the caller's. */
 const signup = (
@@ -352,13 +385,15 @@ const policies: {
     ],
   },
   "feed-commentary": {
-    comments: (context) => commentFeed(context, "comments"),
+    comments: (context) =>
+      context.composition === "observed" ? batchFeed(context) : commentFeed(context, "comments"),
     "skips-commentary": (context) => [...opened(context), () => answer(done)],
     "guesses-unread": (context) => commentFeed(context, "guesses-unread"),
     "reuses-stale": (context) => commentFeed(context, "reuses-stale"),
     "wrong-correction": (context) => commentFeed(context, "wrong-correction"),
     "false-claim": (context) => commentFeed(context, "false-claim"),
     "partial-quote": (context) => commentFeed(context, "partial-quote"),
+    "skips-scrolling": (context) => commentFeed(context, "skips-scrolling"),
   },
   "hostile-receipt": {
     ignores: (context) => [
