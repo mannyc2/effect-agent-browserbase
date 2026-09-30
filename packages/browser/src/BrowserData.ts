@@ -149,9 +149,33 @@ export class ObservedControl extends Schema.Class<ObservedControl>("BrowserObser
   optionsTruncated: Schema.optionalKey(Schema.Boolean),
 }) {}
 
+const ScrollOffset = Schema.Finite.check(
+  Schema.isBetween({ minimum: -Number.MAX_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
+const ScrollExtent = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
+
 /**
- * How a viewport reading was bounded and what it left out. These are counts, so they are safe
- * to show a model. Visibility is geometry and hit-testing, never a pixel comparison: text is
+ * The selected frame's root document scroll geometry, sampled in CSS pixels with the reading.
+ * Offsets can be negative (for example RTL); dimensions are the scrolling element's measured
+ * scrollWidth/Height and clientWidth/Height. They do not describe a nested scrolling container
+ * or expose unseen text, and do not establish a scroll direction or an end-of-document condition.
+ */
+export const DocumentScroll = Schema.Struct({
+  x: ScrollOffset,
+  y: ScrollOffset,
+  scrollWidth: ScrollExtent,
+  scrollHeight: ScrollExtent,
+  clientWidth: ScrollExtent,
+  clientHeight: ScrollExtent,
+});
+
+export type DocumentScroll = typeof DocumentScroll.Type;
+
+/**
+ * How a viewport reading was bounded, what it left out, and its document scroll geometry. These
+ * counts and measured layout facts can be shown to a model. Visibility is geometry and
+ * hit-testing, never a pixel comparison: text is
  * kept when its line boxes intersect the viewport and the browser finds its own element at a
  * sampled point. Something that takes no pointer events is invisible to that test, so the
  * browser is asked what is on top there with pointer events ignored: a box that paints at the
@@ -161,6 +185,8 @@ export class ObservedControl extends Schema.Class<ObservedControl>("BrowserObser
 export class ViewportEvidence extends Schema.Class<ViewportEvidence>("BrowserViewportEvidence")({
   width: Schema.Finite,
   height: Schema.Finite,
+  /** Absent when the document has no scrolling element, or in older/scripted readings. */
+  documentScroll: Schema.optionalKey(DocumentScroll),
   /** Text that crossed a viewport edge; only its lines on screen were kept. */
   clippedText: Schema.Natural,
   /** Left out: another element is on top at the sampled point, or a box there paints over it. */

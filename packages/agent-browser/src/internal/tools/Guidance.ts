@@ -18,8 +18,8 @@ export const sequentialScheduling = (hook: RunSchedulingHook = {}): RunSchedulin
 });
 
 /**
- * Agent instructions for the Tools a Toolkit declares, or for all of them. They restate the rules
- * the Tools enforce, so a model plans around them instead of learning them from failures. Use
+ * Agent instructions for the Tools a Toolkit declares, or for all of them. They explain the rules
+ * the Tools enforce and suggest how to read and navigate observations. Use
  * them as they are, add to them, or write your own: nothing depends on their wording.
  */
 export const instructions = (toolkit?: { readonly tools: object }): string => {
@@ -42,6 +42,12 @@ export const instructions = (toolkit?: { readonly tools: object }): string => {
       : []),
     "A failure with outcome unknown may still have happened: inspect before anything else and never repeat it blindly. An undispatched failure changed nothing.",
     "If a control you need is not in the observation, scroll, or inspect with find; scope document searches the whole page.",
+    ...(has("browser_scroll") || has("browser_scroll_and_inspect")
+      ? [
+          "An empty viewport can be a gap between content, not the end of a page. When reading by scrolling, advance in the intended direction in overlapping steps smaller than the viewport height and inspect each result to avoid skipping content.",
+          "When present, viewport.documentScroll reports the selected frame's document scroll position and dimensions in CSS pixels. Compare successive readings to check actual progress; a nested container can scroll independently, and these measurements do not prove that all content has loaded.",
+        ]
+      : []),
     ...(has("browser_read_more")
       ? ["When an observation's text is truncated, browser_read_more continues it."]
       : []),

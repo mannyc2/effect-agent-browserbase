@@ -498,6 +498,13 @@ test model vision, spoken narration, livestream delivery or broadcast timing.
 Capture overhead is part of a filmed run, so its timings are not directly
 comparable to recordings made with capture off.
 
+The measured agent performs both browser actions and commentary. Feed claims,
+quotes and observation references check what it actually read while navigating;
+caption writing style remains ungraded. Browser comparisons should hold the
+model, task, grading and call bounds fixed, count failures in cost per completed
+task, and retain failed footage. Improvements tuned on this feed need separate
+held-out browser tasks before claiming broader navigation reliability.
+
 ### Jev decision baseline
 
 `typesafe` uses the direct [System One API](https://docs.typesafe.ai/api), pinned

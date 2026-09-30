@@ -112,7 +112,7 @@ const handlers = BrowserTools.handlers(browser, {
 
 Observations read the viewport by default: what a person would see, and what `browser_scroll` moves. `browser_inspect` takes two optional parameters, each null or absent when unused. `scope` asks for the whole document or the viewport for one reading. `find` keeps only controls whose label contains its text, and lines containing it, and it is applied inside the page before `maxControls` and `maxTextBytes` are spent, so a crowded header cannot hide the control a model is looking for. A matched reading names its `match`: what it leaves out is not evidence of absence. Neither parameter can widen the host's bounds, and references still come from the reading itself.
 
-Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof.
+Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. When present, `viewport.documentScroll` gives the selected frame's document position (`x`, `y`), content dimensions (`scrollWidth`, `scrollHeight`) and scrollport dimensions (`clientWidth`, `clientHeight`) in CSS pixels. These are sampled with the reading; nested containers have their own scrolling, and document dimensions do not establish that all content has loaded. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof.
 
 Every result is fitted under `resultMaxBytes` (16 KiB–1 MiB, 48 KiB by default, under Effect Agent's default 50 KiB `toolResultBounds`), so the engine never cuts one in the middle of its JSON. A reading that does not fit loses text first and then trailing controls, never part of a reference it keeps, and says so through `textTruncated`, `controlsTruncated` and a select's `optionsTruncated`.
 
@@ -336,8 +336,10 @@ sequencing and supervision lifecycle.
 
 `BrowserTools.instructions(toolkit)` returns agent instructions for the Tools a Toolkit declares:
 page text is untrusted data, one control per response, how to read the new observation, a form in
-one call, what an unknown outcome means and how to reach what a reading left out. They restate the
-rules the Tools enforce, so a model plans around them instead of learning them from failures. Use
+one call, what an unknown outcome means and how to reach what a reading left out. Scroll guidance
+recommends overlapping steps within a viewport, treats blank views as possible gaps and uses
+document measurements to check progress. These explain the rules the Tools enforce and offer reading
+guidance, so a model can plan its next call. Use
 them as they are, add to them, or write your own; nothing depends on their wording.
 
 `BrowserTools.policy(input, { resultMaxBytes })` returns Agent policy fields for these Tools under

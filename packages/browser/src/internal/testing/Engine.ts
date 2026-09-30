@@ -16,6 +16,7 @@ import {
   type SelectOptions,
   type Viewport,
   type ViewportPoint,
+  type DocumentScroll,
   type WaitForElementRequest,
 } from "../../BrowserData.ts";
 import {
@@ -101,6 +102,7 @@ interface DocumentState {
   readonly url: string;
   readonly title: string;
   readonly text: string;
+  readonly documentScroll?: DocumentScroll;
   readonly controls: ReadonlyArray<ControlState>;
 }
 
@@ -289,6 +291,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     url: document.url,
     title: document.title ?? "",
     text: document.text,
+    ...(document.documentScroll === undefined
+      ? {}
+      : { documentScroll: { ...document.documentScroll } }),
     controls: (document.controls ?? []).map(controlState),
   });
 
@@ -369,6 +374,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       url: document.url,
       title: document.title ?? "",
       text: document.text,
+      ...(document.documentScroll === undefined
+        ? {}
+        : { documentScroll: { ...document.documentScroll } }),
       controls,
     };
     if (page.focused !== undefined && !previous.has(page.focused)) page.focused = undefined;
@@ -1384,6 +1392,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             viewport: ViewportEvidence.make({
               width: viewport.width,
               height: viewport.height,
+              ...(page.document.documentScroll === undefined
+                ? {}
+                : { documentScroll: { ...page.document.documentScroll } }),
               clippedText: 0,
               coveredText: 0,
               uncertainText: 0,
@@ -1410,6 +1421,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             viewport: ViewportEvidence.make({
               width: viewport.width,
               height: viewport.height,
+              ...(page.document.documentScroll === undefined
+                ? {}
+                : { documentScroll: { ...page.document.documentScroll } }),
               clippedText: 0,
               coveredText: 0,
               uncertainText: 0,
@@ -1892,6 +1906,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     url: document.url,
     title: document.title,
     text: document.text,
+    ...(document.documentScroll === undefined
+      ? {}
+      : { documentScroll: { ...document.documentScroll } }),
     controls: document.controls.map((control) => ({
       ...control.script,
       ...(control.checked === undefined ? {} : { checked: control.checked }),
