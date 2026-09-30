@@ -46,12 +46,13 @@ bound instead of being cut by the engine, observations default to the viewport, 
 applied inside the page before any limit. `host.run` schedules browser calls sequentially, in the
 order the model declared them. `effect-browser` adds a gated `fillForm`, which
 `browser_fill_form` exposes, so a whole form costs one call; `fillElement` refuses before dispatch
-what Playwright would otherwise refuse only after it. This is unpaid local evidence against
-Chromium with a scripted model: no model provider has been called and no hosted session run.
+what Playwright would otherwise refuse only after it. Scripted local Chromium tests qualify
+these contracts; later real-model and Browserbase pilots are recorded below.
 
 The unpaid evaluation foundation for [#93](https://github.com/mannyc2/effect-agent-browserbase/issues/93)
 lives in `effect-agent-browser`'s unpublished tests. It retains bounded model-boundary records and
-host facts for seven cases: form submission; over Chromium, multi-page navigation, a write whose acknowledgement is lost, a
+host facts for nine cases: form submission; over Chromium, multi-page navigation, chart source-data
+reasoning, viewport feed commentary, a write whose acknowledgement is lost, a
 write refused before dispatch after a re-render, and one named hostile-page attack; a cancelled
 waiter; and a long reading. It grades task success, output, claims, duplicate writes, retries after
 an unknown outcome, termination, cleanup, whether the injected condition occurred and whether the
@@ -63,14 +64,29 @@ Anthropic models: `plan` prints the whole matrix, rates and spend bounds with a 
 `campaign` needs an opt-in, that digest and the credentials before anything is allocated. Each
 provider request is checked against its priced contract and reserved against the run's and the
 campaign's limits before it is sent, then settled from reported usage; records alias provider
-identifiers. It is tested only over a scripted HTTP transport, and Browserbase is refused because
-no hosted fixture exists. The [evaluation guide](../packages/agent-browser/test/evaluation/README.md)
-lists what it does not prove. The local navigation case also admits a pinned
+identifiers. Scripted HTTP tests calibrate admission and transport behavior; owner-authorized
+pilots have run against real providers locally and on Browserbase, recorded below. `hosted-v1`
+serves the sign-up, re-rendered submit and hostile-receipt cases through a page-to-host binding.
+The [evaluation guide](../packages/agent-browser/test/evaluation/README.md) lists what it does not
+prove. One scripted trial now contains 39 runs; three complete trials total 117 within the 120-run cap.
+The chart shows an SVG and accessible source table: structured arithmetic, unit and nonzero-axis
+facts are graded against host truth and model-visible source values, while explanation quality
+is ungraded. The feed forces viewport reads and records fresh claims, full-post quotes matched
+after whitespace normalization, and generated captions for six posts, including a later correction.
+Its 24-turn, 24-Tool-call bounds cover
+reading, commentary and scrolling. Measured runs print captions when the handler receives them;
+the Tool's receipt acknowledges delivery without correctness or answer feedback. Task-specific reports
+expose chart source grounding and feed coverage, freshness, order and correction checks; their success
+flags require complete evidence. Timestamps are host
+receipt times, not inference duration or video airtime, and prose quality is ungraded. The local
+navigation case also admits a pinned
 `jev-1.13.0` decision policy, selecting observed links and text lines under an approved
 confidence threshold. Evidence v5 distinguishes its host-assembled output from generated
 model output and retains decision inputs before dispatch. Its integration calibration uses
-scripted HTTP responses; no Jev accuracy or cost measurement has been made.
-Owner-authorized pilots have run locally and on Browserbase, recorded below.
+scripted HTTP responses. An owner-authorized bounded Jev navigation smoke is retained in
+[PR #129](https://github.com/mannyc2/effect-agent-browserbase/pull/129); it establishes no broader
+accuracy or cost claim. Jev remains restricted to navigation and supplies neither generated
+commentary nor image understanding.
 
 The Browserbase runtime's completed unpaid implementation was merged in [PR #3](https://github.com/mannyc2/effect-agent-browserbase/pull/3). Its immutable source identity, exact acceptance results and artifact checksums are retained in the [2026-09-19 acceptance record](history/2026-09-19-acceptance.md).
 

@@ -280,7 +280,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
   if (unhosted.length > 0)
     return yield* refuse(
       "backend",
-      `Browserbase cannot run ${unhosted.join(", ")}: reading uses the scripted owner, and a lost acknowledgement's late write reaches the host only after the owner has fenced the page.`,
+      `Browserbase cannot run ${unhosted.join(", ")}: only signup, rerendered-submit and hostile-receipt have a hosted fixture; the other cases remain local.`,
     );
   const excluded = spec.tasks.filter((task) => unmeasured[task] !== undefined);
 

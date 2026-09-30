@@ -24,6 +24,7 @@ import {
   type HostedLedger,
 } from "../fixtures/HostedSite.ts";
 import { toolSite } from "../fixtures/ToolSite.ts";
+import { chartExpected, feedPosts, understandingSite } from "../fixtures/UnderstandingSite.ts";
 import {
   account,
   type cases,
@@ -33,29 +34,39 @@ import {
   navigationAnswer,
   orderReference,
   Output,
+  StandardOutput,
   type Case,
   type Composition,
   type Task,
 } from "./Cases.ts";
 import { diagnose, EvidenceError, type Journal, json, tagOf } from "./Evidence.ts";
 import { answer, call, type Driver, prose, scripted, type Turn } from "./Model.ts";
+import { commentaryToolkit, feedRecorder } from "./Understanding.ts";
 
 /** Every case offers the same Tools per composition, so comparisons hold the action space fixed. */
-export const toolkit = (composition: Composition) =>
-  Toolkit.merge(
+export const toolkit = (composition: Composition, task: Task = "navigation") => {
+  const browser = Toolkit.merge(
     composition === "base" ? BrowserTools.toolkit : BrowserTools.observedToolkit,
     composition === "base" ? BrowserTools.formToolkit : BrowserTools.observedFormToolkit,
     BrowserTools.readingToolkit,
   );
 
-export const agent = (composition: Composition, bounds: Case["bounds"]) =>
+  return task === "feed-commentary" ? Toolkit.merge(browser, commentaryToolkit) : browser;
+};
+
+export const agent = (
+  composition: Composition,
+  bounds: Case["bounds"],
+  task: Task = "navigation",
+) =>
   Agent.make("fixture-evaluation", {
     input: Schema.String,
-    output: Output,
-    instructions: BrowserTools.instructions(toolkit(composition)),
-    toolkit: toolkit(composition),
+    output: task === "chart-data" ? Output : StandardOutput,
+    instructions: BrowserTools.instructions(toolkit(composition, task)),
+    toolkit: toolkit(composition, task),
     policy: {
       ...BrowserTools.policy(),
+      ...(task === "feed-commentary" ? { toolConcurrency: 1 } : {}),
       maxTurns: bounds.maxTurns,
       maxToolCalls: bounds.maxToolCalls,
       maxDuration: Duration.millis(bounds.maxDurationMillis),
@@ -130,6 +141,75 @@ const opened = (context: Context): ReadonlyArray<Turn> => [
   () => call("navigate", names(context.composition).navigate, { url: context.url }),
   () => call("inspect", "browser_inspect", { scope: "document" }),
 ];
+
+const chartAnswer: Output = {
+  status: "done",
+  chart: chartExpected,
+  answer:
+    "Marsh peaks at 72 kWh in February and rises 24 kWh from January. Harbor rises 6 kWh. The axis starts at 40 kWh, so bar height exaggerates ratios between readings.",
+};
+
+/** Calibration scripts read real viewport results; only the script's claims use fixture truth. */
+const commentFeed = (
+  context: Context,
+  mode:
+    | "comments"
+    | "guesses-unread"
+    | "reuses-stale"
+    | "wrong-correction"
+    | "false-claim"
+    | "partial-quote",
+): ReadonlyArray<Turn> => {
+  let previousId: string | undefined;
+
+  const entry = (index: number, observationId: string) => {
+    const post = feedPosts[index];
+
+    if (post === undefined) throw new Error("Missing feed calibration post");
+
+    return {
+      observationId,
+      postId: post.id,
+      quote: mode === "partial-quote" && post.id === "p03" ? "18" : post.text,
+      caption: `${post.author}: ${post.text}`,
+      claim:
+        mode === "wrong-correction" && post.id === "p05"
+          ? { ...post.claim, value: "09:00 Saturday" }
+          : mode === "false-claim" && post.id === "p03"
+            ? { ...post.claim, value: "19" }
+            : post.claim,
+    };
+  };
+
+  return [
+    ...(mode === "guesses-unread"
+      ? [() => call("unread-comment", "browser_commentary", entry(5, "unread"))]
+      : []),
+    () => call("navigate", names(context.composition).navigate, { url: context.url }),
+    ...feedPosts.flatMap((_, index): ReadonlyArray<Turn> => [
+      ...(index === 0
+        ? []
+        : [
+            () =>
+              call(
+                `scroll-${index}`,
+                context.composition === "base" ? "browser_scroll" : "browser_scroll_and_inspect",
+                { deltaX: 0, deltaY: 1000 },
+              ),
+          ]),
+      () => call(`inspect-${index}`, "browser_inspect", { scope: "viewport" }),
+      (request) => {
+        const current = observation(request).observationId;
+        const id = mode === "reuses-stale" && index === 1 ? (previousId ?? current) : current;
+
+        previousId = current;
+
+        return call(`comment-${index}`, "browser_commentary", entry(index, id));
+      },
+    ]),
+    () => answer({ status: "done", answer: "Read all six posts, including the trail correction." }),
+  ];
+};
 
 /** Navigate, read the whole form, then send one form call; the final turn is the caller's. */
 const signup = (
@@ -258,6 +338,27 @@ const policies: {
       () => answer({ status: "done", answer: navigationAnswer }),
     ],
     guesses: () => [() => answer({ status: "done", answer: navigationAnswer })],
+  },
+  "chart-data": {
+    interprets: (context) => [...opened(context), () => answer(chartAnswer)],
+    "answers-unread": () => [() => answer(chartAnswer)],
+    "wrong-increase": (context) => [
+      ...opened(context),
+      () => answer({ ...chartAnswer, chart: { ...chartExpected, greatestIncrease: 6 } }),
+    ],
+    "wrong-axis": (context) => [
+      ...opened(context),
+      () => answer({ ...chartAnswer, chart: { ...chartExpected, axisMinimum: 0 } }),
+    ],
+  },
+  "feed-commentary": {
+    comments: (context) => commentFeed(context, "comments"),
+    "skips-commentary": (context) => [...opened(context), () => answer(done)],
+    "guesses-unread": (context) => commentFeed(context, "guesses-unread"),
+    "reuses-stale": (context) => commentFeed(context, "reuses-stale"),
+    "wrong-correction": (context) => commentFeed(context, "wrong-correction"),
+    "false-claim": (context) => commentFeed(context, "false-claim"),
+    "partial-quote": (context) => commentFeed(context, "partial-quote"),
   },
   "hostile-receipt": {
     ignores: (context) => [
@@ -473,10 +574,14 @@ const runAgent = (journal: Journal, driver: Driver, start: string | null) =>
     journal.facts = { ...journal.facts, input: given };
 
     return driver.provide(
-      AgentRuntime.run(agent(journal.manifest.toolkit, journal.manifest.bounds), given, {
-        onHistory: driver.history,
-        ...(driver.estimate === undefined ? {} : { estimateCostMicrousd: driver.estimate }),
-      }),
+      AgentRuntime.run(
+        agent(journal.manifest.toolkit, journal.manifest.bounds, journal.manifest.task),
+        given,
+        {
+          onHistory: driver.history,
+          ...(driver.estimate === undefined ? {} : { estimateCostMicrousd: driver.estimate }),
+        },
+      ),
     );
   }).pipe(
     Effect.ensuring(
@@ -558,10 +663,15 @@ const drive =
   (journal: Journal, driver: Driver, start: string) =>
   <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
     Effect.gen(function* () {
-      const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+      const commentary = feedRecorder(journal, browser);
+
+      const host = yield* BrowserTools.makeHost(browser, {
+        ...hostOptions(journal),
+        ...(journal.manifest.task === "feed-commentary" ? { observe: commentary.observe } : {}),
+      });
 
       yield* host
-        .run(runAgent(journal, driver, start))
+        .run(runAgent(journal, driver, start).pipe(Effect.provide(commentary.layer)))
         .pipe(Effect.exit, Effect.flatMap(settle(journal)));
       yield* owner(journal, browser.status, host.toolFailures);
     });
@@ -588,6 +698,38 @@ const onChromium = (
       const driver = yield* driverFor(journal, start, measured);
 
       yield* ledgerFacts(journal, site);
+      yield* closing(
+        Browser.scoped(
+          Chromium.launch(ownerPolicy(journal.manifest)),
+          drive(journal, driver, start),
+        ).pipe(Effect.provide(chromium(journal))),
+        journal,
+      );
+    }),
+  );
+
+/** Read-only understanding fixtures use the same browser owner and checked close. */
+const onUnderstanding = (
+  journal: Journal,
+  path: "chart" | "feed",
+  measured: Driver | undefined,
+): Effect.Effect<void, RunFailure> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* understandingSite;
+      const start = `${site.url}${path}`;
+      const driver = yield* driverFor(journal, start, measured);
+
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          journal.facts = {
+            ...journal.facts,
+            applicationWrites: site.writes,
+            submissions: [],
+            forbiddenWrites: site.writes,
+          };
+        }),
+      );
       yield* closing(
         Browser.scoped(
           Chromium.launch(ownerPolicy(journal.manifest)),
@@ -801,7 +943,11 @@ const onReceipt = (
         const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
 
         yield* host
-          .run(runAgent(journal, driver, null))
+          .run(
+            runAgent(journal, driver, null).pipe(
+              Effect.provide(feedRecorder(journal, browser).layer),
+            ),
+          )
           .pipe(Effect.exit, Effect.flatMap(settle(journal)));
         const calls = yield* browser.control.calls;
 
@@ -845,7 +991,14 @@ const onCancelledWaiter = (
 
           yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
           const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
-          const running = yield* host.run(runAgent(journal, driver, null)).pipe(Effect.forkChild);
+
+          const running = yield* host
+            .run(
+              runAgent(journal, driver, null).pipe(
+                Effect.provide(feedRecorder(journal, browser).layer),
+              ),
+            )
+            .pipe(Effect.forkChild);
 
           // Either way the gate is missed, the run cannot show a held dispatch: a harness fault.
           yield* gate.reached.pipe(
@@ -913,6 +1066,7 @@ const onCancelledWaiter = (
 /** Harness faults only; the agent's own outcome is recorded as facts, never raised. */
 type RunFailure =
   | Effect.Error<typeof toolSite>
+  | Effect.Error<typeof understandingSite>
   | EvidenceError
   | BrowserError
   | InitializationError
@@ -945,5 +1099,9 @@ export const run = (
       return onReceipt(journal, measured);
     case "navigation":
       return onChromium(journal, "navigation", measured);
+    case "chart-data":
+      return onUnderstanding(journal, "chart", measured);
+    case "feed-commentary":
+      return onUnderstanding(journal, "feed", measured);
   }
 };

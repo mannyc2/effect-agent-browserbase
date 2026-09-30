@@ -10,6 +10,7 @@ import { type Evidence, Journal, json, requestData } from "./Evidence.ts";
 import { grade } from "./Grading.ts";
 import { history, model, type Turn } from "./Model.ts";
 import { agent } from "./Tasks.ts";
+import { commentaryTool, commentaryToolkit } from "./Understanding.ts";
 
 export class ReplayDivergence extends Schema.TaggedError<ReplayDivergence>()("ReplayDivergence", {
   reason: Schema.Literals(["incomplete", "schema", "action", "result", "remaining", "request"]),
@@ -38,7 +39,7 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
   // Aliased identifiers still replay: the same aliases name each call and its result.
   if (grade(evidence).exactness === "incomplete")
     return yield* new ReplayDivergence({ reason: "incomplete" });
-  const { toolkit: composition, bounds, goal } = evidence.manifest;
+  const { toolkit: composition, bounds, goal, task } = evidence.manifest;
   const requests = evidence.events.filter((event) => event.kind === "request");
   const lastHistory = evidence.events.findLast((event) => event.kind === "history");
 
@@ -147,6 +148,9 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
     BrowserTools.readingToolkit.toLayer({
       browser_read_more: serve("browser_read_more", readMore),
     }),
+    commentaryToolkit.toLayer({
+      browser_commentary: serve("browser_commentary", commentaryTool),
+    }),
   );
 
   const turns: Turn[] = requests.map((request) => (actual) => {
@@ -176,9 +180,13 @@ export const replay = Effect.fn("Evaluation.replay")(function* (
 
   const journal = new Journal(evidence.manifest);
 
-  const result = yield* AgentRuntime.run(agent(composition, bounds), evidence.facts.input ?? goal, {
-    onHistory: history(journal),
-  }).pipe(
+  const result = yield* AgentRuntime.run(
+    agent(composition, bounds, task),
+    evidence.facts.input ?? goal,
+    {
+      onHistory: history(journal),
+    },
+  ).pipe(
     Effect.provide(Layer.mergeAll(handlers, model(journal, turns))),
     Effect.catchCause(() => Effect.fail(divergence ?? new ReplayDivergence({ reason: "result" }))),
   );
