@@ -442,7 +442,12 @@ it.effect(
         expect(fail).toBeDefined();
 
         const held = hold
-          ?.invoke({ read: async () => "1", check: async () => {}, dispose: async () => {} })
+          ?.invoke({
+            origin: "https://example.test",
+            read: async () => "1",
+            check: async () => {},
+            dispose: async () => {},
+          })
           .catch(() => "rejected");
 
         yield* Deferred.await(entered);
@@ -451,7 +456,12 @@ it.effect(
         yield* Effect.promise(() => inputEntered.promise);
         yield* Effect.promise(async () => {
           await fail
-            ?.invoke({ read: async () => "1", check: async () => {}, dispose: async () => {} })
+            ?.invoke({
+              origin: "https://example.test",
+              read: async () => "1",
+              check: async () => {},
+              dispose: async () => {},
+            })
             .catch(() => undefined);
         });
         expect(yield* Fiber.join(input)).toMatchObject({
@@ -630,7 +640,12 @@ it.effect.each(["consumer", "consumer-initialization-error", "registration"] as 
           expect(binding).toBeDefined();
           yield* Effect.promise(async () => {
             await binding
-              ?.invoke({ read: async () => "1", check: async () => {}, dispose: async () => {} })
+              ?.invoke({
+                origin: "https://example.test",
+                read: async () => "1",
+                check: async () => {},
+                dispose: async () => {},
+              })
               .catch(() => undefined);
           });
         }

@@ -222,7 +222,7 @@ it.live(
             origins: [first],
             input: authorizedInput,
             output: Schema.String,
-            // Regression for ecbb6c8: an unauthorized document must not apply fail-session.
+            // A document refused by origin must not end the session.
             failureMode: "fail-session",
             handle: ({ label }) =>
               Effect.sync(() => {
@@ -322,7 +322,13 @@ it.live(
             expect(publicCalls).toEqual(["main", "child", "cross", "popup"]);
             expect(privateCalls).toEqual(["main", "popup"]);
             expect(privateDecodes).toEqual(["main", "popup"]);
-            expect((yield* session.bindingDiagnostics).faulted).toBe(false);
+            const diagnostics = yield* session.bindingDiagnostics;
+
+            expect(diagnostics.faulted).toBe(false);
+            // Both refusals are recorded, and neither was admitted.
+            expect(
+              diagnostics.bindings.find(({ name }) => name === "privateSettings"),
+            ).toMatchObject({ accepted: 2, succeeded: 2, rejected: 2 });
           }),
         );
         expect(fixture.connections).toEqual(["session-1"]);

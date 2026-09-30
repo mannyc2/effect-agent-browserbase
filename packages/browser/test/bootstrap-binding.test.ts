@@ -200,6 +200,7 @@ it.effect(
 
         const reply = yield* Effect.promise(() =>
           binding.invoke({
+            origin: "https://portal.example.com",
             read: async () => '{"version":3}',
             check: async () => {},
             dispose: async () => {},

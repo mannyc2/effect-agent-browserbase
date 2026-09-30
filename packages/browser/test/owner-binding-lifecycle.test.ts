@@ -98,6 +98,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
 
           const reply = binding
             .invoke({
+              origin: "https://example.test",
               read: async () => '"held"',
               check: async () => {},
               dispose: async () => {},

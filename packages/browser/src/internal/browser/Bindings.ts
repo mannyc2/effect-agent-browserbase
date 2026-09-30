@@ -8,6 +8,8 @@ import { duplicateStep } from "./Bootstrap.ts";
 import type { DriverFault } from "./Driver.ts";
 
 export interface NativeBindingCall {
+  /** The calling document's origin, fixed by its native execution context. */
+  readonly origin: string;
   /** Validate native membership, allowed origin and the captured document before returning JSON. */
   readonly read: (signal: AbortSignal) => Promise<string>;
   /** Revalidate the same native caller/document; never substitute a newly selected document. */
@@ -296,6 +298,17 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
         const invoke = (call: NativeBindingCall): Promise<string> => {
           if (!active()) {
             state.rejected = increment(state.rejected);
+
+            return rejected();
+          }
+          // A document outside the binding's origins has no authority over the owner. It is
+          // refused before admission, so it can neither take capacity nor apply fail-session.
+          if (!registration.origins.includes(call.origin)) {
+            state.rejected = increment(state.rejected);
+            record(
+              { name: registration.name, failureMode: "reject-call" },
+              Cause.fail(error("origin")),
+            );
 
             return rejected();
           }
