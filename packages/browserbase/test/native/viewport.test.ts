@@ -150,11 +150,16 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
           assert.ok(scoutNative);
           const actual = yield* geometry(scoutNative);
 
+          // A created page is a window of its own, so Chromium paints it while the stage is in
+          // front, and its contents are the stage's size wherever the window itself is placed.
           expect(actual.viewport).toBeNull();
-          expect(actual.window.windowId).toBe(before.window.windowId);
+          expect(actual.window.windowId).not.toBe(before.window.windowId);
           expect(actual.js).toMatchObject({ innerWidth: 640, innerHeight: 480 });
           expect(actual.layout).toEqual(dimensions);
-          expect(actual.window.bounds).toEqual(before.window.bounds);
+          expect(actual.window.bounds).toMatchObject({
+            width: before.window.bounds.width,
+            height: before.window.bounds.height,
+          });
           // The stage keeps everything the owner controls. Its emulated window.outerWidth and
           // outerHeight are Chromium's report, not a setting: measured here they settle from the
           // native window's outer height (623) to the emulated height (480) once the renderer
