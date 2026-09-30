@@ -433,6 +433,12 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
        * would have had from the moment it was asked for.
        */
       readonly queue?: boolean;
+      /**
+       * Where this operation's own page can absorb an unknown outcome: asks the browser to close
+       * that page once the outcome is unknown, and says whether it did. Undefined, or a page
+       * that did not close, fences.
+       */
+      readonly contain?: () => Effect.Effect<boolean> | undefined;
     } = {},
   ): Effect.Effect<A, E | BrowserError, R> =>
     Effect.suspend(() => {
@@ -558,18 +564,51 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
         admitted = ticket;
 
-        const uncertain = () => {
+        // Dispatched work this admission gave up on, whose outcome no fence has decided yet.
+        let abandoned = false;
+
+        const abandon = () => {
           // The action timer can win the same instant as the independent lifetime timer.
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
           const fenced = controller.signal.aborted;
 
           controller.abort();
           if (dispatched && !fenced && state.phase !== "closing" && state.phase !== "closed")
-            fence("uncertain", "uncertain");
+            abandoned = true;
         };
 
+        const current = () => state.generation === generation && state.phase === "open";
+
+        /**
+         * Work given up after dispatch fences the owner, since nothing knows what it did or
+         * whether more of it will land. An operation confined to one page it may close instead
+         * closes that page: once the browser confirms it closed, nothing still bound for it can
+         * land anywhere, and every other page keeps working. It is still never replayed.
+         */
+        const settle = Effect.uninterruptible(
+          Effect.suspend(() => {
+            if (!abandoned) return Effect.void;
+            abandoned = false;
+            const closing = current() ? options.contain?.() : undefined;
+
+            if (closing === undefined) return Effect.sync(() => fence("uncertain", "uncertain"));
+
+            return closing.pipe(
+              Effect.map((closed) => {
+                if (!closed || !current()) {
+                  fence("uncertain", "uncertain");
+
+                  return;
+                }
+                unresolved.delete(controller);
+                record("page-contained", "confirmed");
+              }),
+            );
+          }),
+        );
+
         return yield* within(body(ticket), ticket.deadline, () => {
-          uncertain();
+          abandon();
 
           return BrowserError.make({
             operation,
@@ -591,20 +630,19 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                 }),
           ),
           Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
-            if (dispatched) uncertain();
+            if (dispatched) abandon();
+
             // The permit adds dispatch evidence only to browser-operation errors. Typed
             // initialization/consumer failures retain their identity and original family.
-            if (!Schema.is(BrowserError)(error)) return Effect.fail(error);
+            const failure: Effect.Effect<never, E | BrowserError> = Schema.is(BrowserError)(error)
+              ? Effect.fail(
+                  BrowserError.make({ operation, reason: error.reason, outcome: error.outcome }),
+                )
+              : Effect.fail(error);
 
-            return Effect.fail(
-              BrowserError.make({
-                operation,
-                reason: error.reason,
-                outcome: error.outcome,
-              }),
-            );
+            return settle.pipe(Effect.andThen(failure));
           }),
-          Effect.onInterrupt(() => Effect.sync(uncertain)),
+          Effect.onInterrupt(() => Effect.sync(abandon).pipe(Effect.andThen(settle))),
           Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
           Effect.ensuring(
             Effect.sync(() => {

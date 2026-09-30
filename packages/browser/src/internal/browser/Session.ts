@@ -757,6 +757,34 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         : Effect.void;
     });
 
+  /**
+   * A page other than the selected one can take an unknown outcome of its own mutation with it:
+   * closing it ends everything still bound for it, where the selected page and every other one
+   * go on working. The selected page's own outcome still fences, since direct operations follow
+   * it and nothing could be selected in its place.
+   */
+  const containment = (pageId: string): Effect.Effect<boolean> | undefined => {
+    const current = driver;
+
+    if (current === undefined) return undefined;
+    let selected: string | undefined;
+
+    try {
+      selected = current.selected().pageId;
+    } catch {
+      // Nothing is selected: the page is not the selected one.
+    }
+
+    return selected === pageId
+      ? undefined
+      : Effect.promise(() =>
+          current.containPage(pageId).then(
+            () => true,
+            () => false,
+          ),
+        );
+  };
+
   const waitFree = (operation: BrowserOperation, pageId?: string) =>
     Effect.suspend(() =>
       owner.waitPending(pageId)
@@ -946,6 +974,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           preflight: mutation
             ? Effect.suspend(check).pipe(Effect.andThen(unreserved(operation, browserTarget)))
             : Effect.suspend(check),
+          ...(browserTarget === undefined
+            ? {}
+            : { contain: () => containment(browserTarget.pageId) }),
         },
       );
 
@@ -1052,6 +1083,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             browserTarget,
             control,
           );
+
+          // A continuation that outlived its permit takes no reservation: whatever gave that
+          // permit up has already decided this dispatch's outcome.
+          ticket.check();
 
           return {
             target,

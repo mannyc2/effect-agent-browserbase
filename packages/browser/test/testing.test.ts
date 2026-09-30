@@ -860,6 +860,151 @@ it.effect("one page's address and title are read without reading any other page"
   ),
 );
 
+/** A second page, pinned and showing the shop, that is not the selected one. */
+const background = (browser: Testing.ScriptedSession) =>
+  Effect.gen(function* () {
+    const page = yield* browser.createPage;
+    const pinned = yield* browser.pinPage(page);
+
+    yield* pinned.navigate({ url: `${origin}/` });
+
+    return { page, pinned };
+  });
+
+it.effect(
+  "an unknown outcome on a page that is not selected closes that page and fences nothing",
+  () =>
+    Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+      Effect.gen(function* () {
+        const { page, pinned } = yield* background(browser);
+        const gate = yield* browser.control.gate;
+
+        yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
+        const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+
+        yield* gate.reached;
+        yield* TestClock.adjust("5 seconds");
+        // The caller still learns the outcome is unknown, and nothing re-sends it.
+        expect(yield* Fiber.join(clicking).pipe(Effect.flip)).toMatchObject({
+          operation: "click",
+          reason: { _tag: "Timeout" },
+          outcome: "unknown",
+        });
+        expect(yield* browser.status).toMatchObject({
+          phase: "open",
+          reason: null,
+          unresolvedDispatch: false,
+        });
+        expect((yield* browser.diagnostics).records).toMatchObject([
+          { reason: "page-contained", disposition: "confirmed" },
+        ]);
+        expect(yield* browser.pages).toMatchObject([{ selected: true }]);
+        expect(yield* pinned.readText({}).pipe(Effect.flip)).toMatchObject({
+          outcome: "undispatched",
+        });
+        expect(yield* browser.describePage(page).pipe(Effect.flip)).toMatchObject({
+          outcome: "undispatched",
+        });
+        // The selected page, and a page opened afterwards, keep working.
+        expect((yield* browser.readText({})).text).toBe("Welcome. We use cookies.");
+        yield* browser.clickElement(reference(yield* browser.observe(), "accept"));
+        expect(yield* browser.createPage).toMatchObject({ selected: false });
+        const calls = yield* browser.control.calls;
+
+        expect(calls.filter((call) => call.operation === "click")).toMatchObject([
+          { pageId: page.pageId, dispatched: true },
+          { dispatched: true, settled: "completed" },
+        ]);
+        expect(calls.filter((call) => call.operation === "close-page")).toMatchObject([
+          { pageId: page.pageId, dispatched: true, settled: "completed" },
+        ]);
+        yield* gate.open;
+      }),
+    ),
+);
+
+it.effect("a page that is not selected also takes an interrupted mutation with it", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const { pinned } = yield* background(browser);
+      const gate = yield* browser.control.gate;
+
+      yield* browser.control.next("type", { _tag: "Hold", gate, dispatched: true });
+      const typing = yield* pinned.type({ text: "hello" }).pipe(Effect.forkScoped);
+
+      yield* gate.reached;
+      yield* Fiber.interrupt(typing);
+      expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+      expect(yield* browser.pages).toHaveLength(1);
+      yield* gate.open;
+    }),
+  ),
+);
+
+it.effect("an unknown outcome on the selected page still fences, even through a pin", () =>
+  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+    Effect.gen(function* () {
+      yield* browser.createPage;
+      const selected = (yield* browser.pages).find((page) => page.selected)!;
+      const pinned = yield* browser.pinPage(selected);
+      const gate = yield* browser.control.gate;
+
+      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
+      const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+
+      yield* gate.reached;
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(clicking).pipe(Effect.flip);
+      expect(yield* browser.status).toMatchObject({
+        phase: "uncertain",
+        unresolvedDispatch: true,
+      });
+      expect(
+        (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
+      ).toEqual([]);
+      yield* gate.open;
+    }),
+  ).pipe(
+    Effect.catchTag("BrowserError", (error) =>
+      error.operation === "close" ? Effect.void : Effect.fail(error),
+    ),
+  ),
+);
+
+it.effect("a page that does not close when its outcome is unknown fences the session", () =>
+  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+    Effect.gen(function* () {
+      const { pinned } = yield* background(browser);
+      const gate = yield* browser.control.gate;
+
+      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
+      yield* browser.control.next("close-page", {
+        _tag: "Fail",
+        reason: Reasons.Provider.make({}),
+        outcome: "unknown",
+      });
+      const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+
+      yield* gate.reached;
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(clicking).pipe(Effect.flip);
+      expect(yield* browser.status).toMatchObject({
+        phase: "uncertain",
+        unresolvedDispatch: true,
+      });
+      expect(yield* browser.readText({}).pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Closed" },
+        outcome: "undispatched",
+      });
+      yield* gate.open;
+    }),
+  ).pipe(
+    Effect.catchTag("BrowserError", (error) =>
+      error.operation === "close" ? Effect.void : Effect.fail(error),
+    ),
+  ),
+);
+
 it.effect("an in-flight navigation can be watched, stopped, or time out under the test clock", () =>
   Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
     Effect.gen(function* () {

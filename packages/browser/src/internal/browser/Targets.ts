@@ -503,6 +503,15 @@ export const makeTargets = (
       ticket.check();
     });
 
+  const containPage = async (pageId: string): Promise<void> => {
+    const entry = entries.get(pageId);
+
+    // A closed page has already left the registry.
+    if (entry === undefined) return;
+    await closeWithin(() => entry.page.close({ runBeforeUnload: false }), 5000);
+    if (!entry.page.isClosed()) throw failure(Reasons.Failed.make({}));
+  };
+
   const listFrames = (ticket: Ticket, page?: PageInfo) =>
     sanitize(async () => {
       ticket.check();
@@ -582,6 +591,7 @@ export const makeTargets = (
     selectPage,
     newPage,
     closePage,
+    containPage,
     listFrames,
     resolveFrame,
     selectFrame,

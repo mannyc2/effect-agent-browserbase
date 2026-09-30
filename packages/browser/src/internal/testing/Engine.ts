@@ -489,6 +489,23 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         snapshot.validity = "invalid";
     };
 
+    /** The page closes as a browser closes it: every connection learns, and nothing on it lasts. */
+    const close = (target: Page) => {
+      target.closed = true;
+      target.navigation?.drop();
+      target.capture?.start.invalidate("target-changed");
+      target.capture = undefined;
+      notify(target);
+      if (selectedId === target.pageId) select(undefined);
+      invalidateSnapshot({ pageId: target.pageId });
+      events.invalidate("target-changed", { pageId: target.pageId });
+      for (const other of live) {
+        if (other === connection) continue;
+        other.retire(target.pageId);
+        other.announce(target.pageId);
+      }
+    };
+
     /** This connection ends: what it held on the browser's pages ends with it. */
     const dropConnection = (announce: boolean, ended: ScriptedConnection = "dropped") => {
       if (disconnected) return;
@@ -1190,19 +1207,20 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           const target = pageOf(page, "close-page");
 
           dispatch(ticket, record);
-          target.closed = true;
-          target.navigation?.drop();
-          target.capture?.start.invalidate("target-changed");
-          target.capture = undefined;
-          notify(target);
-          if (selectedId === target.pageId) select(undefined);
-          invalidateSnapshot({ pageId: target.pageId });
-          events.invalidate("target-changed", { pageId: target.pageId });
-          for (const other of live) {
-            if (other === connection) continue;
-            other.retire(target.pageId);
-            other.announce(target.pageId);
-          }
+          close(target);
+        }),
+      // Recorded as a close; an armed `close-page` failure makes it fail instead, so the owner
+      // fences, and the page stays open.
+      containPage: (pageId) =>
+        attempt("close-page", undefined, { pageId }, async (record) => {
+          const target = pages.get(pageId);
+
+          if (target === undefined || target.closed) return;
+          const outcome = take("close-page");
+
+          record.dispatched = true;
+          if (outcome?._tag === "Fail") throw fail("close-page", outcome.reason, outcome.outcome);
+          close(target);
         }),
       listFrames: (ticket, page) =>
         attempt("list-frames", ticket, {}, async () => [
