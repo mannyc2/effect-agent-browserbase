@@ -66,6 +66,11 @@ test("five clean consumers supply hosts directly and substitute only the browser
       manifest === browser ? undefined : manifest.dependencies["effect-browser"],
       "Bun's peer substitution must select the directly supplied browser archive",
     );
+    assert.equal(
+      manifest.overrides["@effect/platform-node-shared"],
+      manifest.devDependencies["@effect/platform-node"],
+      "The platform's shared package must be the one released with it",
+    );
     for (const name of ["effect-browserbase", "effect-agent-browser", "effect-agent"])
       assert.equal(
         manifest.overrides[name],
