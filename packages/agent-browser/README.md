@@ -489,16 +489,20 @@ Common-operation helpers may accept `AnySession`; helpers such as the example's 
 
 The unpublished [evaluation runner](test/evaluation/README.md) records actual
 AgentRuntime model-boundary inputs, projected tool results and independent
-application or owner state for six resettable cases: form submission, a write
+application or owner state for seven resettable cases: form submission, a write
 whose acknowledgement is lost, a write refused before dispatch, a cancelled
-waiter, a long reading and a page that instructs the agent to cancel an order.
+waiter, a long reading, multi-page navigation and a page that instructs the agent to cancel an order.
 Scripted reference and known-bad policies, with retained-evidence tests, check
 its deterministic oracles, which grade task success, output, claims, duplicate
 writes, retries after an unknown outcome, termination, cleanup, whether the
 injected condition occurred and whether a named attack was resisted separately.
 Two cases are held out from tuning. Offline grading and compatible-action replay
 need no model calls. These scripted cases establish integration contracts. A
-guarded campaign command runs the same cases with OpenAI or Anthropic models: its
+guarded campaign command runs the same cases with OpenAI or Anthropic models, and
+supports a pinned Jev decision policy for local navigation. Jev selects observed
+links and text lines; the host assembles Tool calls and the final output, recorded
+as decision-policy provenance. This baseline measures navigation and answer
+recognition, with no generation or vision. Its
 dry run shows the whole matrix and spend bounds, and a live run needs an opt-in,
 the approved plan digest and credentials, and reserves each request's worst-case
 cost before sending it. One owner-authorized pilot has run two cheap models

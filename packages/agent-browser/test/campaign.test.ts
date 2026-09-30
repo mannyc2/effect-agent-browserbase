@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, ConfigProvider, Effect, Exit, Redacted, Stream } from "effect";
+import { Cause, ConfigProvider, Effect, Exit, Redacted, Schema, Stream } from "effect";
 import { AgentPolicyError } from "effect-agent/agent-error";
 import { Command } from "effect/unstable/cli";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
@@ -23,7 +23,7 @@ import {
 } from "./evaluation/Campaign.ts";
 import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
-import { diagnose, Journal, manifest } from "./evaluation/Evidence.ts";
+import { decisionAdmission, diagnose, Journal, manifest, Manifest } from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
 import { provenance } from "./evaluation/Provenance.ts";
 import {
@@ -77,6 +77,29 @@ const spec = {
   trials: 2,
   budget: { perRunUsd: 0.25, campaignUsd: 4, maxRunSeconds: 180 },
   judges: "disabled",
+};
+
+const jev = {
+  id: "jev",
+  provider: "typesafe",
+  gateway: "direct",
+  model: "jev-1.13.0",
+  maxOutputTokens: 0,
+  reasoningEffort: null,
+  decisionThreshold: 0.8,
+  rates: {
+    ...rates,
+    cacheReadUsdPerMillion: 0,
+    cacheWriteUsdPerMillion: 0,
+    outputUsdPerMillion: 0,
+  },
+} as const;
+
+const decisionSpec = {
+  ...spec,
+  models: [jev],
+  tasks: ["navigation"],
+  trials: 1,
 };
 
 const live = {
@@ -182,6 +205,98 @@ it.effect("a real-model plan is refused, not truncated, when it cannot be bounde
         plan({ ...spec, models: [{ ...gpt, rates: { ...rates, inputUsdPerMillion: 0.0000001 } }] }),
       ),
     ).toBe("specification");
+  }),
+);
+
+it.effect("a Jev plan binds the decision policy, its rates and its output provenance", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(decisionSpec);
+    const subject = shown.subjects[0]!;
+    const evidence = measuredManifest(shown, shown.runs[0]!, "unavailable");
+
+    expect(shown.credentials).toEqual(["TYPESAFE_API_KEY"]);
+    expect(shown.runs.map((entry) => entry.backend)).toEqual(["chromium", "chromium"]);
+    expect(subject.settings).toEqual({
+      gateway: "direct",
+      maxOutputTokens: 0,
+      reasoningEffort: null,
+      serviceTier: null,
+      decisionThreshold: 0.8,
+    });
+    expect(shown.budget.admissionBySubject).toEqual({ jev: decisionAdmission });
+    expect(evidence).toMatchObject({
+      version: 5,
+      evaluator: "browser-evaluation-v5",
+      provider: "typesafe",
+      boundary: "typesafe-decisions; host-derived-tool-calls",
+      outputProvenance: "decision-policy",
+      spend: { admission: decisionAdmission },
+    });
+    expect(Schema.is(Manifest)({ ...evidence, version: 4 })).toBe(false);
+    expect(
+      (yield* plan({ ...decisionSpec, models: [{ ...jev, decisionThreshold: 0.9 }] })).digest,
+    ).not.toBe(shown.digest);
+    expect(yield* reason(authorize(decisionSpec, shown.digest).pipe(withEnv(live)))).toBe(
+      "credentials",
+    );
+    expect(
+      (yield* authorize(decisionSpec, shown.digest).pipe(
+        withEnv({ EFFECT_AGENT_BROWSER_EVALUATION_LIVE: "1", TYPESAFE_API_KEY: "test-SECRET" }),
+      )).plan.digest,
+    ).toBe(shown.digest);
+  }),
+);
+
+it.effect("a Jev plan refuses unsupported models, settings, tasks and browser backends", () =>
+  Effect.gen(function* () {
+    for (const model of [
+      { ...jev, model: "jev-latest" },
+      { ...jev, gateway: "openrouter" },
+      { ...jev, maxOutputTokens: 256 },
+      { ...jev, reasoningEffort: "low" },
+      Object.fromEntries(Object.entries(jev).filter(([name]) => name !== "decisionThreshold")),
+      { ...jev, rates: { ...jev.rates, cacheReadUsdPerMillion: 1 } },
+      { ...jev, rates: { ...jev.rates, cacheWriteUsdPerMillion: 1 } },
+      { ...jev, rates: { ...jev.rates, outputUsdPerMillion: 1 } },
+    ])
+      expect(yield* reason(plan({ ...decisionSpec, models: [model] }))).toBe("settings");
+    for (const decisionThreshold of [-0.1, 1.1])
+      expect(
+        yield* reason(plan({ ...decisionSpec, models: [{ ...jev, decisionThreshold }] })),
+      ).toBe("specification");
+    expect(yield* reason(plan({ ...decisionSpec, tasks: ["signup"] }))).toBe("task");
+    expect(yield* reason(plan({ ...decisionSpec, backends: ["browserbase"] }))).toBe("backend");
+    expect(yield* reason(plan({ ...spec, models: [{ ...gpt, decisionThreshold: 0.8 }] }))).toBe(
+      "settings",
+    );
+    expect(yield* reason(plan({ ...spec, models: [{ ...gpt, maxOutputTokens: 0 }] }))).toBe(
+      "settings",
+    );
+  }),
+);
+
+it.effect("Jev reserves the full input allowance and counts free response tokens", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(decisionSpec);
+    const ledger = new Ledger(shown.budget.campaignMicrousd);
+    const bounded = allowance(ledger, shown, shown.subjects[0]!);
+
+    yield* bounded.admit(65536);
+    expect(bounded.usage()).toMatchObject({ retainedMicrousd: 66560 });
+    expect(
+      bounded.settle({
+        inputTokens: { total: 500, uncached: 500, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 73, text: 73, reasoning: 0 },
+      }),
+    ).toBe(500);
+    expect(bounded.usage()).toMatchObject({
+      inputTokens: 500,
+      outputTokens: 73,
+      costMicrousd: 500,
+      retainedMicrousd: 0,
+      overrun: false,
+    });
+    expect(ledger.closed).toBe(null);
   }),
 );
 

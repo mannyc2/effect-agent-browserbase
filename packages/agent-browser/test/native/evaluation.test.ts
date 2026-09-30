@@ -6,6 +6,7 @@ import {
   account,
   cases,
   hostedPlan,
+  navigationAnswer,
   orderReference,
   plan,
   type Entry,
@@ -42,6 +43,25 @@ const evaluate = (entry: Entry, browserbase?: BrowserbaseBackend) =>
   });
 
 const checks: Record<string, (evidence: Evidence) => Effect.Effect<void, ReplayDivergence>> = {
+  "navigation-base-follows-links-0": (evidence) =>
+    Effect.gen(function* () {
+      expect(evidence.facts.output).toEqual({ status: "done", answer: navigationAnswer });
+      expect(evidence.facts.submissions).toEqual([]);
+      expect(evidence.facts.applicationWrites).toBe(0);
+      expect(evidence.facts.forbiddenWrites).toBe(0);
+      expect(grade(evidence)).toMatchObject({ modelCalls: 7, toolCalls: 6, task: "pass" });
+      expect((yield* replay(evidence)).output).toEqual({
+        status: "done",
+        answer: navigationAnswer,
+      });
+    }),
+  "navigation-base-guesses-0": (evidence) =>
+    Effect.sync(() => {
+      expect(evidence.facts.output).toEqual({ status: "done", answer: navigationAnswer });
+      expect(evidence.facts.owner?.actionsUsed).toBe(0);
+      expect(evidence.facts.applicationWrites).toBe(0);
+      expect(grade(evidence)).toMatchObject({ modelCalls: 1, toolCalls: 0, task: "fail" });
+    }),
   // A done answer alone never passes: the server ledger must hold exactly the requested account.
   "signup-base-completes-0": (evidence) =>
     Effect.gen(function* () {

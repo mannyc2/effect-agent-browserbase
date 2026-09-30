@@ -46,7 +46,7 @@ const preview = Command.make(
     yield* Console.log(
       JSON.stringify(
         {
-          version: 4,
+          version: 5,
           mode: "unpaid-plan",
           concurrency: 1,
           maxRuns,
@@ -209,7 +209,7 @@ const run = Command.make(
 
     const summarize = Effect.suspend(() => {
       const summary = {
-        version: 4,
+        version: 5,
         sourceRevision: source,
         planned: runs.length,
         recorded: outcomes.filter((outcome) => outcome.recorded).length,
