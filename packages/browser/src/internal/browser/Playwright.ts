@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import type { Browser, CDPSession, Dialog, Frame, Page } from "playwright-core";
 
+import { Identifier } from "../../BrowserData.ts";
 import { Reasons, BrowserError, InitializationError } from "../../Errors.ts";
 import { makeActions } from "./Actions.ts";
 import type { ConnectionIdentity } from "./Binding.ts";
@@ -9,7 +10,14 @@ import { makeCaptureSources } from "./CaptureSource.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { makeInitialization } from "./Initialization.ts";
 import { makeKeyboard } from "./Keyboard.ts";
-import { closeWithin, failure, NativeFailure, safeDecode, sanitize } from "./NativeCalls.ts";
+import {
+  closeWithin,
+  failure,
+  NativeFailure,
+  providerReason,
+  safeDecode,
+  sanitize,
+} from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
 import { makePointer } from "./Pointer.ts";
@@ -17,6 +25,18 @@ import { PolicyCleanup } from "./PolicyCleanup.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
 const NativeWindow = Schema.Struct({ windowId: Schema.Natural });
+
+const CreatedTarget = Schema.Struct({ targetId: Identifier });
+
+/**
+ * Playwright 1.63.0 reports the browser's own error reply to a CDP command this way. A reply is
+ * the browser's answer that it did not do what was asked; anything else leaves that unknown.
+ */
+const refusedBy = (method: string, error: unknown): boolean =>
+  error instanceof Error &&
+  error.message.includes(`Protocol error (${method})`) &&
+  // Playwright's own rejection of a call still pending when its session closed.
+  !error.message.includes("session closed");
 
 /**
  * Connects to an already validated or host-resolved CDP endpoint and builds the one driver. The
@@ -61,7 +81,7 @@ export const connectPlaywrightEndpoint = async (
       Schema.is(InitializationError)(error) ||
       Schema.is(NativeFailure)(error)
       ? error
-      : failure(Reasons.Provider.make({}));
+      : failure(providerReason(error));
   }
 };
 
@@ -94,77 +114,119 @@ export const makePlaywrightDriver = async (
   let closing = false;
   let initialized = false;
   let browserCdp: CDPSession | undefined;
+  // Cleared the first time the browser refuses a window; the pages it opens are tabs from then on.
+  let windows = true;
   let sameDocumentCapture: (entry: Entry, frame: Frame) => void = () => {};
 
-  const targets = makeTargets(browser, context, options, identity.namespace, () => closing, {
-    opened: (entry, created) => {
-      if (initialized && !created && options.popupPolicy === "close") {
-        void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
+  const targets = makeTargets(
+    browser,
+    context,
+    options,
+    identity.namespace,
+    () => closing,
+    {
+      opened: (entry, created) => {
+        if (initialized && !created && options.popupPolicy === "close") {
+          void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
 
-        return;
-      }
-      if (initialized && options.pageControl)
-        callbacks.submit(async () => {
-          await pageControl.execution(entry);
-        });
-      if (initialized) initialization.attachPage(entry.page);
-      if (initialized && !created && options.popupPolicy === "pause") events.pause("popup");
-    },
-    overflow: (entry) => {
-      if (options.popupPolicy === "close")
-        void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }), {
-          overflow: "popup-overflow",
-        });
-      else
-        events.fault({
-          source: "policy",
-          reason: "popup-overflow",
-          token: blockedPopup,
-          disposition: "not-dispatched",
-        });
-    },
-    closed: (entry) => {
-      actions.waitChanged(entry);
-      for (const [dialog, beforeUnload] of dialogs)
-        if (dialog.page() === entry.page) {
-          beforeUnload?.dismissed(false);
-          dialogs.delete(dialog);
+          return;
         }
-      observation.invalidate({ pageId: entry.id });
-      pageControl.closed(entry);
-      captures.forget(entry);
-    },
-    navigating: (entry, frame) => pageControl.navigating(entry, frame),
-    navigated: (entry, frame) => {
-      if (initialized) initialization.attachFrame(frame, entry.page);
-    },
-    sameDocumentNavigated: (entry, frame) => sameDocumentCapture(entry, frame),
-    frameChanged: (entry, frame) => {
-      actions.waitChanged(entry, frame);
-      // Only the frame an observation read can change what it names.
-      observation.invalidate({ pageId: entry.id, frameId: targets.frameId(frame) });
-      captures.invalidate(entry, "target-changed", frame);
-    },
-    dialog: (entry, dialog) => {
-      // Capture the exact navigation now. A page lookup after acknowledgement could name its successor.
-      const beforeUnload =
-        dialog.type() === "beforeunload" ? actions.beforeUnload(entry.id) : undefined;
+        if (initialized && options.pageControl)
+          callbacks.submit(async () => {
+            await pageControl.execution(entry);
+          });
+        if (initialized) initialization.attachPage(entry.page);
+        if (initialized && !created && options.popupPolicy === "pause") events.pause("popup");
+      },
+      external: (entry) => {
+        if (!initialized) return;
+        if (options.popupPolicy === "close")
+          void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
+        else if (options.popupPolicy === "pause") events.pause("popup");
+      },
+      overflow: (entry) => {
+        if (options.popupPolicy === "close")
+          void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }), {
+            overflow: "popup-overflow",
+          });
+        else
+          events.fault({
+            source: "policy",
+            reason: "popup-overflow",
+            token: blockedPopup,
+            disposition: "not-dispatched",
+          });
+      },
+      closed: (entry) => {
+        actions.waitChanged(entry);
+        for (const [dialog, beforeUnload] of dialogs)
+          if (dialog.page() === entry.page) {
+            beforeUnload?.dismissed(false);
+            dialogs.delete(dialog);
+          }
+        observation.invalidate({ pageId: entry.id });
+        pageControl.closed(entry);
+        captures.forget(entry);
+      },
+      navigating: (entry, frame) => pageControl.navigating(entry, frame),
+      navigated: (entry, frame) => {
+        if (initialized) initialization.attachFrame(frame, entry.page);
+      },
+      sameDocumentNavigated: (entry, frame) => sameDocumentCapture(entry, frame),
+      frameChanged: (entry, frame) => {
+        actions.waitChanged(entry, frame);
+        // Only the frame an observation read can change what it names.
+        observation.invalidate({ pageId: entry.id, frameId: targets.frameId(frame) });
+        captures.invalidate(entry, "target-changed", frame);
+      },
+      dialog: (entry, dialog) => {
+        // Capture the exact navigation now. A page lookup after acknowledgement could name its successor.
+        const beforeUnload =
+          dialog.type() === "beforeunload" ? actions.beforeUnload(entry.id) : undefined;
 
-      const overflow = dialogs.size >= 8;
+        const overflow = dialogs.size >= 8;
 
-      if (options.dialogPolicy === "dismiss" || overflow)
-        void policyCleanup.run(dialog, () => dialog.dismiss(), {
-          ...(overflow ? { overflow: "dialog-overflow" } : {}),
-          settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
-        });
-      else {
-        dialogs.set(dialog, beforeUnload);
-        observation.invalidate();
-        events.pause("dialog");
-      }
+        if (options.dialogPolicy === "dismiss" || overflow)
+          void policyCleanup.run(dialog, () => dialog.dismiss(), {
+            ...(overflow ? { overflow: "dialog-overflow" } : {}),
+            settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
+          });
+        else {
+          dialogs.set(dialog, beforeUnload);
+          observation.invalidate();
+          events.pause("dialog");
+        }
+      },
+      changed: (reason, scope) => observation.changed(reason, scope),
     },
-    changed: (reason, scope) => observation.changed(reason, scope),
-  });
+    {
+      open: async () => {
+        if (!windows) return undefined;
+        const cdp = browserSession();
+        let created: unknown;
+
+        try {
+          created = await cdp.send("Target.createTarget", { url: "about:blank", newWindow: true });
+        } catch (error) {
+          if (!refusedBy("Target.createTarget", error)) throw error;
+          windows = false;
+
+          return undefined;
+        }
+        const { targetId } = safeDecode(CreatedTarget, created);
+
+        return {
+          targetId,
+          // The browser sizes a new window like the last one it showed, which may be a popup's, so
+          // a fixed viewport is set on each. A preserved viewport is the provider's to size.
+          sized: options.preserveViewport ? Promise.resolve() : sizeNativeWindow(targetId),
+          discard: async () => {
+            await cdp.send("Target.closeTarget", { targetId });
+          },
+        };
+      },
+    },
+  );
 
   const { current, entries, register } = targets;
 
@@ -229,18 +291,26 @@ export const makePlaywrightDriver = async (
   context.on("page", onPage);
   browser.on("disconnected", onDisconnected);
 
-  const sizeNativeContents = async (entry: Entry): Promise<void> => {
+  const browserSession = (): CDPSession => {
     if (browserCdp === undefined) throw failure(Reasons.Closed.make({}), "undispatched");
-    const targetId = await targets.targetId(entry);
-    const current: unknown = await browserCdp.send("Browser.getWindowForTarget", { targetId });
+
+    return browserCdp;
+  };
+
+  const sizeNativeWindow = async (targetId: string): Promise<void> => {
+    const cdp = browserSession();
+    const current: unknown = await cdp.send("Browser.getWindowForTarget", { targetId });
     const native = safeDecode(NativeWindow, current);
 
-    await browserCdp.send("Browser.setContentsSize", {
+    await cdp.send("Browser.setContentsSize", {
       windowId: native.windowId,
       width: options.viewport.width,
       height: options.viewport.height,
     });
   };
+
+  const sizeNativeContents = async (entry: Entry): Promise<void> =>
+    sizeNativeWindow(await targets.targetId(entry));
 
   const driver: Driver = {
     ...(options.pageControl
@@ -251,10 +321,12 @@ export const makePlaywrightDriver = async (
     selected: targets.selected,
     selectedTargetId: targets.selectedTargetId,
     listPages: targets.listPages,
+    describePage: targets.describePage,
     resolvePage: targets.resolvePage,
     selectPage: targets.selectPage,
     newPage: targets.newPage,
     closePage: targets.closePage,
+    containPage: targets.containPage,
     listFrames: targets.listFrames,
     resolveFrame: targets.resolveFrame,
     selectFrame: targets.selectFrame,

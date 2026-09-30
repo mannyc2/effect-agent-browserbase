@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect";
 
 import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
-import { publicError } from "./NativeCalls.ts";
+import { providerReason, publicError } from "./NativeCalls.ts";
 
 /**
  * Random values the owner draws from its `Crypto` service for one connection attempt. A native
@@ -68,7 +68,7 @@ export const fromNativeAttempt = (attempt: NativeAttempt): BindingImplementation
         Schema.is(InitializationError)(error)
           ? error
           : publicError(error, "connect", {
-              reason: Reasons.Provider.make({}),
+              reason: providerReason(error),
               outcome: "unknown",
             }),
     }),
