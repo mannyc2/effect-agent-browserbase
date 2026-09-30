@@ -24,7 +24,12 @@ import {
   type HostedLedger,
 } from "../fixtures/HostedSite.ts";
 import { toolSite } from "../fixtures/ToolSite.ts";
-import { chartExpected, feedPosts, understandingSite } from "../fixtures/UnderstandingSite.ts";
+import {
+  chartExpected,
+  chartFacts,
+  feedPosts,
+  understandingSite,
+} from "../fixtures/UnderstandingSite.ts";
 import {
   account,
   type cases,
@@ -373,7 +378,20 @@ const policies: {
     guesses: () => [() => answer({ status: "done", answer: navigationAnswer })],
   },
   "chart-data": {
-    interprets: (context) => [...opened(context), () => answer(chartAnswer)],
+    interprets: (context) =>
+      context.composition === "observed"
+        ? [
+            () => call("navigate", names(context.composition).navigate, { url: context.url }),
+            ...chartFacts.rows.map(
+              (row) => () =>
+                call(`inspect-${row.month}`, "browser_inspect", {
+                  find: row.month,
+                  scope: "document",
+                }),
+            ),
+            () => answer(chartAnswer),
+          ]
+        : [...opened(context), () => answer(chartAnswer)],
     "answers-unread": () => [() => answer(chartAnswer)],
     "wrong-increase": (context) => [
       ...opened(context),

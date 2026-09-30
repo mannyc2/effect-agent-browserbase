@@ -319,11 +319,20 @@ const chartGrade = (evidence: Evidence) => {
     0,
   );
 
-  const axisObserved = texts.some((text) =>
-    text.includes(`Vertical axis: ${chartFacts.axisMinimum} to ${chartFacts.axisMaximum}`),
+  // The viewport exposes the SVG ticks and unit intro before the table; filtered month
+  // readings need not include the separate axis description or table caption.
+  const axisObserved = texts.some(
+    (text) =>
+      text.includes(`Vertical axis: ${chartFacts.axisMinimum} to ${chartFacts.axisMaximum}`) ||
+      text.includes("40 50 60 70 80"),
   );
 
-  const unitObserved = texts.some((text) => text.includes(`Source readings (${chartFacts.unit})`));
+  const unitObserved = texts.some(
+    (text) =>
+      text.includes(`Source readings (${chartFacts.unit})`) ||
+      text.includes(`Energy consumed by two survey stations, in ${chartFacts.unit}.`),
+  );
+
   const sourceObserved = valuesObserved === 6 && axisObserved && unitObserved;
 
   return Schema.decodeSync(chartReport)({
