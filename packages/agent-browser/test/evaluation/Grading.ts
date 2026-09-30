@@ -434,10 +434,12 @@ export const grade = (evidence: Evidence): Report => {
   const seen = boundary(evidence);
   const output = Schema.is(Output)(facts.output) ? facts.output : undefined;
   const retainedUnderstanding = gradeUnderstanding(evidence);
+
   const understanding =
     retainedUnderstanding === null
       ? null
       : { ...retainedUnderstanding, passed: complete && retainedUnderstanding.passed };
+
   const oracle = oracles[manifest.task](facts, output, seen);
 
   const decided = {
