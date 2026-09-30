@@ -88,6 +88,31 @@ export const localSite = Effect.acquireRelease(
 
         return;
       }
+      if (url.pathname === "/keyboard") {
+        response.end(`<!doctype html><meta charset=utf-8><title>Trusted keyboard input</title>
+        <label>First<input id=first></label><label>Second<input id=second></label>
+        <output id=events></output><output id=values></output>
+        <script>
+          const entries = [];
+          const first = document.querySelector('#first');
+          const second = document.querySelector('#second');
+          const moveAfter = Number(new URLSearchParams(location.search).get('moveAfter'));
+          let inputs = 0;
+          for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
+            document.addEventListener(type, event => {
+              entries.push([event.type, event.target.id, event.key ?? null,
+                event.code ?? null, event.repeat ?? false, event.shiftKey ?? false,
+                event.ctrlKey ?? false, event.altKey ?? false, event.metaKey ?? false,
+                event.data ?? null, event.inputType ?? null, event.isTrusted]);
+              document.querySelector('#events').textContent = JSON.stringify(entries);
+              document.querySelector('#values').textContent = JSON.stringify([first.value, second.value]);
+              if (type === 'input' && event.target === first && ++inputs === moveAfter) second.focus();
+            });
+          }
+        </script>`);
+
+        return;
+      }
       if (url.pathname === "/pinned-frame") {
         response.end(`<!doctype html><title>Pinned child</title>
         <strong id=frame-name>${url.searchParams.get("name") ?? "child"}</strong>

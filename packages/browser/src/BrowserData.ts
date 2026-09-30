@@ -603,12 +603,13 @@ const TypedText = Schema.NonEmptyString.check(
 );
 
 /**
- * Text as the real key strokes that produce it, two native commands for each character, one
- * after another under a single action timeout: send a long passage as several shorter runs.
+ * Text as the real key strokes that produce it, with ordered native commands submitted in
+ * bounded windows under a single action timeout. An interrupted run is never replayed.
  * A character the US layout cannot produce is inserted as text, as an input method commits it,
  * and raises no key events. Control characters are refused, so a line break can never press
  * Enter from inside a run of text: a named key is always its own `press`. `into` works as it
- * does for `PressRequest`: a guard on where the text lands, never a focus.
+ * does for `PressRequest`: a guard on where the text lands, never a focus. The exact node is
+ * checked before subsequent windows; already submitted input cannot be recalled on focus loss.
  */
 export class TypeRequest extends Schema.Class<TypeRequest>("BrowserTypeRequest")({
   text: TypedText,

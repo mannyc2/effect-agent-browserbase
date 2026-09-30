@@ -275,6 +275,7 @@ export const makePlaywrightDriver = async (
 
   const retired = () => {
     policyCleanup.retired();
+    keyboard.retire();
     actions.retireWait();
     observation.retireConnection();
     events.retired?.();

@@ -3,11 +3,13 @@ import { expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
+import * as BrowserRuntime from "effect-browser/browser-runtime";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import type { Browser as PlaywrightBrowser } from "playwright-core";
 
-import { localSite } from "../fixtures/StandaloneBrowser.ts";
+import { externalChromium, localSite } from "../fixtures/StandaloneBrowser.ts";
 
 const policy = BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 });
 
@@ -18,6 +20,180 @@ const launch = {
   chromiumSandbox: false,
   startupTimeoutMillis: 25000,
 };
+
+const keyboardFixture = Effect.fnUntraced(function* () {
+  const site = yield* localSite;
+  const host = yield* externalChromium;
+  let native: PlaywrightBrowser | undefined;
+
+  const runtime = yield* BrowserRuntime.make({
+    implementation: "native-keyboard-workflow",
+    binding: BrowserRuntime.playwright({
+      onConnected: (connection) => {
+        native = connection.native as PlaywrightBrowser;
+      },
+    }),
+  }).pipe(Effect.provide(NodeCrypto.layer));
+
+  const acquired = yield* runtime.acquire(policy, (cleanup) =>
+    Effect.gen(function* () {
+      const release = yield* Effect.cached(
+        cleanup.fence.pipe(
+          Effect.andThen(cleanup.capture),
+          Effect.andThen(cleanup.initialization),
+          Effect.andThen(cleanup.disconnect),
+          Effect.orDie,
+          Effect.ensuring(Effect.promise(host.close)),
+          Effect.asVoid,
+        ),
+      );
+
+      yield* Effect.addFinalizer(() => release);
+
+      return {
+        reference: "native-keyboard-workflow",
+        connection: () => Effect.succeed(host.endpoint),
+        release,
+        cleanupResult: Effect.succeedNone,
+        closeChecked: release,
+        controlRetired: Effect.sync(() => !host.running()),
+      };
+    }),
+  );
+
+  const { session } = yield* acquired.connect;
+
+  if (native === undefined)
+    throw new Error("The public runtime did not connect its native browser");
+  const page = native.contexts().flatMap((context) => context.pages())[0];
+
+  if (page === undefined) throw new Error("The native keyboard workflow has no page");
+
+  return { session, page, host, url: new URL("keyboard", site.url).href };
+});
+
+// The owner requested this native seam before implementation for #94's bounded plain typing.
+it.live(
+  "plain typing preserves native key ordering, Unicode and modifier state as one action",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session, page, host, url } = yield* keyboardFixture();
+
+        const text =
+          Array.from({ length: 95 }, (_, index) => String.fromCodePoint(0x20 + index)).join("") +
+          "aaaé e\u0301😀";
+
+        yield* Browser.scoped(Effect.succeed(session), (browser) =>
+          Effect.gen(function* () {
+            yield* browser.navigate({ url });
+            yield* browser.click({ selector: "#first" });
+            yield* Effect.promise(() => page.keyboard.type(text));
+            const expectedEvents = (yield* browser.readText({ selector: "#events" })).text;
+
+            yield* browser.navigate({ url });
+            yield* browser.click({ selector: "#first" });
+            const before = (yield* browser.status).actions.used;
+            const receipt = yield* browser.type({ text, into: "#first" });
+
+            expect(receipt.kind).toBe("type");
+            expect((yield* browser.status).actions.used).toBe(before + 1);
+            const events = (yield* browser.readText({ selector: "#events" })).text;
+
+            expect(events).toBe(expectedEvents);
+            expect(
+              (JSON.parse(events) as ReadonlyArray<ReadonlyArray<unknown>>).every(
+                (event) => event[11] === true,
+              ),
+            ).toBe(true);
+            expect((yield* browser.readText({ selector: "#values" })).text).toBe(
+              JSON.stringify([text, ""]),
+            );
+
+            yield* browser.navigate({ url });
+            yield* browser.click({ selector: "#first" });
+            yield* browser.type({ text: "a", into: "#first" });
+            yield* browser.press({ key: "A", modifiers: ["Shift"], into: "#first" });
+            yield* browser.type({ text: "b", into: "#first" });
+            expect((yield* browser.readText({ selector: "#values" })).text).toBe(
+              JSON.stringify(["aAb", ""]),
+            );
+
+            const finalEvents = JSON.parse(
+              (yield* browser.readText({ selector: "#events" })).text,
+            ) as ReadonlyArray<ReadonlyArray<unknown>>;
+
+            const finalKeyDown = finalEvents.filter(
+              (event) => event[0] === "keydown" && event[2] === "b",
+            );
+
+            expect(finalKeyDown).toHaveLength(1);
+            expect(finalKeyDown[0]?.[4]).toBe(false);
+            expect(finalKeyDown[0]?.[5]).toBe(false);
+
+            yield* browser.click({ selector: "#second" });
+            const previousEvents = (yield* browser.readText({ selector: "#events" })).text;
+
+            const notFocused = yield* browser
+              .type({ text: "must not land", into: "#first" })
+              .pipe(Effect.flip);
+
+            expect(notFocused).toMatchObject({
+              reason: { _tag: "NotFocused" },
+              outcome: "undispatched",
+            });
+            expect((yield* browser.readText({ selector: "#events" })).text).toBe(previousEvents);
+          }),
+        );
+        expect(host.running()).toBe(false);
+      }),
+    ),
+);
+
+it.live("guarded plain typing stops future windows when the original input loses focus", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, page, host, url } = yield* keyboardFixture();
+
+      yield* Browser.scoped(Effect.succeed(session), (browser) =>
+        Effect.gen(function* () {
+          yield* browser.navigate({ url: `${url}?moveAfter=1` });
+          yield* browser.click({ selector: "#first" });
+          const before = (yield* browser.status).actions.used;
+
+          const result = yield* browser
+            .type({ text: "a".repeat(80), into: "#first" })
+            .pipe(Effect.exit);
+
+          const values = yield* Effect.promise(() => page.locator("#values").textContent());
+
+          expect(values).not.toBeNull();
+          const [first, second] = JSON.parse(values ?? "[]") as [string, string];
+
+          expect(first).toBe("a");
+          expect(second.length).toBeLessThanOrEqual(15);
+
+          const errors = Exit.isFailure(result)
+            ? result.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)
+            : [];
+
+          expect(errors).toContainEqual(
+            expect.objectContaining({
+              reason: expect.objectContaining({ _tag: "NotFocused" }),
+              outcome: "unknown",
+            }),
+          );
+          expect((yield* browser.status).actions.used).toBe(before + 1);
+          expect(yield* browser.status).toMatchObject({
+            phase: "uncertain",
+            unresolvedDispatch: true,
+          });
+        }),
+      );
+      expect(host.running()).toBe(false);
+    }),
+  ),
+);
 
 it.live("Browser.scoped joins callback resources before checked owned cleanup", () =>
   Effect.scoped(
