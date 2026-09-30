@@ -23,7 +23,7 @@
     },
     "packages/agent-browser": {
       "name": "effect-agent-browser",
-      "version": "0.2.0-beta.6",
+      "version": "0.2.0-beta.7",
       "devDependencies": {
         "@effect-agent/testing": "0.1.0-beta.142",
         "@effect/ai-anthropic": "4.0.0-rc.117",
@@ -48,7 +48,7 @@
     },
     "packages/browser": {
       "name": "effect-browser",
-      "version": "0.2.0-beta.6",
+      "version": "0.2.0-beta.7",
       "devDependencies": {
         "@effect/platform-bun": "4.0.0-rc.117",
         "@effect/platform-node": "4.0.0-rc.117",
@@ -69,7 +69,7 @@
     },
     "packages/browserbase": {
       "name": "effect-browserbase",
-      "version": "0.2.0-beta.6",
+      "version": "0.2.0-beta.7",
       "devDependencies": {
         "@effect/platform-bun": "4.0.0-rc.117",
         "@effect/platform-node": "4.0.0-rc.117",
