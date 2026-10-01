@@ -305,3 +305,36 @@ it.live("real CDP: performed typing produces shifted characters exactly", () =>
     }).pipe(Effect.provide(layer)),
   ),
 );
+
+it.live("real CDP: the same seed plans the same glide for the same geometry", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/shift");
+
+      const glide = Effect.gen(function* () {
+        const ran = yield* session.initialPage.run(
+          {
+            version: 1,
+            steps: [
+              { id: "a", action: { _tag: "PointerMove", to: { x: 40, y: 40 } } },
+              { id: "b", action: { _tag: "PointerMove", to: { x: 400, y: 300 } } },
+            ],
+          },
+          { style: { seed: 5 } },
+        );
+
+        return (yield* session.timeline.snapshot()).events.flatMap(({ correlation, event }) =>
+          event._tag === "Glide" && correlation?.runId === ran.runId && correlation.stepId === "b"
+            ? [event.schedule.map(({ position }) => position)]
+            : [],
+        );
+      });
+
+      // Step b glides from a to b both times; only the first run's step a starts from nowhere.
+      const first = yield* glide;
+
+      expect(first).toHaveLength(1);
+      expect(yield* glide).toEqual(first);
+    }).pipe(Effect.provide(layer)),
+  ),
+);
