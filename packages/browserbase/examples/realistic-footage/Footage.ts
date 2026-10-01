@@ -155,6 +155,28 @@ export const demo: Storyboard.Storyboard = [
   },
   { _tag: "Read", words: 36 },
   { _tag: "Caption", text: "Pick a berth and hold it" },
+  // Hover never scrolls; bring the berth into view as its own visible step first.
+  {
+    _tag: "Browser",
+    step: {
+      id: "show-berth",
+      resolution: { _tag: "Strict" },
+      action: {
+        _tag: "Scroll",
+        mode: {
+          _tag: "To",
+          target: {
+            _tag: "Descriptor",
+            descriptor: {
+              kind: "button",
+              label: "CouchetteFour bunks, bedding included€99",
+              matchScope: "document",
+            },
+          },
+        },
+      },
+    },
+  },
   {
     _tag: "Browser",
     step: {
