@@ -16,8 +16,13 @@ import { StageSite } from "../../examples/realistic-footage/StageSite.ts";
 import { Telemetry } from "../../examples/realistic-footage/Telemetry.ts";
 import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
 
-// Set to a directory to keep the film and its metrics; otherwise both are deleted with the scope.
-const keepIn = process.env.REALISTIC_FOOTAGE_DIR;
+// Keep the film and metrics in the requested directory or the acceptance video artifacts.
+const keepIn =
+  process.env.REALISTIC_FOOTAGE_DIR ??
+  (process.env.BROWSERBASE_VIDEO_EVIDENCE_DIR === undefined
+    ? undefined
+    : join(process.env.BROWSERBASE_VIDEO_EVIDENCE_DIR, "realistic-footage"));
+
 // Set to a port to watch the session live: the film waits for a viewer at http://127.0.0.1:<port>/.
 const livePort = process.env.REALISTIC_FOOTAGE_LIVE_PORT;
 

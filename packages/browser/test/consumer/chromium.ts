@@ -29,13 +29,9 @@ const result = await Effect.runPromise(
             yield* session.initialPage.navigate({ url: site.url });
             assert.match((yield* session.initialPage.observe()).text, /ownership fixture/);
 
-            const copied = yield* Capture.start({ ...session }.initialPage).pipe(Effect.result);
+            const copied = yield* Capture.start({ ...session.initialPage }).pipe(Effect.result);
 
-            assert.equal(
-              copied._tag,
-              "Failure",
-              "copying the session cannot copy capture authority",
-            );
+            assert.equal(copied._tag, "Failure", "copying the Page cannot copy capture authority");
 
             const interval = yield* Capture.start(session.initialPage, {
               lifetime: "page",

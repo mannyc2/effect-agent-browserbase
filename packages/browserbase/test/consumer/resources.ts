@@ -340,9 +340,9 @@ const scripted = await Effect.runPromise(
 
         expect(
           retry._tag === "Failure" &&
-            retry.failure.reason._tag === "Closed" &&
+            retry.failure.reason._tag === "Stale" &&
             retry.failure.outcome === "undispatched",
-          "an uncertain owner refuses the retry without sending it",
+          "the retired Page refuses the retry without sending it",
         );
         const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
 

@@ -271,7 +271,7 @@ const scripted = await Effect.runPromise(
       const calls = yield* browser.control.calls;
 
       expect(
-        calls.map((call) => call.operation).join(",") === "navigate,observe,click",
+        calls.map((call) => call.operation).join(",") === "navigate,observe,resolve,click",
         "the agent's tool calls reached the real owner in order",
       );
       expect(
