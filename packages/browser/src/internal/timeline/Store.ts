@@ -484,8 +484,16 @@ export const makeStore = (configuration: {
       if (reader.released) return Cause.done();
       const output: Event[] = [];
       const ending = viewTerminal(reader.view);
+      const first = entry(0)?.event.sequence;
 
-      for (let index = 0; index < size; index++) {
+      // Retained sequences are contiguous from the oldest, so a reader resumes at its own index
+      // instead of rescanning the whole ring on every wake.
+      for (
+        let index =
+          first === undefined || reader.sequence < first ? 0 : Number(reader.sequence - first) + 1;
+        index < size;
+        index++
+      ) {
         const current = entry(index)?.event;
 
         if (current === undefined || current.sequence <= reader.sequence) continue;
