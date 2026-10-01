@@ -219,8 +219,14 @@ export const makeStore = (configuration: {
   readonly originNanos: bigint;
   readonly identity: StoreIdentity;
   readonly limits: Retention;
+  /**
+   * The clock-domain offset this journal's coverage starts at. A reconnect's journal shares the
+   * session clock but holds nothing from before it began; earlier times are another journal's.
+   */
+  readonly coversFromNanos?: bigint;
 }) => {
   const { clock, originNanos } = configuration;
+  const coversFrom = configuration.coversFromNanos ?? 0n;
   const identity = Object.freeze({ ...configuration.identity });
   const limits = Object.freeze({ ...configuration.limits });
 
@@ -295,7 +301,11 @@ export const makeStore = (configuration: {
     } else {
       if (requested.at.clockId !== identity.clockId)
         return new TimelineCursorError({ reason: "Clock", requested, current: cursor() });
-      if (evictedAt !== undefined && requested.at.offsetNanos <= evictedAt) return gap(requested);
+      if (
+        requested.at.offsetNanos < coversFrom ||
+        (evictedAt !== undefined && requested.at.offsetNanos <= evictedAt)
+      )
+        return gap(requested);
     }
 
     return undefined;

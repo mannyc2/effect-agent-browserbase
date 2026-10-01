@@ -346,12 +346,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const clockId = yield* uuid;
   const originNanos = clock.monotonicTimeNanosUnsafe();
 
-  const makeDomain = (storeId: string) => {
+  const makeDomain = (storeId: string, coversFromNanos?: bigint) => {
     const store = makeStore({
       clock,
       originNanos,
       identity: { storeId, clockId },
       limits: limits.timelineLimits ?? TimelineDefaults,
+      ...(coversFromNanos === undefined ? {} : { coversFromNanos }),
     });
 
     return {
@@ -916,7 +917,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
         if (hasConnectedStore) {
           endTimeline("detached");
-          domain = makeDomain(yield* uuid);
+          domain = makeDomain(yield* uuid, clock.monotonicTimeNanosUnsafe() - originNanos);
         }
         hasConnectedStore = true;
         publish(domain.store, {

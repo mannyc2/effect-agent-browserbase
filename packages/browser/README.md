@@ -337,7 +337,9 @@ encode host evidence and preserve those addresses.
 
 The session facade chooses the current journal when an Effect or Stream executes. Each active
 subscription stays on that journal. Reconnect creates a new store identity; old subscribers
-drain their available tail and terminate, or report a gap if lapped. Issued Page timelines stay
+drain their available tail and terminate, or report a gap if lapped. A time selector earlier
+than the current journal's start fails `TimelineGap`: that history belongs to the previous
+journal, which an issued Page's timeline from that connection still reads. Issued Page timelines stay
 on their original domain. Page/session terminal delivery does not bypass retention, and
 `page.status` retains original containment facts after the corresponding events have evicted.
 
