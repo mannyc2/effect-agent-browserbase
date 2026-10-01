@@ -37,15 +37,35 @@ import { makeSettledResource } from "./Settled.ts";
 import type { Entry, Targets } from "./Targets.ts";
 
 /**
+ * Input types whose whole value is assigned, as Playwright's fill does, rather than typed key by
+ * key. A fill checks each on a detached probe; performed typing cannot produce any of them.
+ */
+const AssignedInputTypes: ReadonlyArray<string> = [
+  "color",
+  "date",
+  "time",
+  "datetime-local",
+  "month",
+  "range",
+  "week",
+];
+
+/** Refuses, undispatched, performed typing into a control whose value can only be assigned. */
+const refusePerformedTyping = (inputType: string | undefined) => {
+  if (inputType !== undefined && AssignedInputTypes.includes(inputType))
+    throw failure(Reasons.Unsupported.make({}), "undispatched");
+};
+
+/**
  * What Playwright's own input would refuse only after dispatch, checked before it: a node it
  * would wait for until the deadline, or text it would not put into this control. Either way the
  * wait or the thrown error would be an unknown outcome that fences the owner. It mirrors
  * Playwright's visible, enabled and editable checks and its fill rules for the control and text.
- * Runs in the page, so it is self-contained.
+ * Runs in the page, so it is self-contained and receives the assigned input types from the host.
  */
 const inputRefusal = (
   node: Element,
-  text: string | undefined,
+  { text, assigned }: { readonly text?: string; readonly assigned: ReadonlyArray<string> },
 ): "not-visible" | "disabled" | "unsupported" | null => {
   const style = getComputedStyle(node);
 
@@ -63,7 +83,6 @@ const inputRefusal = (
   if (text === undefined) return null;
   if (node instanceof HTMLInputElement) {
     const type = node.type.toLowerCase();
-    const assigned = ["color", "date", "time", "datetime-local", "month", "range", "week"];
     const typed = ["", "email", "number", "password", "search", "tel", "text", "url"];
 
     if (node.readOnly || (!typed.includes(type) && !assigned.includes(type))) return "unsupported";
@@ -354,7 +373,10 @@ export const makeActions = (
 
   /** Refuses, undispatched, what `inputRefusal` finds on this exact node right now. */
   const refuseInput = async (element: ElementHandle<Element>, text?: string) => {
-    const refusal: unknown = await element.evaluate(inputRefusal, text);
+    const refusal: unknown = await element.evaluate(inputRefusal, {
+      ...(text === undefined ? {} : { text }),
+      assigned: AssignedInputTypes,
+    });
 
     if (refusal === "not-visible") throw failure(Reasons.NotVisible.make({}), "undispatched");
     if (refusal === "disabled") throw failure(Reasons.Disabled.make({}), "undispatched");
@@ -582,13 +604,7 @@ export const makeActions = (
         async (element, facts) => {
           await refuseInput(element, value);
           if (!isPerformed(ticket)) return undefined;
-          if (
-            facts?.inputType !== undefined &&
-            ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
-              facts.inputType,
-            )
-          )
-            throw failure(Reasons.Unsupported.make({}), "undispatched");
+          refusePerformedTyping(facts?.inputType);
 
           return { ticket, schedule: keyboard.prepareKeys(value, ticket) };
         },
@@ -710,13 +726,7 @@ export const makeActions = (
             | undefined;
 
           if (isPerformed(ticket)) {
-            if (
-              facts.inputType !== undefined &&
-              ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
-                facts.inputType,
-              )
-            )
-              throw failure(Reasons.Unsupported.make({}), "undispatched");
+            refusePerformedTyping(facts.inputType);
             performed = { ticket, schedule: keyboard.prepareKeys(text, ticket) };
           }
           act = async () => {
