@@ -39,6 +39,7 @@ export interface TicketObserver {
   readonly phase: (
     phase: Exclude<NonNullable<Ticket["phase"]>, "Terminal">,
     mutation: boolean,
+    acknowledgement?: AcknowledgementFact,
   ) => void;
   readonly picture: (boundary: NativePictureBoundary) => void;
   readonly input: (
@@ -888,7 +889,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             if (phase !== "Terminal") phase = "Acknowledged";
             if (!unknownDecided) unresolved.delete(controller);
             options.evidence?.phase?.("Acknowledged", ticket, fact);
-            observer?.phase("Acknowledged", mutation);
+            observer?.phase("Acknowledged", mutation, fact);
           },
           followUp() {
             if (phase === "Acknowledged") {

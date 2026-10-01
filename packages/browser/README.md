@@ -345,7 +345,9 @@ on their original domain. Page/session terminal delivery does not bypass retenti
 
 Events include plan correlation, original native phases, genuine input intervals, navigation,
 settled/containment outcomes and capture references. A dispatch means handoff to checked native
-implementation; acknowledgement means native completion. Later follow-up failure remains
+implementation; acknowledgement means native completion. A performed preparatory or burst reply
+carries `acknowledgement: { subphase, logicalComplete }`; only an acknowledgement without that
+fact, or with `logicalComplete: true`, completed logical input. Later follow-up failure remains
 separate. Key events contain counts and their units, never text. Individual pointer commands
 are `Pointer` events; `Glide` is reserved for an actual bounded intended schedule. Capture IDs,
 interval-local frame sequences and boundary attribution refer to the original capture; no

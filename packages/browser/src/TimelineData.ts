@@ -220,11 +220,20 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
     mutation: Schema.optionalKey(Schema.Boolean),
   };
 
+  /** A preparatory or burst acknowledgement; absent when the reply completed the logical input. */
+  const acknowledgement = Schema.Struct({
+    subphase: Schema.Literals(["scroll-into-view", "focus", "key-burst", "scroll-burst"]),
+    logicalComplete: Schema.Boolean,
+  });
+
   return Schema.Union([
     Schema.TaggedStruct("Planned", { action: ActionKind }),
     Schema.TaggedStruct("Prepared", phase),
     Schema.TaggedStruct("Dispatched", phase),
-    Schema.TaggedStruct("Acknowledged", phase),
+    Schema.TaggedStruct("Acknowledged", {
+      ...phase,
+      acknowledgement: Schema.optionalKey(acknowledgement),
+    }),
     Schema.TaggedStruct("FollowUp", phase),
     Schema.TaggedStruct("Pointer", {
       kind: Schema.Literals(["pointer-move", "hover"]),

@@ -129,13 +129,13 @@ export const observeTickets =
     });
 
     const observer: TicketObserver = {
-      phase: (phase, mutation) => {
+      phase: (phase, mutation, acknowledgement) => {
         const ticket = facts.ticket();
 
         if (ticket === undefined) return;
         if (phase === "Dispatched") ordinal++;
-        append({
-          _tag: phase,
+
+        const common = {
           operation: facts.operation,
           operationId: facts.operationId,
           nativeOrdinal: ordinal,
@@ -144,7 +144,21 @@ export const observeTickets =
             ticket.phase === "Terminal" ||
             ticket.signal.aborted ||
             Number(configuration.clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= ticket.deadline,
-        });
+        };
+
+        // Consumers tell a preparatory or burst reply from completed logical input by its fact.
+        append(
+          phase === "Acknowledged" && acknowledgement !== undefined
+            ? {
+                _tag: phase,
+                ...common,
+                acknowledgement: {
+                  subphase: acknowledgement.subphase,
+                  logicalComplete: acknowledgement.logicalComplete,
+                },
+              }
+            : { _tag: phase, ...common },
+        );
       },
       picture: (boundary) => {
         const captured: EvidenceTarget = {
