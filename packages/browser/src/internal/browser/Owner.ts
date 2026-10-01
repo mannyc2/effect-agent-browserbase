@@ -239,7 +239,6 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     phase: "acquiring" as Phase,
     generation: 0,
     revision: 0,
-    selection: 0,
     actions: 0,
     hostReads: 0,
   };

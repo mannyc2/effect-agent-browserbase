@@ -3463,7 +3463,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           ticket.check();
           registerPage(page, target, ticket.generation);
           await driver.selectPage(page, ticket);
-          owner.state.selection++;
         },
         { ...operationOptions, charge: false },
       ),
