@@ -10,7 +10,7 @@ A `BrowserSession<E>` is the live, host-only capability returned by the supplyin
 
 All callers use this exact session. Issued `Page` and `Frame` objects keep authority on its original connection. `Capture.start`, `Capture.stream` and `PageControl` authenticate the original session or Page privately; spreading or decoding an object cannot copy authority. An absent registration fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered session with page control disabled still fails `Unsupported`. `Tools.run` from `effect-agent-browser/tools` uses the original session directly; `yield* Adapter.fromSession(session, { selection: "current" | "retained" })` adapts it to the framework's handle with an explicit target policy. Neither opens another browser.
 
-Mutations are serialized by one owner permit. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation with an unacknowledged native command has an `unknown` outcome and is never automatically replayed. Its exact page is revoked before bounded closure. Positive closure reports `containment: PageClosed` and preserves healthy pages; unconfirmed closure fences the session and reports `SessionFenced`. This applies to the selected page too. Containment does not make the original action known. `performed` means dispatched input was acknowledged before a later step failed; it also must not be replayed blindly. `undispatched`, `rejected`, `performed` and `unknown` remain distinct outcomes.
+Mutations on one Page share its permit with its Frames; healthy Pages can proceed independently. Registry operations remain serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation with an unacknowledged native command has an `unknown` outcome and is never automatically replayed. Its exact page is revoked before bounded closure. Positive closure reports `containment: PageClosed` and preserves healthy pages; unconfirmed closure fences the session and reports `SessionFenced`. This applies to the selected page too. Containment does not make the original action known. `performed` means dispatched input was acknowledged before a later step failed; it also must not be replayed blindly. `undispatched`, `rejected`, `performed` and `unknown` remain distinct outcomes.
 
 ## Self-managed Chromium
 
@@ -75,7 +75,7 @@ const program = Effect.gen(function* () {
 
 Here `recordReceipt` is the host's bounded receipt sink. Consumers of the same Layer build share
 selection, budgets, native admission and lifetime; the Layer does not reset an expired session or
-make concurrent operations independent. Its acquisition finalizer performs unchecked release and
+give same-Page operations independent permits. Its acquisition finalizer performs unchecked release and
 stores the receipt. It does not supervise `browser.failure`, and does not turn incomplete cleanup
 into a checked-close error for every consumer. The application must choose that supervision and
 explicit checked closure, or use `Browser.scoped` for a bounded workflow that owns those decisions.
@@ -267,7 +267,8 @@ Omitting `admission.queue`, or setting it to zero, refuses conflicting work imme
 `Busy/undispatched`. A positive finite Effect duration allows FIFO waiting for that permit.
 The queue defaults to 32 pending callers per Page or registry and 128 across the session.
 `automation.admissionLimits.pendingPerPage` and `pendingPerSession` can set either bound to an
-integer from 1 through 1,024. `QueueFull` reports the refusing scope, maximum and observed count;
+integer from 1 through 1,024. `Chromium.layer` and `BrowserbaseBrowser.layer` accept those fields
+under their top-level `admissionLimits` option. `QueueFull` reports the refusing scope, maximum and observed count;
 `QueueExpired` means the admission wait expired. Cancellation and either refusal dispatch
 nothing and consume no action allowance. A granted waiter owns the permit before waking, so a
 new arrival cannot overtake it.
@@ -426,7 +427,7 @@ switching selection and returns only data after the shared browser scope closes.
 
 ### Typed host failures
 
-`BrowserError` keeps its operation and a required `outcome` (`undispatched`, `rejected`, or
+`BrowserError` keeps its operation and a required `outcome` (`undispatched`, `rejected`, `performed`, or
 `unknown`), while `reason` is a tagged union. Recover by reason without parsing strings:
 
 ```ts
@@ -476,8 +477,8 @@ The owner's permit is released as soon as the navigation is dispatched. While it
 - `completed` belongs to that one navigation: a successor reaching the same URL fails it instead of completing it, and its URL is the page that navigated, not whichever page is selected by then. **Interrupting a waiter stops nothing.** The browser keeps loading and nothing is dispatched again.
 - `stop` asks the browser to stop loading. Its acknowledgement is a known outcome: `completed` then fails `interrupted`, the page holds whatever had loaded, and the session stays usable. It does not undo anything the page already did. Concurrent callers share their active stop attempt. A busy refusal or cancellation before dispatch allows a later request only after native setup and its port retire; pending or unconfirmed retirement keeps setup capacity occupied. Once a stop is dispatched, every later caller receives that attempt's recorded result, including failure or interruption, without sending it again. A completed navigation cannot stop its successor.
 - A main-frame loading timeout asks the same stop coordinator to retire that exact navigation. Acknowledged stop completes it with `Timeout/unknown` and leaves the owner open: partial content remains inspectable and deliberate subsequent input is allowed. An explicit stop racing recovery shares its attempt; a completed predecessor cannot stop a successor. The `unknown` outcome still says nothing about page effects before cancellation.
-- A failed or unacknowledged recovery, replacement navigation, detached frame or other native rejection keeps the conservative fence. Pinned child-frame timeout also fences: `Page.stopLoading` acts on the whole page, so automatic frame-local cancellation is not claimed. Explicit stop retains its page-wide meaning.
-- Leaving the operation's scope unsettled fences it as unknown. Neither navigation nor a dispatched stop is replayed, and no timeout or acknowledgement promises rollback, an unchanged DOM, or termination of every page timer or worker.
+- A failed or unacknowledged recovery, replacement navigation, detached frame or other unknown native outcome closes that exact Page, with a session fence if closure is unconfirmed. Pinned child-frame timeout also uses Page containment: `Page.stopLoading` acts on the whole page, so automatic frame-local cancellation is not claimed. Explicit stop retains its page-wide meaning.
+- Leaving the operation's scope unsettled retains an unknown outcome and closes its Page; healthy Pages survive confirmed closure. Neither navigation nor a dispatched stop is replayed, and no timeout or acknowledgement promises rollback, an unchanged DOM, or termination of every page timer or worker.
 
 A read is ordered against the document being replaced by failing: if the document it was reading was replaced underneath it, or a navigation is still in flight on its page, the error is `target-changed` and `undispatched`, which means read again. A read is never a mutation, so that is always safe. A held page is not read at all; take the checkpoint before the hold and keep it.
 
@@ -696,7 +697,7 @@ With `into`, the original node and document must still have focus before each su
 
 Two limits follow the pinned engine's semantics. A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. And a shifted character arrives as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Pacing is yours, as easing is for the pointer: for a typist's cadence, send one character per call and sleep between them, at one action each.
 
-A press is dispatched, not awaited. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Neither operation is part of the model-facing toolkit in `effect-agent-browser`.
+A press waits for native input acknowledgement, without waiting for resulting navigation. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Both operations are available in the model-facing toolkit in `effect-agent-browser`.
 
 The connection endpoint is read through the exact allocated session, so a provider reply that names a different session is refused before any CDP attachment.
 
