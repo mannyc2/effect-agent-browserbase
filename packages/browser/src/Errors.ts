@@ -171,10 +171,15 @@ export const BrowserReason = Schema.Union(Object.values(Reasons));
 
 export type BrowserReason = typeof BrowserReason.Type;
 
-/** Containment never changes an uncertain mutation into a known action outcome. */
+/**
+ * Containment never changes an uncertain mutation into a known action outcome. `PagePaused` is
+ * a page's own popup/dialog-policy quarantine: the page stays open for an operator and refuses
+ * automation until a drained handoff and explicit release.
+ */
 export const Containment = Schema.Union([
   Schema.TaggedStruct("NotRequired", {}),
   Schema.TaggedStruct("PageClosed", { pageId: Schema.String, generation: Schema.Natural }),
+  Schema.TaggedStruct("PagePaused", { pageId: Schema.String, generation: Schema.Natural }),
   Schema.TaggedStruct("SessionFenced", { generation: Schema.Natural }),
 ]);
 

@@ -516,7 +516,8 @@ export interface Driver {
   readonly fenceInitialization?: () => void;
   readonly fenceInitializationPage?: (pageId: string) => void;
   readonly restoreInitializationPage?: (pageId: string) => void;
-  readonly handoffDrained?: () => boolean;
+  /** Work on a `quarantined` page belongs to its operator and cannot block a handoff. */
+  readonly handoffDrained?: (quarantined: (pageId: string) => boolean) => boolean;
   readonly retireInitializationPage?: (pageId: string) => void;
   /** Remove this connection's registrations while its native connection is still usable. */
   readonly disposeInitialization?: () => Promise<void>;

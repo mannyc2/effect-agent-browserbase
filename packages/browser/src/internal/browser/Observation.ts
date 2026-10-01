@@ -2471,12 +2471,14 @@ export const makeObservation = (
     });
 
   return {
-    drained: () =>
+    /** Snapshots of a `quarantined` page wait for its operator, not for a handoff drain. */
+    drained: (quarantined: (pageId: string) => boolean = () => false) =>
       [...reservations].every(
         (snapshot) =>
-          !snapshot.reading &&
-          snapshot.pending === 0 &&
-          [...snapshot.resources.values()].every((resource) => resource.disposal === undefined),
+          quarantined(snapshot.target.pageId) ||
+          (!snapshot.reading &&
+            snapshot.pending === 0 &&
+            [...snapshot.resources.values()].every((resource) => resource.disposal === undefined)),
       ),
     invalidate,
     changed,

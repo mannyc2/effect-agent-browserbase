@@ -365,8 +365,9 @@ export const makeAdmission = (
         forget(lease.lane);
       }
     },
-    drained: (except?: AbortSignal) =>
-      native.size === 0 &&
+    /** `held` lanes belong to an operator's quarantine; their native work cannot block it. */
+    drained: (except?: AbortSignal, held: (lane: AdmissionLane) => boolean = () => false) =>
+      [...native.values()].every((lease) => held(lease.lane)) &&
       [registry, ...retained].every(
         (lane) =>
           lane.native.stopSetupPending === undefined &&

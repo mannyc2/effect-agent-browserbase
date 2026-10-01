@@ -185,6 +185,54 @@ it.live.each(["inventory", "second-dismissal"] as const)(
     ),
 );
 
+it.live(
+  "a dialog opened by an exact click pauses that page for the operator instead of closing it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session, operations, page, host, url } = yield* keyboardFixture({
+          dialogPolicy: "pause",
+        });
+
+        const initial = session.initialPage;
+
+        yield* initial.navigate({ url: new URL("confirm", url).href });
+        const failure = yield* initial.click({ selector: "#ask" }).pipe(Effect.flip);
+
+        // The click opened the dialog, so its effect is unknown; the page's quarantine contains it.
+        expect(failure).toMatchObject({
+          operation: "click",
+          outcome: "unknown",
+          containment: { _tag: "PagePaused", pageId: initial.identity.pageId },
+        });
+        expect(page.isClosed()).toBe(false);
+        expect(yield* initial.status).toMatchObject({ phase: "paused" });
+        expect(yield* session.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+        expect(yield* initial.click({ selector: "#other" }).pipe(Effect.flip)).toMatchObject({
+          outcome: "undispatched",
+        });
+
+        // The quarantined click does not hold up the handoff that lets an operator release it.
+        const handoff = yield* operations.beginHandoff(Effect.succeed({ granted: true }));
+        const inventory = yield* operations.resume(handoff.token, true);
+
+        const info = inventory.pages.find(
+          (candidate) => candidate.pageId === initial.identity.pageId,
+        );
+
+        if (info === undefined) throw new Error("The resumed inventory lost the paused page");
+        // Releasing the dialog lets the paused click finish natively; the page waits for it.
+        const fresh = yield* session.page(info, { admission: { queue: "5 seconds" } });
+
+        expect((yield* fresh.readText({ selector: "#answer" })).text).toBe("false");
+        yield* fresh.click({ selector: "#other" });
+        expect((yield* fresh.readText({ selector: "#count" })).text).toBe("1");
+        yield* session.closeChecked;
+        expect(host.running()).toBe(false);
+      }),
+    ),
+);
+
 // The owner requested this native seam before implementation for #94's bounded plain typing.
 it.live(
   "plain typing preserves native key ordering, Unicode and modifier state as one action",

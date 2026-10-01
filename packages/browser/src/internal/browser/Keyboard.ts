@@ -619,6 +619,8 @@ export const makeKeyboard = (
     fillElement,
     retire,
     retirePage,
-    drained: () => [...typing.values()].every((slot) => slot.idle !== undefined),
+    /** A typing slot on a `quarantined` page waits for its operator, not for a handoff drain. */
+    drained: (quarantined: (page: Page) => boolean = () => false) =>
+      [...typing].every(([page, slot]) => slot.idle !== undefined || quarantined(page)),
   };
 };

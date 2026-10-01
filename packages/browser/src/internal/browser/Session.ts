@@ -460,10 +460,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   let initialTarget: DriverTarget | undefined;
   let initialInfo: PageInfo | undefined;
   let initialAuthority: ReturnType<typeof registerPage> | undefined;
-  const pausedPages = new Set<string>();
 
   const pageClosed = (pageId: string, cached?: NativeCachedPage, store = domain.store) => {
-    pausedPages.delete(pageId);
     driver?.retireInitializationPage?.(pageId);
     activeBindings?.retirePage(pageId);
     const page = pages.get(pageId);
@@ -515,7 +513,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   };
 
   const restorePageAuthority = (pageId: string) => {
-    pausedPages.delete(pageId);
     owner.restorePageAdmission(pageId);
     driver?.restoreInitializationPage?.(pageId);
     activeBindings?.resumePage(pageId);
@@ -679,10 +676,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         );
       pages.clear();
     }
-    if (["disconnected", "uncertain", "closed"].includes(reason) && scope === "all") {
-      pausedPages.clear();
+    if (["disconnected", "uncertain", "closed"].includes(reason) && scope === "all")
       fenceBindings();
-    }
     if (["paused", "disconnected", "uncertain", "closed"].includes(reason)) {
       if (reason !== "paused" && scope !== "all" && scope !== "none")
         activeBindings?.fencePage(scope.pageId);
@@ -862,18 +857,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
         owner.record(trigger, "confirmed", generation);
         if (pageId !== undefined && owner.state.phase === "open") {
-          if (!pausedPages.has(pageId) && pausedPages.size >= options.driver.maxPages) {
+          if (!owner.paused(pageId) && owner.pausedPages >= options.driver.maxPages) {
             owner.terminate(trigger, "unknown", generation);
 
             return;
           }
-          pausedPages.add(pageId);
           const page = pages.get(pageId);
 
           if (page !== undefined && page.phase === "open") page.phase = "paused";
           activeBindings?.fencePage(pageId);
           driver?.fenceInitializationPage?.(pageId);
-          owner.revokePage(pageId);
+          owner.pausePage(pageId);
           owner.invalidate("paused", { pageId });
 
           return;
@@ -3310,7 +3304,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         admission: owner.pageAdmission(info.pageId, generation),
         info,
         frames: new Map(),
-        phase: pausedPages.has(info.pageId) ? "paused" : "open",
+        phase: owner.paused(info.pageId) ? "paused" : "open",
         containment: { _tag: "NotRequired" },
         store,
         retirement,
@@ -3611,7 +3605,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     while (
                       !owner.drained(ticket.signal) ||
                       activeBindings?.drained() === false ||
-                      getDriver().handoffDrained?.() === false ||
+                      getDriver().handoffDrained?.(owner.paused) === false ||
                       capture.captureLeases.size !== 0 ||
                       pendingPageFaults.size !== 0
                     )

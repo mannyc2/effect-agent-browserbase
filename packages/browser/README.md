@@ -10,7 +10,7 @@ A `BrowserSession<E>` is the live, host-only capability returned by the supplyin
 
 All browser operations use issued `Page` and `Frame` objects on the original connection. `Capture.start`, `Capture.stream` and `PageControl` authenticate the exact Page privately; spreading or decoding an object cannot copy authority. An absent registration fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered Page with page control disabled still fails `Unsupported`. Tools and adapters bind the issued Page together with its original session for callback supervision and checked owner cleanup. Neither opens another browser.
 
-Mutations on one Page share its permit with its Frames; healthy Pages can proceed independently. Registry operations remain serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation with an unacknowledged native command has an `unknown` outcome and is never automatically replayed. Its exact page is revoked before bounded closure. Positive closure reports `containment: PageClosed` and preserves healthy pages; unconfirmed closure fences the session and reports `SessionFenced`. This applies to the selected page too. Containment does not make the original action known. `performed` means dispatched input was acknowledged before a later step failed; it also must not be replayed blindly. `undispatched`, `rejected`, `performed` and `unknown` remain distinct outcomes.
+Mutations on one Page share its permit with its Frames; healthy Pages can proceed independently. Registry operations remain serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation with an unacknowledged native command has an `unknown` outcome and is never automatically replayed. Its exact page is revoked before bounded closure. Positive closure reports `containment: PageClosed` and preserves healthy pages; unconfirmed closure fences the session and reports `SessionFenced`. A page that its own popup/dialog policy paused is kept open for the operator instead, and its unknown work reports `PagePaused`. Containment does not make the original action known. `performed` means dispatched input was acknowledged before a later step failed; it also must not be replayed blindly. `undispatched`, `rejected`, `performed` and `unknown` remain distinct outcomes.
 
 ## Self-managed Chromium
 
@@ -186,8 +186,10 @@ overflow follows the same bounded dismissal rules. An acknowledged before-unload
 retire only the exact navigation captured when its dialog arrived and subsequently rejected.
 An attributed popup/dialog pause quarantines its exact Page and stops its capture and bindings;
 healthy peers keep working. The original Page reports `paused` and permits explicit close, while
-input remains refused. Recovery requires a drained session handoff and explicit operator release,
-then newly acquired Page/Frame authority. Unattributed policy or shared connection failures fence
+input remains refused. An action the pause interrupts on that page, such as the click that opened
+the dialog, is never closed away: its unknown outcome reports `containment: PagePaused`, and the
+quarantined page's native work does not hold up a handoff's drain. Recovery requires a drained
+session handoff and explicit operator release, then newly acquired Page/Frame authority. Unattributed policy or shared connection failures fence
 the session conservatively.
 
 ## Browser operations

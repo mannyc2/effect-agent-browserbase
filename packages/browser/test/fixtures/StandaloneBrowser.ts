@@ -113,6 +113,14 @@ export const localSite = Effect.acquireRelease(
 
         return;
       }
+      if (url.pathname === "/confirm") {
+        response.end(`<!doctype html><title>Confirm</title>
+        <button id=ask onclick="answer.textContent=String(confirm('Proceed?'))">Ask</button>
+        <button id=other onclick="count.textContent=Number(count.textContent)+1">Other</button>
+        <output id=answer></output><span id=count>0</span>`);
+
+        return;
+      }
       if (url.pathname === "/pinned-frame") {
         response.end(`<!doctype html><title>Pinned child</title>
         <strong id=frame-name>${url.searchParams.get("name") ?? "child"}</strong>

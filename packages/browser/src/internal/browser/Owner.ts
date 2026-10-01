@@ -267,6 +267,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   let terminalReason: SessionReason | null = null;
   let pauseReason: SessionReason | null = null;
   const policies = new Map<object, Extract<DriverFault, { readonly source: "policy" }>>();
+  // Pages a popup/dialog policy paused: an operator, not containment, decides their work.
+  const quarantined = new Set<string>();
   const records: Array<BrowserDiagnostics["records"][number]> = [];
   let total = 0;
   let dropped = 0;
@@ -375,6 +377,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     const refusal =
       terminalReason === "expired" ? Reasons.Expired.make({}) : Reasons.Stale.make({});
 
+    // A handoff keeps each quarantine for its operator; losing the connection ends them.
+    if (reason === "disconnected" || reason === "uncertain" || reason === "closed")
+      quarantined.clear();
     admission.fence(refusal);
     for (const waiting of waits()) waiting.cancel(refusal);
     for (const reservation of pending) reservation.abort();
@@ -981,6 +986,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           Effect.suspend(() => {
             if (!abandoned) return Effect.void;
             abandoned = false;
+            // A policy pause already holds this page for an operator: closing it would discard
+            // the page the operator must inspect, and its quarantine refuses all automation.
+            if (current() && lane.pageId !== undefined && quarantined.has(lane.pageId)) {
+              containment = { _tag: "PagePaused", pageId: lane.pageId, generation };
+              unresolved.delete(controller);
+
+              return Effect.void;
+            }
             const page = current() ? options.contain?.() : undefined;
 
             return contain(page, generation).pipe(
@@ -1208,6 +1221,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     restorePageAdmission: (pageId: string) => {
       const lane = admission.pages.get(pageId);
 
+      quarantined.delete(pageId);
       if (lane !== undefined) lane.revoked = false;
     },
     revision: (pageId: string) => admission.pages.get(pageId)?.revision ?? state.revision,
@@ -1229,13 +1243,38 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       return true;
     },
     drained: (except?: AbortSignal) =>
-      admission.drained(except) &&
+      admission.drained(
+        except,
+        (lane) => lane.pageId !== undefined && quarantined.has(lane.pageId),
+      ) &&
       !nativeUncertainty &&
       unresolved.size === 0 &&
       admission.lanes().every((lane) => lane.reservation === undefined) &&
       waits().size === 0 &&
       policies.size === 0,
     reserved: (key: string): boolean => admission.pages.get(key)?.reservation !== undefined,
+    /** Whether a popup/dialog policy holds this page for an operator. */
+    paused: (pageId: string): boolean => quarantined.has(pageId),
+    get pausedPages(): number {
+      return quarantined.size;
+    },
+    /**
+     * A popup/dialog policy pause: the page's admitted work is revoked as for closure, but an
+     * outcome it leaves unknown is held by the quarantine for the operator rather than closed.
+     */
+    pausePage: (pageId: string) => {
+      quarantined.add(pageId);
+      for (const lane of admission.lanes()) {
+        if (lane.pageId !== pageId) continue;
+        admission.revoke(lane, Reasons.Stale.make({}));
+        const reservation = lane.reservation;
+
+        lane.reservation = undefined;
+        if (reservation !== undefined) unresolved.delete(reservation);
+        reservation?.abort();
+      }
+      waitOn(pageId)?.cancel(Reasons.Stale.make({}));
+    },
     revokePage: (pageId: string, except?: AbortSignal) => {
       for (const lane of admission.lanes()) {
         if (lane.pageId !== pageId) continue;
@@ -1251,6 +1290,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     retirePage: (pageId: string) => {
       const waiting = waitOn(pageId);
 
+      quarantined.delete(pageId);
       waiting?.cancel(Reasons.Stale.make({}));
       waiting?.retire();
       admission.retirePage(pageId);
