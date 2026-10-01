@@ -79,15 +79,20 @@ export const runWithOperator = (
       yield* operator(handoff.view);
       // The boolean is this host's own decision that the operator has let go. The page cannot say.
       const inventory = yield* session.resume(handoff.token, true);
-      const selected = inventory.pages.find((page) => page.selected);
 
-      if (selected === undefined)
+      // Resume retires every issued Page. Acquire the one the first run worked on afresh from
+      // the inventory; display selection only says what the operator last looked at.
+      const worked = inventory.pages.find(
+        (page) => page.pageId === session.initialPage.identity.pageId,
+      );
+
+      if (worked === undefined)
         return yield* BrowserError.make({
           operation: "target",
           reason: Reasons.Missing.make({}),
           outcome: "undispatched",
         });
-      const resumedPage = yield* session.page(selected);
+      const resumedPage = yield* session.page(worked);
 
       yield* resumedPage.observe();
 

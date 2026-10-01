@@ -317,8 +317,9 @@ A main-frame loading deadline uses the browser owner's bounded recovery, includi
 `Tools.run`: the model receives `timeout/unknown` after acknowledged stop and can inspect the
 partial page before choosing its next action. Recovery and explicit stop share one coordinator;
 the loading deadline may be followed by up to three seconds of recovery, never beyond the browser
-lifetime. Failed recovery or a pinned child-frame timeout keeps the owner fenced. No failed
-navigation is automatically repeated.
+lifetime. Failed recovery, or a loading deadline on a child Frame, closes that exact Page
+instead; the owner is fenced only when that closure is unconfirmed. No failed navigation is
+automatically repeated.
 
 Inspection references come from the actual returned observation. Display selection and input on
 another Page cannot retarget them. A foreign Page or changed exact document/control is refused. Input on their own page, including hover
