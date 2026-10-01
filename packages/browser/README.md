@@ -531,6 +531,8 @@ per-field admission, verification, partial results and guarded submit.
 
 `startAt` is an absolute bigint on this owner's host monotonic clock, available through
 `session.monotonicTimeNanos`. Future starts wait before admission and reserve no Page permit.
+A waiting start holds only its run registration, never the timeline: when its Page closes or its
+owner pauses, detaches or ends, the run fails preparation at once instead of at its start.
 `within` starts at the intended boundary and bounds queueing, preparation, pacing, input and
 postconditions together, capped by owner lifetime and each action deadline. Missed preparation
 reports `ScheduleMissed` without inventing an attempt; an insufficient pacing budget reports

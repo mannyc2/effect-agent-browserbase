@@ -88,6 +88,8 @@ export interface PlanExecutionOptions {
     readonly append: (correlation: Correlation, event: Payload) => void;
     readonly release: () => void;
   };
+  /** Completes once the issuing Page or its owner can no longer run; a scheduled start ends then. */
+  readonly retired?: Effect.Effect<void>;
   /** This bounds registrations, never takes a Page mutation permit for the whole walk. */
   readonly reserve: Effect.Effect<() => void, BrowserError>;
   readonly executeStep: (
@@ -258,8 +260,10 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
         const runId = yield* restore(configuration.newId);
         const ids = yield* restore(Effect.forEach(plan.steps, () => configuration.newId));
         const release = yield* configuration.reserve.pipe(Effect.mapError(preparationFailure));
-        const publication = configuration.publish?.();
-        const publish = publication?.append;
+        // Evidence publication is taken when the walk starts, so a scheduled start retains no
+        // journal while it waits and never holds back its domain's terminal.
+        let publication: ReturnType<NonNullable<typeof configuration.publish>> | undefined;
+        let publish: ((correlation: Correlation, event: Payload) => void) | undefined;
         let released = false;
 
         const releaseAll = () => {
@@ -300,7 +304,31 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
         const worker = Effect.gen(function* () {
           const remaining = began - now();
 
-          if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
+          if (remaining > 0) {
+            const retired = yield* (configuration.retired ?? Effect.never).pipe(
+              Effect.timeoutOption(Duration.millis(remaining)),
+            );
+
+            // The issuing Page or owner ended before the start: refuse with its current reason.
+            if (Option.isSome(retired))
+              return yield* configuration.validate.pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    BrowserError.make({
+                      operation: "run",
+                      reason: Reasons.Closed.make({}),
+                      outcome: "undispatched",
+                    }),
+                  ),
+                ),
+                Effect.mapError(preparationFailure),
+              );
+            yield* configuration.validate.pipe(Effect.mapError(preparationFailure));
+          }
+          if (!released) {
+            publication = configuration.publish?.();
+            publish = publication?.append;
+          }
           const startedMonotonicNanos = configuration.clock.monotonicTimeNanosUnsafe();
 
           timing = Object.freeze({
@@ -848,11 +876,12 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
         );
 
         // Fiber observers cover interruption before the deferred worker evaluates any onExit.
+        // Capacity and publication are released before a joined caller can resume.
         yield* Effect.sync(() => {
           fiber.addObserver((exit) => {
+            releaseAll();
             terminal = true;
             Deferred.doneUnsafe(completion, exit);
-            releaseAll();
           });
         });
 

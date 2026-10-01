@@ -3239,6 +3239,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           },
         };
       },
+      retired: Effect.suspend(() =>
+        authority === undefined
+          ? domain.retirement.requested
+          : Effect.raceFirst(domain.retirement.requested, authority.retirement.requested),
+      ),
       reserve: Effect.suspend(() => {
         const pageId = target.pageId;
         const count = pageRuns.get(pageId) ?? 0;
