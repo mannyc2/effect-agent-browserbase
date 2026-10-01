@@ -24,8 +24,54 @@ import {
 
 const nonnegative = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
+/** Artifact-only capture limits. Omission from a campaign preserves its earlier approved digest. */
+export const CaptureRequest = Schema.Struct({
+  format: Schema.Literal("jpeg-frames-v1"),
+  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1800 })),
+  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1024 * 1024, maximum: 64 * 1024 * 1024 })),
+  quality: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
+});
+
+export const CaptureProfile = Schema.Struct({
+  ...CaptureRequest.fields,
+  maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 305000 })),
+});
+
+export type CaptureProfile = typeof CaptureProfile.Type;
+
+export interface RecordingFrame {
+  readonly bytes: Uint8Array;
+  readonly sourceTimeMillis: number;
+  readonly sourceClock: "presentation-unix-millis";
+  readonly receivedAt: number;
+  readonly receivedMonotonicNanos: string;
+  readonly sequence: number;
+  readonly document: number;
+  readonly width: number;
+  readonly height: number;
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+}
+
+/** Binary artifacts stay outside model events, terminal facts and offline replay. */
+export interface Recording extends CaptureProfile {
+  readonly frames: Array<RecordingFrame>;
+  readonly startedAt: number;
+  endedAt: number;
+  stoppedAt: number | null;
+  nativeStop: "missing" | "confirmed" | "unconfirmed";
+  stopReason: string | null;
+  overflowFrames: number;
+  totalBytes: number;
+  discardedFrames: number;
+  discardedBytes: number;
+  limitReached: "frames" | "bytes" | "duration" | null;
+  error: string | null;
+  summary: Schema.Json | null;
+}
+
 /** The model behind a run: a finite script, or a real provider named by a campaign plan. */
-export const Provider = Schema.Literals(["openai", "anthropic"]);
+export const Provider = Schema.Literals(["openai", "anthropic", "typesafe"]);
 export type Provider = typeof Provider.Type;
 
 export const ReasoningEffort = Schema.Literals(["none", "minimal", "low", "medium", "high"]);
@@ -38,7 +84,7 @@ export const Gateway = Schema.Literals(["direct", "openrouter"]);
 export type Gateway = typeof Gateway.Type;
 
 /** Settings a real model runs with; each is sent on every request and checked before it is. */
-export const Settings = Schema.Struct({
+export const ChatSettings = Schema.Struct({
   gateway: Gateway,
   maxOutputTokens: Schema.Int.check(Schema.isBetween({ minimum: 256, maximum: 32768 })),
   /** OpenAI's reasoning effort; null leaves the provider's default, and is required for Anthropic. */
@@ -49,6 +95,17 @@ export const Settings = Schema.Struct({
    */
   serviceTier: Schema.NullOr(Schema.Literals(["default", "standard_only"])),
 });
+
+/** A decision model has no text-generation allowance or chat-provider settings. */
+export const JevSettings = Schema.Struct({
+  gateway: Schema.Literal("direct"),
+  maxOutputTokens: Schema.Literal(0),
+  reasoningEffort: Schema.Null,
+  serviceTier: Schema.Null,
+  decisionThreshold: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+});
+
+export const Settings = Schema.Union([ChatSettings, JevSettings]);
 
 /** Integer micro-dollars per million tokens, with the dated source they were read from. */
 export const Rates = Schema.Struct({
@@ -66,11 +123,14 @@ export type Rates = typeof Rates.Type;
 export const admission =
   "reserved before dispatch: request bytes + 1024 tokens at the dearest input rate, plus the request's whole output allowance; settled from reported usage" as const;
 
+export const decisionAdmission =
+  "reserved before dispatch: the full 65536-token request limit plus 1024 framing tokens at the declared input rate; settled from reported usage" as const;
+
 export const Manifest = Schema.Struct({
-  version: Schema.Literal(4),
+  version: Schema.Literal(5),
   runId: Schema.String,
   sourceRevision: Schema.String,
-  evaluator: Schema.Literal("browser-evaluation-v4"),
+  evaluator: Schema.Literal("browser-evaluation-v5"),
   task: Task,
   taskRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   family: Family,
@@ -91,7 +151,11 @@ export const Manifest = Schema.Struct({
   model: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._:/-]{1,100}$/)),
   /** The campaign's name for this model and its settings; null for a script. */
   subject: Schema.NullOr(Schema.String),
-  boundary: Schema.Literal("effect-language-model-provider-options; not provider HTTP"),
+  boundary: Schema.Literals([
+    "effect-language-model-provider-options; not provider HTTP",
+    "typesafe-decisions; host-derived-tool-calls",
+  ]),
+  outputProvenance: Schema.Literals(["model", "decision-policy"]),
   settings: Schema.Union([
     Schema.Literal("deterministic finite script; no sampling or inference"),
     Settings,
@@ -101,7 +165,7 @@ export const Manifest = Schema.Struct({
     Schema.Struct({
       perRunMicrousd: nonnegative,
       campaignMicrousd: nonnegative,
-      admission: Schema.Literal(admission),
+      admission: Schema.Literals([admission, decisionAdmission]),
     }),
   ),
   /** The approved plan a measured run belongs to. */
@@ -120,7 +184,7 @@ export const Manifest = Schema.Struct({
     playwrightCore: Schema.String,
   }),
   browserVersion: Schema.Literal("unavailable"),
-  capture: Schema.Literal("off"),
+  capture: Schema.Union([Schema.Literal("off"), CaptureProfile]),
   viewport: Schema.Struct({ width: nonnegative, height: nonnegative }),
   bounds: Schema.Struct({
     maxTurns: nonnegative,
@@ -146,12 +210,12 @@ export const Manifest = Schema.Struct({
 export type Manifest = typeof Manifest.Type;
 
 export const Event = Schema.Struct({
-  version: Schema.Literal(4),
+  version: Schema.Literal(5),
   runId: Schema.String,
   seq: nonnegative,
   clock: Schema.Literal("host-performance-milliseconds"),
   at: Schema.Finite,
-  kind: Schema.Literals(["request", "response", "history", "host"]),
+  kind: Schema.Literals(["request", "response", "history", "host", "decision-request", "decision"]),
   turn: Schema.NullOr(nonnegative),
   value: Schema.Json,
 });
@@ -359,10 +423,10 @@ export const manifest = (
   const declared = cases[entry.task];
 
   return Schema.decodeSync(Manifest)({
-    version: 4,
+    version: 5,
     runId: entry.runId,
     sourceRevision,
-    evaluator: "browser-evaluation-v4",
+    evaluator: "browser-evaluation-v5",
     task: entry.task,
     taskRevision: declared.revision,
     family: declared.family,
@@ -382,7 +446,11 @@ export const manifest = (
     reset: "new fixture and owner per run; serial declared order",
     backend: entry.hosted ?? declared.backend,
     ...measurement,
-    boundary: "effect-language-model-provider-options; not provider HTTP",
+    boundary:
+      measurement.provider === "typesafe"
+        ? "typesafe-decisions; host-derived-tool-calls"
+        : "effect-language-model-provider-options; not provider HTTP",
+    outputProvenance: measurement.provider === "typesafe" ? "decision-policy" : "model",
     runtime: runtime(),
     packages: packages(),
     browserVersion: "unavailable",
@@ -428,6 +496,7 @@ export const emptyFacts: Facts = {
 /** A caller-owned bounded sink survives cancellation of the agent's waiter. Terminal facts have a separate reserve. */
 export class Journal {
   readonly manifest: Manifest;
+  recording: Recording | undefined;
   facts: Facts = emptyFacts;
   readonly #events: Event[] = [];
   readonly #started = performance.now();
@@ -441,14 +510,18 @@ export class Journal {
       limits: { ...input.limits, ...bounds },
     });
   }
+  /** Frame sinks use the same receipt clock as host commentary; source clocks remain separate. */
+  elapsedMillis(): number {
+    return performance.now() - this.#started;
+  }
   append(input: Pick<Event, "kind" | "turn" | "value">): void {
     const event = Schema.decodeSync(Event)({
       ...input,
-      version: 4,
+      version: 5,
       runId: this.manifest.runId,
       seq: this.#seq++,
       clock: "host-performance-milliseconds",
-      at: performance.now() - this.#started,
+      at: this.elapsedMillis(),
     });
 
     const bytes = byteLength(event) + 1;

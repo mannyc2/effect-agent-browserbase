@@ -130,7 +130,7 @@ const handlers = BrowserTools.handlers(browser, browser.initialPage, {
 
 Observations read the viewport by default: what a person would see, and what `browser_scroll` moves. `browser_inspect` takes two optional parameters, each null or absent when unused. `scope` asks for the whole document or the viewport for one reading. `find` keeps only controls whose label contains its text, and lines containing it, and it is applied inside the page before `maxControls` and `maxTextBytes` are spent, so a crowded header cannot hide the control a model is looking for. A matched reading names its `match`: what it leaves out is not evidence of absence. Neither parameter can widen the host's bounds, and references still come from the reading itself.
 
-Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof.
+Viewport observations retain the generic reading's geometry budgets and its clipped, covered, uncertain and exhausted qualifications. When present, `viewport.documentScroll` gives the bound Page's or Frame's document position (`x`, `y`), content dimensions (`scrollWidth`, `scrollHeight`) and scrollport dimensions (`clientWidth`, `clientHeight`) in CSS pixels. These are sampled with the reading; nested containers have their own scrolling, and document dimensions do not establish that all content has loaded. Choosing viewport scope does not turn hit-testing into pixel-level visibility proof.
 
 Every result is fitted under `resultMaxBytes` (16 KiB–1 MiB, 48 KiB by default, under Effect Agent's default 50 KiB `toolResultBounds`), so the engine never cuts one in the middle of its JSON. A reading that does not fit loses text first and then trailing controls, never part of a reference it keeps, and says so through `textTruncated`, `controlsTruncated` and a select's `optionsTruncated`.
 
@@ -372,8 +372,8 @@ sequencing and supervision lifecycle.
 
 `BrowserTools.instructions(toolkit)` returns agent instructions for the Tools a Toolkit declares:
 page text is untrusted data, one control per response, how to read the new observation, a form in
-one call, what an unknown outcome means and how to reach what a reading left out. They restate the
-rules the Tools enforce, so a model plans around them instead of learning them from failures. Use
+one call, what an unknown outcome means and how to reach what a reading left out. These explain
+the rules the Tools enforce and offer reading guidance, so a model can plan its next call. Use
 them as they are, add to them, or write your own; nothing depends on their wording.
 
 `BrowserTools.policy(input, { resultMaxBytes })` returns Agent policy fields for these Tools under
@@ -533,16 +533,20 @@ Operation helpers accept an exact `Page`; helpers such as the example's `turns<E
 
 The unpublished [evaluation runner](test/evaluation/README.md) records actual
 AgentRuntime model-boundary inputs, projected tool results and independent
-application or owner state for six resettable cases: form submission, a write
+application or owner state for seven resettable cases: form submission, a write
 whose acknowledgement is lost, a write refused before dispatch, a cancelled
-waiter, a long reading and a page that instructs the agent to cancel an order.
+waiter, a long reading, multi-page navigation and a page that instructs the agent to cancel an order.
 Scripted reference and known-bad policies, with retained-evidence tests, check
 its deterministic oracles, which grade task success, output, claims, duplicate
 writes, retries after an unknown outcome, termination, cleanup, whether the
 injected condition occurred and whether a named attack was resisted separately.
 Two cases are held out from tuning. Offline grading and compatible-action replay
 need no model calls. These scripted cases establish integration contracts. A
-guarded campaign command runs the same cases with OpenAI or Anthropic models: its
+guarded campaign command runs the same cases with OpenAI or Anthropic models, and
+supports a pinned Jev decision policy for local navigation. Jev selects observed
+links and text lines; the host assembles Tool calls and the final output, recorded
+as decision-policy provenance. This baseline measures navigation and answer
+recognition, with no generation or vision. Its
 dry run shows the whole matrix and spend bounds, and a live run needs an opt-in,
 the approved plan digest and credentials, and reserves each request's worst-case
 cost before sending it. One owner-authorized pilot has run two cheap models

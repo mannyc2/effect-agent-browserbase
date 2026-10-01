@@ -46,7 +46,7 @@ const preview = Command.make(
     yield* Console.log(
       JSON.stringify(
         {
-          version: 4,
+          version: 5,
           mode: "unpaid-plan",
           concurrency: 1,
           maxRuns,
@@ -108,9 +108,82 @@ const Outcome = Schema.Struct({
   calibrated: Schema.NullOr(Schema.Boolean),
   termination: Termination,
   costMicrousd: Schema.NullOr(nonnegative),
+  capture: Schema.optionalKey(
+    Schema.Struct({
+      recorded: Schema.Boolean,
+      status: Schema.Literals(["complete", "limited", "failed"]),
+      error: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 
 type Outcome = typeof Outcome.Type;
+
+/** Encoding is caller-owned artifact work after the original browser and capture have closed. */
+const film = Effect.fn("Evaluation.film")(function* (
+  directory: string,
+  journal: Journal,
+  report: ReturnType<typeof grade>,
+) {
+  const recording = journal.recording;
+
+  const { frames, ...metadata } = recording ?? {
+    frames: [],
+    profile: journal.manifest.capture,
+    status: "not-started",
+    nativeStop: "missing",
+  };
+
+  yield* Effect.tryPromise({
+    try: () =>
+      writeFile(
+        `${directory}/capture.json`,
+        JSON.stringify(
+          {
+            version: 1,
+            origin: "live capture of this run's original browser session",
+            clock: "host-performance-milliseconds",
+            alignment:
+              "frame sink receipts share the commentary clock; presentation and native monotonic clocks are retained separately",
+            ...metadata,
+            frames: frames.length,
+          },
+          null,
+          2,
+        ),
+        { flag: "wx" },
+      ),
+    catch: () => new EvidenceError({ operation: "save capture accounting" }),
+  });
+  if (recording === undefined || frames.length === 0)
+    return yield* new EvidenceError({ operation: "requested capture has no retained frames" });
+  const { encode } = yield* Effect.promise(() => import("./Video.ts"));
+
+  const commentary =
+    report.understanding?.kind === "feed-commentary"
+      ? report.understanding.commentary.map(({ at, postId, caption }) => ({ at, postId, caption }))
+      : [];
+
+  const complete =
+    recording.limitReached === null &&
+    recording.error === null &&
+    recording.nativeStop === "confirmed" &&
+    recording.stopReason === "stopped" &&
+    recording.overflowFrames === 0;
+
+  yield* encode({
+    ...recording,
+    outputDirectory: `${directory}/capture`,
+    commentary,
+    label: `${journal.manifest.runId} · live model run${complete ? "" : " · capture limited"}`,
+  });
+
+  return {
+    recorded: true,
+    status: complete ? ("complete" as const) : ("limited" as const),
+    error: recording.error,
+  };
+});
 
 /** Evidence is saved when a run ends, on failure or interruption too, before the next starts. */
 const recorder =
@@ -144,6 +217,17 @@ const recorder =
       const report = grade(evidence);
       const saved = yield* save(evidence, report, `${directory}/${runId}`).pipe(Effect.exit);
 
+      const filmed =
+        evidence.manifest.capture === "off"
+          ? undefined
+          : yield* (
+              Exit.isSuccess(saved)
+                ? film(`${directory}/${runId}`, journal, report)
+                : Effect.fail(
+                    new EvidenceError({ operation: "evidence save failed before filming" }),
+                  )
+            ).pipe(Effect.exit);
+
       outcomes.push({
         runId,
         split: evidence.manifest.split,
@@ -154,6 +238,17 @@ const recorder =
         calibrated: harness === null ? report.calibration.agrees : null,
         termination: report.termination,
         costMicrousd: evidence.facts.usage?.costMicrousd ?? null,
+        ...(filmed === undefined
+          ? {}
+          : {
+              capture: Exit.isSuccess(filmed)
+                ? filmed.value
+                : {
+                    recorded: false,
+                    status: "failed" as const,
+                    error: tagOf(filmed.cause),
+                  },
+            }),
       });
       yield* Console.log(JSON.stringify({ run: runId, ...report }));
     });
@@ -209,7 +304,7 @@ const run = Command.make(
 
     const summarize = Effect.suspend(() => {
       const summary = {
-        version: 4,
+        version: 5,
         sourceRevision: source,
         planned: runs.length,
         recorded: outcomes.filter((outcome) => outcome.recorded).length,
@@ -429,6 +524,19 @@ const campaignCommand = ({
           harnessFailures: outcomes.filter((outcome) => outcome.harness !== null).length,
           incompleteEvidence: outcomes.filter((outcome) => outcome.evidence === "incomplete")
             .length,
+          ...(shown.capture === undefined
+            ? {}
+            : {
+                capture: {
+                  planned: shown.runs.length,
+                  recorded: outcomes.filter((outcome) => outcome.capture?.recorded).length,
+                  complete: outcomes.filter((outcome) => outcome.capture?.status === "complete")
+                    .length,
+                  limited: outcomes.filter((outcome) => outcome.capture?.status === "limited")
+                    .length,
+                  failed: outcomes.filter((outcome) => outcome.capture?.status === "failed").length,
+                },
+              }),
           outcomes,
         };
 
@@ -447,6 +555,7 @@ const campaignCommand = ({
         summary.recorded !== summary.planned ||
         summary.harnessFailures > 0 ||
         summary.incompleteEvidence > 0 ||
+        (summary.capture !== undefined && summary.capture.complete !== summary.capture.planned) ||
         ledger.closed !== null
       )
         return yield* new EvidenceError({ operation: "campaign incomplete or stopped" });

@@ -14,11 +14,15 @@ import {
 } from "./Cases.ts";
 import {
   admission,
+  ChatSettings,
+  CaptureRequest,
+  decisionAdmission,
   Gateway,
+  JevSettings,
   manifest,
   Provider,
   Rates,
-  Settings,
+  type Settings,
   type Manifest,
   type Provider as ProviderName,
 } from "./Evidence.ts";
@@ -54,11 +58,13 @@ const refuse = (reason: CampaignRefusal["reason"], message: string) =>
 export const optIn = "EFFECT_AGENT_BROWSER_EVALUATION_LIVE";
 
 const credential = (provider: ProviderName, gateway: Gateway) =>
-  gateway === "openrouter"
-    ? "OPENROUTER_API_KEY"
-    : provider === "openai"
-      ? "OPENAI_API_KEY"
-      : "ANTHROPIC_API_KEY";
+  provider === "typesafe"
+    ? "TYPESAFE_API_KEY"
+    : gateway === "openrouter"
+      ? "OPENROUTER_API_KEY"
+      : provider === "openai"
+        ? "OPENAI_API_KEY"
+        : "ANTHROPIC_API_KEY";
 
 const Slug = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,39}$/));
 const Usd = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1000 }));
@@ -74,8 +80,9 @@ const Model = Schema.Struct({
    * prices differently, so both are refused.
    */
   model: Schema.String.check(Schema.isPattern(/^(?:[a-z]+\/)?[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/)),
-  maxOutputTokens: Settings.fields.maxOutputTokens,
-  reasoningEffort: Settings.fields.reasoningEffort,
+  maxOutputTokens: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 32768 })),
+  reasoningEffort: ChatSettings.fields.reasoningEffort,
+  decisionThreshold: Schema.optionalKey(JevSettings.fields.decisionThreshold),
   /** US dollars per million tokens, as the dated source lists them. */
   rates: Schema.Struct({
     inputUsdPerMillion: Usd,
@@ -103,6 +110,7 @@ export const Spec = Schema.Struct({
     maxRunSeconds: Schema.Int.check(Schema.isBetween({ minimum: 30, maximum: 900 })),
   }),
   judges: Schema.Literal("disabled"),
+  capture: Schema.optionalKey(CaptureRequest),
 });
 
 /** A model as a plan runs it: its settings, integer prices and the credential it needs. */
@@ -182,6 +190,56 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
         "specification",
         `${model.id}: rates must be whole micro-dollars per million tokens.`,
       );
+
+    const pricesForSubject = {
+      inputPerMillionMicrousd: input,
+      cacheReadPerMillionMicrousd: cacheRead,
+      cacheWritePerMillionMicrousd: cacheWrite,
+      outputPerMillionMicrousd: output,
+      source: model.rates.source,
+      retrieved: model.rates.retrieved,
+    };
+
+    if (model.provider === "typesafe") {
+      if (
+        model.model !== "jev-1.13.0" ||
+        model.gateway !== "direct" ||
+        model.maxOutputTokens !== 0 ||
+        model.reasoningEffort !== null ||
+        model.decisionThreshold === undefined ||
+        cacheRead !== 0 ||
+        cacheWrite !== 0 ||
+        output !== 0
+      )
+        return yield* refuse(
+          "settings",
+          `${model.id}: Jev needs jev-1.13.0 directly, a decision threshold, no generation allowance or reasoning, and zero cache/output rates.`,
+        );
+      if (spec.backends.some((backend) => backend !== "chromium"))
+        return yield* refuse("backend", "Jev's decision policy currently runs on Chromium only.");
+      if (spec.tasks.some((task) => task !== "navigation"))
+        return yield* refuse("task", "Jev's decision policy currently measures navigation only.");
+      subjects.push({
+        id: model.id,
+        provider: model.provider,
+        model: model.model,
+        settings: {
+          gateway: "direct",
+          maxOutputTokens: 0,
+          reasoningEffort: null,
+          serviceTier: null,
+          decisionThreshold: model.decisionThreshold,
+        },
+        rates: pricesForSubject,
+        credential: credential(model.provider, model.gateway),
+      });
+      continue;
+    }
+    if (model.maxOutputTokens < 256 || model.decisionThreshold !== undefined)
+      return yield* refuse(
+        "settings",
+        `${model.id}: chat models need at least 256 output tokens and cannot take a decision threshold.`,
+      );
     if (
       model.gateway === "openrouter"
         ? !model.model.startsWith(`${model.provider}/`)
@@ -211,14 +269,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
               ? "default"
               : "standard_only",
       },
-      rates: {
-        inputPerMillionMicrousd: input,
-        cacheReadPerMillionMicrousd: cacheRead,
-        cacheWritePerMillionMicrousd: cacheWrite,
-        outputPerMillionMicrousd: output,
-        source: model.rates.source,
-        retrieved: model.rates.retrieved,
-      },
+      rates: pricesForSubject,
       credential: credential(model.provider, model.gateway),
     });
   }
@@ -231,7 +282,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
   if (unhosted.length > 0)
     return yield* refuse(
       "backend",
-      `Browserbase cannot run ${unhosted.join(", ")}: reading uses the scripted owner, and a lost acknowledgement's late write reaches the host only after the owner has fenced the page.`,
+      `Browserbase cannot run ${unhosted.join(", ")}: only signup, rerendered-submit and hostile-receipt have a hosted fixture; the other cases remain local.`,
     );
   const excluded = spec.tasks.filter((task) => unmeasured[task] !== undefined);
 
@@ -263,6 +314,16 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
 
   const sessions = runs.filter((entry) => entry.backend === "browserbase").length;
 
+  if (spec.capture !== undefined) {
+    if (runs.some((entry) => entry.backend !== "chromium"))
+      return yield* refuse("backend", "Filming requires each run's original local Chromium owner.");
+    if (spec.budget.maxRunSeconds > 300)
+      return yield* refuse(
+        "budget",
+        "Filmed runs are bounded to five minutes plus capture cleanup.",
+      );
+  }
+
   if (runs.length > maxRuns)
     return yield* refuse("runs", `${runs.length} runs exceed the ${maxRuns}-run bound.`);
   const perRun = micro(spec.budget.perRunUsd);
@@ -282,7 +343,7 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
     version: 1,
     mode: "real-model-plan",
     name: spec.name,
-    evaluator: "browser-evaluation-v4",
+    evaluator: "browser-evaluation-v5",
     concurrency: 1,
     order:
       "trial, then task, toolkit, backend and model: every model runs the same case back to back",
@@ -315,7 +376,15 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       worstCaseMicrousd: worst,
       maxRunMillis: spec.budget.maxRunSeconds * 1000,
       judgeMicrousd: 0,
-      admission,
+      admission: subjects.some((subject) => subject.provider === "typesafe")
+        ? "per subject; see admissionBySubject"
+        : admission,
+      admissionBySubject: Object.fromEntries(
+        subjects.map((subject) => [
+          subject.id,
+          subject.provider === "typesafe" ? decisionAdmission : admission,
+        ]),
+      ),
     },
     browser:
       "a new local Chromium, scripted owner or Browserbase session for each run, closed before the next starts",
@@ -340,6 +409,11 @@ export const plan = Effect.fn("Campaign.plan")(function* (input: unknown) {
       ...new Set(subjects.map((subject) => subject.credential)),
       ...(sessions === 0 ? [] : ["BROWSERBASE_API_KEY", "BROWSERBASE_PROJECT_ID"]),
     ],
+    ...(spec.capture === undefined
+      ? {}
+      : {
+          capture: { ...spec.capture, maxDurationMillis: spec.budget.maxRunSeconds * 1000 + 5000 },
+        }),
   };
 
   return {
@@ -418,7 +492,7 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
       spend: {
         perRunMicrousd: shown.budget.perRunMicrousd,
         campaignMicrousd: shown.budget.campaignMicrousd,
-        admission,
+        admission: subject.provider === "typesafe" ? decisionAdmission : admission,
       },
       campaign: { name: shown.name, digest: shown.digest },
     },
@@ -428,6 +502,7 @@ export const measuredManifest = (shown: Plan, run: Measured, sourceRevision: str
   return {
     ...declared,
     bounds: { ...declared.bounds, maxDurationMillis: shown.budget.maxRunMillis },
+    capture: shown.capture ?? "off",
   };
 };
 
@@ -468,5 +543,7 @@ export const allowance = (ledger: Ledger, shown: Plan, subject: Subject): Allowa
       cacheWrite: subject.rates.cacheWritePerMillionMicrousd,
       output: subject.rates.outputPerMillionMicrousd,
     },
-    maxOutputTokens: subject.settings.maxOutputTokens,
+    // Decision responses report output usage even though output is not billed or generated.
+    maxOutputTokens:
+      subject.provider === "typesafe" ? Number.MAX_SAFE_INTEGER : subject.settings.maxOutputTokens,
   });

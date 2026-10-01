@@ -114,6 +114,11 @@ export class Allowance {
 
     return refusal(reason);
   }
+  /** A provider response contradicts its declared model or usage contract. */
+  breakContract(): void {
+    this.#ledger.closed = "contract";
+    this.#overrun = true;
+  }
   /** The admitted request's stream has ended; its reservation waits for settlement. */
   release(): void {
     this.#inFlight = false;

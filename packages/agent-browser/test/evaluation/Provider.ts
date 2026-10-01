@@ -7,6 +7,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 
 import type { Subject } from "./Campaign.ts";
 import { type Journal, json, requestData } from "./Evidence.ts";
+import { measured as decisionMeasured } from "./Jev.ts";
 import type { Driver } from "./Model.ts";
 import type { Allowance } from "./Spend.ts";
 
@@ -439,6 +440,9 @@ export const measured = (options: {
   readonly transport: Layer.Layer<HttpClient.HttpClient>;
 }): Driver => {
   const { subject, allowance, apiKey, journal, transport } = options;
+
+  if (subject.provider === "typesafe") return decisionMeasured(options);
+
   const gate: Gate = { armed: false };
   const aliases = new Aliases();
   const { gateway, maxOutputTokens, reasoningEffort, serviceTier } = subject.settings;
