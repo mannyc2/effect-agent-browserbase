@@ -680,6 +680,7 @@ it.effect.each(["ack-first", "reject-first", "unconfirmed"] as const)(
         });
 
         const session = yield* (yield* f.acquisition).connect;
+        const page = session.initialPage();
         const operation = yield* session.operations.startNavigation("https://example.test/first");
         const dialog = control?.beforeUnload();
 
@@ -696,19 +697,31 @@ it.effect.each(["ack-first", "reject-first", "unconfirmed"] as const)(
           failure: {
             reason: { _tag: order === "unconfirmed" ? "Provider" : "Interrupted" },
             outcome: "unknown",
+            ...(order === "unconfirmed"
+              ? { containment: { _tag: "PageClosed", pageId: page.record.identity.pageId } }
+              : {}),
           },
         });
         expect(dispatches).toBe(1);
         expect(yield* session.status).toMatchObject({
-          phase: order === "unconfirmed" ? "uncertain" : "open",
-          unresolvedDispatch: order === "unconfirmed",
+          phase: "open",
+          unresolvedDispatch: false,
         });
         dialog?.dismissed(true);
-        if (order === "unconfirmed")
+        if (order === "unconfirmed") {
+          expect(yield* page.status).toMatchObject({ phase: "closed" });
+          expect(
+            (yield* f.control.calls).filter((call) => call.operation === "close-page"),
+          ).toMatchObject([
+            { pageId: page.record.identity.pageId, dispatched: true, settled: "completed" },
+          ]);
           expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
             _tag: "Failure",
+            failure: { outcome: "undispatched" },
           });
-        else {
+          expect(f.state.clicks).toBe(0);
+          expect(dispatches).toBe(1);
+        } else {
           yield* session.operations.click("#act");
           expect(f.state.clicks).toBe(1);
         }

@@ -18,7 +18,7 @@ import type { CaptureSize } from "../../CaptureData.ts";
 import type { InitializationError } from "../../Errors.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
-import type { AdmissionPolicy } from "./Observation.ts";
+import type { AdmissionPolicy, ObservationLimits } from "./Observation.ts";
 import type { Invalidation, ObservationScope, Ticket, WaitTicket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
@@ -41,6 +41,7 @@ export interface DriverOptions {
   readonly popupPolicy: "retain" | "close" | "pause";
   readonly dialogPolicy: "dismiss" | "pause";
   readonly maxPages: number;
+  readonly observationLimits?: ObservationLimits;
   readonly preserveViewport?: boolean;
   readonly pageControl?: boolean;
   /** Installed once per connection, before any document this connection creates. */
@@ -84,10 +85,15 @@ export type DriverFault =
     };
 
 export interface DriverEvents {
+  readonly frameClosed?: (pageId: string, frameId: string) => void;
   readonly invalidate: (reason: Invalidation, scope?: ObservationScope) => void;
   readonly disconnected: () => void;
   /** Positive native connection retirement, also delivered during or after explicit cleanup. */
   readonly retired?: () => void;
+  /** Positive exact native page closure, never merely logical revocation. */
+  readonly pageClosed?: (pageId: string) => void;
+  /** Native uncertainty confined to one known page; the owner contains that page. */
+  readonly pageFault?: (pageId: string) => void;
   readonly pause: (reason?: "popup" | "dialog") => void;
   readonly fault: (event: DriverFault) => void;
 }
@@ -255,6 +261,7 @@ export interface Driver {
     controls: number,
     ticket: Ticket,
     match?: string,
+    target?: DriverTarget,
   ) => Promise<NativeObservation>;
   readonly checkpoint: (
     maximumBytes: number,
@@ -262,11 +269,20 @@ export interface Driver {
     /** Absent means no picture is taken. */
     pictureBytes: number | undefined,
     ticket: Ticket,
+    target?: DriverTarget,
   ) => Promise<NativeCheckpoint>;
   /** Fresh facts from the exact node an observation named. */
-  readonly controlFacts: (target: ObservedElement, ticket: Ticket) => Promise<ControlFacts>;
+  readonly controlFacts: (
+    target: ObservedElement,
+    ticket: Ticket,
+    browserTarget?: DriverTarget,
+  ) => Promise<ControlFacts>;
   /** After a hold: is this still the attached control that was inspected? */
-  readonly revalidate: (target: ObservedElement, ticket: Ticket) => Promise<void>;
+  readonly revalidate: (
+    target: ObservedElement,
+    ticket: Ticket,
+    browserTarget?: DriverTarget,
+  ) => Promise<void>;
   readonly click: (
     target: string | ObservedElement,
     ticket: Ticket,
@@ -286,6 +302,7 @@ export interface Driver {
     options: SelectOptions,
     ticket: Ticket,
     policy?: AdmissionPolicy,
+    browserTarget?: DriverTarget,
   ) => Promise<string>;
   /**
    * One form step on an exact observed node that may have become enabled since it was observed.
@@ -301,6 +318,7 @@ export interface Driver {
     policy: AdmissionPolicy | undefined,
     settleMillis: number,
     capture: InputCapture,
+    browserTarget?: DriverTarget,
   ) => Promise<{
     readonly status: "set" | "unchanged";
     readonly reached: boolean;
@@ -312,6 +330,7 @@ export interface Driver {
   readonly formState: (
     targets: ReadonlyArray<ObservedElement>,
     ticket: Ticket,
+    browserTarget?: DriverTarget,
   ) => Promise<ReadonlyArray<string | undefined>>;
   /** The one submit click, on an exact observed node that may have become enabled. */
   readonly formSubmit: (
@@ -319,6 +338,7 @@ export interface Driver {
     ticket: Ticket,
     capture: InputCapture,
     policy?: AdmissionPolicy,
+    browserTarget?: DriverTarget,
   ) => Promise<ClickResult>;
   /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (
@@ -367,7 +387,7 @@ export interface Driver {
     ticket: Ticket,
     target?: DriverTarget,
   ) => Promise<Uint8Array>;
-  readonly resize: (viewport: Viewport, ticket: Ticket) => Promise<void>;
+  readonly resize: (viewport: Viewport, ticket: Ticket, target?: DriverTarget) => Promise<void>;
   readonly waitFor: (
     selector: string,
     state: "visible" | "hidden" | "attached" | "detached",
@@ -384,10 +404,12 @@ export interface Driver {
     target: string | ObservedElement,
     ticket: Ticket,
     capture: InputCapture,
+    browserTarget?: DriverTarget,
   ) => Promise<ClickResult>;
   readonly clickForDownload: (
     target: string | ObservedElement,
     ticket: Ticket,
+    browserTarget?: DriverTarget,
   ) => Promise<{
     readonly downloadId: string;
     readonly filename: string;
@@ -397,12 +419,14 @@ export interface Driver {
     target: string | ObservedElement,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
+    browserTarget?: DriverTarget,
   ) => Promise<string>;
   /** The chooser observer is registered before the single click dispatch that opens it. */
   readonly clickForFileSelection: (
     target: string | ObservedElement,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
+    browserTarget?: DriverTarget,
   ) => Promise<string>;
   /** Evaluated once per document; a later document never inherits an earlier one's result. */
   readonly documentReadiness: (ticket: Ticket, target?: DriverTarget) => Promise<ReadinessState>;
@@ -411,6 +435,8 @@ export interface Driver {
   readonly invalidateObservation: (scope?: ObservationScope) => void;
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;
+  readonly fenceInitializationPage?: (pageId: string) => void;
+  readonly retireInitializationPage?: (pageId: string) => void;
   /** Remove this connection's registrations while its native connection is still usable. */
   readonly disposeInitialization?: () => Promise<void>;
   /** Closes this client connection, not an assertion about remote provider termination. */

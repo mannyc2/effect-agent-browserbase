@@ -7,7 +7,7 @@ import {
   type SessionReason,
   type SessionPhase,
 } from "../../BrowserData.ts";
-import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
+import { BrowserError, Reasons, type BrowserOperation, type Containment } from "../../Errors.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
 import { providerReason, publicError } from "./NativeCalls.ts";
 
@@ -64,6 +64,8 @@ export interface ReadTicket {
 export interface Ticket extends ReadTicket {
   readonly dispatched: boolean;
   dispatch(): void;
+  /** Called only for positive completion of all native commands in the current mutation phase. */
+  acknowledge?(): void;
 }
 
 /** The driver retires native capacity only after its wait and required handle disposal settle. */
@@ -117,6 +119,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   };
 
   let active: AbortController | undefined;
+  let activeScope: ObservationScope | undefined;
   let holdingPermit = false;
 
   let waiting:
@@ -131,7 +134,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
   const reservations = new Map<string, AbortController>();
   // These facts outlive the tickets which produced them. Aborting admission is not retirement.
-  const unresolved = new Set<object>();
+  const unresolved = new Map<object, string | undefined>();
   let nativeUncertainty = false;
   let terminalReason: SessionReason | null = null;
   let pauseReason: SessionReason | null = null;
@@ -235,7 +238,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         if (previous === undefined && terminalReason === null) policies.set(event.token, event);
         break;
       case "dispatched":
-        unresolved.add(event.token);
+        unresolved.set(event.token, undefined);
         if (previous !== undefined) policies.set(event.token, event);
         break;
       case "confirmed":
@@ -244,7 +247,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         break;
       case "unknown":
         // Keep the token so a late acknowledgement may retire it, but never reopen admission.
-        unresolved.add(event.token);
+        unresolved.set(event.token, undefined);
         fence("uncertain", "uncertain", event.reason);
         break;
       case "not-dispatched":
@@ -260,7 +263,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     const controller = new AbortController();
 
     reservations.set(key, controller);
-    unresolved.add(controller);
+    unresolved.set(controller, key);
 
     return {
       signal: controller.signal,
@@ -414,6 +417,38 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     };
   };
 
+  const contain = (
+    page: { readonly pageId: string; readonly close: Effect.Effect<boolean> } | undefined,
+    generation: number,
+  ): Effect.Effect<Containment> =>
+    Effect.uninterruptible(
+      Effect.gen(function* () {
+        if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
+        if (page === undefined || state.generation !== generation || state.phase !== "open") {
+          fence("uncertain", "uncertain");
+
+          return { _tag: "SessionFenced", generation: state.generation };
+        }
+        const closed = yield* page.close;
+
+        if (!closed || state.generation !== generation || state.phase !== "open") {
+          fence("uncertain", "uncertain");
+
+          return { _tag: "SessionFenced", generation: state.generation };
+        }
+        const reservation = reservations.get(page.pageId);
+
+        if (reservation !== undefined) {
+          reservations.delete(page.pageId);
+          unresolved.delete(reservation);
+          reservation.abort();
+        }
+        record("page-contained", "confirmed", generation);
+
+        return { _tag: "PageClosed", pageId: page.pageId, generation };
+      }),
+    );
+
   const guard = <A, E, R>(
     operation: BrowserOperation,
     body: (ticket: Ticket) => Effect.Effect<A, E, R>,
@@ -520,7 +555,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         const controller = new AbortController();
 
         active = controller;
+        activeScope = options.mutationScope?.();
         let dispatched = false;
+        let pending = false;
+        let containment: Containment = { _tag: "NotRequired" };
         const generation = state.generation;
         const allowed = options.phases ?? ["open"];
 
@@ -534,14 +572,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             throw BrowserError.make({
               operation,
               reason: Reasons.Stale.make({}),
-              outcome: dispatched ? "unknown" : "undispatched",
+              outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
             });
           }
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline)
             throw BrowserError.make({
               operation,
               reason: Reasons.Timeout.make({}),
-              outcome: dispatched ? "unknown" : "undispatched",
+              outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
             });
         };
 
@@ -560,7 +598,17 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             if (!dispatched && options.mutation)
               invalidate("observation", options.mutationScope?.() ?? "all");
             dispatched = true;
-            unresolved.add(controller);
+            pending = true;
+            const scope = options.mutationScope?.();
+
+            unresolved.set(
+              controller,
+              scope !== undefined && scope !== "all" && scope !== "none" ? scope.pageId : undefined,
+            );
+          },
+          acknowledge() {
+            pending = false;
+            unresolved.delete(controller);
           },
         };
 
@@ -572,11 +620,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         const abandon = () => {
           // The action timer can win the same instant as the independent lifetime timer.
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
-          const fenced = controller.signal.aborted;
-
           controller.abort();
-          if (dispatched && !fenced && state.phase !== "closing" && state.phase !== "closed")
-            abandoned = true;
+          if (pending) {
+            if (state.generation === generation && state.phase === "open") abandoned = true;
+            else containment = { _tag: "SessionFenced", generation: state.generation };
+          }
         };
 
         const current = () => state.generation === generation && state.phase === "open";
@@ -593,26 +641,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             abandoned = false;
             const page = current() ? options.contain?.() : undefined;
 
-            if (page === undefined) return Effect.sync(() => fence("uncertain", "uncertain"));
-
-            return page.close.pipe(
-              Effect.map((closed) => {
-                if (!closed || !current()) {
-                  fence("uncertain", "uncertain");
-
-                  return;
-                }
-                unresolved.delete(controller);
-                // A navigation this operation dispatched, and reserved, ended with its page.
-                const reservation = reservations.get(page.pageId);
-
-                if (reservation !== undefined) {
-                  reservations.delete(page.pageId);
-                  unresolved.delete(reservation);
-                  reservation.abort();
-                }
-                record("page-contained", "confirmed");
-              }),
+            return contain(page, generation).pipe(
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  containment = result;
+                  if (result._tag === "PageClosed") unresolved.delete(controller);
+                }),
+              ),
             );
           }),
         );
@@ -623,7 +658,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           return BrowserError.make({
             operation,
             reason: Reasons.Timeout.make({}),
-            outcome: dispatched ? "unknown" : "undispatched",
+            outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
           });
         }).pipe(
           Effect.tap(() =>
@@ -635,29 +670,49 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                     BrowserError.make({
                       operation,
                       reason: Reasons.Stale.make({}),
-                      outcome: dispatched ? "unknown" : "undispatched",
+                      outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
                     }),
                 }),
           ),
           Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
-            if (dispatched) abandon();
+            const outcome = pending
+              ? "unknown"
+              : dispatched
+                ? "performed"
+                : Schema.is(BrowserError)(error)
+                  ? error.outcome
+                  : "undispatched";
+
+            if (pending) abandon();
 
             // The permit adds dispatch evidence only to browser-operation errors. Typed
             // initialization/consumer failures retain their identity and original family.
-            const failure: Effect.Effect<never, E | BrowserError> = Schema.is(BrowserError)(error)
-              ? Effect.fail(
-                  BrowserError.make({ operation, reason: error.reason, outcome: error.outcome }),
-                )
-              : Effect.fail(error);
-
-            return settle.pipe(Effect.andThen(failure));
+            return settle.pipe(
+              Effect.andThen(
+                Effect.suspend((): Effect.Effect<never, E | BrowserError> =>
+                  Schema.is(BrowserError)(error)
+                    ? Effect.fail(
+                        BrowserError.make({
+                          operation,
+                          reason: error.reason,
+                          outcome,
+                          containment,
+                        }),
+                      )
+                    : Effect.fail(error),
+                ),
+              ),
+            );
           }),
           Effect.onInterrupt(() => Effect.sync(abandon).pipe(Effect.andThen(settle))),
           Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
           Effect.ensuring(
             Effect.sync(() => {
               controller.abort();
-              if (active === controller) active = undefined;
+              if (active === controller) {
+                active = undefined;
+                activeScope = undefined;
+              }
             }),
           ),
         );
@@ -699,7 +754,21 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     lifetimeDeadline,
     guard,
     reserve,
+    contain,
     reserved: (key: string): boolean => reservations.has(key),
+    revokePage: (pageId: string) => {
+      if (
+        activeScope !== undefined &&
+        activeScope !== "all" &&
+        activeScope !== "none" &&
+        activeScope.pageId === pageId
+      )
+        active?.abort();
+      if (waiting?.target.pageId === pageId) waiting.cancel(Reasons.Stale.make({}));
+    },
+    retirePage: (pageId: string) => {
+      for (const [token, page] of unresolved) if (page === pageId) unresolved.delete(token);
+    },
     beginWait,
     waitAvailable: () => waiting === undefined,
     waitPending: (pageId?: string) =>

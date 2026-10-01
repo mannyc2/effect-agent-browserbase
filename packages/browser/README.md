@@ -8,9 +8,9 @@ This package has no Browserbase or Effect Agent dependency. Its common entry poi
 
 A `BrowserSession<E>` is the live, host-only capability returned by the supplying implementation. It preserves callback failures and diagnostics of type `E`, one action budget, one native connection and one set of capture/page-control reservations. `implementation` identifies the control implementation. `closeChecked` performs the owner's cleanup and fails if its required cleanup was not confirmed. On concrete Chromium and Browserbase sessions it returns that same frozen cleanup receipt on success; the generic session permits discarding that value. Helpers that only use operations take `AnySession`, an alias for `BrowserSession<unknown>`. Helpers that supervise callback failures must stay generic in `E` or the concrete session so they retain those failures.
 
-All callers use this exact session. `Capture.start`, `Capture.stream` and `PageControl` authenticate its identity privately; spreading or decoding an object cannot copy authority. A session or binding absent from the receiving runtime's private registry fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered session with page control disabled still fails `Unsupported`. `Tools.run` from `effect-agent-browser/tools` uses the original session directly; `yield* Adapter.fromSession(session, { selection: "current" | "retained" })` adapts it to the framework's handle with an explicit target policy. Neither opens another browser.
+All callers use this exact session. Issued `Page` and `Frame` objects keep authority on its original connection. `Capture.start`, `Capture.stream` and `PageControl` authenticate the original session or Page privately; spreading or decoding an object cannot copy authority. An absent registration fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered session with page control disabled still fails `Unsupported`. `Tools.run` from `effect-agent-browser/tools` uses the original session directly; `yield* Adapter.fromSession(session, { selection: "current" | "retained" })` adapts it to the framework's handle with an explicit target policy. Neither opens another browser.
 
-Mutations are serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation after dispatch has an unknown outcome and is never automatically replayed. Unresolved control fences the owner; a main-frame loading timeout can instead retire control through one acknowledged stop, and an unknown outcome on a pinned page that is not the selected one can instead close that page, as described below. `undispatched`, `rejected` and `unknown` remain distinct expected outcomes.
+Mutations are serialized by one owner permit. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation with an unacknowledged native command has an `unknown` outcome and is never automatically replayed. Its exact page is revoked before bounded closure. Positive closure reports `containment: PageClosed` and preserves healthy pages; unconfirmed closure fences the session and reports `SessionFenced`. This applies to the selected page too. Containment does not make the original action known. `performed` means dispatched input was acknowledged before a later step failed; it also must not be replayed blindly. `undispatched`, `rejected`, `performed` and `unknown` remain distinct outcomes.
 
 ## Self-managed Chromium
 
@@ -188,6 +188,53 @@ Existing popup/dialog pause policies still require their explicit host recovery 
 
 ## Browser operations
 
+### Page and Frame authority
+
+`session.initialPage` is the Page acquired on the first connection. `session.listPages()` returns
+bounded metadata; `session.page(info)` authenticates it and issues the canonical Page for that
+native page and generation. A Page provides navigation, input, observation, exact-node actions,
+checkpoint, readiness, viewport control and close. `page.listFrames()` and `page.frame(info)`
+issue a Frame with the same document operations for that exact frame. None changes display
+selection or opens a connection.
+
+```ts
+const stage = session.initialPage;
+const scoutInfo = yield * session.createPage;
+const scout = yield * session.page(scoutInfo);
+yield * scout.navigate({ url: scoutUrl });
+const stageObservation = yield * stage.observe();
+
+yield * scout.observe();
+yield * scout.screenshot({ fullPage: false });
+yield *
+  stage.clickElement({
+    observationId: stageObservation.observationId,
+    elementId: stageObservation.controls[0]!.elementId,
+  });
+```
+
+Use a control whose inspected role and label match your intent. Each frame has its own current
+observation: reading or acting on the scout preserves the stage's exact references. Another
+observation of the same frame retires its predecessor. A reference passed through the wrong
+Page or Frame fails `Stale/undispatched` before input. Mutation invalidation remains conservative
+for the affected page. A detached frame, closed page or old connection generation cannot acquire
+fresh authority. `page.status` is passive host state, including terminal containment facts, and
+remains readable after closure. Reconnect and handoff resume require freshly issued capabilities.
+
+Observation storage is finite, including snapshots awaiting native disposal. Optional
+`automation.observationLimits` sets all six bounds together: defaults are 16 snapshots,
+8,192 handles and 64 MiB per page, and 64 snapshots, 32,768 handles and 256 MiB per session.
+Reads reserve capacity before native allocation and return `Limit/undispatched` when it is
+unavailable. Timeout or caller cancellation does not return a reservation until native work
+and disposal settle, or exact positive page/connection retirement proves it unusable.
+
+`page.ready({ timeoutMillis })`, `page.describe({ timeoutMillis })`,
+`page.listFrames({ timeoutMillis })`, `page.close({ timeoutMillis })` and
+`session.listPages({ timeoutMillis })` narrow the owner's deadline. `Capture.start(page, options)`
+and `Capture.stream(page, options)` use the same owner and capture budget. With page control
+enabled, `PageControl.state(page)`, `PageControl.suspend(page)` and
+`PageControl.resume(page, receipt)` authenticate that exact Page and suspension receipt.
+
 ### Selected, retained and pinned targets
 
 The session itself is the convenient selected-target API. Its `navigate`, `readText`, `click`,
@@ -271,14 +318,13 @@ mean ambiguous. Never fall back to order, local serial, URL or title. Then reacq
 `framesOf(freshPage)`. A surviving native target can identify the same page, but cannot make old
 local metadata or handles current again.
 
-Pinned operations are selector-based. They intentionally do not create another retained
-`Observation` or an exact-node namespace. There is still one observation: a new `observe` replaces
-it. A pinned read or mutation on another page leaves that observation intact, as does selecting
-away and back without observing another document. Exact-node work refuses `Stale/undispatched`
-while another page or frame is selected; it never redirects the reference to that selection.
-Returning to the original page/frame can use the original reference only if its document and
-exact control are still valid. This does not revive a retained-selection handle: `retain` still
-becomes stale after every selection change, including away and back.
+Pinned operations retain their selector-based interface. Use issued Page and Frame objects for
+the complete observation and exact-node API. The session's convenience operations use the
+selected page/frame, so passing another frame's reference through that selected view refuses
+`Stale/undispatched`. An explicit Page or Frame keeps operating on its own target while selection
+moves. Returning to a selection can use its original reference only if the document and exact
+control remain valid. This does not revive a retained-selection handle: `retain` still becomes
+stale after every selection change, including away and back.
 
 Dispatched input on the observation's own page still retires its references, including `hover`,
 `pointerMove`, `wheel` and `scroll`. Hover then click therefore deliberately needs a new inspection.
@@ -500,8 +546,7 @@ that the page will remain unchanged.
 
 While a wait is pending, `checkpoint`, `pages` and ordinary bounded reads can use the normal
 permit. Mutations, another navigation and page holds on the waited page are refused before
-dispatch. Input on another page may proceed; replacing the single observation is refused until
-the logical wait ends. Closing a page or session remains available and cancels affected waits.
+dispatch. Input and observation on another page may proceed; replacing the waited frame's observation is refused until the logical wait ends. Closing a page or session remains available and cancels affected waits.
 No general read-under-write bypass has been added.
 
 One native wait may be outstanding per browser session. Cancellation and timeout release the
@@ -514,7 +559,7 @@ the observation is replaced, and its late cleanup cannot dispose a successor's r
 
 ### Passive checkpoints for a recorder
 
-`observe()` replaces the one observation whose nodes later actions may name, so a recorder calling it would retire the references an agent is about to use. `session.checkpoint()` is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.
+`page.observe()` replaces that frame's current observation, so a recorder calling it on the same frame would retire the references an agent is about to use. `page.checkpoint()` (or the selected-session adapter) is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.
 
 ```ts
 const checkpoint = yield * session.checkpoint({ picture: true });
@@ -546,7 +591,7 @@ const receipt =
   yield * handle.wheel(WheelRequest.make({ deltaX: 0, deltaY: 240, at: { x: 420, y: 120 } }));
 ```
 
-Coordinates are CSS pixels in the main frame's viewport. Each call is one native command, charged as one action and fenced like any other mutation, so a handle bound to a page that is no longer selected sends nothing to either page. Easing, pacing and cursor artwork are yours: send the points you want, and draw the cursor from the positions the receipts report.
+Coordinates are CSS pixels in the main frame's viewport. Each call is charged as one action and uses its issued Page or Frame; a retained-selection handle instead goes stale when selection changes. Easing, pacing and cursor artwork are yours: send the points you want, and draw the cursor from the positions the receipts report.
 
 `hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`session.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
 
@@ -581,9 +626,9 @@ Keys go to whatever has focus in the selected page, in whichever frame that is, 
 
 A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabulary is closed: `Enter`, `Tab`, `Backspace`, `Delete`, `Escape`, the four arrows, `Home`, `End`, `PageUp`, `PageDown`, or one printable ASCII character (a space is `" "`), with `Shift`, `Control`, `Alt` and `Meta` as modifiers. The native engine parses a key string, chords included, and begins holding the modifiers before it has validated the key, so nothing reaches it that was not reviewed here. A modifier other than Shift makes a chord rather than a character, and nothing is typed.
 
-`type` sends up to 256 characters as one charged action under a single action timeout. It submits ordered native input in windows of at most 16 code points and 32 commands, without waiting for every individual reply. Each normal stroke ends at key-up, and the window drains before another begins. The owner is checked before every command, including key-up: a fence stops unsent input, and no interrupted run is replayed or repaired. Timeout or interruption leaves an unknown outcome and fences the session (or, on a pinned page that is not selected, closes that page). A canceled caller does not release native typing capacity; unresolved attachment, replies or failed port cleanup retain it until confirmed retirement.
+`type` sends up to 256 characters as one charged action under a single action timeout. It submits ordered native input in windows of at most 16 code points and 32 commands, without waiting for every individual reply. Each normal stroke ends at key-up, and the window drains before another begins. The owner is checked before every command, including key-up: a fence stops unsent input, and no interrupted run is replayed or repaired. Failure while dispatched input is still unacknowledged leaves an `unknown` outcome; the owner closes that exact page, or fences the session when closure is unconfirmed. Failure after all earlier input was acknowledged reports `performed`. Neither result replays the run. A canceled caller does not release native typing capacity; unresolved attachment, replies or failed port cleanup retain it until confirmed retirement. A run whose replies all succeeded leaves its private port attached for the next run on the same page, so consecutive runs there attach once; the port is detached before typing moves to another page, and released when its page closes or the connection retires.
 
-With `into`, the original node and document must still have focus before each subsequent window. Focus is never repaired. Commands already submitted in a window can land after focus moves; a later refusal is `not-focused` with an unknown outcome because earlier input was dispatched.
+With `into`, the original node and document must still have focus before each subsequent window. Focus is never repaired. Commands already submitted in a window can land after focus moves. Once that window has successfully drained, a later `not-focused` refusal reports `performed`: earlier input was acknowledged, and the refused window sends nothing.
 
 Two limits follow the pinned engine's semantics. A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. And a shifted character arrives as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Pacing is yours, as easing is for the pointer: for a typist's cadence, send one character per call and sleep between them, at one action each.
 
@@ -836,7 +881,7 @@ it.effect("an unknown click is never replayed", () =>
 );
 ```
 
-`browser.control` is the test's side of the scripted browser. The browser outlives any one connection, as a keep-alive browser does: a reconnection to the same address finds the pages it left, and the control keeps working while no connection is open, so a test can change a page while its owner is detached. `connections` lists every connection made to that browser and how each ended so far (`open`, `closed`, `dropped`, `close-failed`, or `refused` by the script's `connections: ["refuse", …]`), which makes a connection an owner left open visible. `next("disconnect", …)` scripts the owner's native teardown: `Fail` makes it fail, so the receipt reports `connection: "failed"` with a `disconnect` issue, and `Hold` parks it at a gate however long cleanup waits. A navigation stop is recorded in `calls` as `navigate-stop`, and its arms apply before or after it is sent. Closing a page that is not selected after an unknown outcome on it is recorded as `close-page`; arming `close-page` with `Fail` makes that close fail, so the owner fences. The rest of `browser.control`: `next(operation, outcome)` arms what the next admitted call of one operation does. `Fail` with `outcome: "unknown"` dispatches and then fails, so the owner fences the session and refuses every later mutation `Closed` and `undispatched`; `Fail` with `undispatched` or `rejected` never dispatches. `Hold` parks the call at a `Gate` before or after dispatch, so a test can interrupt or time out a call at a known point and then check what the owner made of it. `Disconnect` drops the connection inside the call. `calls` is the recorder: every admitted call with its operation, page, node, `dispatched` and `settled`, and never a filled value, typed text or address; `document.values` and `document.files` hold those separately. `document.replace` swaps the page's document as a navigation would, so retained nodes and pending waits go stale and a capture learns of a new document; `document.update` changes the same document in place, so controls that keep their `id` keep their identity and waits re-evaluate. `capture.emit` hands a frame to a running interval, `invoke` calls a registered binding as a page would, and `disconnect` drops every open connection outside any call. `closeChecked` returns a `ScriptedCleanupResult`, and `onCleanup` receives it, as the concrete owners do.
+`browser.control` is the test's side of the scripted browser. The browser outlives any one connection, as a keep-alive browser does: a reconnection to the same address finds the pages it left, and the control keeps working while no connection is open, so a test can change a page while its owner is detached. `connections` lists every connection made to that browser and how each ended so far (`open`, `closed`, `dropped`, `close-failed`, or `refused` by the script's `connections: ["refuse", …]`), which makes a connection an owner left open visible. `next("disconnect", …)` scripts the owner's native teardown: `Fail` makes it fail, so the receipt reports `connection: "failed"` with a `disconnect` issue, and `Hold` parks it at a gate however long cleanup waits. A navigation stop is recorded in `calls` as `navigate-stop`, and its arms apply before or after it is sent. Closing the exact affected page after an unknown outcome is recorded as `close-page`; arming `close-page` with `Fail` makes that close fail, so the owner fences. The rest of `browser.control`: `next(operation, outcome)` arms what the next admitted call of one operation does. `Fail` with `outcome: "unknown"` dispatches and then fails: acknowledged exact-page closure preserves healthy peers, while failed closure fences the session and refuses every later mutation `Closed` and `undispatched`; `Fail` with `undispatched` or `rejected` never dispatches. `Hold` parks the call at a `Gate` before or after dispatch, so a test can interrupt or time out a call at a known point and then check what the owner made of it. `Disconnect` drops the connection inside the call. `calls` is the recorder: every admitted call with its operation, page, node, `dispatched` and `settled`, and never a filled value, typed text or address; `document.values` and `document.files` hold those separately. `document.replace` swaps the page's document as a navigation would, so retained nodes and pending waits go stale and a capture learns of a new document; `document.update` changes the same document in place, so controls that keep their `id` keep their identity and waits re-evaluate. `capture.emit` hands a frame to a running interval, `invoke` calls a registered binding as a page would, and `disconnect` drops every open connection outside any call. `closeChecked` returns a `ScriptedCleanupResult`, and `onCleanup` receives it, as the concrete owners do.
 
 Time is the caller's clock. In-flight navigations, waits, holds and callback deadlines run under the context the session was opened in, so under `it.effect` from `@effect/vitest` a `TestClock.adjust` advances them and nothing real elapses, while `it.live` runs them in real time. `Testing.binding(script)` is the same engine as an opaque `BrowserBinding` for code that constructs a runtime itself; its `browsers` has one control handle for each address connected to, in first-connection order; `Testing.jpeg()` is a small valid JPEG for frames.
 

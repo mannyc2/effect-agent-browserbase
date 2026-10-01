@@ -1,6 +1,6 @@
 import { Effect } from "effect";
-import type { BrowserSession, TargetOperations } from "effect-browser/browser";
-import { BrowserDiagnostics, SessionStatus } from "effect-browser/browser-data";
+import type { BrowserSession, Page, TargetOperations } from "effect-browser/browser";
+import { BrowserDiagnostics, SessionStatus, Target } from "effect-browser/browser-data";
 
 /** Typed operation double for adapter/Toolkit tests; it issues no native or capture authority. */
 export const scriptedSession = (overrides: Partial<BrowserSession> = {}): BrowserSession => {
@@ -21,8 +21,38 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
     screenshot: () => unexpected,
   };
 
+  // An unused typed operation stub, deliberately absent from the runtime's authority registries.
+  const initialPage: Page = {
+    ...operations,
+    identity: Target.make({ generation: 1, pageId: "scripted-page", frameId: "scripted-frame" }),
+    status: unexpected,
+    observe: () => unexpected,
+    checkpoint: () => unexpected,
+    controlFacts: () => unexpected,
+    revalidateElement: () => unexpected,
+    clickElement: () => unexpected,
+    fillElement: () => unexpected,
+    selectOption: () => unexpected,
+    fillForm: () => unexpected,
+    hoverElement: () => unexpected,
+    pressElement: () => unexpected,
+    typeElement: () => unexpected,
+    waitFor: () => unexpected,
+    waitForElement: () => unexpected,
+    clickAndWait: () => unexpected,
+    ready: () => unexpected,
+    describe: () => unexpected,
+    listFrames: () => unexpected,
+    frame: () => unexpected,
+    resizeViewport: () => unexpected,
+    close: () => unexpected,
+  };
+
   return {
     ...operations,
+    initialPage,
+    page: () => unexpected,
+    listPages: () => unexpected,
     implementation: "scripted-browser",
     status: Effect.sync(() =>
       Object.freeze(

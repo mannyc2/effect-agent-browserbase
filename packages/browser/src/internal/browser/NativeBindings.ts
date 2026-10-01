@@ -188,6 +188,8 @@ export const makeNativeBindings = (
   bindingIdentity: string,
   bindings: ReadonlyArray<NativeBinding>,
   fault: () => void,
+  /** Resolve only the still-registered exact native page; never reconstruct retired authority. */
+  pageIdOf: (page: Page) => string | undefined,
 ) => {
   const identity = bindingIdentity.replaceAll("-", "");
   const nativeName = `__effect_agent_binding_${identity}`;
@@ -304,8 +306,14 @@ export const makeNativeBindings = (
       }) => {
         if (closing || event.name !== nativeName || replies >= maximumReplies) return;
         const document = documents.get(event.executionContextId);
+        const pageId = pageIdOf(page);
 
-        if (document === undefined || event.payload.length > 2 * 1024 * 1024 + 512) return;
+        if (
+          pageId === undefined ||
+          document === undefined ||
+          event.payload.length > 2 * 1024 * 1024 + 512
+        )
+          return;
         const parsed = Schema.decodeOption(Schema.fromJsonString(Call))(event.payload);
 
         if (parsed._tag === "None") return;
@@ -319,7 +327,13 @@ export const makeNativeBindings = (
 
         const check = async (signal: AbortSignal) => {
           const current = () => {
-            if (closing || retired || signal.aborted || page.isClosed())
+            if (
+              closing ||
+              retired ||
+              signal.aborted ||
+              page.isClosed() ||
+              pageIdOf(page) !== pageId
+            )
               throw error(binding.name, "closed");
             if (
               documents.get(document.id) !== document ||
@@ -367,6 +381,7 @@ export const makeNativeBindings = (
         // Both branches stay observed even when the source document disappears while settling.
         void binding
           .invoke({
+            pageId,
             read: async (signal) => {
               // An environment-free codec can still suspend or invoke host code. Authorize
               // before even decoding, then recheck after decode and before publishing a reply.

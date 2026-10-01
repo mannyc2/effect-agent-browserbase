@@ -151,6 +151,8 @@ it is independent of model action accounting and never a tool parameter.
 
 Small selection needs no provisioning: `session.selectFiles` attaches in-memory bytes the caller already holds, and `session.clickForFileSelection` registers the chooser observation before the single click that opens it and attaches exactly once.
 
+`session.selectFiles(request, page)`, `session.clickForFileSelection(request, page)` and `session.clickForDownload(request, page)` accept an issued `Page` from that session, such as `session.initialPage` or `yield* session.page(info)`. Transfers stay on that Page through the original connection while display selection moves. Cloned, foreign and retired Pages fail before transfer dispatch. Omitting the Page uses the selection resolved when the operation is admitted.
+
 Larger files use `BrowserbaseUploads.create`, which places bytes for the exact running session and returns a receipt. A stored file is named to the browser process, which opens the path itself; only in-memory bytes are streamed from this client, and the two mechanisms are never mixed. Attachment authority is the identity of a receipt this package issued for that session, so a value that merely has the right shape carries none: no caller, and no model, turns a server pathname into an attached file. The receipt reports the provider's remote path only when the provider returned one; when it does not, attachment by path is refused rather than guessed. Hosted H6 remains the check for real provider upload identity and routing.
 
 ## Borrowed attachment

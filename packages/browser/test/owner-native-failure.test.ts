@@ -187,6 +187,87 @@ it.effect("the owner stamps the admitted operation on whatever the native step r
   }),
 );
 
+it.effect(
+  "an acknowledged input with failed follow-up stays performed and leaves admission open",
+  () =>
+    Effect.gen(function* () {
+      const owner = yield* makeOwner(limits);
+      let inputs = 0;
+
+      owner.state.phase = "open";
+
+      const failedRead = yield* owner
+        .guard(
+          "click",
+          (ticket) =>
+            native("click", ticket, async () => {
+              ticket.dispatch();
+              await Promise.resolve();
+              inputs++;
+              ticket.acknowledge?.();
+              throw failure(Reasons.Malformed.make({}));
+            }),
+          { mutation: true },
+        )
+        .pipe(Effect.flip);
+
+      expect(failedRead).toMatchObject({
+        operation: "click",
+        reason: { _tag: "Malformed" },
+        outcome: "performed",
+        containment: { _tag: "NotRequired" },
+      });
+      expect(yield* owner.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+      yield* owner.guard("read-text", () => Effect.void);
+      expect(inputs).toBe(1);
+    }),
+);
+
+it.effect("a connection fault during dispatched input reports the existing session fence", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner(limits);
+    let closes = 0;
+
+    owner.transition("open");
+
+    const error = yield* owner
+      .guard(
+        "click",
+        (ticket) =>
+          native("click", ticket, async () => {
+            ticket.dispatch();
+            owner.terminate("disconnected", "unknown", ticket.generation);
+            throw failure(Reasons.Disconnected.make({}));
+          }),
+        {
+          mutation: true,
+          mutationScope: () => ({ pageId: "page-a" }),
+          contain: () => ({
+            pageId: "page-a",
+            close: Effect.sync(() => {
+              closes++;
+
+              return true;
+            }),
+          }),
+        },
+      )
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      reason: { _tag: "Stale" },
+      outcome: "unknown",
+      containment: { _tag: "SessionFenced" },
+    });
+    expect(yield* owner.status).toMatchObject({
+      phase: "uncertain",
+      reason: "disconnected",
+      unresolvedDispatch: true,
+    });
+    expect(closes).toBe(0);
+  }),
+);
+
 it.effect("a refused connection keeps the reason the native attempt gave", () =>
   Effect.gen(function* () {
     const request = {

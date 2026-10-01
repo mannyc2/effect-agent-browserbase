@@ -177,6 +177,7 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
   Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
     Effect.gen(function* () {
       const gate = yield* browser.control.gate;
+      const page = browser.initialPage;
 
       yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
       const attempt = yield* acceptCookies(browser).pipe(Effect.forkScoped);
@@ -187,13 +188,19 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
         operation: "click",
         reason: { _tag: "Timeout" },
         outcome: "unknown",
+        containment: { _tag: "PageClosed", pageId: page.identity.pageId },
       });
       expect(yield* browser.status).toMatchObject({
-        phase: "uncertain",
-        reason: "native-failure",
-        unresolvedDispatch: true,
+        phase: "open",
+        reason: null,
+        unresolvedDispatch: false,
       });
-      // A retry in application code cannot get past the owner: nothing is re-sent.
+      expect(yield* page.status).toMatchObject({ phase: "closed" });
+      expect(yield* browser.pages).toEqual([]);
+      expect(
+        (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
+      ).toMatchObject([{ pageId: page.identity.pageId, dispatched: true, settled: "completed" }]);
+      // The original page closed, so application retries cannot replay its input.
       expect(yield* acceptCookies(browser).pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Closed" },
         outcome: "undispatched",
@@ -204,11 +211,6 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
       expect(clicks[0]).toMatchObject({ dispatched: true });
       yield* gate.open;
     }),
-  ).pipe(
-    // The uncertain owner cannot confirm cleanup; the scope still closes.
-    Effect.catchTag("BrowserError", (error) =>
-      error.operation === "close" ? Effect.void : Effect.fail(error),
-    ),
   ),
 );
 
@@ -941,34 +943,52 @@ it.effect("a page that is not selected also takes an interrupted mutation with i
   ),
 );
 
-it.effect("an unknown outcome on the selected page still fences, even through a pin", () =>
-  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
-    Effect.gen(function* () {
-      yield* browser.createPage;
-      const selected = (yield* browser.pages).find((page) => page.selected)!;
-      const pinned = yield* browser.pinPage(selected);
-      const gate = yield* browser.control.gate;
+it.effect(
+  "an unknown outcome on the selected page closes that exact page and keeps its peer usable",
+  () =>
+    Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+      Effect.gen(function* () {
+        const peer = yield* browser.page(yield* browser.createPage);
 
-      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
-      const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+        yield* peer.navigate({ url: `${origin}/` });
+        const selected = (yield* browser.pages).find((page) => page.selected)!;
+        const pinned = yield* browser.pinPage(selected);
+        const gate = yield* browser.control.gate;
 
-      yield* gate.reached;
-      yield* TestClock.adjust("5 seconds");
-      yield* Fiber.join(clicking).pipe(Effect.flip);
-      expect(yield* browser.status).toMatchObject({
-        phase: "uncertain",
-        unresolvedDispatch: true,
-      });
-      expect(
-        (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
-      ).toEqual([]);
-      yield* gate.open;
-    }),
-  ).pipe(
-    Effect.catchTag("BrowserError", (error) =>
-      error.operation === "close" ? Effect.void : Effect.fail(error),
+        yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
+        const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+
+        yield* gate.reached;
+        yield* TestClock.adjust("5 seconds");
+        expect(yield* Fiber.join(clicking).pipe(Effect.flip)).toMatchObject({
+          operation: "click",
+          reason: { _tag: "Timeout" },
+          outcome: "unknown",
+          containment: { _tag: "PageClosed", pageId: selected.pageId },
+        });
+        expect(yield* browser.status).toMatchObject({
+          phase: "open",
+          unresolvedDispatch: false,
+        });
+        expect(yield* browser.initialPage.status).toMatchObject({ phase: "closed" });
+        expect((yield* browser.pages).map((page) => page.pageId)).toEqual([peer.identity.pageId]);
+        expect(
+          (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
+        ).toMatchObject([{ pageId: selected.pageId, dispatched: true, settled: "completed" }]);
+        expect(yield* pinned.readText({}).pipe(Effect.flip)).toMatchObject({
+          outcome: "undispatched",
+        });
+        expect((yield* peer.readText({})).text).toBe("Welcome. We use cookies.");
+        yield* peer.clickElement(reference(yield* peer.observe(), "accept"));
+        expect((yield* peer.readText({})).text).toBe("Welcome back.");
+        expect(
+          (yield* browser.control.calls).filter(
+            (call) => call.operation === "click" && call.pageId === selected.pageId,
+          ),
+        ).toHaveLength(1);
+        yield* gate.open;
+      }),
     ),
-  ),
 );
 
 it.effect("a page that does not close when its outcome is unknown fences the session", () =>
@@ -1249,6 +1269,7 @@ it.effect("a keep-alive reconnection finds the pages its browser kept while deta
       );
 
       const { session, operations } = yield* acquired.connect;
+      const original = session.initialPage;
 
       yield* session.navigate({ url: `${origin}/` });
       const [control] = yield* scripted.browsers;
@@ -1261,6 +1282,24 @@ it.effect("a keep-alive reconnection finds the pages its browser kept while deta
       const observed = yield* operations.reconnect(true);
 
       expect(observed.text).toBe("Changed while detached.");
+      expect(session.initialPage).toBe(original);
+      expect(yield* original.status).toMatchObject({ phase: "stale" });
+      const callsBeforeStale = (yield* control.calls).length;
+
+      expect(yield* original.observe().pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Stale" },
+        outcome: "undispatched",
+      });
+      expect(yield* control.calls).toHaveLength(callsBeforeStale);
+      const [info] = yield* session.listPages();
+
+      expect(info).toBeDefined();
+      if (info === undefined) return;
+      const fresh = yield* session.page(info);
+
+      expect(fresh.identity.generation).toBeGreaterThan(original.identity.generation);
+      expect(yield* fresh.status).toMatchObject({ phase: "open" });
+      expect((yield* fresh.observe()).text).toBe("Changed while detached.");
       expect(yield* scripted.browsers).toHaveLength(1);
       expect(yield* control.connections).toEqual(["refused", "closed", "open"]);
     }),

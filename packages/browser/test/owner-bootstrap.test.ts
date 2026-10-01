@@ -130,7 +130,7 @@ it.effect("a document that predates the registrations cannot admit dependent wor
       }
       assert.equal(f.state.clicks, 0);
       assert.equal(f.state.readinessChecks, 4);
-      assert.deepEqual(yield* session.readiness, { _tag: "RequiresNavigation" });
+      assert.deepEqual(yield* session.readiness(), { _tag: "RequiresNavigation" });
       yield* session.close;
     }),
   ),

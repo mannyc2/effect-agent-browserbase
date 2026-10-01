@@ -9,10 +9,23 @@ export interface PageControlPort {
   readonly resume: (receipt: PageSuspension) => Effect.Effect<void, BrowserError>;
 }
 
-const owners = new WeakMap<object, PageControlPort>();
+export interface PageControlAssociation {
+  readonly port: PageControlPort;
+  readonly page?: PageInfo;
+}
 
-export const associatePageControl = (session: object, port: PageControlPort): void => {
-  owners.set(session, port);
+const owners = new WeakMap<object, PageControlAssociation>();
+
+export const associatePageControl = (
+  session: object,
+  port: PageControlPort,
+  page?: PageInfo,
+): void => {
+  owners.set(session, {
+    port,
+    ...(page === undefined ? {} : { page: Object.freeze({ ...page }) }),
+  });
 };
 
-export const pageControl = (session: object): PageControlPort | undefined => owners.get(session);
+export const pageControl = (session: object): PageControlAssociation | undefined =>
+  owners.get(session);

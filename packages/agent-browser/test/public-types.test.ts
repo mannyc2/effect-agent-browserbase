@@ -43,7 +43,7 @@ const borrowed: Same<LayerRequirements<ReturnType<typeof handlers>>, never> = tr
 
 const explicitOutcome: Same<
   BrowserToolFailure["outcome"],
-  "undispatched" | "rejected" | "unknown"
+  "undispatched" | "rejected" | "performed" | "unknown"
 > = true;
 
 type CallbackFailure = { readonly _tag: "SettingsUnavailable" };

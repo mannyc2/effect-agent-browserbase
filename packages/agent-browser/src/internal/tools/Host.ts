@@ -80,7 +80,7 @@ export type ToolHostFailure<OwnerError = never, CallbackError = never> =
 
 /** Original bounded browser error fields, copied before the model-facing projection. */
 export interface ToolFailureDiagnostic {
-  readonly error: Pick<BrowserError, "_tag" | "operation" | "reason" | "outcome">;
+  readonly error: Pick<BrowserError, "_tag" | "operation" | "reason" | "outcome" | "containment">;
   /** The Tool whose call failed. */
   readonly toolName: string;
   /** IDs longer than 256 UTF-16 code units are omitted, never shortened into a different ID. */
@@ -202,6 +202,9 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         error: Object.freeze({
           ...encoded.success,
           reason: Object.freeze({ ...encoded.success.reason }),
+          ...(encoded.success.containment === undefined
+            ? {}
+            : { containment: Object.freeze({ ...encoded.success.containment }) }),
         }),
         toolName: call.tool,
         toolCallId: toolCallIdOmitted ? undefined : call.id,

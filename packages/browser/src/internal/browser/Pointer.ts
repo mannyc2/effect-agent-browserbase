@@ -141,6 +141,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
 
       ticket.dispatch();
       await moveTo(page, point);
+      ticket.acknowledge?.();
       ticket.check();
 
       return receipt(page);
@@ -243,10 +244,15 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     sanitize(async () => {
       const { page } = current(target).entry;
 
+      if (at !== undefined) {
+        ticket.dispatch();
+        await moveTo(page, at);
+        ticket.acknowledge?.();
+      }
       ticket.dispatch();
-      if (at !== undefined) await moveTo(page, at);
       // Dispatched, not awaited: Chromium scrolls afterwards, on its own schedule.
       await page.mouse.wheel(deltaX, deltaY);
+      ticket.acknowledge?.();
       ticket.check();
 
       return receipt(page);

@@ -36,6 +36,11 @@ export const makeInitialization = (
   let initializationClosed = false;
   let disposal: Promise<void> | undefined;
 
+  const pendingReadiness = new Map<
+    Frame,
+    { readonly pageId: string; readonly work: Promise<unknown> }
+  >();
+
   const initializationFault = (error: InitializationError) => {
     if (closing() || initializationClosed) return;
     if (options.onBindingFault === undefined)
@@ -47,11 +52,16 @@ export const makeInitialization = (
     else options.onBindingFault(error);
   };
 
-  const bindingTask = (action: () => Promise<void>) => {
+  const revokedPages = new WeakSet<Page>();
+  const livePage = (page: Page) => !revokedPages.has(page) && targets.pageIdOf(page) !== undefined;
+
+  const bindingTask = (page: Page, action: () => Promise<void>) => {
     const admitted = callbacks.submit(async () => {
+      if (!livePage(page)) return;
       try {
         await action();
       } catch (cause) {
+        if (!livePage(page)) return;
         initializationFault(
           Schema.is(InitializationError)(cause)
             ? cause
@@ -64,7 +74,7 @@ export const makeInitialization = (
       }
     }, "reject-call");
 
-    if (!admitted)
+    if (!admitted && livePage(page))
       initializationFault(
         InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
       );
@@ -73,10 +83,15 @@ export const makeInitialization = (
   const bindings =
     options.bindings === undefined || options.bindings.length === 0
       ? undefined
-      : makeNativeBindings(context, bindingIdentity, options.bindings, () =>
-          initializationFault(
-            InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
-          ),
+      : makeNativeBindings(
+          context,
+          bindingIdentity,
+          options.bindings,
+          () =>
+            initializationFault(
+              InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
+            ),
+          targets.pageIdOf,
         );
 
   const attach = async (page: Page) => {
@@ -89,6 +104,17 @@ export const makeInitialization = (
   const fence = () => {
     initializationClosed = true;
     bindings?.close();
+  };
+
+  const fencePage = (pageId: string) => {
+    const page = entries.get(pageId)?.page;
+
+    if (page !== undefined) revokedPages.add(page);
+  };
+
+  const retirePage = (pageId: string) => {
+    for (const [frame, pending] of pendingReadiness)
+      if (pending.pageId === pageId) pendingReadiness.delete(frame);
   };
 
   const dispose = (): Promise<void> => {
@@ -108,12 +134,12 @@ export const makeInitialization = (
 
   /** Attaches a page this connection registered after initialization, off the event path. */
   const attachPage = (page: Page) => {
-    if (bindings !== undefined) bindingTask(() => attach(page));
+    if (bindings !== undefined) bindingTask(page, () => attach(page));
   };
 
   /** Attaches the new document of a frame that navigated after initialization. */
   const attachFrame = (frame: Frame, page: Page) => {
-    if (bindings !== undefined) bindingTask(() => bindings.attach(frame, page));
+    if (bindings !== undefined) bindingTask(page, () => bindings.attach(frame, page));
   };
 
   /**
@@ -161,11 +187,26 @@ export const makeInitialization = (
     expression: string,
     milliseconds: number,
   ): Promise<unknown> => {
+    const pageId = targets.pageIdOf(frame.page());
+
+    if (pageId === undefined || !livePage(frame.page()) || frame.isDetached())
+      throw failure(Reasons.Stale.make({}));
+    if (pendingReadiness.has(frame) || pendingReadiness.size >= 32)
+      throw failure(Reasons.Busy.make({}));
+    const pending = { pageId, work: Promise.resolve().then(() => frame.evaluate(expression)) };
+
+    pendingReadiness.set(frame, pending);
+
+    const retired = () => {
+      if (pendingReadiness.get(frame) === pending) pendingReadiness.delete(frame);
+    };
+
+    void pending.work.then(retired, retired);
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     try {
       return await Promise.race([
-        frame.evaluate(expression),
+        pending.work,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(failure(Reasons.Timeout.make({}))), milliseconds);
         }),
@@ -181,6 +222,8 @@ export const makeInitialization = (
     target?: DriverTarget,
   ): Promise<ReadinessState> => {
     const { frame } = current(target);
+
+    if (!livePage(frame.page()) || frame.isDetached()) throw failure(Reasons.Stale.make({}));
     const epoch = epochOf(frame);
 
     if (readyDocuments.get(frame) === epoch) return { _tag: "Ready" };
@@ -209,7 +252,8 @@ export const makeInitialization = (
       try {
         value = await evaluateWithin(frame, requirement.expression, budget);
       } catch (error) {
-        if (epochOf(frame) !== epoch || frame.isDetached())
+        if (Schema.is(NativeFailure)(error) && error.reason._tag === "Busy") throw error;
+        if (epochOf(frame) !== epoch || frame.isDetached() || !livePage(frame.page()))
           return { _tag: "NotReady", step: requirement.step, reason: "stale" };
 
         return {
@@ -223,7 +267,7 @@ export const makeInitialization = (
       }
       ticket.check();
       // A completed wait cannot ready a document that replaced the one it observed.
-      if (epochOf(frame) !== epoch)
+      if (epochOf(frame) !== epoch || frame.isDetached() || !livePage(frame.page()))
         return { _tag: "NotReady", step: requirement.step, reason: "stale" };
       if (value !== true) return { _tag: "NotReady", step: requirement.step, reason: "failed" };
     }
@@ -241,5 +285,15 @@ export const makeInitialization = (
         : readiness(bootstrap, ticket, target);
     });
 
-  return { attach, attachPage, attachFrame, fence, dispose, install, documentReadiness };
+  return {
+    attach,
+    attachPage,
+    attachFrame,
+    fence,
+    fencePage,
+    retirePage,
+    dispose,
+    install,
+    documentReadiness,
+  };
 };

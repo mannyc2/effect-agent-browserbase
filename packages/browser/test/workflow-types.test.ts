@@ -19,7 +19,7 @@ const standalone = (
   open: Effect.Effect<ChromiumSession<CallbackError>, AcquireError, AcquireService | Scope.Scope>,
   task: Effect.Effect<string, TaskError, TaskService | Scope.Scope>,
 ) => {
-  const use = Browser.scoped((browser) => Effect.andThen(browser.observe(), task));
+  const use = Browser.scoped((browser) => Effect.andThen(browser.initialPage.observe(), task));
 
   return open.pipe(use);
 };

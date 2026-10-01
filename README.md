@@ -47,6 +47,13 @@ Every agent turn borrows that session. `BrowserTools.run` provides the maintaine
 
 ## API migration
 
+For complete operations on an explicit target, use `session.initialPage` or
+`yield* session.page(pageInfo)`, then `yield* page.frame(frameInfo)` for a child frame.
+These issued capabilities include observation and exact-node actions and do not change selection.
+`Capture` and `PageControl` accept the issued Page; provider file operations accept it as their
+final argument. See [Page and Frame authority](packages/browser/README.md#page-and-frame-authority)
+for independent observations, bounded retention and separate action/containment outcomes.
+
 | Previous composition                                                   | Current API                                                                                                                                                             |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider-specific `withBrowser(policy, options, use)`                  | `Browser.scoped(Chromium.launch(policy, options), use)` or the same combinator with `BrowserbaseBrowser.open`                                                           |

@@ -492,6 +492,7 @@ export const startCapture = Effect.fnUntraced(function* (
     }
   };
 
+  yield* parent.validate ?? Effect.void;
   yield* parent.owner
     .guard(
       "capture-start",
@@ -535,6 +536,7 @@ export const startCapture = Effect.fnUntraced(function* (
             });
           }
           lease = {
+            pageId: target.pageId,
             reservedBytes: maxBytes,
             stop: stopNative.pipe(Effect.asVoid),
             invalidate: (why) => {

@@ -22,19 +22,20 @@ approved plan counts and bounds its sessions, as the
 [evaluation guide](../packages/agent-browser/test/evaluation/README.md#browserbase)
 describes.
 
-| Check | Question | What a passing run supports |
-| --- | --- | --- |
-| `acceptance` | — | allocation, connect, navigation, capture, Live View URL retrieval, confirmed release, recording download |
-| `demo` | — | README media only; no correctness claim |
-| `handoff` | — | operator takeover and release through Live View (needs a person at a terminal; never runs in CI) |
-| `context-durability` | H1 | a cookie and localStorage marker survive into a later session on the same context |
-| `context-crash` | H1 | the same markers survive when the writer's process is killed without a release, once the provider reports its session terminal |
-| `keepalive-reconnect` | H4 | a keep-alive session survives detach, and an init script is ready after reconnect |
-| `extension-identity` | H3 | a registered MV3 extension keeps its identity and its content script runs |
-| `upload-routing` | H6 | uploaded bytes reach the remote file chooser intact |
-| `replay-delivery` | H7 | the replay playlist validates and a segment downloads; recording delivery is reported as observed |
-| `live-capture` | — | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements |
-| `long-session` | — | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
+| Check                 | Question | What a passing run supports                                                                                                                                                                                                                  |
+| --------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acceptance`          | —        | allocation, connect, navigation, capture, Live View URL retrieval, confirmed release, recording download                                                                                                                                     |
+| `demo`                | —        | README media only; no correctness claim                                                                                                                                                                                                      |
+| `handoff`             | —        | operator takeover and release through Live View (needs a person at a terminal; never runs in CI)                                                                                                                                             |
+| `context-durability`  | H1       | a cookie and localStorage marker survive into a later session on the same context                                                                                                                                                            |
+| `context-crash`       | H1       | the same markers survive when the writer's process is killed without a release, once the provider reports its session terminal                                                                                                               |
+| `keepalive-reconnect` | H4       | a keep-alive session survives detach, and an init script is ready after reconnect                                                                                                                                                            |
+| `extension-identity`  | H3       | a registered MV3 extension keeps its identity and its content script runs                                                                                                                                                                    |
+| `upload-routing`      | H6       | uploaded bytes reach the remote file chooser intact                                                                                                                                                                                          |
+| `page-authority`      | H5       | issued Page/Frame routing, independent references, exact capture ownership and healthy peer reuse after acknowledged page closure; registered with no hosted evidence yet                                                                    |
+| `replay-delivery`     | H7       | the replay playlist validates and a segment downloads; recording delivery is reported as observed                                                                                                                                            |
+| `live-capture`        | —        | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements                                                                                       |
+| `long-session`        | —        | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
 
 The question codes come from the design research that preceded the checks
 (retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1
@@ -85,14 +86,15 @@ Keep the provider-side budgets and credential scope appropriate to that bound.
 3. Add these **environment** secrets (not repository secrets) with exactly these
    names:
 
-   | Secret | Required for | Value |
-   | --- | --- | --- |
-   | `BROWSERBASE_API_KEY` | every check | an API key with verified minimum provider permissions |
-   | `BROWSERBASE_PROJECT_ID` | every check | that project's id |
+   | Secret                         | Required for                                                          | Value                                                                        |
+   | ------------------------------ | --------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+   | `BROWSERBASE_API_KEY`          | every check                                                           | an API key with verified minimum provider permissions                        |
+   | `BROWSERBASE_PROJECT_ID`       | every check                                                           | that project's id                                                            |
    | `BROWSERBASE_ARTIFACT_ORIGINS` | checks that retrieve provider media (`acceptance`, `replay-delivery`) | comma-separated exact HTTPS origins approved for provider recording delivery |
 
    The names are checked before allocation; a misnamed secret fails the run
    rather than silently skipping a check.
+
 4. Set repository variable **`BROWSERBASE_LIVE_ENABLED`** to the literal string
    `true` only after reviewing the above.
 

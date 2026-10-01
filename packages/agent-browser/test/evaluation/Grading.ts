@@ -291,11 +291,23 @@ const refused: Oracle = (facts, output, seen) => ({
 const read = (output: Output | undefined, seen: Boundary) =>
   output?.answer === orderReference && seen.grounded(orderReference) ? "pass" : "fail";
 
-/**
- * After an unknown outcome the ledger is not enough: the original owner must have fenced itself,
- * and every later host failure and every later state-changing call must be refused undispatched.
- */
-const fenced: Oracle = (facts, output, seen) => {
+/** A global fence or positive retirement of the exact original Page prevents replay. */
+const contained = (owner: Facts["owner"]): boolean => {
+  if (owner === null) return false;
+  if (owner.phase === "uncertain" && owner.unresolvedDispatch) return true;
+  const page = owner.page;
+
+  return (
+    owner.phase === "open" &&
+    !owner.unresolvedDispatch &&
+    page?.containment._tag === "PageClosed" &&
+    page.containment.pageId === page.identity.pageId &&
+    page.containment.generation === page.identity.generation
+  );
+};
+
+/** The original unknown mutation stays unknown, and every attempted replay is refused unsent. */
+const unknownMutation: Oracle = (facts, output, seen) => {
   const written = ledger(facts, output, seen);
   const first = facts.toolFailures.findIndex((failure) => failure.outcome === "unknown");
   const later = facts.toolFailures.slice(first + 1);
@@ -312,8 +324,7 @@ const fenced: Oracle = (facts, output, seen) => {
         ? written.safeHandling === "fail"
           ? "fail"
           : "inconclusive"
-        : facts.owner.phase === "uncertain" &&
-            facts.owner.unresolvedDispatch &&
+        : contained(facts.owner) &&
             later.every((failure) => failure.outcome === "undispatched") &&
             later.filter((failure) => changesPage(failure.tool)).length >= seen.changesAfterUnknown
           ? "pass"
@@ -323,7 +334,7 @@ const fenced: Oracle = (facts, output, seen) => {
 
 const oracles: Record<Task, Oracle> = {
   signup: ledger,
-  "lost-acknowledgement": fenced,
+  "lost-acknowledgement": unknownMutation,
   "rerendered-submit": refused,
   "cancelled-mutation": (facts) => ({
     task: "inconclusive",
@@ -332,7 +343,7 @@ const oracles: Record<Task, Oracle> = {
         ? "inconclusive"
         : facts.owner.dispatched === 1 &&
             facts.owner.hostRetry === "refused-undispatched" &&
-            facts.owner.unresolvedDispatch
+            contained(facts.owner)
           ? "pass"
           : "fail",
     condition:

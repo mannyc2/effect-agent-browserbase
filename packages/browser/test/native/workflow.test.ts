@@ -154,6 +154,31 @@ it.live("guarded plain typing stops future windows when the original input loses
   Effect.scoped(
     Effect.gen(function* () {
       const { session, page, host, url } = yield* keyboardFixture();
+      const context = page.context();
+      const connect = context.newCDPSession.bind(context);
+      const input = { submitted: 0, acknowledged: 0 };
+
+      context.newCDPSession = async (target) => {
+        const port = await connect(target);
+
+        if (target === page) {
+          const send = port.send.bind(port);
+
+          port.send = (method, params) => {
+            if (method !== "Input.dispatchKeyEvent" && method !== "Input.insertText")
+              return send(method, params);
+            input.submitted++;
+
+            return send(method, params).then((result) => {
+              input.acknowledged++;
+
+              return result;
+            });
+          };
+        }
+
+        return port;
+      };
 
       yield* Browser.scoped(Effect.succeed(session), (browser) =>
         Effect.gen(function* () {
@@ -172,6 +197,9 @@ it.live("guarded plain typing stops future windows when the original input loses
 
           expect(first).toBe("a");
           expect(second.length).toBeLessThanOrEqual(15);
+          expect(first.length + second.length).toBe(16);
+          // The acknowledged window drained completely; revalidation submits no later window.
+          expect(input).toEqual({ submitted: 32, acknowledged: 32 });
 
           const errors = Exit.isFailure(result)
             ? result.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)
@@ -180,16 +208,18 @@ it.live("guarded plain typing stops future windows when the original input loses
           expect(errors).toContainEqual(
             expect.objectContaining({
               reason: expect.objectContaining({ _tag: "NotFocused" }),
-              outcome: "unknown",
+              outcome: "performed",
+              containment: expect.objectContaining({ _tag: "NotRequired" }),
             }),
           );
           expect((yield* browser.status).actions.used).toBe(before + 1);
           expect(yield* browser.status).toMatchObject({
-            phase: "uncertain",
-            unresolvedDispatch: true,
+            phase: "open",
+            unresolvedDispatch: false,
           });
         }),
       );
+      expect(input).toEqual({ submitted: 32, acknowledged: 32 });
       expect(host.running()).toBe(false);
     }),
   ),

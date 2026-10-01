@@ -30,7 +30,7 @@ export class BrowserToolFailure extends Schema.TaggedError<BrowserToolFailure>()
       "closed",
       "failed",
     ]),
-    outcome: Schema.Literals(["undispatched", "rejected", "unknown"]),
+    outcome: Schema.Literals(["undispatched", "rejected", "performed", "unknown"]),
   },
 ) {}
 

@@ -164,9 +164,10 @@ export const makePlaywrightDriver = async (
             beforeUnload?.dismissed(false);
             dialogs.delete(dialog);
           }
-        observation.invalidate({ pageId: entry.id });
+        observation.retirePage(entry.id);
         pageControl.closed(entry);
         captures.forget(entry);
+        events.pageClosed?.(entry.id);
       },
       navigating: (entry, frame) => pageControl.navigating(entry, frame),
       navigated: (entry, frame) => {
@@ -174,6 +175,7 @@ export const makePlaywrightDriver = async (
       },
       sameDocumentNavigated: (entry, frame) => sameDocumentCapture(entry, frame),
       frameChanged: (entry, frame) => {
+        if (frame.isDetached()) events.frameClosed?.(entry.id, targets.frameId(frame));
         actions.waitChanged(entry, frame);
         // Only the frame an observation read can change what it names.
         observation.invalidate({ pageId: entry.id, frameId: targets.frameId(frame) });
@@ -240,7 +242,12 @@ export const makePlaywrightDriver = async (
     () => closing,
   );
 
-  const observation = makeObservation(targets, identity.namespace, events);
+  const observation = makeObservation(
+    targets,
+    identity.namespace,
+    events,
+    options.observationLimits,
+  );
 
   const actions = makeActions(
     context,
@@ -350,15 +357,16 @@ export const makePlaywrightDriver = async (
     press: keyboard.press,
     type: keyboard.type,
     screenshot: observation.screenshot,
-    resize: (viewport, ticket) =>
+    resize: (viewport, ticket, target) =>
       sanitize(async () => {
-        const page = current().entry.page;
-        const entry = current().entry;
+        const { entry } = current(target);
+        const { page } = entry;
 
         ticket.dispatch();
         captures.invalidate(entry, "resized");
         observation.changed("resized", { pageId: entry.id });
         await page.setViewportSize(viewport);
+        ticket.acknowledge?.();
         ticket.check();
       }),
     waitFor: actions.waitFor,
@@ -388,6 +396,8 @@ export const makePlaywrightDriver = async (
     capture: captures.capture,
     invalidateObservation: observation.invalidate,
     fenceInitialization: initialization.fence,
+    fenceInitializationPage: initialization.fencePage,
+    retireInitializationPage: initialization.retirePage,
     disposeInitialization: initialization.dispose,
     disconnect: () =>
       sanitize(async () => {

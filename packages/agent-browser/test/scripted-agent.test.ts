@@ -116,63 +116,84 @@ it.effect("the agent clicks the observed control exactly once and finishes", () 
   ),
 );
 
-it.effect("an unknown click outcome reaches the model as a failure and is never replayed", () =>
-  Browser.scoped(Testing.open(shop), (browser) =>
-    Effect.gen(function* () {
-      yield* browser.control.next("click", {
-        _tag: "Fail",
-        reason: Reasons.Timeout.make({}),
-        outcome: "unknown",
-      });
+it.effect.each([false, true])(
+  "an unknown click outcome is never replayed (failed containment: %s)",
+  (failedContainment) =>
+    Browser.scoped(Testing.open(shop), (browser) =>
+      Effect.gen(function* () {
+        if (failedContainment)
+          yield* browser.control.next("close-page", {
+            _tag: "Fail",
+            reason: Reasons.Provider.make({}),
+            outcome: "unknown",
+          });
+        yield* browser.control.next("click", {
+          _tag: "Fail",
+          reason: Reasons.Timeout.make({}),
+          outcome: "unknown",
+        });
 
-      const turns = [
-        call("c1", "browser_navigate", { url: `${origin}/` }),
-        call("c2", "browser_inspect", {}),
-        call("c3", "browser_click", reference),
-        {
-          // The model tries again with the same reference; the owner refuses without sending.
-          ...call("c4", "browser_click", reference),
-          assertRequest: (request: LanguageModel.ProviderOptions) => {
+        const turns = [
+          call("c1", "browser_navigate", { url: `${origin}/` }),
+          call("c2", "browser_inspect", {}),
+          call("c3", "browser_click", reference),
+          {
+            // The model tries again with the same reference; the owner refuses without sending.
+            ...call("c4", "browser_click", reference),
+            assertRequest: (request: LanguageModel.ProviderOptions) => {
+              expect(toolResults(request, "browser_click").at(-1)).toMatchObject({
+                isFailure: true,
+                result: { reason: "timeout", outcome: "unknown" },
+              });
+            },
+          },
+          answer((request) => {
             expect(toolResults(request, "browser_click").at(-1)).toMatchObject({
               isFailure: true,
-              result: { reason: "timeout", outcome: "unknown" },
+              result: { reason: "closed", outcome: "undispatched" },
             });
-          },
-        },
-        answer((request) => {
-          expect(toolResults(request, "browser_click").at(-1)).toMatchObject({
-            isFailure: true,
-            result: { reason: "closed", outcome: "undispatched" },
-          });
-        }),
-      ];
+          }),
+        ];
 
-      const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser);
 
-      const result = yield* host
-        .run(AgentRuntime.run(consent, "accept the banner"))
-        .pipe(Effect.provide(model(turns)));
+        const result = yield* host
+          .run(AgentRuntime.run(consent, "accept the banner"))
+          .pipe(Effect.provide(model(turns)));
 
-      expect(result.output).toEqual({ done: true });
-      const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
+        expect(result.output).toEqual({ done: true });
+        const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
 
-      expect(clicks).toEqual([expect.objectContaining({ dispatched: true, settled: "failed" })]);
-      const failures = yield* host.toolFailures;
+        expect(clicks).toEqual([expect.objectContaining({ dispatched: true, settled: "failed" })]);
+        const failures = yield* host.toolFailures;
 
-      expect(
-        failures.failures.map((failure) => [failure.error.reason._tag, failure.error.outcome]),
-      ).toEqual([
-        ["Timeout", "unknown"],
-        ["Closed", "undispatched"],
-      ]);
-      expect(failures.status).toMatchObject({ phase: "uncertain", unresolvedDispatch: true });
-    }),
-  ).pipe(
-    // An uncertain owner cannot confirm its cleanup; the workflow reports that, the scope still closes.
-    Effect.catchTag("BrowserError", (error) =>
-      error.operation === "close" ? Effect.void : Effect.fail(error),
+        expect(
+          failures.failures.map((failure) => [failure.error.reason._tag, failure.error.outcome]),
+        ).toEqual([
+          ["Timeout", "unknown"],
+          ["Closed", "undispatched"],
+        ]);
+        expect(failures.failures[0]?.error.containment).toMatchObject(
+          failedContainment
+            ? { _tag: "SessionFenced", generation: failures.status.generation }
+            : {
+                _tag: "PageClosed",
+                pageId: browser.initialPage.identity.pageId,
+                generation: browser.initialPage.identity.generation,
+              },
+        );
+        expect(failures.status).toMatchObject(
+          failedContainment
+            ? { phase: "uncertain", unresolvedDispatch: true }
+            : { phase: "open", unresolvedDispatch: false },
+        );
+      }),
+    ).pipe(
+      // An uncertain owner cannot confirm its cleanup; the workflow reports that, the scope still closes.
+      Effect.catchTag("BrowserError", (error) =>
+        error.operation === "close" ? Effect.void : Effect.fail(error),
+      ),
     ),
-  ),
 );
 
 const signupUrl = `${origin}/signup`;

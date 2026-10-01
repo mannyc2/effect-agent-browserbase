@@ -39,7 +39,58 @@ import type {
   Target,
   Viewport,
 } from "./BrowserData.ts";
-import type { BrowserError, InitializationError } from "./Errors.ts";
+import type { BrowserError, Containment, InitializationError } from "./Errors.ts";
+
+export interface OperationOptions {
+  readonly timeoutMillis?: number;
+}
+
+/** Terminal facts remain readable after this page loses live authority. */
+export interface PageStatus {
+  readonly identity: Target;
+  readonly phase: "open" | "closing" | "closed" | "stale";
+  readonly containment: Containment;
+}
+
+export type PageOperations = TargetOperations &
+  Pick<
+    BrowserSession,
+    | "observe"
+    | "checkpoint"
+    | "controlFacts"
+    | "revalidateElement"
+    | "clickElement"
+    | "fillElement"
+    | "selectOption"
+    | "fillForm"
+    | "hoverElement"
+    | "pressElement"
+    | "typeElement"
+    | "waitFor"
+    | "waitForElement"
+    | "clickAndWait"
+  > & {
+    readonly ready: (
+      options?: OperationOptions,
+    ) => Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
+  };
+
+/** Issued live authority for one native frame; navigation keeps the frame and retires its references. */
+export interface Frame extends PageOperations {
+  readonly identity: Target;
+  readonly status: Effect.Effect<PageStatus>;
+}
+
+/** Issued live authority for one native page on its original connection. */
+export interface Page extends Frame {
+  readonly describe: (options?: OperationOptions) => Effect.Effect<PageInfo, BrowserError>;
+  readonly listFrames: (
+    options?: OperationOptions,
+  ) => Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
+  readonly frame: (info: FrameInfo) => Effect.Effect<Frame, BrowserError>;
+  readonly resizeViewport: (viewport: Viewport) => Effect.Effect<void, BrowserError>;
+  readonly close: (options?: OperationOptions) => Effect.Effect<void, BrowserError>;
+}
 
 /**
  * A host's decision about one control, made on facts read from the exact node immediately
@@ -57,7 +108,8 @@ export interface ElementAdmission {
  * dispatched, so while it loads a host may read, `checkpoint`, hold and resume this page, and
  * use any other page. Anything that would change this page fails `busy` until it settles.
  *
- * Leaving its scope unsettled fences the session, exactly as an interrupted mutation does,
+ * Leaving its scope unsettled revokes and attempts to close its exact page. Positive closure
+ * preserves healthy peers; unconfirmed closure fences the session. Its outcome remains unknown
  * because nothing then knows what the browser did. It is never replayed.
  */
 export interface NavigationOperation {
@@ -124,10 +176,17 @@ export interface RetainedTarget extends TargetOperations {}
  * session object cannot copy its capture, page-control or connection authority.
  *
  * The inherited target operations resolve the selected page/frame when their Effect executes.
- * Use `retain` to retain the current selection with stale-on-selection-change semantics, or
- * `pinPage` / `pinFrame` when work must stay on an explicit target while selection moves.
+ * Use issued Page and Frame objects for complete operations on exact targets. `retain` retains
+ * the current selection with stale-on-selection-change semantics; selector-only `pinPage` and
+ * `pinFrame` remain adapters over the same owner.
  */
 export interface BrowserSession<E = never> extends TargetOperations {
+  /** The page acquired on the initial connection, independent of later display selection. */
+  readonly initialPage: Page;
+  readonly page: (info: PageInfo) => Effect.Effect<Page, BrowserError>;
+  readonly listPages: (
+    options?: OperationOptions,
+  ) => Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   /** The implementation which owns this live connection. */
   readonly implementation: string;
   /** Copied host-only state, readable without admission in every lifecycle phase. */

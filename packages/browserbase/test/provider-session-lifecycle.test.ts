@@ -87,6 +87,12 @@ it.effect("unconfirmed owned release cannot retire a dispatched operation's cont
     const session = yield* acquisition.connect;
     const [browser] = yield* scripted.browsers;
 
+    // This case needs unconfirmed native containment as well as unconfirmed provider release.
+    yield* browser!.next("close-page", {
+      _tag: "Fail",
+      reason: Reasons.Provider.make({}),
+      outcome: "unknown",
+    });
     // The click is sent and its acknowledgement is lost.
     yield* browser!.next("click", {
       _tag: "Fail",
@@ -95,7 +101,7 @@ it.effect("unconfirmed owned release cannot retire a dispatched operation's cont
     });
     expect(yield* Effect.result(session.click({ selector: "#act" }))).toMatchObject({
       _tag: "Failure",
-      failure: { outcome: "unknown" },
+      failure: { outcome: "unknown", containment: { _tag: "SessionFenced" } },
     });
     const original = yield* session.status;
 

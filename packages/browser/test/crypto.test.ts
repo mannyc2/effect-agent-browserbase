@@ -78,7 +78,8 @@ it.effect("the owner draws connection identity and handoff tokens from the runti
         }),
       );
 
-      const { operations } = yield* acquired.connect;
+      const { session, operations } = yield* acquired.connect;
+      const original = session.initialPage;
 
       expect(identities).toEqual([{ namespace: uuid(1), bindings: uuid(2) }]);
 
@@ -89,6 +90,21 @@ it.effect("the owner draws connection identity and handoff tokens from the runti
       expect(Redacted.value(first.token)).toBe(uuid(3));
       expect(Redacted.value(repeated.token)).toBe(uuid(3));
       yield* operations.resume(first.token, true);
+      expect(session.initialPage).toBe(original);
+      expect(yield* original.status).toMatchObject({ phase: "stale" });
+      expect(yield* original.observe().pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Stale" },
+        outcome: "undispatched",
+      });
+      const [info] = yield* session.listPages();
+
+      expect(info).toBeDefined();
+      if (info === undefined) return;
+      const fresh = yield* session.page(info);
+
+      expect(fresh.identity.generation).toBeGreaterThan(original.identity.generation);
+      expect(yield* fresh.status).toMatchObject({ phase: "open" });
+      expect((yield* fresh.observe()).text).toBe("Welcome.");
 
       const next = yield* operations.beginHandoff(Effect.succeed("view"));
 

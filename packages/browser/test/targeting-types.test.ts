@@ -1,13 +1,23 @@
 import { expect, it } from "@effect/vitest";
-import type { Effect } from "effect";
+import type { Effect, Scope } from "effect";
 import type {
   BrowserSession,
+  Frame,
+  Page,
   TargetOperations,
   RetainedTarget,
   PinnedTarget,
 } from "effect-browser/browser";
-import type { FrameInfo, PageInfo, Target, TextResult } from "effect-browser/browser-data";
-import type { BrowserError } from "effect-browser/errors";
+import type {
+  FrameInfo,
+  Observation,
+  PageInfo,
+  Target,
+  TextResult,
+} from "effect-browser/browser-data";
+import * as Capture from "effect-browser/capture";
+import type { BrowserError, InitializationError } from "effect-browser/errors";
+import * as PageControl from "effect-browser/page-control";
 
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -47,6 +57,61 @@ const retainedError: Same<Effect.Error<ReturnType<typeof retain>>, BrowserError>
 const retainedServices: Same<Effect.Services<ReturnType<typeof retain>>, never> = true;
 const createdResult: Same<Effect.Success<ReturnType<typeof create>>, PageInfo> = true;
 const selectedResult: Same<Effect.Success<ReturnType<typeof select>>, void> = true;
+
+const issuedPage = (session: BrowserSession, info: PageInfo) => session.page(info);
+const issuedFrame = (page: Page, info: FrameInfo) => page.frame(info);
+const frameRead = (frame: Frame) => frame.observe();
+const pageHold = (page: Page) => PageControl.suspend(page);
+const pageCapture = (page: Page) => Capture.start(page);
+
+const issuedPageContract: Same<
+  ReturnType<typeof issuedPage>,
+  Effect.Effect<Page, BrowserError>
+> = true;
+
+const issuedFrameContract: Same<
+  ReturnType<typeof issuedFrame>,
+  Effect.Effect<Frame, BrowserError>
+> = true;
+
+const frameReadContract: Same<
+  ReturnType<typeof frameRead>,
+  Effect.Effect<Observation, BrowserError>
+> = true;
+
+const frameReadinessError: Same<
+  Effect.Error<ReturnType<Frame["ready"]>>,
+  InitializationError
+> = true;
+
+const frameReadinessServices: Same<Effect.Services<ReturnType<Frame["ready"]>>, never> = true;
+
+const frameNavigationScope: Same<
+  Effect.Services<ReturnType<Frame["startNavigation"]>>,
+  Scope.Scope
+> = true;
+
+const pageHoldError: Same<Effect.Error<ReturnType<typeof pageHold>>, BrowserError> = true;
+const pageHoldServices: Same<Effect.Services<ReturnType<typeof pageHold>>, never> = true;
+const pageCaptureError: Same<Effect.Error<ReturnType<typeof pageCapture>>, BrowserError> = true;
+const pageCaptureScope: Same<Effect.Services<ReturnType<typeof pageCapture>>, Scope.Scope> = true;
+const originalInitialPage: Same<BrowserSession["initialPage"], Page> = true;
+
+it("issued Page and Frame operations retain typed errors and require Scope for owned work", () => {
+  expect(
+    issuedPageContract &&
+      issuedFrameContract &&
+      frameReadContract &&
+      frameReadinessError &&
+      frameReadinessServices &&
+      frameNavigationScope &&
+      pageHoldError &&
+      pageHoldServices &&
+      pageCaptureError &&
+      pageCaptureScope &&
+      originalInitialPage,
+  ).toBe(true);
+});
 
 it("direct selected operations and pinned targets preserve the public Effect contract", () => {
   expect(

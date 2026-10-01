@@ -45,6 +45,16 @@ const fixture = (
   hooks: {
     readonly extractFirstNode?: () => Promise<void>;
     readonly readFacts?: () => Promise<void>;
+    readonly disposeNode?: () => Promise<void>;
+    readonly disposeFacts?: () => Promise<void>;
+    readonly observationLimits?: {
+      readonly maxSnapshotsPerPage: number;
+      readonly maxSnapshotsPerSession: number;
+      readonly maxHandlesPerPage: number;
+      readonly maxHandlesPerSession: number;
+      readonly maxBytesPerPage: number;
+      readonly maxBytesPerSession: number;
+    };
   } = {},
 ) => {
   const records: Array<{ disposed: number }> = [];
@@ -75,7 +85,9 @@ const fixture = (
 
             return { facts };
           },
-          dispose: async () => {},
+          dispose: async () => {
+            await hooks.disposeFacts?.();
+          },
         };
       }
 
@@ -89,6 +101,7 @@ const fixture = (
         evaluate: async () => true,
         dispose: async () => {
           record.disposed++;
+          await hooks.disposeNode?.();
         },
       };
 
@@ -133,12 +146,17 @@ const fixture = (
     navigating: { has: () => false },
   } as unknown as Targets;
 
-  const observation = makeObservation(targets, "connection", {
-    invalidate: () => {},
-    pause: () => {},
-    fault: () => {},
-    disconnected: () => {},
-  });
+  const observation = makeObservation(
+    targets,
+    "connection",
+    {
+      invalidate: () => {},
+      pause: () => {},
+      fault: () => {},
+      disconnected: () => {},
+    },
+    hooks.observationLimits,
+  );
 
   return {
     observation,
@@ -357,6 +375,88 @@ it("an observation from a different connection generation refuses before reading
   });
   expect(f.calls).toEqual({ facts: 0, factsProperties: 0 });
   await f.observation.dispose();
+});
+
+// https://github.com/mannyc2/effect-agent-browserbase/issues/94#issuecomment-5914182775
+// A lost native disposal reply cannot be reproduced reliably in a local browser. Capacity must
+// follow the actual native lifetime, including retired snapshots, rather than caller completion.
+it("failed node disposal retains finite snapshot capacity until positive page retirement", async () => {
+  const f = fixture(undefined, {
+    disposeNode: async () => {
+      throw new Error("native disposal unconfirmed");
+    },
+    observationLimits: {
+      maxSnapshotsPerPage: 2,
+      maxSnapshotsPerSession: 2,
+      maxHandlesPerPage: 8192,
+      maxHandlesPerSession: 32768,
+      maxBytesPerPage: 64 * 1024 * 1024,
+      maxBytesPerSession: 256 * 1024 * 1024,
+    },
+  });
+
+  try {
+    await f.observation.observe("document", 1024, 1, ticket().admission);
+    await f.observation.observe("document", 1024, 1, ticket().admission);
+    await expect(
+      f.observation.observe("document", 1024, 1, ticket().admission),
+    ).rejects.toMatchObject({
+      reason: { _tag: "Limit", dimension: "observation-snapshots" },
+      outcome: "undispatched",
+    });
+    expect(f.records).toEqual([{ disposed: 1 }, { disposed: 1 }]);
+    // Only an observed native page close frees these reservations. The next page can now
+    // acquire its own snapshot while the original browser connection remains live.
+    f.observation.retirePage("stage");
+    f.target.pageId = "scout";
+    await observeFresh(f);
+    expect(f.records).toHaveLength(3);
+  } finally {
+    f.observation.retireConnection();
+    await f.observation.dispose();
+  }
+});
+
+// The same native-retirement rule covers temporary fact reads. Chromium cannot reliably lose
+// only a wrapper-disposal reply; this gate checks that repeated failures cannot bypass the cap.
+it("failed passive wrapper disposal prevents further native facts reads when capacity is full", async () => {
+  const f = fixture(undefined, {
+    disposeFacts: async () => {
+      throw new Error("native facts wrapper unconfirmed");
+    },
+    observationLimits: {
+      maxSnapshotsPerPage: 3,
+      maxSnapshotsPerSession: 3,
+      maxHandlesPerPage: 8192,
+      maxHandlesPerSession: 32768,
+      maxBytesPerPage: 64 * 1024 * 1024,
+      maxBytesPerSession: 256 * 1024 * 1024,
+    },
+  });
+
+  try {
+    const seen = await f.observation.observe("document", 1024, 1, ticket().admission);
+
+    const reference = {
+      observationId: seen.observationId,
+      elementId: seen.controls[0]!.elementId,
+    };
+
+    for (let read = 0; read < 2; read++)
+      await expect(f.observation.controlFacts(reference, ticket().admission)).rejects.toMatchObject(
+        {
+          reason: { _tag: "Provider" },
+        },
+      );
+    await expect(f.observation.controlFacts(reference, ticket().admission)).rejects.toMatchObject({
+      reason: { _tag: "Limit", dimension: "observation-snapshots" },
+      outcome: "undispatched",
+    });
+    expect(f.calls.facts).toBe(2);
+  } finally {
+    f.observation.retireConnection();
+    await f.observation.dispose();
+  }
 });
 
 it("an action rechecks the resolved snapshot after asynchronous admission and sends no input to a changed target", async () => {

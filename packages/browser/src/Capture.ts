@@ -1,6 +1,6 @@
 import { Crypto, Effect, type PlatformError, Schema, type Scope, Stream } from "effect";
 
-import type { BrowserSession } from "./Browser.ts";
+import type { BrowserSession, Page } from "./Browser.ts";
 import { PageInfo } from "./BrowserData.ts";
 import type {
   CapturedFrame,
@@ -44,7 +44,7 @@ export interface CaptureInterval {
  * `CaptureInterval` remains a live scoped capability, not a schema or JSON/Tool value.
  */
 export const start = <E>(
-  session: BrowserSession<E>,
+  session: BrowserSession<E> | Page,
   options: CaptureOptions = {},
 ): Effect.Effect<CaptureInterval, BrowserError, Scope.Scope> =>
   Effect.suspend(() => {
@@ -80,7 +80,7 @@ export const start = <E>(
  * explicit stop acknowledgement, interval snapshots and the final capture summary.
  */
 export const stream = <E>(
-  session: BrowserSession<E>,
+  session: BrowserSession<E> | Page,
   options: CaptureOptions = {},
 ): Stream.Stream<CapturedFrame, BrowserError> =>
   Stream.unwrap(start(session, options).pipe(Effect.map((interval) => interval.frames)));

@@ -117,7 +117,9 @@ const operationError = (
         ? "The browser action was not dispatched"
         : error.outcome === "rejected"
           ? "The browser action was rejected"
-          : "The browser action failed; its outcome may be unknown",
+          : error.outcome === "performed"
+            ? "The browser action was performed, but its follow-up failed"
+            : "The browser action failed; its outcome may be unknown",
   });
 };
 

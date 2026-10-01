@@ -1,7 +1,7 @@
 import { Crypto, Effect, type Option, Redacted, Schema, Scope } from "effect";
 
 import * as Bootstrap from "./Bootstrap.ts";
-import type { BrowserSession, OpenOptions } from "./Browser.ts";
+import type { BrowserSession, OpenOptions, Page } from "./Browser.ts";
 import {
   ActionResult,
   AutomationOptions,
@@ -21,6 +21,7 @@ import {
   type BrowserOperation,
   type InitializationError,
 } from "./Errors.ts";
+import { resolvePageControlsForSession } from "./internal/browser/Association.ts";
 import {
   bindingImplementation,
   fromNativeAttempt,
@@ -32,7 +33,7 @@ import type { ConnectionCleanup } from "./internal/browser/ConnectionCleanup.ts"
 import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driver.ts";
 import { connectPlaywrightEndpoint } from "./internal/browser/Playwright.ts";
 import { checked, decoded, makeSession } from "./internal/browser/PublicSession.ts";
-import { acquireSession } from "./internal/browser/Session.ts";
+import { acquireSession, type PageControls } from "./internal/browser/Session.ts";
 
 export {
   cleanupStep,
@@ -159,12 +160,17 @@ export class DownloadEvent extends Schema.Class<DownloadEvent>("BrowserDownloadE
  * Modeled host operations for the integration creating this connection. Native authority stays
  * inside the owner; the integration adds only the capabilities its public session supports.
  */
-export interface Integration<Reference> {
+export interface TransferOperations {
   readonly clickForDownload: (request: ClickRequest) => Effect.Effect<DownloadEvent, BrowserError>;
   readonly selectFiles: (request: FileRequest) => Effect.Effect<ActionResult, BrowserError>;
   readonly clickForFileSelection: (
     request: FileRequest,
   ) => Effect.Effect<ActionResult, BrowserError>;
+}
+
+/** The transfer bridge accepts only a Page issued by this exact session on its original owner. */
+export interface Integration<Reference> extends TransferOperations {
+  readonly forPage: (page: Page) => Effect.Effect<TransferOperations, BrowserError>;
   readonly liveView: <A>(issue: Effect.Effect<A, BrowserError>) => Effect.Effect<A, BrowserError>;
   readonly beginHandoff: <A>(
     issue: Effect.Effect<A, BrowserError>,
@@ -247,6 +253,34 @@ const resolveFiles = (
     ),
   );
 
+const makeTransferOperations = (
+  controls: Pick<PageControls, "clickForDownload" | "selectFiles" | "clickForFileSelection">,
+): TransferOperations => {
+  const fileOperation = (operation: "select-files" | "file-chooser", request: FileRequest) =>
+    checked(Selector, request.selector, operation).pipe(
+      Effect.flatMap((selector) =>
+        resolveFiles(request.selection, operation).pipe(
+          Effect.flatMap((files) =>
+            operation === "select-files"
+              ? controls.selectFiles(selector, files)
+              : controls.clickForFileSelection(selector, files),
+          ),
+        ),
+      ),
+      Effect.flatMap((url) => decoded(ActionResult, "action-result", "performed")({ url })),
+    );
+
+  return {
+    clickForDownload: (request) =>
+      checked(ClickRequest, request, "download-action").pipe(
+        Effect.flatMap((value) => controls.clickForDownload(value.selector)),
+        Effect.flatMap(decoded(DownloadEvent, "download-action", "performed")),
+      ),
+    selectFiles: (request) => fileOperation("select-files", request),
+    clickForFileSelection: (request) => fileOperation("file-chooser", request),
+  };
+};
+
 /**
  * Validate immutable connection configuration without loading a peer or acquiring a lifetime.
  * Connection ids and handoff tokens come from the `Crypto` service captured here, so a Layer
@@ -289,6 +323,11 @@ export const make = Effect.fnUntraced(function* (
   const popupPolicy = automation.popupPolicy ?? "retain";
   const dialogPolicy = automation.dialogPolicy ?? "dismiss";
 
+  const observationLimits =
+    automation.observationLimits === undefined
+      ? undefined
+      : Object.freeze({ ...automation.observationLimits });
+
   if (pageControl && (keepAlive || popupPolicy === "pause" || dialogPolicy === "pause"))
     return yield* BrowserError.make({
       operation: "configure",
@@ -303,6 +342,7 @@ export const make = Effect.fnUntraced(function* (
     popupPolicy,
     dialogPolicy,
     preserveViewport,
+    ...(observationLimits === undefined ? {} : { observationLimits }),
     ...(automation.initialPage === undefined
       ? {}
       : "targetId" in automation.initialPage
@@ -345,6 +385,7 @@ export const make = Effect.fnUntraced(function* (
             dialogPolicy,
             newPage: false,
             preserveViewport: true,
+            ...(observationLimits === undefined ? {} : { observationLimits }),
             ...(existing.targetId === undefined ? {} : { initialTargetId: existing.targetId }),
           };
 
@@ -369,33 +410,16 @@ export const make = Effect.fnUntraced(function* (
     const connected = yield* Effect.cached(
       acquired.connect.pipe(
         Effect.map((controls): Connection<L["reference"], E> => {
-          const fileOperation = (
-            operation: "select-files" | "file-chooser",
-            request: FileRequest,
-          ) =>
-            checked(Selector, request.selector, operation).pipe(
-              Effect.flatMap((selector) =>
-                resolveFiles(request.selection, operation).pipe(
-                  Effect.flatMap((files) =>
-                    operation === "select-files"
-                      ? controls.selectFiles(selector, files)
-                      : controls.clickForFileSelection(selector, files),
-                  ),
-                ),
-              ),
-              Effect.flatMap((url) => decoded(ActionResult, "action-result", "unknown")({ url })),
-            );
+          const session = makeSession(controls, bindings);
 
           return {
-            session: makeSession(controls, bindings),
+            session,
             operations: {
-              clickForDownload: (request) =>
-                checked(ClickRequest, request, "download-action").pipe(
-                  Effect.flatMap((value) => controls.clickForDownload(value.selector)),
-                  Effect.flatMap(decoded(DownloadEvent, "download-action", "unknown")),
+              ...makeTransferOperations(controls),
+              forPage: (page) =>
+                resolvePageControlsForSession(session, page).pipe(
+                  Effect.map(makeTransferOperations),
                 ),
-              selectFiles: (request) => fileOperation("select-files", request),
-              clickForFileSelection: (request) => fileOperation("file-chooser", request),
               liveView: controls.liveView,
               beginHandoff: controls.beginHandoff,
               resume: controls.resume,

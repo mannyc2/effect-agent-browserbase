@@ -8,7 +8,7 @@ import {
   Schema,
   type Scope,
 } from "effect";
-import type { BrowserSession, OpenOptions } from "effect-browser/browser";
+import type { BrowserSession, OpenOptions, Page } from "effect-browser/browser";
 import type {
   ActionResult,
   AutomationOptions,
@@ -61,12 +61,17 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly closeChecked: Effect.Effect<CleanupResult, BrowserError>;
   readonly clickForDownload: (
     request: ClickRequest,
+    page?: Page,
   ) => Effect.Effect<DownloadObservation, BrowserError>;
   /** Attaches to an existing file input; an uploaded branch needs a receipt for this session. */
-  readonly selectFiles: (request: SelectFilesRequest) => Effect.Effect<ActionResult, BrowserError>;
+  readonly selectFiles: (
+    request: SelectFilesRequest,
+    page?: Page,
+  ) => Effect.Effect<ActionResult, BrowserError>;
   /** Registers the chooser observation before the single click that opens it. */
   readonly clickForFileSelection: (
     request: SelectFilesRequest,
+    page?: Page,
   ) => Effect.Effect<ActionResult, BrowserError>;
   readonly liveView: (expiresInSeconds?: number) => Effect.Effect<LiveView, BrowserError>;
   readonly beginHandoff: (expiresInSeconds?: number) => Effect.Effect<Handoff, BrowserError>;
@@ -153,12 +158,18 @@ const makeSession = <E>(
 ): BrowserbaseSession<E> => {
   const { session, operations } = connection;
 
+  const transfers = (
+    page?: Page,
+  ): Effect.Effect<BrowserRuntime.TransferOperations, BrowserError> =>
+    page === undefined ? Effect.succeed(operations) : operations.forPage(page);
+
   // Decorating the same object preserves its private capture and page-control associations.
   return Object.assign(session, {
     reference: lifetime.reference,
     closeChecked: session.closeChecked.pipe(Effect.andThen(lifetime.closeChecked)),
-    clickForDownload: (request) =>
-      operations.clickForDownload(request).pipe(
+    clickForDownload: (request, page) =>
+      transfers(page).pipe(
+        Effect.flatMap((operations) => operations.clickForDownload(request)),
         Effect.flatMap((event) =>
           Schema.decodeEffect(DownloadObservation)({
             ...event,
@@ -168,22 +179,30 @@ const makeSession = <E>(
               BrowserError.make({
                 operation: "download-action",
                 reason: Reasons.Malformed.make({}),
-                outcome: "unknown",
+                outcome: "performed",
               }),
             ),
           ),
         ),
       ),
-    selectFiles: (request) =>
-      selection(request, lifetime.reference, "select-files").pipe(
-        Effect.flatMap((files) =>
-          operations.selectFiles({ selector: request.selector, selection: files }),
+    selectFiles: (request, page) =>
+      transfers(page).pipe(
+        Effect.flatMap((operations) =>
+          selection(request, lifetime.reference, "select-files").pipe(
+            Effect.flatMap((files) =>
+              operations.selectFiles({ selector: request.selector, selection: files }),
+            ),
+          ),
         ),
       ),
-    clickForFileSelection: (request) =>
-      selection(request, lifetime.reference, "file-chooser").pipe(
-        Effect.flatMap((files) =>
-          operations.clickForFileSelection({ selector: request.selector, selection: files }),
+    clickForFileSelection: (request, page) =>
+      transfers(page).pipe(
+        Effect.flatMap((operations) =>
+          selection(request, lifetime.reference, "file-chooser").pipe(
+            Effect.flatMap((files) =>
+              operations.clickForFileSelection({ selector: request.selector, selection: files }),
+            ),
+          ),
         ),
       ),
     liveView: (ttl = 60) => operations.liveView(lifetime.liveView(ttl)),
@@ -372,6 +391,9 @@ export class BrowserbaseBrowser extends Context.Service<
 
 /** Only the automation fields cross the schema boundary; launch and callbacks are separate. */
 const projected = (options: BrowserOptions) => ({
+  ...(options.observationLimits === undefined
+    ? {}
+    : { observationLimits: options.observationLimits }),
   ...(options.maxHostReads === undefined ? {} : { maxHostReads: options.maxHostReads }),
   ...(options.actionTimeoutMillis === undefined
     ? {}

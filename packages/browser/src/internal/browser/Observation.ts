@@ -91,6 +91,12 @@ const Classified = Schema.Struct({
   }),
 });
 
+interface NativeRetention {
+  readonly own: (value: object, dispose: () => Promise<unknown>, slots?: number) => void;
+  readonly dispose: (value: object) => Promise<void>;
+  readonly work: <A>(body: () => Promise<A>) => Promise<A>;
+}
+
 /**
  * Asks the browser which box is on top at each pending point once pointer events are ignored,
  * then has the page judge whether that box paints there. Chromium's own hit test finds boxes the
@@ -102,9 +108,21 @@ const confirmPending = async (
   page: Page,
   pending: NonNullable<PageReadResult["pending"]>,
   check: () => void,
+  retention?: NativeRetention,
 ): Promise<Record<string, PointVerdict>> => {
   const cdp = await page.context().newCDPSession(page);
   const group = "effect-browser-occlusion";
+
+  const dispose = async () => {
+    await closeWithin(() => cdp.send("Runtime.releaseObjectGroup", { objectGroup: group })).catch(
+      () => {},
+    );
+    await cdp.detach();
+  };
+
+  // A detached port positively retires its object group too. Failed detach retains the
+  // reservation, even when the caller's occlusion deadline has already returned.
+  retention?.own(cdp, dispose, 257);
 
   try {
     check();
@@ -181,10 +199,7 @@ const confirmPending = async (
 
     return verdicts;
   } finally {
-    await closeWithin(() => cdp.send("Runtime.releaseObjectGroup", { objectGroup: group })).catch(
-      () => {},
-    );
-    await closeWithin(() => cdp.detach()).catch(() => {});
+    await closeWithin(() => retention?.dispose(cdp) ?? dispose()).catch(() => {});
   }
 };
 
@@ -195,25 +210,49 @@ export type AdmissionPolicy = (facts: ControlFacts) => boolean;
  * A node's private state after a form step: its value, checked state or selected option values.
  * It is compared on the host and never leaves it. Runs inside the page, so it is self-contained.
  */
-const privateState = (node: Element): string | null => {
+const PrivateStateBytes = 512 * 1024;
+
+const privateState = (node: Element, maximumBytes: number): string | null => {
   if (!node.isConnected || node.ownerDocument !== document) return null;
   const role = node.getAttribute("role");
 
+  const encode = (value: ReadonlyArray<string | boolean | ReadonlyArray<string>>) => {
+    const text = JSON.stringify(value);
+
+    return text.length <= maximumBytes && new TextEncoder().encode(text).length <= maximumBytes
+      ? text
+      : null;
+  };
+
   if (node instanceof HTMLInputElement && (node.type === "checkbox" || node.type === "radio"))
-    return JSON.stringify(["checked", node.checked]);
+    return encode(["checked", node.checked]);
   if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)
-    return JSON.stringify(["value", node.value]);
-  if (node instanceof HTMLSelectElement)
-    return JSON.stringify(["options", Array.from(node.selectedOptions, (option) => option.value)]);
+    return node.value.length > maximumBytes ? null : encode(["value", node.value]);
+  if (node instanceof HTMLSelectElement) {
+    if (node.selectedOptions.length > 64) return null;
+    const values: string[] = [];
+    let length = 0;
+
+    for (const option of node.selectedOptions) {
+      length += option.value.length;
+      if (length > maximumBytes) return null;
+      values.push(option.value);
+    }
+
+    return encode(["options", values]);
+  }
   if (
     role !== null &&
     ["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)
   )
-    return JSON.stringify(["checked", node.getAttribute("aria-checked") === "true"]);
-  if (node instanceof HTMLElement && node.isContentEditable)
-    return JSON.stringify(["text", node.textContent ?? ""]);
+    return encode(["checked", node.getAttribute("aria-checked") === "true"]);
+  if (node instanceof HTMLElement && node.isContentEditable) {
+    const text = node.textContent ?? "";
 
-  return JSON.stringify(["other"]);
+    return text.length > maximumBytes ? null : encode(["text", text]);
+  }
+
+  return encode(["other"]);
 };
 
 /**
@@ -224,7 +263,7 @@ export const readFieldState = async (
   element: ElementHandle<Element>,
 ): Promise<string | undefined> => {
   try {
-    const value: unknown = await element.evaluate(privateState);
+    const value: unknown = await element.evaluate(privateState, PrivateStateBytes);
 
     return typeof value === "string" ? value : undefined;
   } catch {
@@ -247,6 +286,31 @@ interface Retained {
   readonly option?: { readonly selectElementId: string; readonly value: string };
   leases: number;
   retired: boolean;
+  readonly snapshot: Snapshot;
+}
+
+/** Validated at the supplying runtime boundary; never model-controlled. */
+export interface ObservationLimits {
+  readonly maxSnapshotsPerPage: number;
+  readonly maxSnapshotsPerSession: number;
+  readonly maxHandlesPerPage: number;
+  readonly maxHandlesPerSession: number;
+  readonly maxBytesPerPage: number;
+  readonly maxBytesPerSession: number;
+}
+
+const DefaultObservationLimits: ObservationLimits = {
+  maxSnapshotsPerPage: 16,
+  maxSnapshotsPerSession: 64,
+  maxHandlesPerPage: 8192,
+  maxHandlesPerSession: 32768,
+  maxBytesPerPage: 64 * 1024 * 1024,
+  maxBytesPerSession: 256 * 1024 * 1024,
+};
+
+interface NativeResource {
+  readonly dispose: () => Promise<unknown>;
+  readonly slots: number;
   disposal?: Promise<void>;
 }
 
@@ -262,32 +326,41 @@ interface Snapshot {
   validity: "reading" | "valid" | "suspended" | "invalid";
   readonly nodes: Map<string, Retained>;
   readonly revalidated: Set<string>;
+  readonly resources: Map<object, NativeResource>;
+  reading: boolean;
+  pending: number;
+  retired: boolean;
+  nativeRetired: boolean;
+  reservedHandles: number;
+  reservedBytes: number;
 }
 
 /**
- * What is read from the selected document, and the one retained observation whose nodes a later
- * action may name. That observation is valid only until the next invalidating event.
+ * One current snapshot per exact frame. Retired native reservations remain bounded until
+ * actual disposal or positive page/connection retirement; they never regain action authority.
  */
 export const makeObservation = (
   targets: Targets,
   /** Observation ids from an earlier connection never name this one's nodes. */
   connectionNamespace: string,
   events: DriverEvents,
+  limits: ObservationLimits = DefaultObservationLimits,
 ) => {
   const { current } = targets;
-  let observation: Snapshot | undefined;
+  const snapshots = new Map<string, Snapshot>();
+  const reservations = new Set<Snapshot>();
   let observationSerial = 0;
   let connectionRetired = false;
 
+  const scopeMatches = (snapshot: Snapshot, scope: ObservationScope) =>
+    scope !== "none" &&
+    (scope === "all" ||
+      (scope.pageId === snapshot.target.pageId &&
+        (scope.frameId === undefined || scope.frameId === snapshot.target.frameId)));
+
   const invalidate = (scope: ObservationScope = "all") => {
-    if (
-      observation !== undefined &&
-      scope !== "none" &&
-      (scope === "all" ||
-        (scope.pageId === observation.target.pageId &&
-          (scope.frameId === undefined || scope.frameId === observation.target.frameId)))
-    )
-      observation.validity = "invalid";
+    for (const snapshot of snapshots.values())
+      if (scopeMatches(snapshot, scope)) snapshot.validity = "invalid";
   };
 
   /**
@@ -329,21 +402,85 @@ export const makeObservation = (
    * independent of the page an agent is driving.
    */
   const held = (pageId: string) => {
-    if (observation?.target.pageId === pageId) {
-      if (observation.validity === "reading") observation.validity = "invalid";
-      else if (observation.validity === "valid") {
-        observation.validity = "suspended";
-        observation.revalidated.clear();
+    for (const snapshot of snapshots.values()) {
+      if (snapshot.target.pageId !== pageId) continue;
+      if (snapshot.validity === "reading") snapshot.validity = "invalid";
+      else if (snapshot.validity === "valid") {
+        snapshot.validity = "suspended";
+        snapshot.revalidated.clear();
       }
     }
   };
 
+  const bytes = (value: string): number => new TextEncoder().encode(value).length;
+
+  const refresh = (snapshot: Snapshot) => {
+    if (snapshot.nativeRetired) return;
+    if (snapshot.reading || snapshot.pending > 0) return;
+    if (snapshot.retired && snapshot.resources.size === 0) {
+      reservations.delete(snapshot);
+      snapshot.nodes.clear();
+
+      return;
+    }
+    const nodes = new Set<object>([...snapshot.nodes.values()].map((node) => node.handle));
+
+    // A wrapper can still own the entire read result, and an occlusion port owns its group.
+    // Keep their worst-case byte/handle reservation until their actual disposal is confirmed.
+    if ([...snapshot.resources.keys()].some((value) => !nodes.has(value))) return;
+    snapshot.reservedHandles = [...snapshot.resources.values()].reduce(
+      (total, resource) => total + resource.slots,
+      0,
+    );
+    snapshot.reservedBytes =
+      4096 +
+      [...snapshot.nodes.values()].reduce(
+        (total, node) =>
+          total + bytes(node.identity) + bytes(node.stable) + bytes(node.option?.value ?? ""),
+        0,
+      );
+  };
+
+  const disposeResource = (snapshot: Snapshot, value: object): Promise<void> => {
+    const resource = snapshot.resources.get(value);
+
+    if (snapshot.nativeRetired || resource === undefined) return Promise.resolve();
+    if (resource.disposal === undefined) {
+      resource.disposal = Promise.resolve().then(async () => {
+        if (!snapshot.nativeRetired) await resource.dispose();
+      });
+      // Observe rejection immediately. Failure retains capacity and never fabricates disposal.
+      void resource.disposal.then(
+        () => {
+          snapshot.resources.delete(value);
+          refresh(snapshot);
+        },
+        () => {},
+      );
+    }
+
+    return resource.disposal;
+  };
+
+  const retentionFor = (snapshot: Snapshot): NativeRetention => ({
+    own: (value, dispose, slots = 1) => {
+      if (!snapshot.nativeRetired && !snapshot.resources.has(value))
+        snapshot.resources.set(value, { dispose, slots });
+    },
+    dispose: (value) => disposeResource(snapshot, value),
+    work: async (body) => {
+      snapshot.pending++;
+      try {
+        return await body();
+      } finally {
+        snapshot.pending--;
+        refresh(snapshot);
+      }
+    },
+  });
+
   const disposeNode = (node: Retained): Promise<void> =>
-    connectionRetired
-      ? Promise.resolve()
-      : (node.disposal ??= Promise.resolve().then(() =>
-          connectionRetired ? undefined : node.handle.dispose(),
-        ));
+    disposeResource(node.snapshot, node.handle);
 
   const retireNode = (node: Retained): Promise<void> => {
     node.retired = true;
@@ -351,20 +488,157 @@ export const makeObservation = (
     return node.leases === 0 ? disposeNode(node) : Promise.resolve();
   };
 
-  const dispose = async () => {
-    const old = observation;
+  const retireSnapshot = async (snapshot: Snapshot) => {
+    snapshot.retired = true;
+    snapshot.validity = "invalid";
+    if (snapshots.get(snapshot.target.frameId) === snapshot)
+      snapshots.delete(snapshot.target.frameId);
+    await closeWithin(() => Promise.allSettled([...snapshot.nodes.values()].map(retireNode)));
+    refresh(snapshot);
+  };
 
-    observation = undefined;
-    if (old !== undefined) {
-      old.validity = "invalid";
-      await closeWithin(() => Promise.allSettled([...old.nodes.values()].map(retireNode)));
+  const dispose = async (target?: DriverTarget) => {
+    const retiring =
+      target === undefined
+        ? [...snapshots.values()]
+        : [snapshots.get(target.frameId)].filter((snapshot) => snapshot !== undefined);
+
+    await Promise.allSettled(retiring.map(retireSnapshot));
+  };
+
+  const retirePage = (pageId: string) => {
+    for (const snapshot of reservations) {
+      if (snapshot.target.pageId !== pageId) continue;
+      snapshot.validity = "invalid";
+      snapshot.retired = true;
+      snapshot.nativeRetired = true;
+      if (snapshots.get(snapshot.target.frameId) === snapshot)
+        snapshots.delete(snapshot.target.frameId);
+      for (const node of snapshot.nodes.values()) node.retired = true;
+      snapshot.resources.clear();
+      snapshot.nodes.clear();
+      reservations.delete(snapshot);
+    }
+  };
+
+  const reserve = (snapshot: Snapshot) => {
+    const page = [...reservations].filter(
+      (previous) => previous.target.pageId === snapshot.target.pageId,
+    );
+
+    const dimensions = [
+      {
+        dimension: "observation-snapshots",
+        pageMaximum: limits.maxSnapshotsPerPage,
+        sessionMaximum: limits.maxSnapshotsPerSession,
+        count: (_previous: Snapshot) => 1,
+        requested: 1,
+      },
+      {
+        dimension: "observation-handles",
+        pageMaximum: limits.maxHandlesPerPage,
+        sessionMaximum: limits.maxHandlesPerSession,
+        count: (previous: Snapshot) => previous.reservedHandles,
+        requested: snapshot.reservedHandles,
+      },
+      {
+        dimension: "observation-bytes",
+        pageMaximum: limits.maxBytesPerPage,
+        sessionMaximum: limits.maxBytesPerSession,
+        count: (previous: Snapshot) => previous.reservedBytes,
+        requested: snapshot.reservedBytes,
+      },
+    ] as const;
+
+    for (const { dimension, pageMaximum, sessionMaximum, count, requested } of dimensions) {
+      const scopes: ReadonlyArray<readonly [ReadonlyArray<Snapshot>, number]> = [
+        [page, pageMaximum],
+        [[...reservations], sessionMaximum],
+      ];
+
+      for (const [owned, maximum] of scopes) {
+        const observed = owned.reduce<number>(
+          (total, previous) => total + count(previous),
+          requested,
+        );
+
+        if (observed > maximum)
+          throw failure(Reasons.Limit.make({ dimension, maximum, observed }), "undispatched");
+      }
+    }
+    reservations.add(snapshot);
+  };
+
+  /** Temporary readers use the same finite native ownership as published frame snapshots. */
+  const temporary = (
+    target: DriverTarget,
+    ticket: ReadTicket,
+    reservedHandles: number,
+    reservedBytes: number,
+  ) => {
+    ticket.check();
+    if (connectionRetired) throw failure(Reasons.Stale.make({}), "undispatched");
+
+    const snapshot: Snapshot = {
+      id: "",
+      target,
+      documentEpoch: targets.epochOf(current(target).frame),
+      generation: ticket.generation,
+      validity: "reading",
+      nodes: new Map(),
+      revalidated: new Set(),
+      resources: new Map(),
+      reading: true,
+      pending: 0,
+      retired: false,
+      nativeRetired: false,
+      reservedHandles,
+      reservedBytes,
+    };
+
+    reserve(snapshot);
+    const retention = retentionFor(snapshot);
+    let releasing: Promise<void> | undefined;
+
+    return {
+      retention,
+      release: (): Promise<void> => {
+        releasing ??= (async () => {
+          snapshot.reading = false;
+          snapshot.retired = true;
+          snapshot.validity = "invalid";
+          await closeWithin(() =>
+            Promise.allSettled([...snapshot.resources.keys()].map(retention.dispose)),
+          ).catch(() => {});
+          refresh(snapshot);
+        })();
+
+        return releasing;
+      },
+    };
+  };
+
+  const withTemporary = async <A>(
+    target: DriverTarget,
+    ticket: ReadTicket,
+    handles: number,
+    bytes: number,
+    body: (retention: NativeRetention) => Promise<A>,
+  ): Promise<A> => {
+    const owned = temporary(target, ticket, handles, bytes);
+
+    try {
+      return await body(owned.retention);
+    } finally {
+      await owned.release();
     }
   };
 
   const exactElement = async (
     selector: string,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
+    retention: NativeRetention,
   ): Promise<ElementHandle<Element>> => {
     ticket.check();
 
@@ -378,16 +652,19 @@ export const makeObservation = (
       }
     }, selector);
 
+    retention.own(holder, () => holder.dispose());
     let node: JSHandle | undefined;
 
     try {
       const countHandle = await holder.getProperty("count");
+
+      retention.own(countHandle, () => countHandle.dispose());
       let count: number;
 
       try {
         count = safeDecode(Count, await countHandle.jsonValue());
       } finally {
-        await countHandle.dispose();
+        await retention.dispose(countHandle);
       }
       ticket.check();
       if (count !== 1)
@@ -396,6 +673,9 @@ export const makeObservation = (
           "undispatched",
         );
       node = await holder.getProperty("node");
+      const ownedNode = node;
+
+      retention.own(ownedNode, () => ownedNode.dispose());
       const element = node.asElement();
 
       if (element === null) throw failure(Reasons.NotFound.make({}), "undispatched");
@@ -403,38 +683,48 @@ export const makeObservation = (
 
       return element;
     } catch (error) {
-      await node?.dispose().catch(() => {});
+      if (node !== undefined) await retention.dispose(node).catch(() => {});
       throw error;
     } finally {
-      await holder.dispose();
+      await retention.dispose(holder);
     }
   };
 
-  /** Selection can move away and back; the original document and snapshot cannot be replaced. */
+  /** The exact registered frame, document and snapshot cannot be replaced. */
   const checkSnapshot = (snapshot: Snapshot, ticket: ReadTicket): void => {
     ticket.check();
     if (
-      observation !== snapshot ||
+      connectionRetired ||
+      snapshots.get(snapshot.target.frameId) !== snapshot ||
       snapshot.generation !== ticket.generation ||
       snapshot.validity === "invalid"
     )
       throw failure(Reasons.Stale.make({}), "undispatched");
 
-    const selected = targets.selected();
-
-    if (
-      selected.pageId !== snapshot.target.pageId ||
-      selected.frameId !== snapshot.target.frameId ||
-      targets.epochOf(current(snapshot.target).frame) !== snapshot.documentEpoch
-    )
+    if (targets.epochOf(current(snapshot.target).frame) !== snapshot.documentEpoch)
       throw failure(Reasons.Stale.make({}), "undispatched");
   };
 
   /** A retained node is only as current as the observation that produced it. */
-  const retained = (target: ObservedElement, ticket: ReadTicket, allowSuspended = false) => {
-    const snapshot = observation;
+  const retained = (
+    target: ObservedElement,
+    ticket: ReadTicket,
+    allowSuspended = false,
+    browserTarget?: DriverTarget,
+  ) => {
+    ticket.check();
+    const caller = browserTarget ?? targets.selected();
 
-    if (snapshot === undefined || snapshot.id !== target.observationId)
+    // Authenticate the caller before looking at a Ref. No supplied observation id can choose
+    // another page's frame, read its native facts, or redirect a caller's operation into it.
+    current(caller);
+    const snapshot = snapshots.get(caller.frameId);
+
+    if (
+      snapshot === undefined ||
+      snapshot.target.pageId !== caller.pageId ||
+      snapshot.id !== target.observationId
+    )
       throw failure(Reasons.Stale.make({}), "undispatched");
     const node = snapshot.nodes.get(target.elementId);
 
@@ -442,6 +732,12 @@ export const makeObservation = (
 
     const check = (): void => {
       checkSnapshot(snapshot, ticket);
+      if (browserTarget === undefined) {
+        const selected = targets.selected();
+
+        if (selected.pageId !== caller.pageId || selected.frameId !== caller.frameId)
+          throw failure(Reasons.Stale.make({}), "undispatched");
+      }
 
       const usable =
         snapshot.validity === "valid" ||
@@ -461,19 +757,20 @@ export const makeObservation = (
    * A wait borrows one exact node without authorizing input. Its state may change. Retiring the
    * observation defers this node's disposal until the native wait actually releases the lease.
    */
-  const lease = (reference: ObservedElement, ticket: ReadTicket) => {
-    const { node, snapshot } = retained(reference, ticket);
+  const lease = (reference: ObservedElement, ticket: ReadTicket, browserTarget?: DriverTarget) => {
+    const { node, snapshot } = retained(reference, ticket, false, browserTarget);
 
     node.leases++;
     let released: Promise<void> | undefined;
 
     return {
       element: node.handle,
+      target: snapshot.target,
       check: () => {
         ticket.check();
         if (
           connectionRetired ||
-          observation !== snapshot ||
+          snapshots.get(snapshot.target.frameId) !== snapshot ||
           snapshot.validity === "invalid" ||
           targets.epochOf(current(snapshot.target).frame) !== snapshot.documentEpoch
         )
@@ -490,37 +787,64 @@ export const makeObservation = (
     };
   };
 
+  /** A timed-out after-step read keeps its node and capacity until the raw reply settles. */
+  const passiveRead = async <A>(
+    reference: ObservedElement,
+    ticket: Ticket,
+    body: () => Promise<A>,
+    browserTarget?: DriverTarget,
+  ): Promise<A> => {
+    const leased = lease(reference, ticket, browserTarget);
+
+    try {
+      return await withTemporary(leased.target, ticket, 0, 4096 + PrivateStateBytes, body);
+    } finally {
+      await leased.release();
+    }
+  };
+
   /**
    * Read from the exact node, never re-resolved from a selector or a label. It is the same page
    * function an observation uses, told to read one node and traverse nothing.
    */
   const sampleFacts = async (
     element: ElementHandle<Element>,
+    ticket: ReadTicket,
     check: () => void,
     target?: DriverTarget,
     options?: ReadonlyArray<{ readonly node: ElementHandle<Element>; readonly value: string }>,
   ): Promise<unknown> => {
     check();
+    const exact = target ?? targets.selected();
 
-    const holder = await current(target).frame.evaluateHandle(readPage, {
-      scope: "document" as const,
-      maximumBytes: 0,
-      controlLimit: 0,
-      nodeBudget: 0,
-      only: element,
-      ...(options === undefined ? {} : { options }),
-    });
+    return withTemporary(
+      exact,
+      ticket,
+      1,
+      4096 + (1 + (options?.length ?? 0)) * 512 * 1024,
+      async (retention) => {
+        const holder = await current(exact).frame.evaluateHandle(readPage, {
+          scope: "document" as const,
+          maximumBytes: 0,
+          controlLimit: 0,
+          nodeBudget: 0,
+          only: element,
+          ...(options === undefined ? {} : { options }),
+        });
 
-    try {
-      check();
-      const raw = await holder.evaluate((read) => read.data);
+        retention.own(holder, () => holder.dispose());
+        try {
+          check();
+          const raw = await holder.evaluate((read) => read.data);
 
-      check();
+          check();
 
-      return raw;
-    } finally {
-      await holder.dispose();
-    }
+          return raw;
+        } finally {
+          await retention.dispose(holder);
+        }
+      },
+    );
   };
 
   /**
@@ -543,23 +867,44 @@ export const makeObservation = (
     readonly kept: boolean;
     readonly check: () => void;
     readonly facts: ControlFacts | undefined;
+    readonly release: () => Promise<void>;
   }> => {
     const kept = typeof target !== "string";
 
     const retainedNode =
-      typeof target === "string" ? undefined : retained(target, ticket, allowSuspended);
+      typeof target === "string"
+        ? undefined
+        : retained(target, ticket, allowSuspended, browserTarget);
 
     const node = retainedNode?.node;
-    const resolvedTarget = retainedNode?.snapshot.target ?? browserTarget;
+    const resolvedTarget = retainedNode?.snapshot.target ?? browserTarget ?? targets.selected();
     const check = retainedNode?.check ?? (() => ticket.check());
+    const owned = kept ? undefined : temporary(resolvedTarget, ticket, 3, 4096);
+    let released: Promise<void> | undefined;
 
-    const element =
-      typeof target === "string" ? await exactElement(target, ticket, browserTarget) : node?.handle;
+    if (node !== undefined) node.leases++;
 
-    if (element === undefined) throw failure(Reasons.Stale.make({}), "undispatched");
+    const release = (): Promise<void> => {
+      released ??= (async () => {
+        if (owned !== undefined) await owned.release();
+        if (node !== undefined) {
+          node.leases--;
+          if (node.retired && node.leases === 0) await disposeNode(node);
+        }
+      })();
+
+      return released;
+    };
+
     let facts: ControlFacts | undefined;
 
     try {
+      const element =
+        typeof target === "string" && owned !== undefined
+          ? await exactElement(target, ticket, resolvedTarget, owned.retention)
+          : node?.handle;
+
+      if (element === undefined) throw failure(Reasons.Stale.make({}), "undispatched");
       check();
 
       const select =
@@ -597,7 +942,7 @@ export const makeObservation = (
       check();
       if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
       if (node !== undefined || policy !== undefined) {
-        facts = safeDecode(Facts, await sampleFacts(element, check, resolvedTarget)).facts;
+        facts = safeDecode(Facts, await sampleFacts(element, ticket, check, resolvedTarget)).facts;
 
         check();
         if (
@@ -621,9 +966,9 @@ export const makeObservation = (
       }
       check();
 
-      return { element, kept, check, facts };
+      return { element, kept, check, facts, release };
     } catch (error) {
-      if (!kept) await closeWithin(() => element.dispose()).catch(() => {});
+      await closeWithin(release).catch(() => {});
       check();
       throw error;
     }
@@ -636,18 +981,25 @@ export const makeObservation = (
     element: ElementHandle<Element>,
     ticket: Ticket,
     enablement = false,
+    browserTarget?: DriverTarget,
   ) => {
     const same = (facts: ControlFacts, node: Retained) =>
       enablement ? stableIdentityOf(facts) === node.stable : identityOf(facts) === node.identity;
 
-    const select = retained(target, ticket);
+    const select = retained(target, ticket, false, browserTarget);
 
     if (select.node.handle !== element) throw failure(Reasons.Stale.make({}), "undispatched");
     if (select.node.multiple === undefined)
       throw failure(Reasons.Unsupported.make({}), "undispatched");
 
     const options = ids.map((elementId) => {
-      const option = retained({ observationId: target.observationId, elementId }, ticket);
+      const option = retained(
+        { observationId: target.observationId, elementId },
+        ticket,
+        false,
+        browserTarget,
+      );
+
       const identity = option.node.option;
 
       if (identity === undefined || identity.selectElementId !== target.elementId)
@@ -665,6 +1017,7 @@ export const makeObservation = (
       SelectionFacts,
       await sampleFacts(
         element,
+        ticket,
         check,
         select.snapshot.target,
         options.map((option) => ({ node: option.node.handle, value: option.value })),
@@ -699,14 +1052,24 @@ export const makeObservation = (
     };
   };
 
-  const controlFacts = (target: ObservedElement, ticket: Ticket) =>
+  const controlFacts = (target: ObservedElement, ticket: Ticket, browserTarget?: DriverTarget) =>
     sanitize(async () => {
-      const { facts, check } = await resolve(target, ticket);
+      const { facts, check, release } = await resolve(
+        target,
+        ticket,
+        undefined,
+        false,
+        browserTarget,
+      );
 
-      check();
-      if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+      try {
+        check();
+        if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
 
-      return facts;
+        return facts;
+      } finally {
+        await release();
+      }
     });
 
   /**
@@ -714,16 +1077,24 @@ export const makeObservation = (
    * form's own steps may have changed exactly what identity compares. A retired observation or a
    * replaced document still fails stale, and a detached node reads as absent.
    */
-  const formState = (references: ReadonlyArray<ObservedElement>, ticket: Ticket) =>
+  const formState = (
+    references: ReadonlyArray<ObservedElement>,
+    ticket: Ticket,
+    browserTarget?: DriverTarget,
+  ) =>
     sanitize(async () => {
       const states: Array<string | undefined> = [];
 
       for (const reference of references) {
-        const leased = lease(reference, ticket);
+        const leased = lease(reference, ticket, browserTarget);
 
         try {
           leased.check();
-          states.push(await readFieldState(leased.element));
+          states.push(
+            await withTemporary(leased.target, ticket, 0, 4096 + PrivateStateBytes, () =>
+              readFieldState(leased.element),
+            ),
+          );
           leased.check();
         } finally {
           await leased.release();
@@ -734,15 +1105,19 @@ export const makeObservation = (
     });
 
   /** After a hold, one node at a time: still attached, and still the control inspected. */
-  const revalidate = (target: ObservedElement, ticket: Ticket) =>
+  const revalidate = (target: ObservedElement, ticket: Ticket, browserTarget?: DriverTarget) =>
     sanitize(async () => {
-      const snapshot = observation;
-      const { check } = await resolve(target, ticket, undefined, true);
+      const { snapshot } = retained(target, ticket, true, browserTarget);
+      const { check, release } = await resolve(target, ticket, undefined, true, browserTarget);
 
-      check();
-      if (snapshot === undefined || snapshot !== observation)
-        throw failure(Reasons.Stale.make({}), "undispatched");
-      snapshot.revalidated.add(target.elementId);
+      try {
+        check();
+        if (snapshots.get(snapshot.target.frameId) !== snapshot)
+          throw failure(Reasons.Stale.make({}), "undispatched");
+        snapshot.revalidated.add(target.elementId);
+      } finally {
+        await release();
+      }
     });
 
   const readText = (
@@ -753,40 +1128,51 @@ export const makeObservation = (
   ) =>
     sanitize(async () => {
       ticket.check();
+      const exact = target ?? targets.selected();
 
-      const raw: unknown = await reading(
-        () =>
-          current(target).frame.evaluate(
-            ({ selector, maximumBytes }) => {
-              const element =
-                selector === undefined ? document.body : document.querySelector(selector);
+      return withTemporary(exact, ticket, 0, 4096 + maximumBytes, async () => {
+        const raw: unknown = await reading(
+          () =>
+            current(exact).frame.evaluate(
+              ({ selector, maximumBytes }) => {
+                const element =
+                  selector === undefined ? document.body : document.querySelector(selector);
 
-              if (element === null) return { text: "", missing: true, byteLength: 0 };
+                if (element === null) return { text: "", missing: true, byteLength: 0 };
 
-              const text =
-                element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
+                const text =
+                  element instanceof HTMLElement ? element.innerText : (element.textContent ?? "");
 
-              const byteLength = new TextEncoder().encode(text).length;
+                const byteLength = new TextEncoder().encode(text).length;
 
-              return { text: byteLength > maximumBytes ? "" : text, missing: false, byteLength };
-            },
-            { selector, maximumBytes },
-          ),
-        target,
-      );
-
-      ticket.check();
-      const value = safeDecode(TextResult, raw);
-
-      if (value.missing) throw failure(Reasons.NotFound.make({}));
-      const observedBytes = Math.max(value.byteLength, new TextEncoder().encode(value.text).length);
-
-      if (observedBytes > maximumBytes)
-        throw failure(
-          Reasons.Limit.make({ dimension: "text", maximum: maximumBytes, observed: observedBytes }),
+                return { text: byteLength > maximumBytes ? "" : text, missing: false, byteLength };
+              },
+              { selector, maximumBytes },
+            ),
+          exact,
         );
 
-      return value.text;
+        ticket.check();
+        const value = safeDecode(TextResult, raw);
+
+        if (value.missing) throw failure(Reasons.NotFound.make({}));
+
+        const observedBytes = Math.max(
+          value.byteLength,
+          new TextEncoder().encode(value.text).length,
+        );
+
+        if (observedBytes > maximumBytes)
+          throw failure(
+            Reasons.Limit.make({
+              dimension: "text",
+              maximum: maximumBytes,
+              observed: observedBytes,
+            }),
+          );
+
+        return value.text;
+      });
     });
 
   /** One pass of the page reader over the selected frame, and the node handles it names. */
@@ -799,6 +1185,7 @@ export const makeObservation = (
     target: DriverTarget | undefined,
     match: string | undefined,
     verdicts: Record<string, PointVerdict> | undefined,
+    retention?: NativeRetention,
   ) => {
     check();
 
@@ -811,6 +1198,11 @@ export const makeObservation = (
       ...(match === undefined ? {} : { match }),
       ...(verdicts === undefined ? {} : { verdicts }),
     });
+
+    retention?.own(holder, () => holder.dispose());
+
+    const release = (value: JSHandle): Promise<void> =>
+      retention?.dispose(value) ?? value.dispose();
 
     const handles: Array<ElementHandle<Element>> = [];
     let nodesHandle: JSHandle | undefined;
@@ -844,11 +1236,24 @@ export const makeObservation = (
           );
         if (keepNodes) {
           nodesHandle = await holder.evaluateHandle((read) => read.nodes);
+          const ownedNodes = nodesHandle;
+
+          retention?.own(ownedNodes, () => ownedNodes.dispose());
           check();
           const nodes = await nodesHandle.getProperties();
 
           spare = [...nodes.values()];
+          for (const node of spare) retention?.own(node, () => node.dispose());
           check();
+          if (spare.length > controlLimit)
+            throw failure(
+              Reasons.Limit.make({
+                dimension: "observation-handles",
+                maximum: controlLimit,
+                observed: spare.length,
+              }),
+              "undispatched",
+            );
           const picked: Array<ElementHandle<Element>> = [];
 
           for (let i = 0; i < data.controls.length; i++) {
@@ -866,20 +1271,16 @@ export const makeObservation = (
           handles.push(...picked);
         }
       } finally {
-        await closeWithin(() => Promise.allSettled(spare.map((node) => node.dispose()))).catch(
-          () => {},
-        );
-        await nodesHandle?.dispose().catch(() => {});
-        await holder.dispose();
+        await closeWithin(() => Promise.allSettled(spare.map(release))).catch(() => {});
+        if (nodesHandle !== undefined) await release(nodesHandle).catch(() => {});
+        await release(holder);
       }
       check();
 
       return { data, handles };
     } catch (error) {
       // Ownership transfers only after wrapper release succeeds and the snapshot is rechecked.
-      await closeWithin(() => Promise.allSettled(handles.map((handle) => handle.dispose()))).catch(
-        () => {},
-      );
+      await closeWithin(() => Promise.allSettled(handles.map(release))).catch(() => {});
       check();
       throw error;
     }
@@ -898,6 +1299,7 @@ export const makeObservation = (
     keepNodes: boolean,
     target?: DriverTarget,
     match?: string,
+    retention?: NativeRetention,
   ) => {
     const first = await readOnce(
       scope,
@@ -908,6 +1310,7 @@ export const makeObservation = (
       target,
       match,
       undefined,
+      retention,
     );
 
     const pending = first.data.pending;
@@ -917,15 +1320,29 @@ export const makeObservation = (
     let verdicts: Record<string, PointVerdict> | undefined;
 
     await closeWithin(async () => {
-      verdicts = await confirmPending(entry.page, pending, check);
+      const confirm = () => confirmPending(entry.page, pending, check, retention);
+
+      verdicts = await (retention?.work(confirm) ?? confirm());
     }, ConfirmMillis).catch(() => {});
     check();
     if (verdicts === undefined || Object.keys(verdicts).length === 0) return first;
     await closeWithin(() =>
-      Promise.allSettled(first.handles.map((handle) => handle.dispose())),
+      Promise.allSettled(
+        first.handles.map((handle) => retention?.dispose(handle) ?? handle.dispose()),
+      ),
     ).catch(() => {});
 
-    return readOnce(scope, maximumBytes, controlLimit, check, keepNodes, target, match, verdicts);
+    return readOnce(
+      scope,
+      maximumBytes,
+      controlLimit,
+      check,
+      keepNodes,
+      target,
+      match,
+      verdicts,
+      retention,
+    );
   };
 
   const observe = (
@@ -934,12 +1351,15 @@ export const makeObservation = (
     controlLimit: number,
     ticket: Ticket,
     match?: string,
+    browserTarget?: DriverTarget,
   ) =>
     sanitize(async () => {
       ticket.check();
-      await dispose();
+      const target = browserTarget ?? targets.selected();
+
+      current(target);
+      await dispose(target);
       ticket.check();
-      const target = targets.selected();
 
       const snapshot: Snapshot = {
         id: `observation-${connectionNamespace}-${++observationSerial}`,
@@ -949,29 +1369,43 @@ export const makeObservation = (
         validity: "reading",
         nodes: new Map(),
         revalidated: new Set(),
+        resources: new Map(),
+        reading: true,
+        pending: 0,
+        retired: false,
+        nativeRetired: false,
+        // Two DOM passes, their wrappers, and the bounded occlusion object group/port.
+        reservedHandles: 2 * controlLimit + 260,
+        // Each private option value is <=65,536 UTF-16 units. Both escaped identities plus
+        // its UTF-8 value fit within 512KiB; data text and fixed snapshot metadata are separate.
+        reservedBytes: 4096 + maximumBytes + controlLimit * 512 * 1024,
       };
 
       // Own-page events must also retire a read whose native handles have not arrived yet.
-      observation = snapshot;
+      reserve(snapshot);
+      snapshots.set(target.frameId, snapshot);
+      const retention = retentionFor(snapshot);
+
+      const check = () => {
+        checkSnapshot(snapshot, ticket);
+        if (browserTarget === undefined) {
+          const selected = targets.selected();
+
+          if (selected.pageId !== target.pageId || selected.frameId !== target.frameId)
+            throw failure(Reasons.Stale.make({}), "undispatched");
+        }
+      };
+
       let handles: Array<ElementHandle<Element>> = [];
 
       try {
         const sampled = await reading(
-          () =>
-            read(
-              scope,
-              maximumBytes,
-              controlLimit,
-              () => checkSnapshot(snapshot, ticket),
-              true,
-              target,
-              match,
-            ),
+          () => read(scope, maximumBytes, controlLimit, check, true, target, match, retention),
           target,
         );
 
         handles = sampled.handles;
-        checkSnapshot(snapshot, ticket);
+        check();
         const { data } = sampled;
         const selects = new Map<number, boolean>();
         const options = new Map<number, NonNullable<Retained["option"]>>();
@@ -1003,6 +1437,7 @@ export const makeObservation = (
               stable: stableIdentityOf(facts),
               leases: 0,
               retired: false,
+              snapshot,
               ...(facts.multiple === undefined ? {} : { multiple: facts.multiple }),
               ...(option === undefined ? {} : { option }),
             });
@@ -1030,17 +1465,21 @@ export const makeObservation = (
           viewport: data.viewport,
         };
 
-        checkSnapshot(snapshot, ticket);
+        check();
         snapshot.validity = "valid";
 
         return result;
       } catch (error) {
         snapshot.validity = "invalid";
-        if (observation === snapshot) observation = undefined;
+        snapshot.retired = true;
+        if (snapshots.get(target.frameId) === snapshot) snapshots.delete(target.frameId);
         await closeWithin(() =>
-          Promise.allSettled(handles.map((handle) => handle.dispose())),
+          Promise.allSettled([...snapshot.resources.keys()].map(retention.dispose)),
         ).catch(() => {});
         throw error;
+      } finally {
+        snapshot.reading = false;
+        refresh(snapshot);
       }
     });
 
@@ -1050,53 +1489,57 @@ export const makeObservation = (
     ticket: Ticket,
     target?: DriverTarget,
   ) =>
-    sanitize(() =>
-      reading(async () => {
-        const page = current(target).entry.page;
+    sanitize(async () => {
+      const exact = target ?? targets.selected();
 
-        ticket.check();
+      return withTemporary(exact, ticket, 0, 4096 + maximumBytes, () =>
+        reading(async () => {
+          const page = current(exact).entry.page;
 
-        const raw: unknown = await page.evaluate(
-          (full) => ({
-            width: full
-              ? Math.max(document.documentElement.scrollWidth, window.innerWidth)
-              : window.innerWidth,
-            height: full
-              ? Math.max(document.documentElement.scrollHeight, window.innerHeight)
-              : window.innerHeight,
-          }),
-          fullPage,
-        );
+          ticket.check();
 
-        const geometry = safeDecode(Geometry, raw);
-
-        checkScreenshotGeometry(geometry);
-        ticket.check();
-
-        const bytes: unknown = await page.screenshot({
-          type: "png",
-          fullPage,
-          scale: "css",
-          timeout: timeout(ticket),
-        });
-
-        if (!(bytes instanceof Uint8Array)) throw failure(Reasons.Malformed.make({}));
-        if (bytes.length > maximumBytes)
-          throw failure(
-            Reasons.Limit.make({
-              dimension: "returned-bytes",
-              maximum: maximumBytes,
-              observed: bytes.length,
+          const raw: unknown = await page.evaluate(
+            (full) => ({
+              width: full
+                ? Math.max(document.documentElement.scrollWidth, window.innerWidth)
+                : window.innerWidth,
+              height: full
+                ? Math.max(document.documentElement.scrollHeight, window.innerHeight)
+                : window.innerHeight,
             }),
+            fullPage,
           );
-        const actual = pngGeometry(bytes);
 
-        checkScreenshotGeometry(actual);
-        ticket.check();
+          const geometry = safeDecode(Geometry, raw);
 
-        return new Uint8Array(bytes);
-      }, target),
-    );
+          checkScreenshotGeometry(geometry);
+          ticket.check();
+
+          const bytes: unknown = await page.screenshot({
+            type: "png",
+            fullPage,
+            scale: "css",
+            timeout: timeout(ticket),
+          });
+
+          if (!(bytes instanceof Uint8Array)) throw failure(Reasons.Malformed.make({}));
+          if (bytes.length > maximumBytes)
+            throw failure(
+              Reasons.Limit.make({
+                dimension: "returned-bytes",
+                maximum: maximumBytes,
+                observed: bytes.length,
+              }),
+            );
+          const actual = pngGeometry(bytes);
+
+          checkScreenshotGeometry(actual);
+          ticket.check();
+
+          return new Uint8Array(bytes);
+        }, exact),
+      );
+    });
 
   /**
    * Passive: it reads what is on screen and takes a picture, keeps no node, and leaves the
@@ -1108,31 +1551,54 @@ export const makeObservation = (
     controlLimit: number,
     pictureBytes: number | undefined,
     ticket: Ticket,
+    target?: DriverTarget,
   ) =>
     sanitize(async () => {
       ticket.check();
-      const { frame } = current();
+      const exact = target ?? targets.selected();
+      const { frame } = current(exact);
       const epoch = targets.epochOf(frame);
 
-      const { data } = await reading(() =>
-        read("viewport", maximumBytes, controlLimit, () => ticket.check(), false),
+      return withTemporary(
+        exact,
+        ticket,
+        260,
+        4096 + maximumBytes + controlLimit * 512 * 1024 + (pictureBytes ?? 0),
+        async (retention) => {
+          const { data } = await reading(
+            () =>
+              read(
+                "viewport",
+                maximumBytes,
+                controlLimit,
+                () => ticket.check(),
+                false,
+                exact,
+                undefined,
+                retention,
+              ),
+            exact,
+          );
+
+          const picture =
+            pictureBytes === undefined
+              ? undefined
+              : await screenshot(false, pictureBytes, ticket, exact);
+
+          const result: NativeCheckpoint = {
+            url: targets.url(exact),
+            text: data.text,
+            textTruncated: data.textTruncated,
+            controls: data.controls,
+            controlsTruncated: data.controlsTruncated,
+            viewport: data.viewport,
+            ...(picture === undefined ? {} : { picture }),
+            documentChanged: targets.epochOf(frame) !== epoch,
+          };
+
+          return result;
+        },
       );
-
-      const picture =
-        pictureBytes === undefined ? undefined : await screenshot(false, pictureBytes, ticket);
-
-      const result: NativeCheckpoint = {
-        url: targets.selectedUrl(),
-        text: data.text,
-        textTruncated: data.textTruncated,
-        controls: data.controls,
-        controlsTruncated: data.controlsTruncated,
-        viewport: data.viewport,
-        ...(picture === undefined ? {} : { picture }),
-        documentChanged: targets.epochOf(frame) !== epoch,
-      };
-
-      return result;
     });
 
   return {
@@ -1141,15 +1607,12 @@ export const makeObservation = (
     held,
     dispose,
     lease,
+    passiveRead,
+    retirePage,
     retireConnection: () => {
       connectionRetired = true;
-      const old = observation;
-
-      observation = undefined;
-      if (old !== undefined) {
-        old.validity = "invalid";
-        for (const node of old.nodes.values()) node.retired = true;
-      }
+      for (const snapshot of reservations) retirePage(snapshot.target.pageId);
+      snapshots.clear();
     },
     resolve,
     selectOptions,

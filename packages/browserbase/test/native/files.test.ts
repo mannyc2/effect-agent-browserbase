@@ -67,6 +67,127 @@ it.live("real CDP: in-memory selection reaches the page without any provisioning
   ),
 );
 
+it.live("real CDP: provider transfers follow issued pages and reject invalid page authority", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
+
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const browser = yield* BrowserbaseBrowser;
+          const session = yield* browser.open(policy);
+          const destination = session.initialPage;
+
+          yield* destination.navigate(NavigateRequest.make({ url: f.url }));
+          const selectedInfo = yield* session.createPage;
+          const selected = yield* session.page(selectedInfo);
+
+          yield* session.selectPage(selectedInfo);
+          yield* selected.navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.selectFiles(
+            {
+              selector: "#file",
+              selection: { _tag: "Inline", files: [inline("page.txt", "exact")] },
+            },
+            destination,
+          );
+          expect(
+            (yield* destination.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
+          ).toBe("page.txt:5");
+          expect(
+            (yield* selected.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
+          ).toBe("");
+
+          yield* session.clickForFileSelection(
+            {
+              selector: "#choose",
+              selection: { _tag: "Inline", files: [inline("chooser.txt", "chosen")] },
+            },
+            destination,
+          );
+          expect(
+            (yield* destination.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
+          ).toBe("chooser.txt:6");
+          expect(
+            (yield* selected.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
+          ).toBe("");
+
+          // The selected page has no download link. Only the issued destination can perform it.
+          yield* selected.navigate(NavigateRequest.make({ url: new URL("next", f.url).href }));
+
+          const download = yield* session.clickForDownload(
+            ClickRequest.make({ selector: "#download" }),
+            destination,
+          );
+
+          expect(download.filename).toBe("fixture.txt");
+          expect(download.reference).toEqual(session.reference);
+          expect(f.fileRequests()).toBe(1);
+          yield* selected.navigate(NavigateRequest.make({ url: f.url }));
+
+          const foreign = yield* browser.open(policy);
+          const invalidPages = [{ ...destination }, foreign.initialPage];
+
+          const request = {
+            selector: "#file",
+            selection: { _tag: "Inline" as const, files: [inline("refused.txt", "unsent")] },
+          };
+
+          for (const page of invalidPages) {
+            for (const transfer of [
+              session.selectFiles(request, page).pipe(Effect.asVoid),
+              session
+                .clickForFileSelection({ ...request, selector: "#choose" }, page)
+                .pipe(Effect.asVoid),
+              session
+                .clickForDownload(ClickRequest.make({ selector: "#download" }), page)
+                .pipe(Effect.asVoid),
+            ]) {
+              const result = yield* transfer.pipe(Effect.result);
+
+              expect(result._tag).toBe("Failure");
+              if (result._tag === "Failure") {
+                expect(result.failure.reason._tag).toBe("UnregisteredSession");
+                expect(result.failure.outcome).toBe("undispatched");
+              }
+            }
+          }
+          expect(
+            (yield* destination.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
+          ).toBe("chooser.txt:6");
+          yield* destination.close();
+
+          for (const transfer of [
+            session.selectFiles(request, destination).pipe(Effect.asVoid),
+            session
+              .clickForFileSelection({ ...request, selector: "#choose" }, destination)
+              .pipe(Effect.asVoid),
+            session
+              .clickForDownload(ClickRequest.make({ selector: "#download" }), destination)
+              .pipe(Effect.asVoid),
+          ]) {
+            const result = yield* transfer.pipe(Effect.result);
+
+            expect(result._tag).toBe("Failure");
+            if (result._tag === "Failure") {
+              expect(result.failure.reason._tag).toBe("Stale");
+              expect(result.failure.outcome).toBe("undispatched");
+            }
+          }
+          expect(
+            (yield* selected.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
+          ).toBe("");
+          expect(f.fileRequests()).toBe(1);
+          expect(f.uploadedPaths).toHaveLength(0);
+          expect(f.connections).toEqual(["session-1", "session-2"]);
+        }),
+      );
+      expect(f.releaseIds).toEqual(["session-2", "session-1"]);
+    }),
+  ),
+);
+
 it.live("real CDP: an uploaded file is opened by the browser, not streamed from this client", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -236,7 +236,8 @@ it.live(
         yield* session.selectPage(scout);
         expect((yield* session.checkpoint()).target.pageId).toBe(scout.pageId);
         expect(yield* Effect.result(stageTarget.click({ selector: "#act" }))).toMatchObject(busy);
-        expect(yield* Effect.result(session.observe())).toMatchObject(busy);
+        // B's observation is independent of the exact wait protecting A and its retained nodes.
+        expect((yield* session.observe()).target.pageId).toBe(scout.pageId);
         yield* session.selectPage(stage);
         yield* session.selectPage(scout);
         expect(yield* Deferred.isDone(pending.done)).toBe(false);

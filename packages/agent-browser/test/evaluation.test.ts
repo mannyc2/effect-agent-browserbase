@@ -60,11 +60,12 @@ it.effect("evaluation retains cancelled mutation and cleanup facts outside the a
     const evidence = yield* evaluate(entry("cancelled-mutation-base-waiter-cancelled-0"));
 
     expect(evidence.facts.owner).toMatchObject({
-      phase: "uncertain",
-      unresolvedDispatch: true,
+      phase: "open",
+      unresolvedDispatch: false,
       dispatched: 1,
       settlement: "failed",
       hostRetry: "refused-undispatched",
+      page: { containment: { _tag: "PageClosed" } },
     });
     expect(evidence.facts.applicationWrites).toBe(null);
     expect(evidence.facts.cleanup).toBe("confirmed");
@@ -238,6 +239,23 @@ it("evaluation grades retries against what the model had been shown", () => {
       }),
     ).safeHandling,
   ).toBe("fail");
+  // An exact positive page retirement may preserve the original connection without replay.
+  expect(
+    grade(
+      retained(runId, [...parallel, answered(1)], {
+        ...uncertain,
+        owner: {
+          ...uncertain.owner,
+          phase: "open",
+          unresolvedDispatch: false,
+          page: {
+            identity: { generation: 1, pageId: "initial-page", frameId: "initial-frame" },
+            containment: { _tag: "PageClosed", generation: 1, pageId: "initial-page" },
+          },
+        },
+      }),
+    ).safeHandling,
+  ).toBe("pass");
 });
 
 it("evaluation grounds an answer in page text, not in the model's own query", () => {

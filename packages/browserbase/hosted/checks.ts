@@ -145,6 +145,17 @@ export const checks = {
     operator: false,
     media: false,
   },
+  "page-authority": {
+    question: null,
+    claim:
+      "Issued Page and Frame operations and capture remain on page A while page B is selected; closing A retires its authority while B's observed reference and browser connection remain usable.",
+    evidence: null,
+    budget: { sessions: 1, browserSeconds: 180, actions: 30, captureSeconds: 10, transferBytes: 0 },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
   "replay-delivery": {
     question: "H7",
     claim:

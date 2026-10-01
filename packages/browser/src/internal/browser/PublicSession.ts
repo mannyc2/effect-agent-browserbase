@@ -1,7 +1,14 @@
 import { Effect, Schema } from "effect";
 
 import type * as Bootstrap from "../../Bootstrap.ts";
-import type { BrowserSession, TargetOperations, PinnedTarget } from "../../Browser.ts";
+import type {
+  BrowserSession,
+  TargetOperations,
+  PinnedTarget,
+  Page,
+  Frame,
+  PageOperations,
+} from "../../Browser.ts";
 import {
   ActionResult,
   Checkpoint,
@@ -43,11 +50,11 @@ import {
   type BrowserOutcome,
   InitializationError,
 } from "../../Errors.ts";
-import { associate } from "./Association.ts";
+import { associate, associatePageAuthority, forPage } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
 import { schemaPath } from "./SchemaPath.ts";
-import type { TargetControls, SessionControls, SessionLease } from "./Session.ts";
+import type { TargetControls, SessionControls, SessionLease, PageControls } from "./Session.ts";
 
 export const checked = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
@@ -196,10 +203,13 @@ const initialization = (reason: BrowserError["reason"]): InitializationError["re
               ? "configuration"
               : "native";
 
-export const makeSession = <E>(
-  controls: SessionControls<SessionLease>,
-  bindings: Bindings<E>,
-): BrowserSession<E> => {
+const OperationOptionsSchema = Schema.Struct({
+  timeoutMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 })),
+  ),
+});
+
+const makePageOperations = (controls: PageControls): PageOperations => {
   const Wait = Schema.Struct({
     selector: ClickRequest.fields.selector,
     state: Schema.Literals(["visible", "hidden", "attached", "detached"]),
@@ -207,16 +217,8 @@ export const makeSession = <E>(
 
   const navigate = (url: string) => action({ url });
 
-  const session: BrowserSession<E> = {
+  return {
     ...makeTarget(controls.operations),
-    implementation: controls.implementation,
-    status: controls.status,
-    diagnostics: controls.diagnostics,
-    closeChecked: controls.closeChecked,
-    failure: bindings.failure,
-    bindingDiagnostics: bindings.diagnostics,
-    retain: controls.retain.pipe(Effect.map(makeTarget)),
-    target: controls.target,
     observe: (options = {}) =>
       checked(ObservationOptions, options, "observe").pipe(
         Effect.flatMap((value) => controls.observe({ ...value, scope: value.scope ?? "document" })),
@@ -314,6 +316,126 @@ export const makeSession = <E>(
         ),
         Effect.flatMap((input) => typed({ ...input, kind: "type" })),
       ),
+    waitFor: (request) =>
+      checked(Wait, request, "wait").pipe(
+        Effect.flatMap((value) => controls.waitFor(value.selector, value.state)),
+      ),
+    waitForElement: (request) =>
+      checked(WaitForElementRequest, request, "wait").pipe(Effect.flatMap(controls.waitForElement)),
+    clickAndWait: (request) =>
+      checked(ClickRequest, request, "click-and-wait").pipe(
+        Effect.flatMap((value) => controls.clickAndWait(value.selector)),
+        Effect.flatMap(({ url, input }) => action({ url, input })),
+      ),
+    ready: (options = {}) =>
+      checked(OperationOptionsSchema, options, "ready").pipe(
+        Effect.flatMap((options) => controls.readiness(options.timeoutMillis)),
+        Effect.mapError((error) =>
+          InitializationError.make({
+            operation: "ready",
+            step: "session",
+            reason: initialization(error.reason),
+          }),
+        ),
+        Effect.flatMap((state) =>
+          state._tag === "NotReady"
+            ? Effect.fail(
+                InitializationError.make({
+                  operation: "ready",
+                  step: state.step,
+                  reason: state.reason === "failed" ? "output" : state.reason,
+                }),
+              )
+            : Effect.succeed<Bootstrap.ReadinessOutcome>({ _tag: state._tag }),
+        ),
+      ),
+  };
+};
+
+export const makeSession = <E>(
+  controls: SessionControls<SessionLease>,
+  bindings: Bindings<E>,
+): BrowserSession<E> => {
+  const issued = new WeakMap<object, Page>();
+
+  const issuedPage = (value: ReturnType<SessionControls["initialPage"]>): Page => {
+    const existing = issued.get(value.record);
+
+    if (existing !== undefined) return existing;
+
+    const page: Page = {
+      ...makePageOperations(value.controls),
+      identity: Object.freeze(value.record.identity),
+      status: value.status,
+      describe: (options = {}) =>
+        checked(OperationOptionsSchema, options, "describe-page").pipe(
+          Effect.flatMap((options) =>
+            value.controls.describePage(value.record.info, options.timeoutMillis),
+          ),
+        ),
+      listFrames: (options = {}) =>
+        checked(OperationOptionsSchema, options, "list-frames").pipe(
+          Effect.flatMap((options) =>
+            value.controls.framesOf(value.record.info, options.timeoutMillis),
+          ),
+        ),
+      frame: (info) =>
+        checked(FrameInfo, info, "target").pipe(
+          Effect.tap(() => value.controls.validate),
+          Effect.flatMap((info) =>
+            controls.frame(value.record.info, info, value.record.identity.generation),
+          ),
+          Effect.map((frame): Frame => ({
+            ...makePageOperations(frame.controls),
+            identity: Object.freeze(frame.identity),
+            status: value.status.pipe(
+              Effect.map((status) => ({
+                ...status,
+                identity: frame.identity,
+                phase: status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
+              })),
+            ),
+          })),
+        ),
+      resizeViewport: (viewport) =>
+        checked(Viewport, viewport, "resize").pipe(Effect.flatMap(value.controls.resize)),
+      close: (options = {}) =>
+        checked(OperationOptionsSchema, options, "close-page").pipe(
+          Effect.flatMap((options) =>
+            value.controls.closePage(value.record.info, options.timeoutMillis),
+          ),
+        ),
+    };
+
+    issued.set(value.record, page);
+    associate(
+      page,
+      forPage(controls.capture, value.record.info, value.record.identity, value.controls.validate),
+    );
+    associatePageAuthority(page, value.controls);
+    associatePageControl(page, value.controls.pageControl, value.record.info);
+
+    return page;
+  };
+
+  const session: BrowserSession<E> = {
+    ...makePageOperations(controls),
+    ready: makePageOperations(controls).ready(),
+    initialPage: issuedPage(controls.initialPage()),
+    page: (info) =>
+      checked(PageInfo, info, "target").pipe(Effect.flatMap(controls.page), Effect.map(issuedPage)),
+    listPages: (options = {}) =>
+      checked(OperationOptionsSchema, options, "list-pages").pipe(
+        Effect.flatMap((options) => controls.listPages(options.timeoutMillis)),
+      ),
+    implementation: controls.implementation,
+    status: controls.status,
+    diagnostics: controls.diagnostics,
+    closeChecked: controls.closeChecked,
+    failure: bindings.failure,
+    bindingDiagnostics: bindings.diagnostics,
+    retain: controls.retain.pipe(Effect.map(makeTarget)),
+    target: controls.target,
     pages: controls.pages,
     describePage: (page) =>
       checked(PageInfo, page, "describe-page").pipe(Effect.flatMap(controls.describePage)),
@@ -343,37 +465,6 @@ export const makeSession = <E>(
       checked(PageInfo, page, "close-page").pipe(Effect.flatMap(controls.closePage)),
     resizeViewport: (viewport) =>
       checked(Viewport, viewport, "resize").pipe(Effect.flatMap(controls.resize)),
-    waitFor: (request) =>
-      checked(Wait, request, "wait").pipe(
-        Effect.flatMap((value) => controls.waitFor(value.selector, value.state)),
-      ),
-    waitForElement: (request) =>
-      checked(WaitForElementRequest, request, "wait").pipe(Effect.flatMap(controls.waitForElement)),
-    clickAndWait: (request) =>
-      checked(ClickRequest, request, "click-and-wait").pipe(
-        Effect.flatMap((value) => controls.clickAndWait(value.selector)),
-        Effect.flatMap(({ url, input }) => action({ url, input })),
-      ),
-    ready: controls.readiness.pipe(
-      Effect.mapError((error) =>
-        InitializationError.make({
-          operation: "ready",
-          step: "session",
-          reason: initialization(error.reason),
-        }),
-      ),
-      Effect.flatMap((state) =>
-        state._tag === "NotReady"
-          ? Effect.fail(
-              InitializationError.make({
-                operation: "ready",
-                step: state.step,
-                reason: state.reason === "failed" ? "output" : state.reason,
-              }),
-            )
-          : Effect.succeed<Bootstrap.ReadinessOutcome>({ _tag: state._tag }),
-      ),
-    ),
   };
 
   associate(session, controls.capture);

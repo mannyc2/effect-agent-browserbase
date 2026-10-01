@@ -1,16 +1,16 @@
 import { Effect, Schema } from "effect";
 
-import type { BrowserSession } from "./Browser.ts";
+import type { BrowserSession, Page } from "./Browser.ts";
 import { type PageExecutionState, PageInfo, PageSuspension } from "./BrowserData.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
 import { pageControl } from "./internal/browser/PageControlAssociation.ts";
 export { PageExecutionState, PageSuspension } from "./BrowserData.ts";
 
-const owner = <E>(session: BrowserSession<E>) =>
+const owner = <E>(session: BrowserSession<E> | Page) =>
   Effect.suspend(() => {
-    const port = pageControl(session);
+    const association = pageControl(session);
 
-    return port === undefined
+    return association === undefined
       ? Effect.fail(
           BrowserError.make({
             operation: "page-control",
@@ -18,7 +18,7 @@ const owner = <E>(session: BrowserSession<E>) =>
             outcome: "undispatched",
           }),
         )
-      : Effect.succeed(port);
+      : Effect.succeed(association);
   });
 
 const invalid = () =>
@@ -28,35 +28,70 @@ const invalid = () =>
     outcome: "undispatched",
   });
 
-/** Last acknowledged state; no remote guarantee survives connection loss or external control. */
-export const state = <E>(
-  session: BrowserSession<E>,
-  page: PageInfo,
-): Effect.Effect<PageExecutionState, BrowserError> =>
-  Schema.decodeEffect(PageInfo)(page).pipe(
-    Effect.mapError(invalid),
-    Effect.map((value) => Object.freeze(PageInfo.make({ ...value }))),
-    Effect.flatMap((value) => owner(session).pipe(Effect.flatMap((port) => port.state(value)))),
+const requested = <E>(session: BrowserSession<E> | Page, page?: PageInfo) =>
+  owner(session).pipe(
+    Effect.flatMap((association) => {
+      if (association.page !== undefined)
+        return page === undefined
+          ? Effect.succeed({ port: association.port, page: association.page })
+          : Effect.fail(invalid());
+      if (page === undefined) return Effect.fail(invalid());
+
+      return Schema.decodeEffect(PageInfo)(page).pipe(
+        Effect.mapError(invalid),
+        Effect.map((value) => ({
+          port: association.port,
+          page: Object.freeze(PageInfo.make({ ...value })),
+        })),
+      );
+    }),
   );
 
-/** Explicit host-only hold requiring InteractiveOptions.pageControl; capture ACKs never invoke it. */
-export const suspend = <E>(
+/** Last acknowledged state; no remote guarantee survives connection loss or external control. */
+export function state(page: Page): Effect.Effect<PageExecutionState, BrowserError>;
+
+export function state<E>(
   session: BrowserSession<E>,
   page: PageInfo,
-): Effect.Effect<PageSuspension, BrowserError> =>
-  Schema.decodeEffect(PageInfo)(page).pipe(
-    Effect.mapError(invalid),
-    Effect.map((value) => Object.freeze(PageInfo.make({ ...value }))),
-    Effect.flatMap((value) => owner(session).pipe(Effect.flatMap((port) => port.suspend(value)))),
-  );
+): Effect.Effect<PageExecutionState, BrowserError>;
+
+export function state<E>(
+  session: BrowserSession<E> | Page,
+  page?: PageInfo,
+): Effect.Effect<PageExecutionState, BrowserError> {
+  return requested(session, page).pipe(Effect.flatMap(({ port, page }) => port.state(page)));
+}
+
+/** Explicit host-only hold requiring InteractiveOptions.pageControl; capture ACKs never invoke it. */
+export function suspend(page: Page): Effect.Effect<PageSuspension, BrowserError>;
+
+export function suspend<E>(
+  session: BrowserSession<E>,
+  page: PageInfo,
+): Effect.Effect<PageSuspension, BrowserError>;
+
+export function suspend<E>(
+  session: BrowserSession<E> | Page,
+  page?: PageInfo,
+): Effect.Effect<PageSuspension, BrowserError> {
+  return requested(session, page).pipe(Effect.flatMap(({ port, page }) => port.suspend(page)));
+}
 
 /** Consumes the exact live receipt. Activation is intentional; stale receipts never replay commands. */
 export const resume = <E>(
-  session: BrowserSession<E>,
+  session: BrowserSession<E> | Page,
   receipt: PageSuspension,
 ): Effect.Effect<void, BrowserError> =>
   Schema.decodeEffect(PageSuspension)(receipt).pipe(
     Effect.mapError(invalid),
     Effect.map((value) => Object.freeze(PageSuspension.make({ ...value }))),
-    Effect.flatMap((value) => owner(session).pipe(Effect.flatMap((port) => port.resume(value)))),
+    Effect.flatMap((value) =>
+      owner(session).pipe(
+        Effect.flatMap(({ port, page }) =>
+          page !== undefined && (page.pageId !== value.pageId || page.targetId !== value.targetId)
+            ? Effect.fail(invalid())
+            : port.resume(value),
+        ),
+      ),
+    ),
   );

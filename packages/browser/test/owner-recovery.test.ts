@@ -49,11 +49,36 @@ const recoveryCases: ReadonlyArray<Case> = [
         });
 
         const session = yield* (yield* f.acquisition).connect;
+        const initial = session.initialPage();
 
         yield* session.observe();
         yield* session.detach;
         yield* session.reconnect(true);
         assert.equal(connections.length, 2);
+        // The original issuance is a lifetime fact. Reading it after reconnection must not
+        // replace the fresh inventory with authority made from the old connection's target.
+        assert.equal(session.initialPage().record, initial.record);
+        assert.equal(
+          session.initialPage().record.identity.generation,
+          initial.record.identity.generation,
+        );
+        assert.equal((yield* initial.status).phase, "stale");
+        const stale = yield* initial.controls.observe().pipe(Effect.result);
+
+        assert.equal(stale._tag, "Failure");
+        if (stale._tag === "Failure") {
+          assert.equal(stale.failure.reason._tag, "Stale");
+          assert.equal(stale.failure.outcome, "undispatched");
+        }
+        const [info] = yield* session.pages;
+
+        assert.ok(info !== undefined);
+        const fresh = yield* session.page(info);
+
+        assert.notEqual(fresh.record, initial.record);
+        assert.ok(fresh.record.identity.generation > initial.record.identity.generation);
+        assert.equal((yield* fresh.status).phase, "open");
+        assert.equal((yield* fresh.controls.observe()).text, "initial");
         connections[0]!.disconnected();
         assert.equal(yield* session.operations.readText(), "initial");
         assert.equal(f.state.connects, 2);

@@ -66,6 +66,7 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
 
   const submit = (command: () => Promise<unknown>) => {
     ticket.check();
+    ticket.dispatch();
     // Observe every reply immediately, including a rejection arriving after caller cancellation.
     pending.push(command().then(() => {}, reject));
   };
@@ -111,6 +112,7 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
   }
   await Promise.all(pending);
   if (failed) throw firstFailure;
+  ticket.acknowledge?.();
 };
 
 /**
@@ -124,11 +126,23 @@ export const makeKeyboard = (
   receipt: (page: Page) => NativeInput,
 ) => {
   const { current } = targets;
-  let typing: { release?: () => void } | undefined;
+
+  // A port whose run drained every reply stays attached, idle, for the next run on its page:
+  // attaching and detaching cost three serial round trips, more than a one-character run.
+  type Slot = { release?: () => void; idle?: { readonly page: Page; readonly port: CDPSession } };
+
+  let typing: Slot | undefined;
 
   const retire = () => {
     typing?.release?.();
     typing = undefined;
+  };
+
+  // Only the acknowledgement, a close event, or positive connection retirement returns
+  // capacity; a failed close does not.
+  const detach = async (slot: Slot, port: CDPSession) => {
+    await port.detach();
+    slot.release?.();
   };
 
   const withTypingPort = async <A>(
@@ -137,47 +151,59 @@ export const makeKeyboard = (
     action: (port: CDPSession) => Promise<A>,
   ) => {
     ticket.check();
-    if (typing !== undefined) throw failure(Reasons.Busy.make({}), "undispatched");
-    // Reserve before attachment: a canceled waiter cannot admit more native setup or input.
-    const slot: { release?: () => void } = {};
+    const moved = typing;
 
+    if (moved?.idle !== undefined && moved.idle.page !== page) {
+      // Typing moved to another page: retire that idle port before attaching another.
+      const { port } = moved.idle;
+
+      moved.idle = undefined;
+      await detach(moved, port).catch(() => {});
+      ticket.check();
+    }
+    const previous = typing;
+
+    if (previous !== undefined && previous.idle === undefined)
+      throw failure(Reasons.Busy.make({}), "undispatched");
+    // Reserve before attachment: a canceled waiter cannot admit more native setup or input.
+    const slot: Slot = previous ?? {};
+    let port = slot.idle?.port;
+
+    slot.idle = undefined;
     typing = slot;
-    let port: CDPSession | undefined;
 
     let result:
       | { readonly _tag: "Success"; readonly value: A }
       | { readonly _tag: "Failure"; readonly error: unknown };
 
     try {
-      port = await page.context().newCDPSession(page);
-      const attached = port;
+      if (port === undefined) {
+        port = await page.context().newCDPSession(page);
+        const attached = port;
 
-      const release = () => {
-        attached.off("close", release);
-        if (typing === slot) typing = undefined;
-      };
+        const release = () => {
+          attached.off("close", release);
+          if (typing === slot) typing = undefined;
+        };
 
-      slot.release = release;
-      if (typing === slot) attached.on("close", release);
+        slot.release = release;
+        if (typing === slot) attached.on("close", release);
+      }
       ticket.check();
       if (typing !== slot) throw failure(Reasons.Closed.make({}), "undispatched");
 
-      result = { _tag: "Success", value: await action(attached) };
+      result = { _tag: "Success", value: await action(port) };
     } catch (error) {
       result = { _tag: "Failure", error };
       // A terminal constructor rejection returned no owned port and has no pending setup.
       // Cancellation alone never reaches here while that constructor is still unresolved.
       if (port === undefined && typing === slot) typing = undefined;
     }
-    if (port !== undefined && typing === slot)
-      try {
-        // Drained input replies precede detach. Only its acknowledgement, a close event,
-        // or positive connection retirement returns capacity; a failed close does not.
-        await port.detach();
-        slot.release?.();
-      } catch (error) {
-        if (result._tag === "Success") result = { _tag: "Failure", error };
-      }
+    if (port !== undefined && typing === slot) {
+      // Drained input replies precede detach; a failed run never leaves its port for reuse.
+      if (result._tag === "Success") slot.idle = { page, port };
+      else await detach(slot, port).catch(() => {});
+    }
     if (result._tag === "Failure") throw result.error;
 
     return result.value;
@@ -226,6 +252,7 @@ export const makeKeyboard = (
     if (into === undefined) {
       ticket.dispatch();
       await keys(page);
+      ticket.acknowledge?.();
     } else
       await actions.withAdmittedElement(
         into,

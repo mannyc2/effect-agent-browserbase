@@ -100,6 +100,8 @@ export const makeCaptureSources = (targets: Targets) => {
       const targetId = await targets.targetId(entry);
       const watchedFrameId = frameId(captureFrame);
 
+      current({ pageId: entry.id, frameId: watchedFrameId });
+
       // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
       if (page.screencast === undefined) throw failure(Reasons.Unsupported.make({}));
       let watcherSet: Set<CaptureWatcher> | undefined;

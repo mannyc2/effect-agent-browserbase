@@ -702,6 +702,16 @@ export const InlineFiles = Schema.Array(InlineFile).check(
 );
 
 export const AutomationOptions = Schema.Struct({
+  observationLimits: Schema.optionalKey(
+    Schema.Struct({
+      maxSnapshotsPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 128 })),
+      maxSnapshotsPerSession: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4096 })),
+      maxHandlesPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65536 })),
+      maxHandlesPerSession: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2097152 })),
+      maxBytesPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 268435456 })),
+      maxBytesPerSession: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1073741824 })),
+    }),
+  ),
   actionTimeoutMillis: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 })),
   ),

@@ -72,7 +72,7 @@ export const BrowserOperation = Schema.Literals([
 export type BrowserOperation = typeof BrowserOperation.Type;
 
 /** Dispatch evidence belongs to the operation, independently of its failure reason. */
-export const BrowserOutcome = Schema.Literals(["undispatched", "rejected", "unknown"]);
+export const BrowserOutcome = Schema.Literals(["undispatched", "rejected", "performed", "unknown"]);
 
 export type BrowserOutcome = typeof BrowserOutcome.Type;
 
@@ -94,6 +94,9 @@ export const LimitDimension = Schema.Literals([
   "width",
   "height",
   "pixels",
+  "observation-snapshots",
+  "observation-handles",
+  "observation-bytes",
 ]);
 
 const SchemaPath = Schema.String.check(Schema.isMaxLength(512));
@@ -151,10 +154,20 @@ export const BrowserReason = Schema.Union(Object.values(Reasons));
 
 export type BrowserReason = typeof BrowserReason.Type;
 
+/** Containment never changes an uncertain mutation into a known action outcome. */
+export const Containment = Schema.Union([
+  Schema.TaggedStruct("NotRequired", {}),
+  Schema.TaggedStruct("PageClosed", { pageId: Schema.String, generation: Schema.Natural }),
+  Schema.TaggedStruct("SessionFenced", { generation: Schema.Natural }),
+]);
+
+export type Containment = typeof Containment.Type;
+
 export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserError", {
   operation: BrowserOperation,
   reason: BrowserReason,
   outcome: BrowserOutcome,
+  containment: Schema.optionalKey(Containment),
 }) {}
 
 export class InitializationError extends Schema.TaggedError<InitializationError>()(

@@ -152,6 +152,31 @@ export const makeTargets = (
     return id;
   };
 
+  const retire = (entry: Entry): void => {
+    if (entries.get(entry.id) !== entry) return;
+    hooks.closed(entry);
+    entries.delete(entry.id);
+    navigating.delete(entry.id);
+    for (const off of entry.off.splice(0)) off();
+    if (selection.entry !== entry) return;
+    selection.entry = undefined;
+    selection.frame = undefined;
+    for (const candidate of entries.values()) {
+      const frame = candidate.page.mainFrame();
+
+      if (candidate.page.isClosed() || frame.isDetached()) continue;
+      try {
+        candidate.executionValue?.assertRunning();
+      } catch {
+        continue;
+      }
+      selection.entry = candidate;
+      selection.frame = frame;
+      break;
+    }
+    hooks.changed("target-changed", { pageId: entry.id });
+  };
+
   const register = (page: Page): Entry => {
     const existing = byPage.get(page);
 
@@ -192,14 +217,7 @@ export const makeTargets = (
     }
 
     const onClose = () => {
-      hooks.closed(entry);
-      entries.delete(entry.id);
-      for (const off of entry.off.splice(0)) off();
-      if (selection.entry === entry) {
-        selection.entry = undefined;
-        selection.frame = undefined;
-        hooks.changed("target-changed", { pageId: entry.id });
-      }
+      retire(entry);
     };
 
     const onNavigation = (frame: Frame) => {
@@ -253,6 +271,15 @@ export const makeTargets = (
     hooks.opened(entry, creatingPage);
 
     return entry;
+  };
+
+  /** Bootstrap callbacks may name only an exact page still owned by this registry. */
+  const pageIdOf = (page: Page): string | undefined => {
+    const entry = byPage.get(page);
+
+    return entry !== undefined && entries.get(entry.id) === entry && !page.isClosed()
+      ? entry.id
+      : undefined;
   };
 
   const selectedCurrent = () => {
@@ -525,6 +552,9 @@ export const makeTargets = (
 
       ticket.dispatch();
       await entry.page.close({ runBeforeUnload: false });
+      if (!entry.page.isClosed()) throw failure(Reasons.Failed.make({}), "unknown");
+      ticket.acknowledge?.();
+      retire(entry);
       ticket.check();
     });
 
@@ -535,6 +565,7 @@ export const makeTargets = (
     if (entry === undefined) return;
     await closeWithin(() => entry.page.close({ runBeforeUnload: false }));
     if (!entry.page.isClosed()) throw failure(Reasons.Failed.make({}));
+    retire(entry);
   };
 
   const listFrames = (ticket: Ticket, page?: PageInfo) =>
@@ -595,6 +626,7 @@ export const makeTargets = (
     epochOf,
     frameId,
     register,
+    pageIdOf,
     current,
     targetId,
     urlOf,

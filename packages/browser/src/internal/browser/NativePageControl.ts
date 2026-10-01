@@ -148,10 +148,10 @@ export const makePageControl = (
       });
   };
 
-  /** A main-frame navigation invalidates the execution; one that was held faults the session. */
+  /** A held main-frame navigation invalidates its receipt and contains its exact page. */
   const navigating = (entry: Entry, frame: Frame) => {
     if (frame === entry.page.mainFrame() && entry.executionValue?.invalidate())
-      events.fault({ source: "native", reason: "page-control", disposition: "unknown" });
+      events.pageFault?.(entry.id);
   };
 
   const operations: NonNullable<Driver["pageControl"]> = {

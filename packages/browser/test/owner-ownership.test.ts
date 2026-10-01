@@ -392,12 +392,14 @@ const ownershipCases: ReadonlyArray<Case> = [
       yield* handle.click("#act");
       assert.equal(f.state.clicks, 2);
     })),
-  test("a navigation that fails after dispatch, or is left unsettled, fences the owner", () =>
+  test("a failed or unsettled navigation closes its exact page without replay", () =>
     Effect.gen(function* () {
       for (const abandon of [false, true]) {
         const flight = inFlight();
         const f = yield* fixture({ onNavigate: flight.script });
         const session = yield* (yield* f.acquisition).connect;
+
+        const page = session.initialPage();
         const handle = yield* session.retain;
 
         if (abandon) {
@@ -413,10 +415,29 @@ const ownershipCases: ReadonlyArray<Case> = [
           if (failed._tag === "Failure") {
             assert.equal(failed.failure.operation, "navigate");
             assert.equal(failed.failure.outcome, "unknown");
+            assert.deepEqual(failed.failure.containment, {
+              _tag: "PageClosed",
+              pageId: page.record.identity.pageId,
+              generation: page.record.identity.generation,
+            });
           }
         }
-        // Nothing knows what the browser did, so nothing more is sent. It is never replayed.
-        assert.equal((yield* handle.click("#act").pipe(Effect.result))._tag, "Failure");
+        // The navigation's result remains unknown, while positive exact closure retires input.
+        assert.equal((yield* page.status).phase, "closed");
+        assert.equal((yield* session.status).phase, "open");
+        const refused = yield* handle.click("#act").pipe(Effect.result);
+
+        assert.equal(refused._tag, "Failure");
+        if (refused._tag === "Failure") assert.equal(refused.failure.outcome, "undispatched");
+        assert.equal(
+          (yield* f.control.calls).filter(
+            (call) =>
+              call.operation === "close-page" &&
+              call.pageId === page.record.identity.pageId &&
+              call.settled === "completed",
+          ).length,
+          1,
+        );
         assert.equal(f.state.clicks, 0);
         assert.deepEqual(flight.urls, ["https://example.test/slow"]);
       }
