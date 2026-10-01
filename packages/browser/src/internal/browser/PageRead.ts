@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { type ControlFacts, ObservedControl } from "../../BrowserData.ts";
+import { type ControlFacts, ObservedControl, ViewportEvidence } from "../../BrowserData.ts";
 import { NativeControlFacts, type DescriptorQuery } from "./Descriptor.ts";
 
 const ControlIndex = Schema.Natural.check(Schema.isLessThanOrEqualTo(63));
@@ -34,15 +34,7 @@ export const PageReadResult = Schema.Struct({
       ),
     ),
   ),
-  viewport: Schema.Struct({
-    width: Schema.Finite,
-    height: Schema.Finite,
-    clippedText: Schema.Natural,
-    coveredText: Schema.Natural,
-    uncertainText: Schema.Natural,
-    unreachableControls: Schema.Natural,
-    exhausted: Schema.Boolean,
-  }),
+  viewport: Schema.Struct(ViewportEvidence.fields),
   /**
    * Sampled points that something taking no pointer events lies over, which only the browser's
    * own hit test can settle. They were counted as uncertain in this reading.
@@ -176,6 +168,7 @@ export const readPage = (
   const { scope, maximumBytes, controlLimit, nodeBudget, only } = request;
   const width = window.innerWidth;
   const height = window.innerHeight;
+  const scrolling = document.scrollingElement;
   const needle = request.match?.toLowerCase();
 
   const matches = (value: string): boolean =>
@@ -184,6 +177,18 @@ export const readPage = (
   const evidence = {
     width,
     height,
+    ...(scrolling === null
+      ? {}
+      : {
+          documentScroll: {
+            x: window.scrollX,
+            y: window.scrollY,
+            scrollWidth: scrolling.scrollWidth,
+            scrollHeight: scrolling.scrollHeight,
+            clientWidth: scrolling.clientWidth,
+            clientHeight: scrolling.clientHeight,
+          },
+        }),
     clippedText: 0,
     coveredText: 0,
     uncertainText: 0,

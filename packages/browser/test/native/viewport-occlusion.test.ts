@@ -141,6 +141,16 @@ const site = Effect.acquireRelease(
           const name = new URL(request.url ?? "/", "http://127.0.0.1").pathname.slice(1);
 
           response.writeHead(200, { "content-type": "text/html" });
+          if (name === "scroll-progress" || name === "scroll-child") {
+            const child = name === "scroll-child";
+
+            response.end(`${head(`body{height:${child ? 1800 : 3000}px}`)}
+<p class=at style="top:20px">${child ? "child" : "parent"} first words</p>
+<p class=at style="top:${child ? 1600 : 2900}px">${child ? "child" : "parent"} last words</p>
+${child ? "" : '<iframe src="/scroll-child" style="position:absolute;left:300px;top:0;width:320px;height:200px;border:0"></iframe>'}`);
+
+            return;
+          }
           // A shell over thousands of rows: the scan runs out of budget before the text does.
           response.end(
             name === "large"
@@ -158,6 +168,80 @@ const site = Effect.acquireRelease(
       }),
   ),
   (server) => Effect.sync(server.close),
+);
+
+// The b203753 filmed feed run stopped at a blank gap: a viewport offered no measured document
+// progress. Keep the native seam because a scripted offset cannot detect wrong-frame sampling,
+// unclamped deltas presented as positions, or offscreen text leaking into a blank reading.
+it.live("real CDP: blank viewport progress measures the selected document after clamping", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { origin } = yield* site;
+      const host = yield* externalChromium;
+
+      const session = yield* Chromium.attach(host.endpoint, {
+        policy: BrowserPolicy.unrestricted({ maxActions: 30, maxElapsedMillis: 60_000 }),
+      });
+
+      const page = session.initialPage;
+
+      yield* page.resizeViewport({ width: 640, height: 480 });
+      yield* page.navigate({ url: `${origin}/scroll-progress` });
+      yield* page.scroll({ deltaX: 0, deltaY: 500 });
+      const blank = yield* page.observe({ scope: "viewport" });
+
+      expect(blank.text).toBe("");
+      expect(blank.viewport).toMatchObject({
+        documentScroll: {
+          x: 0,
+          y: 500,
+          scrollHeight: 3000,
+          clientHeight: 480,
+        },
+      });
+      expect(blank.viewport.documentScroll?.clientWidth).toBeGreaterThan(500);
+      expect(blank.viewport.documentScroll?.clientWidth).toBeLessThanOrEqual(640);
+      expect(blank.viewport.documentScroll?.scrollWidth).toBe(
+        blank.viewport.documentScroll?.clientWidth,
+      );
+      yield* page.scroll({ deltaX: 0, deltaY: 10_000 });
+      const bottom = yield* page.observe({ scope: "viewport" });
+
+      expect(bottom.text).toContain("parent last words");
+      expect(bottom.viewport).toMatchObject({ documentScroll: { y: 2520 } });
+      const child = (yield* page.listFrames()).find((frame) => frame.parentFrameId !== null);
+
+      expect(child).toBeDefined();
+      if (child === undefined) return;
+      // The child frame's own Frame reads and scrolls that document, not the selected page.
+      const frame = yield* page.frame(child);
+
+      yield* frame.scroll({ deltaX: 0, deltaY: 700 });
+      const childBlank = yield* frame.observe({ scope: "viewport" });
+
+      expect(childBlank.text).toBe("");
+      expect(childBlank.target.frameId).toBe(child.frameId);
+      expect(childBlank.viewport).toMatchObject({
+        documentScroll: {
+          x: 0,
+          y: 700,
+          scrollHeight: 1800,
+          clientHeight: 200,
+        },
+      });
+      expect(childBlank.viewport.documentScroll?.clientWidth).toBeGreaterThan(200);
+      expect(childBlank.viewport.documentScroll?.clientWidth).toBeLessThanOrEqual(320);
+      expect(childBlank.viewport.documentScroll?.scrollWidth).toBe(
+        childBlank.viewport.documentScroll?.clientWidth,
+      );
+      expect((yield* page.checkpoint({ picture: false })).viewport).toMatchObject({
+        documentScroll: { y: 2520, scrollHeight: 3000, clientHeight: 480 },
+      });
+      yield* session.closeChecked;
+      expect((yield* session.status).phase).toBe("closed");
+      expect(host.running()).toBe(true);
+    }).pipe(Effect.provide(layer)),
+  ),
 );
 
 const layer = Chromium.layer({}).pipe(Layer.provide(NodeCrypto.layer));

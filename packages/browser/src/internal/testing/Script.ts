@@ -3,6 +3,7 @@ import { type Effect, type Option, Schema } from "effect";
 import type { BrowserSession } from "../../Browser.ts";
 import {
   Identifier,
+  DocumentScroll,
   ObservedControl,
   SafeFilename,
   TargetUrl,
@@ -90,6 +91,11 @@ export const DocumentScript = Schema.Struct({
   url: TargetUrl,
   title: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
   text: Schema.String.check(Schema.isMaxLength(131072)),
+  /**
+   * Authored root-document geometry, not inferred layout. Readings carry this exact snapshot;
+   * use document.update to supply the next state after a scripted scroll or resize.
+   */
+  documentScroll: Schema.optionalKey(DocumentScroll),
   controls: Schema.optionalKey(
     Schema.Array(ControlScript).check(
       Schema.isMaxLength(64),
