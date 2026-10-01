@@ -429,8 +429,10 @@ methods keep the host's `ElementAdmission` callback separate from trailing opera
 
 `page.status` includes passive `admission` state: the active operation, pending count and bound,
 oldest wait age, retained native operations, native wait and stop setup. `session.admission` adds
-aggregate counts and registry state. Native capacity remains occupied after caller cancellation
-until the actual work settles or exact positive Page/connection retirement proves it unusable.
+aggregate counts and registry state. Native work that dispatched input keeps its Page occupied
+after caller cancellation until the actual work settles or exact positive Page/connection
+retirement proves it unusable. A read, or a mutation cancelled before dispatch, can no longer
+change the page: it stays counted in `nativePending` but leaves the Page usable at once.
 These host snapshots grant no priority and expose no native handles.
 
 Navigation stopping and Page closure have reserved, bounded cleanup admission, so a full ordinary

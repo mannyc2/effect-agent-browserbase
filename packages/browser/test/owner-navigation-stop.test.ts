@@ -189,10 +189,7 @@ it.effect.each(["cancel", "timeout"] as const)(
         });
         close.resolve();
         yield* Effect.promise(() => navigation.nativeFinished.promise);
-        expect(yield* Effect.result(operation.stop)).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
-        });
+        // The abandoned attempt never dispatched; with its setup and port retired, a retry is safe.
         yield* awaitNativeRetirement(session);
         yield* operation.stop;
         yield* operation.stop;

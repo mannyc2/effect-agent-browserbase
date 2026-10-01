@@ -875,7 +875,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           ...(options.evidence?.target === undefined
             ? {}
             : { captureTarget: options.evidence.target }),
-          retainNative: () => admission.retainNative(lane, operation, nativeConnection),
+          retainNative: () =>
+            admission.retainNative(lane, operation, nativeConnection, () => dispatched),
           signal: controller.signal,
           deadline,
           generation,

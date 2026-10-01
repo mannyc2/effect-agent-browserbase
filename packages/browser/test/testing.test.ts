@@ -214,34 +214,25 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
   ),
 );
 
-it.effect(
-  "interruption before dispatch retains native capacity until a queued successor enters",
-  () =>
-    Browser.scoped(Testing.open(shop), (browser) =>
-      Effect.gen(function* () {
-        const gate = yield* browser.control.gate;
+it.effect("interruption before dispatch leaves the session usable", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const gate = yield* browser.control.gate;
 
-        yield* browser.control.next("observe", { _tag: "Hold", gate, dispatched: false });
-        const attempt = yield* acceptCookies(browser).pipe(Effect.forkScoped);
+      yield* browser.control.next("observe", { _tag: "Hold", gate, dispatched: false });
+      const attempt = yield* acceptCookies(browser).pipe(Effect.forkScoped);
 
-        yield* gate.reached;
-        yield* Fiber.interrupt(attempt);
-        expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
-        expect((yield* browser.control.calls)[0]).toMatchObject({
-          operation: "observe",
-          dispatched: false,
-          settled: "failed",
-        });
-        expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
-          reason: { _tag: "Busy" },
-          outcome: "undispatched",
-        });
-        expect((yield* browser.status).actions.used).toBe(1);
-        expect(yield* acceptCookies(browser, { admission: { queue: "1 second" } })).toBe(
-          "accepted",
-        );
-      }),
-    ),
+      yield* gate.reached;
+      yield* Fiber.interrupt(attempt);
+      expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+      expect((yield* browser.control.calls)[0]).toMatchObject({
+        operation: "observe",
+        dispatched: false,
+        settled: "failed",
+      });
+      expect(yield* acceptCookies(browser)).toBe("accepted");
+    }),
+  ),
 );
 
 it.effect("a dispatched mutation and a replaced document both make earlier nodes stale", () =>

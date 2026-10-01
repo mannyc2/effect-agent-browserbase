@@ -93,7 +93,7 @@ const test = (
 ): Case => ({ name, run: timed(Effect.scoped(Effect.suspend(body))) });
 
 const ownershipCases: ReadonlyArray<Case> = [
-  test("pre-dispatch interruption keeps native capacity and fences a late continuation", () =>
+  test("pre-dispatch interruption fences a late continuation without poisoning the owner", () =>
     Effect.gen(function* () {
       const entered = gate<void>(),
         queried = gate<void>(),
@@ -125,17 +125,12 @@ const ownershipCases: ReadonlyArray<Case> = [
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(fiber);
-      yield* expectReason(session.initialPage().controls.operations.readText(), "Busy");
-      assert.equal((yield* session.status).actions.used, 1);
+      // The interrupted click can no longer dispatch, so its pending native call holds nothing.
+      assert.equal(yield* session.initialPage().controls.operations.readText(), "initial");
       queried.resolve();
       yield* Effect.promise(() => settled.promise);
       assert.equal(dispatches, 0);
-      assert.equal(
-        yield* session
-          .initialPage()
-          .controls.operations.readText(undefined, { admission: { queue: "1 second" } }),
-        "initial",
-      );
+      assert.equal(yield* session.initialPage().controls.operations.readText(), "initial");
     })),
   test("interruption after dispatch expires automation without replay", () =>
     Effect.gen(function* () {

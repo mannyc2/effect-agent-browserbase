@@ -801,15 +801,11 @@ it.live(
 
             yield* Deferred.await(entered);
             yield* Fiber.interrupt(pending);
-            yield* refused(session.initialPage.observe(), "Busy");
+            // The interrupted read can no longer change the page, so the page is usable at once.
+            const observation = yield* session.initialPage.observe();
+
             expect(releases).toBe(0);
-
             resume();
-
-            const observation = yield* session.initialPage.observe(
-              {},
-              { admission: { queue: "1 second" } },
-            );
 
             const control = observation.controls.find((candidate) => candidate.label === "User");
 

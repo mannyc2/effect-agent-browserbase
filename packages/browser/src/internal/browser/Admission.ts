@@ -68,13 +68,28 @@ export const makeAdmission = (
   const maximumSession = limits.pendingPerSession ?? 128;
   const maximumNative = 128;
   let pendingCount = 0;
-  const native = new Map<object, { readonly lane: AdmissionLane; readonly connection?: object }>();
+
+  const native = new Map<
+    object,
+    {
+      readonly lane: AdmissionLane;
+      readonly connection?: object;
+      /** Whether this unsettled native call can still change its page. */
+      readonly occupies: () => boolean;
+    }
+  >();
 
   const error = (operation: BrowserOperation, reason: BrowserError["reason"]) =>
     BrowserError.make({ operation, reason, outcome: "undispatched" });
 
-  const available = (lane: AdmissionLane) =>
-    lane.holder === undefined && lane.native.work.size === 0;
+  /**
+   * Native work outlives its caller. Work that dispatched input keeps its page until it settles;
+   * a read, or a mutation whose caller left before dispatch, can no longer change the page.
+   */
+  const occupied = (capacity: NativePageCapacity) =>
+    [...capacity.work].some((token) => native.get(token)?.occupies() !== false);
+
+  const available = (lane: AdmissionLane) => lane.holder === undefined && !occupied(lane.native);
 
   const forget = (lane: AdmissionLane) => {
     if (
@@ -296,7 +311,12 @@ export const makeAdmission = (
         Deferred.doneUnsafe(waiter.result, Effect.fail(error(waiter.operation, reason)));
       for (const lane of retained) forget(lane);
     },
-    retainNative: (lane: AdmissionLane, operation: BrowserOperation, connection?: object) => {
+    retainNative: (
+      lane: AdmissionLane,
+      operation: BrowserOperation,
+      connection?: object,
+      occupies: () => boolean = () => true,
+    ) => {
       if (native.size >= maximumNative)
         throw error(
           operation,
@@ -310,7 +330,7 @@ export const makeAdmission = (
 
       if (connection !== undefined) lane.native.connection = connection;
       lane.native.work.add(token);
-      native.set(token, { lane, ...(connection === undefined ? {} : { connection }) });
+      native.set(token, { lane, occupies, ...(connection === undefined ? {} : { connection }) });
 
       return () => {
         if (!native.delete(token)) return;
