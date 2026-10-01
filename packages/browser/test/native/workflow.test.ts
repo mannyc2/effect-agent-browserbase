@@ -243,7 +243,7 @@ it.live(
 );
 
 it.live(
-  "a quarantined page's pending bootstrap readiness does not hold up the handoff that releases it",
+  "a quarantined page's pending bootstrap readiness holds up neither its handoff nor its release",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -279,16 +279,19 @@ it.live(
           Effect.timeout("10 seconds"),
         );
 
-        // The operator answers the dialog afterwards, whatever the handoff did.
+        // If the handoff fails, answer the dialog so the fixture's teardown is not left behind it.
         const answered = Effect.promise(() =>
           cdp.send("Page.handleJavaScriptDialog", { accept: false }),
         ).pipe(Effect.ignore);
 
         const handoff = yield* operations
           .beginHandoff(Effect.succeed({ granted: true }))
-          .pipe(Effect.ensuring(answered));
+          .pipe(Effect.onError(() => answered));
 
         expect(handoff.view).toEqual({ granted: true });
+        // Release answers the dialog; restoring the page cannot require the readiness work the
+        // handoff left running.
+        yield* operations.resume(handoff.token, true);
         yield* session.closeChecked;
       }),
     ),

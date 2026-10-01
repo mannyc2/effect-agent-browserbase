@@ -537,7 +537,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const restorePageAuthority = (pageId: string) => {
     owner.restorePageAdmission(pageId);
-    driver?.restoreInitializationPage?.(pageId);
+    driver?.restoreInitializationPage?.(pageId, owner.paused);
     activeBindings?.resumePage(pageId);
   };
 
@@ -3012,7 +3012,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     ticket,
                     () =>
                       owner.drained(ticket.signal) &&
-                      activeBindings?.drained() !== false &&
+                      activeBindings?.drained(owner.paused) !== false &&
                       getDriver().handoffDrained?.(owner.paused) !== false &&
                       pendingPageFaults.size === 0 &&
                       capture.captureLeases.size === 0,

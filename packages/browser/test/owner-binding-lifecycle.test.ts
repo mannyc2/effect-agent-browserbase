@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
-import { Deferred, Effect, Exit, Schema, Scope } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
 import type { BrowserError } from "effect-browser/errors";
+import { TestClock } from "effect/testing";
 
 import {
   type ConnectionBindings,
   makeBindings,
   preparePlan,
 } from "../src/internal/browser/Bindings.ts";
+import type { DriverEvents } from "../src/internal/browser/Driver.ts";
 import type { PageControls } from "../src/internal/browser/Session.ts";
 import { fixture } from "./fixtures/ScriptedOwner.ts";
 
@@ -133,3 +135,69 @@ for (const strategy of ["sequential", "parallel"] as const) {
       }),
   );
 }
+
+it.effect(
+  "a quarantined page's outstanding binding call does not hold up the handoff that releases it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let connection: ConnectionBindings | undefined;
+        let events: DriverEvents | undefined;
+
+        const bindings = yield* makeBindings(
+          yield* preparePlan(
+            Bootstrap.binding({
+              name: "lookup",
+              origins: ["https://example.test"],
+              input: Schema.String,
+              output: Schema.String,
+              maxConcurrent: 1,
+              maxInputBytes: 128,
+              maxOutputBytes: 128,
+              timeoutMillis: 5000,
+              failureMode: "reject-call",
+              handle: (value) => Effect.succeed(value),
+            }),
+          ),
+        );
+
+        const scripted = yield* fixture({
+          lifetimeMillis: 20000,
+          connectBindings: (fault, active) =>
+            bindings.connect(fault, active).pipe(
+              Effect.tap((connected) =>
+                Effect.sync(() => {
+                  connection = connected;
+                }),
+              ),
+            ),
+          onConnect: async (driver, connected) => {
+            events = connected;
+
+            return driver;
+          },
+        });
+
+        const session = yield* (yield* scripted.acquisition).connect;
+        const pageId = session.initialPage().record.identity.pageId;
+        const binding = connection?.bindings[0];
+
+        assert.ok(binding);
+        // The page's call is accepted, but its native read never settles.
+        void binding.invoke({
+          pageId,
+          origin: "https://example.test",
+          read: () => new Promise<string>(() => {}),
+          check: async () => {},
+          dispose: async () => {},
+        });
+        // A dialog then quarantines that page; only the operator's handoff can release it.
+        events?.pause("dialog", pageId);
+
+        const handoff = yield* Effect.forkChild(session.beginHandoff(Effect.succeed("view")));
+
+        yield* TestClock.adjust(3000);
+        assert.equal((yield* Fiber.join(handoff)).view, "view");
+      }),
+    ),
+);
