@@ -292,13 +292,13 @@ export interface Driver {
   readonly scrollTo: (
     target: ObservedElement | ResolvedElement,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   readonly pageControl?: {
     readonly state: (page: PageInfo, ticket: Ticket) => Promise<PageExecutionState>;
     readonly suspend: (page: PageInfo, ticket: Ticket) => Promise<PageSuspension>;
     readonly resume: (receipt: PageSuspension, ticket: Ticket) => Promise<void>;
-    readonly checkTarget: (target: DriverTarget | undefined, ticket: Ticket) => Promise<void>;
+    readonly checkTarget: (target: DriverTarget, ticket: Ticket) => Promise<void>;
   };
   readonly selected: () => { readonly pageId: string; readonly frameId: string };
   readonly selectedTargetId: () => Promise<string>;
@@ -313,7 +313,7 @@ export interface Driver {
    * has closed it; a page already closed settles at once. Never asked of the selected page.
    */
   readonly containPage: (pageId: string) => Promise<void>;
-  readonly listFrames: (ticket: Ticket, page?: PageInfo) => Promise<ReadonlyArray<FrameInfo>>;
+  readonly listFrames: (ticket: Ticket, page: PageInfo) => Promise<ReadonlyArray<FrameInfo>>;
   readonly resolveFrame: (
     page: PageInfo,
     frame: FrameInfo,
@@ -324,22 +324,22 @@ export interface Driver {
     url: string,
     timeoutMillis: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
     control?: NavigationControl,
   ) => Promise<NativeNavigation>;
   readonly readText: (
     selector: string | undefined,
     maximumBytes: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<string>;
   readonly observe: (
     scope: "document" | "viewport",
     maximumBytes: number,
     controls: number,
     ticket: Ticket,
-    match?: string,
-    target?: DriverTarget,
+    match: string | undefined,
+    target: DriverTarget,
   ) => Promise<NativeObservation>;
   readonly checkpoint: (
     maximumBytes: number,
@@ -347,40 +347,40 @@ export interface Driver {
     /** Absent means no picture is taken. */
     pictureBytes: number | undefined,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<NativeCheckpoint>;
   /** Fresh facts from the exact node an observation named. */
   readonly controlFacts: (
     target: ObservedElement,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<ControlFacts>;
   /** After a hold: is this still the attached control that was inspected? */
   readonly revalidate: (
     target: ObservedElement,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<void>;
   readonly click: (
     target: ElementTarget,
     ticket: Ticket,
     capture: InputCapture,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<ClickResult>;
   readonly fill: (
     target: ElementTarget,
     value: string,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   readonly selectOption: (
     target: ObservedElement | ResolvedElement,
     options: NativeSelectOptions,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   /**
    * One form step on an exact observed node that may have become enabled since it was observed.
@@ -396,7 +396,7 @@ export interface Driver {
     policy: AdmissionPolicy | undefined,
     settleMillis: number,
     capture: InputCapture,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<{
     readonly status: "set" | "unchanged";
     readonly reached: boolean;
@@ -408,40 +408,40 @@ export interface Driver {
   readonly formState: (
     targets: ReadonlyArray<ObservedElement | ResolvedElement>,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<ReadonlyArray<string | undefined>>;
   /** The one submit click, on an exact observed node that may have become enabled. */
   readonly formSubmit: (
     target: ObservedElement | ResolvedElement,
     ticket: Ticket,
     capture: InputCapture,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<ClickResult>;
   /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (
     deltaX: number,
     deltaY: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<string>;
   readonly pointerMove: (
     to: NativePoint,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<NativeInput>;
   readonly hover: (
     target: ElementTarget,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<NativeInput>;
   readonly wheel: (
     deltaX: number,
     deltaY: number,
     at: NativePoint | undefined,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<NativeInput>;
   /** One key stroke to whatever has focus, or only to `into` if it already has it. */
   readonly press: (
@@ -449,23 +449,23 @@ export interface Driver {
     modifiers: ReadonlyArray<KeyModifier>,
     into: ElementTarget | undefined,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<NativeInput>;
   readonly type: (
     text: string,
     into: ElementTarget | undefined,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<NativeInput>;
   readonly screenshot: (
     fullPage: boolean,
     maximumBytes: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<Uint8Array>;
-  readonly resize: (viewport: Viewport, ticket: Ticket, target?: DriverTarget) => Promise<void>;
+  readonly resize: (viewport: Viewport, ticket: Ticket, target: DriverTarget) => Promise<void>;
   readonly waitFor: (
     selector: string,
     state: "visible" | "hidden" | "attached" | "detached",
@@ -482,12 +482,12 @@ export interface Driver {
     target: ElementTarget,
     ticket: Ticket,
     capture: InputCapture,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<ClickResult>;
   readonly clickForDownload: (
     target: ElementTarget,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<{
     readonly downloadId: string;
     readonly filename: string;
@@ -497,19 +497,19 @@ export interface Driver {
     target: ElementTarget,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   /** The chooser observer is registered before the single click dispatch that opens it. */
   readonly clickForFileSelection: (
     target: ElementTarget,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   /** Evaluated once per document; a later document never inherits an earlier one's result. */
-  readonly documentReadiness: (ticket: Ticket, target?: DriverTarget) => Promise<ReadinessState>;
+  readonly documentReadiness: (ticket: Ticket, target: DriverTarget) => Promise<ReadinessState>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
-  readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
+  readonly capture: (target: CaptureTarget) => Promise<CaptureBinding>;
   readonly invalidateObservation: (scope?: ObservationScope, origin?: AbortSignal) => void;
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;

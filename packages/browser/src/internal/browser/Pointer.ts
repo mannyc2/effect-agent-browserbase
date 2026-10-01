@@ -146,7 +146,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
 
   const glideFrom = (page: Page) => positions.get(page) ?? aims.get(page) ?? null;
 
-  const pointerMove = (point: NativePoint, ticket: Ticket, target?: DriverTarget) =>
+  const pointerMove = (point: NativePoint, ticket: Ticket, target: DriverTarget) =>
     sanitize(async () => {
       const { entry, frame } = current(target);
       const { page } = entry;
@@ -436,8 +436,8 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
   const hover = (
     target: ElementTarget,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
       browserTarget = actions.targetFor(target, browserTarget);
@@ -478,7 +478,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     deltaY: number,
     at: NativePoint | undefined,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) =>
     sanitize(async () => {
       const { page } = current(target).entry;

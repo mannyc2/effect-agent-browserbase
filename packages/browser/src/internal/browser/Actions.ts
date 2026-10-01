@@ -375,7 +375,7 @@ export const makeActions = (
    * its whole frame tree is refused unsent, and afterwards the address read before dispatch
    * stands in when the action left none.
    */
-  const resultUrl = (target?: DriverTarget) => {
+  const resultUrl = (target: DriverTarget) => {
     const before = addressOf(current(target).frame);
 
     if (before === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
@@ -383,9 +383,9 @@ export const makeActions = (
     return () => addressOf(current(target).frame) ?? before;
   };
 
-  const targetFor = (element: ElementTarget, target?: DriverTarget): DriverTarget | undefined => {
+  const targetFor = (element: ElementTarget, target: DriverTarget): DriverTarget => {
     if (typeof element === "string" || !("_tag" in element)) return target;
-    if (target !== undefined && target.pageId !== element.target.pageId)
+    if (target.pageId !== element.target.pageId)
       throw failure(Reasons.Stale.make({}), "undispatched");
 
     return element.target;
@@ -408,8 +408,8 @@ export const makeActions = (
       check: () => void,
       readmit: () => Promise<void>,
     ) => Promise<A>,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
     enablement = false,
     automaticDispatch = true,
   ): Promise<A> => {
@@ -453,8 +453,8 @@ export const makeActions = (
       check: () => void,
       readmit: () => Promise<void>,
     ) => Promise<A>,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
     automaticDispatch = true,
   ): Promise<A> =>
     withAdmittedElement(
@@ -558,7 +558,7 @@ export const makeActions = (
   const clickWithoutReceipt = async (
     target: ElementTarget,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ): Promise<string> => {
     browserTarget = targetFor(target, browserTarget);
     const url = resultUrl(browserTarget);
@@ -587,7 +587,7 @@ export const makeActions = (
     target: ElementTarget,
     paths: ReadonlyArray<string>,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => {
     if (typeof target !== "string") throw failure(Reasons.Unsupported.make({}), "undispatched");
     const { entry, frame } = current(browserTarget);
@@ -994,7 +994,7 @@ export const makeActions = (
           );
           ticket.acknowledge?.({ subphase: "scroll-burst", logicalComplete: false });
           ticket.recordScroll?.({
-            target: target ?? targets.selected(),
+            target,
             x: sample.deltaX,
             y: sample.deltaY,
             startedMonotonicNanos: requested,

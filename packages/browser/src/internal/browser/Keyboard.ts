@@ -483,7 +483,7 @@ export const makeKeyboard = (
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
     keys: (page: Page, element?: ElementHandle<Element>, check?: () => void) => Promise<void>,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ): Promise<NativeInput> => {
     if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
     const { page } = current(browserTarget).entry;
@@ -514,8 +514,8 @@ export const makeKeyboard = (
     modifiers: ReadonlyArray<KeyModifier>,
     into: ElementTarget | undefined,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
       if (ticket.performance !== undefined) {
@@ -567,8 +567,8 @@ export const makeKeyboard = (
     text: string,
     into: ElementTarget | undefined,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
       if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);

@@ -238,7 +238,7 @@ export const makeInitialization = (
   const readiness = async (
     bootstrap: CompiledBootstrap,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ): Promise<ReadinessState> => {
     const { frame } = current(target);
 

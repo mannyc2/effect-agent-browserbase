@@ -36,7 +36,6 @@ const fixture = Effect.fnUntraced(function* () {
 
   owner.pageAdmission(target.pageId, owner.state.generation);
   let epoch = 0;
-  let selected = { ...target };
   const records: Array<ReturnType<typeof node>> = [];
 
   const viewport = {
@@ -148,7 +147,6 @@ const fixture = Effect.fnUntraced(function* () {
   const entry = { id: "stage", page: { mainFrame: () => frame } } as unknown as Entry;
 
   const targets = {
-    selected: () => ({ ...selected }),
     current: () => ({ entry, frame }),
     epochOf: () => epoch,
     url: () => "https://example.test/",
@@ -165,7 +163,9 @@ const fixture = Effect.fnUntraced(function* () {
   const actions = makeActions({} as BrowserContext, targets, observation, () => false);
 
   const observe = owner.guard("observe", (ticket) =>
-    native("observe", ticket, () => observation.observe("document", 1024, 2, ticket)),
+    native("observe", ticket, () =>
+      observation.observe("document", 1024, 2, ticket, undefined, target),
+    ),
   );
 
   const begin = (run: (wait: OwnedWait) => Promise<void>, connectionId = connection) =>
@@ -193,12 +193,6 @@ const fixture = Effect.fnUntraced(function* () {
     selectorResult,
     observe,
     begin,
-    selectElsewhere: () => {
-      selected = { pageId: "scout", frameId: "scout-main" };
-    },
-    selectOriginal: () => {
-      selected = { ...target };
-    },
     replaceDocument: () => {
       epoch++;
       actions.waitChanged(entry, frame);
@@ -206,51 +200,49 @@ const fixture = Effect.fnUntraced(function* () {
   };
 });
 
-it.effect(
-  "an exact wait tolerates changed state and selection without authorizing stale input",
-  () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const seen = yield* f.observe;
+it.effect("an exact wait tolerates changed state without authorizing stale input", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const seen = yield* f.observe;
 
-      const reference = {
-        observationId: seen.observationId,
-        elementId: seen.controls[0]!.elementId,
-      };
+    const reference = {
+      observationId: seen.observationId,
+      elementId: seen.controls[0]!.elementId,
+    };
 
-      const original = f.records[0]!;
+    const original = f.records[0]!;
 
-      const wait = yield* f.begin((wait) =>
-        f.actions.waitForElement(reference, "enabled", wait.ticket, f.target),
-      );
+    const wait = yield* f.begin((wait) =>
+      f.actions.waitForElement(reference, "enabled", wait.ticket, f.target),
+    );
 
-      yield* Effect.promise(() => original.entered.promise);
-      expect(wait.ticket.signal.aborted).toBe(false);
-      original.native.disabled = false;
-      f.selectElsewhere();
-      original.finish.resolve();
-      yield* wait.completed;
-      expect(original.native.waits).toBe(1);
-      expect(original.native.disposals).toBe(0);
-      f.selectOriginal();
-      expect(
-        yield* f.owner
-          .guard("control-facts", (ticket) =>
-            native("control-facts", ticket, () => f.observation.controlFacts(reference, ticket)),
-          )
-          .pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-      });
-      expect(yield* f.owner.status).toMatchObject({
-        phase: "open",
-        busy: false,
-        unresolvedDispatch: false,
-      });
-      yield* Effect.promise(() => f.observation.dispose());
-      expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
-    }),
+    yield* Effect.promise(() => original.entered.promise);
+    expect(wait.ticket.signal.aborted).toBe(false);
+    original.native.disabled = false;
+    original.finish.resolve();
+    yield* wait.completed;
+    expect(original.native.waits).toBe(1);
+    expect(original.native.disposals).toBe(0);
+    expect(
+      yield* f.owner
+        .guard("control-facts", (ticket) =>
+          native("control-facts", ticket, () =>
+            f.observation.controlFacts(reference, ticket, f.target),
+          ),
+        )
+        .pipe(Effect.result),
+    ).toMatchObject({
+      _tag: "Failure",
+      failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+    });
+    expect(yield* f.owner.status).toMatchObject({
+      phase: "open",
+      busy: false,
+      unresolvedDispatch: false,
+    });
+    yield* Effect.promise(() => f.observation.dispose());
+    expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
+  }),
 );
 
 it.effect(
@@ -296,7 +288,9 @@ it.effect(
       };
 
       yield* f.owner.guard("control-facts", (ticket) =>
-        native("control-facts", ticket, () => f.observation.controlFacts(current, ticket)),
+        native("control-facts", ticket, () =>
+          f.observation.controlFacts(current, ticket, f.target),
+        ),
       );
       yield* Effect.promise(() => f.observation.dispose());
       expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1, 1, 1]);

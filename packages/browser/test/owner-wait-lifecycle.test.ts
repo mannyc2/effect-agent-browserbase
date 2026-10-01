@@ -31,16 +31,16 @@ it.effect("a pending wait releases admission for host reads while excluding conf
         maxHostReads: 1,
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             ticket.signal.addEventListener("abort", () => admissionReleased.resolve(), {
               once: true,
             });
 
-            return driver.documentReadiness(ticket);
+            return driver.documentReadiness(ticket, target);
           },
           click: async (_selector, ticket, capture, _policy, target) => {
             ticket.dispatch();
-            inputs.push(target?.pageId ?? driver.selected().pageId);
+            inputs.push(target.pageId);
 
             return {
               url: "https://example.test/",
@@ -231,11 +231,11 @@ it.effect("the wait deadline includes readiness and cannot widen host policy", (
         actionMillis: 100,
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             preparing.resolve();
             await ready.promise;
 
-            return driver.documentReadiness(ticket);
+            return driver.documentReadiness(ticket, target);
           },
           waitForElement: async (_ref, _state, ticket) => {
             remaining = ticket.remainingMillis();
@@ -284,12 +284,12 @@ it.effect("canceled readiness retains capacity until settlement and cannot start
       const f = yield* fixture({
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             entered.resolve();
             try {
               await finish.promise;
 
-              return await driver.documentReadiness(ticket);
+              return await driver.documentReadiness(ticket, target);
             } finally {
               readyRetired.resolve();
             }
@@ -439,12 +439,12 @@ it.effect("a handoff refuses a pending pure wait instead of draining it into unc
       const f = yield* fixture({
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             ticket.signal.addEventListener("abort", () => admissionReleased.resolve(), {
               once: true,
             });
 
-            return driver.documentReadiness(ticket);
+            return driver.documentReadiness(ticket, target);
           },
           // The condition never holds, and the native wait outlives every caller.
           waitFor: async (_selector, _state, ticket) => {

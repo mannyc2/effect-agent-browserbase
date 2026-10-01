@@ -76,26 +76,15 @@ export const makeCaptureSources = (targets: Targets) => {
     captureWatchers.clear();
   };
 
-  const capture = (target?: CaptureTarget): Promise<CaptureBinding> =>
+  const capture = (target: CaptureTarget): Promise<CaptureBinding> =>
     sanitize(async () => {
-      let entry: Entry;
-      let captureFrame: Frame;
+      const entry = entries.get(target.pageId);
 
-      if (target === undefined) {
-        const selectedTarget = current();
-
-        entry = selectedTarget.entry;
-        captureFrame = selectedTarget.frame;
-      } else {
-        const requested = entries.get(target.pageId);
-
-        if (requested === undefined || requested.page.isClosed())
-          throw failure(Reasons.NotFound.make({}), "undispatched");
-        if ((await targets.targetId(requested)) !== target.targetId)
-          throw failure(Reasons.Stale.make({}), "undispatched");
-        entry = requested;
-        captureFrame = entry.page.mainFrame();
-      }
+      if (entry === undefined || entry.page.isClosed())
+        throw failure(Reasons.NotFound.make({}), "undispatched");
+      if ((await targets.targetId(entry)) !== target.targetId)
+        throw failure(Reasons.Stale.make({}), "undispatched");
+      const captureFrame = entry.page.mainFrame();
       const page = entry.page;
       const targetId = await targets.targetId(entry);
       const watchedFrameId = frameId(captureFrame);

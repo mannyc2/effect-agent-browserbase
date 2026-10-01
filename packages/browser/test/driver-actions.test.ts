@@ -16,6 +16,8 @@ type KeyInput = {
 // https://github.com/mannyc2/effect-agent-browserbase/issues/94#issuecomment-5914182775
 // The accepted typing slice names this seam. Held replies and setup retirement cannot be
 // forced reliably through Chromium; native workflow tests own event trust, focus and key data.
+const target = { pageId: "page-1", frameId: "frame-1" };
+
 const scriptedKeyboard = (
   send: (method: string, input?: KeyInput) => Promise<unknown>,
   options: {
@@ -188,10 +190,12 @@ it("plain typing submits ordered balanced input while earlier replies are held, 
     return reply.promise;
   });
 
-  const result = keyboard.type(text, undefined, cancellableTicket(controller)).then(
-    () => "completed",
-    () => "failed",
-  );
+  const result = keyboard
+    .type(text, undefined, cancellableTicket(controller), undefined, target)
+    .then(
+      () => "completed",
+      () => "failed",
+    );
 
   try {
     await nativeTurn();
@@ -247,7 +251,7 @@ it("a failed reply stops future input but drains other submitted replies before 
   );
 
   const result = keyboard
-    .type("abcdefghijklmnopqrstuvwxyz", undefined, cancellableTicket(controller))
+    .type("abcdefghijklmnopqrstuvwxyz", undefined, cancellableTicket(controller), undefined, target)
     .then(
       () => ({ success: true }),
       (cause: unknown) => ({ success: false, cause }),
@@ -304,7 +308,7 @@ it("a fence between characters stops the rest of a run of text", async () => {
     },
   };
 
-  await expect(keyboard.type("abcd", undefined, ticket)).rejects.toBeDefined();
+  await expect(keyboard.type("abcd", undefined, ticket, undefined, target)).rejects.toBeDefined();
   // Characters are whole code points, and none follows the fence.
   expect(sent.filter((input) => input.type === "keyDown").map((input) => input.key)).toEqual([
     "a",
@@ -314,7 +318,7 @@ it("a fence between characters stops the rest of a run of text", async () => {
   fenced = false;
   fenceAfter = Number.POSITIVE_INFINITY;
   sent.length = 0;
-  await keyboard.type("a🚆", undefined, ticket);
+  await keyboard.type("a🚆", undefined, ticket, undefined, target);
   expect(
     sent
       .filter((input) => input.type === "keyDown" || input.text !== undefined)
@@ -331,7 +335,9 @@ it("authority loss during keydown leaves its unsent keyup and every subsequent i
     controller.abort();
   });
 
-  await expect(keyboard.type("ab", undefined, cancellableTicket(controller))).rejects.toBeDefined();
+  await expect(
+    keyboard.type("ab", undefined, cancellableTicket(controller), undefined, target),
+  ).rejects.toBeDefined();
   expect(sent).toEqual([expect.objectContaining({ type: "keyDown", key: "a" })]);
 });
 
@@ -358,16 +364,18 @@ it("canceled setup and failed detach retain typing capacity until that connectio
     },
   );
 
-  const first = keyboard.type("a", undefined, cancellableTicket(controller)).then(
-    () => "completed",
-    () => "failed",
-  );
+  const first = keyboard
+    .type("a", undefined, cancellableTicket(controller), undefined, target)
+    .then(
+      () => "completed",
+      () => "failed",
+    );
 
   try {
     await nativeTurn();
     controller.abort();
     await expect(
-      keyboard.type("b", undefined, ticketFor(new AbortController().signal)),
+      keyboard.type("b", undefined, ticketFor(new AbortController().signal), undefined, target),
     ).rejects.toMatchObject({
       reason: { _tag: "Busy" },
       outcome: "undispatched",
@@ -377,7 +385,7 @@ it("canceled setup and failed detach retain typing capacity until that connectio
     setup.resolve();
     await expect(first).resolves.toBe("failed");
     await expect(
-      keyboard.type("c", undefined, ticketFor(new AbortController().signal)),
+      keyboard.type("c", undefined, ticketFor(new AbortController().signal), undefined, target),
     ).rejects.toMatchObject({
       reason: { _tag: "Busy" },
       outcome: "undispatched",
@@ -388,7 +396,7 @@ it("canceled setup and failed detach retain typing capacity until that connectio
     // This is the private driver's positive connection-retirement notification, not a
     // timeout, canceled caller, or fabricated successful detach.
     (keyboard as typeof keyboard & { readonly retire: () => void }).retire();
-    await keyboard.type("d", undefined, ticketFor(new AbortController().signal));
+    await keyboard.type("d", undefined, ticketFor(new AbortController().signal), undefined, target);
     expect(setups).toBe(2);
     expect(inputs).toBe(2);
   } finally {

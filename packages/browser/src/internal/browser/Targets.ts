@@ -371,8 +371,8 @@ export const makeTargets = (
     return { entry, frame };
   };
 
-  const current = (target?: DriverTarget) =>
-    target === undefined ? selectedCurrent() : explicitCurrent(target);
+  /** The exact live page and frame a target names; display selection never stands in for it. */
+  const current = (target: DriverTarget) => explicitCurrent(target);
 
   const targetId = async (entry: Entry, ticket?: Ticket): Promise<string> => {
     ticket?.check();
@@ -473,8 +473,7 @@ export const makeTargets = (
     }
   };
 
-  const selectedUrl = () => urlOf(selectedCurrent().frame);
-  const url = (target?: DriverTarget) => urlOf(current(target).frame);
+  const url = (target: DriverTarget) => urlOf(current(target).frame);
 
   /**
    * Chooses the connection's first target: a page it opens itself, the one the caller named, or
@@ -505,7 +504,7 @@ export const makeTargets = (
   };
 
   const selected = () => {
-    const { entry, frame } = current();
+    const { entry, frame } = selectedCurrent();
 
     return { pageId: entry.id, frameId: frameId(frame) };
   };
@@ -649,10 +648,10 @@ export const makeTargets = (
     retire(entry);
   };
 
-  const listFrames = (ticket: Ticket, page?: PageInfo) =>
+  const listFrames = (ticket: Ticket, page: PageInfo) =>
     sanitize(async () => {
       ticket.check();
-      const entry = page === undefined ? selectedCurrent().entry : await explicitPage(page, ticket);
+      const entry = await explicitPage(page, ticket);
       const frames = entry.page.frames();
 
       if (frames.length > 128)
@@ -706,7 +705,6 @@ export const makeTargets = (
       end: (pageId: string) => void navigating.delete(pageId),
       has: (pageId: string) => navigating.has(pageId),
     },
-    selectedUrl,
     url,
     selectInitial,
     clear,

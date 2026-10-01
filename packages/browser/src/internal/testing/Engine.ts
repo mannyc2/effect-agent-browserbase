@@ -513,8 +513,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       return page;
     };
 
-    const current = (target: DriverTarget | undefined, operation: BrowserOperation): Page => {
-      if (target === undefined) return selectedPage(operation);
+    const current = (target: DriverTarget, operation: BrowserOperation): Page => {
       if (disconnected) throw fail(operation, Reasons.Closed.make({}));
       const page = pages.get(target.pageId);
 
@@ -843,7 +842,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       operation: BrowserOperation,
       allowSuspended = false,
       attached = true,
-      browserTarget?: DriverTarget,
+      browserTarget: DriverTarget,
     ) => {
       ticket.check();
       const stale = () => fail(operation, Reasons.Stale.make({}));
@@ -877,12 +876,12 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       target: ResolvedElement,
       ticket: ReadTicket,
       operation: BrowserOperation,
-      browserTarget?: DriverTarget,
+      browserTarget: DriverTarget,
       attached = true,
     ) => {
       ticket.check();
       const record = resolvedElements.get(target);
-      const page = current(browserTarget ?? target.target, operation);
+      const page = current(browserTarget, operation);
 
       if (
         record === undefined ||
@@ -908,7 +907,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       operation: BrowserOperation,
       allowSuspended = false,
       attached = true,
-      browserTarget?: DriverTarget,
+      browserTarget: DriverTarget,
     ) =>
       "_tag" in target
         ? privateRetained(target, ticket, operation, browserTarget, attached)
@@ -942,8 +941,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       target: string | ElementTarget,
       ticket: ReadTicket,
       operation: BrowserOperation,
-      policy?: AdmissionPolicy,
-      browserTarget?: DriverTarget,
+      policy: AdmissionPolicy | undefined,
+      browserTarget: DriverTarget,
       allowSuspended = false,
       enablement = false,
     ) => {
@@ -1303,7 +1302,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       ticket: ReadTicket,
       operation: BrowserOperation,
       policy: AdmissionPolicy | undefined,
-      browserTarget: DriverTarget | undefined,
+      browserTarget: DriverTarget,
     ) => {
       if (into === undefined) return current(browserTarget, operation);
       const { node, page } = resolve(into, ticket, operation, policy, browserTarget);
@@ -1910,9 +1909,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           close(target);
         }),
       listFrames: (ticket, page) =>
-        attempt("list-frames", ticket, {}, async () => [
-          frameInfo(page === undefined ? selectedPage("list-frames") : pageOf(page, "list-frames")),
-        ]),
+        attempt("list-frames", ticket, {}, async () => [frameInfo(pageOf(page, "list-frames"))]),
       resolveFrame: async (page, frame, ticket) => {
         ticket.check();
         const target = pageOf(page, "target");
@@ -1922,7 +1919,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         return { pageId: target.pageId, frameId: target.frameId };
       },
       beginNavigation: (url, timeoutMillis, ticket, target) =>
-        attempt("navigate", undefined, { pageId: target?.pageId }, async (record) => {
+        attempt("navigate", undefined, { pageId: target.pageId }, async (record) => {
           ticket.check();
           const page = current(target, "navigate");
 
@@ -2003,7 +2000,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           return navigation;
         }),
       readText: (selector, maximumBytes, ticket, target) =>
-        attempt("read-text", ticket, { pageId: target?.pageId, ...meta(selector) }, async () => {
+        attempt("read-text", ticket, { pageId: target.pageId, ...meta(selector) }, async () => {
           const page = current(target, "read-text");
 
           if (selector === undefined) return bounded(page.document.text, maximumBytes).text;
@@ -2015,7 +2012,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "observe",
           ticket,
-          { pageId: target?.pageId },
+          { pageId: target.pageId },
           async (): Promise<NativeObservation> => {
             const page = current(target, "observe");
             const size = page.viewport ?? viewport;
@@ -2116,7 +2113,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "checkpoint",
           ticket,
-          { pageId: target?.pageId },
+          { pageId: target.pageId },
           async (): Promise<NativeCheckpoint> => {
             const page = current(target, "checkpoint");
             const size = page.viewport ?? viewport;
@@ -2150,7 +2147,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "control-facts",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async () => resolve(target, ticket, "control-facts", undefined, browserTarget).facts,
         ),
       resolveDescriptor: (
@@ -2215,7 +2212,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "revalidate",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async () => {
             const { snapshot: current } = retained(
               target,
@@ -2233,7 +2230,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "click",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(target, ticket, "click", policy, browserTarget);
 
@@ -2250,13 +2247,13 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return { url, input };
           },
-          () => invalidatePointer(browserTarget?.pageId ?? selectedId ?? ""),
+          () => invalidatePointer(browserTarget.pageId),
         ),
       fill: (target, value, ticket, policy, browserTarget) =>
         attempt(
           "fill",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(target, ticket, "fill", policy, browserTarget);
 
@@ -2275,7 +2272,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "select-option",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(target, ticket, "select-option", policy, browserTarget);
 
@@ -2292,7 +2289,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "fill-form",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(
               target,
@@ -2308,12 +2305,10 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return formStep(page, node, field, ticket, record, capture);
           },
-          field.checked === undefined
-            ? undefined
-            : () => invalidatePointer(browserTarget?.pageId ?? selectedId ?? ""),
+          field.checked === undefined ? undefined : () => invalidatePointer(browserTarget.pageId),
         ),
       formState: (targets, ticket, browserTarget) =>
-        attempt("fill-form", ticket, { pageId: browserTarget?.pageId }, async () =>
+        attempt("fill-form", ticket, { pageId: browserTarget.pageId }, async () =>
           targets.map((target) => {
             // A node the form's own steps detached reads as absent rather than stale.
             const { node, page } = retainedElement(
@@ -2332,7 +2327,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "fill-form",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(
               target,
@@ -2357,10 +2352,10 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return { url, input };
           },
-          () => invalidatePointer(browserTarget?.pageId ?? selectedId ?? ""),
+          () => invalidatePointer(browserTarget.pageId),
         ),
       scroll: (deltaX, deltaY, ticket, target) =>
-        attempt("scroll", ticket, { pageId: target?.pageId }, async (record) => {
+        attempt("scroll", ticket, { pageId: target.pageId }, async (record) => {
           const page = current(target, "scroll");
 
           requireRunning(page, "scroll");
@@ -2371,11 +2366,11 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
           return page.document.url;
         }),
-      scrollTo: (target: ElementTarget, ticket: Ticket, browserTarget?: DriverTarget) =>
+      scrollTo: (target: ElementTarget, ticket: Ticket, browserTarget: DriverTarget) =>
         attempt(
           "scroll",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { page, facts: fresh } = resolve(
               target,
@@ -2398,7 +2393,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "pointer-move",
           ticket,
-          { pageId: target?.pageId },
+          { pageId: target.pageId },
           async (record): Promise<NativeInput> => {
             const page = current(target, "pointer-move");
 
@@ -2413,7 +2408,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "hover",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record): Promise<NativeInput> => {
             const {
               node,
@@ -2436,7 +2431,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "wheel",
           ticket,
-          { pageId: target?.pageId },
+          { pageId: target.pageId },
           async (record): Promise<NativeInput> => {
             const page = current(target, "wheel");
 
@@ -2454,7 +2449,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "press",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(into) },
+          { pageId: browserTarget.pageId, ...meta(into) },
           async (record): Promise<NativeInput> => {
             const page = focusedOrRefuse(into, ticket, "press", policy, browserTarget);
 
@@ -2469,7 +2464,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "type",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(into) },
+          { pageId: browserTarget.pageId, ...meta(into) },
           async (record): Promise<NativeInput> => {
             const page = focusedOrRefuse(into, ticket, "type", policy, browserTarget);
 
@@ -2481,13 +2476,13 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           },
         ),
       screenshot: (_fullPage, _maximumBytes, ticket, target) =>
-        attempt("screenshot", ticket, { pageId: target?.pageId }, async () => {
+        attempt("screenshot", ticket, { pageId: target.pageId }, async () => {
           const page = current(target, "screenshot");
 
           return picture(page, ticket);
         }),
       resize: (next, ticket, target) =>
-        attempt("resize", ticket, { pageId: target?.pageId }, async (record) => {
+        attempt("resize", ticket, { pageId: target.pageId }, async (record) => {
           const page = current(target, "resize");
 
           dispatch(ticket, record);
@@ -2573,7 +2568,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "click-and-wait",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(
               target,
@@ -2596,13 +2591,13 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return { url, input };
           },
-          () => invalidatePointer(browserTarget?.pageId ?? selectedId ?? ""),
+          () => invalidatePointer(browserTarget.pageId),
         ),
       clickForDownload: (target, ticket, browserTarget) =>
         attempt(
           "download-action",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(
               target,
@@ -2629,7 +2624,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "select-files",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) =>
             selectFilesOn(target, files, ticket, record, "select-files", browserTarget),
         ),
@@ -2637,7 +2632,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "file-chooser",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) =>
             selectFilesOn(target, files, ticket, record, "file-chooser", browserTarget),
         ),
@@ -2663,19 +2658,16 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       },
       dismissDialogs: async () => {},
       capture: async (target): Promise<CaptureBinding> => {
-        const page =
-          target === undefined
-            ? selectedPage("capture")
-            : pageOf(
-                PageInfo.make({
-                  pageId: target.pageId,
-                  targetId: target.targetId,
-                  url: "",
-                  title: "",
-                  selected: false,
-                }),
-                "capture",
-              );
+        const page = pageOf(
+          PageInfo.make({
+            pageId: target.pageId,
+            targetId: target.targetId,
+            url: "",
+            title: "",
+            selected: false,
+          }),
+          "capture",
+        );
 
         return {
           pageId: page.pageId,
@@ -2725,7 +2717,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       ticket: Ticket,
       record: MutableCall,
       operation: "select-files" | "file-chooser",
-      browserTarget?: DriverTarget,
+      browserTarget: DriverTarget,
     ) => {
       const { node, page } = resolve(target, ticket, operation, undefined, browserTarget);
 

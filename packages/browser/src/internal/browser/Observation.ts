@@ -429,7 +429,7 @@ export const makeObservation = (
    * is `target-changed` and `undispatched`, so a caller knows to read again. A read is never a
    * mutation, so reading again is always safe.
    */
-  const reading = async <A>(body: () => Promise<A>, target?: DriverTarget): Promise<A> => {
+  const reading = async <A>(body: () => Promise<A>, target: DriverTarget): Promise<A> => {
     const { entry, frame } = current(target);
     const epoch = targets.epochOf(frame);
 
@@ -805,10 +805,9 @@ export const makeObservation = (
     target: ObservedElement,
     ticket: ReadTicket,
     allowSuspended = false,
-    browserTarget?: DriverTarget,
+    caller: DriverTarget,
   ) => {
     ticket.check();
-    const caller = browserTarget ?? targets.selected();
 
     // Authenticate the caller before looking at a Ref. No supplied observation id can choose
     // another page's frame, read its native facts, or redirect a caller's operation into it.
@@ -827,12 +826,6 @@ export const makeObservation = (
 
     const check = (): void => {
       checkSnapshot(snapshot, ticket);
-      if (browserTarget === undefined) {
-        const selected = targets.selected();
-
-        if (selected.pageId !== caller.pageId || selected.frameId !== caller.frameId)
-          throw failure(Reasons.Stale.make({}), "undispatched");
-      }
 
       const usable =
         snapshot.validity === "valid" ||
@@ -855,7 +848,7 @@ export const makeObservation = (
   const lease = (
     reference: ObservedElement | ResolvedElement,
     ticket: ReadTicket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => {
     const privateReference = "_tag" in reference;
 
@@ -902,7 +895,7 @@ export const makeObservation = (
     reference: ObservedElement | ResolvedElement,
     ticket: Ticket,
     body: () => Promise<A>,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ): Promise<A> => {
     const leased = lease(reference, ticket, browserTarget);
 
@@ -921,19 +914,18 @@ export const makeObservation = (
     element: ElementHandle<Element>,
     ticket: ReadTicket,
     check: () => void,
-    target?: DriverTarget,
+    target: DriverTarget,
     options?: ReadonlyArray<{ readonly node: ElementHandle<Element>; readonly value: string }>,
   ): Promise<unknown> => {
     check();
-    const exact = target ?? targets.selected();
 
     return withTemporary(
-      exact,
+      target,
       ticket,
       1,
       4096 + (1 + (options?.length ?? 0)) * 512 * 1024,
       async (retention) => {
-        const holder = await current(exact).frame.evaluateHandle(readPage, {
+        const holder = await current(target).frame.evaluateHandle(readPage, {
           scope: "document" as const,
           maximumBytes: 0,
           controlLimit: 0,
@@ -969,7 +961,7 @@ export const makeObservation = (
       throw failure(Reasons.Stale.make({}), "undispatched");
   };
 
-  const privateRetained = (target: ResolvedElement, ticket: ReadTicket, caller?: DriverTarget) => {
+  const privateRetained = (target: ResolvedElement, ticket: ReadTicket, caller: DriverTarget) => {
     const resolved = resolvedElements.get(target);
 
     if (
@@ -1519,7 +1511,7 @@ export const makeObservation = (
             const target = group.elements[0];
 
             if (target === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
-            const resolved = privateRetained(target, ticket);
+            const resolved = privateRetained(target, ticket, browserTarget);
 
             const sampled = safeDecode(
               Facts,
@@ -1556,9 +1548,9 @@ export const makeObservation = (
   const resolve = async (
     target: string | ObservedElement | ResolvedElement,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    allowSuspended = false,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    allowSuspended: boolean,
+    browserTarget: DriverTarget,
     enablement = false,
     ownPhase = false,
   ): Promise<{
@@ -1575,7 +1567,7 @@ export const makeObservation = (
       const group = await resolveGroup(
         [{ target: { _tag: "Ref", reference: target } }],
         ticket,
-        browserTarget ?? targets.selected(),
+        browserTarget,
         { _tag: "Strict" },
       );
 
@@ -1625,7 +1617,7 @@ export const makeObservation = (
           : retained(target, ticket, allowSuspended, browserTarget);
 
     const node = retainedNode?.node;
-    const resolvedTarget = retainedNode?.snapshot.target ?? browserTarget ?? targets.selected();
+    const resolvedTarget = retainedNode?.snapshot.target ?? browserTarget;
     const owned = kept ? undefined : temporary(resolvedTarget, ticket, 3, 4096, ownPhase);
 
     const check =
@@ -1778,7 +1770,7 @@ export const makeObservation = (
     element: ElementHandle<Element>,
     ticket: Ticket,
     enablement = false,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) => {
     const same = (facts: ControlFacts, node: Retained) =>
       enablement ? stableIdentityOf(facts) === node.stable : identityOf(facts) === node.identity;
@@ -1885,7 +1877,7 @@ export const makeObservation = (
     };
   };
 
-  const controlFacts = (target: ObservedElement, ticket: Ticket, browserTarget?: DriverTarget) =>
+  const controlFacts = (target: ObservedElement, ticket: Ticket, browserTarget: DriverTarget) =>
     sanitize(async () => {
       const { facts, check, release } = await resolve(
         target,
@@ -1913,17 +1905,13 @@ export const makeObservation = (
   const formState = (
     references: ReadonlyArray<ObservedElement | ResolvedElement>,
     ticket: Ticket,
-    browserTarget?: DriverTarget,
+    browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
       const states: Array<string | undefined> = [];
 
       for (const reference of references) {
-        if (
-          "_tag" in reference &&
-          browserTarget !== undefined &&
-          reference.target.pageId !== browserTarget.pageId
-        )
+        if ("_tag" in reference && reference.target.pageId !== browserTarget.pageId)
           throw failure(Reasons.Stale.make({}), "undispatched");
 
         const leased = lease(
@@ -1949,7 +1937,7 @@ export const makeObservation = (
     });
 
   /** After a hold, one node at a time: still attached, and still the control inspected. */
-  const revalidate = (target: ObservedElement, ticket: Ticket, browserTarget?: DriverTarget) =>
+  const revalidate = (target: ObservedElement, ticket: Ticket, browserTarget: DriverTarget) =>
     sanitize(async () => {
       const { snapshot } = retained(target, ticket, true, browserTarget);
       const { check, release } = await resolve(target, ticket, undefined, true, browserTarget);
@@ -1968,16 +1956,15 @@ export const makeObservation = (
     selector: string | undefined,
     maximumBytes: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) =>
     sanitize(async () => {
       ticket.check();
-      const exact = target ?? targets.selected();
 
-      return withTemporary(exact, ticket, 0, 4096 + maximumBytes, async () => {
+      return withTemporary(target, ticket, 0, 4096 + maximumBytes, async () => {
         const raw: unknown = await reading(
           () =>
-            current(exact).frame.evaluate(
+            current(target).frame.evaluate(
               ({ selector, maximumBytes }) => {
                 const element =
                   selector === undefined ? document.body : document.querySelector(selector);
@@ -1993,7 +1980,7 @@ export const makeObservation = (
               },
               { selector, maximumBytes },
             ),
-          exact,
+          target,
         );
 
         ticket.check();
@@ -2026,7 +2013,7 @@ export const makeObservation = (
     controlLimit: number,
     check: () => void,
     keepNodes: boolean,
-    target: DriverTarget | undefined,
+    target: DriverTarget,
     match: string | undefined,
     verdicts: Record<string, PointVerdict> | undefined,
     retention?: NativeRetention,
@@ -2141,7 +2128,7 @@ export const makeObservation = (
     controlLimit: number,
     check: () => void,
     keepNodes: boolean,
-    target?: DriverTarget,
+    target: DriverTarget,
     match?: string,
     retention?: NativeRetention,
   ) => {
@@ -2194,12 +2181,11 @@ export const makeObservation = (
     maximumBytes: number,
     controlLimit: number,
     ticket: Ticket,
-    match?: string,
-    browserTarget?: DriverTarget,
+    match: string | undefined,
+    target: DriverTarget,
   ) =>
     sanitize(async () => {
       ticket.check();
-      const target = browserTarget ?? targets.selected();
 
       current(target);
       await dispose(target);
@@ -2232,15 +2218,7 @@ export const makeObservation = (
       snapshots.set(target.frameId, snapshot);
       const retention = retentionFor(snapshot);
 
-      const check = () => {
-        checkSnapshot(snapshot, ticket);
-        if (browserTarget === undefined) {
-          const selected = targets.selected();
-
-          if (selected.pageId !== target.pageId || selected.frameId !== target.frameId)
-            throw failure(Reasons.Stale.make({}), "undispatched");
-        }
-      };
+      const check = () => checkSnapshot(snapshot, ticket);
 
       let handles: Array<ElementHandle<Element>> = [];
 
@@ -2399,13 +2377,11 @@ export const makeObservation = (
     fullPage: boolean,
     maximumBytes: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) =>
     sanitize(async () => {
-      const exact = target ?? targets.selected();
-
-      return withTemporary(exact, ticket, 0, 4096 + maximumBytes, () =>
-        picture(fullPage, maximumBytes, ticket, exact),
+      return withTemporary(target, ticket, 0, 4096 + maximumBytes, () =>
+        picture(fullPage, maximumBytes, ticket, target),
       );
     });
 
@@ -2419,16 +2395,15 @@ export const makeObservation = (
     controlLimit: number,
     pictureBytes: number | undefined,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) =>
     sanitize(async () => {
       ticket.check();
-      const exact = target ?? targets.selected();
-      const { frame } = current(exact);
+      const { frame } = current(target);
       const epoch = targets.epochOf(frame);
 
       return withTemporary(
-        exact,
+        target,
         ticket,
         260,
         4096 + maximumBytes + controlLimit * 512 * 1024 + (pictureBytes ?? 0),
@@ -2441,21 +2416,21 @@ export const makeObservation = (
                 controlLimit,
                 () => ticket.check(),
                 false,
-                exact,
+                target,
                 undefined,
                 retention,
               ),
-            exact,
+            target,
           );
 
           // This read's own reservation already includes the picture's bytes.
           const pictured =
             pictureBytes === undefined
               ? undefined
-              : await picture(false, pictureBytes, ticket, exact);
+              : await picture(false, pictureBytes, ticket, target);
 
           const result: NativeCheckpoint = {
-            url: targets.url(exact),
+            url: targets.url(target),
             text: data.text,
             textTruncated: data.textTruncated,
             controls: data.controls,
