@@ -37,14 +37,33 @@ export const validateOptions = (value: unknown): Effect.Effect<RunOptions, Brows
     Effect.map(({ withinMillis: _withinMillis, queueMillis: _queueMillis, ...options }) => options),
   );
 
-/** Live host failure evidence is not a durable plan or a serialization schema. */
-export class StepFailed extends Data.TaggedError("StepFailed")<{
+interface StepFailure {
   readonly stage: "PreparationFailed" | "AttemptFailed";
   readonly stepId?: string;
   readonly completed: ReadonlyArray<RanStep>;
   readonly attempt?: StepAttempt;
   readonly error: BrowserError;
-}> {}
+}
+
+/**
+ * Live host failure evidence is not a durable plan or a serialization schema. Its message names
+ * only the stage, step and reason; the evidence fields can retain authored literal values, so
+ * log the message rather than the whole value.
+ */
+export class StepFailed extends Data.TaggedError("StepFailed")<
+  StepFailure & { readonly message: string }
+> {
+  constructor(failure: StepFailure) {
+    const { operation, reason, outcome } = failure.error;
+
+    const where =
+      failure.stage === "PreparationFailed"
+        ? "Plan preparation failed"
+        : `Step ${failure.stepId ?? "(unknown)"} failed`;
+
+    super({ ...failure, message: `${where}: ${operation} ${reason._tag} (${outcome})` });
+  }
+}
 
 export class RecordingIncomplete extends Data.TaggedError("RecordingIncomplete")<{
   readonly stepId?: string;

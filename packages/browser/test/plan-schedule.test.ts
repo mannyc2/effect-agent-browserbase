@@ -109,6 +109,7 @@ it.effect("a start already past its budget is missed before any attempt or input
         error: { reason: { _tag: "ScheduleMissed" }, outcome: "undispatched" },
       });
       expect(failure.attempt).toBeUndefined();
+      expect(failure.message).toBe("Plan preparation failed: run ScheduleMissed (undispatched)");
       expect((yield* browser.control.calls).slice(before)).toEqual([]);
     }),
   ),
