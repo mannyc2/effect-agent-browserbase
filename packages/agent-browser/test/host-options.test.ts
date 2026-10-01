@@ -2,7 +2,6 @@ import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import { RunToolScheduling } from "effect-agent/run-options";
-import { ActionResult } from "effect-browser/browser-data";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -107,11 +106,9 @@ it.effect("the host's lane bounds how many calls wait and for how long", () =>
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Deferred.succeed(entered, undefined).pipe(
-                Effect.andThen(Deferred.await(release)),
-                Effect.as(ActionResult.make({ url })),
-              ))();
+            return Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+            );
           }
 
           return Effect.void;
@@ -144,11 +141,9 @@ it.effect("the host's lane bounds how many calls wait and for how long", () =>
       const slowerBrowser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Deferred.succeed(waiting, undefined).pipe(
-                Effect.andThen(Deferred.await(blocked)),
-                Effect.as(ActionResult.make({ url })),
-              ))();
+            return Deferred.succeed(waiting, undefined).pipe(
+              Effect.andThen(Deferred.await(blocked)),
+            );
           }
 
           return Effect.void;

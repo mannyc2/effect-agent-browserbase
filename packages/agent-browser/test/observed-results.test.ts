@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import * as Tools from "effect-agent-browser/tools";
-import { InputReceipt, Observation, Target } from "effect-browser/browser-data";
+import { Observation, Target } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
@@ -32,15 +32,6 @@ const observation = (text = "fresh", id = "fresh") =>
       unreachableControls: 0,
       exhausted: false,
     },
-  });
-
-const receipt = (kind: InputReceipt["kind"]) =>
-  InputReceipt.make({
-    target,
-    kind,
-    position: null,
-    startedMonotonicNanos: 0n,
-    completedMonotonicNanos: 1n,
   });
 
 const variants = Toolkit.merge(
@@ -172,12 +163,11 @@ it.effect(
           const browser = yield* scriptedSession({
             beforeStart: (action) => {
               if (action._tag === "Click") {
-                return (() =>
-                  Effect.sync(() => {
-                    actions++;
+                return Effect.sync(() => {
+                  actions++;
 
-                    return { url };
-                  }))();
+                  return { url };
+                });
               }
 
               return Effect.void;
@@ -289,18 +279,17 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "Click") {
-              return (() =>
-                Effect.suspend(() => {
-                  actions++;
+              return Effect.suspend(() => {
+                actions++;
 
-                  return Effect.fail(
-                    BrowserError.make({
-                      operation: "click",
-                      reason: Reasons.Stale.make({}),
-                      outcome: "undispatched",
-                    }),
-                  );
-                }))();
+                return Effect.fail(
+                  BrowserError.make({
+                    operation: "click",
+                    reason: Reasons.Stale.make({}),
+                    outcome: "undispatched",
+                  }),
+                );
+              });
             }
 
             return Effect.void;
@@ -360,20 +349,18 @@ it.effect("the invocation lane spans the fresh read and queued input cannot over
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Click") {
-            return (() =>
-              Effect.sync(() => {
-                order.push("click");
+            return Effect.sync(() => {
+              order.push("click");
 
-                return { url };
-              }))();
+              return { url };
+            });
           }
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.sync(() => {
-                order.push("scroll");
+            return Effect.sync(() => {
+              order.push("scroll");
 
-                return { url };
-              }))();
+              return { url };
+            });
           }
 
           return Effect.void;
@@ -429,20 +416,18 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "Click") {
-              return (() =>
-                Effect.sync(() => {
-                  actions++;
+              return Effect.sync(() => {
+                actions++;
 
-                  return { url };
-                }))();
+                return { url };
+              });
             }
             if (action._tag === "Scroll") {
-              return (() =>
-                Effect.sync(() => {
-                  laterInput++;
+              return Effect.sync(() => {
+                laterInput++;
 
-                  return { url };
-                }))();
+                return { url };
+              });
             }
 
             return Effect.void;
@@ -495,12 +480,9 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "PointerMove") {
-              return (() =>
-                Effect.sync(() => {
-                  order.push("input");
-
-                  return receipt("pointer-move");
-                }))();
+              return Effect.sync(() => {
+                order.push("input");
+              });
             }
 
             return Effect.void;

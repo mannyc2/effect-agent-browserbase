@@ -25,20 +25,19 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "Wait") {
-              return (() =>
-                Effect.suspend(() => {
-                  calls++;
-                  expect(action).toMatchObject({
-                    mode: {
-                      _tag: "Element",
-                      target: { _tag: "Ref", reference },
-                      state: "enabled",
-                      timeoutMillis: 100,
-                    },
-                  });
+              return Effect.suspend(() => {
+                calls++;
+                expect(action).toMatchObject({
+                  mode: {
+                    _tag: "Element",
+                    target: { _tag: "Ref", reference },
+                    state: "enabled",
+                    timeoutMillis: 100,
+                  },
+                });
 
-                  return Effect.fail(error);
-                }))();
+                return Effect.fail(error);
+              });
             }
 
             return Effect.void;
@@ -159,26 +158,24 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "Wait") {
-              return (() =>
-                Effect.sync(() => {
-                  waits++;
-                }).pipe(
-                  Effect.andThen(Deferred.succeed(entered, undefined)),
-                  Effect.andThen(Effect.never),
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      cancellations++;
-                    }),
-                  ),
-                ))();
+              return Effect.sync(() => {
+                waits++;
+              }).pipe(
+                Effect.andThen(Deferred.succeed(entered, undefined)),
+                Effect.andThen(Effect.never),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    cancellations++;
+                  }),
+                ),
+              );
             }
             if (action._tag === "Scroll") {
-              return (() =>
-                Effect.sync(() => {
-                  inputs++;
+              return Effect.sync(() => {
+                inputs++;
 
-                  return { url: "https://example.test/" };
-                }))();
+                return { url: "https://example.test/" };
+              });
             }
 
             return Effect.void;

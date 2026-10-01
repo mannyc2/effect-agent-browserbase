@@ -1,8 +1,9 @@
 import { Effect } from "effect";
 import type { BrowserSession, Page } from "effect-browser/browser";
-import { BrowserPolicy } from "effect-browser/browser-data";
+import { BrowserPolicy, type NavigationResult } from "effect-browser/browser-data";
 import { type BrowserError } from "effect-browser/errors";
 import { StepFailed, type RunOptions } from "effect-browser/plan";
+import type { RunReceipt } from "effect-browser/plan-data";
 import * as Testing from "effect-browser/testing";
 
 export const fixtureScript: Testing.Script = {
@@ -23,14 +24,25 @@ export const fixtureScript: Testing.Script = {
   ],
 };
 
-/** The ordinary browser runtime issues every Session, Page, reference and RunOperation here. */
+/**
+ * The ordinary browser runtime issues every Session, Page, reference and RunOperation here. The
+ * hooks run before the runtime's own `start`/`startNavigation`: they can observe, delay or refuse
+ * a call, never supply its result. Results come from the scripted engine (`browser.control`).
+ */
 export const scriptedSession = Effect.fnUntraced(function* (
   options: {
     readonly beforeStart?: (
       action: Parameters<Page["start"]>[0]["steps"][number]["action"],
       options: RunOptions | undefined,
-    ) => Effect.Effect<unknown, BrowserError>;
-    readonly beforeNavigation?: () => Effect.Effect<unknown, BrowserError>;
+    ) => Effect.Effect<void, BrowserError>;
+    readonly beforeNavigation?: () => Effect.Effect<void, BrowserError>;
+    /**
+     * Models a browser that broke its own result contract: each completed step's receipt is
+     * replaced, unchecked, after the engine produced it. Only malformed-result tests use it.
+     */
+    readonly receipt?: (receipt: RunReceipt) => unknown;
+    /** The same for a completed navigation's result. */
+    readonly navigationResult?: (result: NavigationResult) => unknown;
     readonly observe?: Page["observe"];
     readonly readText?: Page["readText"];
     readonly status?: BrowserSession["status"];
@@ -76,6 +88,46 @@ export const scriptedSession = Effect.fnUntraced(function* (
       startNavigation: ((request, configuration) =>
         beforeNavigation().pipe(
           Effect.andThen(original(request, configuration)),
+        )) satisfies Page["startNavigation"],
+    });
+  }
+  const receipt = options.receipt;
+
+  if (receipt !== undefined) {
+    const original = page.start;
+
+    const start: Page["start"] = (plan, configuration) =>
+      original(plan, configuration).pipe(
+        Effect.map((operation) => ({
+          ...operation,
+          completed: operation.completed.pipe(
+            Effect.map((ran) => ({
+              ...ran,
+              steps: ran.steps.map((step) => ({
+                ...step,
+                receipt: receipt(step.receipt) as RunReceipt,
+              })),
+            })),
+          ),
+        })),
+      );
+
+    Object.assign(page, { start });
+  }
+  const navigationResult = options.navigationResult;
+
+  if (navigationResult !== undefined) {
+    const original = page.startNavigation;
+
+    Object.assign(page, {
+      startNavigation: ((request, configuration) =>
+        original(request, configuration).pipe(
+          Effect.map((operation) => ({
+            ...operation,
+            completed: operation.completed.pipe(
+              Effect.map((result) => navigationResult(result) as NavigationResult),
+            ),
+          })),
         )) satisfies Page["startNavigation"],
     });
   }

@@ -1,7 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import { ActionResult, InputReceipt, Target } from "effect-browser/browser-data";
 import { BrowserError, InitializationError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
@@ -17,18 +16,7 @@ const allTools = Toolkit.merge(
 
 type Ready = Toolkit.WithHandler<Toolkit.Tools<typeof allTools>>;
 const url = "https://example.test/";
-const target = Target.make({ generation: 1, pageId: "page-1", frameId: "frame-1" });
 const reference = { observationId: "observation-1", elementId: "element-1" };
-const result = ActionResult.make({ url });
-
-const receipt = (kind: InputReceipt["kind"]) =>
-  InputReceipt.make({
-    target,
-    kind,
-    position: null,
-    startedMonotonicNanos: 0n,
-    completedMonotonicNanos: 1n,
-  });
 
 const scroll = (tools: Ready, id = "scroll") =>
   tools
@@ -54,7 +42,7 @@ it.effect("one host sequences all four handler layers across independent program
       let active = 0;
       let peak = 0;
 
-      const operation = <A>(name: string, value: A) =>
+      const operation = (name: string) =>
         Effect.gen(function* () {
           calls.push(name);
           peak = Math.max(peak, ++active);
@@ -62,8 +50,6 @@ it.effect("one host sequences all four handler layers across independent program
             yield* Deferred.succeed(entered, undefined);
             yield* Deferred.await(release);
           }
-
-          return value;
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
@@ -75,16 +61,16 @@ it.effect("one host sequences all four handler layers across independent program
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() => operation("scroll", result))();
+            return operation("scroll");
           }
           if (action._tag === "PointerMove") {
-            return (() => operation("pointer", receipt("pointer-move")))();
+            return operation("pointer");
           }
           if (action._tag === "Press") {
-            return (() => operation("press", receipt("press")))();
+            return operation("press");
           }
           if (action._tag === "Select") {
-            return (() => operation("select-option", result))();
+            return operation("select-option");
           }
 
           return Effect.void;
@@ -131,16 +117,13 @@ it.effect("capacity includes the active call, and cancelling a waiter returns it
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.gen(function* () {
-                calls++;
-                if (calls === 1) {
-                  yield* Deferred.succeed(entered, undefined);
-                  yield* Deferred.await(release);
-                }
-
-                return result;
-              }))();
+            return Effect.gen(function* () {
+              calls++;
+              if (calls === 1) {
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+              }
+            });
           }
 
           return Effect.void;
@@ -197,14 +180,11 @@ it.effect("an expired queue wait sends nothing and cannot time out the active ha
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.gen(function* () {
-                calls++;
-                yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(release);
-
-                return result;
-              }))();
+            return Effect.gen(function* () {
+              calls++;
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+            });
           }
 
           return Effect.void;
@@ -245,15 +225,12 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "Scroll") {
-              return (() =>
-                Effect.gen(function* () {
-                  const first = ++calls === 1;
+              return Effect.gen(function* () {
+                const first = ++calls === 1;
 
-                  yield* Deferred.succeed(first ? firstEntered : secondEntered, undefined);
-                  yield* Deferred.await(first ? firstRelease : secondRelease);
-
-                  return result;
-                }))();
+                yield* Deferred.succeed(first ? firstEntered : secondEntered, undefined);
+                yield* Deferred.await(first ? firstRelease : secondRelease);
+              });
             }
 
             return Effect.void;
@@ -289,19 +266,18 @@ it.effect("closing a raw-layer host joins its active call and cancels every acce
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.gen(function* () {
-                calls++;
-                yield* Deferred.succeed(entered, undefined);
+            return Effect.gen(function* () {
+              calls++;
+              yield* Deferred.succeed(entered, undefined);
 
-                return yield* Effect.never;
-              }).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    finalizers++;
-                  }),
-                ),
-              ))();
+              return yield* Effect.never;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalizers++;
+                }),
+              ),
+            );
           }
 
           return Effect.void;
@@ -351,13 +327,12 @@ it.effect("a browser failure wakes raw-layer waiters without dispatch or cause p
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.gen(function* () {
-                calls++;
-                yield* Deferred.succeed(entered, undefined);
+            return Effect.gen(function* () {
+              calls++;
+              yield* Deferred.succeed(entered, undefined);
 
-                return yield* Effect.never;
-              }))();
+              return yield* Effect.never;
+            });
           }
 
           return Effect.void;
@@ -408,20 +383,14 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "PointerMove") {
-              return (() =>
-                Effect.gen(function* () {
-                  seen.push(yield* callerValue);
-
-                  return receipt("pointer-move");
-                }))();
+              return Effect.gen(function* () {
+                seen.push(yield* callerValue);
+              });
             }
             if (action._tag === "Scroll") {
-              return (() =>
-                Effect.sync(() => {
-                  scrolls++;
-
-                  return result;
-                }))();
+              return Effect.sync(() => {
+                scrolls++;
+              });
             }
 
             return Effect.void;
@@ -494,15 +463,12 @@ it.effect(
         const browser = yield* scriptedSession({
           beforeStart: (action) => {
             if (action._tag === "PointerMove") {
-              return (() => Effect.succeed(receipt("pointer-move")))();
+              return Effect.void;
             }
             if (action._tag === "Scroll") {
-              return (() =>
-                Effect.sync(() => {
-                  scrolls++;
-
-                  return result;
-                }))();
+              return Effect.sync(() => {
+                scrolls++;
+              });
             }
 
             return Effect.void;
@@ -682,30 +648,26 @@ it.effect("a queued stale reference is refused once and is never refreshed or re
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(release);
-                valid = false;
-
-                return result;
-              }))();
+            return Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              valid = false;
+            });
           }
           if (action._tag === "Press") {
-            return (() =>
-              Effect.suspend(() => {
-                exactCalls++;
+            return Effect.suspend(() => {
+              exactCalls++;
 
-                return valid
-                  ? Effect.succeed(receipt("press"))
-                  : Effect.fail(
-                      BrowserError.make({
-                        operation: "press",
-                        reason: Reasons.Stale.make({}),
-                        outcome: "undispatched",
-                      }),
-                    );
-              }))();
+              return valid
+                ? Effect.void
+                : Effect.fail(
+                    BrowserError.make({
+                      operation: "press",
+                      reason: Reasons.Stale.make({}),
+                      outcome: "undispatched",
+                    }),
+                  );
+            });
           }
 
           return Effect.void;
@@ -743,15 +705,12 @@ it.effect("plain handler layers remain caller-managed and unsequenced", () =>
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Scroll") {
-            return (() =>
-              Effect.gen(function* () {
-                peak = Math.max(peak, ++active);
-                if (active === 2) yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(release);
-                active--;
-
-                return result;
-              }))();
+            return Effect.gen(function* () {
+              peak = Math.max(peak, ++active);
+              if (active === 2) yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              active--;
+            });
           }
 
           return Effect.void;

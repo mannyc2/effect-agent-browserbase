@@ -1,13 +1,14 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Exit, Scope, Stream } from "effect";
+import { Effect, Exit, Schema, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import { Observation, SessionStatus } from "effect-browser/browser-data";
+import { InputReceipt, Observation, SessionStatus } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
 import { Toolkit } from "effect/unstable/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 
 const reference = { observationId: "observation-1", elementId: "element-1" };
+const selection = { reference: { ...reference, elementId: "element-3" }, options: ["option-1"] };
 
 const requests = [
   ["browser_navigate", { url: "https://example.test/" }, "navigate"],
@@ -376,6 +377,72 @@ it.effect.each(["page", "session"] as const)(
         expect((yield* host.toolFailures).failures).toHaveLength(requests.length);
       }),
     ),
+);
+
+it.effect(
+  "malformed typed results are recorded once before projection without replay or receipt callbacks",
+  () =>
+    Effect.gen(function* () {
+      const malformedUrl = { url: "PRIVATE-MALFORMED-URL" };
+      const malformedInput = { kind: "PRIVATE-MALFORMED-RECEIPT" };
+
+      // One browser per Tool: each action retires the references the next one would name.
+      for (const [name, request] of requests) {
+        if (name === "browser_inspect") continue;
+        let inputs = 0;
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const browser = yield* scriptedSession({
+              receipt: (receipt) =>
+                Schema.is(InputReceipt)(receipt) ? malformedInput : malformedUrl,
+              navigationResult: () => malformedUrl,
+            });
+
+            const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+              onInput: () =>
+                Effect.sync(() => {
+                  inputs++;
+                }),
+            });
+
+            const tools = yield* allTools.pipe(Effect.provide(host.layer));
+            let target: unknown = name === "browser_select_option" ? selection : request;
+
+            // Keyboard input needs a focused control: click it, then name a fresh reading.
+            if (name === "browser_press" || name === "browser_type") {
+              yield* browser.initialPage.clickElement(reference);
+              const { observationId } = yield* browser.initialPage.observe();
+
+              target = { ...request, reference: { ...reference, observationId } };
+            }
+
+            // @ts-expect-error Each call pairs its parameters with the Tool it names.
+            const handled = yield* tools.handle(name, target, name);
+
+            expect((yield* Stream.runCollect(handled))[0]?.encodedResult).toEqual({
+              _tag: "BrowserToolFailure",
+              reason: "failed",
+              outcome: "unknown",
+            });
+            const snapshot = yield* host.toolFailures;
+
+            expect(snapshot.failures).toMatchObject([
+              {
+                toolCallId: name,
+                error: { reason: { _tag: "Malformed" }, outcome: "unknown" },
+              },
+            ]);
+            expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-");
+            expect(
+              (yield* browser.control.calls).filter((call) => call.operation === "navigate-stop"),
+            ).toEqual([]);
+            expect(inputs).toBe(0);
+            expect(yield* host.run(Effect.succeed(true))).toBe(true);
+          }),
+        );
+      }
+    }),
 );
 
 it.effect("a malformed replacement reading is recorded without input or replay", () =>

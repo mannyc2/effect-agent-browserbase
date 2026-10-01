@@ -228,7 +228,7 @@ it.effect("an action's reading is fitted beside its result and continues through
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Click") {
-            return (() => Effect.succeed({ url }))();
+            return Effect.succeed({ url });
           }
 
           return Effect.void;
@@ -318,7 +318,7 @@ it.effect("a host's observe replaces how every reading is taken", () =>
       const browser = yield* scriptedSession({
         beforeStart: (action) => {
           if (action._tag === "Click") {
-            return (() => Effect.succeed({ url }))();
+            return Effect.succeed({ url });
           }
 
           return Effect.void;
