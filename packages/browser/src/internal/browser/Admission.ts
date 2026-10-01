@@ -399,13 +399,14 @@ export const makeAdmission = (
     },
     /**
      * Only native work that can still change a page must settle. A `held` lane belongs to an
-     * operator's quarantine, whose own work cannot hold up the handoff that releases it.
+     * operator's quarantine, whose own work, including a pending stop setup, cannot hold up the
+     * handoff that releases it.
      */
     drained: (except?: AbortSignal, held: (lane: AdmissionLane) => boolean = () => false) =>
       [...native.values()].every((lease) => !lease.occupies() || held(lease.lane)) &&
       [registry, ...retained].every(
         (lane) =>
-          lane.native.stopSetupPending === undefined &&
+          (lane.native.stopSetupPending === undefined || held(lane)) &&
           (lane.holder === undefined ||
             (except !== undefined && lane.active?.controller.signal === except)),
       ),

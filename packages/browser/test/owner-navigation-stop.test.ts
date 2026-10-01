@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
 import { dispatchNavigationStop } from "../src/internal/browser/Actions.ts";
-import type { NativeNavigation } from "../src/internal/browser/Driver.ts";
+import type { DriverEvents, NativeNavigation } from "../src/internal/browser/Driver.ts";
 import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
 const awaitNativeRetirement = (session: {
@@ -522,6 +522,53 @@ it.effect(
           failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
         expect(f.state.clicks).toBe(0);
+      }),
+    ),
+);
+
+it.effect(
+  "a quarantined page's pending stop setup does not hold up the handoff that releases it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const opened = gate<void>();
+        let events: DriverEvents | undefined;
+
+        // The stop's native setup never completes, so it stays pending after its caller is gone.
+        const stuck = flight(async () => {
+          opened.resolve();
+
+          return new Promise<never>(() => {});
+        });
+
+        const f = yield* fixture({
+          lifetimeMillis: 20000,
+          onConnect: async (driver, connected) => {
+            events = connected;
+
+            return driver;
+          },
+          onNavigate: (url, pageId) => stuck.script(url, pageId),
+        });
+
+        const session = yield* (yield* f.acquisition).connect;
+        const page = session.initialPage();
+
+        const navigation = yield* page.controls.operations.startNavigation(
+          "https://example.test/slow",
+        );
+
+        const canceled = yield* Effect.forkChild(navigation.stop);
+
+        yield* Effect.promise(() => opened.promise);
+        yield* Fiber.interrupt(canceled);
+        // A dialog quarantines the page; only the operator's handoff can release it.
+        events?.pause("dialog", page.record.identity.pageId);
+
+        const handoff = yield* Effect.forkChild(session.beginHandoff(Effect.succeed("view")));
+
+        yield* TestClock.adjust(3000);
+        expect((yield* Fiber.join(handoff)).view).toBe("view");
       }),
     ),
 );
