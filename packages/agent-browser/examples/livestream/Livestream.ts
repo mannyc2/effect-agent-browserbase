@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, FiberSet, Schema, Semaphore, Stream } from "effect";
+import { Deferred, Effect, Fiber, FiberSet, Queue, Schema, Semaphore, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -85,6 +85,23 @@ const displayNanos = (text: string) =>
   BigInt(Math.round(Math.max(5000 / 6, (text.length / 20) * 1000))) * Millis;
 
 const MaxDisplayNanos = 7000n * Millis;
+
+/**
+ * Pointer and address graphics waiting in the delay line, in the order they air. The timeline
+ * reader only queues them, so a long delay never lets the timeline evict unread events; a fuller
+ * line resets presentation as a timeline gap does.
+ */
+const MaxCues = 16_384;
+
+interface Cue {
+  /** When it airs, before the delay, on the capture owner's clock. */
+  readonly at: bigint;
+  /** Its event's own time: presentation reset after it drops the cue. */
+  readonly since: bigint;
+  readonly apply: Effect.Effect<void>;
+}
+
+class CueOverflow extends Schema.TaggedError<CueOverflow>()("CueOverflow", {}) {}
 
 interface StepState {
   readonly toolCallId: string;
@@ -293,55 +310,87 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
     ...(step.attemptId === undefined ? {} : { attemptId: step.attemptId }),
   });
 
+  const cues = yield* Queue.dropping<Cue>(MaxCues);
+
+  /** Airs each queued cue in order; a cue from before a presentation reset is dropped. */
+  const presenter = yield* Queue.take(cues).pipe(
+    Effect.flatMap((cue) =>
+      airAt(cue.at).pipe(
+        Effect.andThen(
+          Effect.suspend(() => (cue.since < resetAfterNanos ? Effect.void : cue.apply)),
+        ),
+      ),
+    ),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+
+  /** Takes one event promptly: whatever it shows waits in `cues`, never in the timeline reader. */
   const projectMetadata = (envelope: Event) =>
     Effect.gen(function* () {
       if (envelope.sequence <= consumed.composition) return;
       consumed.composition = envelope.sequence;
       timelineMetrics.compositionEvents++;
-      if (rawTime(envelope.at) < resetAfterNanos) return;
+      const since = rawTime(envelope.at);
+
+      if (since < resetAfterNanos) return;
       const event = envelope.event;
 
+      const cue = (at: bigint, apply: Effect.Effect<void>) =>
+        Queue.offer(cues, { at, since, apply }).pipe(
+          Effect.flatMap((queued) => (queued ? Effect.void : Effect.fail(new CueOverflow()))),
+        );
+
       if (event._tag === "Glide") {
-        for (const sample of event.schedule) {
-          yield* airAt(rawTime(sample.at));
-          yield* presentation.withPermits(1)(stage.update({ pointer: sample.position }));
-        }
+        for (const sample of event.schedule)
+          yield* cue(
+            rawTime(sample.at),
+            presentation.withPermits(1)(stage.update({ pointer: sample.position })),
+          );
       } else if (event._tag === "Pointer") {
-        yield* airAt(rawTime(event.interval.end));
-        yield* presentation.withPermits(1)(stage.update({ pointer: event.position }));
+        yield* cue(
+          rawTime(event.interval.end),
+          presentation.withPermits(1)(stage.update({ pointer: event.position })),
+        );
       } else if (
         event._tag === "CaptureBoundary" &&
         event.captureId === interval.id &&
         event.sameDocument
       ) {
-        yield* airAt(rawTime(event.observed));
+        const observedAt = rawTime(event.observed);
         const address = addressOf(event.url);
 
-        yield* presentation.withPermits(1)(
-          Effect.suspend(() => {
-            const observedAt = rawTime(event.observed);
+        yield* cue(
+          observedAt,
+          presentation.withPermits(1)(
+            Effect.suspend(() => {
+              if (observedAt < addressAfterNanos || observedAt < resetAfterNanos)
+                return Effect.void;
+              addressAfterNanos = observedAt;
 
-            if (observedAt < addressAfterNanos || observedAt < resetAfterNanos) return Effect.void;
-            addressAfterNanos = observedAt;
-
-            return stage.update({ address }).pipe(
-              Effect.andThen(session.monotonicTimeNanos),
-              Effect.flatMap((airedNanos) => onAir({ _tag: "Address", address, airedNanos })),
-            );
-          }),
+              return stage.update({ address }).pipe(
+                Effect.andThen(session.monotonicTimeNanos),
+                Effect.flatMap((airedNanos) => onAir({ _tag: "Address", address, airedNanos })),
+              );
+            }),
+          ),
         );
       } else if (event._tag === "Terminal") {
-        yield* airAt(rawTime(envelope.at));
-        yield* Fiber.join(airing);
-        presentationEnded = true;
-        yield* presentation.withPermits(1)(
-          stage.update({
-            status: captureFailure === undefined ? "ended" : "failed",
-            caption: null,
-            pointer: null,
+        yield* cue(
+          since,
+          Effect.gen(function* () {
+            yield* Fiber.join(airing);
+            presentationEnded = true;
+            yield* presentation.withPermits(1)(
+              stage.update({
+                status: captureFailure === undefined ? "ended" : "failed",
+                caption: null,
+                pointer: null,
+              }),
+            );
+            yield* onAir({ _tag: "PresentationEnded", reason: event.reason });
           }),
         );
-        yield* onAir({ _tag: "PresentationEnded", reason: event.reason });
       }
     });
 
@@ -373,7 +422,8 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
         yield* Effect.forEach(snapshot.events, project, { discard: true });
         yield* page.timeline.events(snapshot.resumeAfter).pipe(Stream.runForEach(project));
       }).pipe(
-        Effect.catchTag("TimelineGap", () =>
+        // A full delay line is a gap too: what it would have shown is no longer known.
+        Effect.catchTag(["TimelineGap", "CueOverflow"], () =>
           Effect.gen(function* () {
             const count =
               consumer === "composition"
@@ -387,6 +437,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
                   addressAfterNanos = resetAfterNanos;
                   latestFrame = undefined;
                   captioned = undefined;
+                  yield* Queue.clear(cues);
                   yield* stage.update({
                     status: "gap",
                     address: null,
@@ -668,7 +719,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
     Effect.timeoutOption(Number(delay + MaxDisplayNanos) / 1e6),
   );
   yield* Fiber.join(airing);
-  yield* Effect.forEach(readers, Fiber.interrupt, { discard: true });
+  yield* Effect.forEach([...readers, presenter], Fiber.interrupt, { discard: true });
   if (!presentationEnded) {
     presentationEnded = true;
     yield* presentation.withPermits(1)(

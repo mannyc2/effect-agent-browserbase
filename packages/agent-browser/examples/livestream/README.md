@@ -36,7 +36,10 @@ runs it on a local Chromium with scripted models for both the agent and the narr
   admission, then airs `delayMillis` after the read; another Page host may still be running.
 - **Metadata.** Two independent subscribers read snapshot plus events(resumeAfter): one projects
   composition and pointer graphics, the other counts native outcomes. Neither subscribes to pixels
-  or stops capture. Timeline offsets are bridged to the capture owner's monotonic clock with
+  or stops capture. The composition reader takes each event at once and queues the pointer and
+  address graphics it implies in air-time order, so a delay longer than the timeline's retention
+  never lets unread events be evicted; more than 16,384 queued cues resets presentation as a
+  timeline gap does. Timeline offsets are bridged to the capture owner's monotonic clock with
   measured uncertainty. A Gap is reported and resets presentation; older queued pictures are
   skipped explicitly rather than paired with invented history. Page terminal and capture-stream
   failures are reported separately from the agent outcome. Capture draining publishes an ended
