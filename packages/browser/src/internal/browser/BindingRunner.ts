@@ -2,6 +2,7 @@ import { Effect, Exit, type Fiber, FiberSet, Scope } from "effect";
 
 import type { CallbackFailureMode } from "./CallbackTasks.ts";
 import type { DriverFault } from "./Driver.ts";
+import { exitPromise } from "./NativeCalls.ts";
 
 export type BindingRejection = "closed" | "capacity";
 
@@ -90,12 +91,13 @@ export const makeBindingRunner = <I, A, E, R>(
 
       inputs.set(fiber, input);
 
-      const execution = new Promise<Exit.Exit<A, E>>((resolve) => {
-        fiber.addObserver((exit) => {
-          inputs.delete(fiber);
-          resolve(Exit.isSuccess(exit) ? exit.value : Exit.failCause(exit.cause));
-        });
+      fiber.addObserver(() => {
+        inputs.delete(fiber);
       });
+
+      const execution = exitPromise(fiber).then((exit) =>
+        Exit.isSuccess(exit) ? exit.value : Exit.failCause(exit.cause),
+      );
 
       const result = execution
         .then(

@@ -1,4 +1,4 @@
-import { Exit, Schema } from "effect";
+import { Exit, type Fiber, Schema } from "effect";
 
 import {
   BrowserError,
@@ -8,6 +8,12 @@ import {
   type BrowserReason,
 } from "../../Errors.ts";
 import type { ReadTicket } from "./Owner.ts";
+
+/** A fiber's Exit as a Promise, for native callers that cannot await an Effect. */
+export const exitPromise = <A, E>(fiber: Fiber.Fiber<A, E>): Promise<Exit.Exit<A, E>> =>
+  new Promise((resolve) => {
+    fiber.addObserver(resolve);
+  });
 
 /** Carries a captured Clock defect/interruption across the native Promise boundary unchanged. */
 export class NativeEffectFailure extends Schema.TaggedError<NativeEffectFailure>()(
