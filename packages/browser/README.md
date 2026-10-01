@@ -467,8 +467,10 @@ const seen = yield * scout.observe({ scope: "viewport" });
 `createPage()` returns the Page issued for the new page without selecting it. `selectPage(page)`
 takes a Page this session issued and chooses the displayed page, which is also the page `detach`
 records and `reconnect` resumes on; it never retargets a Page or Frame operation, and a closed or
-stale Page is refused unsent. A child frame is reached through `page.frame(frameInfo)`,
-never by selection. Use `page.describe()`, `page.listFrames()`,
+stale Page is refused unsent. `Browser.checkPage(session, page)` checks that a Page or Frame
+is one this session issued, by identity, and that its authority is still current; adapters call it
+once when they bind, so a foreign, copied or retired target fails before any work. A child frame
+is reached through `page.frame(frameInfo)`, never by selection. Use `page.describe()`, `page.listFrames()`,
 `page.frame(frameInfo)`, `page.resizeViewport(viewport)` and `page.close()` for exact page work.
 The selected-session actions, `retain`, `pinPage`, `pinFrame` and their target-view types are
 removed. The shared operation contract is `PageOperations`.
@@ -538,7 +540,7 @@ dispatch remain necessary even when the last input targeted a different page.
 ### Performed plans and absolute starts
 
 `page.run(plan, { style: {} })` uses the named default performed profile; omitted style or
-`style: "plain"` keeps plain input. `Plan.validateOptions(value)` validates and normalizes host
+`style: "plain"` keeps plain input. `Plan.checkRunOptions(value)` checks and normalizes host
 options, preserving public `within`, queue admission and performed defaults. Profiles have finite
 pointer duration/inset/curvature, key interval/hold and scroll duration/interval bounds. `seed` is
 an optional safe integer; the actual chosen seed is retained in run and attempt receipts.

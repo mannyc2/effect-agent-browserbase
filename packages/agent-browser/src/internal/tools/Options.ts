@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect";
 import type { ElementAdmission, Frame, Page } from "effect-browser/browser";
 import { FillFormOptions, type Observation } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
-import { type RunOptions, validateOptions } from "effect-browser/plan";
+import { checkRunOptions, type RunOptions } from "effect-browser/plan";
 
 import { ResultMaxBytes } from "./Model.ts";
 
@@ -177,7 +177,7 @@ export const resolveOptions = Effect.fnUntraced(function* (
   if (options.observe !== undefined && typeof options.observe !== "function")
     return yield* configuration("observe");
 
-  const execution = yield* validateOptions(
+  const execution = yield* checkRunOptions(
     options.execution === undefined ? {} : options.execution,
   );
 

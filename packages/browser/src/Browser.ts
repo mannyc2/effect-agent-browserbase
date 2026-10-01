@@ -419,7 +419,12 @@ export interface BrowserSession<E = never> {
 /** Helpers that do not supervise callback failures accept any live browser session. */
 export type AnySession = BrowserSession<unknown>;
 
-/** Check the exact issued Page or Frame and its current authority on this original session. */
+/**
+ * Check that `page` is a Page or Frame this session issued, by identity, and that its authority
+ * is still current: a foreign or copied object fails `UnregisteredSession`, a closed, stale or
+ * detached one fails with the same refusal its own operations would report. Adapters such as
+ * agent-browser hosts call it once when they bind, so a wrong target fails before any work.
+ */
 export const checkPage = (
   session: AnySession,
   page: Page | Frame,

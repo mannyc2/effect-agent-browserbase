@@ -31,8 +31,12 @@ export interface RunOptions extends OperationOptions {
   readonly checkpoint?: CheckpointOptions;
 }
 
-/** Normalize host options without exposing private deadline/queue accounting fields. */
-export const validateOptions = (value: unknown): Effect.Effect<RunOptions, BrowserError> =>
+/**
+ * Check and normalize host run options exactly as `page.start` and `page.run` will, without
+ * exposing private deadline/queue accounting fields. A caller that builds options from untrusted
+ * configuration can fail early with the same `Configuration` refusal.
+ */
+export const checkRunOptions = (value: unknown): Effect.Effect<RunOptions, BrowserError> =>
   checkedRunOptions(value).pipe(
     Effect.map(({ withinMillis: _withinMillis, queueMillis: _queueMillis, ...options }) => options),
   );
