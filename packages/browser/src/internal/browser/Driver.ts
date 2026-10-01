@@ -16,9 +16,22 @@ import type {
 } from "../../BrowserData.ts";
 import type { CaptureSize } from "../../CaptureData.ts";
 import type { InitializationError } from "../../Errors.ts";
+import type {
+  Descriptor,
+  Precondition,
+  ResolveGuard,
+  SettledEvidence,
+  SettledOptions,
+} from "../../PlanData.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
-import type { AdmissionPolicy, ObservationLimits } from "./Observation.ts";
+import type { ResolveRequest } from "./Descriptor.ts";
+import type {
+  AdmissionPolicy,
+  ObservationLimits,
+  ResolvedElement,
+  ResolvedGroup,
+} from "./Observation.ts";
 import type { Invalidation, ObservationScope, Ticket, WaitTicket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
@@ -32,6 +45,13 @@ export interface ClickResult {
   readonly url: string;
   readonly input: InputReceipt;
 }
+
+export type ElementTarget = string | ObservedElement | ResolvedElement;
+export type NativeSelectOptions = SelectOptions | ReadonlyArray<ResolvedElement>;
+
+export type NativeFormField = Omit<FormField, "options"> & {
+  readonly options?: NativeSelectOptions;
+};
 
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
 export interface DriverOptions {
@@ -215,6 +235,33 @@ export type NativeFileSelection =
   | { readonly _tag: "Remote"; readonly path: string };
 
 export interface Driver {
+  readonly resolveDescriptor: (
+    descriptor: Descriptor,
+    ticket: Ticket,
+    target: DriverTarget,
+    guard?: ResolveGuard,
+  ) => Promise<ObservedElement>;
+  readonly resolveGroup: (
+    requests: ReadonlyArray<ResolveRequest>,
+    ticket: Ticket,
+    target: DriverTarget,
+    guard: ResolveGuard,
+  ) => Promise<ResolvedGroup>;
+  readonly expectations: (
+    conditions: ReadonlyArray<Precondition>,
+    ticket: Ticket,
+    target: DriverTarget,
+  ) => Promise<void>;
+  readonly settled: (
+    options: SettledOptions,
+    ticket: WaitTicket,
+    target: DriverTarget,
+  ) => Promise<SettledEvidence>;
+  readonly scrollTo: (
+    target: ObservedElement | ResolvedElement,
+    ticket: Ticket,
+    browserTarget?: DriverTarget,
+  ) => Promise<string>;
   readonly pageControl?: {
     readonly state: (page: PageInfo, ticket: Ticket) => Promise<PageExecutionState>;
     readonly suspend: (page: PageInfo, ticket: Ticket) => Promise<PageSuspension>;
@@ -284,22 +331,22 @@ export interface Driver {
     browserTarget?: DriverTarget,
   ) => Promise<void>;
   readonly click: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     capture: InputCapture,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ) => Promise<ClickResult>;
   readonly fill: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     value: string,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ) => Promise<string>;
   readonly selectOption: (
-    target: ObservedElement,
-    options: SelectOptions,
+    target: ObservedElement | ResolvedElement,
+    options: NativeSelectOptions,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
@@ -312,8 +359,8 @@ export interface Driver {
    * a state other than the requested one.
    */
   readonly formStep: (
-    target: ObservedElement,
-    field: FormField,
+    target: ObservedElement | ResolvedElement,
+    field: NativeFormField,
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
     settleMillis: number,
@@ -328,13 +375,13 @@ export interface Driver {
   }>;
   /** Private current states of retained nodes, without identity checks; absent when detached. */
   readonly formState: (
-    targets: ReadonlyArray<ObservedElement>,
+    targets: ReadonlyArray<ObservedElement | ResolvedElement>,
     ticket: Ticket,
     browserTarget?: DriverTarget,
   ) => Promise<ReadonlyArray<string | undefined>>;
   /** The one submit click, on an exact observed node that may have become enabled. */
   readonly formSubmit: (
-    target: ObservedElement,
+    target: ObservedElement | ResolvedElement,
     ticket: Ticket,
     capture: InputCapture,
     policy?: AdmissionPolicy,
@@ -353,7 +400,7 @@ export interface Driver {
     target?: DriverTarget,
   ) => Promise<NativeInput>;
   readonly hover: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
@@ -369,14 +416,14 @@ export interface Driver {
   readonly press: (
     key: string,
     modifiers: ReadonlyArray<KeyModifier>,
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ) => Promise<NativeInput>;
   readonly type: (
     text: string,
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
@@ -395,19 +442,19 @@ export interface Driver {
     target: DriverTarget,
   ) => Promise<void>;
   readonly waitForElement: (
-    reference: ObservedElement,
+    reference: ObservedElement | ResolvedElement,
     state: WaitForElementRequest["state"],
     ticket: WaitTicket,
     target: DriverTarget,
   ) => Promise<void>;
   readonly clickAndWait: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     capture: InputCapture,
     browserTarget?: DriverTarget,
   ) => Promise<ClickResult>;
   readonly clickForDownload: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     browserTarget?: DriverTarget,
   ) => Promise<{
@@ -416,14 +463,14 @@ export interface Driver {
     readonly state: "completed" | "failed";
   }>;
   readonly selectFiles: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
     browserTarget?: DriverTarget,
   ) => Promise<string>;
   /** The chooser observer is registered before the single click dispatch that opens it. */
   readonly clickForFileSelection: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
     browserTarget?: DriverTarget,
@@ -432,7 +479,7 @@ export interface Driver {
   readonly documentReadiness: (ticket: Ticket, target?: DriverTarget) => Promise<ReadinessState>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
   readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
-  readonly invalidateObservation: (scope?: ObservationScope) => void;
+  readonly invalidateObservation: (scope?: ObservationScope, origin?: AbortSignal) => void;
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;
   readonly fenceInitializationPage?: (pageId: string) => void;

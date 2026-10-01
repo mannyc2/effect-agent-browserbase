@@ -176,15 +176,17 @@ it.live(
             expect(latency.p50).toBeGreaterThan(-clock.uncertaintyMillis - 5);
             expect(latency.p50).toBeLessThan(500);
 
-            // Everything the storyboard dispatched was timed. Three clicks and one link are timed
-            // around the call. Six real keys, and one native pointer move for each of the four
-            // glides before them, are timed by the receipt the library returned for each.
-            expect(metrics.control.actionMillis.click?.count).toBe(3);
-            expect(metrics.control.actionMillis.clickAndWait?.count).toBe(1);
+            // Four original Plan Click steps and one whole-text Type are timed around the run.
+            // Every input duration is an actual receipt, including the four presentation moves.
+            expect(metrics.control.actionMillis.click?.count).toBe(4);
+            expect(metrics.control.actionMillis.clickAndWait).toBeUndefined();
+            expect(metrics.control.actionMillis.type?.count).toBe(1);
             expect(metrics.control.actionMillis.fill).toBeUndefined();
-            expect(metrics.control.inputMillis.key?.count).toBe(6);
+            expect(metrics.control.inputMillis.key).toBeUndefined();
+            expect(metrics.control.inputMillis.type?.count).toBe(1);
+            expect(metrics.control.inputMillis.click?.count).toBe(4);
             expect(metrics.control.inputMillis.pointerMove?.count).toBe(4);
-            expect(metrics.control.clickToFrameMillis?.count).toBe(3);
+            expect(metrics.control.clickToFrameMillis?.count).toBe(4);
             expect(metrics.control.cueRoundTripMillis?.count).toBeGreaterThan(5);
 
             // Constant rate: the decoded frame count is the duration at thirty per second, and

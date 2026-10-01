@@ -52,10 +52,19 @@ import {
   type Containment,
   InitializationError,
 } from "../../Errors.ts";
+import { StepFailed, type RunOptions } from "../../Plan.ts";
+import type { LivePlanEncoded, PlanEncoded } from "../../PlanData.ts";
 import { associate, associatePageAuthority, forPage } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { OperationOptionsSchema } from "./OperationOptions.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
+import {
+  checkedDescriptor,
+  checkedLivePlan,
+  checkedResolveOptions,
+  checkedRunOptions,
+  checkedSettled,
+} from "./PlanOptions.ts";
 import { schemaPath } from "./SchemaPath.ts";
 import type {
   TargetControls,
@@ -506,6 +515,45 @@ const makePageOperations = (controls: PageControls): PageOperations => {
   };
 };
 
+const makePlanOperations = (
+  controls: PageControls,
+): Pick<Frame, "start" | "run" | "resolve" | "settled"> => {
+  const prepare = (plan: LivePlanEncoded | PlanEncoded, options: RunOptions | undefined) =>
+    checkedRunOptions(options).pipe(
+      Effect.flatMap((options) =>
+        checkedLivePlan(plan).pipe(Effect.map((plan) => ({ plan, options }))),
+      ),
+      Effect.mapError(
+        (error) => new StepFailed({ stage: "PreparationFailed", completed: [], error }),
+      ),
+    );
+
+  return {
+    start: (plan, options) =>
+      prepare(plan, options).pipe(
+        Effect.flatMap(({ plan, options }) => controls.plans.start(plan, options)),
+      ),
+    run: (plan, options) =>
+      prepare(plan, options).pipe(
+        Effect.flatMap(({ plan, options }) => controls.plans.run(plan, options)),
+      ),
+    resolve: (descriptor, options) =>
+      checkedResolveOptions(options).pipe(
+        Effect.flatMap(({ operationOptions, guard }) =>
+          checkedDescriptor(descriptor).pipe(
+            Effect.flatMap((descriptor) => controls.resolve(descriptor, guard, operationOptions)),
+          ),
+        ),
+      ),
+    settled: (request, options) =>
+      checkedSettled(request).pipe(
+        Effect.flatMap((request) =>
+          withOperationOptions(options, "settled", (options) => controls.settled(request, options)),
+        ),
+      ),
+  };
+};
+
 export const makeSession = <E>(
   controls: SessionControls<SessionLease>,
   bindings: Bindings<E>,
@@ -519,6 +567,7 @@ export const makeSession = <E>(
 
     const page: Page = {
       ...makePageOperations(value.controls),
+      ...makePlanOperations(value.controls),
       identity: Object.freeze(value.record.identity),
       status: value.status,
       describe: (options = {}) =>
@@ -539,6 +588,7 @@ export const makeSession = <E>(
           ),
           Effect.map((frame): Frame => ({
             ...makePageOperations(frame.controls),
+            ...makePlanOperations(frame.controls),
             identity: Object.freeze(frame.identity),
             status: value.status.pipe(
               Effect.map((status) =>

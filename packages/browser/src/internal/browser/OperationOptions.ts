@@ -7,7 +7,7 @@ const FiniteDurationValue = Schema.Union([
 
 // Duration.fromInput intentionally normalizes raw NaN to zero. Validate raw components first
 // so an invalid queue allowance cannot silently become fail-fast admission.
-const FiniteDurationInput = Schema.Union([
+export const FiniteDurationInput = Schema.Union([
   // The built-in declaration checks only the Duration marker. Validate its representation
   // before arithmetic so a malformed host value is a typed refusal rather than a defect.
   Schema.Duration.check(

@@ -1,9 +1,9 @@
 import type { CDPSession, ElementHandle, Page } from "playwright-core";
 
-import type { KeyModifier, ObservedElement } from "../../BrowserData.ts";
+import type { KeyModifier } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { makeActions } from "./Actions.ts";
-import type { DriverTarget } from "./Driver.ts";
+import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
@@ -241,12 +241,13 @@ export const makeKeyboard = (
 
   /** Sends under one dispatch, either to whatever has focus or to the one element that must. */
   const send = async (
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
     keys: (page: Page, element?: ElementHandle<Element>) => Promise<void>,
     browserTarget?: DriverTarget,
   ): Promise<NativeInput> => {
+    if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
     const { page } = current(browserTarget).entry;
 
     if (into === undefined) {
@@ -271,7 +272,7 @@ export const makeKeyboard = (
   const press = (
     key: string,
     modifiers: ReadonlyArray<KeyModifier>,
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
@@ -289,12 +290,13 @@ export const makeKeyboard = (
 
   const type = (
     text: string,
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ) =>
     sanitize(async () => {
+      if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
       const { page } = current(browserTarget).entry;
 
       return withTypingPort(page, ticket, async (port) => {

@@ -31,6 +31,8 @@ const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (b
 
 Browser Layers take Effect's `Crypto` from the host platform: `NodeServices.layer` here, `BunServices.layer` on Bun. For hosted acquisition, supply `BrowserbaseBrowser.open(policy)` with a Browserbase account and launch recipe. `Browser.scoped` supervises either source: it preserves the concrete session and typed callback errors, joins callback resources before closing the browser, and retains checked cleanup failures in the workflow's own final cause even when its body fails. An outer race can discard that cause; use the provider's `onCleanup` with a host-owned sink to retain receipt evidence outside the race. The [Browserbase workflow examples](packages/browserbase/examples/workflows.ts) show account/resource composition.
 
+Issued Pages and Frames also execute bounded action plans through `page.run` and scoped `page.start`. `effect-browser/plan` validates and records durable descriptor intent with named inputs; the same owner preserves native acknowledgements, deadlines and containment. See [actions, plans and recording](packages/browser/README.md#actions-plans-and-recording).
+
 ## Use the same tools with either source
 
 ```ts

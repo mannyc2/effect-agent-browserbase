@@ -4,6 +4,7 @@ import type { OperationOptions } from "../../Browser.ts";
 import {
   BrowserDiagnostic,
   BrowserDiagnostics,
+  type ObservedElement,
   type AdmissionLimits,
   SessionStatus,
   type SessionReason,
@@ -13,6 +14,7 @@ import { BrowserError, Reasons, type BrowserOperation, type Containment } from "
 import { makeAdmission } from "./Admission.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
 import { providerReason, publicError } from "./NativeCalls.ts";
+import type { DescriptorSample, ResolvedElement } from "./Observation.ts";
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
@@ -69,10 +71,23 @@ export interface Ticket extends ReadTicket {
   readonly retainNative?: () => () => void;
   readonly dispatched: boolean;
   readonly phase?: "Prepared" | "Dispatched" | "Acknowledged" | "FollowUp" | "Terminal";
+  /** Actual owner's containment, including pure interruption without a typed failure. */
+  readonly containment?: Containment;
   dispatch(): void;
   /** Called only for positive completion of all native commands in the current mutation phase. */
   acknowledge?(): void;
   followUp?(): void;
+  /** Facts from the checked node immediately before dispatch; no separate recording read. */
+  readonly captureTarget?: (
+    target: string | ObservedElement | ResolvedElement,
+    sample: DescriptorSample | undefined,
+  ) => void;
+}
+
+/** Synchronous host evidence from the original ticket, never dispatch authority. */
+export interface ExecutionEvidence {
+  readonly phase?: (phase: NonNullable<Ticket["phase"]>, ticket: Ticket) => void;
+  readonly target?: NonNullable<Ticket["captureTarget"]>;
 }
 
 /** The driver retires native capacity only after its wait and required handle disposal settle. */
@@ -114,7 +129,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   const lifetimeDeadline =
     Number(yield* Clock.monotonicTimeNanos) / 1_000_000 + limits.maxElapsedMillis;
 
-  const hooks = new Set<(reason: Invalidation, scope: ObservationScope) => void>();
+  const hooks = new Set<
+    (reason: Invalidation, scope: ObservationScope, origin?: AbortSignal) => void
+  >();
 
   const state = {
     phase: "acquiring" as Phase,
@@ -185,14 +202,18 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     if (phase === "open") pauseReason = null;
   };
 
-  const invalidate = (reason: Invalidation, scope: ObservationScope = "all") => {
+  const invalidate = (
+    reason: Invalidation,
+    scope: ObservationScope = "all",
+    origin?: AbortSignal,
+  ) => {
     for (const waiting of waits())
       if (scope === "all" || (scope !== "none" && scope.pageId === waiting.target.pageId))
         waiting.cancel(Reasons.Stale.make({}));
     for (const lane of admission.pages.values())
       if (scope === "all" || (scope !== "none" && scope.pageId === lane.pageId)) lane.revision++;
     state.revision++;
-    for (const hook of hooks) hook(reason, scope);
+    for (const hook of hooks) hook(reason, scope, origin);
   };
 
   const fence = (phase: Phase, reason: Invalidation, trigger?: SessionReason) => {
@@ -316,13 +337,18 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
    * Admission transfers a pure wait to an independent deadline and cancellation record. Its
    * logical barrier may end before uncancellable native work; neither is a mutation reservation.
    */
-  const beginWait = (admitted: Ticket, target: DriverTarget, connection: object): OwnedWait => {
+  const beginWait = (
+    admitted: Ticket,
+    target: DriverTarget,
+    connection: object,
+    operation: "wait" | "settled" = "wait",
+  ): OwnedWait => {
     admitted.check();
     const lane = admission.pages.get(target.pageId);
 
     if (lane === undefined || lane.native.wait !== undefined)
       throw BrowserError.make({
-        operation: "wait",
+        operation,
         reason: Reasons.Busy.make({}),
         outcome: "undispatched",
       });
@@ -335,7 +361,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     let canceled: BrowserError | undefined;
 
     const error = (reason: BrowserError["reason"]) =>
-      BrowserError.make({ operation: "wait", reason, outcome: "undispatched" });
+      BrowserError.make({ operation, reason, outcome: "undispatched" });
 
     const release = () => {
       if (retired && !record.pending) {
@@ -397,7 +423,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     };
 
     const fail = (cause: unknown) => {
-      let failure = publicError(cause, "wait", {
+      let failure = publicError(cause, operation, {
         reason: Reasons.Provider.make({}),
         outcome: "undispatched",
       });
@@ -423,7 +449,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           Effect.try({
             try: check,
             catch: (cause) =>
-              publicError(cause, "wait", {
+              publicError(cause, operation, {
                 reason: Reasons.Stale.make({}),
                 outcome: "undispatched",
               }),
@@ -503,6 +529,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       /** Composite operations retain the deadlines captured by their original caller. */
       readonly operationDeadline?: number;
       readonly queueDeadline?: number;
+      readonly evidence?: ExecutionEvidence;
       /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
       readonly waitUntil?: number;
       /** Recovery and lifecycle cleanup own independent, bounded capacity. */
@@ -660,6 +687,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         };
 
         const ticket: Ticket = {
+          ...(options.evidence?.target === undefined
+            ? {}
+            : { captureTarget: options.evidence.target }),
           retainNative: () => admission.retainNative(lane, operation, nativeConnection),
           signal: controller.signal,
           deadline,
@@ -672,11 +702,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           get phase() {
             return phase;
           },
+          get containment() {
+            return containment;
+          },
           check,
           dispatch() {
             check();
             if (!dispatched && options.mutation)
-              invalidate("observation", options.mutationScope?.() ?? "all");
+              invalidate("observation", options.mutationScope?.() ?? "all", controller.signal);
             dispatched = true;
             pending = true;
             phase = "Dispatched";
@@ -686,16 +719,23 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               controller,
               scope !== undefined && scope !== "all" && scope !== "none" ? scope.pageId : undefined,
             );
+            options.evidence?.phase?.("Dispatched", ticket);
           },
           acknowledge() {
             pending = false;
             if (phase !== "Terminal") phase = "Acknowledged";
             if (!unknownDecided) unresolved.delete(controller);
+            options.evidence?.phase?.("Acknowledged", ticket);
           },
           followUp() {
-            if (phase === "Acknowledged") phase = "FollowUp";
+            if (phase === "Acknowledged") {
+              phase = "FollowUp";
+              options.evidence?.phase?.("FollowUp", ticket);
+            }
           },
         };
+
+        options.evidence?.phase?.("Prepared", ticket);
 
         // A revocation freezes the pending attempt synchronously, before a late native
         // acknowledgement can run and before the interrupted Effect resumes its handler.
@@ -815,6 +855,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           Effect.ensuring(
             Effect.sync(() => {
               phase = "Terminal";
+              options.evidence?.phase?.("Terminal", ticket);
               controller.signal.removeEventListener("abort", freezeUnknown);
               controller.abort();
               if (lane.active?.controller === controller) lane.active = undefined;
@@ -894,6 +935,20 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     state,
     lifetimeDeadline,
     guard,
+    chargeHostRead: (ticket: Ticket, operation: BrowserOperation) => {
+      ticket.check();
+      if (state.hostReads >= limits.maxHostReads)
+        throw BrowserError.make({
+          operation,
+          reason: Reasons.Limit.make({
+            dimension: "host-reads",
+            maximum: limits.maxHostReads,
+            observed: state.hostReads,
+          }),
+          outcome: "undispatched",
+        });
+      state.hostReads++;
+    },
     pageAdmission: admission.page,
     admissionSnapshot: admission.snapshot,
     admissionStatus: Effect.sync(admission.status),
@@ -1026,7 +1081,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
       return Object.freeze(snapshot);
     }),
-    onInvalidate(hook: (reason: Invalidation, scope: ObservationScope) => void): () => void {
+    onInvalidate(
+      hook: (reason: Invalidation, scope: ObservationScope, origin?: AbortSignal) => void,
+    ): () => void {
       hooks.add(hook);
 
       return () => {

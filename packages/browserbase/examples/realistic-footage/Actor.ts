@@ -1,12 +1,13 @@
-import { Duration, Effect } from "effect";
-import type { AnySession } from "effect-browser/browser";
+import { Duration, Effect, Schema } from "effect";
+import type { AnySession, Page } from "effect-browser/browser";
 import {
   ClickRequest,
-  type InputReceipt,
+  InputReceipt,
   PointerMoveRequest,
   PressRequest,
   TypeRequest,
 } from "effect-browser/browser-data";
+import type { Step } from "effect-browser/plan-data";
 
 import { type Answer, Report } from "./Cues.ts";
 import { type CueRequest, Director } from "./Director.ts";
@@ -106,6 +107,27 @@ const glideOnto = Effect.fnUntraced(function* (session: AnySession, found: Locat
 });
 
 export const scrollTo = (selector: string) => Effect.asVoid(bringIntoView(selector));
+
+/** Run original public browser intent and measure only the receipt that run actually returned. */
+export const perform = Effect.fn("Actor.perform")(function* (page: Page, step: Step) {
+  const kind = step.action._tag.charAt(0).toLowerCase() + step.action._tag.slice(1);
+  const ran = yield* timed(kind, page.run({ version: 1, steps: [step] }, { style: "plain" }));
+
+  for (const performed of ran.steps) {
+    const receipt = performed.receipt;
+
+    const input = Schema.is(InputReceipt)(receipt)
+      ? receipt
+      : receipt !== undefined && "input" in receipt
+        ? receipt.input
+        : undefined;
+
+    if (Schema.is(InputReceipt)(input)) yield* received(input.kind, Effect.succeed(input));
+  }
+  if (step.action._tag === "Click" || step.action._tag === "Navigate") yield* page.ready();
+
+  return ran;
+});
 
 export const moveTo = Effect.fn("Actor.moveTo")(function* (session: AnySession, selector: string) {
   yield* glideOnto(session, yield* bringIntoView(selector));

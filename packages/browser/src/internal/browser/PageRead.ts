@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
-import { ControlFacts, ObservedControl } from "../../BrowserData.ts";
+import { type ControlFacts, ObservedControl } from "../../BrowserData.ts";
+import { NativeControlFacts, type DescriptorQuery } from "./Descriptor.ts";
 
 const ControlIndex = Schema.Natural.check(Schema.isLessThanOrEqualTo(63));
 
@@ -12,7 +13,7 @@ export const PageReadResult = Schema.Struct({
   text: Schema.String.check(Schema.isMaxLength(131072)),
   textTruncated: Schema.Boolean,
   controlsTruncated: Schema.Boolean,
-  controls: Schema.Array(ControlFacts).check(Schema.isMaxLength(64)),
+  controls: Schema.Array(NativeControlFacts).check(Schema.isMaxLength(64)),
   /** Private selection identity, separate from every public control-facts projection. */
   selects: Schema.optionalKey(
     Schema.Array(
@@ -87,6 +88,8 @@ export interface PageReadRequest {
   readonly match?: string;
   /** Fresh membership and identity checks for already retained options; values stay private. */
   readonly options?: ReadonlyArray<{ readonly node: Element; readonly value: string }>;
+  /** Descriptor matching counts its complete bounded universe before returning any node. */
+  readonly descriptors?: ReadonlyArray<DescriptorQuery>;
   /** The browser's answers for the points an earlier reading of this page left pending. */
   readonly verdicts?: Readonly<Record<string, PointVerdict>>;
   /**
@@ -564,6 +567,19 @@ export const readPage = (
         ? node.autocomplete
         : "";
 
+    const label =
+      node.getAttribute("aria-label") ??
+      node.getAttribute("placeholder") ??
+      (node instanceof HTMLInputElement
+        ? node.labels?.[0]?.textContent
+        : node instanceof HTMLOptionElement
+          ? node.label
+          : node.textContent) ??
+      "";
+
+    const inputType =
+      node instanceof HTMLInputElement || node instanceof HTMLButtonElement ? node.type : undefined;
+
     return {
       kind:
         tag === "a"
@@ -571,16 +587,34 @@ export const readPage = (
           : ["button", "input", "select", "textarea"].includes(tag)
             ? tag
             : "other",
-      label: (
-        node.getAttribute("aria-label") ??
-        node.getAttribute("placeholder") ??
-        (node instanceof HTMLInputElement
-          ? node.labels?.[0]?.textContent
-          : node instanceof HTMLOptionElement
-            ? node.label
-            : node.textContent) ??
-        ""
-      ).slice(0, 256),
+      label: label.slice(0, 256),
+      completeness: {
+        label: label.length <= 256 ? ("complete" as const) : ("omitted" as const),
+        inputType:
+          inputType === undefined
+            ? ("absent" as const)
+            : inputType.length <= 32
+              ? ("complete" as const)
+              : ("omitted" as const),
+        autocomplete:
+          autocomplete === ""
+            ? ("absent" as const)
+            : autocomplete.length <= 128
+              ? ("complete" as const)
+              : ("omitted" as const),
+        destination:
+          target === undefined
+            ? ("absent" as const)
+            : target.length <= 2048
+              ? ("complete" as const)
+              : ("omitted" as const),
+        formMethod:
+          method === undefined
+            ? ("absent" as const)
+            : method === "get" || method === "post" || method === "dialog"
+              ? ("complete" as const)
+              : ("omitted" as const),
+      },
       disabled,
       ...(checked === undefined ? {} : { checked }),
       ...(selected === undefined ? {} : { selected }),
@@ -591,9 +625,7 @@ export const readPage = (
         (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
           ? !node.readOnly
           : node instanceof HTMLSelectElement),
-      ...(node instanceof HTMLInputElement || node instanceof HTMLButtonElement
-        ? { inputType: node.type.slice(0, 32) }
-        : {}),
+      ...(inputType === undefined ? {} : { inputType: inputType.slice(0, 32) }),
       ...(autocomplete === "" ? {} : { autocomplete: autocomplete.slice(0, 128) }),
       // An over-long destination is left out, never cut: half a URL is a different URL.
       ...(target === undefined || target.length > 2048 ? {} : { destination: target }),
@@ -606,6 +638,138 @@ export const readPage = (
       mainFrame: window.top === window,
     };
   };
+
+  if (request.descriptors !== undefined) {
+    const candidateSelector =
+      "a[href],button,input,select,textarea,option,[role=button],[role=checkbox],[role=radio],[role=switch],[role=menuitemcheckbox],[role=menuitemradio],[role=option],[role=tab],[role=treeitem],[role=row],[role=gridcell],[role=textbox],[role=combobox],[role=listbox],[role=radiogroup],[role=spinbutton],[role=tree]";
+
+    const matches = request.descriptors.map(() => ({
+      documentCount: 0,
+      visibleCount: 0,
+      document: undefined as
+        | { readonly node: Element; readonly facts: ReturnType<typeof factsOf> }
+        | undefined,
+      visible: undefined as
+        | { readonly node: Element; readonly facts: ReturnType<typeof factsOf> }
+        | undefined,
+      uncertain: false,
+    }));
+
+    const walker = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT);
+    let exhausted = false;
+
+    for (let candidate = walker.nextNode(); candidate !== null; candidate = walker.nextNode()) {
+      if (++visited > nodeBudget) {
+        exhausted = true;
+        break;
+      }
+      if (!(candidate instanceof Element) || !candidate.matches(candidateSelector)) continue;
+      const facts = factsOf(candidate);
+
+      for (const [index, query] of request.descriptors.entries()) {
+        const result = matches[index];
+        const descriptor = query.descriptor;
+
+        if (
+          result === undefined ||
+          facts.kind !== descriptor.kind ||
+          facts.completeness.label !== "complete" ||
+          facts.label !== descriptor.label
+        )
+          continue;
+        if (
+          query.parent !== undefined &&
+          (!(query.parent instanceof HTMLSelectElement) ||
+            !(candidate instanceof HTMLOptionElement) ||
+            candidate.closest("select") !== query.parent ||
+            query.parent.options.item(candidate.index) !== candidate)
+        )
+          continue;
+        if (
+          descriptor.destination !== undefined &&
+          (facts.completeness.destination !== "complete" ||
+            facts.destination !== descriptor.destination)
+        )
+          continue;
+        const identity = descriptor.identity;
+
+        if (
+          identity !== undefined &&
+          ((identity.inputType !== undefined &&
+            (facts.completeness.inputType !== "complete" ||
+              facts.inputType !== identity.inputType)) ||
+            (identity.autocomplete !== undefined &&
+              (facts.completeness.autocomplete !== "complete" ||
+                facts.autocomplete !== identity.autocomplete)) ||
+            (identity.formMethod !== undefined &&
+              (facts.completeness.formMethod !== "complete" ||
+                facts.formMethod !== identity.formMethod)))
+        )
+          continue;
+        const matched = { node: candidate, facts };
+
+        if (result.documentCount === (descriptor.ordinal?.index ?? 0)) result.document = matched;
+        result.documentCount++;
+        if (facts.hitTest === "self") {
+          if (result.visibleCount === (descriptor.ordinal?.index ?? 0)) result.visible = matched;
+          result.visibleCount++;
+        } else if (facts.hitTest === "uncertain" && facts.placement !== "outside")
+          result.uncertain = true;
+      }
+    }
+
+    const nodes: Array<Element> = [];
+
+    const results = request.descriptors.map((query, index) => {
+      const result = matches[index];
+
+      const picked =
+        query.descriptor.matchScope === "viewport" ? result?.visible : result?.document;
+
+      const count =
+        query.descriptor.matchScope === "viewport"
+          ? (result?.visibleCount ?? 0)
+          : (result?.documentCount ?? 0);
+
+      const documentCount = result?.documentCount ?? 0;
+
+      const status = (value: "missing" | "ambiguous" | "incomplete") => ({
+        status: value,
+        count,
+        documentCount,
+      });
+
+      if (exhausted) return status("incomplete");
+      if (query.descriptor.matchScope === "viewport") {
+        if (result?.uncertain) return status("incomplete");
+      }
+      if (count === 0) return status("missing");
+      if (query.descriptor.matchScope === "viewport" && !query.contextual && documentCount > 1)
+        return { ...status("ambiguous"), count: documentCount };
+      const ordinal = query.descriptor.ordinal;
+
+      if (ordinal !== undefined && ordinal.of !== count) return status("incomplete");
+      if (ordinal === undefined && count !== 1) return status("ambiguous");
+      if (picked === undefined) return status("incomplete");
+      if (query.parent !== undefined && picked.node instanceof HTMLOptionElement) {
+        if (picked.node.value.length > 65536) return status("incomplete");
+        nodes.push(picked.node);
+
+        return {
+          status: "matched",
+          count,
+          documentCount,
+          facts: picked.facts,
+          value: picked.node.value,
+        };
+      }
+      nodes.push(picked.node);
+
+      return { status: "matched", count, documentCount, facts: picked.facts };
+    });
+
+    return { nodes, data: { exhausted, visited, results } };
+  }
 
   if (only !== undefined)
     return {

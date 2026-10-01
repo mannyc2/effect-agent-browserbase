@@ -40,6 +40,8 @@ import type {
   Viewport,
 } from "./BrowserData.ts";
 import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
+import type { PlanOperations } from "./Plan.ts";
+import type { DescriptorEncoded, ResolveGuard, SettledEvidence } from "./PlanData.ts";
 
 /**
  * Host-only ordinary admission. Omission or zero fails immediately; positive finite duration
@@ -53,6 +55,17 @@ export interface AdmissionOptions {
 export interface OperationOptions {
   readonly timeoutMillis?: number;
   readonly admission?: AdmissionOptions;
+}
+
+/** Explicit descriptor guard and ordinary host admission; no selector or geometry fallback. */
+export interface ResolveOptions extends OperationOptions {
+  readonly guard?: typeof ResolveGuard.Encoded;
+}
+
+/** Named native quiet signals within the original positive finite deadline. */
+export interface SettledRequest {
+  readonly quiet: Duration.Input;
+  readonly within: Duration.Input;
 }
 
 /** A bounded host-memory snapshot; it grants no priority or native authority. */
@@ -108,9 +121,22 @@ export type PageOperations = TargetOperations &
   };
 
 /** Issued live authority for one native frame; navigation keeps the frame and retires its references. */
-export interface Frame extends PageOperations {
+export interface Frame extends PageOperations, PlanOperations {
   readonly identity: Target;
   readonly status: Effect.Effect<PageStatus>;
+  /** Resolve full descriptor intent against the complete current native candidate inventory. */
+  readonly resolve: (
+    descriptor: DescriptorEncoded,
+    options?: ResolveOptions,
+  ) => Effect.Effect<ObservedElement, BrowserError>;
+  /**
+   * Quiet DOM mutation, scroll, root geometry and viewport signals in one pinned document.
+   * This does not establish network, animation or business completion.
+   */
+  readonly settled: (
+    request: SettledRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<SettledEvidence, BrowserError>;
 }
 
 /** Issued live authority for one native page on its original connection. */

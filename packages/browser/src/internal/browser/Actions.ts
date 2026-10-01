@@ -8,16 +8,12 @@ import type {
   Page,
 } from "playwright-core";
 
-import {
-  type ControlFacts,
-  type InputReceipt,
-  type ObservedElement,
-  SafeFilename,
-} from "../../BrowserData.ts";
+import { type ControlFacts, type InputReceipt, SafeFilename } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type {
   Driver,
   DriverTarget,
+  ElementTarget,
   InputCapture,
   NativeFileSelection,
   NavigationControl,
@@ -37,6 +33,7 @@ import {
   readFieldState,
 } from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
+import { makeSettledResource } from "./Settled.ts";
 import type { Entry, Targets } from "./Targets.ts";
 
 /**
@@ -311,6 +308,14 @@ export const makeActions = (
 
   const postUrl = (target?: DriverTarget) => httpUrl(targets.url(target));
 
+  const targetFor = (element: ElementTarget, target?: DriverTarget): DriverTarget | undefined => {
+    if (typeof element === "string" || !("_tag" in element)) return target;
+    if (target !== undefined && target.pageId !== element.target.pageId)
+      throw failure(Reasons.Stale.make({}), "undispatched");
+
+    return element.target;
+  };
+
   /**
    * Acts on the exact attached node a target names. The observation seam establishes that it is
    * still the control that was inspected and that the host's policy, if any, admits it. `admit`
@@ -319,7 +324,7 @@ export const makeActions = (
    * `enablement` is a form step's: see `Observation.resolve`.
    */
   const withAdmittedElement = async <Admitted, A>(
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     admit: (element: ElementHandle<Element>, facts: ControlFacts | undefined) => Promise<Admitted>,
     action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
@@ -327,12 +332,12 @@ export const makeActions = (
     browserTarget?: DriverTarget,
     enablement = false,
   ): Promise<A> => {
-    const { element, check, facts, release } = await observation.resolve(
+    const { element, check, facts, capture, release } = await observation.resolve(
       target,
       ticket,
       policy,
       false,
-      browserTarget,
+      targetFor(target, browserTarget),
       enablement,
     );
 
@@ -342,6 +347,7 @@ export const makeActions = (
 
       check();
       ticket.check();
+      ticket.captureTarget?.(target, capture);
       // ElementHandle actions do not re-resolve the selector onto a replacement node.
       ticket.dispatch();
 
@@ -357,7 +363,7 @@ export const makeActions = (
   };
 
   const withElement = <A>(
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     action: (element: ElementHandle<Element>) => Promise<A>,
     policy?: AdmissionPolicy,
@@ -399,6 +405,7 @@ export const makeActions = (
 
   const click: Driver["click"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       const { page } = current(browserTarget).entry;
 
       const input = await withElement(
@@ -417,10 +424,11 @@ export const makeActions = (
     });
 
   const clickWithoutReceipt = async (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     browserTarget?: DriverTarget,
   ): Promise<string> => {
+    browserTarget = targetFor(target, browserTarget);
     const { page } = current(browserTarget).entry;
 
     await withElement(
@@ -441,7 +449,7 @@ export const makeActions = (
    * command dispatches. A retained node or child frame is refused rather than approximated.
    */
   const attachStoredFiles = async (
-    target: string | ObservedElement,
+    target: ElementTarget,
     paths: ReadonlyArray<string>,
     ticket: Ticket,
     browserTarget?: DriverTarget,
@@ -549,6 +557,7 @@ export const makeActions = (
 
   const fill: Driver["fill"] = (target, value, ticket, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       await withAdmittedElement(
         target,
         ticket,
@@ -579,14 +588,15 @@ export const makeActions = (
     browserTarget,
   ) =>
     sanitize(async () => {
-      const { element, check, facts, release } = await observation.resolve(
-        target,
-        ticket,
-        policy,
-        false,
-        browserTarget,
-        true,
-      );
+      browserTarget = targetFor(target, browserTarget);
+
+      const {
+        element,
+        check,
+        facts,
+        capture: sampled,
+        release,
+      } = await observation.resolve(target, ticket, policy, false, browserTarget, true);
 
       try {
         check();
@@ -653,6 +663,7 @@ export const makeActions = (
         }
         check();
         ticket.check();
+        ticket.captureTarget?.(target, sampled);
         if (act !== undefined) {
           // ElementHandle actions do not re-resolve onto a replacement node.
           ticket.dispatch();
@@ -696,6 +707,7 @@ export const makeActions = (
   /** The one submit click, on an exact observed node that may have become enabled. */
   const formSubmit: Driver["formSubmit"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       const { page } = current(browserTarget).entry;
 
       const input = await withAdmittedElement(
@@ -717,6 +729,7 @@ export const makeActions = (
 
   const selectOption: Driver["selectOption"] = (target, options, ticket, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       await withAdmittedElement(
         target,
         ticket,
@@ -760,20 +773,38 @@ export const makeActions = (
       return postUrl(target);
     });
 
+  const scrollTo: Driver["scrollTo"] = (target, ticket, browserTarget) =>
+    sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      await withElement(
+        target,
+        ticket,
+        (element) =>
+          element.evaluate((node) =>
+            node.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }),
+          ),
+        undefined,
+        browserTarget,
+      );
+      ticket.check();
+
+      return postUrl(browserTarget);
+    });
+
   let waitConnectionRetired = false;
 
   const pendingWaits = new Map<Entry, { readonly frame: Frame; readonly ticket: WaitTicket }>();
 
   /** Capture native identity before releasing admission; no later read follows live selection. */
-  const waitOn = (
+  const waitOn = <A>(
     ticket: WaitTicket,
     target: DriverTarget,
     acquire: () => {
-      readonly wait: () => Promise<void>;
+      readonly wait: () => Promise<A>;
       readonly check?: () => void;
       readonly dispose: () => Promise<void>;
     },
-  ): Promise<void> => {
+  ): Promise<A> => {
     ticket.check();
     const { entry, frame } = current(target);
 
@@ -803,10 +834,12 @@ export const makeActions = (
     };
 
     return sanitize(async () => {
+      let result: A;
+
       try {
         try {
           check();
-          await resource.wait();
+          result = await resource.wait();
           check();
         } catch (error) {
           // Lifecycle/deadline evidence wins over a native cancellation or detached-node error.
@@ -823,6 +856,8 @@ export const makeActions = (
         if (pendingWaits.get(entry) === pending) pendingWaits.delete(entry);
       }
       check();
+
+      return result;
     });
   };
 
@@ -847,7 +882,8 @@ export const makeActions = (
     });
 
   const waitForElement: Driver["waitForElement"] = (reference, state, ticket, target) =>
-    waitOn(ticket, target, () => {
+    waitOn(ticket, targetFor(reference, target) ?? target, () => {
+      target = targetFor(reference, target) ?? target;
       const leased = observation.lease(reference, ticket, target);
 
       /** A node that can no longer be read, because its document is gone, is not attached. */
@@ -885,8 +921,12 @@ export const makeActions = (
       };
     });
 
+  const settled: Driver["settled"] = (options, ticket, target) =>
+    waitOn(ticket, target, () => makeSettledResource(current(target).frame, ticket, options));
+
   const clickAndWait: Driver["clickAndWait"] = (target, ticket, capture, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       const { entry, frame } = current(browserTarget);
 
       const observer = waitEvent<Frame>(
@@ -911,6 +951,7 @@ export const makeActions = (
 
   const clickForDownload: Driver["clickForDownload"] = (target, ticket, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       const page = current(browserTarget).entry.page;
 
       const observer = waitEvent<Download>(
@@ -941,6 +982,7 @@ export const makeActions = (
 
   const selectFiles: Driver["selectFiles"] = (target, files, ticket, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       const selection = nativeSelection(files);
 
       if (selection._tag === "Remote")
@@ -965,6 +1007,7 @@ export const makeActions = (
     browserTarget,
   ) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
       const selection = nativeSelection(files);
 
       // A chooser is satisfied with bytes this client holds. A provider-stored file is
@@ -1001,6 +1044,7 @@ export const makeActions = (
   return {
     setPointerInvalidator,
     withAdmittedElement,
+    targetFor,
     beginNavigation,
     /** Capture the exact navigation at dialog arrival; acknowledgement never looks it up again. */
     beforeUnload: (pageId: string) => {
@@ -1014,6 +1058,8 @@ export const makeActions = (
     formSubmit,
     selectOption,
     scroll,
+    scrollTo,
+    settled,
     waitFor,
     waitForElement,
     waitChanged: (entry: Entry, frame?: Frame) => {

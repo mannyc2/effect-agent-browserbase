@@ -57,8 +57,11 @@ reset it. Native waits and keyboard ports are bounded per Page. Recovery has res
 admission, and global lifecycle barriers have one owner through bounded drain and authorization.
 Passive host admission snapshots expose capacity without native authority. Effect-valued
 `ready`, `retain`, `target`, `pages`, `frames` and `createPage` become methods accepting operation
-options; implicit page-creation waiting becomes explicit. Action plans, presentation scheduling
-and the shared timeline remain later work. The registered `page-authority` hosted check has no
+options; implicit page-creation waiting becomes explicit. The action-plan milestone adds bounded
+version-1 live and durable schemas, explicit checked descriptor resolution, plain per-step execution,
+scoped run handles and native phase evidence, input-slot recording and one owned settled observer.
+The footage example consumes public action intent while retaining its application presentation cues.
+Presentation scheduling and the shared timeline remain later work. The registered `page-authority` hosted check has no
 provider evidence; exact-commit PR
 acceptance supplies the local qualification record.
 

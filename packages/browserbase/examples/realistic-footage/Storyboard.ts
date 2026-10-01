@@ -1,13 +1,14 @@
 import { Effect, Schema } from "effect";
 import type { AnySession } from "effect-browser/browser";
-import { Selector, TypeRequest } from "effect-browser/browser-data";
+import { Selector } from "effect-browser/browser-data";
+import { Step } from "effect-browser/plan-data";
 
 import * as Actor from "./Actor.ts";
 
 /**
  * A performance as data. A storyboard can be written by hand, kept in a file
  * or proposed by a model; decoding it is what makes it safe to perform. Its
- * selectors and typed text are held to the library's own bounds, so a line
+ * browser steps and typed text use the library's own bounds, so a line
  * break that would press Enter is refused here, before anything is filmed.
  */
 export const Scene = Schema.TaggedUnion({
@@ -18,10 +19,8 @@ export const Scene = Schema.TaggedUnion({
   Read: { words: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2_000 })) },
   ScrollTo: { selector: Selector },
   MoveTo: { selector: Selector },
-  Click: { selector: Selector },
-  /** A click that loads another document. */
-  Follow: { selector: Selector },
-  Type: { selector: Selector, text: TypeRequest.fields.text.check(Schema.isMaxLength(200)) },
+  /** Original bounded browser intent; presentation cues remain application choreography. */
+  Browser: { step: Step },
 });
 
 export type Scene = typeof Scene.Type;
@@ -30,18 +29,30 @@ export const Storyboard = Schema.Array(Scene).check(Schema.isMinLength(1), Schem
 
 export type Storyboard = typeof Storyboard.Type;
 
-export const perform = (session: AnySession, storyboard: Storyboard) =>
-  Effect.forEach(
-    storyboard,
-    Scene.match({
-      Caption: ({ text }) => Actor.caption(text),
-      Pause: ({ millis }) => Effect.sleep(millis),
-      Read: ({ words }) => Actor.read(words),
-      ScrollTo: ({ selector }) => Actor.scrollTo(selector),
-      MoveTo: ({ selector }) => Actor.moveTo(session, selector),
-      Click: ({ selector }) => Effect.asVoid(Actor.click(session, selector)),
-      Follow: ({ selector }) => Effect.asVoid(Actor.follow(session, selector)),
-      Type: ({ selector, text }) => Actor.type(session, selector, text),
-    }),
-    { discard: true },
-  );
+export const perform = Effect.fn("Storyboard.perform")(function* (
+  session: AnySession,
+  storyboard: Storyboard,
+) {
+  for (const scene of storyboard) {
+    switch (scene._tag) {
+      case "Caption":
+        yield* Actor.caption(scene.text);
+        break;
+      case "Pause":
+        yield* Effect.sleep(scene.millis);
+        break;
+      case "Read":
+        yield* Actor.read(scene.words);
+        break;
+      case "ScrollTo":
+        yield* Actor.scrollTo(scene.selector);
+        break;
+      case "MoveTo":
+        yield* Actor.moveTo(session, scene.selector);
+        break;
+      case "Browser":
+        yield* Actor.perform(session.initialPage, scene.step);
+        break;
+    }
+  }
+});

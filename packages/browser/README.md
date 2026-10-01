@@ -249,6 +249,53 @@ and `Capture.stream(page, options)` use the same owner and capture budget. With 
 enabled, `PageControl.state(page)`, `PageControl.suspend(page)` and
 `PageControl.resume(page, receipt)` authenticate that exact Page and suspension receipt.
 
+### Actions, plans and recording
+
+Issued Pages and Frames expose `run(plan, options)` and scoped `start(plan, options)` on their original owner. `effect-browser/plan-data` supplies one tagged action schema for navigation, exact target input, selection, forms, scrolling and bounded waits. A live plan can name an observed Ref or a Descriptor; durable version-1 plans contain only descriptors and named inputs. `Plan.make` validates live intent, `Plan.decode` validates stored intent, and `Plan.encode` serializes normalized defaults. Ingress checks finite data cost before semantic decoding: at most 128 distinct steps and 1 MiB of encoded data.
+
+```ts
+import * as Plan from "effect-browser/plan";
+
+// page is an issued Page on the browser's active connection.
+const ran =
+  yield *
+  page.run(
+    {
+      version: 1,
+      steps: [
+        { id: "open", action: { _tag: "Navigate", url: "https://example.com" } },
+        {
+          id: "search",
+          action: {
+            _tag: "Fill",
+            target: { _tag: "Descriptor", descriptor: { kind: "input", label: "Search" } },
+            value: { _tag: "Input", name: "query" },
+          },
+        },
+        {
+          id: "quiet",
+          action: { _tag: "Wait", mode: { _tag: "Settled", quietMillis: 100, withinMillis: 2000 } },
+        },
+      ],
+    },
+    { inputs: { query: "Effect" }, within: "20 seconds", style: "plain" },
+  );
+const stored = yield * Plan.recorded(ran);
+const encoded = yield * Plan.encode(stored);
+```
+
+Every step has its own admission and action accounting. Form fields, verification and submit reuse the existing exact-node form implementation; a walk never holds a permit across its steps. `within` captures one absolute run bound, and each step captures its action and queue deadlines once. Resolution, form phases, conditions and optional checkpoints cannot renew those bounds. `through: stepId` returns a successful prefix and the next step's index and id; it does not automatically resume or replay that prefix. Missing input bindings or an invalid `through` fail preparation before any input.
+
+Descriptors compare the full exact kind and label, optional destination and stable field metadata, checked ordinal/cardinality and a bounded main-anchored frame path. Scope normalizes to `document`; a recorded viewport descriptor uses document-wide uniqueness by default. Explicit `ViewportContext` resolution requires checked preconditions. Missing, ambiguous, incomplete or exhausted evidence refuses before input. The diagnostic `near` box never chooses another node. Descriptor steps resolve private exact nodes within the step's admission without replacing the public observation. A live Ref always keeps its original identity and is never substituted.
+
+`yield* page.resolve(descriptor, { guard })` performs an explicit admitted read and returns a fresh ordinary Ref. It retires that Frame's previous public observation on success. A Page cannot mint a child Frame's Ref: acquire the checked child Frame and resolve there. A plan on a Page can route a main-anchored child descriptor privately to that exact frame without changing selection.
+
+`const operation = yield* page.start(plan, options)` returns a scoped handle before its worker is scheduled. Its `completed` Effect joins one result; repeated joins submit no new input. `operation.cancel` interrupts that worker. `operation.attempts` retains bounded host evidence after cancellation, scope exit or an outer race, including original causes and every native dispatch/acknowledgement phase. Run registrations are bounded to 32 per Page and 128 per session, with at most 1,024 phase rows per step. Evidence overflow prevents complete recording. `StepFailed` distinguishes preparation from an attempted step and retains the completed prefix, current attempt and original `BrowserError`. An acknowledgement survives later verification or postcondition failure; an unknown command stops the walk and keeps the original owner's containment outcome.
+
+`Plan.recorded(ran)` projects only completely captured successful intent. Literal fill/type values become deterministic named input slots; existing input names and source conditions remain unchanged. Failed or incomplete whole forms and unknown attempts are not reusable plans. After a later failure, `Plan.recorded(yield* operation.attempts, { through: completedStepId })` can explicitly retain an acknowledged completed prefix. Capture is based on checked native facts, and missing or omitted identity facts produce `Incomplete` rather than executable descriptor intent.
+
+`yield* page.settled({ quiet: "100 millis", within: "2 seconds" })` uses one owned wait in the pinned document. It reports quiet DOM mutation, scroll, root geometry and viewport signals. It does not establish network, descendant animation or business completion. Native timers work on hidden pages, but browser throttling can still cause an honest timeout. Cancellation retains wait capacity until native observer disposal is confirmed. Plain plans use the same browser inputs as ordinary operations; presentation and recording composition stay with the host.
+
 ### Admission and deadlines
 
 Ordinary operations on one Page share its permit, including operations on its Frames. Work on
@@ -979,6 +1026,8 @@ The native driver, action permits, mutable capture leases and registry lookup ar
 | ------------------------ | ------------------------------------------------------------------------------------- |
 | `browser`                | Common session, bound target, navigation operation and host admission types           |
 | `browser-data`, `errors` | Credential-free schemas and expected browser/initialization errors                    |
+| `plan`                   | Live plan construction, durable encoding, recording and typed run failures            |
+| `plan-data`              | Bounded actions, descriptors, conditions and durable plan schemas                     |
 | `bootstrap`              | Typed bindings, init/permission plans, readiness and host diagnostics                 |
 | `capture`                | Bounded live frame intervals, snapshots and final accounting; reexports frame schemas |
 | `capture-data`           | Capture options, binary frame and result schemas without session operations           |

@@ -7,6 +7,7 @@ import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import * as PageControl from "effect-browser/page-control";
+import * as Plan from "effect-browser/plan";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { localSite } from "../fixtures/StandaloneBrowser.ts";
@@ -53,8 +54,35 @@ const result = await Effect.runPromise(
 
             assert.equal((yield* PageControl.state(session, page)).state, "suspended");
             yield* PageControl.resume(session, held);
-            yield* session.click({ selector: "#increment" });
+            const issuedPage = yield* session.page(page);
+
+            const ran = yield* issuedPage.run(
+              {
+                version: 1,
+                steps: [
+                  {
+                    id: "increment",
+                    action: {
+                      _tag: "Click",
+                      target: {
+                        _tag: "Descriptor",
+                        descriptor: { kind: "button", label: "Increment", matchScope: "document" },
+                      },
+                    },
+                  },
+                ],
+              },
+              { style: "plain" },
+            );
+
             assert.equal((yield* session.readText({ selector: "#count" })).text, "1");
+            assert.equal(ran.completion._tag, "Complete");
+            assert.equal(ran.steps[0]?.recorded._tag, "Complete");
+            const recorded = yield* Plan.recorded(ran);
+            const durable = yield* Plan.decode(yield* Plan.encode(recorded));
+
+            yield* issuedPage.run(durable, { style: "plain" });
+            assert.equal((yield* session.readText({ selector: "#count" })).text, "2");
             const summary = yield* interval.stop;
 
             assert.equal(summary.nativeStop, "confirmed");

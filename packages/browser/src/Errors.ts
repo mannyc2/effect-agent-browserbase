@@ -37,6 +37,9 @@ export const BrowserOperation = Schema.Literals([
   "read-text",
   "screenshot",
   "wait",
+  "resolve",
+  "run",
+  "settled",
   // input
   "navigate",
   "navigate-stop",
@@ -78,6 +81,7 @@ export type BrowserOutcome = typeof BrowserOutcome.Type;
 
 /** Limits report measured producer facts; an unavailable measurement is never invented. */
 export const LimitDimension = Schema.Literals([
+  "runs",
   "actions",
   "elapsed",
   "returned-bytes",
@@ -123,7 +127,10 @@ export const Reasons = {
   Closed: Schema.TaggedStruct("Closed", {}),
   Stale: Schema.TaggedStruct("Stale", {}),
   NotFound: Schema.TaggedStruct("NotFound", {}),
-  Ambiguous: Schema.TaggedStruct("Ambiguous", {}),
+  Missing: Schema.TaggedStruct("Missing", {}),
+  Ambiguous: Schema.TaggedStruct("Ambiguous", { count: Schema.optionalKey(Schema.Natural) }),
+  Incomplete: Schema.TaggedStruct("Incomplete", {}),
+  Drifted: Schema.TaggedStruct("Drifted", {}),
   Malformed: Schema.TaggedStruct("Malformed", { path: Schema.optionalKey(SchemaPath) }),
   Limit: Schema.TaggedStruct("Limit", {
     dimension: LimitDimension,

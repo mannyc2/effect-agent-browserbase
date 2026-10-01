@@ -1,10 +1,9 @@
 import { Schema } from "effect";
 import type { ElementHandle, Page } from "playwright-core";
 
-import type { ObservedElement } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { makeActions } from "./Actions.ts";
-import type { DriverTarget } from "./Driver.ts";
+import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
@@ -214,12 +213,13 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
   };
 
   const hover = (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ) =>
     sanitize(async () => {
+      browserTarget = actions.targetFor(target, browserTarget);
       const { page } = current(browserTarget).entry;
 
       await actions.withAdmittedElement(

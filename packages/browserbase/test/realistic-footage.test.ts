@@ -194,15 +194,53 @@ it.effect("a cue no page answers fails as a silent stagehand and is withdrawn", 
 it("a storyboard is decoded before it is performed", () => {
   const accepts = Schema.is(Storyboard);
 
-  expect(accepts([{ _tag: "Click", selector: "#hold" }])).toBe(true);
+  const target = {
+    _tag: "Descriptor",
+    descriptor: { kind: "input", label: "Destination", matchScope: "document" },
+  } as const;
+
+  const typed = (text: string) => [
+    {
+      _tag: "Browser",
+      step: {
+        id: "type",
+        action: { _tag: "Type", target, text: { _tag: "Literal", value: text } },
+        resolution: { _tag: "Strict" },
+      },
+    },
+  ];
+
+  expect(
+    accepts([
+      {
+        _tag: "Browser",
+        step: {
+          id: "hold",
+          action: { _tag: "Click", target },
+          resolution: { _tag: "Strict" },
+        },
+      },
+    ]),
+  ).toBe(true);
   expect(accepts([])).toBe(false);
-  expect(accepts([{ _tag: "Click", selector: "" }])).toBe(false);
+  expect(
+    accepts([
+      {
+        _tag: "Browser",
+        step: {
+          id: "",
+          action: { _tag: "Click", target },
+          resolution: { _tag: "Strict" },
+        },
+      },
+    ]),
+  ).toBe(false);
   expect(accepts([{ _tag: "Evaluate", script: "alert(1)" }])).toBe(false);
   // Typed text is held to the library's own rule: a line break would press Enter, so it is
   // refused while the storyboard is decoded rather than halfway through a film.
-  expect(accepts([{ _tag: "Type", selector: "#q", text: "Venice" }])).toBe(true);
-  expect(accepts([{ _tag: "Type", selector: "#q", text: "Venice\n" }])).toBe(false);
-  expect(accepts([{ _tag: "Type", selector: "#q", text: "" }])).toBe(false);
+  expect(accepts(typed("Venice"))).toBe(true);
+  expect(accepts(typed("Venice\n"))).toBe(false);
+  expect(accepts(typed(""))).toBe(false);
 });
 
 it("two clocks are compared from the tightest exchange, and its round trip bounds the error", () => {

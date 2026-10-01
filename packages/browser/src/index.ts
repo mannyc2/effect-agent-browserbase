@@ -6,3 +6,5 @@ export * as Capture from "./Capture.ts";
 export * as CaptureData from "./CaptureData.ts";
 export * as Errors from "./Errors.ts";
 export * as PageControl from "./PageControl.ts";
+export * as Plan from "./Plan.ts";
+export * as PlanData from "./PlanData.ts";

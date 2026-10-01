@@ -51,6 +51,7 @@ const operationError = (
     case "Closed":
     case "Expired":
     case "Disconnected":
+    case "Drifted":
     case "Stale":
       return InteractiveBrowserExpiredError.make({
         implementation,
@@ -94,6 +95,8 @@ const operationError = (
     case "Disabled":
     case "Failed":
     case "Interrupted":
+    case "Incomplete":
+    case "Missing":
     case "NotFocused":
     case "NotFound":
     case "NotVisible":

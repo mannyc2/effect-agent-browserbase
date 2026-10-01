@@ -346,6 +346,12 @@ export const makePlaywrightDriver = async (
     checkpoint: observation.checkpoint,
     controlFacts: observation.controlFacts,
     revalidate: observation.revalidate,
+    resolveDescriptor: (descriptor, ticket, target, guard) =>
+      observation.resolveDescriptor(descriptor, ticket, target, guard ?? { _tag: "Strict" }),
+    resolveGroup: observation.resolveGroup,
+    expectations: observation.expectations,
+    settled: actions.settled,
+    scrollTo: actions.scrollTo,
     click: actions.click,
     fill: actions.fill,
     formStep: actions.formStep,

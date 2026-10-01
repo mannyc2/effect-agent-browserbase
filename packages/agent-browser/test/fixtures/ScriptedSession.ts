@@ -24,6 +24,10 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
   // An unused typed operation stub, deliberately absent from the runtime's authority registries.
   const initialPage: Page = {
     ...operations,
+    start: () => unexpected,
+    run: () => unexpected,
+    resolve: () => unexpected,
+    settled: () => unexpected,
     identity: Target.make({ generation: 1, pageId: "scripted-page", frameId: "scripted-frame" }),
     status: unexpected,
     observe: () => unexpected,

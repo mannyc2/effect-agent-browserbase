@@ -28,6 +28,8 @@ export default defineConfig({
       "src/Chromium.ts",
       "src/Errors.ts",
       "src/PageControl.ts",
+      "src/Plan.ts",
+      "src/PlanData.ts",
       "src/Testing.ts",
     ],
     // Keep root namespaces on the public entry modules; the pinned bundler otherwise

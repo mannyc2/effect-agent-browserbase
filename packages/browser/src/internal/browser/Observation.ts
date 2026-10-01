@@ -1,8 +1,18 @@
 import { Schema } from "effect";
-import type { ElementHandle, JSHandle, Page } from "playwright-core";
+import type { ElementHandle, Frame, JSHandle, Page } from "playwright-core";
 
 import { ControlFacts, type ObservedElement, type SelectOptions } from "../../BrowserData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
+import type { Condition, Descriptor, FrameDescriptor, ResolveGuard } from "../../PlanData.ts";
+import {
+  DescriptorReadResult,
+  MaximumGroupNodes,
+  NativeControlFacts,
+  type DescriptorSample,
+  type ResolveRequest,
+  type ResolvedElement,
+  type ResolvedGroup,
+} from "./Descriptor.ts";
 import type { DriverEvents, DriverTarget, NativeCheckpoint, NativeObservation } from "./Driver.ts";
 import { pngGeometry } from "./Images.ts";
 import {
@@ -23,6 +33,13 @@ import {
   stableIdentityOf,
 } from "./PageRead.ts";
 import type { Targets } from "./Targets.ts";
+
+export type {
+  DescriptorSample,
+  ResolveRequest,
+  ResolvedElement,
+  ResolvedGroup,
+} from "./Descriptor.ts";
 
 const TextResult = Schema.Struct({
   text: Schema.String,
@@ -53,14 +70,14 @@ const checkScreenshotGeometry = (geometry: typeof Geometry.Type) => {
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(1000000));
 
-const Facts = Schema.Struct({ facts: ControlFacts });
+const Facts = Schema.Struct({ facts: NativeControlFacts });
 
 const SelectionFacts = Schema.Struct({
-  facts: ControlFacts,
+  facts: NativeControlFacts,
   attached: Schema.Boolean,
   options: Schema.Array(
     Schema.Struct({
-      facts: ControlFacts,
+      facts: NativeControlFacts,
       member: Schema.Boolean,
       valueMatches: Schema.Boolean,
     }),
@@ -323,6 +340,9 @@ interface Snapshot {
   readonly target: DriverTarget;
   readonly documentEpoch: number;
   readonly generation: number;
+  readonly scope: "document" | "viewport";
+  private: boolean;
+  origin?: AbortSignal;
   validity: "reading" | "valid" | "suspended" | "invalid";
   readonly nodes: Map<string, Retained>;
   readonly revalidated: Set<string>;
@@ -349,6 +369,18 @@ export const makeObservation = (
   const { current } = targets;
   const snapshots = new Map<string, Snapshot>();
   const reservations = new Set<Snapshot>();
+
+  const resolvedElements = new WeakMap<
+    ResolvedElement,
+    {
+      readonly node: Retained;
+      readonly snapshot: Snapshot;
+      readonly scope: "document" | "viewport";
+      readonly descriptor?: Descriptor;
+      readonly group: ReadonlyArray<Snapshot>;
+    }
+  >();
+
   let observationSerial = 0;
   let connectionRetired = false;
 
@@ -358,9 +390,13 @@ export const makeObservation = (
       (scope.pageId === snapshot.target.pageId &&
         (scope.frameId === undefined || scope.frameId === snapshot.target.frameId)));
 
-  const invalidate = (scope: ObservationScope = "all") => {
-    for (const snapshot of snapshots.values())
-      if (scopeMatches(snapshot, scope)) snapshot.validity = "invalid";
+  const invalidate = (scope: ObservationScope = "all", origin?: AbortSignal) => {
+    for (const snapshot of reservations)
+      if (
+        scopeMatches(snapshot, scope) &&
+        !(snapshot.private && origin !== undefined && snapshot.origin === origin)
+      )
+        snapshot.validity = "invalid";
   };
 
   /**
@@ -402,9 +438,9 @@ export const makeObservation = (
    * independent of the page an agent is driving.
    */
   const held = (pageId: string) => {
-    for (const snapshot of snapshots.values()) {
+    for (const snapshot of reservations) {
       if (snapshot.target.pageId !== pageId) continue;
-      if (snapshot.validity === "reading") snapshot.validity = "invalid";
+      if (snapshot.private || snapshot.validity === "reading") snapshot.validity = "invalid";
       else if (snapshot.validity === "valid") {
         snapshot.validity = "suspended";
         snapshot.revalidated.clear();
@@ -494,13 +530,22 @@ export const makeObservation = (
     if (snapshots.get(snapshot.target.frameId) === snapshot)
       snapshots.delete(snapshot.target.frameId);
     await closeWithin(() => Promise.allSettled([...snapshot.nodes.values()].map(retireNode)));
+    const handles = new Set<object>([...snapshot.nodes.values()].map((node) => node.handle));
+
+    await closeWithin(() =>
+      Promise.allSettled(
+        [...snapshot.resources.keys()]
+          .filter((value) => !handles.has(value))
+          .map((value) => disposeResource(snapshot, value)),
+      ),
+    ).catch(() => {});
     refresh(snapshot);
   };
 
   const dispose = async (target?: DriverTarget) => {
     const retiring =
       target === undefined
-        ? [...snapshots.values()]
+        ? [...reservations]
         : [snapshots.get(target.frameId)].filter((snapshot) => snapshot !== undefined);
 
     await Promise.allSettled(retiring.map(retireSnapshot));
@@ -584,6 +629,8 @@ export const makeObservation = (
       target,
       documentEpoch: targets.epochOf(current(target).frame),
       generation: ticket.generation,
+      scope: "document",
+      private: false,
       validity: "reading",
       nodes: new Map(),
       revalidated: new Set(),
@@ -757,8 +804,18 @@ export const makeObservation = (
    * A wait borrows one exact node without authorizing input. Its state may change. Retiring the
    * observation defers this node's disposal until the native wait actually releases the lease.
    */
-  const lease = (reference: ObservedElement, ticket: ReadTicket, browserTarget?: DriverTarget) => {
-    const { node, snapshot } = retained(reference, ticket, false, browserTarget);
+  const lease = (
+    reference: ObservedElement | ResolvedElement,
+    ticket: ReadTicket,
+    browserTarget?: DriverTarget,
+  ) => {
+    const privateReference = "_tag" in reference;
+
+    const leased = privateReference
+      ? privateRetained(reference, ticket, browserTarget)
+      : retained(reference, ticket, false, browserTarget);
+
+    const { node, snapshot } = leased;
 
     node.leases++;
     let released: Promise<void> | undefined;
@@ -767,6 +824,11 @@ export const makeObservation = (
       element: node.handle,
       target: snapshot.target,
       check: () => {
+        if (privateReference) {
+          leased.check();
+
+          return;
+        }
         ticket.check();
         if (
           connectionRetired ||
@@ -789,7 +851,7 @@ export const makeObservation = (
 
   /** A timed-out after-step read keeps its node and capacity until the raw reply settles. */
   const passiveRead = async <A>(
-    reference: ObservedElement,
+    reference: ObservedElement | ResolvedElement,
     ticket: Ticket,
     body: () => Promise<A>,
     browserTarget?: DriverTarget,
@@ -847,6 +909,591 @@ export const makeObservation = (
     );
   };
 
+  const checkPrivate = (snapshot: Snapshot, ticket: ReadTicket) => {
+    ticket.check();
+    if (
+      connectionRetired ||
+      snapshot.retired ||
+      snapshot.validity === "invalid" ||
+      snapshot.generation !== ticket.generation ||
+      targets.epochOf(current(snapshot.target).frame) !== snapshot.documentEpoch
+    )
+      throw failure(Reasons.Stale.make({}), "undispatched");
+  };
+
+  const privateRetained = (target: ResolvedElement, ticket: ReadTicket, caller?: DriverTarget) => {
+    const resolved = resolvedElements.get(target);
+
+    if (
+      resolved === undefined ||
+      (caller !== undefined &&
+        (caller.pageId !== resolved.snapshot.target.pageId ||
+          caller.frameId !== resolved.snapshot.target.frameId))
+    )
+      throw failure(Reasons.Stale.make({}), "undispatched");
+
+    const check = () => {
+      for (const snapshot of resolved.group) checkPrivate(snapshot, ticket);
+    };
+
+    check();
+
+    return { ...resolved, check };
+  };
+
+  const frameSample = (target: DriverTarget): Pick<DescriptorSample, "frame" | "frameComplete"> => {
+    const { entry, frame } = current(target);
+    const main = entry.page.mainFrame();
+
+    if (frame === main) return { frameComplete: true };
+    const path: FrameDescriptor["path"][number][] = [];
+    let child: Frame | null = frame;
+
+    while (child !== main) {
+      if (child === null || child.isDetached() || path.length >= 8) return { frameComplete: false };
+      const parent: Frame | null = child.parentFrame();
+      const name = child.name();
+      const url = child.url();
+
+      if (parent === null || name.length === 0 || name.length > 256 || url.length > 8192)
+        return { frameComplete: false };
+      const siblings = parent.childFrames();
+
+      if (siblings.length > 128) return { frameComplete: false };
+
+      const matches = siblings.filter(
+        (candidate) => candidate.name() === name && candidate.url() === url,
+      );
+
+      const index = matches.indexOf(child);
+
+      if (index < 0) return { frameComplete: false };
+      path.unshift({
+        name,
+        url,
+        ...(matches.length === 1 ? {} : { ordinal: { index, of: matches.length } }),
+      });
+      child = parent;
+    }
+
+    return { frameComplete: true, frame: { path } };
+  };
+
+  const descriptorTarget = (descriptor: Descriptor, bound: DriverTarget, ticket: ReadTicket) => {
+    const { entry, frame: boundFrame } = current(bound);
+
+    if (descriptor.frame === undefined) return bound;
+    let frame = entry.page.mainFrame();
+
+    for (const segment of descriptor.frame.path) {
+      ticket.check();
+      const children = frame.childFrames();
+
+      if (children.length > 128)
+        throw failure(
+          Reasons.Limit.make({ dimension: "frames", maximum: 128, observed: children.length }),
+          "undispatched",
+        );
+
+      const matches = children.filter(
+        (child) => child.name() === segment.name && child.url() === segment.url,
+      );
+
+      if (matches.length === 0) throw failure(Reasons.Missing.make({}), "undispatched");
+      if (segment.ordinal !== undefined && segment.ordinal.of !== matches.length)
+        throw failure(Reasons.Incomplete.make({}), "undispatched");
+      if (segment.ordinal === undefined && matches.length !== 1)
+        throw failure(Reasons.Ambiguous.make({ count: matches.length }), "undispatched");
+      const child = matches[segment.ordinal?.index ?? 0];
+
+      if (child === undefined || child.isDetached())
+        throw failure(Reasons.Stale.make({}), "undispatched");
+      frame = child;
+    }
+    if (boundFrame !== entry.page.mainFrame() && frame !== boundFrame)
+      throw failure(Reasons.Unsupported.make({}), "undispatched");
+    ticket.check();
+
+    return { pageId: entry.id, frameId: targets.frameId(frame) };
+  };
+
+  const scanDescriptor = async (
+    descriptor: Descriptor,
+    snapshot: Snapshot,
+    ticket: Ticket,
+    contextual: boolean,
+    parent?: ElementHandle<Element>,
+  ) => {
+    const retention = retentionFor(snapshot);
+    const check = () => checkPrivate(snapshot, ticket);
+
+    check();
+
+    const holder = await current(snapshot.target).frame.evaluateHandle(readPage, {
+      scope: descriptor.matchScope,
+      maximumBytes: 0,
+      controlLimit: 0,
+      nodeBudget: NodeBudget,
+      descriptors: [{ descriptor, contextual, ...(parent === undefined ? {} : { parent }) }],
+    });
+
+    retention.own(holder, () => holder.dispose());
+    let nodes: JSHandle | undefined;
+
+    try {
+      check();
+      const raw = await holder.evaluate((read) => read.data);
+      const data = safeDecode(DescriptorReadResult, raw);
+
+      check();
+      if (data.exhausted)
+        throw failure(
+          Reasons.Limit.make({
+            dimension: "controls",
+            maximum: NodeBudget,
+            observed: data.visited,
+          }),
+          "undispatched",
+        );
+      const result = data.results[0];
+
+      if (data.results.length !== 1 || result === undefined)
+        throw failure(Reasons.Malformed.make({}), "undispatched");
+      if (result.status === "missing") throw failure(Reasons.Missing.make({}), "undispatched");
+      if (result.status === "ambiguous")
+        throw failure(
+          Reasons.Ambiguous.make({ count: result.count || result.documentCount }),
+          "undispatched",
+        );
+      if (result.status !== "matched" || result.facts === undefined)
+        throw failure(Reasons.Incomplete.make({}), "undispatched");
+      nodes = await holder.evaluateHandle((read) => read.nodes);
+      const ownedNodes = nodes;
+
+      retention.own(ownedNodes, () => ownedNodes.dispose());
+      check();
+      const properties = await nodes.getProperties();
+
+      for (const handle of properties.values()) retention.own(handle, () => handle.dispose());
+      check();
+      if (properties.size !== 1) throw failure(Reasons.Malformed.make({}), "undispatched");
+      const element = properties.get("0")?.asElement();
+
+      if (element === null || element === undefined)
+        throw failure(Reasons.Malformed.make({}), "undispatched");
+
+      const picked: Array<ElementHandle<Element>> = [];
+
+      // Playwright types property handles as any; asElement rejected every other native value.
+      // oxlint-disable-next-line typescript/no-unsafe-argument -- untyped Playwright property handle
+      picked.push(element);
+      const exact = picked[0];
+
+      if (exact === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+
+      return { element: exact, facts: result.facts, value: result.value };
+    } finally {
+      if (nodes !== undefined) await retention.dispose(nodes).catch(() => {});
+      await retention.dispose(holder);
+    }
+  };
+
+  const resolveGroup = (
+    requests: ReadonlyArray<ResolveRequest>,
+    ticket: Ticket,
+    browserTarget: DriverTarget,
+    guard: ResolveGuard,
+  ): Promise<ResolvedGroup> =>
+    sanitize(async () => {
+      ticket.check();
+      current(browserTarget);
+      if (requests.length === 0 || requests.length > MaximumGroupNodes)
+        throw failure(
+          Reasons.Limit.make({
+            dimension: "controls",
+            maximum: MaximumGroupNodes,
+            observed: requests.length,
+          }),
+          "undispatched",
+        );
+      if (guard._tag === "ViewportContext") await expectations(guard.before, ticket, browserTarget);
+      const group: Snapshot[] = [];
+      const elements: ResolvedElement[] = [];
+      const samples: Array<DescriptorSample | undefined> = [];
+      const records: Retained[] = [];
+
+      const nativeRequests = requests.filter(
+        (request) => request.target._tag === "Descriptor",
+      ).length;
+
+      let released: Promise<void> | undefined;
+
+      const release = (): Promise<void> => {
+        released ??= Promise.allSettled(group.map(retireSnapshot)).then(() => {});
+
+        return released;
+      };
+
+      const privateSnapshot = (target: DriverTarget, scope: "document" | "viewport") => {
+        const previous = group.find((snapshot) => snapshot.target.frameId === target.frameId);
+
+        if (previous !== undefined) return previous;
+
+        const snapshot: Snapshot = {
+          id: `observation-${connectionNamespace}-${++observationSerial}`,
+          target,
+          documentEpoch: targets.epochOf(current(target).frame),
+          generation: ticket.generation,
+          scope,
+          private: true,
+          validity: "reading",
+          nodes: new Map(),
+          revalidated: new Set(),
+          resources: new Map(),
+          reading: true,
+          pending: 0,
+          retired: false,
+          nativeRetired: false,
+          reservedHandles: nativeRequests + 3,
+          reservedBytes: 4096 + requests.length * 512 * 1024,
+        };
+
+        reserve(snapshot);
+        group.push(snapshot);
+
+        return snapshot;
+      };
+
+      try {
+        for (const [index, request] of requests.entries()) {
+          ticket.check();
+          if (request.parent !== undefined && (request.parent < 0 || request.parent >= index))
+            throw failure(Reasons.Malformed.make({}), "undispatched");
+          const parent = request.parent === undefined ? undefined : records[request.parent];
+          let snapshot: Snapshot;
+          let node: Retained;
+          let scope: "document" | "viewport";
+          let sampledFacts: NativeControlFacts | undefined;
+
+          if (request.target._tag === "Ref") {
+            const source = retained(request.target.reference, ticket, false, browserTarget);
+
+            scope = source.snapshot.scope;
+            snapshot = privateSnapshot(source.snapshot.target, scope);
+
+            const previous = [...snapshot.nodes.values()].find(
+              (kept) => kept.handle === source.node.handle,
+            );
+
+            if (previous !== undefined) node = previous;
+            else {
+              source.node.leases++;
+              retentionFor(snapshot).own(
+                source.node.handle,
+                async () => {
+                  source.node.leases--;
+                  if (source.node.retired && source.node.leases === 0)
+                    await disposeNode(source.node);
+                },
+                0,
+              );
+              node = { ...source.node, snapshot, leases: 0, retired: false };
+            }
+            if (request.captureInitial === true && ticket.captureTarget !== undefined)
+              sampledFacts = safeDecode(
+                Facts,
+                await sampleFacts(source.node.handle, ticket, source.check, source.snapshot.target),
+              ).facts;
+          } else {
+            const target = descriptorTarget(request.target.descriptor, browserTarget, ticket);
+
+            scope = request.target.descriptor.matchScope;
+            snapshot = privateSnapshot(target, scope);
+            if (parent !== undefined && parent.snapshot.target.frameId !== target.frameId)
+              throw failure(Reasons.Unsupported.make({}), "undispatched");
+
+            const found = await scanDescriptor(
+              request.target.descriptor,
+              snapshot,
+              ticket,
+              guard._tag === "ViewportContext",
+              parent?.handle,
+            );
+
+            sampledFacts = found.facts;
+
+            node = {
+              handle: found.element,
+              identity: identityOf(found.facts),
+              stable: stableIdentityOf(found.facts),
+              snapshot,
+              leases: 0,
+              retired: false,
+              ...(found.facts.multiple === undefined ? {} : { multiple: found.facts.multiple }),
+              ...(request.parent === undefined || found.value === undefined
+                ? {}
+                : { option: { selectElementId: `element-${request.parent}`, value: found.value } }),
+            };
+          }
+          if (parent !== undefined) {
+            if (parent.multiple === undefined || parent.snapshot !== snapshot)
+              throw failure(Reasons.Incomplete.make({}), "undispatched");
+            let value = node.option?.value;
+
+            if (value === undefined) {
+              const sampled = safeDecode(
+                Schema.Struct({
+                  member: Schema.Boolean,
+                  value: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(65536))),
+                }),
+                await node.handle.evaluate(
+                  (candidate, select) => ({
+                    member:
+                      candidate instanceof HTMLOptionElement &&
+                      select instanceof HTMLSelectElement &&
+                      candidate.isConnected &&
+                      select.isConnected &&
+                      candidate.ownerDocument === document &&
+                      candidate.closest("select") === select &&
+                      select.options.item(candidate.index) === candidate,
+                    ...(candidate instanceof HTMLOptionElement && candidate.value.length <= 65536
+                      ? { value: candidate.value }
+                      : {}),
+                  }),
+                  parent.handle,
+                ),
+              );
+
+              checkPrivate(snapshot, ticket);
+              if (!sampled.member) throw failure(Reasons.Stale.make({}), "undispatched");
+              value = sampled.value;
+            }
+            if (value === undefined) throw failure(Reasons.Incomplete.make({}), "undispatched");
+            node = { ...node, option: { selectElementId: `element-${request.parent}`, value } };
+          }
+          snapshot.nodes.set(`element-${index}`, node);
+          records.push(node);
+
+          const element: ResolvedElement = Object.freeze({
+            _tag: "ResolvedElement",
+            target: snapshot.target,
+          });
+
+          resolvedElements.set(element, {
+            node,
+            snapshot,
+            scope,
+            group,
+            ...(request.target._tag === "Descriptor"
+              ? { descriptor: request.target.descriptor }
+              : {}),
+          });
+          elements.push(element);
+          samples.push(
+            sampledFacts === undefined || ticket.captureTarget === undefined
+              ? undefined
+              : {
+                  facts: ControlFacts.make(sampledFacts),
+                  scope,
+                  ...frameSample(snapshot.target),
+                  ...(sampledFacts.completeness === undefined
+                    ? {}
+                    : { completeness: sampledFacts.completeness }),
+                  ...(request.target._tag !== "Descriptor" ||
+                  request.target.descriptor.ordinal === undefined
+                    ? {}
+                    : { ordinal: request.target.descriptor.ordinal }),
+                },
+          );
+        }
+        for (const snapshot of group) {
+          checkPrivate(snapshot, ticket);
+          snapshot.reading = false;
+          snapshot.validity = "valid";
+          refresh(snapshot);
+        }
+
+        return {
+          elements: Object.freeze(elements),
+          samples: Object.freeze(samples),
+          activate: (next: Ticket) => {
+            for (const snapshot of group) checkPrivate(snapshot, next);
+            for (const snapshot of group) snapshot.origin = next.signal;
+          },
+          release,
+        };
+      } catch (error) {
+        for (const snapshot of group) snapshot.reading = false;
+        await release();
+        throw error;
+      }
+    });
+
+  const resolveDescriptor = (
+    descriptor: Descriptor,
+    ticket: Ticket,
+    browserTarget: DriverTarget,
+    guard: ResolveGuard,
+  ) =>
+    sanitize(async () => {
+      const group = await resolveGroup(
+        [{ target: { _tag: "Descriptor", descriptor } }],
+        ticket,
+        browserTarget,
+        guard,
+      );
+
+      const element = group.elements[0];
+      const resolved = element === undefined ? undefined : resolvedElements.get(element);
+
+      try {
+        if (resolved === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+        checkPrivate(resolved.snapshot, ticket);
+        if (
+          resolved.snapshot.target.pageId !== browserTarget.pageId ||
+          resolved.snapshot.target.frameId !== browserTarget.frameId
+        )
+          throw failure(Reasons.Stale.make({}), "undispatched");
+        const previous = snapshots.get(resolved.snapshot.target.frameId);
+
+        if (previous !== undefined) await retireSnapshot(previous);
+        checkPrivate(resolved.snapshot, ticket);
+        resolved.snapshot.private = false;
+        snapshots.set(resolved.snapshot.target.frameId, resolved.snapshot);
+
+        return { observationId: resolved.snapshot.id, elementId: "element-0" };
+      } catch (error) {
+        await group.release();
+        throw error;
+      }
+    });
+
+  const expectations = (
+    conditions: ReadonlyArray<Condition>,
+    ticket: Ticket,
+    browserTarget: DriverTarget,
+  ) =>
+    sanitize(async () => {
+      ticket.check();
+      const frame = current(browserTarget).frame;
+      const epoch = targets.epochOf(frame);
+
+      const check = () => {
+        ticket.check();
+        if (targets.epochOf(current(browserTarget).frame) !== epoch)
+          throw failure(Reasons.Stale.make({}), "undispatched");
+      };
+
+      if (conditions.length > 16)
+        throw failure(
+          Reasons.Limit.make({ dimension: "controls", maximum: 16, observed: conditions.length }),
+          "undispatched",
+        );
+      for (const condition of conditions) {
+        check();
+        let matches = false;
+
+        if (condition._tag === "Origin" || condition._tag === "Path") {
+          const url = new URL(targets.url(browserTarget));
+
+          matches = (condition._tag === "Origin" ? url.origin : url.pathname) === condition.value;
+        } else if (condition._tag === "Viewport" || condition._tag === "Scroll") {
+          const actual = safeDecode(
+            Schema.Struct({
+              width: Schema.Finite,
+              height: Schema.Finite,
+              x: Schema.Finite,
+              y: Schema.Finite,
+            }),
+            await withTemporary(browserTarget, ticket, 0, 4096, () =>
+              frame.evaluate(() => ({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                x: window.scrollX,
+                y: window.scrollY,
+              })),
+            ),
+          );
+
+          matches =
+            condition._tag === "Viewport"
+              ? actual.width === condition.width && actual.height === condition.height
+              : actual.x === condition.x && actual.y === condition.y;
+        } else if (condition._tag === "Text") {
+          const sampled = await withTemporary(
+            browserTarget,
+            ticket,
+            260,
+            4096 + 131072,
+            (retention) =>
+              reading(
+                () =>
+                  read(
+                    condition.scope,
+                    131072,
+                    0,
+                    check,
+                    false,
+                    browserTarget,
+                    undefined,
+                    retention,
+                  ),
+                browserTarget,
+              ),
+          );
+
+          const data = sampled.data;
+
+          matches =
+            condition.match === "contains"
+              ? data.text.includes(condition.value)
+              : data.text === condition.value;
+          if (
+            (condition.match === "equals" || !matches) &&
+            (data.textTruncated ||
+              data.viewport.exhausted ||
+              (condition.scope === "viewport" &&
+                (data.viewport.uncertainText > 0 || data.viewport.clippedText > 0)))
+          )
+            throw failure(Reasons.Incomplete.make({}), "undispatched");
+        } else {
+          const group = await resolveGroup(
+            [{ target: { _tag: "Descriptor", descriptor: condition.target } }],
+            ticket,
+            browserTarget,
+            { _tag: "Strict" },
+          );
+
+          try {
+            const target = group.elements[0];
+
+            if (target === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+            const resolved = privateRetained(target, ticket);
+
+            const sampled = safeDecode(
+              Facts,
+              await sampleFacts(
+                resolved.node.handle,
+                ticket,
+                resolved.check,
+                resolved.snapshot.target,
+              ),
+            ).facts;
+
+            matches =
+              sampled.box.x === condition.box.x &&
+              sampled.box.y === condition.box.y &&
+              sampled.box.width === condition.box.width &&
+              sampled.box.height === condition.box.height;
+          } finally {
+            await group.release();
+          }
+        }
+        check();
+        if (!matches) throw failure(Reasons.Drifted.make({}), "undispatched");
+      }
+    });
+
   /**
    * The exact attached node a target names, checked against the page right now. A selector must
    * still match it and nothing else. A retained node must still be the control that was
@@ -856,7 +1503,7 @@ export const makeObservation = (
    * observed, and it must be enabled now; every other fact must be unchanged.
    */
   const resolve = async (
-    target: string | ObservedElement,
+    target: string | ObservedElement | ResolvedElement,
     ticket: Ticket,
     policy?: AdmissionPolicy,
     allowSuspended = false,
@@ -867,6 +1514,7 @@ export const makeObservation = (
     readonly kept: boolean;
     readonly check: () => void;
     readonly facts: ControlFacts | undefined;
+    readonly capture: DescriptorSample | undefined;
     readonly release: () => Promise<void>;
   }> => {
     const kept = typeof target !== "string";
@@ -874,7 +1522,9 @@ export const makeObservation = (
     const retainedNode =
       typeof target === "string"
         ? undefined
-        : retained(target, ticket, allowSuspended, browserTarget);
+        : "_tag" in target
+          ? privateRetained(target, ticket, browserTarget)
+          : retained(target, ticket, allowSuspended, browserTarget);
 
     const node = retainedNode?.node;
     const resolvedTarget = retainedNode?.snapshot.target ?? browserTarget ?? targets.selected();
@@ -897,6 +1547,7 @@ export const makeObservation = (
     };
 
     let facts: ControlFacts | undefined;
+    let capture: DescriptorSample | undefined;
 
     try {
       const element =
@@ -941,8 +1592,30 @@ export const makeObservation = (
 
       check();
       if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
-      if (node !== undefined || policy !== undefined) {
-        facts = safeDecode(Facts, await sampleFacts(element, ticket, check, resolvedTarget)).facts;
+      if (node !== undefined || policy !== undefined || ticket.captureTarget !== undefined) {
+        const sampled = safeDecode(
+          Facts,
+          await sampleFacts(element, ticket, check, resolvedTarget),
+        ).facts;
+
+        facts = ControlFacts.make(sampled);
+
+        if (ticket.captureTarget !== undefined) {
+          const privateTarget =
+            typeof target !== "string" && "_tag" in target
+              ? resolvedElements.get(target)
+              : undefined;
+
+          capture = {
+            facts: ControlFacts.make({ ...sampled, box: { ...sampled.box } }),
+            scope: privateTarget?.scope ?? retainedNode?.snapshot.scope ?? "document",
+            ...frameSample(resolvedTarget),
+            ...(sampled.completeness === undefined ? {} : { completeness: sampled.completeness }),
+            ...(privateTarget?.descriptor?.ordinal === undefined
+              ? {}
+              : { ordinal: privateTarget.descriptor.ordinal }),
+          };
+        }
 
         check();
         if (
@@ -966,7 +1639,7 @@ export const makeObservation = (
       }
       check();
 
-      return { element, kept, check, facts, release };
+      return { element, kept, check, facts, capture, release };
     } catch (error) {
       await closeWithin(release).catch(() => {});
       check();
@@ -976,8 +1649,8 @@ export const makeObservation = (
 
   /** Validate all options in one fresh page read, while keeping the original exact handles. */
   const selectOptions = async (
-    target: ObservedElement,
-    ids: SelectOptions,
+    target: ObservedElement | ResolvedElement,
+    ids: SelectOptions | ReadonlyArray<ResolvedElement>,
     element: ElementHandle<Element>,
     ticket: Ticket,
     enablement = false,
@@ -986,23 +1659,39 @@ export const makeObservation = (
     const same = (facts: ControlFacts, node: Retained) =>
       enablement ? stableIdentityOf(facts) === node.stable : identityOf(facts) === node.identity;
 
-    const select = retained(target, ticket, false, browserTarget);
+    const select =
+      "_tag" in target
+        ? privateRetained(target, ticket, browserTarget)
+        : retained(target, ticket, false, browserTarget);
 
     if (select.node.handle !== element) throw failure(Reasons.Stale.make({}), "undispatched");
     if (select.node.multiple === undefined)
       throw failure(Reasons.Unsupported.make({}), "undispatched");
 
+    const selectElementId =
+      "_tag" in target
+        ? [...select.snapshot.nodes].find(([_key, node]) => node === select.node)?.[0]
+        : target.elementId;
+
     const options = ids.map((elementId) => {
-      const option = retained(
-        { observationId: target.observationId, elementId },
-        ticket,
-        false,
-        browserTarget,
-      );
+      const option =
+        typeof elementId !== "string"
+          ? privateRetained(elementId, ticket, browserTarget)
+          : "_tag" in target
+            ? undefined
+            : retained(
+                { observationId: target.observationId, elementId },
+                ticket,
+                false,
+                browserTarget,
+              );
+
+      if (option === undefined || option.snapshot !== select.snapshot)
+        throw failure(Reasons.Stale.make({}), "undispatched");
 
       const identity = option.node.option;
 
-      if (identity === undefined || identity.selectElementId !== target.elementId)
+      if (identity === undefined || identity.selectElementId !== selectElementId)
         throw failure(Reasons.Stale.make({}), "undispatched");
 
       return { ...option, value: identity.value };
@@ -1046,6 +1735,26 @@ export const makeObservation = (
       throw failure(Reasons.Unsupported.make({}), "undispatched");
     check();
 
+    if (ticket.captureTarget !== undefined)
+      for (const [index, sampled] of fresh.options.entries()) {
+        const reference = ids[index];
+
+        if (reference === undefined || typeof reference === "string") continue;
+        const option = privateRetained(reference, ticket, browserTarget);
+
+        ticket.captureTarget(reference, {
+          facts: ControlFacts.make(sampled.facts),
+          scope: option.scope,
+          ...frameSample(option.snapshot.target),
+          ...(sampled.facts.completeness === undefined
+            ? {}
+            : { completeness: sampled.facts.completeness }),
+          ...(option.descriptor?.ordinal === undefined
+            ? {}
+            : { ordinal: option.descriptor.ordinal }),
+        });
+      }
+
     return {
       handles: options.map((option) => option.node.handle),
       values: options.map((option) => option.value),
@@ -1078,7 +1787,7 @@ export const makeObservation = (
    * replaced document still fails stale, and a detached node reads as absent.
    */
   const formState = (
-    references: ReadonlyArray<ObservedElement>,
+    references: ReadonlyArray<ObservedElement | ResolvedElement>,
     ticket: Ticket,
     browserTarget?: DriverTarget,
   ) =>
@@ -1086,7 +1795,18 @@ export const makeObservation = (
       const states: Array<string | undefined> = [];
 
       for (const reference of references) {
-        const leased = lease(reference, ticket, browserTarget);
+        if (
+          "_tag" in reference &&
+          browserTarget !== undefined &&
+          reference.target.pageId !== browserTarget.pageId
+        )
+          throw failure(Reasons.Stale.make({}), "undispatched");
+
+        const leased = lease(
+          reference,
+          ticket,
+          "_tag" in reference ? reference.target : browserTarget,
+        );
 
         try {
           leased.check();
@@ -1366,6 +2086,8 @@ export const makeObservation = (
         target,
         documentEpoch: targets.epochOf(current(target).frame),
         generation: ticket.generation,
+        scope,
+        private: false,
         validity: "reading",
         nodes: new Map(),
         revalidated: new Set(),
@@ -1627,6 +2349,9 @@ export const makeObservation = (
       snapshots.clear();
     },
     resolve,
+    resolveDescriptor,
+    resolveGroup,
+    expectations,
     selectOptions,
     controlFacts,
     formState,

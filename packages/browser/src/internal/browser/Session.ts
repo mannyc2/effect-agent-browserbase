@@ -15,21 +15,37 @@ import {
 import type { OperationOptions, PageStatus } from "../../Browser.ts";
 import {
   type FillFormRequest,
+  type FormField,
   type FrameInfo,
-  type InputReceipt,
+  InputReceipt,
+  ActionResult,
+  NavigationResult,
+  FillFormResult,
+  Checkpoint,
   Inventory,
   type KeyModifier,
   Observation,
   type ObservedElement,
   type PageInfo,
   type PageSuspension,
-  type SelectOptions,
   Target,
   type Viewport,
   type WaitForElementRequest,
 } from "../../BrowserData.ts";
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
+import type {
+  ActionTarget,
+  ValueSource,
+  Descriptor,
+  ResolveGuard,
+  SettledOptions,
+  SettledEvidence,
+  RunPhase,
+  RunReceipt,
+  InputBindings,
+  Step,
+} from "../../PlanData.ts";
 import type { AdmissionLane } from "./Admission.ts";
 import { type CaptureParent } from "./Association.ts";
 import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
@@ -41,12 +57,15 @@ import type {
   DriverFault,
   DriverOptions,
   DriverTarget,
+  ElementTarget,
+  NativeSelectOptions,
+  NativeFormField,
   InputCapture,
   NativeFileSelection,
   NavigationControl,
 } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
-import type { AdmissionPolicy } from "./Observation.ts";
+import type { AdmissionPolicy, ResolvedElement, ResolvedGroup } from "./Observation.ts";
 import {
   makeOwner,
   native,
@@ -54,9 +73,11 @@ import {
   type Limits,
   type ObservationScope,
   type OwnedWait,
+  type ExecutionEvidence,
   type Ticket,
   type WaitTicket,
 } from "./Owner.ts";
+import { actionTargets, makePlanExecution, type StepExecution } from "./PlanExecution.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 import { randomUuid } from "./Random.ts";
 
@@ -75,6 +96,30 @@ export interface Reading {
 export interface FormSettings {
   readonly verify: boolean;
   readonly settleMillis: number;
+}
+
+/** Private composite bounds and evidence cannot enter through decoded public options. */
+export interface ExecutionOptions extends OperationOptions {
+  readonly operationDeadline?: number;
+  readonly queueDeadline?: number;
+  readonly evidence?: ExecutionEvidence;
+  readonly beforeNative?: (driver: Driver, ticket: Ticket) => Promise<void>;
+  readonly phase?: (phase: RunPhase, fieldIndex?: number) => void;
+}
+
+type DeferredElementTarget = ElementTarget | (() => ElementTarget);
+
+const elementTarget = (value: DeferredElementTarget): ElementTarget =>
+  typeof value === "function" ? value() : value;
+
+const effectiveTarget = (value: ElementTarget | undefined, fallback: DriverTarget): DriverTarget =>
+  typeof value === "object" && "_tag" in value && value._tag === "ResolvedElement"
+    ? value.target
+    : fallback;
+
+export interface FormBindings {
+  readonly reference: (id: string) => ObservedElement | ResolvedElement;
+  readonly field: (field: FormField) => NativeFormField;
 }
 
 /** What a form did; the public boundary decodes it. */
@@ -268,6 +313,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const ended = yield* Deferred.make<void>();
   const owner = yield* makeOwner(limits);
   const clock = yield* Clock.Clock;
+  let activeRuns = 0;
+  const pageRuns = new Map<string, number>();
   const uuid = randomUuid(yield* Crypto.Crypto);
 
   let driver: Driver | undefined;
@@ -438,8 +485,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     captureReservedBytes: 0,
   };
 
-  owner.onInvalidate((reason, scope) => {
-    driver?.invalidateObservation(scope);
+  owner.onInvalidate((reason, scope, origin) => {
+    driver?.invalidateObservation(scope, reason === "observation" ? origin : undefined);
     if (reason === "uncertain" && scope === "all")
       for (const page of pages.values())
         page.containment = { _tag: "SessionFenced", generation: owner.state.generation };
@@ -879,7 +926,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   // Reading a target is an ownership operation too. A native mutation that times out
   // after dispatch fences the owner as uncertain; retaining the last native target
   // must not manufacture a fresh usable handle in that state.
-  const readSelected = (operationOptions?: OperationOptions) =>
+  const readSelected = (operationOptions?: ExecutionOptions) =>
     Effect.try({
       try: capture.target,
       catch: (cause) =>
@@ -1054,6 +1101,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly timeoutMillis?: number;
       readonly operationDeadline?: number;
       readonly queueDeadline?: number;
+      readonly evidence?: ExecutionEvidence;
+      readonly beforeNative?: (driver: Driver, ticket: Ticket) => Promise<void>;
       readonly validate?: Effect.Effect<void, BrowserError>;
       readonly containPageId?: string;
     } = {},
@@ -1067,6 +1116,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               // A held page is refused, never woken: none of these may run against one.
               if (
                 [
+                  "resolve",
+                  "run",
+                  "settled",
                   "resize",
                   "wait",
                   "click-and-wait",
@@ -1082,6 +1134,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               )
                 await getDriver().pageControl?.checkTarget(options.target, ticket);
               await requireReady(operation, ticket, options.target);
+
+              await options.beforeNative?.(getDriver(), ticket);
+              ticket.check();
 
               return action(getDriver(), ticket);
             }),
@@ -1137,7 +1192,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     timeoutMillis?: number,
     browserTarget?: DriverTarget,
     generation?: number,
-    operationOptions?: OperationOptions,
+    operationOptions?: ExecutionOptions,
+    operation: "wait" | "settled" = "wait",
   ): Effect.Effect<void, BrowserError> =>
     Effect.suspend(() => {
       let owned: OwnedWait | undefined;
@@ -1145,19 +1201,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
       return owner
         .guard(
-          "wait",
+          operation,
           (ticket) =>
-            native("wait", ticket, async () => {
+            native(operation, ticket, async () => {
               const driver = getDriver();
               const connection = activeConnection;
 
               if (connection === undefined)
                 throw BrowserError.make({
-                  operation: "wait",
+                  operation,
                   reason: Reasons.Closed.make({}),
                   outcome: "undispatched",
                 });
-              const admitted = owner.beginWait(ticket, target, connection);
+              const admitted = owner.beginWait(ticket, target, connection, operation);
 
               owned = admitted;
               let started = false;
@@ -1165,7 +1221,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               try {
                 await driver.pageControl?.checkTarget(target, ticket);
                 ticket.check();
-                await requireReady("wait", ticket, target);
+                await requireReady(operation, ticket, target);
+                ticket.check();
+                await operationOptions?.beforeNative?.(driver, ticket);
                 ticket.check();
                 admitted.start(() => start(driver, admitted.ticket, target));
                 started = true;
@@ -1189,10 +1247,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             targetScope: () => ({ pageId: target.pageId }),
             preflight: Effect.suspend(() =>
               owner.waitAvailable(target.pageId)
-                ? checkTarget(target, generation).pipe(Effect.andThen(unreserved("wait", target)))
+                ? checkTarget(target, generation).pipe(
+                    Effect.andThen(unreserved(operation, target)),
+                  )
                 : Effect.fail(
                     BrowserError.make({
-                      operation: "wait",
+                      operation,
                       reason: Reasons.Busy.make({}),
                       outcome: "undispatched",
                     }),
@@ -1261,7 +1321,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       operation: BrowserOperation,
       action: (driver: Driver, ticket: Ticket, target: DriverTarget) => Promise<A>,
       mutation = false,
-      operationOptions?: OperationOptions,
+      operationOptions?: ExecutionOptions,
     ) =>
       Effect.suspend(() => {
         return Effect.suspend(check).pipe(
@@ -1282,6 +1342,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 native(operation, ticket, async () => {
                   await getDriver().pageControl?.checkTarget(admittedTarget, ticket);
                   await requireReady(operation, ticket, admittedTarget);
+
+                  await operationOptions?.beforeNative?.(getDriver(), ticket);
+                  ticket.check();
 
                   return action(getDriver(), ticket, admittedTarget);
                 }),
@@ -1315,13 +1378,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     const input = (
       operation: BrowserOperation,
       action: (driver: Driver, ticket: Ticket, target: DriverTarget) => Promise<NativeInput>,
-      operationOptions?: OperationOptions,
+      operationOptions?: ExecutionOptions,
+      inputTarget?: (target: DriverTarget) => DriverTarget,
     ) =>
       run(
         operation,
         async (driver, ticket, browserTarget) => {
           // What the input is sent to, read first: input may replace the document it reaches.
-          const target = operationTarget(browserTarget);
+          const target = operationTarget(inputTarget?.(browserTarget) ?? browserTarget);
           const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
           const dispatched = await action(driver, ticket, browserTarget);
 
@@ -1346,7 +1410,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     const startNavigation = Effect.fnUntraced(function* (
       url: string,
       timeoutMillis: number = limits.actionTimeoutMillis,
-      operationOptions?: OperationOptions,
+      operationOptions?: ExecutionOptions,
     ) {
       const requestedTimeout = Math.min(
         timeoutMillis,
@@ -1356,6 +1420,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       const loadingDeadline = Math.min(
         Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + requestedTimeout,
         owner.lifetimeDeadline,
+        operationOptions?.operationDeadline ?? Number.POSITIVE_INFINITY,
       );
 
       let active = true;
@@ -1665,13 +1730,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return {
       startNavigation,
       // The same machinery, scoped to the call: leaving it unsettled fences, as it always has.
-      navigate: (url: string, timeoutMillis?: number, operationOptions?: OperationOptions) =>
+      navigate: (url: string, timeoutMillis?: number, operationOptions?: ExecutionOptions) =>
         Effect.scoped(
           startNavigation(url, timeoutMillis, operationOptions).pipe(
             Effect.flatMap((operation) => operation.completed),
           ),
         ),
-      readText: (selector?: string, operationOptions?: OperationOptions) =>
+      readText: (selector?: string, operationOptions?: ExecutionOptions) =>
         run(
           "read-text",
           (driver, ticket, browserTarget) =>
@@ -1680,64 +1745,79 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           operationOptions,
         ),
       click: (
-        target: string | ObservedElement,
+        target: DeferredElementTarget,
         policy?: AdmissionPolicy,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         run(
           "click",
           (driver, ticket, browserTarget) =>
             driver.click(
-              target,
+              elementTarget(target),
               ticket,
-              captureClickAt(operationTarget(browserTarget)),
+              captureClickAt(
+                operationTarget(effectiveTarget(elementTarget(target), browserTarget)),
+              ),
               policy,
-              browserTarget,
+              effectiveTarget(elementTarget(target), browserTarget),
             ),
           true,
           operationOptions,
         ),
       fill: (
-        target: string | ObservedElement,
+        target: DeferredElementTarget,
         value: string,
         policy?: AdmissionPolicy,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         run(
           "fill",
           (driver, ticket, browserTarget) =>
-            driver.fill(target, value, ticket, policy, browserTarget),
+            driver.fill(
+              elementTarget(target),
+              value,
+              ticket,
+              policy,
+              effectiveTarget(elementTarget(target), browserTarget),
+            ),
           true,
           operationOptions,
         ),
-      scroll: (x: number, y: number, operationOptions?: OperationOptions) =>
+      scroll: (x: number, y: number, operationOptions?: ExecutionOptions) =>
         run(
           "scroll",
           (driver, ticket, browserTarget) => driver.scroll(x, y, ticket, browserTarget),
           true,
           operationOptions,
         ),
-      pointerMove: (to: NativePoint, operationOptions?: OperationOptions) =>
+      pointerMove: (to: NativePoint, operationOptions?: ExecutionOptions) =>
         input(
           "pointer-move",
           (driver, ticket, browserTarget) => driver.pointerMove(to, ticket, browserTarget),
           operationOptions,
         ),
       hover: (
-        target: string | ObservedElement,
+        target: DeferredElementTarget,
         policy?: AdmissionPolicy,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         input(
           "hover",
-          (driver, ticket, browserTarget) => driver.hover(target, ticket, policy, browserTarget),
+          (driver, ticket, browserTarget) =>
+            driver.hover(
+              elementTarget(target),
+              ticket,
+              policy,
+              effectiveTarget(elementTarget(target), browserTarget),
+            ),
           operationOptions,
+          (browserTarget) => effectiveTarget(elementTarget(target), browserTarget),
         ),
       wheel: (
         deltaX: number,
         deltaY: number,
         at?: NativePoint,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         input(
           "wheel",
@@ -1748,28 +1828,46 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       press: (
         key: string,
         modifiers: ReadonlyArray<KeyModifier>,
-        into?: string | ObservedElement,
+        into?: DeferredElementTarget,
         policy?: AdmissionPolicy,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         input(
           "press",
           (driver, ticket, browserTarget) =>
-            driver.press(key, modifiers, into, ticket, policy, browserTarget),
+            driver.press(
+              key,
+              modifiers,
+              into === undefined ? undefined : elementTarget(into),
+              ticket,
+              policy,
+              effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+            ),
           operationOptions,
+          (browserTarget) =>
+            effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
         ),
       type: (
         text: string,
-        into?: string | ObservedElement,
+        into?: DeferredElementTarget,
         policy?: AdmissionPolicy,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         input(
           "type",
-          (driver, ticket, browserTarget) => driver.type(text, into, ticket, policy, browserTarget),
+          (driver, ticket, browserTarget) =>
+            driver.type(
+              text,
+              into === undefined ? undefined : elementTarget(into),
+              ticket,
+              policy,
+              effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+            ),
           operationOptions,
+          (browserTarget) =>
+            effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
         ),
-      screenshot: (full: boolean, operationOptions?: OperationOptions) =>
+      screenshot: (full: boolean, operationOptions?: ExecutionOptions) =>
         run(
           "screenshot",
           (driver, ticket, browserTarget) =>
@@ -1847,7 +1945,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const pinned = (
     info: PageInfo,
     resolve: (driver: Driver, ticket: Ticket) => Promise<DriverTarget>,
-    operationOptions?: OperationOptions,
+    operationOptions?: ExecutionOptions,
   ) =>
     owner.guard(
       "target",
@@ -1871,7 +1969,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       { ...operationOptions, charge: false, targetScope: () => ({ pageId: info.pageId }) },
     );
 
-  const retain = (operationOptions?: OperationOptions) =>
+  const retain = (operationOptions?: ExecutionOptions) =>
     Effect.suspend(() => {
       const selection = owner.state.selection;
 
@@ -1909,14 +2007,51 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       ...(generation === undefined ? {} : { generation }),
     };
 
-    const targetData = () =>
-      target === undefined
+    const targetData = (actual: DriverTarget | undefined = target) =>
+      actual === undefined
         ? capture.target()
-        : Target.make({ generation: generation ?? owner.state.generation, ...target });
+        : Target.make({ generation: generation ?? owner.state.generation, ...actual });
 
-    return {
+    const controls = {
+      resolve: (descriptor: Descriptor, guard: ResolveGuard, operationOptions?: ExecutionOptions) =>
+        nativeOperation(
+          "resolve",
+          (driver, ticket) =>
+            driver.resolveDescriptor(descriptor, ticket, target ?? driver.selected(), guard),
+          { ...bound, ...operationOptions, charge: "host-read" },
+        ),
+      settled: (
+        settle: SettledOptions,
+        operationOptions?: ExecutionOptions,
+      ): Effect.Effect<SettledEvidence, BrowserError> =>
+        Effect.suspend(() => {
+          let evidence: SettledEvidence | undefined;
+
+          return wait(
+            async (driver, ticket, resolved) => {
+              evidence = await driver.settled(settle, ticket, resolved);
+            },
+            settle.withinMillis,
+            target,
+            generation,
+            operationOptions,
+            "settled",
+          ).pipe(
+            Effect.flatMap(() =>
+              evidence === undefined
+                ? Effect.fail(
+                    BrowserError.make({
+                      operation: "settled",
+                      reason: Reasons.Incomplete.make({}),
+                      outcome: "undispatched",
+                    }),
+                  )
+                : Effect.succeed(evidence),
+            ),
+          );
+        }),
       pageControl: {
-        state: (page: PageInfo, operationOptions?: OperationOptions) =>
+        state: (page: PageInfo, operationOptions?: ExecutionOptions) =>
           nativeOperation("page-state", (_driver, ticket) => execution().state(page, ticket), {
             ...bound,
             ...operationOptions,
@@ -1924,7 +2059,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             containPageId: page.pageId,
             targetScope: () => ({ pageId: page.pageId }),
           }),
-        suspend: (page: PageInfo, operationOptions?: OperationOptions) =>
+        suspend: (page: PageInfo, operationOptions?: ExecutionOptions) =>
           nativeOperation("page-suspend", (_driver, ticket) => execution().suspend(page, ticket), {
             ...bound,
             ...operationOptions,
@@ -1933,7 +2068,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             targetScope: () => ({ pageId: page.pageId }),
             preflight: waitFree("page-suspend", page.pageId),
           }),
-        resume: (receipt: PageSuspension, operationOptions?: OperationOptions) =>
+        resume: (receipt: PageSuspension, operationOptions?: ExecutionOptions) =>
           nativeOperation("page-resume", (_driver, ticket) => execution().resume(receipt, ticket), {
             ...bound,
             ...operationOptions,
@@ -1948,7 +2083,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           ? undefined
           : { generation: generation ?? owner.state.generation, target },
       ),
-      observe: (reading: Reading = { scope: "document" }, operationOptions?: OperationOptions) =>
+      observe: (reading: Reading = { scope: "document" }, operationOptions?: ExecutionOptions) =>
         textBudget("observe", reading.maxTextBytes).pipe(
           Effect.flatMap((bytes) =>
             validate.pipe(
@@ -1983,7 +2118,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
        */
       checkpoint: (
         reading: Omit<Reading, "scope"> & { readonly picture: boolean },
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         textBudget("checkpoint", reading.maxTextBytes).pipe(
           Effect.flatMap((bytes) =>
@@ -2014,7 +2149,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
           ),
         ),
-      controlFacts: (reference: ObservedElement, operationOptions?: OperationOptions) =>
+      controlFacts: (reference: ObservedElement, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "control-facts",
           (driver, ticket) => driver.controlFacts(reference, ticket, target),
@@ -2025,14 +2160,24 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           },
         ),
       selectOption: (
-        reference: ObservedElement,
-        options: SelectOptions,
+        reference: ObservedElement | ResolvedElement | (() => ObservedElement | ResolvedElement),
+        options: NativeSelectOptions | (() => NativeSelectOptions),
         policy?: AdmissionPolicy,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         nativeOperation(
           "select-option",
-          (driver, ticket) => driver.selectOption(reference, options, ticket, policy, target),
+          (driver, ticket) => {
+            const ref = typeof reference === "function" ? reference() : reference;
+
+            return driver.selectOption(
+              ref,
+              typeof options === "function" ? options() : options,
+              ticket,
+              policy,
+              effectiveTarget(ref, target ?? driver.selected()),
+            );
+          },
           { ...bound, ...operationOptions, mutation: true },
         ),
       /**
@@ -2044,7 +2189,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         request: FillFormRequest,
         policy: AdmissionPolicy | undefined,
         form: FormSettings,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
+        bindings?: FormBindings,
       ) =>
         Effect.suspend(() => {
           const requested = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
@@ -2058,19 +2204,26 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   limits.actionTimeoutMillis,
                 ),
               owner.lifetimeDeadline,
+              operationOptions?.operationDeadline ?? Number.POSITIVE_INFINITY,
             ),
             ...(operationOptions?.admission?.queue === undefined
               ? {}
-              : { queueDeadline: requested + Duration.toMillis(operationOptions.admission.queue) }),
+              : {
+                  queueDeadline: Math.min(
+                    requested + Duration.toMillis(operationOptions.admission.queue),
+                    operationOptions.queueDeadline ?? Number.POSITIVE_INFINITY,
+                  ),
+                }),
           };
 
           // The page whose observation the steps kept usable, known once one of them dispatched.
           let pageId: string | undefined;
 
-          const reference = (elementId: string): ObservedElement => ({
-            observationId: request.observationId,
-            elementId,
-          });
+          const reference = (elementId: string): ObservedElement | ResolvedElement =>
+            bindings?.reference(elementId) ?? {
+              observationId: request.observationId,
+              elementId,
+            };
 
           const body = Effect.gen(function* () {
             const fields: Array<{
@@ -2093,7 +2246,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               stopped: { stage, error, ...(elementId === undefined ? {} : { elementId }) },
             });
 
-            for (const field of request.fields) {
+            for (const [fieldIndex, field] of request.fields.entries()) {
+              formOptions.phase?.("Field", fieldIndex);
+
               const exit = yield* Effect.exit(
                 nativeOperation(
                   "fill-form",
@@ -2101,18 +2256,30 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     try {
                       return await driver.formStep(
                         reference(field.elementId),
-                        field,
+                        bindings?.field(field) ?? field,
                         ticket,
                         policy,
                         form.settleMillis,
-                        captureClickAt(targetData()),
-                        target,
+                        captureClickAt(
+                          targetData(
+                            effectiveTarget(
+                              reference(field.elementId),
+                              target ?? driver.selected(),
+                            ),
+                          ),
+                        ),
+                        effectiveTarget(reference(field.elementId), target ?? driver.selected()),
                       );
                     } finally {
                       if (ticket.dispatched) pageId ??= target?.pageId ?? driver.selected().pageId;
                     }
                   },
-                  { ...bound, ...formOptions, mutation: true, mutationScope: () => "none" },
+                  {
+                    ...bound,
+                    ...formOptions,
+                    mutation: true,
+                    ...(bindings === undefined ? { mutationScope: () => "none" as const } : {}),
+                  },
                 ),
               );
 
@@ -2148,6 +2315,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             }
 
             if (form.verify) {
+              formOptions.phase?.("Verification");
+
               // Not charged, like revalidation: it sends no input and reads nodes already issued.
               const exit = yield* Effect.exit(
                 nativeOperation(
@@ -2188,6 +2357,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             if (request.submit === undefined) return finish(false);
             const submit = request.submit;
 
+            formOptions.phase?.("Submit");
+
             const exit = yield* Effect.exit(
               nativeOperation(
                 "fill-form",
@@ -2195,9 +2366,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   driver.formSubmit(
                     reference(submit),
                     ticket,
-                    captureClickAt(targetData()),
+                    captureClickAt(
+                      targetData(effectiveTarget(reference(submit), target ?? driver.selected())),
+                    ),
                     policy,
-                    target,
+                    effectiveTarget(reference(submit), target ?? driver.selected()),
                   ),
                 { ...bound, ...formOptions, mutation: true },
               ),
@@ -2226,7 +2399,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           );
         }),
       /** Not charged: it sends no input and reads one node the caller was already given. */
-      revalidate: (reference: ObservedElement, operationOptions?: OperationOptions) =>
+      revalidate: (reference: ObservedElement, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "revalidate",
           (driver, ticket) => driver.revalidate(reference, ticket, target),
@@ -2237,7 +2410,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           },
         ),
       // Inspecting readiness is not an action: it charges nothing and mutates nothing.
-      readiness: (operationOptions?: OperationOptions) =>
+      readiness: (operationOptions?: ExecutionOptions) =>
         validate.pipe(
           Effect.andThen(
             owner.guard(
@@ -2253,16 +2426,16 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
           ),
         ),
-      pages: (operationOptions?: OperationOptions) => listPages(operationOptions),
-      listPages: (operationOptions?: OperationOptions) => listPages(operationOptions),
-      describePage: (page: PageInfo, operationOptions?: OperationOptions) =>
+      pages: (operationOptions?: ExecutionOptions) => listPages(operationOptions),
+      listPages: (operationOptions?: ExecutionOptions) => listPages(operationOptions),
+      describePage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
         nativeOperation("describe-page", (driver, ticket) => driver.describePage(page, ticket), {
           charge: false,
           ...bound,
           ...operationOptions,
           targetScope: () => ({ pageId: page.pageId }),
         }),
-      frames: (operationOptions?: OperationOptions) =>
+      frames: (operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "list-frames",
           async (driver, ticket) => {
@@ -2281,22 +2454,22 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           },
           { ...bound, ...operationOptions, charge: false },
         ),
-      framesOf: (page: PageInfo, operationOptions?: OperationOptions) =>
+      framesOf: (page: PageInfo, operationOptions?: ExecutionOptions) =>
         nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket, page), {
           charge: false,
           ...bound,
           ...operationOptions,
           targetScope: () => ({ pageId: page.pageId }),
         }),
-      pinPage: (page: PageInfo, operationOptions?: OperationOptions) =>
+      pinPage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
         pinned(page, (driver, ticket) => driver.resolvePage(page, ticket), operationOptions),
-      pinFrame: (page: PageInfo, frame: FrameInfo, operationOptions?: OperationOptions) =>
+      pinFrame: (page: PageInfo, frame: FrameInfo, operationOptions?: ExecutionOptions) =>
         pinned(
           page,
           (driver, ticket) => driver.resolveFrame(page, frame, ticket),
           operationOptions,
         ),
-      selectPage: (page: PageInfo, operationOptions?: OperationOptions) =>
+      selectPage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "select-page",
           async (driver, ticket) => {
@@ -2309,7 +2482,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           },
           { ...operationOptions, charge: false },
         ),
-      selectFrame: (id: string, operationOptions?: OperationOptions) =>
+      selectFrame: (id: string, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "select-frame",
           async (driver, ticket) => {
@@ -2319,7 +2492,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           { ...operationOptions, charge: false },
         ),
       /** Creation and adoption use the registry lane, independently of Page work. */
-      createPage: (operationOptions?: OperationOptions) =>
+      createPage: (operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "new-page",
           async (driver, ticket) => {
@@ -2340,7 +2513,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             anyPage: true,
           },
         ),
-      closePage: (page: PageInfo, operationOptions?: OperationOptions) =>
+      closePage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
         Effect.suspend(() => {
           const record = authority ?? pages.get(page.pageId);
 
@@ -2458,7 +2631,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
           );
         }),
-      resize: (viewport: Viewport, operationOptions?: OperationOptions) =>
+      resize: (viewport: Viewport, operationOptions?: ExecutionOptions) =>
         nativeOperation("resize", (driver, ticket) => driver.resize(viewport, ticket, target), {
           ...bound,
           ...operationOptions,
@@ -2468,7 +2641,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       waitFor: (
         selector: string,
         state: "visible" | "hidden" | "attached" | "detached",
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         validate.pipe(
           Effect.andThen(
@@ -2481,7 +2654,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
           ),
         ),
-      waitForElement: (request: WaitForElementRequest, operationOptions?: OperationOptions) =>
+      waitForElement: (request: WaitForElementRequest, operationOptions?: ExecutionOptions) =>
         validate.pipe(
           Effect.andThen(
             wait(
@@ -2494,14 +2667,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
           ),
         ),
-      clickAndWait: (element: string | ObservedElement, operationOptions?: OperationOptions) =>
+      clickAndWait: (element: string | ObservedElement, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "click-and-wait",
           (driver, ticket) =>
             driver.clickAndWait(element, ticket, captureClickAt(targetData()), target),
           { ...bound, ...operationOptions, mutation: true },
         ),
-      clickForDownload: (element: string | ObservedElement, operationOptions?: OperationOptions) =>
+      clickForDownload: (element: string | ObservedElement, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "download-action",
           (driver, ticket) => driver.clickForDownload(element, ticket, target),
@@ -2510,7 +2683,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       selectFiles: (
         element: string | ObservedElement,
         files: ReadonlyArray<NativeFileSelection>,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         nativeOperation(
           "select-files",
@@ -2520,7 +2693,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       clickForFileSelection: (
         element: string | ObservedElement,
         files: ReadonlyArray<NativeFileSelection>,
-        operationOptions?: OperationOptions,
+        operationOptions?: ExecutionOptions,
       ) =>
         nativeOperation(
           "file-chooser",
@@ -2529,6 +2702,401 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         ),
       validate,
     };
+
+    const decodeReceipt = <S extends Schema.Constraint>(schema: S, value: unknown) =>
+      Schema.decodeUnknownEffect(schema)(value).pipe(
+        Effect.mapError(() =>
+          BrowserError.make({
+            operation: "run",
+            reason: Reasons.Malformed.make({}),
+            outcome: "performed",
+          }),
+        ),
+      );
+
+    const executeStep = (
+      step: Step,
+      inputs: InputBindings,
+      context: StepExecution,
+    ): Effect.Effect<{ receipt: RunReceipt; checkpoint?: Checkpoint }, BrowserError> =>
+      Effect.suspend(() => {
+        const requests = actionTargets(step.action);
+        let group: ResolvedGroup | undefined;
+        let prepared = false;
+
+        let currentPhase: RunPhase =
+          step.action._tag === "FillForm"
+            ? "Field"
+            : step.action._tag === "Wait" && step.action.mode._tag === "Settled"
+              ? "Settled"
+              : "Input";
+
+        let currentField: number | undefined;
+
+        const planOptions: ExecutionOptions = {
+          ...context.options,
+          phase: (phase, fieldIndex) => {
+            currentPhase = phase;
+            currentField = fieldIndex;
+            context.phase(phase, fieldIndex);
+          },
+          beforeNative: async (driver, ticket) => {
+            if (!prepared) {
+              if (step.expect?.before !== undefined) {
+                context.phase("Precondition");
+                owner.chargeHostRead(ticket, "run");
+                await driver.expectations(step.expect.before, ticket, target ?? driver.selected());
+              }
+              if (requests.length > 0) {
+                context.phase("Resolution");
+                owner.chargeHostRead(ticket, "resolve");
+                group = await driver.resolveGroup(
+                  requests,
+                  ticket,
+                  target ?? driver.selected(),
+                  step.resolution,
+                );
+                context.targets(
+                  requests.map((request, index) => ({
+                    value: groupElement(index),
+                    path: request.path,
+                    ...(group?.samples?.[index] === undefined
+                      ? {}
+                      : { sample: group.samples[index] }),
+                  })),
+                );
+              }
+              prepared = true;
+            }
+            group?.activate(ticket);
+            ticket.check();
+            context.phase(currentPhase, currentField);
+          },
+        };
+
+        const groupElement = (index: number): ResolvedElement => {
+          const value = group?.elements[index];
+
+          if (value === undefined)
+            throw BrowserError.make({
+              operation: "run",
+              reason: Reasons.Incomplete.make({}),
+              outcome: "undispatched",
+            });
+
+          return value;
+        };
+
+        const indexed = (value: ActionTarget): (() => ResolvedElement) => {
+          const index = requests.findIndex((request) => request.target === value);
+
+          return () => groupElement(index);
+        };
+
+        const inputValue = (value: ValueSource): Effect.Effect<string, BrowserError> =>
+          value._tag === "Literal"
+            ? Effect.succeed(value.value)
+            : inputs[value.name] === undefined
+              ? Effect.fail(
+                  BrowserError.make({
+                    operation: "run",
+                    reason: Reasons.Configuration.make({ path: `inputs.${value.name}` }),
+                    outcome: "undispatched",
+                  }),
+                )
+              : Effect.succeed(inputs[value.name] ?? "");
+
+        const policy: AdmissionPolicy | undefined = context.policy?.admit;
+        const action = step.action;
+
+        const perform: Effect.Effect<RunReceipt, BrowserError> = Effect.suspend(() => {
+          switch (action._tag) {
+            case "Navigate":
+              return controls.operations
+                .navigate(action.url, action.timeoutMillis, planOptions)
+                .pipe(Effect.flatMap((url) => decodeReceipt(NavigationResult, { url })));
+            case "Click":
+              return controls.operations
+                .click(indexed(action.target), policy, planOptions)
+                .pipe(Effect.flatMap((value) => decodeReceipt(ActionResult, value)));
+            case "Hover":
+              return controls.operations
+                .hover(indexed(action.target), policy, planOptions)
+                .pipe(
+                  Effect.flatMap((value) =>
+                    decodeReceipt(InputReceipt, { ...value, kind: "hover" }),
+                  ),
+                );
+            case "Fill":
+              return inputValue(action.value).pipe(
+                Effect.flatMap((value) =>
+                  controls.operations.fill(indexed(action.target), value, policy, planOptions),
+                ),
+                Effect.flatMap((url) => decodeReceipt(ActionResult, { url })),
+              );
+            case "Type":
+              return inputValue(action.text).pipe(
+                Effect.flatMap((value) =>
+                  controls.operations.type(
+                    value,
+                    action.target === undefined ? undefined : indexed(action.target),
+                    policy,
+                    planOptions,
+                  ),
+                ),
+                Effect.flatMap((value) => decodeReceipt(InputReceipt, { ...value, kind: "type" })),
+              );
+            case "Press":
+              return controls.operations
+                .press(
+                  action.key,
+                  action.modifiers ?? [],
+                  action.target === undefined ? undefined : indexed(action.target),
+                  policy,
+                  planOptions,
+                )
+                .pipe(
+                  Effect.flatMap((value) =>
+                    decodeReceipt(InputReceipt, { ...value, kind: "press" }),
+                  ),
+                );
+            case "Select":
+              return controls
+                .selectOption(
+                  indexed(action.target),
+                  () => action.options.map((option) => indexed(option)()),
+                  policy,
+                  planOptions,
+                )
+                .pipe(Effect.flatMap((url) => decodeReceipt(ActionResult, { url })));
+            case "Scroll": {
+              const mode = action.mode;
+
+              return (
+                mode._tag === "By"
+                  ? controls.operations.scroll(mode.deltaX, mode.deltaY, planOptions)
+                  : nativeOperation(
+                      "scroll",
+                      (driver, ticket) => {
+                        const ref = indexed(mode.target)();
+
+                        return driver.scrollTo(ref, ticket, ref.target);
+                      },
+                      { ...bound, ...planOptions, mutation: true },
+                    )
+              ).pipe(Effect.flatMap((url) => decodeReceipt(ActionResult, { url })));
+            }
+            case "PointerMove":
+              return controls.operations
+                .pointerMove(action.to, planOptions)
+                .pipe(
+                  Effect.flatMap((value) =>
+                    decodeReceipt(InputReceipt, { ...value, kind: "pointer-move" }),
+                  ),
+                );
+            case "Wheel":
+              return controls.operations
+                .wheel(action.deltaX, action.deltaY, action.at, planOptions)
+                .pipe(
+                  Effect.flatMap((value) =>
+                    decodeReceipt(InputReceipt, {
+                      ...value,
+                      kind: "wheel",
+                      delta: { x: action.deltaX, y: action.deltaY },
+                    }),
+                  ),
+                );
+            case "Wait": {
+              const mode = action.mode;
+
+              if (mode._tag === "Settled") return controls.settled(mode, planOptions);
+              if (mode._tag === "Duration")
+                return owner.guard(
+                  "wait",
+                  (ticket) =>
+                    native("wait", ticket, async () => {
+                      const driver = getDriver();
+
+                      await driver.pageControl?.checkTarget(target, ticket);
+                      await planOptions.beforeNative?.(driver, ticket);
+                    }).pipe(
+                      Effect.andThen(Effect.sleep(mode.milliseconds)),
+                      Effect.andThen(Effect.sync(() => ticket.check())),
+                    ),
+                  { ...bound, ...planOptions, mutation: false },
+                );
+
+              return wait(
+                (driver, ticket) => {
+                  const ref = indexed(mode.target)();
+
+                  return driver.waitForElement(ref, mode.state, ticket, ref.target);
+                },
+                mode.timeoutMillis,
+                target,
+                generation,
+                planOptions,
+              );
+            }
+            case "FillForm":
+              return Effect.gen(function* () {
+                const fields = yield* Effect.forEach(
+                  action.fields,
+                  (field, index): Effect.Effect<FormField, BrowserError> =>
+                    field._tag === "Value"
+                      ? inputValue(field.value).pipe(
+                          Effect.map((value) => ({ elementId: `field_${index}`, value })),
+                        )
+                      : Effect.succeed(
+                          field._tag === "Checked"
+                            ? { elementId: `field_${index}`, checked: field.checked }
+                            : {
+                                elementId: `field_${index}`,
+                                options: field.options.map(
+                                  (_, option) => `option_${index}_${option}`,
+                                ),
+                              },
+                        ),
+                );
+
+                const request = {
+                  observationId: "private_plan",
+                  fields,
+                  ...(action.submit === undefined ? {} : { submit: "private_submit" }),
+                };
+
+                const references = new Map<string, () => ResolvedElement>();
+
+                action.fields.forEach((field, index) =>
+                  references.set(`field_${index}`, indexed(field.target)),
+                );
+                if (action.submit !== undefined)
+                  references.set("private_submit", indexed(action.submit));
+
+                const result = yield* controls.fillForm(
+                  request,
+                  policy,
+                  {
+                    verify: action.options?.verify ?? true,
+                    settleMillis: action.options?.settleMillis ?? 50,
+                  },
+                  planOptions,
+                  {
+                    reference: (id) => {
+                      const ref = references.get(id);
+
+                      if (ref === undefined)
+                        throw BrowserError.make({
+                          operation: "fill-form",
+                          reason: Reasons.Incomplete.make({}),
+                          outcome: "undispatched",
+                        });
+
+                      return ref();
+                    },
+                    field: (field) => {
+                      const index = action.fields.findIndex(
+                        (_, index) => field.elementId === `field_${index}`,
+                      );
+
+                      const source = action.fields[index];
+
+                      return source?._tag === "Options"
+                        ? { ...field, options: source.options.map((option) => indexed(option)()) }
+                        : field;
+                    },
+                  },
+                );
+
+                const receipt = yield* decodeReceipt(FillFormResult, result);
+
+                context.retainReceipt(receipt);
+                if (result.stopped !== undefined) return yield* result.stopped.error;
+
+                return receipt;
+              });
+          }
+        });
+
+        return perform.pipe(
+          Effect.tap((receipt) => Effect.sync(() => context.retainReceipt(receipt))),
+          Effect.flatMap((receipt) => {
+            const after =
+              step.expect?.after === undefined
+                ? Effect.void
+                : nativeOperation(
+                    "run",
+                    async (driver, ticket) => {
+                      context.phase("Postcondition");
+                      await driver.expectations(
+                        step.expect?.after ?? [],
+                        ticket,
+                        target ?? driver.selected(),
+                      );
+                    },
+                    { ...bound, ...context.options, charge: "host-read" },
+                  );
+
+            return after.pipe(
+              Effect.andThen(
+                context.checkpoint === undefined
+                  ? Effect.succeed({ receipt })
+                  : controls
+                      .checkpoint(
+                        { ...context.checkpoint, picture: context.checkpoint.picture ?? false },
+                        context.options,
+                      )
+                      .pipe(
+                        Effect.flatMap((value) => decodeReceipt(Checkpoint, value)),
+                        Effect.map((checkpoint) => ({ receipt, checkpoint })),
+                      ),
+              ),
+            );
+          }),
+          Effect.ensuring(Effect.promise(() => group?.release() ?? Promise.resolve())),
+        );
+      });
+
+    const plans = makePlanExecution({
+      clock,
+      validate,
+      lifetimeDeadline: owner.lifetimeDeadline,
+      actionTimeoutMillis: limits.actionTimeoutMillis,
+      newId: uuid,
+      reserve: Effect.suspend(() => {
+        const pageId = target?.pageId ?? getDriver().selected().pageId;
+        const count = pageRuns.get(pageId) ?? 0;
+
+        if (activeRuns >= 128 || count >= 32)
+          return Effect.fail(
+            BrowserError.make({
+              operation: "run",
+              reason: Reasons.Limit.make({
+                dimension: "runs",
+                maximum: count >= 32 ? 32 : 128,
+                observed: count >= 32 ? count : activeRuns,
+              }),
+              outcome: "undispatched",
+            }),
+          );
+        activeRuns++;
+        pageRuns.set(pageId, count + 1);
+        let released = false;
+
+        return Effect.succeed(() => {
+          if (released) return;
+          released = true;
+          activeRuns--;
+          const remaining = (pageRuns.get(pageId) ?? 1) - 1;
+
+          if (remaining === 0) pageRuns.delete(pageId);
+          else pageRuns.set(pageId, remaining);
+        });
+      }),
+      executeStep,
+    });
+
+    return { ...controls, plans };
   };
 
   const registerPage = (info: PageInfo, target: DriverTarget, generation: number) => {
@@ -2566,7 +3134,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     };
   };
 
-  const page = (info: PageInfo, operationOptions?: OperationOptions) =>
+  const page = (info: PageInfo, operationOptions?: ExecutionOptions) =>
     owner.guard(
       "target",
       (ticket) =>
@@ -2611,7 +3179,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       return Object.freeze(fresh);
     });
 
-  const listPages = (operationOptions?: OperationOptions) =>
+  const listPages = (operationOptions?: ExecutionOptions) =>
     owner.guard(
       "list-pages",
       (ticket) => refreshPages(ticket).pipe(Effect.map((inventory) => inventory.pages)),
@@ -2790,7 +3358,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       info: PageInfo,
       frame: FrameInfo,
       generation: number,
-      operationOptions?: OperationOptions,
+      operationOptions?: ExecutionOptions,
     ) =>
       owner.guard(
         "target",
@@ -2848,13 +3416,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     cleanupResult,
     close: release.pipe(Effect.tap(() => retireControl)),
     closeChecked: acquired.closeChecked.pipe(Effect.onExit(() => retireControl)),
-    liveView: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: OperationOptions) =>
+    liveView: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: ExecutionOptions) =>
       owner.guard("live-view", () => issue, {
         ...operationOptions,
         charge: false,
         phases: ["open", "paused"],
       }),
-    beginHandoff: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: OperationOptions) =>
+    beginHandoff: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: ExecutionOptions) =>
       lifecycle(
         "handoff",
         () => !options.driver.pageControl,
@@ -2947,7 +3515,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     resume: (
       token: Redacted.Redacted<string>,
       operatorReleasedControl: boolean,
-      operationOptions?: OperationOptions,
+      operationOptions?: ExecutionOptions,
     ) =>
       lifecycle(
         "resume",
@@ -3042,7 +3610,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           )
           .pipe(Effect.onError(() => Effect.sync(() => owner.fence("uncertain", "uncertain")))),
     ),
-    reconnect: (operatorReleasedControl: boolean, operationOptions?: OperationOptions) =>
+    reconnect: (operatorReleasedControl: boolean, operationOptions?: ExecutionOptions) =>
       lifecycle(
         "reconnect",
         () =>

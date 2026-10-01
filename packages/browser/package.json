@@ -25,6 +25,8 @@
     "./chromium": "./src/Chromium.ts",
     "./errors": "./src/Errors.ts",
     "./page-control": "./src/PageControl.ts",
+    "./plan": "./src/Plan.ts",
+    "./plan-data": "./src/PlanData.ts",
     "./testing": "./src/Testing.ts"
   },
   "publishConfig": {
