@@ -1070,6 +1070,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
       try {
         const reply = await binding.invoke({
+          origin: documentOrigin,
           read: async (signal) => {
             await check(signal);
 

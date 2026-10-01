@@ -37,9 +37,11 @@ type Metadata = Pick<
   | "failureMode"
 >;
 
+const origin = "https://portal.example";
+
 const metadata: Metadata = {
   name: "readSettings",
-  origins: ["https://portal.example"],
+  origins: [origin],
   maxConcurrent: 1,
   maxInputBytes: 128,
   maxOutputBytes: 128,
@@ -67,6 +69,7 @@ const native = (text = "7", overrides: Partial<NativeBindingCall> = {}) => {
   const calls = { read: 0, check: 0, dispose: 0 };
 
   const call: NativeBindingCall = {
+    origin: overrides.origin ?? origin,
     read: (signal) => {
       calls.read++;
 
@@ -793,6 +796,56 @@ for (const mode of ["reject-call", "fail-session"] as const) {
         if (mode === "fail-session") yield* rejection(pending);
         else assert.equal(yield* Effect.promise(() => pending), "7");
         assert.equal((yield* owner.diagnostics).bindings[0]?.accepted, 1);
+      }),
+    ),
+  );
+
+  it.effect(`${mode} refuses another origin before admission and never faults the owner`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let faults = 0;
+
+        const owner = yield* acquire(numeric(Effect.succeed, { failureMode: mode }));
+
+        const connection = yield* owner.connect(
+          () => {
+            faults++;
+          },
+          () => true,
+        );
+
+        const binding = connection.bindings[0];
+
+        assert.ok(binding);
+
+        // Admitted, this read would hold the only permit and leave the next call busy.
+        const foreign = native("7", {
+          origin: "https://other.example",
+          read: () => new Promise<string>(() => {}),
+        });
+
+        yield* rejection(binding.invoke(foreign.call));
+        assert.deepEqual(foreign.calls, { read: 0, check: 0, dispose: 0 });
+        assert.equal(yield* Effect.promise(() => binding.invoke(native().call)), "7");
+        assert.equal(faults, 0);
+        const snapshot = yield* owner.diagnostics;
+
+        assert.equal(snapshot.faulted, false);
+        assert.equal(snapshot.bindings[0]?.accepted, 1);
+        assert.equal(snapshot.bindings[0]?.succeeded, 1);
+        assert.equal(snapshot.bindings[0]?.rejected, 1);
+        const record = snapshot.failures[0];
+
+        assert.ok(record);
+        assert.equal(record.mode, "reject-call");
+        assert.deepEqual(
+          Option.getOrUndefined(Cause.findErrorOption(record.cause)),
+          InitializationError.make({
+            operation: "callback",
+            step: metadata.name,
+            reason: "origin",
+          }),
+        );
       }),
     ),
   );

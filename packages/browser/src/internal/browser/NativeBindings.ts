@@ -367,6 +367,7 @@ export const makeNativeBindings = (
         // Both branches stay observed even when the source document disappears while settling.
         void binding
           .invoke({
+            origin: document.origin,
             read: async (signal) => {
               // An environment-free codec can still suspend or invoke host code. Authorize
               // before even decoding, then recheck after decode and before publishing a reply.
