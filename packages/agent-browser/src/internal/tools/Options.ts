@@ -47,7 +47,10 @@ export interface HandlerOptions {
   readonly continuationBytes?: number;
   /** Synchronous, on fresh exact-node facts under the owner's permit. Never a Tool parameter. */
   readonly policy?: ElementAdmission;
-  /** Host-only single-step timing and queue configuration; never a model parameter. */
+  /**
+   * Host-only single-step timing and queue configuration; never a model parameter. A fixed
+   * `style.seed` is a base: the nth run these handlers start uses `seed + n - 1`.
+   */
   readonly execution?: Pick<
     RunOptions,
     "style" | "within" | "admission" | "timeoutMillis" | "checkpoint"

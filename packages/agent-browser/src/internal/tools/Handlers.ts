@@ -117,6 +117,21 @@ export const makeOperations = (
   continuation: Continuation,
 ) => {
   const { policy } = options;
+  let runs = 0n;
+
+  /**
+   * A fixed performed seed is the base of a sequence: the nth run these handlers start uses
+   * `seed + n - 1`, so every call draws its own timing and the same calls reproduce it.
+   */
+  const execution = (): ResolvedOptions["execution"] => {
+    const { style } = options.execution;
+
+    if (style === undefined || style === "plain" || style.seed === undefined)
+      return options.execution;
+    const seed = Number((BigInt(style.seed) + runs++) % BigInt(Number.MAX_SAFE_INTEGER));
+
+    return { ...options.execution, style: { ...style, seed } };
+  };
 
   /** One original executor owns authority, recording, attempts and interruption evidence. */
   const execute = Effect.fnUntraced(function* (
@@ -127,7 +142,7 @@ export const makeOperations = (
     const operation = yield* page
       .start(
         { version: 1, steps: [{ id: call.tool, action: intent }] },
-        { ...options.execution, inputs, ...(policy === undefined ? {} : { policy }) },
+        { ...execution(), inputs, ...(policy === undefined ? {} : { policy }) },
       )
       .pipe(
         Effect.tapError((error) => Effect.sync(() => hooks.refused?.(error, call))),

@@ -66,6 +66,38 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
   }),
 );
 
+it.effect("a fixed execution seed is a base: each run draws its own, reproducibly", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const seeds = Effect.fnUntraced(function* () {
+        const browser = yield* scriptedSession();
+
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+          execution: { style: { seed: 94 } },
+        });
+
+        const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+        for (const id of ["first", "second", "third"])
+          yield* Stream.runCollect(
+            yield* tools.handle("browser_scroll", { deltaX: 0, deltaY: 10 }, id),
+          );
+
+        return yield* Effect.forEach((yield* host.receipts).receipts, (receipt) =>
+          receipt._tag === "Run"
+            ? receipt.operation.completed.pipe(Effect.map((ran) => ran.timing.seed))
+            : Effect.die("Expected an original run"),
+        );
+      });
+
+      const first = yield* seeds();
+
+      expect(first).toEqual([94, 95, 96]);
+      expect(yield* seeds()).toEqual(first);
+    }),
+  ),
+);
+
 it.effect("the host's lane bounds how many calls wait and for how long", () =>
   Effect.scoped(
     Effect.gen(function* () {

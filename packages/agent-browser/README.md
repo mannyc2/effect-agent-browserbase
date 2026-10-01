@@ -99,7 +99,10 @@ Every handler function, `makeHost` and `run` take the same `HandlerOptions`. Eac
 
 `execution` configures each single-step run's `style`, `within`, `timeoutMillis`, `checkpoint`
 and bounded `admission.queue`. Omitted style is plain; `style: { seed: 7 }` selects the bounded
-performed profile with slips disabled by default. Seeds and pacing stay on the host. The same
+performed profile with slips disabled by default. A fixed seed is the base of a sequence: the nth
+run the handlers start uses `seed + n - 1`, so each call draws its own timing while the same calls
+reproduce the same performance. Without a seed each run draws a fresh one. Seeds and pacing stay
+on the host. The same
 logical action costs the same budget in either style. Hosted navigation retains its original
 NavigationOperation and uses `within` to narrow its original loading deadline; input Plans
 retain run/step/attempt IDs. No model parameter gains timing or recording authority.
