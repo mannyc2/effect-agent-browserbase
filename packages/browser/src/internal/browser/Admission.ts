@@ -25,25 +25,53 @@ export interface PendingAdmission {
 
 /** Native ownership survives generation changes and caller cancellation. */
 export interface NativePageCapacity {
-  readonly work: Set<object>;
-  wait?: NativeWait;
-  stopSetupPending?: Deferred.Deferred<void>;
+  readonly work: ReadonlySet<object>;
+  readonly wait?: NativeWait;
+  readonly stopSetupPending?: Deferred.Deferred<void>;
   /** The connection whose positive retirement may release `stopSetupPending`. */
-  stopSetupConnection?: object;
+  readonly stopSetupConnection?: object;
 }
 
-/** One page's caller ownership and retained native capacity share this record. */
+/**
+ * One page's caller ownership and retained native capacity share this record. Callers read it;
+ * only admission's own operations change it.
+ */
 export interface AdmissionLane {
   readonly pageId?: string;
   readonly generation: number;
-  readonly pending: Array<PendingAdmission>;
+  readonly pending: ReadonlyArray<PendingAdmission>;
   readonly native: NativePageCapacity;
+  readonly revision: number;
+  readonly holder?: object;
+  readonly active?: {
+    readonly controller: AbortController;
+    readonly operation: BrowserOperation;
+  };
+  readonly reservation?: AbortController;
+  readonly recovery?: AdmissionLane;
+  readonly closure?: AdmissionLane;
+  readonly revoked: boolean;
+  readonly retired: boolean;
+}
+
+interface CapacityState {
+  readonly work: Set<object>;
+  wait?: NativeWait;
+  stopSetupPending?: Deferred.Deferred<void>;
+  stopSetupConnection?: object;
+}
+
+interface LaneState {
+  readonly pageId?: string;
+  readonly generation: number;
+  readonly pending: Array<PendingAdmission>;
+  readonly native: CapacityState;
   revision: number;
   holder?: object;
   active?: { readonly controller: AbortController; readonly operation: BrowserOperation };
   reservation?: AbortController;
-  recovery?: AdmissionLane;
-  closure?: AdmissionLane;
+  recovery?: LaneState;
+  closure?: LaneState;
   revoked: boolean;
   retired: boolean;
 }
@@ -55,17 +83,33 @@ export const makeAdmission = (
   /** Called after work leaves admission, once its bookkeeping is complete. */
   settled: () => void = () => {},
 ) => {
-  const pages = new Map<string, AdmissionLane>();
-  const retained = new Set<AdmissionLane>();
+  const pages = new Map<string, LaneState>();
+  const retained = new Set<LaneState>();
+  // Every lane this admission made, by identity: callers hold the read-only view of each one.
+  const owned = new WeakMap<AdmissionLane, LaneState>();
 
-  const registry: AdmissionLane = {
+  const own = (lane: LaneState): LaneState => {
+    owned.set(lane, lane);
+
+    return lane;
+  };
+
+  const state = (lane: AdmissionLane): LaneState => {
+    const found = owned.get(lane);
+
+    if (found === undefined) throw new TypeError("Admission lane belongs to another admission");
+
+    return found;
+  };
+
+  const registry = own({
     generation: 0,
     pending: [],
     native: { work: new Set() },
     revision: 0,
     revoked: false,
     retired: false,
-  };
+  });
 
   const maximumPage = limits.pendingPerPage ?? 32;
   const maximumSession = limits.pendingPerSession ?? 128;
@@ -75,7 +119,7 @@ export const makeAdmission = (
   const native = new Map<
     object,
     {
-      readonly lane: AdmissionLane;
+      readonly lane: LaneState;
       readonly connection?: object;
       /** Whether this unsettled native call can still change its page. */
       readonly occupies: () => boolean;
@@ -89,12 +133,12 @@ export const makeAdmission = (
    * Native work outlives its caller. Work that dispatched input keeps its page until it settles;
    * a read, or a mutation whose caller left before dispatch, can no longer change the page.
    */
-  const occupied = (capacity: NativePageCapacity) =>
+  const occupied = (capacity: CapacityState) =>
     [...capacity.work].some((token) => native.get(token)?.occupies() !== false);
 
-  const available = (lane: AdmissionLane) => lane.holder === undefined && !occupied(lane.native);
+  const available = (lane: LaneState) => lane.holder === undefined && !occupied(lane.native);
 
-  const forget = (lane: AdmissionLane) => {
+  const forgetState = (lane: LaneState) => {
     if (
       !lane.retired ||
       lane.native.work.size > 0 ||
@@ -108,7 +152,7 @@ export const makeAdmission = (
     if (lane.pageId !== undefined && pages.get(lane.pageId) === lane) pages.delete(lane.pageId);
   };
 
-  const next = (lane: AdmissionLane) => {
+  const next = (lane: LaneState) => {
     if (!available(lane) || lane.revoked) return;
     while (lane.pending.length > 0) {
       const head = lane.pending.shift();
@@ -137,25 +181,25 @@ export const makeAdmission = (
     }
   };
 
-  const release = (lane: AdmissionLane, token: object) => {
+  const releaseState = (lane: LaneState, token: object) => {
     if (lane.holder !== token) return;
     lane.holder = undefined;
     next(lane);
-    forget(lane);
+    forgetState(lane);
     settled();
   };
 
-  const cancel = (lane: AdmissionLane, pending: PendingAdmission) => {
+  const cancelState = (lane: LaneState, pending: PendingAdmission) => {
     const index = lane.pending.indexOf(pending);
 
     if (index >= 0) {
       lane.pending.splice(index, 1);
       if (!pending.reserved) pendingCount--;
       next(lane);
-    } else release(lane, pending.token);
+    } else releaseState(lane, pending.token);
   };
 
-  const revoke = (lane: AdmissionLane, reason: BrowserError["reason"]) => {
+  const revokeState = (lane: LaneState, reason: BrowserError["reason"]) => {
     lane.revoked = true;
     lane.active?.controller.abort();
     const pending = lane.pending.splice(0);
@@ -177,8 +221,23 @@ export const makeAdmission = (
       stopSetupPending: lane.native.stopSetupPending !== undefined,
     });
 
+  /** Ends a navigation stop's setup on its capacity, if it is still the current one. */
+  const clearStopSetup = (capacity: CapacityState) => {
+    const setup = capacity.stopSetupPending;
+
+    capacity.stopSetupPending = undefined;
+    capacity.stopSetupConnection = undefined;
+    if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
+  };
+
+  const wake = (capacity: CapacityState) => {
+    for (const waiting of [registry, ...retained]) if (waiting.native === capacity) next(waiting);
+  };
+
+  const registryView: AdmissionLane = registry;
+
   return {
-    registry,
+    registry: registryView,
     snapshot,
     status: () =>
       Object.freeze({
@@ -198,15 +257,16 @@ export const makeAdmission = (
         ).size,
         registry: snapshot(registry),
       }),
-    pages,
-    lanes: () => [registry, ...retained],
-    page: (pageId: string, generation: number) => {
+    /** The page's current lane, if it has one. */
+    lane: (pageId: string): AdmissionLane | undefined => pages.get(pageId),
+    lanes: (): ReadonlyArray<AdmissionLane> => [registry, ...retained],
+    page: (pageId: string, generation: number): AdmissionLane => {
       const previous = pages.get(pageId);
 
       if (previous?.generation === generation) return previous;
       if (previous !== undefined) previous.retired = true;
 
-      const lane: AdmissionLane = {
+      const lane = own({
         pageId,
         generation,
         pending: [],
@@ -214,15 +274,16 @@ export const makeAdmission = (
         revision: previous?.revision ?? 0,
         revoked: false,
         retired: false,
-      };
+      });
 
       pages.set(pageId, lane);
       retained.add(lane);
-      if (previous !== undefined) forget(previous);
+      if (previous !== undefined) forgetState(previous);
 
       return lane;
     },
-    recovery: (page: AdmissionLane, operation: BrowserOperation) => {
+    recovery: (lane: AdmissionLane, operation: BrowserOperation): AdmissionLane => {
+      const page = state(lane);
       const key = operation === "close-page" ? "closure" : "recovery";
       const previous = page[key];
 
@@ -232,43 +293,45 @@ export const makeAdmission = (
         return previous;
       }
 
-      const lane: AdmissionLane = {
-        pageId: page.pageId,
+      const recovery = own({
+        ...(page.pageId === undefined ? {} : { pageId: page.pageId }),
         generation: page.generation,
         pending: [],
         native: { work: new Set() },
         revision: page.revision,
         revoked: false,
         retired: false,
-      };
+      });
 
-      page[key] = lane;
-      retained.add(lane);
+      page[key] = recovery;
+      retained.add(recovery);
 
-      return lane;
+      return recovery;
     },
     acquire: (lane: AdmissionLane, pending: PendingAdmission, queueMillis: number) => {
-      if (lane.revoked) return Effect.fail(error(pending.operation, Reasons.Stale.make({})));
-      if (available(lane) && lane.pending.length === 0) {
-        lane.holder = pending.token;
+      const owner = state(lane);
+
+      if (owner.revoked) return Effect.fail(error(pending.operation, Reasons.Stale.make({})));
+      if (available(owner) && owner.pending.length === 0) {
+        owner.holder = pending.token;
 
         return Effect.void;
       }
       if (queueMillis <= 0) return Effect.fail(error(pending.operation, Reasons.Busy.make({})));
 
-      if (pending.reserved && lane.pending.length >= 1)
+      if (pending.reserved && owner.pending.length >= 1)
         return Effect.fail(error(pending.operation, Reasons.Busy.make({})));
 
       const scope =
         pendingCount >= maximumSession
           ? "session"
-          : lane.pageId === undefined
+          : owner.pageId === undefined
             ? "registry"
             : "page";
 
       if (
         !pending.reserved &&
-        (pendingCount >= maximumSession || lane.pending.length >= maximumPage)
+        (pendingCount >= maximumSession || owner.pending.length >= maximumPage)
       )
         return Effect.fail(
           error(
@@ -276,19 +339,95 @@ export const makeAdmission = (
             Reasons.QueueFull.make({
               scope,
               maximum: scope === "session" ? maximumSession : maximumPage,
-              observed: (scope === "session" ? pendingCount : lane.pending.length) + 1,
+              observed: (scope === "session" ? pendingCount : owner.pending.length) + 1,
             }),
           ),
         );
-      lane.pending.push(pending);
+      owner.pending.push(pending);
       if (!pending.reserved) pendingCount++;
 
       return Deferred.await(pending.result);
     },
-    cancel,
-    release,
-    forget,
-    revoke,
+    cancel: (lane: AdmissionLane, pending: PendingAdmission) => cancelState(state(lane), pending),
+    release: (lane: AdmissionLane, token: object) => releaseState(state(lane), token),
+    forget: (lane: AdmissionLane) => forgetState(state(lane)),
+    revoke: (lane: AdmissionLane, reason: BrowserError["reason"]) =>
+      revokeState(state(lane), reason),
+    /** A page whose quarantine an operator released admits work again. */
+    restore: (pageId: string) => {
+      const lane = pages.get(pageId);
+
+      if (lane !== undefined) lane.revoked = false;
+    },
+    /** Observation evidence on these pages (all of them without a page) is out of date. */
+    revise: (pageId?: string) => {
+      for (const lane of pages.values())
+        if (pageId === undefined || lane.pageId === pageId) lane.revision++;
+    },
+    /** The admitted operation now running in this lane, until `deactivate`. */
+    activate: (lane: AdmissionLane, controller: AbortController, operation: BrowserOperation) => {
+      state(lane).active = { controller, operation };
+    },
+    deactivate: (lane: AdmissionLane, controller: AbortController) => {
+      const owner = state(lane);
+
+      if (owner.active?.controller === controller) owner.active = undefined;
+    },
+    /** A dispatched navigation's claim on its page, held until it settles or a fence aborts it. */
+    reserve: (lane: AdmissionLane, controller: AbortController) => {
+      state(lane).reservation = controller;
+    },
+    /** Clears the lane's reservation if it is still `controller`; false when it was replaced. */
+    settleReservation: (lane: AdmissionLane, controller: AbortController): boolean => {
+      const owner = state(lane);
+
+      if (owner.reservation !== controller) return false;
+      owner.reservation = undefined;
+
+      return true;
+    },
+    /** Removes and returns the lane's reservation, for the caller to abort or settle. */
+    takeReservation: (lane: AdmissionLane): AbortController | undefined => {
+      const owner = state(lane);
+      const reservation = owner.reservation;
+
+      owner.reservation = undefined;
+
+      return reservation;
+    },
+    /** A pure wait owns its page's single wait slot until `endWait`. */
+    beginWait: (lane: AdmissionLane, wait: NativeWait) => {
+      state(lane).native.wait = wait;
+    },
+    endWait: (wait: NativeWait) => {
+      for (const lane of [registry, ...retained]) {
+        if (lane.native.wait !== wait) continue;
+        lane.native.wait = undefined;
+        forgetState(lane);
+      }
+    },
+    /**
+     * Installs a navigation stop's setup on the lane's native capacity for `connection`. Returns
+     * undefined while another setup is pending; otherwise its settle, which clears the setup if
+     * it is still current and releases anyone waiting for it.
+     */
+    beginStopSetup: (lane: AdmissionLane, connection: object | undefined) => {
+      const capacity = state(lane).native;
+
+      if (capacity.stopSetupPending !== undefined) return undefined;
+      const setup = Deferred.makeUnsafe<void>();
+
+      capacity.stopSetupPending = setup;
+      capacity.stopSetupConnection = connection;
+
+      return () => {
+        if (capacity.stopSetupPending === setup) {
+          capacity.stopSetupPending = undefined;
+          capacity.stopSetupConnection = undefined;
+        }
+        Deferred.doneUnsafe(setup, Effect.void);
+      };
+    },
     blockPending: (reason: BrowserError["reason"]) => {
       for (const lane of [registry, ...retained]) {
         const pending = lane.pending.filter((waiter) => !waiter.reserved);
@@ -305,7 +444,7 @@ export const makeAdmission = (
       // Registry ownership belongs to the transition that performed the fence.
       for (const lane of retained) {
         lane.retired = true;
-        revoke(lane, reason);
+        revokeState(lane, reason);
       }
       registry.active?.controller.abort();
       const pending = registry.pending.splice(0);
@@ -313,7 +452,7 @@ export const makeAdmission = (
       pendingCount -= pending.filter((waiter) => !waiter.reserved).length;
       for (const waiter of pending)
         Deferred.doneUnsafe(waiter.result, Effect.fail(error(waiter.operation, reason)));
-      for (const lane of retained) forget(lane);
+      for (const lane of retained) forgetState(lane);
     },
     retainNative: (
       lane: AdmissionLane,
@@ -321,6 +460,8 @@ export const makeAdmission = (
       connection?: object,
       occupies: () => boolean = () => true,
     ) => {
+      const owner = state(lane);
+
       if (native.size >= maximumNative)
         throw error(
           operation,
@@ -332,15 +473,18 @@ export const makeAdmission = (
         );
       const token = {};
 
-      lane.native.work.add(token);
-      native.set(token, { lane, occupies, ...(connection === undefined ? {} : { connection }) });
+      owner.native.work.add(token);
+      native.set(token, {
+        lane: owner,
+        occupies,
+        ...(connection === undefined ? {} : { connection }),
+      });
 
       return () => {
         if (!native.delete(token)) return;
-        lane.native.work.delete(token);
-        for (const waiting of [registry, ...retained])
-          if (waiting.native === lane.native) next(waiting);
-        forget(lane);
+        owner.native.work.delete(token);
+        wake(owner.native);
+        forgetState(owner);
         settled();
       };
     },
@@ -349,14 +493,10 @@ export const makeAdmission = (
         if (lane.pageId !== pageId) continue;
         for (const token of lane.native.work) native.delete(token);
         lane.native.work.clear();
-        const setup = lane.native.stopSetupPending;
-
-        lane.native.stopSetupPending = undefined;
-        lane.native.stopSetupConnection = undefined;
-        if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
+        clearStopSetup(lane.native);
         lane.revoked = true;
         lane.retired = true;
-        forget(lane);
+        forgetState(lane);
         next(lane);
       }
       pages.delete(pageId);
@@ -366,12 +506,8 @@ export const makeAdmission = (
       native.clear();
       for (const lane of [registry, ...retained]) {
         lane.native.work.clear();
-        const setup = lane.native.stopSetupPending;
-
-        lane.native.stopSetupPending = undefined;
-        lane.native.stopSetupConnection = undefined;
-        if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
-        forget(lane);
+        clearStopSetup(lane.native);
+        forgetState(lane);
       }
       settled();
     },
@@ -380,20 +516,15 @@ export const makeAdmission = (
         // Only the setup's own connection may release it, even when that retirement arrives
         // after a successor connection has used the same page.
         if (lane.native.stopSetupConnection !== connection) continue;
-        const setup = lane.native.stopSetupPending;
-
-        lane.native.stopSetupPending = undefined;
-        lane.native.stopSetupConnection = undefined;
-        if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
-        forget(lane);
+        clearStopSetup(lane.native);
+        forgetState(lane);
       }
       for (const [token, lease] of native) {
         if (lease.connection !== connection) continue;
         native.delete(token);
         lease.lane.native.work.delete(token);
-        for (const waiting of [registry, ...retained])
-          if (waiting.native === lease.lane.native) next(waiting);
-        forget(lease.lane);
+        wake(lease.lane.native);
+        forgetState(lease.lane);
       }
       settled();
     },

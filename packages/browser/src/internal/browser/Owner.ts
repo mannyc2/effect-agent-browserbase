@@ -269,7 +269,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         .flatMap((lane) => (lane.native.wait === undefined ? [] : [lane.native.wait])),
     );
 
-  const waitOn = (pageId: string) => admission.pages.get(pageId)?.native.wait;
+  const waitOn = (pageId: string) => admission.lane(pageId)?.native.wait;
   // These facts outlive the tickets which produced them. Aborting admission is not retirement.
   const unresolved = new Map<object, string | undefined>();
   let nativeUncertainty = false;
@@ -354,8 +354,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     for (const waiting of waits())
       if (scope === "all" || (scope !== "none" && scope.pageId === waiting.target.pageId))
         waiting.cancel(Reasons.Stale.make({}));
-    for (const lane of admission.pages.values())
-      if (scope === "all" || (scope !== "none" && scope.pageId === lane.pageId)) lane.revision++;
+    if (scope === "all") admission.revise();
+    else if (scope !== "none") admission.revise(scope.pageId);
     state.revision++;
     for (const hook of hooks) hook(reason, scope, origin);
   };
@@ -378,9 +378,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     const pending: Array<AbortController> = [];
 
     for (const lane of admission.lanes()) {
-      if (lane.reservation === undefined) continue;
-      pending.push(lane.reservation);
-      lane.reservation = undefined;
+      const reservation = admission.takeReservation(lane);
+
+      if (reservation !== undefined) pending.push(reservation);
     }
 
     const refusal =
@@ -453,7 +453,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     // Outlives the fiber that dispatched it, and must be abortable by a fence from outside it.
     const controller = new AbortController();
 
-    const lane = admission.pages.get(key);
+    const lane = admission.lane(key);
 
     if (lane === undefined)
       throw BrowserError.make({
@@ -461,7 +461,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         reason: Reasons.Stale.make({}),
         outcome: "unknown",
       });
-    lane.reservation = controller;
+    admission.reserve(lane, controller);
     unresolved.set(controller, key);
 
     return {
@@ -476,8 +476,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         )
           expire();
         // A fence already cleared it, and decided the outcome for everything it aborted.
-        if (lane.reservation !== controller) return;
-        lane.reservation = undefined;
+        if (!admission.settleReservation(lane, controller)) return;
         if (outcome === "known") unresolved.delete(controller);
         else fence("uncertain", "uncertain");
         admission.forget(lane);
@@ -497,7 +496,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     operation: "wait" | "settled" = "wait",
   ): OwnedWait => {
     admitted.check();
-    const lane = admission.pages.get(target.pageId);
+    const lane = admission.lane(target.pageId);
 
     if (lane === undefined || lane.native.wait !== undefined)
       throw BrowserError.make({
@@ -517,13 +516,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       BrowserError.make({ operation, reason, outcome: "undispatched" });
 
     const release = () => {
-      if (retired && !record.pending) {
-        for (const lane of admission.lanes()) {
-          if (lane.native.wait !== record) continue;
-          lane.native.wait = undefined;
-          admission.forget(lane);
-        }
-      }
+      if (retired && !record.pending) admission.endWait(record);
     };
 
     const complete = (exit: Effect.Effect<void, BrowserError>) => {
@@ -552,7 +545,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       },
     };
 
-    lane.native.wait = record;
+    admission.beginWait(lane, record);
 
     const check = () => {
       const now = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
@@ -651,11 +644,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
           return { _tag: "SessionFenced", generation: state.generation };
         }
-        const lane = admission.pages.get(page.pageId);
-        const reservation = lane?.reservation;
+        const lane = admission.lane(page.pageId);
+        const reservation = lane === undefined ? undefined : admission.takeReservation(lane);
 
         if (reservation !== undefined) {
-          if (lane !== undefined) lane.reservation = undefined;
           unresolved.delete(reservation);
           reservation.abort();
         }
@@ -735,7 +727,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
       const pageLane =
         scope !== undefined && scope !== "all" && scope !== "none"
-          ? admission.pages.get(scope.pageId)
+          ? admission.lane(scope.pageId)
           : undefined;
 
       const lane =
@@ -815,7 +807,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         // @effect-diagnostics-next-line abortControllerInEffect:off
         const controller = new AbortController();
 
-        lane.active = { controller, operation };
+        admission.activate(lane, controller, operation);
         let dispatched = false;
         let pending = false;
         // Acknowledged input that landed, and acknowledged preparation that changed no input.
@@ -1129,7 +1121,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               options.evidence?.phase?.("Terminal", ticket);
               controller.signal.removeEventListener("abort", freezeUnknown);
               controller.abort();
-              if (lane.active?.controller === controller) lane.active = undefined;
+              admission.deactivate(lane, controller);
             }),
           ),
         );
@@ -1236,6 +1228,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       state.hostReads++;
     },
     pageAdmission: admission.page,
+    /** A navigation stop's setup on its page's native capacity; see `Admission.beginStopSetup`. */
+    beginStopSetup: admission.beginStopSetup,
     admissionSnapshot: admission.snapshot,
     admissionStatus: Effect.sync(admission.status),
     setConnection: (connection: object) => {
@@ -1250,12 +1244,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             (except === undefined || lane.active?.controller.signal !== except),
         ),
     restorePageAdmission: (pageId: string) => {
-      const lane = admission.pages.get(pageId);
-
       quarantined.delete(pageId);
-      if (lane !== undefined) lane.revoked = false;
+      admission.restore(pageId);
     },
-    revision: (pageId: string) => admission.pages.get(pageId)?.revision ?? state.revision,
+    revision: (pageId: string) => admission.lane(pageId)?.revision ?? state.revision,
     reserve,
     contain,
     pauseAdmission: () => {
@@ -1294,7 +1286,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       ),
     /** Completes after the next settlement of admitted work, a policy or a fence. */
     nextChange: Effect.suspend(() => Deferred.await(change)),
-    reserved: (key: string): boolean => admission.pages.get(key)?.reservation !== undefined,
+    reserved: (key: string): boolean => admission.lane(key)?.reservation !== undefined,
     /** Whether a popup/dialog policy holds this page for an operator. */
     paused: (pageId: string): boolean => quarantined.has(pageId),
     get pausedPages(): number {
@@ -1309,9 +1301,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       for (const lane of admission.lanes()) {
         if (lane.pageId !== pageId) continue;
         admission.revoke(lane, Reasons.Stale.make({}));
-        const reservation = lane.reservation;
+        const reservation = admission.takeReservation(lane);
 
-        lane.reservation = undefined;
         if (reservation !== undefined) unresolved.delete(reservation);
         reservation?.abort();
       }
@@ -1323,10 +1314,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         if (lane.pageId !== pageId) continue;
         if (except === undefined || lane.active?.controller.signal !== except)
           admission.revoke(lane, Reasons.Stale.make({}));
-        const reservation = lane.reservation;
-
-        lane.reservation = undefined;
-        reservation?.abort();
+        admission.takeReservation(lane)?.abort();
       }
       waitOn(pageId)?.cancel(Reasons.Stale.make({}));
     },

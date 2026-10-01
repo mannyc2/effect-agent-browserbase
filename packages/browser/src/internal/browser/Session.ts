@@ -1745,24 +1745,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                           stopDispatched = true;
                         },
                         () => {
-                          if (admission.native.stopSetupPending !== undefined)
+                          const settle = owner.beginStopSetup(admission, activeConnection);
+
+                          if (settle === undefined)
                             throw BrowserError.make({
                               operation: "navigate-stop",
                               reason: Reasons.Busy.make({}),
                               outcome: "undispatched",
                             });
-                          const setup = Deferred.makeUnsafe<void>();
-
-                          admission.native.stopSetupPending = setup;
-                          admission.native.stopSetupConnection = activeConnection;
                           const retired = retainSetup();
 
                           return () => {
-                            if (admission.native.stopSetupPending === setup) {
-                              admission.native.stopSetupPending = undefined;
-                              admission.native.stopSetupConnection = undefined;
-                            }
-                            Deferred.doneUnsafe(setup, Effect.void);
+                            settle();
                             retired();
                           };
                         },
