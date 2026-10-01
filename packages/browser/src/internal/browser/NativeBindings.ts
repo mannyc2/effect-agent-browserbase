@@ -412,6 +412,7 @@ export const makeNativeBindings = (
         void binding
           .invoke({
             pageId,
+            origin: document.origin,
             read: async (signal) => {
               // An environment-free codec can still suspend or invoke host code. Authorize
               // before even decoding, then recheck after decode and before publishing a reply.
