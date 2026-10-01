@@ -51,6 +51,8 @@ export const makeAdmission = (
   now: () => number,
   expired: () => boolean,
   limits: AdmissionLimits = {},
+  /** Called after work leaves admission, once its bookkeeping is complete. */
+  settled: () => void = () => {},
 ) => {
   const pages = new Map<string, AdmissionLane>();
   const retained = new Set<AdmissionLane>();
@@ -139,6 +141,7 @@ export const makeAdmission = (
     lane.holder = undefined;
     next(lane);
     forget(lane);
+    settled();
   };
 
   const cancel = (lane: AdmissionLane, pending: PendingAdmission) => {
@@ -338,6 +341,7 @@ export const makeAdmission = (
         for (const waiting of [registry, ...retained])
           if (waiting.native === lane.native) next(waiting);
         forget(lane);
+        settled();
       };
     },
     retirePage: (pageId: string) => {
@@ -355,6 +359,7 @@ export const makeAdmission = (
         next(lane);
       }
       pages.delete(pageId);
+      settled();
     },
     retire: () => {
       native.clear();
@@ -366,6 +371,7 @@ export const makeAdmission = (
         if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
         forget(lane);
       }
+      settled();
     },
     retireConnection: (connection: object) => {
       for (const lane of [registry, ...retained]) {
@@ -384,10 +390,14 @@ export const makeAdmission = (
           if (waiting.native === lease.lane.native) next(waiting);
         forget(lease.lane);
       }
+      settled();
     },
-    /** `held` lanes belong to an operator's quarantine; their native work cannot block it. */
+    /**
+     * Only native work that can still change a page must settle. A `held` lane belongs to an
+     * operator's quarantine, whose own work cannot hold up the handoff that releases it.
+     */
     drained: (except?: AbortSignal, held: (lane: AdmissionLane) => boolean = () => false) =>
-      [...native.values()].every((lease) => held(lease.lane)) &&
+      [...native.values()].every((lease) => !lease.occupies() || held(lease.lane)) &&
       [registry, ...retained].every(
         (lane) =>
           lane.native.stopSetupPending === undefined &&

@@ -3592,8 +3592,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + 3000,
                   );
 
-                  let drained = false;
+                  const drained = () =>
+                    owner.drained(ticket.signal) &&
+                    activeBindings?.drained() !== false &&
+                    getDriver().handoffDrained?.(owner.paused) !== false &&
+                    capture.captureLeases.size === 0 &&
+                    pendingPageFaults.size === 0;
 
+                  // Work that cannot settle in time fails only this request: the barrier lifts and
+                  // automation continues, as nothing was handed over or left undecided.
                   yield* Effect.gen(function* () {
                     yield* Effect.forEach(
                       [...capture.captureLeases.values()],
@@ -3602,14 +3609,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                         discard: true,
                       },
                     );
-                    while (
-                      !owner.drained(ticket.signal) ||
-                      activeBindings?.drained() === false ||
-                      getDriver().handoffDrained?.(owner.paused) === false ||
-                      capture.captureLeases.size !== 0 ||
-                      pendingPageFaults.size !== 0
-                    )
-                      yield* Effect.sleep(10);
+                    while (!drained()) {
+                      // The owner signals settled work; driver and binding cleanup is rechecked.
+                      yield* owner.nextChange.pipe(
+                        Effect.timeoutOrElse({
+                          duration: Duration.millis(25),
+                          orElse: () => Effect.void,
+                        }),
+                      );
+                      // A settlement can complete the signal synchronously; decide on a later turn.
+                      yield* Effect.yieldNow;
+                    }
                     if (owner.state.phase !== "open")
                       return yield* BrowserError.make({
                         operation: "handoff",
@@ -3617,34 +3627,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                         outcome: "undispatched",
                         containment: { _tag: "SessionFenced", generation: owner.state.generation },
                       });
-                    drained = true;
                     owner.fence("paused", "paused", "handoff");
-                  }).pipe(
-                    (drain) =>
-                      within(drain, deadline, () =>
-                        BrowserError.make({
-                          operation: "handoff",
-                          reason: Reasons.Timeout.make({}),
-                          outcome: "undispatched",
-                        }),
-                      ),
-                    Effect.ensuring(
-                      Effect.sync(() => {
-                        if (!drained) {
-                          if (owner.state.phase === "open" || owner.state.phase === "paused")
-                            owner.terminate("native-failure", "unknown");
-                          activeBindings?.close();
-                        }
-                      }),
-                    ),
-                    Effect.mapError((error) =>
+                  }).pipe((drain) =>
+                    within(drain, deadline, () =>
                       BrowserError.make({
                         operation: "handoff",
-                        reason: error.reason,
-                        outcome: error.outcome,
-                        containment: drained
-                          ? error.containment
-                          : { _tag: "SessionFenced", generation: owner.state.generation },
+                        reason: Reasons.Timeout.make({}),
+                        outcome: "undispatched",
                       }),
                     ),
                   );

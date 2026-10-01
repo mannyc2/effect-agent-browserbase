@@ -428,3 +428,99 @@ it.effect("a held page refuses wait admission without starting native polling", 
     }),
   ),
 );
+
+it.effect("a handoff refuses a pending pure wait instead of draining it into uncertainty", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const entered = gate<void>();
+      const admissionReleased = gate<void>();
+      const finish = gate<void>();
+
+      const f = yield* fixture({
+        onConnect: async (driver) => ({
+          ...driver,
+          documentReadiness: async (ticket) => {
+            ticket.signal.addEventListener("abort", () => admissionReleased.resolve(), {
+              once: true,
+            });
+
+            return driver.documentReadiness(ticket);
+          },
+          // The condition never holds, and the native wait outlives every caller.
+          waitFor: async (_selector, _state, ticket) => {
+            entered.resolve();
+            try {
+              await finish.promise;
+            } finally {
+              ticket.retire();
+            }
+          },
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+
+      const waiting = yield* Effect.forkChild(
+        session.initialPage().controls.waitFor("#never", "visible"),
+      );
+
+      yield* Effect.promise(() => entered.promise);
+      // The wait's own admission ends once native polling starts.
+      yield* Effect.promise(() => admissionReleased.promise);
+      const handoff = yield* session.beginHandoff(Effect.succeed("view"));
+
+      expect(handoff.view).toBe("view");
+      expect(yield* session.status).toMatchObject({
+        phase: "paused",
+        reason: "handoff",
+        unresolvedDispatch: false,
+      });
+      expect(yield* Fiber.join(waiting).pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Stale" },
+        outcome: "undispatched",
+      });
+      finish.resolve();
+    }),
+  ),
+);
+
+it.effect("a handoff that cannot drain in time fails and leaves automation running", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const loaded = gate<string>();
+
+      const f = yield* fixture({
+        lifetimeMillis: 20000,
+        onNavigate: (_url, pageId) => ({
+          pageId,
+          settled: loaded.promise,
+          stop: async () => "settled",
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+
+      const navigation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow");
+
+      // The navigation is still loading, so the drain cannot finish before its bound.
+      const handoff = yield* Effect.forkChild(session.beginHandoff(Effect.succeed("view")));
+
+      yield* TestClock.adjust(3000);
+      const refused = yield* Fiber.join(handoff).pipe(Effect.flip);
+
+      expect(refused).toMatchObject({
+        operation: "handoff",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+        containment: { _tag: "NotRequired" },
+      });
+      expect(yield* session.status).toMatchObject({ phase: "open", reason: null });
+      loaded.resolve("https://example.test/slow");
+      expect(yield* navigation.completed).toBe("https://example.test/slow");
+      yield* session.initialPage().controls.operations.click("#act");
+      expect(f.state.clicks).toBe(1);
+    }),
+  ),
+);

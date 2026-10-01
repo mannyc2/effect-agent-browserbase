@@ -440,7 +440,8 @@ queue cannot prevent recovery. Page closure uses fail-fast reserved admission an
 deadline when joining an existing close; `admission.queue` does not control those waits. Session closure
 preempts work. Handoff, resume and reconnect refuse
 an existing ordinary permit holder before installing their exclusive lifecycle barrier; handoff
-then drains retained native work within its bound before granting operator control.
+then drains retained native work that can still change a page within its bound before granting
+operator control.
 
 ### Exact Pages and Frames
 
@@ -880,11 +881,13 @@ The connection endpoint is read through the exact allocated session, so a provid
 
 Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`; reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
 
-Human handoff blocks new admission and drains native work within a bounded interval before
-pausing automation and returning host-only Live View material. Failure to establish that drain
-fences the session and grants no handoff. Resume requires an explicit operator-release signal
+Human handoff blocks new admission and drains native work that can still change a page within a
+bounded interval before pausing automation and returning host-only Live View material. Pure waits
+and reads do not hold it up; the pause refuses them as `Stale`. Work that cannot drain in time,
+such as a navigation still loading, fails the request with `Timeout/undispatched`: no handoff is
+granted, the barrier lifts and automation continues. Resume requires an explicit operator-release signal
 and returns fresh bounded Page inventory under the lifecycle permit; observing a newly acquired
-Page is explicit. A failed handoff does not silently resume automation. Live View URLs are temporary bearer material; iframe styling is not an authorization boundary. Live View is also where browser-window presentation already exists for watching a session as it runs, and it is the provider's: beside each full-screen URL Browserbase issues a bordered one (`debuggerUrl`, "mimic a real browser with borders"), and a navbar that `navbar=false` hides. This package decodes and returns only the full-screen URL. The bordered one carries the same control authority and would be issued under the same rules, so surfacing it is a small host-only addition whenever something needs it; nothing here does yet, so it is not exported.
+Page is explicit. Once the pause is installed, a failed Live View authorization does not silently resume automation. Live View URLs are temporary bearer material; iframe styling is not an authorization boundary. Live View is also where browser-window presentation already exists for watching a session as it runs, and it is the provider's: beside each full-screen URL Browserbase issues a bordered one (`debuggerUrl`, "mimic a real browser with borders"), and a navbar that `navbar=false` hides. This package decodes and returns only the full-screen URL. The bordered one carries the same control authority and would be issued under the same rules, so surfacing it is a small host-only addition whenever something needs it; nothing here does yet, so it is not exported.
 
 ## Registrations, capabilities and document readiness
 

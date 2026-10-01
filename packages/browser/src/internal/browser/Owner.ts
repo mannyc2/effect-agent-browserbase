@@ -246,11 +246,21 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
   let admissionBarrier: object | undefined;
   let nativeConnection: object | undefined;
+  // Completed once whenever work settles, so a handoff's drain waits for a change, not a timer.
+  let change = Deferred.makeUnsafe<void>();
+
+  const changed = () => {
+    const previous = change;
+
+    change = Deferred.makeUnsafe<void>();
+    Deferred.doneUnsafe(previous, Effect.void);
+  };
 
   const admission = makeAdmission(
     () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
     () => terminalReason === "expired",
     limits.admissionLimits,
+    () => changed(),
   );
 
   const waits = () =>
@@ -384,6 +394,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     for (const waiting of waits()) waiting.cancel(refusal);
     for (const reservation of pending) reservation.abort();
     invalidate(reason);
+    changed();
   };
 
   const terminate = (
@@ -435,6 +446,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         fence("faulted", "closed", event.reason);
         break;
     }
+    changed();
   };
 
   /** Taken under the permit that dispatched the work, so nothing can interleave before it. */
@@ -470,6 +482,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         if (outcome === "known") unresolved.delete(controller);
         else fence("uncertain", "uncertain");
         admission.forget(lane);
+        changed();
       },
     };
   };
@@ -648,6 +661,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           reservation.abort();
         }
         record("page-contained", "confirmed", generation);
+        changed();
 
         return { _tag: "PageClosed", pageId: page.pageId, generation };
       }),
@@ -935,6 +949,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             if (!unknownDecided) unresolved.delete(controller);
             options.evidence?.phase?.("Acknowledged", ticket, fact);
             observer?.phase("Acknowledged", mutation, fact);
+            changed();
           },
           followUp() {
             if (phase === "Acknowledged") {
@@ -992,6 +1007,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             if (current() && lane.pageId !== undefined && quarantined.has(lane.pageId)) {
               containment = { _tag: "PagePaused", pageId: lane.pageId, generation };
               unresolved.delete(controller);
+              changed();
 
               return Effect.void;
             }
@@ -1066,7 +1082,12 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               ? Effect.sync(abandon).pipe(Effect.andThen(settle))
               : Effect.void,
           ),
-          Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              unresolved.delete(controller);
+              changed();
+            }),
+          ),
           Effect.onExit((exit) =>
             Effect.sync(() => {
               const failure = Exit.isFailure(exit)
@@ -1243,6 +1264,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
       return true;
     },
+    /**
+     * No admitted work can still change a page. Pure waits only read; the fence that follows a
+     * drain refuses them, so they never hold one up.
+     */
     drained: (except?: AbortSignal) =>
       admission.drained(
         except,
@@ -1251,8 +1276,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       !nativeUncertainty &&
       unresolved.size === 0 &&
       admission.lanes().every((lane) => lane.reservation === undefined) &&
-      waits().size === 0 &&
       policies.size === 0,
+    /** Completes after the next settlement of admitted work, a policy or a fence. */
+    nextChange: Effect.suspend(() => Deferred.await(change)),
     reserved: (key: string): boolean => admission.pages.get(key)?.reservation !== undefined,
     /** Whether a popup/dialog policy holds this page for an operator. */
     paused: (pageId: string): boolean => quarantined.has(pageId),
@@ -1275,6 +1301,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         reservation?.abort();
       }
       waitOn(pageId)?.cancel(Reasons.Stale.make({}));
+      changed();
     },
     revokePage: (pageId: string, except?: AbortSignal) => {
       for (const lane of admission.lanes()) {
@@ -1296,6 +1323,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       waiting?.retire();
       admission.retirePage(pageId);
       for (const [token, page] of unresolved) if (page === pageId) unresolved.delete(token);
+      changed();
     },
     beginWait,
     waitAvailable: (pageId: string) => waitOn(pageId) === undefined,
@@ -1332,6 +1360,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       unresolved.clear();
       nativeUncertainty = false;
       policies.clear();
+      changed();
     },
     status: Effect.sync(() => {
       const status = SessionStatus.make({
