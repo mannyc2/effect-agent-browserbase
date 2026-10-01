@@ -74,6 +74,72 @@ const keyDescription = (
   return description === undefined ? undefined : { code: description[1], keyCode: description[2] };
 };
 
+/** Performed text holds Shift for uppercase and shifted punctuation, as a person would. */
+const heldModifiers = (
+  key: string,
+  modifiers: ReadonlyArray<KeyModifier>,
+  typed: boolean,
+): ReadonlyArray<KeyModifier> =>
+  typed && /^[A-Z~!@#$%^&*()_+{}|:"<>?]$/u.test(key) && !modifiers.includes("Shift")
+    ? [...modifiers, "Shift"]
+    : modifiers;
+
+const nanos = (milliseconds: number) => BigInt(Math.round(milliseconds * 1e6));
+
+/**
+ * The measured pace of one performed key run. Strokes start at their absolute schedule offsets,
+ * and each key is held from its key-down. Before a stroke's first command, the rest of the
+ * schedule must still fit the original deadline at the round trips the browser has actually
+ * taken, so a stroke that could not finish is refused whole, never cut between a key and its
+ * release.
+ */
+const makePace = (
+  pacing: ReturnType<typeof ownerPacing>,
+  strokes: ReadonlyArray<Stroke>,
+  started: bigint,
+  focus: boolean,
+  modifiers: ReadonlyArray<KeyModifier>,
+  typed: boolean,
+) => {
+  const measured = {
+    focus: { nanos: 0n, count: 0 },
+    command: { nanos: 0n, count: 0 },
+  };
+
+  const mean = ({ nanos: total, count }: { readonly nanos: bigint; readonly count: number }) =>
+    count === 0 ? 0 : Number(total / BigInt(count)) / 1e6;
+
+  return {
+    observe: (kind: "focus" | "command", elapsed: bigint) => {
+      measured[kind].nanos += elapsed;
+      measured[kind].count++;
+    },
+    /** Called after stroke `from`'s focus check, before its first command. */
+    require: (from: number) => {
+      const check = focus ? mean(measured.focus) : 0;
+      // Before any key has answered, a focus check's round trip is the best estimate there is.
+      const command = measured.command.count > 0 ? mean(measured.command) : check;
+      let at = Number(pacing.now() - started) / 1e6;
+
+      for (let index = from; index < strokes.length; index++) {
+        const stroke = strokes[index];
+
+        if (stroke === undefined) break;
+        const keyed = keyDescription(stroke.key) !== undefined;
+        const held = keyed ? heldModifiers(stroke.key, modifiers, typed).length : 0;
+
+        // This stroke has already paid for its focus check.
+        const down =
+          Math.max(at, stroke.offsetMillis) + (index === from ? 0 : check) + held * command;
+
+        at =
+          Math.max(down + command, down + stroke.holdMillis) + (keyed ? (1 + held) * command : 0);
+      }
+      pacing.requireBy(started + nanos(at));
+    },
+  };
+};
+
 /** At most sixteen complete strokes / thirty-two replies live at once. */
 const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, ticket: Ticket) => {
   const pending: Array<Promise<void>> = [];
@@ -291,6 +357,8 @@ export const makeKeyboard = (
     stroke: Stroke,
     ticket: Ticket,
     check: () => void,
+    pace: ReturnType<typeof makePace>,
+    index: number,
     element?: ElementHandle<Element>,
     modifiers: ReadonlyArray<KeyModifier> = [],
     typed = true,
@@ -302,34 +370,42 @@ export const makeKeyboard = (
     // may move it (Tab, an Enter that submits, an auto-advancing field), and the releases still
     // belong to this stroke: like plain typing's, they are fenced by the ticket alone.
     check();
-    if (element !== undefined) await requireFocus(element);
+    if (element !== undefined) {
+      const before = pacing.now();
+
+      await requireFocus(element);
+      pace.observe("focus", pacing.now() - before);
+    }
     check();
+    pace.require(index);
 
     const submit = async (command: () => Promise<unknown>) => {
       check();
       ticket.dispatch();
+      const before = pacing.now();
+
       // The one current reply is observed before another command can be submitted.
       await command();
+      pace.observe("command", pacing.now() - before);
     };
 
     // A character the US layout cannot produce is committed as text, as plain typing does.
     if (keyDescription(stroke.key) === undefined) {
+      const down = pacing.now();
+
       await submit(() => keyboard.insertText(stroke.key));
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
-      if (stroke.holdMillis > 0)
-        await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
+      await pacing.pauseUntil(down + nanos(stroke.holdMillis));
 
       return;
     }
-    const held = [...modifiers];
-
-    if (typed && /^[A-Z~!@#$%^&*()_+{}|:"<>?]$/u.test(stroke.key) && !held.includes("Shift"))
-      held.push("Shift");
+    const held = heldModifiers(stroke.key, modifiers, typed);
 
     for (const modifier of held) await submit(() => keyboard.down(modifier));
+    const down = pacing.now();
+
     await submit(() => keyboard.down(stroke.key));
-    if (stroke.holdMillis > 0)
-      await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
+    await pacing.pauseUntil(down + nanos(stroke.holdMillis));
     await submit(() => keyboard.up(stroke.key));
     for (const modifier of held.toReversed()) await submit(() => keyboard.up(modifier));
     ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
@@ -345,12 +421,14 @@ export const makeKeyboard = (
     const pacing = ownerPacing(ticket);
 
     pacing.requireDuration(schedule.durationMillis);
+    const started = pacing.now();
+    const pace = makePace(pacing, schedule.strokes, started, element !== undefined, [], true);
 
-    for (const stroke of schedule.strokes) {
+    for (const [index, stroke] of schedule.strokes.entries()) {
       check();
-      if (stroke.intervalMillis > 0)
-        await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.intervalMillis * 1e6)));
-      await pacedStroke(keyboard, stroke, ticket, check, element);
+      // Absolute offsets: a slow reply delays the stroke after it, never every later one.
+      await pacing.pauseUntil(started + nanos(stroke.offsetMillis));
+      await pacedStroke(keyboard, stroke, ticket, check, pace, index, element);
     }
   };
 
@@ -364,14 +442,32 @@ export const makeKeyboard = (
     readmit?: () => Promise<void>,
   ) =>
     withTypingPort(page, ticket, async () => {
+      const pacing = ownerPacing(ticket);
+
       check();
-      ownerPacing(ticket).requireDuration(schedule.durationMillis);
+      pacing.requireDuration(schedule.durationMillis);
       ticket.dispatch();
       await element.selectText({ timeout: ticket.remainingMillis() });
       ticket.acknowledge?.({ subphase: "focus", logicalComplete: false });
       await readmit?.();
       check();
+      const before = pacing.now();
+
       await requireFocus(element);
+      const roundTrip = pacing.now() - before;
+
+      // The erase (a key-down and key-up) and every stroke must fit before the old value goes.
+      const pace = makePace(
+        pacing,
+        schedule.strokes,
+        pacing.now() + 2n * roundTrip,
+        true,
+        [],
+        true,
+      );
+
+      pace.observe("focus", roundTrip);
+      pace.require(0);
       check();
       ticket.dispatch();
       await page.keyboard.press("Backspace");
@@ -436,16 +532,22 @@ export const makeKeyboard = (
             into,
             ticket,
             policy,
-            (_page, element, check) =>
-              pacedStroke(
+            (_page, element, check) => {
+              const stroke = { ...planned, key };
+              const pacing = ownerPacing(ticket);
+
+              return pacedStroke(
                 page.keyboard,
-                { ...planned, key },
+                stroke,
                 ticket,
                 check ?? (() => ticket.check()),
+                makePace(pacing, [stroke], pacing.now(), element !== undefined, modifiers, false),
+                0,
                 element,
                 modifiers,
                 false,
-              ),
+              );
+            },
             browserTarget,
           ),
         );

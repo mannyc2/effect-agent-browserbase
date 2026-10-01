@@ -551,7 +551,11 @@ owner pauses, detaches or ends, the run fails preparation at once instead of at 
 `within` starts at the intended boundary and bounds queueing, preparation, pacing, input and
 postconditions together, capped by owner lifetime and each action deadline. Missed preparation
 reports `ScheduleMissed` without inventing an attempt; an insufficient pacing budget reports
-`TimingBudgetExceeded` before new input. Receipts retain requested/intended/actual start, deadline
+`TimingBudgetExceeded` before new input. Performed strokes start at their absolute schedule
+offsets, so a slow reply delays one stroke rather than every later one. Before each stroke's
+first key, the rest of the schedule must still fit the deadline at the round trips the browser
+has actually taken; a stroke that could not finish is refused whole, and strokes already
+acknowledged stay `performed`. Receipts retain requested/intended/actual start, deadline
 and lateness. Cancellation stops future submissions and keeps readable attempt history with the
 original Effect Cause. Known preparatory work followed by refusal is rejected with its subphase
 receipts; pending input remains unknown, and acknowledged logical input stays performed when a

@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Exit, Layer } from "effect";
+import { Clock, Effect, Exit, Layer } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 import type { StepFailed } from "effect-browser/plan";
@@ -41,6 +41,14 @@ a.addEventListener("keyup", () => { if (a.value.length >= 2) b.focus(); });
 <script>
 field.addEventListener("input", () => { mirror.textContent = field.value; });
 field.addEventListener("keyup", (event) => { if (event.key === "Backspace") other.focus(); });
+</script>`,
+  // Every key event costs the renderer 100 ms, standing in for a slow remote round trip.
+  "/slow": `<input aria-label="Slow" id="slow"><p id="mirror">0</p>
+<script>
+const busy = () => { const until = performance.now() + 100; while (performance.now() < until) {} };
+slow.addEventListener("keydown", busy);
+slow.addEventListener("keyup", busy);
+slow.addEventListener("input", () => { mirror.textContent = String(slow.value.length); });
 </script>`,
   "/shift": `<input aria-label="Text" id="text"><p id="mirror"></p>
 <script>
@@ -220,6 +228,52 @@ it.live("real CDP: a performed Fill that already erased the value stays performe
         attempt: { outcome: "performed", containment: { _tag: "NotRequired" } },
       });
       expect((yield* page.readText({ selector: "#mirror" })).text).toBe("");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed Type its measured pace cannot finish stops between strokes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/slow");
+      const page = session.initialPage;
+
+      yield* page.click({ selector: "#slow" });
+      const started = yield* Clock.currentTimeMillis;
+
+      // 100 planned strokes fit the default 10 s action deadline; at 200 ms a stroke they cannot.
+      const failed = stepFailure(
+        yield* page
+          .run(
+            {
+              version: 1,
+              steps: [
+                {
+                  id: "slow",
+                  action: {
+                    _tag: "Type",
+                    target: input("Slow"),
+                    text: { _tag: "Literal", value: "abcdefghij".repeat(10) },
+                  },
+                },
+              ],
+            },
+            { style: { seed: 11 } },
+          )
+          .pipe(Effect.exit),
+      );
+
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(5000);
+      expect(failed).toMatchObject({
+        stage: "AttemptFailed",
+        error: { reason: { _tag: "TimingBudgetExceeded" }, outcome: "performed" },
+        attempt: { outcome: "performed", containment: { _tag: "NotRequired" } },
+      });
+      // The page was not contained, and only whole strokes landed.
+      const typed = Number((yield* page.readText({ selector: "#mirror" })).text);
+
+      expect(typed).toBeGreaterThan(0);
+      expect(typed).toBeLessThan(100);
     }).pipe(Effect.provide(layer)),
   ),
 );
