@@ -373,14 +373,16 @@ export const makeActions = (
    * its nearest ancestor frame's, which is also its base URL. It is resolved before dispatch, so
    * an action never fails over its URL after its input landed: a target with no such address in
    * its whole frame tree is refused unsent, and afterwards the address read before dispatch
-   * stands in when the action left none.
+   * stands in when the action left none, including when the action removed its own frame or
+   * closed its page.
    */
   const resultUrl = (target: DriverTarget) => {
-    const before = addressOf(current(target).frame);
+    const { frame } = current(target);
+    const before = addressOf(frame);
 
     if (before === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
 
-    return () => addressOf(current(target).frame) ?? before;
+    return () => (frame.isDetached() ? before : (addressOf(frame) ?? before));
   };
 
   const targetFor = (element: ElementTarget, target: DriverTarget): DriverTarget => {
