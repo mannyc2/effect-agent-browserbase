@@ -445,7 +445,6 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
 
           assert.ok(info);
           exact = yield* session.initialPage.frame(info);
-          yield* session.selectFrame(info.frameId);
         }
         const target = reference(yield* exact.observe());
         const watch = yield* watchElementWait(page);

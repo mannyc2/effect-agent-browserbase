@@ -319,7 +319,6 @@ export interface Driver {
     frame: FrameInfo,
     ticket: Ticket,
   ) => Promise<DriverTarget>;
-  readonly selectFrame: (id: string, ticket: Ticket) => Promise<void>;
   /** Issued exactly once; returns while the browser is still loading. The only navigator. */
   readonly beginNavigation: (
     url: string,

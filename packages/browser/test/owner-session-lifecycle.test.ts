@@ -348,52 +348,63 @@ it.effect(
     ),
 );
 
+/**
+ * A keep-alive session whose page close lands natively and then waits for the test before the
+ * owner hears back, while a detach is held in its inventory read behind the lifecycle barrier.
+ */
+const closeBehindDetach = Effect.fnUntraced(function* (actionMillis?: number) {
+  const listing = gate<void>();
+  const listed = gate<void>();
+  const closing = gate<void>();
+  const closed = gate<void>();
+  let holdList = false;
+
+  const f = yield* fixture({
+    keepAlive: true,
+    ...(actionMillis === undefined ? {} : { actionMillis }),
+    onConnect: async (driver) => ({
+      ...driver,
+      listPages: async (ticket) => {
+        if (holdList) {
+          holdList = false;
+          listing.resolve();
+          await listed.promise;
+        }
+
+        return driver.listPages(ticket);
+      },
+      closePage: async (page, ticket, onDispatch) => {
+        await driver.closePage(page, ticket, onDispatch);
+        closing.resolve();
+        await closed.promise;
+      },
+    }),
+  });
+
+  const session = yield* (yield* f.acquisition).connect;
+  const second = yield* session.createPage();
+  const issued = yield* session.page(second);
+
+  holdList = true;
+  const detaching = yield* Effect.forkChild(session.detach);
+
+  yield* Effect.promise(() => listing.promise);
+  // Page closure is bounded cleanup, admitted even while the lifecycle barrier is up.
+  const closure = yield* Effect.forkChild(issued.controls.closePage(second));
+
+  yield* Effect.promise(() => closing.promise);
+  listed.resolve();
+
+  return { f, session, detaching, closure, release: () => closed.resolve() };
+});
+
 it.effect("detach waits for a page close admitted behind its barrier before disconnecting", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const listing = gate<void>();
-      const listed = gate<void>();
-      const closing = gate<void>();
-      const closed = gate<void>();
-      let holdList = false;
+      const { session, detaching, closure, release } = yield* closeBehindDetach();
 
-      const f = yield* fixture({
-        keepAlive: true,
-        onConnect: async (driver) => ({
-          ...driver,
-          listPages: async (ticket) => {
-            if (holdList) {
-              holdList = false;
-              listing.resolve();
-              await listed.promise;
-            }
-
-            return driver.listPages(ticket);
-          },
-          // The browser has closed the page; the owner has not yet heard back.
-          closePage: async (page, ticket, onDispatch) => {
-            await driver.closePage(page, ticket, onDispatch);
-            closing.resolve();
-            await closed.promise;
-          },
-        }),
-      });
-
-      const session = yield* (yield* f.acquisition).connect;
-      const second = yield* session.createPage();
-      const issued = yield* session.page(second);
-
-      holdList = true;
-      const detaching = yield* Effect.forkChild(session.detach);
-
-      yield* Effect.promise(() => listing.promise);
-      // Page closure is bounded cleanup, admitted even while the lifecycle barrier is up.
-      const closure = yield* Effect.forkChild(issued.controls.closePage(second));
-
-      yield* Effect.promise(() => closing.promise);
-      listed.resolve();
       yield* Effect.yieldNow;
-      closed.resolve();
+      release();
       yield* Fiber.join(closure);
       yield* Fiber.join(detaching);
       expect(yield* session.status).toMatchObject({
@@ -401,6 +412,26 @@ it.effect("detach waits for a page close admitted behind its barrier before disc
         reason: "detached",
         unresolvedDispatch: false,
       });
+    }),
+  ),
+);
+
+it.effect("a detach refused before it disconnects leaves the session open", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { f, session, detaching, closure, release } = yield* closeBehindDetach(10_000);
+
+      yield* TestClock.adjust(3000);
+      expect(yield* Fiber.join(detaching).pipe(Effect.flip)).toMatchObject({
+        operation: "detach",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+      });
+      expect(yield* session.status).toMatchObject({ phase: "open", reason: null });
+      release();
+      yield* Fiber.join(closure);
+      yield* session.initialPage().controls.operations.click("#act");
+      expect(f.state.clicks).toBe(1);
     }),
   ),
 );

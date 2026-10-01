@@ -1921,13 +1921,6 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
         return { pageId: target.pageId, frameId: target.frameId };
       },
-      selectFrame: (id, ticket) =>
-        attempt("select-frame", ticket, {}, async () => {
-          const page = selectedPage("select-frame");
-
-          if (id !== page.frameId) throw fail("select-frame", Reasons.NotFound.make({}));
-          events.invalidate("target-changed", "none");
-        }),
       beginNavigation: (url, timeoutMillis, ticket, target) =>
         attempt("navigate", undefined, { pageId: target?.pageId }, async (record) => {
           ticket.check();

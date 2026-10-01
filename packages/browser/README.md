@@ -461,8 +461,10 @@ const seen = yield * scout.observe({ scope: "viewport" });
 ```
 
 `session.page(pageInfo)` checks both local and native identity under owner admission.
-`createPage()` returns checked metadata without selecting the page. `selectPage(pageInfo)` and
-`selectFrame(frameId)` affect display selection only. Use `page.describe()`, `page.listFrames()`,
+`createPage()` returns checked metadata without selecting the page. `selectPage(pageInfo)` chooses
+the displayed page, which is also the page `detach` records and `reconnect` resumes on; it never
+retargets a Page or Frame operation. A child frame is reached through `page.frame(frameInfo)`,
+never by selection. Use `page.describe()`, `page.listFrames()`,
 `page.frame(frameInfo)`, `page.resizeViewport(viewport)` and `page.close()` for exact page work.
 The selected-session actions, `retain`, `pinPage`, `pinFrame` and their target-view types are
 removed. The shared operation contract is `PageOperations`.
@@ -470,7 +472,7 @@ removed. The shared operation contract is `PageOperations`.
 | Previous API                                                      | Current API                                                             |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Session actions, `observe`, `checkpoint`, `ready`, `target`       | Issued `Page`/`Frame` methods and immutable `identity`                  |
-| `retain`, `pinPage`, `pinFrame`                                   | `initialPage`, checked `session.page(info)` and `page.frame(info)`      |
+| `retain`, `pinPage`, `pinFrame`, `selectFrame`                    | `initialPage`, checked `session.page(info)` and `page.frame(info)`      |
 | Session `describePage`, `framesOf`, `closePage`, `resizeViewport` | `page.describe`, `page.listFrames`, `page.close`, `page.resizeViewport` |
 | Session capture and PageInfo capture target                       | `Capture.start(page)` / `Capture.stream(page)`                          |
 | Session PageControl adapters                                      | `PageControl.state(page)`, `suspend(page)`, `resume(page, receipt)`     |

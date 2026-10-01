@@ -383,12 +383,12 @@ export interface BrowserSession<E = never> {
   readonly failure: Effect.Effect<never, E | InitializationError>;
   /** Bounded host-only evidence; consumer causes are never projected into a page reply. */
   readonly bindingDiagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
+  /**
+   * Choose the displayed page, which is also the page `detach` records and `reconnect` resumes on.
+   * It never retargets a Page or Frame operation; those keep their own exact authority.
+   */
   readonly selectPage: (
     page: PageInfo,
-    options?: OperationOptions,
-  ) => Effect.Effect<void, BrowserError>;
-  readonly selectFrame: (
-    frameId: string,
     options?: OperationOptions,
   ) => Effect.Effect<void, BrowserError>;
   /**

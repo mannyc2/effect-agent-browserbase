@@ -330,7 +330,6 @@ it.live("real CDP: keys follow focus across frames, and a frame that lost it adm
             () => native.frame({ name: "child" })?.evaluate("window.read()") ?? Promise.resolve(),
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(InFrame)));
 
-          yield* session.selectFrame(child.frameId);
           const childAuthority = yield* session.initialPage.frame(child);
 
           yield* childAuthority.click(ClickRequest.make({ selector: "#inside" }));
@@ -338,10 +337,7 @@ it.live("real CDP: keys follow focus across frames, and a frame that lost it adm
           expect(yield* readChild).toEqual({ inside: "in", active: "inside", focused: true });
 
           // The person moves on to a field in the page around the frame.
-          yield* session.selectFrame(main.frameId);
-
           yield* session.initialPage.click(ClickRequest.make({ selector: "#first" }));
-          yield* session.selectFrame(child.frameId);
 
           // Focus left the frame, and the browser took the field's focus with it, so keys would
           // not reach it. Asking for that field sends nothing.

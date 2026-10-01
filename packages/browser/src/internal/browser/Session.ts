@@ -1373,13 +1373,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 if (options.target !== undefined) return { pageId: options.target.pageId };
 
                 return options.anyPage === true ||
-                  [
-                    "list-pages",
-                    "list-frames",
-                    "describe-page",
-                    "select-page",
-                    "select-frame",
-                  ].includes(operation)
+                  ["list-pages", "list-frames", "describe-page", "select-page"].includes(operation)
                   ? "none"
                   : { pageId: getDriver().selected().pageId };
               }),
@@ -3494,15 +3488,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         },
         { ...operationOptions, charge: false },
       ),
-    selectFrame: (id: string, operationOptions?: ExecutionOptions) =>
-      nativeOperation(
-        "select-frame",
-        async (driver, ticket) => {
-          await driver.selectFrame(id, ticket);
-          owner.state.selection++;
-        },
-        { ...operationOptions, charge: false },
-      ),
     /** Creation and adoption use the registry lane, independently of Page work. */
     createPage: (operationOptions?: ExecutionOptions) =>
       nativeOperation(
@@ -3706,8 +3691,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     detach: lifecycle(
       "detach",
       () => options.keepAlive,
-      () =>
-        owner
+      () => {
+        // Until the connection is given up, a failed detach leaves the session as it was.
+        let disconnecting = false;
+
+        return owner
           .guard(
             "detach",
             (ticket) =>
@@ -3718,12 +3706,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     reason: Reasons.Unsupported.make({}),
                     outcome: "undispatched",
                   });
-                reconnectTarget = yield* native("detach", ticket, () =>
+
+                const target = yield* native("detach", ticket, () =>
                   getDriver().selectedTargetId(),
                 );
+
                 const inventory = yield* refreshPages(ticket);
 
-                if (!inventory.pages.some((info) => info.targetId === reconnectTarget))
+                if (!inventory.pages.some((info) => info.targetId === target))
                   return yield* BrowserError.make({
                     operation: "detach",
                     reason: Reasons.Stale.make({}),
@@ -3734,6 +3724,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 yield* drainAdmitted("detach", ticket, () => owner.idle(ticket.signal));
                 const attached = getDriver();
 
+                disconnecting = true;
+                reconnectTarget = target;
                 activeConnection = undefined;
                 owner.fence("detached", "disconnected", "detached");
                 const initialization = yield* Effect.exit(disposeBindings);
@@ -3754,11 +3746,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 if (Exit.isFailure(disconnected))
                   return yield* Effect.failCause(disconnected.cause);
 
-                return { reference: ref, targetId: reconnectTarget, inventory };
+                return { reference: ref, targetId: target, inventory };
               }),
             { charge: false, verifyAfter: false, bypassBlocked: true },
           )
-          .pipe(Effect.onError(() => Effect.sync(() => owner.fence("uncertain", "uncertain")))),
+          .pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (disconnecting) owner.fence("uncertain", "uncertain");
+              }),
+            ),
+          );
+      },
     ),
     reconnect: (operatorReleasedControl: boolean, operationOptions?: ExecutionOptions) =>
       lifecycle(

@@ -39,7 +39,6 @@ import {
   Viewport,
   WaitForElementRequest,
   WheelRequest,
-  Identifier,
 } from "../../BrowserData.ts";
 import {
   BrowserError,
@@ -671,14 +670,6 @@ export const makeSession = <E>(
         Effect.flatMap((page) =>
           withOperationOptions(options, "select-page", (options) =>
             controls.selectPage(page, options),
-          ),
-        ),
-      ),
-    selectFrame: (id, options) =>
-      checked(Identifier, id, "select-frame").pipe(
-        Effect.flatMap((id) =>
-          withOperationOptions(options, "select-frame", (options) =>
-            controls.selectFrame(id, options),
           ),
         ),
       ),

@@ -92,7 +92,6 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
 
           if (child === undefined || main === undefined)
             throw new Error("The fixture page has a main frame and a child frame");
-          yield* session.selectFrame(child.frameId);
           const childAuthority = yield* session.initialPage.frame(child);
 
           expect(
@@ -100,8 +99,7 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
             "the selected child completed its own registered readiness",
           ).toEqual({ _tag: "Ready" });
           expect((yield* childAuthority.observe()).text).toContain("frame text");
-          // Display selection leaves the issued main Page authority intact.
-          yield* session.selectFrame(main.frameId);
+          // Reading the child leaves the issued main Page authority intact.
           expect((yield* h.readText(ReadTextRequest.make({})).pipe(Effect.result))._tag).toBe(
             "Success",
           );

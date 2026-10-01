@@ -510,7 +510,16 @@ export const makeTargets = (
     return { pageId: entry.id, frameId: frameId(frame) };
   };
 
-  const selectedTargetId = () => sanitize(() => targetId(current().entry));
+  /** Detach records the selected page alone; none of its frames can make that fail. */
+  const selectedTargetId = () =>
+    sanitize(() => {
+      const entry = selection.entry;
+
+      if (closing() || !browser.isConnected() || entry === undefined || entry.page.isClosed())
+        throw failure(Reasons.Closed.make({}), "undispatched");
+
+      return targetId(entry);
+    });
 
   /** Describe this exact entry, including when creation has already dispatched. */
   const pageInfo = async (entry: Entry, ticket: Ticket): Promise<PageInfo> => {
@@ -678,20 +687,6 @@ export const makeTargets = (
       return { pageId: entry.id, frameId: frameId(frame) };
     });
 
-  const selectFrame = (id: string, ticket: Ticket) =>
-    sanitize(async () => {
-      const entry = selection.entry;
-
-      if (entry === undefined) throw failure(Reasons.Closed.make({}));
-      const frame = entry.page.frames().find((f) => frameId(f) === id);
-
-      if (frame === undefined || frame.isDetached())
-        throw failure(Reasons.NotFound.make({}), "undispatched");
-      ticket.check();
-      selection.frame = frame;
-      hooks.changed("target-changed", "none");
-    });
-
   return {
     entries: entries as ReadonlyMap<string, Entry>,
     cachedPages: () => Object.freeze([...entries.values()].map(cachedPage)),
@@ -726,7 +721,6 @@ export const makeTargets = (
     containPage,
     listFrames,
     resolveFrame,
-    selectFrame,
   };
 };
 

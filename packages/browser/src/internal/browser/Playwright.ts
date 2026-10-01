@@ -364,7 +364,6 @@ export const makePlaywrightDriver = async (
     containPage: targets.containPage,
     listFrames: targets.listFrames,
     resolveFrame: targets.resolveFrame,
-    selectFrame: targets.selectFrame,
     beginNavigation: actions.beginNavigation,
     readText: observation.readText,
     observe: observation.observe,

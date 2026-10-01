@@ -336,15 +336,9 @@ it("selection notifications preserve retained nodes while a selected page close 
   const admission = ticket();
 
   await f.targets.selectPage(page, admission);
-  const [frame] = await f.targets.listFrames(ticket());
-
-  await f.targets.selectFrame(frame!.frameId, admission);
   expect(admission.dispatched).toBe(false);
-  expect(f.changes).toEqual([
-    ["target-changed", "none"],
-    ["target-changed", "none"],
-  ]);
+  expect(f.changes).toEqual([["target-changed", "none"]]);
   await f.targets.closePage(page, ticket());
-  expect(f.changes[2]).toEqual(["target-changed", { pageId: page.pageId }]);
+  expect(f.changes[1]).toEqual(["target-changed", { pageId: page.pageId }]);
   expect(f.calls.closed).toBe(1);
 });

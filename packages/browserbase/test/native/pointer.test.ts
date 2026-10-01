@@ -68,7 +68,6 @@ it.live("real CDP: hover reaches a nested cross-origin frame in main-viewport co
           assert.ok(leaf);
           expect(new URL(leaf.url()).origin).toBe(site.origin);
           expect(site.origin).not.toBe(new URL(page.url()).origin);
-          yield* session.selectFrame(target.frameId);
           const handle = yield* session.initialPage.frame(target);
           const receipt = yield* handle.hover(HoverRequest.make({ selector: "#target" }));
 
@@ -115,7 +114,6 @@ it.live("real CDP: a nested hover refuses clipping and occlusion in every ancest
           assert.ok(target);
           assert.ok(outer);
           assert.ok(leaf);
-          yield* session.selectFrame(target.frameId);
           const handle = yield* session.initialPage.frame(target);
 
           const counts = () =>

@@ -576,13 +576,10 @@ it.live(
 
             assert.ok(child);
             assert.ok(main);
-            yield* session.selectFrame(child.frameId);
             const childAuthority = yield* session.initialPage.frame(child);
             const reference = yield* named(childAuthority, "Frame action");
 
-            yield* session.selectFrame(main.frameId);
             yield* refused(session.initialPage.clickElement(reference), "Stale");
-            yield* session.selectFrame(child.frameId);
             expect((yield* childAuthority.readText({ selector: "#inner" })).text).toBe(
               "Frame action",
             );
@@ -594,9 +591,7 @@ it.live(
             const oldDocument = yield* named(childAuthority, "frame clicked");
             const pinnedChild = yield* (yield* session.page(page)).frame(child);
 
-            yield* session.selectFrame(main.frameId);
             yield* pinnedChild.navigate({ url: `${f.url}frame` });
-            yield* session.selectFrame(child.frameId);
             yield* refused(childAuthority.clickElement(oldDocument), "Stale");
             expect((yield* childAuthority.readText({ selector: "#inner" })).text).toBe(
               "Frame action",

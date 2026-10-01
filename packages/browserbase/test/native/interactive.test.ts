@@ -84,7 +84,6 @@ it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation 
           const frames = yield* session.initialPage.listFrames();
           const child = frames.find((frame) => frame.name === "child")!;
 
-          yield* session.selectFrame(child.frameId);
           const frameHandle = yield* session.initialPage.frame(child);
 
           expect((yield* frameHandle.readText(ReadTextRequest.make({}))).text).toContain(
@@ -94,9 +93,6 @@ it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation 
           expect((yield* frameHandle.readText(ReadTextRequest.make({}))).text).toContain(
             "frame clicked",
           );
-          const main = frames.find((frame) => frame.parentFrameId === null)!;
-
-          yield* session.selectFrame(main.frameId);
           expect(
             (yield* session.initialPage.clickAndWait(ClickRequest.make({ selector: "#next" }))).url,
           ).toBe(new URL("next", f.url).href);
