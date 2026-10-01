@@ -102,10 +102,14 @@ and bounded `admission.queue`. Omitted style is plain; `style: { seed: 7 }` sele
 performed profile with slips disabled by default. A fixed seed is the base of a sequence: the nth
 run the handlers start uses `seed + n - 1`, so each call draws its own timing while the same calls
 reproduce the same performance. Without a seed each run draws a fresh one. Seeds and pacing stay
-on the host. The same
-logical action costs the same budget in either style. Hosted navigation retains its original
-NavigationOperation and uses `within` to narrow its original loading deadline; input Plans
-retain run/step/attempt IDs. No model parameter gains timing or recording authority.
+on the host. The same logical action costs the same budget in either style. Input Plans retain
+run/step/attempt IDs. No model parameter gains timing or recording authority.
+
+Navigation is the one Tool whose `execution` differs by composition. Handler Layers without a host
+run `browser_navigate` as a one-step Plan with every option. A host runs it as the original
+NavigationOperation, so `onNavigation` can supervise and stop it: `within` narrows its loading
+deadline and `timeoutMillis` and `admission.queue` apply, but it takes no `checkpoint`, and its
+`receipts` entry is a `Navigation`, not a `Run`. `style` never changes a navigation.
 
 ```ts
 const handlers = BrowserTools.handlers(browser, browser.initialPage, {
