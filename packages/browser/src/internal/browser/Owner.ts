@@ -182,14 +182,29 @@ export interface ReadTicket {
   check(): void;
 }
 
+/** What a performed operation asks of the owner: its seeded plan and, in a form, its field. */
+export interface PerformanceRequest {
+  readonly plan: PerformancePlan;
+  readonly fieldIndex?: number;
+}
+
+/**
+ * A performed admission: the request, plus the original owner's clock, deadline and sleep, which
+ * the owner grants every performed ticket. A plain ticket has none of them.
+ */
+export interface Performance extends PerformanceRequest {
+  /** The original owner's monotonic clock. */
+  readonly now: () => bigint;
+  /** Exact original-owner time left; native SDK timeouts retain their separate millisecond floor. */
+  readonly remainingTimeNanos: () => bigint;
+  /** Original-owner sleep, bounded by this admission and fenced before and after waiting. */
+  readonly pauseUntil: (atNanos: bigint) => Promise<void>;
+}
+
 /** One admitted native operation; checks at dispatch also fence late Promise continuations. */
 export interface Ticket extends ReadTicket {
-  readonly performance?: { readonly plan: PerformancePlan; readonly fieldIndex?: number };
-  readonly monotonicTimeNanosUnsafe?: () => bigint;
-  /** Exact original-owner time left; native SDK timeouts retain their separate millisecond floor. */
-  readonly remainingTimeNanos?: () => bigint;
-  /** Original-owner sleep, bounded by this admission and fenced before and after waiting. */
-  readonly pauseUntil?: (atNanos: bigint) => Promise<void>;
+  /** Present exactly when the operation is performed, with the owner's pacing. */
+  readonly performance?: Performance;
   readonly operationId?: string;
   readonly picture?: (boundary: NativePictureBoundary) => void;
   readonly recordInput?: (receipt: InputReceipt, keys?: KeyCount) => void;
@@ -713,7 +728,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly operationDeadline?: number;
       readonly queueDeadline?: number;
       readonly evidence?: ExecutionEvidence;
-      readonly performance?: Ticket["performance"];
+      readonly performance?: PerformanceRequest;
       /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
       readonly waitUntil?: number;
       /** Recovery and lifecycle cleanup own independent, bounded capacity. */
@@ -920,30 +935,38 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           });
 
         const ticket: Ticket = {
-          ...(options.performance === undefined ? {} : { performance: options.performance }),
-          monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
-          remainingTimeNanos: () =>
-            BigInt(Math.floor(deadline * 1_000_000)) - clock.monotonicTimeNanosUnsafe(),
-          pauseUntil: async (atNanos) => {
-            check();
-            if (atNanos >= BigInt(Math.floor(deadline * 1_000_000)))
-              throw BrowserError.make({
-                operation,
-                reason: Reasons.TimingBudgetExceeded.make({}),
-                outcome: currentOutcome(),
-              });
-            const remaining = atNanos - clock.monotonicTimeNanosUnsafe();
+          ...(options.performance === undefined
+            ? {}
+            : {
+                performance: {
+                  ...options.performance,
+                  now: () => clock.monotonicTimeNanosUnsafe(),
+                  remainingTimeNanos: () =>
+                    BigInt(Math.floor(deadline * 1_000_000)) - clock.monotonicTimeNanosUnsafe(),
+                  pauseUntil: async (atNanos) => {
+                    check();
+                    if (atNanos >= BigInt(Math.floor(deadline * 1_000_000)))
+                      throw BrowserError.make({
+                        operation,
+                        reason: Reasons.TimingBudgetExceeded.make({}),
+                        outcome: currentOutcome(),
+                      });
+                    const remaining = atNanos - clock.monotonicTimeNanosUnsafe();
 
-            if (remaining > 0n) {
-              // oxlint-disable-next-line no-restricted-properties -- the native Promise callback awaits only its captured Clock and carries the original Exit back to Effect
-              const exit = await Effect.runPromiseExit(clock.sleep(Duration.nanos(remaining)), {
-                signal: controller.signal,
-              });
+                    if (remaining > 0n) {
+                      // oxlint-disable-next-line no-restricted-properties -- the native Promise callback awaits only its captured Clock and carries the original Exit back to Effect
+                      const exit = await Effect.runPromiseExit(
+                        clock.sleep(Duration.nanos(remaining)),
+                        { signal: controller.signal },
+                      );
 
-              if (Exit.isFailure(exit)) throw NativeEffectFailure.make({ cause: exit.cause });
-            }
-            check();
-          },
+                      if (Exit.isFailure(exit))
+                        throw NativeEffectFailure.make({ cause: exit.cause });
+                    }
+                    check();
+                  },
+                },
+              }),
           operationId,
           picture: (boundary) => emit({ _tag: "Picture", boundary }),
           recordInput: (receipt, keys) =>

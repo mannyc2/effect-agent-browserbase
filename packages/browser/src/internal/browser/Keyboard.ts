@@ -6,7 +6,7 @@ import { Reasons } from "../../Errors.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import type { ElementAccess } from "./ElementAccess.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
-import { ownerPacing } from "./NativePacing.ts";
+import { isPerformed, ownerPacing, type PerformedTicket } from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import { keys as keySchedule, type KeySchedule, type Stroke } from "./Performance.ts";
@@ -326,11 +326,8 @@ export const makeKeyboard = (
     if (focused !== true) throw failure(Reasons.NotFocused.make({}), "undispatched");
   };
 
-  const planKeys = (text: string, ticket: Ticket): KeySchedule => {
-    const performance = ticket.performance;
-
-    ownerPacing(ticket);
-    if (performance === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
+  const planKeys = (text: string, ticket: PerformedTicket): KeySchedule => {
+    const { performance } = ticket;
     const planned = keySchedule(performance.plan, text, performance.fieldIndex);
 
     if (Result.isFailure(planned)) throw planned.failure;
@@ -338,7 +335,7 @@ export const makeKeyboard = (
     return planned.success;
   };
 
-  const prepareKeys = (text: string, ticket: Ticket): KeySchedule => {
+  const prepareKeys = (text: string, ticket: PerformedTicket): KeySchedule => {
     const schedule = planKeys(text, ticket);
 
     ownerPacing(ticket).requireDuration(schedule.durationMillis);
@@ -355,7 +352,7 @@ export const makeKeyboard = (
   const pacedStroke = async (
     keyboard: Keyboard,
     stroke: Stroke,
-    ticket: Ticket,
+    ticket: PerformedTicket,
     check: () => void,
     pace: ReturnType<typeof makePace>,
     index: number,
@@ -414,7 +411,7 @@ export const makeKeyboard = (
   const pacedKeys = async (
     keyboard: Keyboard,
     schedule: KeySchedule,
-    ticket: Ticket,
+    ticket: PerformedTicket,
     check: () => void,
     element?: ElementHandle<Element>,
   ) => {
@@ -437,7 +434,7 @@ export const makeKeyboard = (
     page: Page,
     element: ElementHandle<Element>,
     schedule: KeySchedule,
-    ticket: Ticket,
+    ticket: PerformedTicket,
     check: () => void,
     readmit?: () => Promise<void>,
   ) =>
@@ -518,12 +515,13 @@ export const makeKeyboard = (
     browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
-      if (ticket.performance !== undefined) {
-        const schedule = planKeys(" ", ticket);
+      if (isPerformed(ticket)) {
+        const performed = ticket;
+        const schedule = planKeys(" ", performed);
         const planned = schedule.strokes[0];
 
         if (planned === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
-        ownerPacing(ticket).requireDuration(planned.holdMillis);
+        ownerPacing(performed).requireDuration(planned.holdMillis);
         if (into !== undefined) browserTarget = elements.targetFor(into, browserTarget);
         const { page } = current(browserTarget).entry;
 
@@ -534,13 +532,13 @@ export const makeKeyboard = (
             policy,
             (_page, element, check) => {
               const stroke = { ...planned, key };
-              const pacing = ownerPacing(ticket);
+              const pacing = ownerPacing(performed);
 
               return pacedStroke(
                 page.keyboard,
                 stroke,
-                ticket,
-                check ?? (() => ticket.check()),
+                performed,
+                check ?? (() => performed.check()),
                 makePace(pacing, [stroke], pacing.now(), element !== undefined, modifiers, false),
                 0,
                 element,
@@ -573,7 +571,10 @@ export const makeKeyboard = (
     sanitize(async () => {
       if (into !== undefined) browserTarget = elements.targetFor(into, browserTarget);
       const { page } = current(browserTarget).entry;
-      const schedule = ticket.performance === undefined ? undefined : prepareKeys(text, ticket);
+
+      const performed = isPerformed(ticket)
+        ? { ticket, schedule: prepareKeys(text, ticket) }
+        : undefined;
 
       return withTypingPort(page, ticket, async (port) => {
         if (current(browserTarget).entry.page !== page)
@@ -584,11 +585,11 @@ export const makeKeyboard = (
           ticket,
           policy,
           async (_page, element, check) => {
-            if (schedule !== undefined) {
+            if (performed !== undefined) {
               await pacedKeys(
                 page.keyboard,
-                schedule,
-                ticket,
+                performed.schedule,
+                performed.ticket,
                 check ?? (() => ticket.check()),
                 element,
               );

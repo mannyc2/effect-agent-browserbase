@@ -6,7 +6,7 @@ import { Reasons } from "../../Errors.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import type { ElementAccess } from "./ElementAccess.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
-import { ownerPacing } from "./NativePacing.ts";
+import { isPerformed, ownerPacing, type PerformedTicket } from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import { move as moveSchedule, pointer as pointerSchedule } from "./Performance.ts";
@@ -152,7 +152,7 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
       const { page } = entry;
       const epoch = targets.epochOf(frame);
 
-      if (ticket.performance !== undefined) {
+      if (isPerformed(ticket)) {
         const pacing = ownerPacing(ticket);
 
         const viewport = safeDecode(
@@ -282,14 +282,13 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
   const preparePress = async (
     page: Page,
     element: ElementHandle<Element>,
-    ticket: Ticket,
+    ticket: PerformedTicket,
     check: () => void,
     options: { readonly scrollIntoView?: boolean } = {},
   ): Promise<NativeInput & { readonly intended: NonNullable<InputReceipt["intended"]> }> => {
     const pacing = ownerPacing(ticket);
-    const performance = ticket.performance;
+    const { performance } = ticket;
 
-    if (performance === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
     check();
     const frame = await element.ownerFrame();
 
@@ -443,16 +442,14 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
       browserTarget = elements.targetFor(target, browserTarget);
       const { page } = current(browserTarget).entry;
 
-      await elements.withAdmittedElement(
-        target,
-        ticket,
-        (element) =>
-          ticket.performance === undefined
-            ? reachablePoint(page, element)
-            : Promise.resolve(undefined),
-        async (element, point, check, readmit) => {
-          if (ticket.performance === undefined && point !== undefined) await moveTo(page, point);
-          else {
+      // Plain hover moves straight to the node's reachable point under automatic dispatch; a
+      // performed one glides there and dispatches its own move once the glide is checked.
+      if (isPerformed(ticket))
+        await elements.withAdmittedElement(
+          target,
+          ticket,
+          async () => {},
+          async (element, _admitted, check, readmit) => {
             const planned = await preparePress(page, element, ticket, check, {
               scrollIntoView: false,
             });
@@ -461,13 +458,21 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
             check();
             ticket.dispatch();
             await moveTo(page, planned.intended.position);
-          }
-        },
-        policy,
-        browserTarget,
-        false,
-        ticket.performance === undefined,
-      );
+          },
+          policy,
+          browserTarget,
+          false,
+          false,
+        );
+      else
+        await elements.withAdmittedElement(
+          target,
+          ticket,
+          (element) => reachablePoint(page, element),
+          (_element, point) => moveTo(page, point),
+          policy,
+          browserTarget,
+        );
       ticket.check();
 
       return receipt(page);

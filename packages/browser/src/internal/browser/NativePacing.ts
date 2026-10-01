@@ -1,21 +1,21 @@
 import { Reasons } from "../../Errors.ts";
 import { failure } from "./NativeCalls.ts";
-import type { Ticket } from "./Owner.ts";
+import type { Performance, Ticket } from "./Owner.ts";
 
-/** Validate the original owner's bridge before a performed action can submit any mutation. */
-export const ownerPacing = (ticket: Ticket) => {
-  if (
-    ticket.monotonicTimeNanosUnsafe === undefined ||
-    ticket.remainingTimeNanos === undefined ||
-    ticket.pauseUntil === undefined
-  )
-    throw failure(Reasons.Unsupported.make({}), "undispatched");
-  const remainingTimeNanos = ticket.remainingTimeNanos;
-  const now = ticket.monotonicTimeNanosUnsafe;
+/** A performed admission's ticket: the owner's pacing is always present on it. */
+export type PerformedTicket = Ticket & { readonly performance: Performance };
+
+/** Whether this admission is performed, which narrows the ticket to carry the owner's pacing. */
+export const isPerformed = (ticket: Ticket): ticket is PerformedTicket =>
+  ticket.performance !== undefined;
+
+/** The original owner's pacing for a performed admission, checked before any input is planned. */
+export const ownerPacing = (ticket: PerformedTicket) => {
+  const { now, pauseUntil, remainingTimeNanos } = ticket.performance;
 
   return {
     now,
-    pauseUntil: ticket.pauseUntil,
+    pauseUntil,
     requireDuration: (durationMillis: number) => {
       ticket.check();
       if (!Number.isFinite(durationMillis) || durationMillis < 0)

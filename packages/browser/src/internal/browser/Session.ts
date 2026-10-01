@@ -82,6 +82,7 @@ import {
   type ObservationScope,
   type OwnedWait,
   type ExecutionEvidence,
+  type PerformanceRequest,
   type Ticket,
   type WaitTicket,
 } from "./Owner.ts";
@@ -110,7 +111,7 @@ export interface FormSettings {
 
 /** Private composite bounds and evidence cannot enter through decoded public options. */
 export interface ExecutionOptions extends OperationOptions {
-  readonly performance?: Ticket["performance"];
+  readonly performance?: PerformanceRequest;
   readonly operationDeadline?: number;
   readonly queueDeadline?: number;
   readonly evidence?: ExecutionEvidence;

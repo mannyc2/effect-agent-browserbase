@@ -28,7 +28,7 @@ import {
   sanitize,
   timeout,
 } from "./NativeCalls.ts";
-import { ownerPacing } from "./NativePacing.ts";
+import { isPerformed, ownerPacing, type PerformedTicket } from "./NativePacing.ts";
 import { holdsChecked, type Observation, readFieldState } from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
 import { scroll as scrollSchedule, type KeySchedule } from "./Performance.ts";
@@ -374,9 +374,7 @@ export const makeActions = (
     check: () => void = () => ticket.check(),
     readmit?: () => Promise<void>,
   ): Promise<InputReceipt | undefined> => {
-    if (ticket.performance !== undefined) {
-      ownerPacing(ticket);
-
+    if (isPerformed(ticket)) {
       return pointer.preparePress(page, element, ticket, check).then(async (planned) => {
         await readmit?.();
         check();
@@ -583,7 +581,7 @@ export const makeActions = (
         ticket,
         async (element, facts) => {
           await refuseInput(element, value);
-          if (ticket.performance === undefined) return undefined;
+          if (!isPerformed(ticket)) return undefined;
           if (
             facts?.inputType !== undefined &&
             ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
@@ -592,16 +590,16 @@ export const makeActions = (
           )
             throw failure(Reasons.Unsupported.make({}), "undispatched");
 
-          return keyboard.prepareKeys(value, ticket);
+          return { ticket, schedule: keyboard.prepareKeys(value, ticket) };
         },
-        (element, schedule, check, readmit) =>
-          schedule === undefined
+        (element, performed, check, readmit) =>
+          performed === undefined
             ? element.fill(value, { timeout: timeout(ticket) })
             : keyboard.fillElement(
                 current(browserTarget).entry.page,
                 element,
-                schedule,
-                ticket,
+                performed.schedule,
+                performed.ticket,
                 check,
                 readmit,
               ),
@@ -706,10 +704,12 @@ export const makeActions = (
           const text = field.value ?? "";
 
           await refuseInput(element, text);
-          const performance = ticket.performance;
-          let schedule: KeySchedule | undefined;
 
-          if (performance !== undefined) {
+          let performed:
+            | { readonly ticket: PerformedTicket; readonly schedule: KeySchedule }
+            | undefined;
+
+          if (isPerformed(ticket)) {
             if (
               facts.inputType !== undefined &&
               ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
@@ -717,16 +717,16 @@ export const makeActions = (
               )
             )
               throw failure(Reasons.Unsupported.make({}), "undispatched");
-            schedule = keyboard.prepareKeys(text, ticket);
+            performed = { ticket, schedule: keyboard.prepareKeys(text, ticket) };
           }
           act = async () => {
-            if (schedule === undefined) await element.fill(text, { timeout: timeout(ticket) });
+            if (performed === undefined) await element.fill(text, { timeout: timeout(ticket) });
             else
               await keyboard.fillElement(
                 current(browserTarget).entry.page,
                 element,
-                schedule,
-                ticket,
+                performed.schedule,
+                performed.ticket,
                 check,
                 readmit,
               );
@@ -852,7 +852,7 @@ export const makeActions = (
       const { frame } = current(target);
       const url = resultUrl(target);
 
-      if (ticket.performance !== undefined) {
+      if (isPerformed(ticket)) {
         const pacing = ownerPacing(ticket);
         const planned = scrollSchedule(ticket.performance.plan, deltaX, deltaY);
 
