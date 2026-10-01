@@ -9,6 +9,7 @@ import { Chromium } from "effect-browser/chromium";
 import { externalChromium } from "../fixtures/StandaloneBrowser.ts";
 
 // An editor with no accessible name: its content is what was entered, not what it is called.
+// The native fields after it are named only by aria-placeholder.
 const site = Effect.acquireRelease(
   Effect.promise(
     () =>
@@ -16,7 +17,8 @@ const site = Effect.acquireRelease(
         const server = createServer((_request, response) => {
           response.writeHead(200, { "content-type": "text/html" });
           response.end(
-            `<!doctype html><div role="textbox" contenteditable="true" style="min-height:2em"></div>`,
+            `<!doctype html><div role="textbox" contenteditable="true" style="min-height:2em"></div>
+<input aria-placeholder="Departure city"><textarea aria-placeholder="Notes for the crew"></textarea>`,
           );
         });
 
@@ -58,6 +60,28 @@ it.live("real CDP: entered editor content never becomes the control's label", ()
 
       expect(after.controls.map((control) => control.label)).not.toContain("entered-secret");
       expect(after.text).toContain("entered-secret");
+    }).pipe(Effect.provide(Chromium.layer({}).pipe(Layer.provide(NodeCrypto.layer)))),
+  ),
+);
+
+it.live("real CDP: a native text field named only by aria-placeholder keeps that name", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { origin } = yield* site;
+      const host = yield* externalChromium;
+
+      const session = yield* Chromium.attach(host.endpoint, {
+        policy: BrowserPolicy.unrestricted({ maxActions: 20, maxElapsedMillis: 60_000 }),
+      });
+
+      yield* session.initialPage.navigate({ url: `${origin}/` });
+      const observed = yield* session.initialPage.observe();
+
+      expect(
+        observed.controls.flatMap((control) =>
+          control.kind === "input" || control.kind === "textarea" ? [control.label] : [],
+        ),
+      ).toEqual(["Departure city", "Notes for the crew"]);
     }).pipe(Effect.provide(Chromium.layer({}).pipe(Layer.provide(NodeCrypto.layer)))),
   ),
 );
