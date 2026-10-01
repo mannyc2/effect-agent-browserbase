@@ -113,6 +113,13 @@ export const localSite = Effect.acquireRelease(
 
         return;
       }
+      if (url.pathname === "/confirm-later") {
+        // The page opens its own dialog shortly after loading, without any input.
+        response.end(`<!doctype html><title>Confirm later</title>
+        <script>setTimeout(() => confirm("Proceed?"), 600)</script>`);
+
+        return;
+      }
       if (url.pathname === "/confirm") {
         response.end(`<!doctype html><title>Confirm</title>
         <button id=ask onclick="answer.textContent=String(confirm('Proceed?'))">Ask</button>
