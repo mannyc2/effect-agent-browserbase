@@ -49,7 +49,7 @@ const fixture = (
 ) => {
   const records: Array<{ disposed: number }> = [];
   const target = { pageId: "stage", frameId: "main" };
-  const calls = { facts: 0, factsProperties: 0 };
+  const calls = { facts: 0, factsProperties: 0, nodeProperties: 0 };
   let documentEpoch = 0;
 
   const facts = ControlFacts.make({
@@ -93,14 +93,28 @@ const fixture = (
       };
 
       return {
-        evaluateHandle: async () => ({
-          getProperties: async () => {
-            if (first) await hooks.extractFirstNode?.();
+        evaluateHandle: async (
+          select: (
+            read: { readonly nodes: ReadonlyArray<typeof handle> },
+            count: number,
+          ) => Record<number, typeof handle>,
+          count: number,
+        ) => {
+          const polluted = [handle];
 
-            return new Map([["0", handle]]);
-          },
-          dispose: async () => {},
-        }),
+          Object.defineProperty(polluted, "hostile", { enumerable: true, value: handle });
+          const selected = select({ nodes: polluted }, count);
+
+          return {
+            getProperties: async () => {
+              calls.nodeProperties = Object.keys(selected).length;
+              if (first) await hooks.extractFirstNode?.();
+
+              return new Map(Object.entries(selected));
+            },
+            dispose: async () => {},
+          };
+        },
         evaluate: async () => ({
           text: "Action",
           textTruncated: false,
@@ -151,6 +165,14 @@ const fixture = (
     },
   };
 };
+
+it("extracts only validated node indices from a page-polluted array", async () => {
+  const f = fixture();
+
+  await f.observation.observe("document", 1024, 1, ticket().admission);
+
+  expect(f.calls.nodeProperties).toBe(1);
+});
 
 it.each(["mutation", "hold"] as const)(
   "an own-page %s during native holder release retires the pending observation and releases its nodes",
@@ -336,7 +358,7 @@ it.each(changeSnapshot)(
       reason: { _tag: "Stale" },
       outcome: "undispatched",
     });
-    expect(f.calls).toEqual({ facts: 1, factsProperties: 0 });
+    expect(f.calls).toEqual({ facts: 1, factsProperties: 0, nodeProperties: 1 });
     await f.observation.dispose();
     expect(f.records).toEqual([{ disposed: 1 }]);
   },
@@ -355,7 +377,7 @@ it("an observation from a different connection generation refuses before reading
     reason: { _tag: "Stale" },
     outcome: "undispatched",
   });
-  expect(f.calls).toEqual({ facts: 0, factsProperties: 0 });
+  expect(f.calls).toEqual({ facts: 0, factsProperties: 0, nodeProperties: 1 });
   await f.observation.dispose();
 });
 

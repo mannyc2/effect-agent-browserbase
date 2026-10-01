@@ -843,7 +843,19 @@ export const makeObservation = (
             }),
           );
         if (keepNodes) {
-          nodesHandle = await holder.evaluateHandle((read) => read.nodes);
+          nodesHandle = await holder.evaluateHandle((read, count) => {
+            // A null-prototype record makes indexed assignment independent of page-modified
+            // Array/Object prototypes. Only the already validated controls cross the handle
+            // boundary; enumerable properties added to the page-created nodes array do not.
+            const picked: {
+              readonly __proto__: null;
+              [index: number]: Element | undefined;
+            } = { __proto__: null };
+
+            for (let i = 0; i < count; i++) picked[i] = read.nodes[i];
+
+            return picked;
+          }, data.controls.length);
           check();
           const nodes = await nodesHandle.getProperties();
 
