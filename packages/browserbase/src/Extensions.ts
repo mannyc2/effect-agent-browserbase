@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { type ClientError, ExtensionError } from "./Errors.ts";
 import { inspectExtensionArchive } from "./internal/extension/Archive.ts";
+import * as Trace from "./internal/Trace.ts";
 import { ExtensionReference, Identifier } from "./References.ts";
 import { SafeFilename } from "./Transfers.ts";
 
@@ -118,7 +119,7 @@ export class BrowserbaseExtensions extends Context.Service<
           return ref;
         });
 
-        const register = Effect.fn("BrowserbaseExtensions.register")(function* (
+        const register = Effect.fnUntraced(function* (
           archive: Uint8Array,
           options: ExtensionUploadOptions = {},
         ) {
@@ -189,11 +190,9 @@ export class BrowserbaseExtensions extends Context.Service<
             entries: inspected.facts.entries,
             declaredBytes: inspected.facts.declaredBytes,
           });
-        });
+        }, Trace.span("BrowserbaseExtensions.register"));
 
-        const retrieve = Effect.fn("BrowserbaseExtensions.retrieve")(function* (
-          reference: ExtensionReference,
-        ) {
+        const retrieve = Effect.fnUntraced(function* (reference: ExtensionReference) {
           const ref = yield* validate(reference, "extension-retrieve");
 
           const raw = yield* client
@@ -213,17 +212,15 @@ export class BrowserbaseExtensions extends Context.Service<
             ...(value.createdAt === undefined ? {} : { createdAt: value.createdAt }),
             ...(value.updatedAt === undefined ? {} : { updatedAt: value.updatedAt }),
           });
-        });
+        }, Trace.span("BrowserbaseExtensions.retrieve"));
 
-        const remove = Effect.fn("BrowserbaseExtensions.delete")(function* (
-          reference: ExtensionReference,
-        ) {
+        const remove = Effect.fnUntraced(function* (reference: ExtensionReference) {
           const ref = yield* validate(reference, "extension-delete");
 
           yield* client
             .noContent("DELETE", `/v1/extensions/${encodeURIComponent(ref.extensionId)}`)
             .pipe(Effect.mapError((error) => fromClient("extension-delete", error)));
-        });
+        }, Trace.span("BrowserbaseExtensions.delete"));
 
         return BrowserbaseExtensions.of({ register, retrieve, delete: remove });
       }),

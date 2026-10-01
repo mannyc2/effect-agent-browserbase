@@ -5,6 +5,7 @@ import { PlatformError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
 import { proxy } from "./internal/provider/Launch.ts";
 import { isContextWriterBusy } from "./internal/session/ContextWriter.ts";
+import * as Trace from "./internal/Trace.ts";
 import { ProxyRule } from "./Launch.ts";
 import { ContextReference, Identifier } from "./References.ts";
 
@@ -268,9 +269,7 @@ export class BrowserbaseFunctions extends Context.Service<
       const id = (value: string, operation: PlatformError["operation"]) =>
         api.input(Identifier, value, operation);
 
-      const list = Effect.fn("BrowserbaseFunctions.list")(function* (
-        query: FunctionPageQuery = {},
-      ) {
+      const list = Effect.fnUntraced(function* (query: FunctionPageQuery = {}) {
         const value = yield* api.input(FunctionPageQuery, query, "function-list");
 
         const page = yield* api.request(
@@ -284,9 +283,9 @@ export class BrowserbaseFunctions extends Context.Service<
           items: yield* Effect.forEach(page.data, owned("function-list", false)),
           total: page.total,
         };
-      });
+      }, Trace.span("BrowserbaseFunctions.list"));
 
-      const retrieve = Effect.fn("BrowserbaseFunctions.retrieve")(function* (functionId: string) {
+      const retrieve = Effect.fnUntraced(function* (functionId: string) {
         const checked = yield* id(functionId, "function-retrieve");
 
         return yield* api
@@ -297,9 +296,9 @@ export class BrowserbaseFunctions extends Context.Service<
             "function-retrieve",
           )
           .pipe(Effect.flatMap(owned("function-retrieve", false, checked)));
-      });
+      }, Trace.span("BrowserbaseFunctions.retrieve"));
 
-      const invoke = Effect.fn("BrowserbaseFunctions.invoke")(function* (
+      const invoke = Effect.fnUntraced(function* (
         functionId: string,
         request: FunctionInvokeRequest = {},
       ) {
@@ -372,9 +371,9 @@ export class BrowserbaseFunctions extends Context.Service<
             },
           )
           .pipe(Effect.flatMap(owned("function-invoke", true)));
-      });
+      }, Trace.span("BrowserbaseFunctions.invoke"));
 
-      const versions = Effect.fn("BrowserbaseFunctions.versions")(function* (
+      const versions = Effect.fnUntraced(function* (
         functionId: string,
         query: FunctionPageQuery = {},
       ) {
@@ -392,9 +391,9 @@ export class BrowserbaseFunctions extends Context.Service<
           items: yield* Effect.forEach(page.results, owned("function-versions", false)),
           total: page.total,
         };
-      });
+      }, Trace.span("BrowserbaseFunctions.versions"));
 
-      const version = Effect.fn("BrowserbaseFunctions.version")(function* (versionId: string) {
+      const version = Effect.fnUntraced(function* (versionId: string) {
         const checked = yield* id(versionId, "function-version");
 
         return yield* api
@@ -405,9 +404,9 @@ export class BrowserbaseFunctions extends Context.Service<
             "function-version",
           )
           .pipe(Effect.flatMap(owned("function-version", false, checked)));
-      });
+      }, Trace.span("BrowserbaseFunctions.version"));
 
-      const invocations = Effect.fn("BrowserbaseFunctions.invocations")(function* (
+      const invocations = Effect.fnUntraced(function* (
         versionId: string,
         query: FunctionStatusQuery = {},
       ) {
@@ -425,11 +424,9 @@ export class BrowserbaseFunctions extends Context.Service<
           items: yield* Effect.forEach(page.results, owned("function-invocations", false)),
           total: page.total,
         };
-      });
+      }, Trace.span("BrowserbaseFunctions.invocations"));
 
-      const invocation = Effect.fn("BrowserbaseFunctions.invocation")(function* (
-        invocationId: string,
-      ) {
+      const invocation = Effect.fnUntraced(function* (invocationId: string) {
         const checked = yield* id(invocationId, "function-invocation");
 
         return yield* api
@@ -440,27 +437,23 @@ export class BrowserbaseFunctions extends Context.Service<
             "function-invocation",
           )
           .pipe(Effect.flatMap(owned("function-invocation", false, checked)));
-      });
+      }, Trace.span("BrowserbaseFunctions.invocation"));
 
       const logs = (path: string, operation: PlatformError["operation"]) =>
         api
           .request("GET", path, Logs, operation)
           .pipe(Effect.map((value) => ({ items: value.logs, total: value.total })));
 
-      const invocationLogs = Effect.fn("BrowserbaseFunctions.invocationLogs")(function* (
-        invocationId: string,
-      ) {
+      const invocationLogs = Effect.fnUntraced(function* (invocationId: string) {
         const checked = yield* id(invocationId, "function-invocation-logs");
 
         return yield* logs(
           `/v1/functions/invocations/${api.segment(checked)}/logs`,
           "function-invocation-logs",
         );
-      });
+      }, Trace.span("BrowserbaseFunctions.invocationLogs"));
 
-      const builds = Effect.fn("BrowserbaseFunctions.builds")(function* (
-        query: FunctionStatusQuery = {},
-      ) {
+      const builds = Effect.fnUntraced(function* (query: FunctionStatusQuery = {}) {
         const value = yield* api.input(FunctionStatusQuery, query, "function-builds");
 
         const page = yield* api.request(
@@ -474,9 +467,9 @@ export class BrowserbaseFunctions extends Context.Service<
           items: yield* Effect.forEach(page.data, owned("function-builds", false)),
           total: page.total,
         };
-      });
+      }, Trace.span("BrowserbaseFunctions.builds"));
 
-      const build = Effect.fn("BrowserbaseFunctions.build")(function* (buildId: string) {
+      const build = Effect.fnUntraced(function* (buildId: string) {
         const checked = yield* id(buildId, "function-build");
 
         return yield* api
@@ -487,18 +480,18 @@ export class BrowserbaseFunctions extends Context.Service<
             "function-build",
           )
           .pipe(Effect.flatMap(owned("function-build", false, checked)));
-      });
+      }, Trace.span("BrowserbaseFunctions.build"));
 
-      const buildLogs = Effect.fn("BrowserbaseFunctions.buildLogs")(function* (buildId: string) {
+      const buildLogs = Effect.fnUntraced(function* (buildId: string) {
         const checked = yield* id(buildId, "function-build-logs");
 
         return yield* logs(
           `/v1/functions/builds/${api.segment(checked)}/logs`,
           "function-build-logs",
         );
-      });
+      }, Trace.span("BrowserbaseFunctions.buildLogs"));
 
-      const waitForInvocation = Effect.fn("BrowserbaseFunctions.waitForInvocation")(function* (
+      const waitForInvocation = Effect.fnUntraced(function* (
         invocationId: string,
         options: FunctionWaitOptions,
       ) {
@@ -506,7 +499,7 @@ export class BrowserbaseFunctions extends Context.Service<
         const deadline = (yield* now) + bounds.timeoutMillis;
 
         for (;;) {
-          const current = yield* invocation(invocationId);
+          const current = yield* invocation(invocationId).pipe(Effect.withTracerEnabled(false));
 
           if (current.status === "COMPLETED" || current.status === "FAILED") return current;
           const remaining = deadline - (yield* now);
@@ -515,7 +508,7 @@ export class BrowserbaseFunctions extends Context.Service<
             return yield* api.make({ operation: "function-wait", reason: "timeout" });
           yield* Effect.sleep(Math.min(bounds.pollIntervalMillis ?? 1_000, remaining));
         }
-      });
+      }, Trace.span("BrowserbaseFunctions.waitForInvocation"));
 
       return BrowserbaseFunctions.of({
         list,

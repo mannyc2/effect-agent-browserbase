@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 
 import { BrowserbaseClient } from "./Client.ts";
 import { type ClientError, FileError } from "./Errors.ts";
+import * as Trace from "./internal/Trace.ts";
 import { recordIssuedUpload } from "./internal/upload/Issued.ts";
 import type { SessionReference } from "./References.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
@@ -87,10 +88,7 @@ export class BrowserbaseUploads extends Context.Service<
       const client = yield* BrowserbaseClient;
       const sessions = yield* BrowserbaseSessions;
 
-      const create = Effect.fn("BrowserbaseUploads.create")(function* (
-        reference: SessionReference,
-        file: UploadFile,
-      ) {
+      const create = Effect.fnUntraced(function* (reference: SessionReference, file: UploadFile) {
         const { bytes, ...rest } = file;
 
         const value = yield* Schema.decodeEffect(UploadOptions)(rest, {
@@ -155,7 +153,7 @@ export class BrowserbaseUploads extends Context.Service<
         recordIssuedUpload(receipt, { reference: state.reference, remotePath });
 
         return receipt;
-      });
+      }, Trace.span("BrowserbaseUploads.create"));
 
       return BrowserbaseUploads.of({ create });
     }),

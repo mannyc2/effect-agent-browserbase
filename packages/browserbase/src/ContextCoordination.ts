@@ -12,6 +12,7 @@ import type {
   ContextWriterPermit,
   WriterOptions,
 } from "./internal/session/WriterFacts.ts";
+import * as Trace from "./internal/Trace.ts";
 import { ContextReference } from "./References.ts";
 import { isTerminalSessionStatus } from "./SessionData.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
@@ -70,7 +71,11 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
           });
         }
         const permit = yield* makeContextWriterPermit(ref);
-        const acquired = yield* restore(backend.acquire(ref)).pipe(Effect.exit);
+
+        const acquired = yield* restore(backend.acquire(ref)).pipe(
+          Trace.span("BrowserbaseWriter.acquire"),
+          Effect.exit,
+        );
 
         if (Exit.isFailure(acquired)) {
           // `use` never received the permit, so no allocation was attempted under it and this
@@ -83,6 +88,7 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
         const lease = acquired.value;
 
         const body = yield* restore(Effect.scoped(Effect.suspend(() => use(permit)))).pipe(
+          Trace.span("BrowserbaseWriter.use"),
           Effect.exit,
         );
 
@@ -92,6 +98,7 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
 
         if (Exit.isSuccess(body) && options.verify !== undefined) {
           verification = yield* restore(Effect.scoped(options.verify(body.value))).pipe(
+            Trace.span("BrowserbaseWriter.readback"),
             Effect.exit,
           );
           if (Exit.isSuccess(verification)) {
@@ -113,6 +120,9 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
                   outcome: "unknown",
                 }),
               ),
+          }),
+          Trace.span("BrowserbaseWriter.settle", {
+            attributes: { "browser.writer.disposition": facts.disposition },
           }),
           Effect.exit,
         );
@@ -136,7 +146,7 @@ export const withWriter = <A, E, R, LeaseE, LeaseR, VerifyE = never, VerifyR = n
         return body.value;
       }),
     ),
-  );
+  ).pipe(Trace.span("BrowserbaseWriter.withWriter"));
 
 /**
  * Lifts this process's quarantine on a Context once no writer it admitted can still write:
@@ -181,7 +191,7 @@ export const reconcile = <E, R>(
               });
             }
           }
-          yield* Effect.scoped(readback);
+          yield* Effect.scoped(readback).pipe(Trace.span("BrowserbaseWriter.readback"));
         }),
       ).pipe(Effect.exit);
 
@@ -189,4 +199,4 @@ export const reconcile = <E, R>(
 
       return yield* checked;
     }),
-  );
+  ).pipe(Trace.span("BrowserbaseWriter.reconcile"));

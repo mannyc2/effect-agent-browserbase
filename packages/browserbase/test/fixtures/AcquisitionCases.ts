@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { NodeCrypto } from "@effect/platform-node";
-import { Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Redacted, Schema, Tracer } from "effect";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 
@@ -499,6 +499,17 @@ export const acquisitionCases: ReadonlyArray<Case> = [
     run: Effect.scoped(
       Effect.gen(function* () {
         let signalEntered: () => void = () => {};
+        const spans: Tracer.NativeSpan[] = [];
+
+        const tracer = Tracer.make({
+          span: (options) => {
+            const span = new Tracer.NativeSpan(options);
+
+            spans.push(span);
+
+            return span;
+          },
+        });
 
         const entered = new Promise<void>((resolve) => {
           signalEntered = resolve;
@@ -543,7 +554,7 @@ export const acquisitionCases: ReadonlyArray<Case> = [
           ),
         );
 
-        const fiber = yield* running.pipe(Effect.forkChild);
+        const fiber = yield* running.pipe(Effect.withTracer(tracer), Effect.forkChild);
 
         yield* Effect.promise(() => entered);
         yield* Fiber.interrupt(fiber);
@@ -552,6 +563,11 @@ export const acquisitionCases: ReadonlyArray<Case> = [
         assert.equal(facts[0]!.attempts[0]!.state, "unknown");
         assert.equal(facts[0]!.attempts[0]!.session, undefined);
         assert.equal(facts[0]!.disposition, "quarantine");
+        const acquisition = spans.find((span) => span.name === "Browserbase.acquireRemote");
+
+        assert.equal(acquisition?.status._tag, "Ended");
+        assert.equal(acquisition?.attributes.get("browser.status"), "interrupted");
+        assert.equal(acquisition?.attributes.get("browser.outcome"), "unknown");
       }),
     ),
   },

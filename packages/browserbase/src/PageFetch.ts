@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { PlatformError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
+import * as Trace from "./internal/Trace.ts";
 
 const HttpUrl = Schema.NonEmptyString.check(
   Schema.isMaxLength(8192),
@@ -60,14 +61,14 @@ export class BrowserbasePageFetch extends Context.Service<
         PlatformError.make({ ...failure, service: "fetch" }),
       );
 
-      const fetch = Effect.fn("BrowserbasePageFetch.fetch")(function* (request: PageFetchRequest) {
+      const fetch = Effect.fnUntraced(function* (request: PageFetchRequest) {
         const value = yield* api.input(PageFetchRequest, request, "fetch");
 
         if (value.schema !== undefined && value.format !== "json")
           return yield* api.configuration("fetch");
 
         return yield* api.request("POST", "/v1/fetch", PageFetchResult, "fetch", value);
-      });
+      }, Trace.span("BrowserbasePageFetch.fetch"));
 
       return BrowserbasePageFetch.of({ fetch });
     }),

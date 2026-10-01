@@ -3,6 +3,7 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { type ClientError, SessionError } from "./Errors.ts";
 import { issueLiveUrls, type LiveView } from "./internal/browser/LiveView.ts";
+import * as Trace from "./internal/Trace.ts";
 export type { LiveView } from "./internal/browser/LiveView.ts";
 import { SessionReference } from "./References.ts";
 import {
@@ -187,13 +188,11 @@ export class BrowserbaseSessions extends Context.Service<
         return yield* decode(raw, "session-retrieve", ref);
       });
 
-      const retrieve = Effect.fn("BrowserbaseSessions.retrieve")(function* (
-        reference: SessionReference,
-      ) {
+      const retrieve = Effect.fnUntraced(function* (reference: SessionReference) {
         return yield* read(reference);
-      });
+      }, Trace.span("BrowserbaseSessions.retrieve"));
 
-      const list = Effect.fn("BrowserbaseSessions.list")(function* (query: SessionListQuery = {}) {
+      const list = Effect.fnUntraced(function* (query: SessionListQuery = {}) {
         const checked = yield* Schema.decodeEffect(SessionListQuery)(query, {
           onExcessProperty: "error",
         }).pipe(Effect.mapError(() => configuration("session-list")));
@@ -218,11 +217,9 @@ export class BrowserbaseSessions extends Context.Service<
         for (const row of rows) output.push(yield* decode(row, "session-list"));
 
         return output;
-      });
+      }, Trace.span("BrowserbaseSessions.list"));
 
-      const requestRelease = Effect.fn("BrowserbaseSessions.requestRelease")(function* (
-        reference: SessionReference,
-      ) {
+      const requestRelease = Effect.fnUntraced(function* (reference: SessionReference) {
         const ref = yield* validate(reference, "session-release");
 
         const raw = yield* client
@@ -233,7 +230,7 @@ export class BrowserbaseSessions extends Context.Service<
           .pipe(Effect.mapError((error) => fromClient("session-release", error)));
 
         return yield* decode(raw, "session-release", ref, true);
-      });
+      }, Trace.span("BrowserbaseSessions.requestRelease"));
 
       const wait = Effect.fnUntraced(function* (
         reference: SessionReference,
@@ -254,6 +251,7 @@ export class BrowserbaseSessions extends Context.Service<
 
           // The deadline bounds the provider read too, not just sleeps between reads.
           const metadata = yield* read(reference, deadline).pipe(
+            Effect.withTracerEnabled(false),
             Effect.timeoutOrElse({
               duration: remaining,
               orElse: () =>
@@ -273,7 +271,7 @@ export class BrowserbaseSessions extends Context.Service<
         }
       });
 
-      const logs = Effect.fn("BrowserbaseSessions.logs")(function* (
+      const logs = Effect.fnUntraced(function* (
         reference: SessionReference,
         options: SessionLogOptions = {},
       ) {
@@ -311,9 +309,9 @@ export class BrowserbaseSessions extends Context.Service<
               : {}),
           }),
         );
-      });
+      }, Trace.span("BrowserbaseSessions.logs"));
 
-      const liveUrls = Effect.fn("BrowserbaseSessions.liveUrls")(function* (
+      const liveUrls = Effect.fnUntraced(function* (
         reference: SessionReference,
         expiresInSeconds: number = 300,
       ) {
@@ -322,7 +320,7 @@ export class BrowserbaseSessions extends Context.Service<
         return yield* issueLiveUrls(client, ref, expiresInSeconds).pipe(
           Effect.mapError((error) => fromClient("session-live-view", error)),
         );
-      });
+      }, Trace.span("BrowserbaseSessions.liveUrls"));
 
       return BrowserbaseSessions.of({
         logs,
@@ -330,8 +328,10 @@ export class BrowserbaseSessions extends Context.Service<
         retrieve,
         list,
         requestRelease,
-        waitForTerminal: (ref, options) => wait(ref, options, false),
-        waitUntilRunning: (ref, options) => wait(ref, options, true),
+        waitForTerminal: (ref, options) =>
+          wait(ref, options, false).pipe(Trace.span("BrowserbaseSessions.waitForTerminal")),
+        waitUntilRunning: (ref, options) =>
+          wait(ref, options, true).pipe(Trace.span("BrowserbaseSessions.waitUntilRunning")),
       });
     }),
   );

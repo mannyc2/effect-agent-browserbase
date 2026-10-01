@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 
 import type { BrowserbaseClient, ClientMethod } from "../../Client.ts";
 import type { ClientError } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 
 type Reason = ClientError["reason"];
 type Outcome = NonNullable<ClientError["outcome"]>;
@@ -63,10 +64,18 @@ export const resource = <E extends { readonly operation: string }>(
           Effect.mapError(() => malformed(operation, method !== "GET")),
         ),
       ),
+      Trace.span("Browserbase.resource.request", {
+        attributes: { "browser.operation": operation },
+      }),
     );
 
   const remove = (path: string, operation: Operation): Effect.Effect<void, E> =>
-    client.noContent("DELETE", path).pipe(Effect.mapError(fromClient(operation)));
+    client.noContent("DELETE", path).pipe(
+      Effect.mapError(fromClient(operation)),
+      Trace.span("Browserbase.resource.remove", {
+        attributes: { "browser.operation": operation, "http.request.method": "DELETE" },
+      }),
+    );
 
   const segment = (id: string) => encodeURIComponent(id);
 

@@ -5,6 +5,7 @@ import { ArtifactError, type ClientError } from "./Errors.ts";
 import { requireTerminalSession } from "./internal/artifact/Authorization.ts";
 import { transferPolicy } from "./internal/artifact/TransferPolicy.ts";
 import { deadlineAfter, nowMillis, until } from "./internal/Deadline.ts";
+import * as Trace from "./internal/Trace.ts";
 import { Identifier, type SessionReference } from "./References.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
 import {
@@ -128,106 +129,141 @@ export class BrowserbaseRecordings extends Context.Service<
         yield* authorize(ref);
 
         return project(ref, yield* read(ref));
-      });
+      }, Trace.span("BrowserbaseRecordings.status"));
 
       const request = (ref: SessionReference, mode: "initial" | "retry-failed" = "initial") =>
-        requests.withPermits(1)(
-          Effect.gen(function* () {
-            if (mode !== "initial" && mode !== "retry-failed")
-              return yield* ArtifactError.make({
-                operation: "recording-request",
-                reason: "configuration",
-                outcome: "undispatched",
-              });
-            yield* authorize(ref);
-            // A prior uncertain POST is reconciled by this GET before any resubmission.
-            const before = yield* read(ref);
-
-            const needed =
-              mode === "retry-failed"
-                ? before.downloads.some((page) => page.status === "FAILED")
-                : before.downloads.every((page) => page.status === "NOT_REQUESTED");
-
-            if (!needed) return project(ref, before);
-
-            const raw = yield* client.json("POST", path(ref)).pipe(
-              Effect.mapError((error) =>
-                ArtifactError.make({
+        requests
+          .withPermits(1)(
+            Effect.gen(function* () {
+              if (mode !== "initial" && mode !== "retry-failed")
+                return yield* ArtifactError.make({
                   operation: "recording-request",
-                  reason:
-                    error.status !== undefined && error.status >= 400 && error.status < 500
-                      ? error.reason
-                      : "assembly-unknown",
-                  outcome:
-                    error.status !== undefined && error.status >= 400 && error.status < 500
-                      ? "rejected"
-                      : "unknown",
-                  ...(error.status === undefined ? {} : { status: error.status }),
-                  ...(error.retryAfterMillis === undefined
-                    ? {}
-                    : { retryAfterMillis: error.retryAfterMillis }),
-                }),
-              ),
-              Effect.flatMap((value) =>
-                Schema.decodeUnknownEffect(RawBatch)(value).pipe(
-                  Effect.mapError(() =>
-                    ArtifactError.make({
-                      operation: "recording-request",
-                      reason: "malformed",
-                      outcome: "unknown",
-                    }),
+                  reason: "configuration",
+                  outcome: "undispatched",
+                });
+              yield* authorize(ref);
+              // A prior uncertain POST is reconciled by this GET before any resubmission.
+              const before = yield* read(ref);
+
+              const needed =
+                mode === "retry-failed"
+                  ? before.downloads.some((page) => page.status === "FAILED")
+                  : before.downloads.every((page) => page.status === "NOT_REQUESTED");
+
+              if (!needed) return project(ref, before);
+
+              const raw = yield* client.json("POST", path(ref)).pipe(
+                Effect.mapError((error) =>
+                  ArtifactError.make({
+                    operation: "recording-request",
+                    reason:
+                      error.status !== undefined && error.status >= 400 && error.status < 500
+                        ? error.reason
+                        : "assembly-unknown",
+                    outcome:
+                      error.status !== undefined && error.status >= 400 && error.status < 500
+                        ? "rejected"
+                        : "unknown",
+                    ...(error.status === undefined ? {} : { status: error.status }),
+                    ...(error.retryAfterMillis === undefined
+                      ? {}
+                      : { retryAfterMillis: error.retryAfterMillis }),
+                  }),
+                ),
+                Effect.flatMap((value) =>
+                  Schema.decodeUnknownEffect(RawBatch)(value).pipe(
+                    Effect.mapError(() =>
+                      ArtifactError.make({
+                        operation: "recording-request",
+                        reason: "malformed",
+                        outcome: "unknown",
+                      }),
+                    ),
                   ),
                 ),
-              ),
-            );
+              );
 
-            return project(ref, raw);
-          }),
-        );
+              return project(ref, raw);
+            }),
+          )
+          .pipe(Trace.span("BrowserbaseRecordings.request"));
 
-      const wait = Effect.fnUntraced(function* (ref: SessionReference, options: PollOptions = {}) {
-        const timeout = options.timeoutMillis ?? 120_000;
-        const interval = options.intervalMillis ?? 3000;
+      const wait = (ref: SessionReference, options: PollOptions = {}) =>
+        Effect.suspend(() => {
+          let failedPolls = 0;
+          let lastFailure: ArtifactError["reason"] | undefined;
+          let timedOut = false;
 
-        if (
-          !Number.isSafeInteger(timeout) ||
-          timeout < 1 ||
-          timeout > 600_000 ||
-          !Number.isSafeInteger(interval) ||
-          interval < 10 ||
-          interval > 30_000
-        ) {
-          return yield* failure("recording-wait", "configuration");
-        }
-        const deadline = yield* deadlineAfter(timeout);
+          return Effect.gen(function* () {
+            const timeout = options.timeoutMillis ?? 120_000;
+            const interval = options.intervalMillis ?? 3000;
 
-        yield* within(authorize(ref), deadline, "recording-wait");
-        let latest: typeof RawBatch.Type = { downloads: [] };
-
-        for (;;) {
-          const result = yield* within(read(ref, deadline), deadline, "recording-wait").pipe(
-            Effect.result,
-          );
-
-          if (result._tag === "Success") {
-            latest = result.success;
             if (
-              latest.downloads.every(
-                (page) => page.status === "COMPLETED" || page.status === "FAILED",
-              )
-            )
-              return project(ref, latest);
-          } else if (
-            !["timeout", "rate-limited", "provider", "transport"].includes(result.failure.reason)
-          ) {
-            return yield* result.failure;
-          }
-          const remaining = deadline - (yield* nowMillis);
+              !Number.isSafeInteger(timeout) ||
+              timeout < 1 ||
+              timeout > 600_000 ||
+              !Number.isSafeInteger(interval) ||
+              interval < 10 ||
+              interval > 30_000
+            ) {
+              return yield* failure("recording-wait", "configuration");
+            }
+            const deadline = yield* deadlineAfter(timeout);
 
-          if (remaining <= 0) return project(ref, latest, true);
-          yield* Effect.sleep(Math.min(interval, remaining));
-        }
-      });
+            yield* within(authorize(ref), deadline, "recording-wait").pipe(
+              Effect.withTracerEnabled(false),
+            );
+            let latest: typeof RawBatch.Type = { downloads: [] };
+
+            for (;;) {
+              const result = yield* within(read(ref, deadline), deadline, "recording-wait").pipe(
+                Effect.withTracerEnabled(false),
+                Effect.tapError((error) =>
+                  Effect.sync(() => {
+                    failedPolls = Math.min(Number.MAX_SAFE_INTEGER, failedPolls + 1);
+                    lastFailure = error.reason;
+                  }),
+                ),
+                Effect.result,
+              );
+
+              if (result._tag === "Success") {
+                latest = result.success;
+                if (
+                  latest.downloads.every(
+                    (page) => page.status === "COMPLETED" || page.status === "FAILED",
+                  )
+                )
+                  return project(ref, latest);
+              } else if (
+                !["timeout", "rate-limited", "provider", "transport"].includes(
+                  result.failure.reason,
+                )
+              ) {
+                return yield* result.failure;
+              }
+              const remaining = deadline - (yield* nowMillis);
+
+              if (remaining <= 0) {
+                timedOut = true;
+
+                return project(ref, latest, true);
+              }
+              yield* Effect.sleep(Math.min(interval, remaining));
+            }
+          }).pipe(
+            Effect.onExit(() =>
+              Trace.annotate({
+                "browser.wait.timed-out": timedOut,
+                "browser.wait.failed-polls": failedPolls,
+                ...(lastFailure === undefined ? {} : { "browser.wait.last-failure": lastFailure }),
+              }),
+            ),
+            Trace.span("BrowserbaseRecordings.wait", {
+              attributes: { "browser.operation": "recording-wait" },
+            }),
+          );
+        });
 
       const download = (ref: RecordingPageReference, limits: DownloadLimits) =>
         Stream.unwrap(
@@ -268,7 +304,7 @@ export class BrowserbaseRecordings extends Context.Service<
               )
               .pipe(Stream.mapError(fromClient("recording-download")));
           }),
-        );
+        ).pipe(Trace.stream("BrowserbaseRecordings.download"));
 
       return BrowserbaseRecordings.of({ request, status, wait, download });
     }),
