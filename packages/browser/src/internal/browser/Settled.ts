@@ -243,6 +243,18 @@ const observeQuiet = (
   return { completed, stop: () => finish({ status: "interrupted" }) };
 };
 
+/**
+ * Whether the observer's own execution context still answers. Its document being replaced or its
+ * frame detached ends that context, and with it every timer and listener the observer owned.
+ */
+const answers = (handle: JSHandle<QuietObserver>): Promise<boolean> =>
+  handle
+    .evaluate(() => true)
+    .then(
+      () => true,
+      () => false,
+    );
+
 export interface SettledResource {
   readonly wait: () => Promise<SettledEvidence>;
   readonly check: () => void;
@@ -274,6 +286,9 @@ export const makeSettledResource = (
 
       try {
         await handle.evaluate((resource) => resource.stop());
+      } catch (error) {
+        // A context that no longer answers took the observer with it: disposal is confirmed.
+        if (await answers(handle)) throw error;
       } finally {
         await handle.dispose();
       }
@@ -305,7 +320,17 @@ export const makeSettledResource = (
         const handle = await setup;
 
         check();
-        const reply = safeDecode(Reply, await handle.evaluate((resource) => resource.completed));
+
+        const reply = safeDecode(
+          Reply,
+          await handle
+            .evaluate((resource) => resource.completed)
+            .catch(async (error: unknown) => {
+              // The observed document was replaced before it could report its own pagehide.
+              if (!(await answers(handle))) throw failure(Reasons.Stale.make({}), "undispatched");
+              throw error;
+            }),
+        );
 
         check();
         switch (reply.status) {
