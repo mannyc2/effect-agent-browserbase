@@ -6,6 +6,7 @@ import {
   Effect,
   Exit,
   Option,
+  Queue,
   Redacted,
   Schema,
   Scope,
@@ -500,7 +501,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     }
   >();
 
-  let pageFaultWake = Deferred.makeUnsafe<void>();
+  // Pages whose faults await containment, in arrival order. The pending map bounds it.
+  const pageFaults = yield* Queue.unbounded<string>();
 
   const revokePage = (pageId: string, except?: AbortSignal) => {
     const page = pages.get(pageId);
@@ -822,7 +824,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           authority: pages.get(pageId),
         });
         revokePage(pageId);
-        Deferred.doneUnsafe(pageFaultWake, Effect.void);
+        Queue.offerUnsafe(pageFaults, pageId);
       },
       frameClosed: (pageId, frameId) => {
         if (activeConnection !== connectionLease) return;
@@ -3820,28 +3822,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       ),
   };
 
-  yield* Effect.forever(
-    Effect.suspend(() =>
-      Deferred.await(pageFaultWake).pipe(
-        Effect.andThen(
-          Effect.suspend(() => {
-            const faults = [...pendingPageFaults];
+  yield* Queue.take(pageFaults).pipe(
+    Effect.flatMap((pageId) => {
+      const fault = pendingPageFaults.get(pageId);
 
-            pageFaultWake = Deferred.makeUnsafe<void>();
-
-            return Effect.forEach(
-              faults,
-              ([pageId, fault]) =>
-                owner
-                  .contain(containment(pageId, fault.authority), fault.generation)
-                  .pipe(Effect.ensuring(Effect.sync(() => pendingPageFaults.delete(pageId)))),
-              { discard: true },
-            );
-          }),
-        ),
-      ),
-    ),
-  ).pipe(Effect.forkScoped);
+      return fault === undefined
+        ? Effect.void
+        : owner
+            .contain(containment(pageId, fault.authority), fault.generation)
+            .pipe(Effect.ensuring(Effect.sync(() => pendingPageFaults.delete(pageId))));
+    }),
+    Effect.forever,
+    Effect.forkScoped,
+  );
 
   // One timer belongs to the enclosing execution, never to an individual Tool call.
   const remaining = Math.max(
