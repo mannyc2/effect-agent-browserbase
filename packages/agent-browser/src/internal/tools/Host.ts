@@ -12,6 +12,7 @@ import {
   Schema,
   Scope,
   Semaphore,
+  Tracer,
 } from "effect";
 import { RunToolScheduling } from "effect-agent/run-options";
 import {
@@ -25,6 +26,7 @@ import type { InputReceipt, SessionStatus } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
 import type { RunOperation, StepFailed } from "effect-browser/plan";
 
+import * as Trace from "../Trace.ts";
 import type {
   FormToolHandlers,
   KeyboardToolHandlers,
@@ -320,11 +322,17 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
   const invoke = Effect.fnUntraced(function* (
     effect: Effect.Effect<void, E, R | Scope.Scope>,
+    name: string,
     outcome: "performed" | "unknown" = "unknown",
   ) {
     const enclosing = yield* invocations;
+    const cause = yield* Trace.capture;
 
     return yield* Effect.scoped(effect).pipe(
+      Trace.span(name, { parent: cause.parent, root: cause.parent === undefined }),
+      Effect.withTracerEnabled(cause.enabled),
+      Effect.provideService(Tracer.CurrentTraceLevel, cause.level),
+      Effect.provideService(Tracer.MinimumTraceLevel, cause.minimum),
       Effect.provideContext(Context.add(consumer, invocations, enclosing)),
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
@@ -353,6 +361,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
         const deadline = now() + maximumQueueMillis;
         const invocation: Invocation = { host: identity, active: false };
+        const admission = yield* Trace.start("BrowserTools.admission");
 
         outstanding++;
 
@@ -372,8 +381,10 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
               );
 
             invocation.active = true;
+            admission?.end(Exit.void);
 
             return restore(effect).pipe(
+              Trace.span("BrowserTools.execute"),
               Effect.provideService(invocations, [
                 ...enclosing.filter((entry) => entry.active),
                 invocation,
@@ -404,6 +415,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         );
 
         return yield* restore(Fiber.join(fiber)).pipe(
+          Effect.onExit((exit) => Effect.sync(() => admission?.end(exit))),
           Effect.ensuring(Fiber.interrupt(fiber)),
           Effect.ensuring(
             Effect.sync(() => {
@@ -413,7 +425,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
             }),
           ),
         );
-      }),
+      }).pipe(Trace.span("BrowserTools.invoke")),
     );
 
   const navigate: NonNullable<Hooks["navigate"]> = Effect.fnUntraced(function* (request, call) {
@@ -475,6 +487,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         ? undefined
         : yield* invoke(
             Effect.suspend(() => onNavigation({ operation, toolCallId: call.id })),
+            "BrowserTools.callback.navigation",
           ).pipe(Effect.forkScoped({ startImmediately: true }));
 
     const observed =
@@ -511,6 +524,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         ? Effect.void
         : invoke(
             Effect.suspend(() => onInput({ receipt, toolCallId: call.id })),
+            "BrowserTools.callback.input",
             "performed",
           ),
   };
