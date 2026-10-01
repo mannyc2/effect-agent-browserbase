@@ -176,6 +176,7 @@ const projections: ReadonlyArray<
   readonly [BrowserReason, BrowserTools.BrowserToolFailure["reason"]]
 > = [
   [Reasons.Stale.make({}), "stale"],
+  [Reasons.Drifted.make({}), "stale"],
   [Reasons.TargetChanged.make({}), "stale"],
   [Reasons.Resized.make({}), "stale"],
   [Reasons.Interrupted.make({}), "stale"],
@@ -187,6 +188,7 @@ const projections: ReadonlyArray<
   [Reasons.Authorization.make({}), "denied"],
   [Reasons.UnsafeUrl.make({}), "denied"],
   [Reasons.NotFound.make({}), "not-found"],
+  [Reasons.Missing.make({}), "not-found"],
   [Reasons.Ambiguous.make({}), "ambiguous"],
   [Reasons.NotVisible.make({}), "not-visible"],
   [Reasons.NotFocused.make({}), "not-focused"],
@@ -204,6 +206,7 @@ const projections: ReadonlyArray<
   [Reasons.Provider.make({ status: 500 }), "failed"],
   [Reasons.Disabled.make({}), "disabled"],
   [Reasons.Failed.make({}), "failed"],
+  [Reasons.Incomplete.make({}), "failed"],
   [Reasons.ContentType.make({}), "failed"],
   [Reasons.Timestamp.make({}), "failed"],
   [Reasons.ContextLease.make({}), "failed"],
