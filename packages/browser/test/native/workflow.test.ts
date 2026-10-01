@@ -351,6 +351,45 @@ it.live(
     ),
 );
 
+it.live("a run waiting for its start ends as soon as a dialog quarantines its page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, url } = yield* keyboardFixture({ dialogPolicy: "pause" });
+      const initial = session.initialPage;
+
+      yield* initial.navigate({ url: new URL("confirm-later", url).href });
+      const startAt = (yield* session.monotonicTimeNanos) + 30_000_000_000n;
+
+      const operation = yield* initial.start(
+        {
+          version: 1,
+          steps: [
+            { id: "pause", action: { _tag: "Wait", mode: { _tag: "Duration", milliseconds: 10 } } },
+          ],
+        },
+        { startAt, within: "60 seconds" },
+      );
+
+      // The page's own dialog quarantines it; that Page can never run this plan.
+      yield* initial.status.pipe(
+        Effect.repeat({
+          until: (status) => status.phase === "paused",
+          schedule: Schedule.spaced(50),
+        }),
+        Effect.timeout("10 seconds"),
+      );
+      expect(
+        yield* operation.completed.pipe(Effect.flip, Effect.timeout("5 seconds")),
+      ).toMatchObject({
+        stage: "PreparationFailed",
+        completed: [],
+        error: { outcome: "undispatched" },
+      });
+      expect((yield* operation.attempts).attempts).toEqual([]);
+    }),
+  ),
+);
+
 // The owner requested this native seam before implementation for #94's bounded plain typing.
 it.live(
   "plain typing preserves native key ordering, Unicode and modifier state as one action",

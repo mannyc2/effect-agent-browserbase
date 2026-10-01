@@ -839,6 +839,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           driver?.fenceInitializationPage?.(pageId);
           owner.pausePage(pageId);
           owner.invalidate("paused", { pageId });
+          // This issued Page never runs again: the operator's release issues fresh Pages. Retire
+          // it as an all-page pause retires every page, so work waiting on it ends now.
+          if (page !== undefined) retirePageTimeline(page, "stale");
 
           return;
         }

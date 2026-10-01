@@ -186,7 +186,8 @@ overflow follows the same bounded dismissal rules. An acknowledged before-unload
 retire only the exact navigation captured when its dialog arrived and subsequently rejected.
 An attributed popup/dialog pause quarantines its exact Page and stops its capture and bindings;
 healthy peers keep working. The original Page reports `paused` and permits explicit close, while
-input remains refused. An action the pause interrupts on that page, such as the click that opened
+input remains refused. Its page timeline ends `stale`, as an all-page pause ends every page's, so a
+run waiting to start on it fails preparation at once. An action the pause interrupts on that page, such as the click that opened
 the dialog, is never closed away: its unknown outcome reports `containment: PagePaused`, and the
 quarantined page's native work does not hold up a handoff's drain. Recovery requires a drained
 session handoff and explicit operator release, then newly acquired Page/Frame authority. Unattributed policy or shared connection failures fence
