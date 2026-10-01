@@ -897,7 +897,7 @@ A press waits for native input acknowledgement, without waiting for resulting na
 
 The connection endpoint is read through the exact allocated session, so a provider reply that names a different session is refused before any CDP attachment.
 
-Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`. Detach first lets admitted work finish within a bounded interval, such as a page close admitted behind its barrier, rather than disconnecting beneath it; work that cannot finish fails the detach as `Timeout/undispatched`. Reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
+Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`. Detach first lets admitted work finish within a bounded interval, such as a page close admitted behind its barrier or a started navigation that is still loading, rather than disconnecting beneath it; work that cannot finish fails the detach as `Timeout/undispatched` and leaves the session open. Reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
 
 Human handoff blocks new admission and drains native work that can still change a page within a
 bounded interval before pausing automation and returning host-only Live View material. Pure waits

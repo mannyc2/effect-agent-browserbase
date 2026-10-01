@@ -1286,12 +1286,16 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       unresolved.size === 0 &&
       admission.lanes().every((lane) => lane.reservation === undefined) &&
       policies.size === 0,
-    /** No admitted operation, and no native work that can still change a page, is running. */
+    /**
+     * No admitted operation, no native work that can still change a page, and no started
+     * navigation that is still loading is running. Unlike `drained`, an earlier unresolved
+     * outcome does not prevent it.
+     */
     idle: (except?: AbortSignal) =>
       admission.drained(
         except,
         (lane) => lane.pageId !== undefined && quarantined.has(lane.pageId),
-      ),
+      ) && admission.lanes().every((lane) => lane.reservation === undefined),
     /** Completes after the next settlement of admitted work, a policy or a fence. */
     nextChange: Effect.suspend(() => Deferred.await(change)),
     reserved: (key: string): boolean => admission.pages.get(key)?.reservation !== undefined,
