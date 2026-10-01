@@ -3,12 +3,15 @@ import { Effect, Random, Result } from "effect";
 import { BrowserError, Reasons } from "../../Errors.ts";
 import type { MotionProfile, Performed } from "../../PlanData.ts";
 
-/** These caps are independent of logical action admission and pending native replies. */
+/**
+ * These caps are independent of logical action admission and pending native replies. Every
+ * schedule is bounded by construction: a path or scroll has at most `samples` points, and a code
+ * point expands to at most three strokes (a slip, its Backspace and the key), so typed text has at
+ * most 768.
+ */
 export const Limits = {
   samples: 128,
   codePoints: 256,
-  strokes: 768,
-  encodedBytes: 65536,
 } as const;
 
 interface KeyRandom {
@@ -79,26 +82,8 @@ export interface ScrollSchedule {
   }>;
 }
 
-const encoder = new TextEncoder();
-
 const failure = (reason: BrowserError["reason"]) =>
   BrowserError.make({ operation: "run", reason, outcome: "undispatched" });
-
-const bounded = <A>(value: A): Result.Result<A, BrowserError> => {
-  const bytes = encoder.encode(JSON.stringify(value)).byteLength;
-
-  return bytes > Limits.encodedBytes
-    ? Result.fail(
-        failure(
-          Reasons.Limit.make({
-            dimension: "returned-bytes",
-            maximum: Limits.encodedBytes,
-            observed: bytes,
-          }),
-        ),
-      )
-    : Result.succeed(value);
-};
 
 const lerp = (minimum: number, maximum: number, unit: number) =>
   minimum + (maximum - minimum) * unit;
@@ -152,7 +137,7 @@ const path = (
   durationMillis: number,
 ): Result.Result<PointerSchedule, BrowserError> => {
   if (from === null)
-    return bounded(Object.freeze({ aim, durationMillis: 0, samples: Object.freeze([]) }));
+    return Result.succeed(Object.freeze({ aim, durationMillis: 0, samples: Object.freeze([]) }));
 
   const deltaX = aim.x - from.x;
   const deltaY = aim.y - from.y;
@@ -160,7 +145,7 @@ const path = (
 
   if (!Number.isFinite(distance)) return Result.fail(failure(Reasons.Malformed.make({})));
   if (distance === 0)
-    return bounded(Object.freeze({ aim, durationMillis: 0, samples: Object.freeze([]) }));
+    return Result.succeed(Object.freeze({ aim, durationMillis: 0, samples: Object.freeze([]) }));
   const count = Math.min(Limits.samples, Math.max(2, Math.ceil(durationMillis / (1000 / 60)) + 1));
   const curvature = (plan.pointer.curvature * 2 - 1) * plan.profile.pointer.curvature * distance;
   const normalX = -deltaY / distance;
@@ -180,7 +165,7 @@ const path = (
     });
   });
 
-  return bounded(Object.freeze({ aim, durationMillis, samples: Object.freeze(samples) }));
+  return Result.succeed(Object.freeze({ aim, durationMillis, samples: Object.freeze(samples) }));
 };
 
 /** The existing native hit checker must validate the returned aim on the exact leased node. */
@@ -273,21 +258,19 @@ export const keys = (
 ): Result.Result<KeySchedule, BrowserError> => {
   if (!Number.isSafeInteger(fieldIndex) || fieldIndex < 0 || fieldIndex > 31)
     return Result.fail(failure(Reasons.Malformed.make({})));
-  const characters: Array<string> = [];
+  // Input values are already bounded to 65,536 UTF-8 bytes, so the count is measured in full.
+  const characters = [...text];
 
-  for (const character of text) {
-    if (characters.length >= Limits.codePoints)
-      return Result.fail(
-        failure(
-          Reasons.Limit.make({
-            dimension: "text",
-            maximum: Limits.codePoints,
-            observed: Limits.codePoints + 1,
-          }),
-        ),
-      );
-    characters.push(character);
-  }
+  if (characters.length > Limits.codePoints)
+    return Result.fail(
+      failure(
+        Reasons.Limit.make({
+          dimension: "code-points",
+          maximum: Limits.codePoints,
+          observed: characters.length,
+        }),
+      ),
+    );
   const strokes: Array<Stroke> = [];
   let durationMillis = 0;
 
@@ -339,7 +322,7 @@ export const keys = (
     append(key, index, random, "type");
   }
 
-  return bounded(
+  return Result.succeed(
     Object.freeze({
       fieldIndex,
       codePoints: characters.length,
@@ -358,7 +341,7 @@ export const scroll = (
   if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY))
     return Result.fail(failure(Reasons.Malformed.make({})));
   if (deltaX === 0 && deltaY === 0)
-    return bounded(Object.freeze({ durationMillis: 0, samples: Object.freeze([]) }));
+    return Result.succeed(Object.freeze({ durationMillis: 0, samples: Object.freeze([]) }));
   const range = plan.profile.scroll.duration;
   const durationMillis = lerp(range.minMillis, range.maxMillis, plan.scroll);
 
@@ -387,5 +370,5 @@ export const scroll = (
     return sample;
   });
 
-  return bounded(Object.freeze({ durationMillis, samples: Object.freeze(samples) }));
+  return Result.succeed(Object.freeze({ durationMillis, samples: Object.freeze(samples) }));
 };

@@ -93,6 +93,7 @@ export const LimitDimension = Schema.Literals([
   "host-reads",
   "controls",
   "text",
+  "code-points",
   "captures",
   "frame-bytes",
   "width",

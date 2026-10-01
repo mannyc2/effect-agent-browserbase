@@ -537,8 +537,10 @@ output-only compositor metadata: they do not generate hover along the drawn path
 checks and selected node identity remain required immediately before real input. A missing actual
 click position stays null even when an intended aim is retained.
 
-A schedule has at most 128 geometry samples, 256 Unicode code points, 768 expanded strokes and
-64 KiB of encoded policy data, independently of action and pending-native capacity. Performed Fill
+A schedule has at most 128 geometry samples per path or scroll, and performed text at most 256
+Unicode code points, which expand to at most 768 strokes (a slip adds a wrong key and its
+Backspace), independently of action and pending-native capacity. Longer text fails `Limit` with
+dimension `code-points` and its measured count before any input. Performed Fill
 may focus/select/replace inside its action; Type still requires existing focus. Each performed
 logical action costs the same action budget as its plain counterpart. FillForm retains its
 per-field admission, verification, partial results and guarded submit.
