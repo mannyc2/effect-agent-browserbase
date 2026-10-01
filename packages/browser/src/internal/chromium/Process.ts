@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { Clock, Duration, Effect, Exit, Path, Redacted, Schema } from "effect";
 
 import { Reasons, BrowserError } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 import { ChromiumEndpoint, type ChromiumLaunch } from "./Data.ts";
 
 export interface ChromiumProcess {
@@ -102,7 +103,7 @@ const terminate = Effect.fnUntraced(function* (
 
   while (!(yield* stopped) && clock.monotonicTimeNanosUnsafe() < forced) yield* pause;
   if (!(yield* stopped)) return yield* failure("close", Reasons.Timeout.make({}));
-});
+}, Trace.span("Chromium.terminate"));
 
 /** Start only Chromium's process. The shared owner later opens its sole CDP connection. */
 export const launch = Effect.fnUntraced(function* (
@@ -207,7 +208,7 @@ export const launch = Effect.fnUntraced(function* (
           }
 
           return yield* failure("connect", Reasons.Timeout.make({}));
-        }),
+        }).pipe(Trace.span("Chromium.ready")),
       terminate: closing,
       removeProfile,
     } satisfies ChromiumProcess;
@@ -227,4 +228,4 @@ export const launch = Effect.fnUntraced(function* (
           }),
     ),
   );
-});
+}, Trace.span("Chromium.launch"));

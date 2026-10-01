@@ -36,6 +36,7 @@ import {
   makeSession,
 } from "./internal/browser/PublicSession.ts";
 import { acquireSession, type PageControls } from "./internal/browser/Session.ts";
+import * as Trace from "./internal/Trace.ts";
 import { TimelineDefaults } from "./TimelineData.ts";
 
 export {
@@ -392,111 +393,114 @@ export const make = Effect.fnUntraced(function* (
 
   const crypto = yield* Crypto.Crypto;
 
-  const acquire = Effect.fnUntraced(function* <L extends Lifetime, AE, AR, E = never, R = never>(
-    policy: BrowserPolicy,
-    source: Source<L, AE, AR>,
-    request: AcquireOptions<E, R> = {},
-  ) {
-    const fixed = yield* checked(BrowserPolicy, policy, "configure");
-    const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
+  const acquire = Effect.fnUntraced(
+    function* <L extends Lifetime, AE, AR, E = never, R = never>(
+      policy: BrowserPolicy,
+      source: Source<L, AE, AR>,
+      request: AcquireOptions<E, R> = {},
+    ) {
+      const fixed = yield* checked(BrowserPolicy, policy, "configure");
+      const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
 
-    const existing =
-      request.existingTarget === undefined
-        ? undefined
-        : yield* checked(
-            Schema.Struct({ targetId: Schema.optionalKey(Identifier) }),
-            request.existingTarget,
-            "configure",
-          );
+      const existing =
+        request.existingTarget === undefined
+          ? undefined
+          : yield* checked(
+              Schema.Struct({ targetId: Schema.optionalKey(Identifier) }),
+              request.existingTarget,
+              "configure",
+            );
 
-    // Even a parent with parallel finalizers closes this connection before callback scopes end.
-    const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-    const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
-    const bootstrap = compileBootstrap(plan);
+      // Even a parent with parallel finalizers closes this connection before callback scopes end.
+      const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+      const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
+      const bootstrap = compileBootstrap(plan);
 
-    const connectionDriver: DriverOptions =
-      existing === undefined
-        ? driver
-        : {
-            viewport,
-            pageControl,
-            maxPages: driver.maxPages,
-            popupPolicy,
-            dialogPolicy,
-            newPage: false,
-            preserveViewport: true,
-            ...(observationLimits === undefined ? {} : { observationLimits }),
-            ...(existing.targetId === undefined ? {} : { initialTargetId: existing.targetId }),
-          };
+      const connectionDriver: DriverOptions =
+        existing === undefined
+          ? driver
+          : {
+              viewport,
+              pageControl,
+              maxPages: driver.maxPages,
+              popupPolicy,
+              dialogPolicy,
+              newPage: false,
+              preserveViewport: true,
+              ...(observationLimits === undefined ? {} : { observationLimits }),
+              ...(existing.targetId === undefined ? {} : { initialTargetId: existing.targetId }),
+            };
 
-    const acquired = yield* acquireSession(
-      {
-        maxActions: fixed.maxActions,
-        maxElapsedMillis: fixed.maxElapsedMillis,
-        actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
-        maxHostReads: automation.maxHostReads ?? 10_000,
-        timelineLimits,
-        ...(automation.admissionLimits === undefined
-          ? {}
-          : { admissionLimits: automation.admissionLimits }),
-      },
-      {
-        implementation,
-        remote: source,
-        engine,
-        keepAlive: existing === undefined && keepAlive,
-        driver: { ...connectionDriver, ...(bootstrap === undefined ? {} : { bootstrap }) },
-        connectBindings: bindings.connect,
-        maxReturnedBytes: fixed.maxReturnedBytes,
-      },
-    ).pipe(Scope.provide(scope), Effect.provideService(Crypto.Crypto, crypto));
+      const acquired = yield* acquireSession(
+        {
+          maxActions: fixed.maxActions,
+          maxElapsedMillis: fixed.maxElapsedMillis,
+          actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
+          maxHostReads: automation.maxHostReads ?? 10_000,
+          timelineLimits,
+          ...(automation.admissionLimits === undefined
+            ? {}
+            : { admissionLimits: automation.admissionLimits }),
+        },
+        {
+          implementation,
+          remote: source,
+          engine,
+          keepAlive: existing === undefined && keepAlive,
+          driver: { ...connectionDriver, ...(bootstrap === undefined ? {} : { bootstrap }) },
+          connectBindings: bindings.connect,
+          maxReturnedBytes: fixed.maxReturnedBytes,
+        },
+      ).pipe(Scope.provide(scope), Effect.provideService(Crypto.Crypto, crypto));
 
-    const connected = yield* Effect.cached(
-      acquired.connect.pipe(
-        Effect.map((controls): Connection<L["reference"], E> => {
-          const session = makeSession(controls, bindings);
+      const connected = yield* Effect.cached(
+        acquired.connect.pipe(
+          Effect.map((controls): Connection<L["reference"], E> => {
+            const session = makeSession(controls, bindings);
 
-          return {
-            session,
-            operations: {
-              forPage: (page) =>
-                resolvePageControlsForSession(session, page).pipe(
-                  Effect.map(makeTransferOperations),
-                ),
-              liveView: (issue, options) =>
-                checkedOperationOptions(options, "live-view").pipe(
-                  Effect.flatMap((options) => controls.liveView(issue, options)),
-                ),
-              beginHandoff: (issue, options) =>
-                checkedOperationOptions(options, "handoff").pipe(
-                  Effect.flatMap((options) => controls.beginHandoff(issue, options)),
-                ),
-              resume: (token, released, options) =>
-                checkedOperationOptions(options, "resume").pipe(
-                  Effect.flatMap((options) => controls.resume(token, released, options)),
-                ),
-              detach: controls.detach,
-              reconnect: (released, options) =>
-                checkedOperationOptions(options, "reconnect").pipe(
-                  Effect.flatMap((options) => controls.reconnect(released, options)),
-                ),
-            },
-          };
-        }),
-      ),
-    );
+            return {
+              session,
+              operations: {
+                forPage: (page) =>
+                  resolvePageControlsForSession(session, page).pipe(
+                    Effect.map(makeTransferOperations),
+                  ),
+                liveView: (issue, options) =>
+                  checkedOperationOptions(options, "live-view").pipe(
+                    Effect.flatMap((options) => controls.liveView(issue, options)),
+                  ),
+                beginHandoff: (issue, options) =>
+                  checkedOperationOptions(options, "handoff").pipe(
+                    Effect.flatMap((options) => controls.beginHandoff(issue, options)),
+                  ),
+                resume: (token, released, options) =>
+                  checkedOperationOptions(options, "resume").pipe(
+                    Effect.flatMap((options) => controls.resume(token, released, options)),
+                  ),
+                detach: controls.detach,
+                reconnect: (released, options) =>
+                  checkedOperationOptions(options, "reconnect").pipe(
+                    Effect.flatMap((options) => controls.reconnect(released, options)),
+                  ),
+              },
+            };
+          }),
+        ),
+      );
 
-    return {
-      reference: acquired.reference,
-      lifetime: acquired.lease,
-      failure: bindings.failure,
-      close: acquired.close,
-      connect: Effect.raceFirst(
-        bindings.failure,
-        acquired.connect.pipe(Effect.andThen(connected)),
-      ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid))),
-    } satisfies Acquisition<L, E>;
-  });
+      return {
+        reference: acquired.reference,
+        lifetime: acquired.lease,
+        failure: bindings.failure,
+        close: acquired.close,
+        connect: Effect.raceFirst(
+          bindings.failure,
+          acquired.connect.pipe(Effect.andThen(connected)),
+        ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid))),
+      } satisfies Acquisition<L, E>;
+    },
+    Trace.span("Browser.acquire", { attributes: { "browser.operation": "acquire" } }),
+  );
 
   return { acquire } satisfies Runtime;
 });

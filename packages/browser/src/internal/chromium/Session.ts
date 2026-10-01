@@ -5,6 +5,7 @@ import { BrowserError, Reasons } from "../../Errors.ts";
 import { cleanupStep, reported, type ConnectionCleanup } from "../browser/ConnectionCleanup.ts";
 import { checked } from "../browser/PublicSession.ts";
 import { randomUuid } from "../browser/Random.ts";
+import * as Trace from "../Trace.ts";
 import {
   ChromiumCleanupIssue,
   ChromiumCleanupResult,
@@ -35,7 +36,7 @@ export const makeChromiumCleanup = Effect.fnUntraced(function* (
         const issues: ChromiumCleanupIssue[] = [];
 
         const step = <A, E>(name: ChromiumCleanupIssue["step"], action: Effect.Effect<A, E>) =>
-          cleanupStep(action, 3000).pipe(
+          cleanupStep(action.pipe(Trace.span(`Chromium.cleanup.${name}`)), 3000).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
                 if (result._tag === "Failure")
@@ -70,9 +71,14 @@ export const makeChromiumCleanup = Effect.fnUntraced(function* (
 
         Object.freeze(result.issues);
         latest = Object.freeze(result);
+        yield* Trace.annotate({
+          "browser.cleanup.connection": result.connection,
+          "browser.cleanup.process": result.process,
+          "browser.cleanup.issues": issues.length,
+        });
 
         return latest;
-      }),
+      }).pipe(Trace.span("Chromium.cleanup")),
     ),
   );
 
@@ -106,7 +112,7 @@ const acquireChromium =
             if (onCleanup !== undefined) yield* reported(Effect.suspend(() => onCleanup(result)));
 
             return result;
-          }).pipe(Effect.uninterruptible),
+          }).pipe(Trace.span("Chromium.release"), Effect.uninterruptible),
         );
 
         yield* Effect.addFinalizer(() => release.pipe(Effect.asVoid));
@@ -153,6 +159,7 @@ const acquireChromium =
                   outcome: "unknown",
                 }),
             ),
+            Trace.span("Chromium.close"),
           ),
           cleanupResult: cleanup.result,
           controlRetired: cleanup.result.pipe(

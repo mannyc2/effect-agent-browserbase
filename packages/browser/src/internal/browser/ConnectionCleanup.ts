@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Option } from "effect";
 
 import type { BrowserError, InitializationError } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 
 /** Evidence about this connection, independent of the lifetime of its browser process. */
 export type ConnectionState = "closed" | "failed" | "not-connected" | "pending";
@@ -34,6 +35,7 @@ export const cleanupStep = <A, E, R>(
   action.pipe(
     Effect.interruptible,
     Effect.timeoutOrElse({ duration: timeoutMillis, orElse: () => Effect.fail(timedOut) }),
+    Trace.span("Browser.cleanup.step"),
     Effect.exit,
     Effect.map((exit): CleanupStep<A> => {
       if (Exit.isSuccess(exit)) return { _tag: "Success", value: exit.value };

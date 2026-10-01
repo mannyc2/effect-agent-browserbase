@@ -50,6 +50,7 @@ import {
 } from "../../Errors.ts";
 import { StepFailed, type RunOptions } from "../../Plan.ts";
 import type { LivePlanEncoded, PlanEncoded } from "../../PlanData.ts";
+import * as Trace from "../Trace.ts";
 import { forPage } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { OperationOptionsSchema } from "./OperationOptions.ts";
@@ -84,6 +85,7 @@ export const checked = <A>(
         outcome: "undispatched",
       }),
     ),
+    Trace.span("Browser.validate", { attributes: { "browser.operation": operation } }),
   );
 
 /** Decode when the Effect executes and retain no caller-owned mutable admission data. */
@@ -134,6 +136,7 @@ export const decoded =
           ...(containment === undefined ? {} : { containment }),
         }),
       ),
+      Trace.span("Browser.result", { attributes: { "browser.operation": operation } }),
     );
 
 const action = decoded(ActionResult, "action-result", "performed");
