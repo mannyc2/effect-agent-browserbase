@@ -199,7 +199,11 @@ bounded metadata; `session.page(info)` authenticates it and issues the canonical
 native page and generation. A Page provides navigation, input, observation, exact-node actions,
 checkpoint, readiness, viewport control and close. `page.listFrames()` and `page.frame(info)`
 issue a Frame with the same document operations for that exact frame. None changes display
-selection or opens a connection.
+selection or opens a connection. An action's result `url` is its frame's http(s) address; a
+document without one (`about:srcdoc`, `about:blank`, `data:`) reports its nearest ancestor
+frame's, which is also its base URL. That address is resolved before dispatch, so an action never
+fails over it after input landed: a target with no http(s) address anywhere in its frame tree is
+refused `Unsupported` and `undispatched`.
 
 ```ts
 const stage = session.initialPage;

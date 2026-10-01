@@ -340,7 +340,48 @@ export const makeActions = (
     return value;
   };
 
-  const postUrl = (target?: DriverTarget) => httpUrl(targets.url(target));
+  const reportable = (value: string): string | undefined => {
+    try {
+      const url = new URL(value);
+
+      return value.length <= 8192 &&
+        ["http:", "https:"].includes(url.protocol) &&
+        url.hostname !== "" &&
+        !url.username &&
+        !url.password
+        ? value
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** The frame's own http(s) address or, for one without (srcdoc, about:blank), its nearest ancestor's. */
+  const addressOf = (frame: Frame): string | undefined => {
+    for (let at: Frame | null = frame; at !== null; at = at.parentFrame()) {
+      const url = reportable(at.url());
+
+      if (url !== undefined) return url;
+    }
+
+    return undefined;
+  };
+
+  /**
+   * The address an action reports, read from the host's frame tree and never from the page. A
+   * document without an http(s) URL of its own (`about:srcdoc`, `about:blank`, `data:`) reports
+   * its nearest ancestor frame's, which is also its base URL. It is resolved before dispatch, so
+   * an action never fails over its URL after its input landed: a target with no such address in
+   * its whole frame tree is refused unsent, and afterwards the address read before dispatch
+   * stands in when the action left none.
+   */
+  const resultUrl = (target?: DriverTarget) => {
+    const before = addressOf(current(target).frame);
+
+    if (before === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
+
+    return () => addressOf(current(target).frame) ?? before;
+  };
 
   const targetFor = (element: ElementTarget, target?: DriverTarget): DriverTarget | undefined => {
     if (typeof element === "string" || !("_tag" in element)) return target;
@@ -492,6 +533,7 @@ export const makeActions = (
   const click: Driver["click"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const { page } = current(browserTarget).entry;
 
       const input = await withAdmittedElement(
@@ -510,7 +552,7 @@ export const makeActions = (
 
       if (input === undefined) throw failure(Reasons.Malformed.make({}));
 
-      return { url: postUrl(browserTarget), input };
+      return { url: url(), input };
     });
 
   const clickWithoutReceipt = async (
@@ -519,6 +561,7 @@ export const makeActions = (
     browserTarget?: DriverTarget,
   ): Promise<string> => {
     browserTarget = targetFor(target, browserTarget);
+    const url = resultUrl(browserTarget);
     const { page } = current(browserTarget).entry;
 
     await withElement(
@@ -532,7 +575,7 @@ export const makeActions = (
     );
     ticket.check();
 
-    return postUrl(browserTarget);
+    return url();
   };
 
   /**
@@ -650,6 +693,8 @@ export const makeActions = (
   const fill: Driver["fill"] = (target, value, ticket, policy, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
       await withAdmittedElement(
         target,
         ticket,
@@ -685,7 +730,7 @@ export const makeActions = (
       );
       ticket.check();
 
-      return postUrl(browserTarget);
+      return url();
     });
 
   /**
@@ -706,6 +751,7 @@ export const makeActions = (
   ) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
 
       const {
         element,
@@ -854,7 +900,7 @@ export const makeActions = (
             state === undefined ||
             holdsChecked(state, field.checked),
           state,
-          url: postUrl(browserTarget),
+          url: url(),
           ...(input === undefined ? {} : { input }),
         };
       } finally {
@@ -866,6 +912,7 @@ export const makeActions = (
   const formSubmit: Driver["formSubmit"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const { page } = current(browserTarget).entry;
 
       const input = await withAdmittedElement(
@@ -884,12 +931,14 @@ export const makeActions = (
 
       if (input === undefined) throw failure(Reasons.Malformed.make({}));
 
-      return { url: postUrl(browserTarget), input };
+      return { url: url(), input };
     });
 
   const selectOption: Driver["selectOption"] = (target, options, ticket, policy, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
       await withAdmittedElement(
         target,
         ticket,
@@ -914,12 +963,13 @@ export const makeActions = (
       );
       ticket.check();
 
-      return postUrl(browserTarget);
+      return url();
     });
 
   const scroll: Driver["scroll"] = (deltaX, deltaY, ticket, target) =>
     sanitize(async () => {
       const { frame } = current(target);
+      const url = resultUrl(target);
 
       if (ticket.performance !== undefined) {
         const pacing = ownerPacing(ticket);
@@ -955,7 +1005,7 @@ export const makeActions = (
         ticket.followUp?.();
         ticket.check();
 
-        return postUrl(target);
+        return url();
       }
       ticket.dispatch();
       await frame.evaluate(
@@ -966,12 +1016,14 @@ export const makeActions = (
       ticket.followUp?.();
       ticket.check();
 
-      return postUrl(target);
+      return url();
     });
 
   const scrollTo: Driver["scrollTo"] = (target, ticket, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
       await withElement(
         target,
         ticket,
@@ -984,7 +1036,7 @@ export const makeActions = (
       );
       ticket.check();
 
-      return postUrl(browserTarget);
+      return url();
     });
 
   let waitConnectionRetired = false;
@@ -1123,6 +1175,7 @@ export const makeActions = (
   const clickAndWait: Driver["clickAndWait"] = (target, ticket, capture, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const { entry, frame } = current(browserTarget);
 
       const observer = waitEvent<Frame>(
@@ -1139,7 +1192,7 @@ export const makeActions = (
         await frame.waitForLoadState("domcontentloaded", { timeout: timeout(ticket) });
         ticket.check();
 
-        return { url: postUrl(browserTarget), input: clicked.input };
+        return { url: url(), input: clicked.input };
       } finally {
         observer.cancel();
       }
@@ -1179,6 +1232,7 @@ export const makeActions = (
   const selectFiles: Driver["selectFiles"] = (target, files, ticket, browserTarget) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const selection = nativeSelection(files);
 
       if (selection._tag === "Remote")
@@ -1193,7 +1247,7 @@ export const makeActions = (
         );
       ticket.check();
 
-      return postUrl(browserTarget);
+      return url();
     });
 
   const clickForFileSelection: Driver["clickForFileSelection"] = (
@@ -1204,6 +1258,7 @@ export const makeActions = (
   ) =>
     sanitize(async () => {
       browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const selection = nativeSelection(files);
 
       // A chooser is satisfied with bytes this client holds. A provider-stored file is
@@ -1231,7 +1286,7 @@ export const makeActions = (
         ticket.followUp?.();
         ticket.check();
 
-        return postUrl(browserTarget);
+        return url();
       } finally {
         observer.cancel();
       }
