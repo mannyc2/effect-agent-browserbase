@@ -164,7 +164,7 @@ it.effect("issued Pages keep their exact target across display selection changes
   ),
 );
 
-it.effect("Page issuance respects Busy refusal and never reads a closed owner", () =>
+it.effect("Page issuance waits for no page work, reads nothing, and refuses a closed owner", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
@@ -184,14 +184,11 @@ it.effect("Page issuance respects Busy refusal and never reads a closed owner", 
       yield* Deferred.await(entered);
       const before = f.selectedReads();
 
-      expect(yield* Effect.result(f.session.page(f.pages[0]!))).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
-      });
+      // Issuing authenticates under the registry permit while the page's own read is running.
+      expect(yield* f.session.page(f.pages[0]!)).toBe(f.session.initialPage);
       expect(f.selectedReads()).toBe(before);
       release();
       yield* Fiber.join(reading);
-      yield* f.session.page(f.pages[0]!);
       yield* f.session.closeChecked;
       const closed = f.selectedReads();
 

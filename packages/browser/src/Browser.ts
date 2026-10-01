@@ -294,10 +294,15 @@ export interface Frame extends PageOperations, PlanOperations {
 export interface Page extends Frame {
   /** Evidence for this issued Page's original domain; navigation does not change its journal. */
   readonly timeline: Timeline;
+  /**
+   * Read this page's address and title. Like `listFrames`, it is a read of the page and shares
+   * its permit; pass `admission.queue` to wait behind work already running there.
+   */
   readonly describe: (options?: OperationOptions) => Effect.Effect<PageInfo, BrowserError>;
   readonly listFrames: (
     options?: OperationOptions,
   ) => Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
+  /** Issue a child Frame. Like `session.page`, issuing takes the registry permit, not this page's. */
   readonly frame: (
     info: FrameInfo,
     options?: OperationOptions,
@@ -366,6 +371,11 @@ export interface BrowserSession<E = never> {
   readonly pages: Stream.Stream<PageEvent, TimelineError>;
   /** The page acquired on the initial connection, independent of later display selection. */
   readonly initialPage: Page;
+  /**
+   * Authenticate `info` against the live native page and return its canonical issued Page. This
+   * takes the registry permit, not the page's own: it never waits for, or fails `busy` on, work
+   * already running on that page.
+   */
   readonly page: (info: PageInfo, options?: OperationOptions) => Effect.Effect<Page, BrowserError>;
   readonly listPages: (
     options?: OperationOptions,

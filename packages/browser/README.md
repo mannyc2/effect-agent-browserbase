@@ -398,7 +398,11 @@ registry retaining old journals.
 Ordinary operations on one Page share its permit, including operations on its Frames. Work on
 other Pages can proceed independently: a held scout read or typing response does not block
 stage input, a stage checkpoint or another Page's capture. Creation, inventory and global
-lifecycle operations use the registry permit. Inventory is bounded and non-atomic.
+lifecycle operations use the registry permit. Inventory is bounded and non-atomic. So does issuing:
+`session.page(info)` and `page.frame(info)` authenticate and register, so they never wait for, or
+fail `Busy` on, work already running on that page. `page.describe()`, `page.listFrames()` and
+`Capture.start` read the page and share its permit like other reads; pass `admission.queue` to
+wait behind that work.
 
 Every admitted operation accepts trailing host-only `OperationOptions`:
 

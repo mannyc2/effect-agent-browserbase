@@ -3263,6 +3263,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     };
   };
 
+  /**
+   * Issuing authenticates a page and registers it; it is not work on that page. It takes the
+   * registry permit, so it never waits for, or is refused by, the page's own operations.
+   */
   const page = (info: PageInfo, operationOptions?: ExecutionOptions) =>
     owner.guard(
       "target",
@@ -3274,7 +3278,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
           return registerPage(info, target, ticket.generation);
         }),
-      { ...operationOptions, charge: false, targetScope: () => ({ pageId: info.pageId }) },
+      { ...operationOptions, charge: false },
     );
 
   // A generation change retires every issued capability. Rebuild from the same live connection
@@ -3488,10 +3492,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               controls: makePageControls(page, target, generation),
             };
           }),
+        // Like a Page, a Frame is issued under the registry permit, not its page's own.
         {
           ...operationOptions,
           charge: false,
-          targetScope: () => ({ pageId: info.pageId }),
           preflight: checkTarget("target", undefined, generation),
         },
       ),

@@ -852,6 +852,34 @@ it.effect("issued Pages can be created, selected for display and closed independ
   ),
 );
 
+it.effect("issuing a Page or Frame takes the registry permit, not the busy page's own", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const gate = yield* browser.control.gate;
+      const [main] = yield* browser.initialPage.listFrames();
+
+      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: false });
+
+      const clicking = yield* browser.initialPage
+        .click({ selector: "#accept" })
+        .pipe(Effect.forkScoped);
+
+      yield* gate.reached;
+      // The page's own permit is held: a read of it refuses, but issuing only authenticates.
+      expect(yield* browser.initialPage.readText({}).pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Busy" },
+        outcome: "undispatched",
+      });
+      const [info] = yield* browser.listPages();
+
+      expect(yield* browser.page(info!)).toBe(browser.initialPage);
+      expect((yield* browser.initialPage.frame(main!)).identity.frameId).toBe(main!.frameId);
+      yield* gate.open;
+      yield* Fiber.join(clicking);
+    }),
+  ),
+);
+
 it.effect(
   "explicitly queued page creation waits behind registry work while a healthy Page reads",
   () =>

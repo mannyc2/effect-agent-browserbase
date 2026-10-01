@@ -221,10 +221,14 @@ it.live(
         );
 
         if (info === undefined) throw new Error("The resumed inventory lost the paused page");
-        // Releasing the dialog lets the paused click finish natively; the page waits for it.
-        const fresh = yield* session.page(info, { admission: { queue: "5 seconds" } });
+        // Releasing the dialog lets the paused click finish natively. Issuing the fresh Page does
+        // not wait for the page; its first read does.
+        const fresh = yield* session.page(info);
 
-        expect((yield* fresh.readText({ selector: "#answer" })).text).toBe("false");
+        expect(
+          (yield* fresh.readText({ selector: "#answer" }, { admission: { queue: "5 seconds" } }))
+            .text,
+        ).toBe("false");
         yield* fresh.click({ selector: "#other" });
         expect((yield* fresh.readText({ selector: "#count" })).text).toBe("1");
         yield* session.closeChecked;
