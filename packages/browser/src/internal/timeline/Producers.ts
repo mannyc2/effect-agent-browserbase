@@ -254,7 +254,9 @@ export const observeTickets =
             _tag: "Scroll",
             operationId: facts.operationId,
             kind: "scroll",
-            delta: null,
+            // A scroll-into-view moves by whatever the browser chose; it has no requested delta.
+            delta:
+              value.x === undefined || value.y === undefined ? null : { x: value.x, y: value.y },
             ...(value.qualification === undefined ? {} : { qualification: value.qualification }),
             interval: interval(value.startedMonotonicNanos, value.completedMonotonicNanos),
           },

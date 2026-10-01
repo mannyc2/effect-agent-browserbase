@@ -115,3 +115,21 @@ it.effect("a time before a reconnected journal began is a gap, not a silent rest
     }),
   ),
 );
+
+it.effect("a scroll event records the delta it scrolled by", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(script);
+      const page = browser.initialPage;
+
+      yield* page.navigate({ url: `${origin}/` });
+      yield* page.scroll({ deltaX: 0, deltaY: 240 });
+
+      const scrolls = (yield* page.timeline.snapshot()).events.flatMap((event) =>
+        event.event._tag === "Scroll" ? [event.event] : [],
+      );
+
+      expect(scrolls).toMatchObject([{ kind: "scroll", delta: { x: 0, y: 240 } }]);
+    }),
+  ),
+);
