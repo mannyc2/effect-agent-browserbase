@@ -138,7 +138,6 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
               }),
           );
           const stops = yield* countStops(page);
-          const original = session.initialPage.identity;
 
           const cancelled = yield* session.initialPage.startNavigation({
             url: `${f.url}next`,
@@ -166,7 +165,14 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
           expect((yield* previous.completed).url).toBe(f.url);
           expect(page.isClosed()).toBe(false);
           expect(stops.count()).toBe(0);
-          expect(session.initialPage.identity.pageId).toBe(original.pageId);
+          // The refused leave kept the same native page in the same generation: the registry
+          // lists only that page, and issuing it again returns the original canonical Page.
+          const [listed, ...others] = yield* session.listPages();
+
+          assert.ok(listed);
+          expect(others).toEqual([]);
+          expect(listed.pageId).toBe(session.initialPage.identity.pageId);
+          expect(yield* session.page(listed)).toBe(session.initialPage);
           yield* session.initialPage.click({ selector: "#increment" });
           expect((yield* session.initialPage.readText({ selector: "#count" })).text).toBe("2");
           expect(yield* session.status).toMatchObject({
