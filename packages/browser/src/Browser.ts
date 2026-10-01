@@ -275,6 +275,11 @@ export interface PageOperations {
 export interface Frame extends PageOperations, PlanOperations {
   readonly identity: Target;
   readonly status: Effect.Effect<PageStatus>;
+  /**
+   * The original owner's host monotonic clock, the same one `session.monotonicTimeNanos` reads,
+   * so a host bound to this Page or Frame can compute a plan's `startAt` without the session.
+   */
+  readonly monotonicTimeNanos: Effect.Effect<bigint>;
   /** Resolve full descriptor intent against the complete current native candidate inventory. */
   readonly resolve: (
     descriptor: DescriptorEncoded,

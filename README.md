@@ -104,7 +104,8 @@ an issued Page, and provider file operations require that Page explicitly.
 `page.run(plan, { style: { seed: 94 }, within: "10 seconds" })` performs the same canonical actions
 with bounded cursor schedules, key intervals/holds and scrolling. Omitted style is plain. Seeded
 policy is reproducible; native geometry and delivery remain measured. `startAt` uses this owner's
-host monotonic runtime; `within` starts at that intended boundary and never renews per step.
+host monotonic runtime, read from `session.monotonicTimeNanos` or the issued `page.monotonicTimeNanos`;
+`within` starts at that intended boundary and never renews per step.
 Type requires existing focus; Fill may focus its exact node. Authored Hover remains a native action.
 The complete/incomplete host recording contract retains original attempts and Causes; unresolved
 mutations never become replayable plans.

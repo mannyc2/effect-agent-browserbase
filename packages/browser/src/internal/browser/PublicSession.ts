@@ -582,6 +582,7 @@ export const makeSession = <E>(
       timeline: value.timeline,
       identity: Object.freeze(value.record.identity),
       status: value.status,
+      monotonicTimeNanos: controls.monotonicTimeNanos,
       describe: (options = {}) =>
         checkedOperationOptions(options, "describe-page").pipe(
           Effect.flatMap((options) => value.controls.describe(options)),
@@ -603,6 +604,7 @@ export const makeSession = <E>(
               ...makePageOperations(frame.controls),
               ...makePlanOperations(frame.controls),
               identity: Object.freeze(frame.identity),
+              monotonicTimeNanos: controls.monotonicTimeNanos,
               status: value.status.pipe(
                 Effect.map((status) =>
                   Object.freeze({

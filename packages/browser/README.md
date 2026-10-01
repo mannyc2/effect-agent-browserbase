@@ -563,7 +563,8 @@ logical action costs the same action budget as its plain counterpart. FillForm r
 per-field admission, verification, partial results and guarded submit.
 
 `startAt` is an absolute bigint on this owner's host monotonic clock, available through
-`session.monotonicTimeNanos`. Future starts wait before admission, reserve no Page permit and
+`session.monotonicTimeNanos` and, for a host that holds only an issued Page or Frame, the same
+clock's `page.monotonicTimeNanos`. Future starts wait before admission, reserve no Page permit and
 never begin before that instant on the owner's clock, so `latenessNanos` is never negative.
 A waiting start holds only its run registration, never the timeline: when its Page closes or its
 owner pauses, detaches or ends, the run fails preparation at once instead of at its start.
