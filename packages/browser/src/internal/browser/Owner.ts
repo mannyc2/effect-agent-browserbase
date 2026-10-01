@@ -744,6 +744,16 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           ? admission.recovery(pageLane, operation)
           : (pageLane ?? admission.registry);
 
+      // A mutation of one page needs that page's lane. The registry lane would admit it without
+      // the page's serialization, and a navigation could not reserve its page after dispatch.
+      const unregistered =
+        pageLane === undefined &&
+        scope !== undefined &&
+        scope !== "all" &&
+        scope !== "none" &&
+        options.mutation === true &&
+        options.recovery !== true;
+
       const pending = {
         token: {},
         operation,
@@ -762,7 +772,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         yield* options.preflight ?? Effect.void;
         const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
-        if (lane.revoked)
+        if (lane.revoked || unregistered)
           return yield* BrowserError.make({
             operation,
             reason: Reasons.Stale.make({}),
