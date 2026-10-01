@@ -1,5 +1,5 @@
 import { Result } from "effect";
-import type { CDPSession, ElementHandle, Page } from "playwright-core";
+import type { CDPSession, ElementHandle, Keyboard, Page } from "playwright-core";
 
 import type { KeyModifier } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
@@ -280,9 +280,14 @@ export const makeKeyboard = (
     return schedule;
   };
 
-  /** One paired native stroke remains unresolved until its key and modifiers are all released. */
+  /**
+   * One paired native stroke remains unresolved until its key and modifiers are all released.
+   * Playwright's own keyboard builds each event, so a performed stroke carries exactly what a
+   * plain `press` sends, including the editing commands Chromium on macOS needs for Backspace,
+   * Delete, the arrows, Home and End.
+   */
   const pacedStroke = async (
-    port: CDPSession,
+    keyboard: Keyboard,
     stroke: Stroke,
     ticket: Ticket,
     check: () => void,
@@ -307,10 +312,9 @@ export const makeKeyboard = (
       await command();
     };
 
-    const description = keyDescription(stroke.key);
-
-    if (description === undefined) {
-      await submit(() => port.send("Input.insertText", { text: stroke.key }));
+    // A character the US layout cannot produce is committed as text, as plain typing does.
+    if (keyDescription(stroke.key) === undefined) {
+      await submit(() => keyboard.insertText(stroke.key));
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
       if (stroke.holdMillis > 0)
         await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
@@ -322,93 +326,17 @@ export const makeKeyboard = (
     if (typed && /^[A-Z~!@#$%^&*()_+{}|:"<>?]$/u.test(stroke.key) && !held.includes("Shift"))
       held.push("Shift");
 
-    const modifierFacts: Record<
-      KeyModifier,
-      { readonly code: string; readonly keyCode: number; readonly mask: number }
-    > = {
-      Shift: { code: "ShiftLeft", keyCode: 16, mask: 8 },
-      Control: { code: "ControlLeft", keyCode: 17, mask: 2 },
-      Alt: { code: "AltLeft", keyCode: 18, mask: 1 },
-      Meta: { code: "MetaLeft", keyCode: 91, mask: 4 },
-    };
-
-    let mask = 0;
-
-    for (const modifier of held) {
-      const facts = modifierFacts[modifier];
-
-      mask |= facts.mask;
-      await submit(() =>
-        port.send("Input.dispatchKeyEvent", {
-          type: "rawKeyDown",
-          modifiers: mask,
-          key: modifier,
-          code: facts.code,
-          windowsVirtualKeyCode: facts.keyCode,
-          location: 1,
-          autoRepeat: false,
-        }),
-      );
-    }
-
-    const text =
-      (mask & ~8) !== 0
-        ? ""
-        : stroke.key === "Enter"
-          ? "\r"
-          : stroke.key.length === 1
-            ? stroke.key
-            : "";
-
-    const unmodifiedText = /^[A-Z]$/u.test(stroke.key) ? stroke.key.toLowerCase() : stroke.key;
-
-    await submit(() =>
-      port.send("Input.dispatchKeyEvent", {
-        type: text.length > 0 ? "keyDown" : "rawKeyDown",
-        modifiers: mask,
-        windowsVirtualKeyCode: description.keyCode,
-        code: description.code,
-        key: stroke.key,
-        text,
-        unmodifiedText: text.length > 0 ? (stroke.key === "Enter" ? "\r" : unmodifiedText) : "",
-        commands: [],
-        autoRepeat: false,
-        location: 0,
-        isKeypad: false,
-      }),
-    );
+    for (const modifier of held) await submit(() => keyboard.down(modifier));
+    await submit(() => keyboard.down(stroke.key));
     if (stroke.holdMillis > 0)
       await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
-    await submit(() =>
-      port.send("Input.dispatchKeyEvent", {
-        type: "keyUp",
-        modifiers: mask,
-        key: stroke.key,
-        windowsVirtualKeyCode: description.keyCode,
-        code: description.code,
-        location: 0,
-      }),
-    );
-    for (const modifier of held.toReversed()) {
-      const facts = modifierFacts[modifier];
-
-      mask &= ~facts.mask;
-      await submit(() =>
-        port.send("Input.dispatchKeyEvent", {
-          type: "keyUp",
-          modifiers: mask,
-          key: modifier,
-          code: facts.code,
-          windowsVirtualKeyCode: facts.keyCode,
-          location: 1,
-        }),
-      );
-    }
+    await submit(() => keyboard.up(stroke.key));
+    for (const modifier of held.toReversed()) await submit(() => keyboard.up(modifier));
     ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
   };
 
   const pacedKeys = async (
-    port: CDPSession,
+    keyboard: Keyboard,
     schedule: KeySchedule,
     ticket: Ticket,
     check: () => void,
@@ -422,7 +350,7 @@ export const makeKeyboard = (
       check();
       if (stroke.intervalMillis > 0)
         await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.intervalMillis * 1e6)));
-      await pacedStroke(port, stroke, ticket, check, element);
+      await pacedStroke(keyboard, stroke, ticket, check, element);
     }
   };
 
@@ -435,7 +363,7 @@ export const makeKeyboard = (
     check: () => void,
     readmit?: () => Promise<void>,
   ) =>
-    withTypingPort(page, ticket, async (port) => {
+    withTypingPort(page, ticket, async () => {
       check();
       ownerPacing(ticket).requireDuration(schedule.durationMillis);
       ticket.dispatch();
@@ -450,7 +378,7 @@ export const makeKeyboard = (
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
       if (schedule.strokes.length > 0) await readmit?.();
       check();
-      await pacedKeys(port, schedule, ticket, check, element);
+      await pacedKeys(page.keyboard, schedule, ticket, check, element);
     });
 
   /** Sends under one dispatch, either to whatever has focus or to the one element that must. */
@@ -503,14 +431,14 @@ export const makeKeyboard = (
         if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
         const { page } = current(browserTarget).entry;
 
-        return withTypingPort(page, ticket, (port) =>
+        return withTypingPort(page, ticket, () =>
           send(
             into,
             ticket,
             policy,
             (_page, element, check) =>
               pacedStroke(
-                port,
+                page.keyboard,
                 { ...planned, key },
                 ticket,
                 check ?? (() => ticket.check()),
@@ -555,7 +483,13 @@ export const makeKeyboard = (
           policy,
           async (_page, element, check) => {
             if (schedule !== undefined) {
-              await pacedKeys(port, schedule, ticket, check ?? (() => ticket.check()), element);
+              await pacedKeys(
+                page.keyboard,
+                schedule,
+                ticket,
+                check ?? (() => ticket.check()),
+                element,
+              );
 
               return;
             }

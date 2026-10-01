@@ -42,6 +42,10 @@ a.addEventListener("keyup", () => { if (a.value.length >= 2) b.focus(); });
 field.addEventListener("input", () => { mirror.textContent = field.value; });
 field.addEventListener("keyup", (event) => { if (event.key === "Backspace") other.focus(); });
 </script>`,
+  "/shift": `<input aria-label="Text" id="text"><p id="mirror"></p>
+<script>
+text.addEventListener("input", () => { mirror.textContent = text.value; });
+</script>`,
 };
 
 const site = Effect.acquireRelease(
@@ -216,6 +220,34 @@ it.live("real CDP: a performed Fill that already erased the value stays performe
         attempt: { outcome: "performed", containment: { _tag: "NotRequired" } },
       });
       expect((yield* page.readText({ selector: "#mirror" })).text).toBe("");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: performed typing produces shifted characters exactly", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/shift");
+      const page = session.initialPage;
+
+      yield* page.run(
+        {
+          version: 1,
+          steps: [
+            {
+              id: "text",
+              action: {
+                _tag: "Fill",
+                target: input("Text"),
+                value: { _tag: "Literal", value: "Ab! ~Z" },
+              },
+            },
+          ],
+        },
+        { style: { seed: 991 } },
+      );
+
+      expect((yield* page.readText({ selector: "#mirror" })).text).toBe("Ab! ~Z");
     }).pipe(Effect.provide(layer)),
   ),
 );
