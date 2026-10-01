@@ -208,21 +208,22 @@ export const associateFrameAuthority = (
 export const resolveTargetControlsForSession = (
   session: object,
   target: object,
+  operation: BrowserOperation = "target",
 ): Effect.Effect<PageControls, BrowserError> =>
   Effect.suspend(() => {
     const frame = frameAuthorities.get(target);
 
-    if (frame === undefined) return resolvePageControlsForSession(session, target);
+    if (frame === undefined) return resolvePageControlsForSession(session, target, operation);
     if (parents.get(session)?.owner !== frame.owner)
       return Effect.fail(
         BrowserError.make({
-          operation: "target",
+          operation,
           reason: Reasons.UnregisteredSession.make({}),
           outcome: "undispatched",
         }),
       );
 
-    return frame.controls.validate.pipe(Effect.as(frame.controls));
+    return frame.controls.validate(operation).pipe(Effect.as(frame.controls));
   });
 
 /** Capture binds only to original issued Page authority; a session association is insufficient. */
