@@ -895,17 +895,19 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               ? Effect.void
               : Effect.try({
                   try: check,
-                  catch: () =>
-                    BrowserError.make({
-                      operation,
-                      reason: Reasons.Stale.make({}),
-                      outcome:
-                        pending || unknownDecided
-                          ? "unknown"
-                          : dispatched
-                            ? "performed"
-                            : "undispatched",
-                    }),
+                  catch: (error) =>
+                    Schema.is(BrowserError)(error)
+                      ? error
+                      : BrowserError.make({
+                          operation,
+                          reason: Reasons.Stale.make({}),
+                          outcome:
+                            pending || unknownDecided
+                              ? "unknown"
+                              : dispatched
+                                ? "performed"
+                                : "undispatched",
+                        }),
                 }),
           ),
           Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
