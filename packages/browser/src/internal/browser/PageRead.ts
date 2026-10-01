@@ -567,14 +567,22 @@ export const readPage = (
         ? node.autocomplete
         : "";
 
+    // Entered or editable content is a control's value, never its name: text typed into it must
+    // not become a label that observations show and recordings store.
+    const editable =
+      (node instanceof HTMLElement && node.isContentEditable) ||
+      (role !== null && ["textbox", "searchbox", "combobox", "spinbutton"].includes(role));
+
     const label =
       node.getAttribute("aria-label") ??
       node.getAttribute("placeholder") ??
-      (node instanceof HTMLInputElement
+      (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
         ? node.labels?.[0]?.textContent
         : node instanceof HTMLOptionElement
           ? node.label
-          : node.textContent) ??
+          : editable
+            ? node.getAttribute("aria-placeholder")
+            : node.textContent) ??
       "";
 
     const inputType =
