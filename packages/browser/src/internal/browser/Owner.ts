@@ -133,6 +133,22 @@ const outcomeRank: Record<BrowserOutcome, number> = {
 export const strongestOutcome = (left: BrowserOutcome, right: BrowserOutcome): BrowserOutcome =>
   outcomeRank[right] > outcomeRank[left] ? right : left;
 
+/**
+ * The one bridge from performed pacing back into Effect. A performed input paces between the
+ * native commands of a single admitted operation, inside the Promise driver that the Playwright
+ * and scripted engines share, so its pauses must be awaitable there. The sleep runs on the
+ * owner's captured Clock, the clock that stamps the operation's evidence and that tests control,
+ * and the admission's signal interrupts it; a failed Exit returns to the driver unchanged.
+ * Scheduling the pauses in Effect instead would need the driver to expose each native command on
+ * its own: a driver redesign, not a change to how pacing waits.
+ */
+const sleepOnOwnerClock = async (clock: Clock.Clock, nanos: bigint, signal: AbortSignal) => {
+  // oxlint-disable-next-line no-restricted-properties -- the native Promise callback awaits only its captured Clock and carries the original Exit back to Effect
+  const exit = await Effect.runPromiseExit(clock.sleep(Duration.nanos(nanos)), { signal });
+
+  if (Exit.isFailure(exit)) throw NativeEffectFailure.make({ cause: exit.cause });
+};
+
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -953,16 +969,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                       });
                     const remaining = atNanos - clock.monotonicTimeNanosUnsafe();
 
-                    if (remaining > 0n) {
-                      // oxlint-disable-next-line no-restricted-properties -- the native Promise callback awaits only its captured Clock and carries the original Exit back to Effect
-                      const exit = await Effect.runPromiseExit(
-                        clock.sleep(Duration.nanos(remaining)),
-                        { signal: controller.signal },
-                      );
-
-                      if (Exit.isFailure(exit))
-                        throw NativeEffectFailure.make({ cause: exit.cause });
-                    }
+                    if (remaining > 0n)
+                      await sleepOnOwnerClock(clock, remaining, controller.signal);
                     check();
                   },
                 },
