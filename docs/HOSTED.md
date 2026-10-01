@@ -154,10 +154,15 @@ alone establishes no hosted behavior, and evidence remains null until separately
 credential-free HTTPS directory URL without a query or fragment. Before allocation it validates
 that URL and makes one bounded reachability request. Its approved bootstrap installs a plain
 input/button scene in each Page with a fixture animation that alternates without end, so the
-captured scene keeps painting; it adds no pointer, pulse or caption artwork to the website. It issues two original Pages, selects the peer for display, and runs performed
-plans on the first Page while two independent public Timeline readers observe its one original
-Capture interval. It cancels one reader, requires the other and captured frames to continue,
-then explicitly stops the capture and requests checked provider cleanup through the harness.
+captured scene keeps painting; it adds no pointer, pulse or caption artwork to the website. It
+issues two original Pages. A created Page opens as the front tab of a headful window and puts the
+Page behind it in the background, where its document stops painting, so the filmed stage is the
+Page the check creates and the original Page is the peer, selected for display. Before capture
+starts the stage must report `document.visibilityState` as visible, or the claim fails without
+waiting on frames. Performed plans run on the stage while two independent public Timeline readers
+observe its one original Capture interval. It cancels one reader, requires the other and captured
+frames to continue, then explicitly stops the capture and requests checked provider cleanup
+through the harness.
 
 The same environment variable is forwarded by the protected manual workflow. The budget is
 one provider session, 180 browser seconds, 30 actions, 10 capture seconds and zero transfers.

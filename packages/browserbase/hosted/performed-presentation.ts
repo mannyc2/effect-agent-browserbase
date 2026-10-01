@@ -58,6 +58,11 @@ const fixture = Bootstrap.init({
       evidence.id = "evidence";
       const motion = document.createElement("div");
       motion.id = "motion";
+      const visibility = document.createElement("p");
+      visibility.id = "visibility";
+      const showVisibility = () => { visibility.textContent = document.visibilityState; };
+      document.addEventListener("visibilitychange", showVisibility);
+      showVisibility();
       const events = [];
       const publish = () => { evidence.textContent = JSON.stringify({ value: first.value, events }); };
       for (const kind of ["keydown", "keyup"]) first.addEventListener(kind, (event) => {
@@ -67,7 +72,7 @@ const fixture = Bootstrap.init({
       });
       first.addEventListener("input", publish);
       document.head.append(style);
-      document.body.replaceChildren(first, button, count, motion, evidence);
+      document.body.replaceChildren(first, button, count, motion, visibility, evidence);
       publish();
       resolve(true);
     };
@@ -120,13 +125,22 @@ await h.run(
           throw new Error("The controlled performed presentation fixture is unreachable");
       });
       const session = yield* h.open({ bootstrap: fixture });
-      const page = session.initialPage;
-
-      yield* page.navigate({ url: fixtureUrl.href });
-      const peerInfo = yield* session.createPage();
-      const peer = yield* session.page(peerInfo);
+      // A created Page opens as the front tab of a headful window and puts the Page behind it in
+      // the background, where its document stops painting. The filmed stage is therefore the
+      // newest Page, and the original Page is the peer whose references must survive.
+      const peer = session.initialPage;
 
       yield* peer.navigate({ url: fixtureUrl.href });
+      const stage = yield* session.page(yield* session.createPage());
+
+      yield* stage.navigate({ url: fixtureUrl.href });
+
+      const peerInfo = (yield* session.listPages()).find(
+        (info) => info.pageId === peer.identity.pageId,
+      );
+
+      if (peerInfo === undefined) return yield* h.established({ peerListed: false });
+      // Display selection names the peer; it never retargets the stage's actions.
       yield* session.selectPage(peerInfo);
       const peerObserved = yield* peer.observe({ maxControls: 8, maxTextBytes: 4096 });
 
@@ -135,13 +149,13 @@ await h.run(
       );
 
       if (peerButton === undefined) return yield* h.established({ peerReferenceIssued: false });
-      const observed = yield* page.observe({ maxControls: 8, maxTextBytes: 4096 });
+      const observed = yield* stage.observe({ maxControls: 8, maxTextBytes: 4096 });
       const field = observed.controls.find((control) => control.label === "Performed field");
       const button = observed.controls.find((control) => control.label === "Performed increment");
 
       if (field === undefined || button === undefined)
         return yield* h.established({ exactPageControlsIssued: false });
-      yield* page.pointerMove({ to: { x: 10, y: 10 } });
+      yield* stage.pointerMove({ to: { x: 10, y: 10 } });
 
       const readerState = () => ({
         count: 0,
@@ -179,16 +193,25 @@ await h.run(
 
       const read = (state: ReturnType<typeof readerState>) =>
         Effect.gen(function* () {
-          const snapshot = yield* page.timeline.snapshot();
+          const snapshot = yield* stage.timeline.snapshot();
 
           yield* Effect.forEach(snapshot.events, collect(state), { discard: true });
-          yield* page.timeline.events(snapshot.resumeAfter).pipe(Stream.runForEach(collect(state)));
+          yield* stage.timeline
+            .events(snapshot.resumeAfter)
+            .pipe(Stream.runForEach(collect(state)));
         });
 
+      const visibility = {
+        stage: (yield* stage.readText({ selector: "#visibility" })).text,
+        peer: (yield* peer.readText({ selector: "#visibility" })).text,
+      };
+
+      // Capture films painted frames, so a hidden stage would only time out below.
+      yield* h.established({ capturedPageVisible: visibility.stage === "visible" });
       const readerA = yield* read(a).pipe(Effect.forkScoped);
       const readerB = yield* read(b).pipe(Effect.forkScoped);
 
-      const interval = yield* Capture.start(page, {
+      const interval = yield* Capture.start(stage, {
         lifetime: "page",
         maxFrames: 32,
         maxFrameBytes: 1024 * 1024,
@@ -210,7 +233,7 @@ await h.run(
             if (delivered >= 1024) return yield* h.established({ boundedCaptureFacts: false });
             delivered++;
             sequences.add(frame.sequence);
-            exactCapture &&= frame.target.pageId === page.identity.pageId;
+            exactCapture &&= frame.target.pageId === stage.identity.pageId;
             yield* Deferred.succeed(first, undefined);
             if (canceled) yield* Deferred.succeed(afterCancel, undefined);
           }),
@@ -221,7 +244,7 @@ await h.run(
       yield* Deferred.await(first).pipe(Effect.timeout(8000));
       const before = (yield* session.status).actions.used;
 
-      const ran = yield* page.run(
+      const ran = yield* stage.run(
         {
           version: 1,
           steps: [
@@ -255,10 +278,10 @@ await h.run(
       const after = (yield* session.status).actions.used;
 
       const keys = yield* Schema.decodeEffect(Schema.fromJsonString(KeyEvidence))(
-        (yield* page.readText({ selector: "#evidence" })).text,
+        (yield* stage.readText({ selector: "#evidence" })).text,
       );
 
-      const count = yield* page.readText({ selector: "#count" });
+      const count = yield* stage.readText({ selector: "#count" });
 
       const aExit = yield* Effect.sync(() => readerA.pollUnsafe());
 
@@ -272,7 +295,7 @@ await h.run(
       const continuingAt = b.count;
 
       canceled = true;
-      yield* page.run(
+      yield* stage.run(
         {
           version: 1,
           steps: [
@@ -357,6 +380,7 @@ await h.run(
 
       return {
         logicalActions: after - before,
+        visibility,
         timing: ran.timing,
         keyEvents: keys.events.length,
         observedDomHoldMillis: holds,
