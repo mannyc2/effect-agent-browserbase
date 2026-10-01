@@ -3,8 +3,8 @@ import type { CDPSession, ElementHandle, Keyboard, Page } from "playwright-core"
 
 import type { KeyModifier } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
-import type { makeActions } from "./Actions.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
+import type { ElementAccess } from "./ElementAccess.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
 import { ownerPacing } from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
@@ -211,7 +211,7 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
  */
 export const makeKeyboard = (
   targets: Targets,
-  actions: ReturnType<typeof makeActions>,
+  elements: ElementAccess,
   receipt: (page: Page) => NativeInput,
 ) => {
   const { current } = targets;
@@ -485,7 +485,7 @@ export const makeKeyboard = (
     keys: (page: Page, element?: ElementHandle<Element>, check?: () => void) => Promise<void>,
     browserTarget: DriverTarget,
   ): Promise<NativeInput> => {
-    if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
+    if (into !== undefined) browserTarget = elements.targetFor(into, browserTarget);
     const { page } = current(browserTarget).entry;
 
     if (into === undefined) {
@@ -494,7 +494,7 @@ export const makeKeyboard = (
       ticket.acknowledge?.();
       ticket.followUp?.();
     } else
-      await actions.withAdmittedElement(
+      await elements.withAdmittedElement(
         into,
         ticket,
         (element) => requireFocus(element),
@@ -524,7 +524,7 @@ export const makeKeyboard = (
 
         if (planned === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
         ownerPacing(ticket).requireDuration(planned.holdMillis);
-        if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
+        if (into !== undefined) browserTarget = elements.targetFor(into, browserTarget);
         const { page } = current(browserTarget).entry;
 
         return withTypingPort(page, ticket, () =>
@@ -571,7 +571,7 @@ export const makeKeyboard = (
     browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
-      if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
+      if (into !== undefined) browserTarget = elements.targetFor(into, browserTarget);
       const { page } = current(browserTarget).entry;
       const schedule = ticket.performance === undefined ? undefined : prepareKeys(text, ticket);
 

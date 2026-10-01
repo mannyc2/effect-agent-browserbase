@@ -3,8 +3,8 @@ import type { ElementHandle, Page } from "playwright-core";
 
 import type { InputReceipt } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
-import type { makeActions } from "./Actions.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
+import type { ElementAccess } from "./ElementAccess.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import { ownerPacing } from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
@@ -122,7 +122,7 @@ const hitPoint = (
  * a person, so handlers see trusted events and the browser decides what is under the pointer.
  * Nothing here scrolls, eases or retries: a caller that wants a trajectory sends its points.
  */
-export const makePointer = (targets: Targets, actions: ReturnType<typeof makeActions>) => {
+export const makePointer = (targets: Targets, elements: ElementAccess) => {
   const { current } = targets;
   // Chromium keeps a pointer position per page; this is only the last one this driver set.
   const positions = new WeakMap<Page, NativePoint | null>();
@@ -440,10 +440,10 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     browserTarget: DriverTarget,
   ) =>
     sanitize(async () => {
-      browserTarget = actions.targetFor(target, browserTarget);
+      browserTarget = elements.targetFor(target, browserTarget);
       const { page } = current(browserTarget).entry;
 
-      await actions.withAdmittedElement(
+      await elements.withAdmittedElement(
         target,
         ticket,
         (element) =>

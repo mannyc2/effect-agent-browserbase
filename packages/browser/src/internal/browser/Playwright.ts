@@ -9,7 +9,6 @@ import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { makeInitialization } from "./Initialization.ts";
-import { makeKeyboard } from "./Keyboard.ts";
 import {
   closeWithin,
   failure,
@@ -20,7 +19,6 @@ import {
 } from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
-import { makePointer } from "./Pointer.ts";
 import { PolicyCleanup } from "./PolicyCleanup.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
@@ -259,13 +257,7 @@ export const makePlaywrightDriver = async (
     (error) => error instanceof errors.TimeoutError,
   );
 
-  const pointer = makePointer(targets, actions);
-
-  actions.setPointerInvalidator(pointer.invalidate);
-  actions.setPerformedPointer(pointer.preparePress);
-  const keyboard = makeKeyboard(targets, actions, pointer.receipt);
-
-  actions.setPerformedKeys({ prepare: keyboard.prepareKeys, fill: keyboard.fillElement });
+  const { pointer, keyboard } = actions;
   const captures = makeCaptureSources(targets);
 
   sameDocumentCapture = captures.sameDocumentNavigated;

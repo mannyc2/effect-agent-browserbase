@@ -8,7 +8,7 @@ import type {
   Page,
 } from "playwright-core";
 
-import { type ControlFacts, type InputReceipt, SafeFilename } from "../../BrowserData.ts";
+import { type InputReceipt, SafeFilename } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type {
   Driver,
@@ -18,6 +18,8 @@ import type {
   NativeFileSelection,
   NavigationControl,
 } from "./Driver.ts";
+import { makeElementAccess } from "./ElementAccess.ts";
+import { makeKeyboard } from "./Keyboard.ts";
 import {
   closeWithin,
   failure,
@@ -27,15 +29,10 @@ import {
   timeout,
 } from "./NativeCalls.ts";
 import { ownerPacing } from "./NativePacing.ts";
-import {
-  type AdmissionPolicy,
-  holdsChecked,
-  type Observation,
-  readFieldState,
-} from "./Observation.ts";
+import { holdsChecked, type Observation, readFieldState } from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
 import { scroll as scrollSchedule, type KeySchedule } from "./Performance.ts";
-import type { NativeInput, NativePoint } from "./Pointer.ts";
+import { makePointer } from "./Pointer.ts";
 import { makeSettledResource } from "./Settled.ts";
 import type { Entry, Targets } from "./Targets.ts";
 
@@ -278,42 +275,12 @@ export const makeActions = (
   isTimeoutError: (error: unknown) => boolean,
 ) => {
   const { current } = targets;
-  let invalidatePointer = (_page: Page, _aim?: NativePoint): void => {};
-
-  let preparePress:
-    | ((
-        page: Page,
-        element: ElementHandle<Element>,
-        ticket: Ticket,
-        check: () => void,
-      ) => Promise<NativeInput & { readonly intended: NonNullable<InputReceipt["intended"]> }>)
-    | undefined;
-
-  let performedKeys:
-    | {
-        readonly prepare: (text: string, ticket: Ticket) => KeySchedule;
-        readonly fill: (
-          page: Page,
-          element: ElementHandle<Element>,
-          schedule: KeySchedule,
-          ticket: Ticket,
-          check: () => void,
-          readmit?: () => Promise<void>,
-        ) => Promise<void>;
-      }
-    | undefined;
-
-  const setPerformedPointer = (prepare: NonNullable<typeof preparePress>) => {
-    preparePress = prepare;
-  };
-
-  const setPerformedKeys = (keys: NonNullable<typeof performedKeys>) => {
-    performedKeys = keys;
-  };
-
-  const setPointerInvalidator = (invalidate: (page: Page, aim?: NativePoint) => void) => {
-    invalidatePointer = invalidate;
-  };
+  // Built in dependency order: exact-node admission, then the pointer and keyboard drivers that
+  // use it, then the actions that use all three.
+  const elements = makeElementAccess(observation);
+  const { targetFor, withAdmittedElement, withElement } = elements;
+  const pointer = makePointer(targets, elements);
+  const keyboard = makeKeyboard(targets, elements, pointer.receipt);
 
   const navigationControls = new Map<
     string,
@@ -385,91 +352,6 @@ export const makeActions = (
     return () => (frame.isDetached() ? before : (addressOf(frame) ?? before));
   };
 
-  const targetFor = (element: ElementTarget, target: DriverTarget): DriverTarget => {
-    if (typeof element === "string" || !("_tag" in element)) return target;
-    if (target.pageId !== element.target.pageId)
-      throw failure(Reasons.Stale.make({}), "undispatched");
-
-    return element.target;
-  };
-
-  /**
-   * Acts on the exact attached node a target names. The observation seam establishes that it is
-   * still the control that was inspected and that the host's policy, if any, admits it. `admit`
-   * then sees that node before anything is dispatched, so a refusal it raises is undispatched
-   * too, and what it learns reaches the action without the node being resolved a second time.
-   * `enablement` is a form step's: see `Observation.resolve`.
-   */
-  const withAdmittedElement = async <Admitted, A>(
-    target: ElementTarget,
-    ticket: Ticket,
-    admit: (element: ElementHandle<Element>, facts: ControlFacts | undefined) => Promise<Admitted>,
-    action: (
-      element: ElementHandle<Element>,
-      admitted: Admitted,
-      check: () => void,
-      readmit: () => Promise<void>,
-    ) => Promise<A>,
-    policy: AdmissionPolicy | undefined,
-    browserTarget: DriverTarget,
-    enablement = false,
-    automaticDispatch = true,
-  ): Promise<A> => {
-    const { element, check, readmit, facts, capture, release } = await observation.resolve(
-      target,
-      ticket,
-      policy,
-      false,
-      targetFor(target, browserTarget),
-      enablement,
-      ticket.performance !== undefined,
-    );
-
-    try {
-      check();
-      const admitted = await admit(element, facts);
-
-      check();
-      ticket.check();
-      ticket.captureTarget?.(target, capture);
-      // ElementHandle actions do not re-resolve the selector onto a replacement node.
-      if (automaticDispatch) ticket.dispatch();
-
-      const result = await action(element, admitted, check, readmit);
-
-      ticket.acknowledge?.();
-      ticket.followUp?.();
-
-      return result;
-    } finally {
-      await closeWithin(release).catch(() => {});
-    }
-  };
-
-  const withElement = <A>(
-    target: ElementTarget,
-    ticket: Ticket,
-    action: (
-      element: ElementHandle<Element>,
-      admitted: void,
-      check: () => void,
-      readmit: () => Promise<void>,
-    ) => Promise<A>,
-    policy: AdmissionPolicy | undefined,
-    browserTarget: DriverTarget,
-    automaticDispatch = true,
-  ): Promise<A> =>
-    withAdmittedElement(
-      target,
-      ticket,
-      async () => {},
-      action,
-      policy,
-      browserTarget,
-      false,
-      automaticDispatch,
-    );
-
   /** Refuses, undispatched, what `inputRefusal` finds on this exact node right now. */
   const refuseInput = async (element: ElementHandle<Element>, text?: string) => {
     const refusal: unknown = await element.evaluate(inputRefusal, text);
@@ -493,10 +375,9 @@ export const makeActions = (
     readmit?: () => Promise<void>,
   ): Promise<InputReceipt | undefined> => {
     if (ticket.performance !== undefined) {
-      if (preparePress === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
       ownerPacing(ticket);
 
-      return preparePress(page, element, ticket, check).then(async (planned) => {
+      return pointer.preparePress(page, element, ticket, check).then(async (planned) => {
         await readmit?.();
         check();
 
@@ -504,7 +385,7 @@ export const makeActions = (
           check();
           ticket.dispatch();
           // The click moves the pointer where it aimed; the next glide starts there.
-          invalidatePointer(page, planned.intended.position);
+          pointer.invalidate(page, planned.intended.position);
           await element.click({
             timeout: timeout(ticket),
             scroll: "none",
@@ -521,7 +402,7 @@ export const makeActions = (
     }
 
     const dispatch = async () => {
-      invalidatePointer(page);
+      pointer.invalidate(page);
       await element.click({ timeout: timeout(ticket) });
       ticket.acknowledge?.();
       ticket.followUp?.();
@@ -704,27 +585,26 @@ export const makeActions = (
           await refuseInput(element, value);
           if (ticket.performance === undefined) return undefined;
           if (
-            performedKeys === undefined ||
-            (facts?.inputType !== undefined &&
-              ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
-                facts.inputType,
-              ))
+            facts?.inputType !== undefined &&
+            ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
+              facts.inputType,
+            )
           )
             throw failure(Reasons.Unsupported.make({}), "undispatched");
 
-          return performedKeys.prepare(value, ticket);
+          return keyboard.prepareKeys(value, ticket);
         },
         (element, schedule, check, readmit) =>
           schedule === undefined
             ? element.fill(value, { timeout: timeout(ticket) })
-            : (performedKeys?.fill(
+            : keyboard.fillElement(
                 current(browserTarget).entry.page,
                 element,
                 schedule,
                 ticket,
                 check,
                 readmit,
-              ) ?? Promise.reject(failure(Reasons.Unsupported.make({}), "undispatched"))),
+              ),
         policy,
         browserTarget,
         false,
@@ -831,19 +711,18 @@ export const makeActions = (
 
           if (performance !== undefined) {
             if (
-              performedKeys === undefined ||
-              (facts.inputType !== undefined &&
-                ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
-                  facts.inputType,
-                ))
+              facts.inputType !== undefined &&
+              ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
+                facts.inputType,
+              )
             )
               throw failure(Reasons.Unsupported.make({}), "undispatched");
-            schedule = performedKeys.prepare(text, ticket);
+            schedule = keyboard.prepareKeys(text, ticket);
           }
           act = async () => {
             if (schedule === undefined) await element.fill(text, { timeout: timeout(ticket) });
-            else if (performedKeys !== undefined)
-              await performedKeys.fill(
+            else
+              await keyboard.fillElement(
                 current(browserTarget).entry.page,
                 element,
                 schedule,
@@ -1295,9 +1174,8 @@ export const makeActions = (
     });
 
   return {
-    setPointerInvalidator,
-    setPerformedPointer,
-    setPerformedKeys,
+    pointer,
+    keyboard,
     withAdmittedElement,
     targetFor,
     beginNavigation,
