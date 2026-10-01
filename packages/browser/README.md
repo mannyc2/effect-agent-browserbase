@@ -205,8 +205,10 @@ issue a Frame with the same document operations for that exact frame. None chang
 selection or opens a connection. An action's result `url` is its frame's http(s) address; a
 document without one (`about:srcdoc`, `about:blank`, `data:`) reports its nearest ancestor
 frame's, which is also its base URL. That address is resolved before dispatch, so an action never
-fails over it after input landed: a target with no http(s) address anywhere in its frame tree is
-refused `Unsupported` and `undispatched`, and an action that removes its own frame or closes its
+fails over it after input landed: a target with no http(s) address anywhere in its frame tree, or
+whose own http(s) address cannot be reported (longer than 8,192 characters, or carrying
+credentials; an ancestor's address never stands in for it), is refused `Unsupported` and
+`undispatched`, and an action that removes its own frame or closes its
 page reports the address read before dispatch.
 
 Pass an issued Page or Frame as the object you were given. Capture, page control, provider
