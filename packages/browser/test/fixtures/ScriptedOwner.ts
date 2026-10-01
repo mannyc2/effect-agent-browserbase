@@ -2,7 +2,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { Effect } from "effect";
 
 import { Viewport } from "../../src/BrowserData.ts";
-import { type ConnectRequest, fromNativeAttempt } from "../../src/internal/browser/Binding.ts";
+import type { ConnectRequest } from "../../src/internal/browser/Binding.ts";
 import type { Bindings } from "../../src/internal/browser/Bindings.ts";
 import type {
   CaptureSource,
@@ -11,6 +11,7 @@ import type {
   NativeNavigation,
   ReadinessState,
 } from "../../src/internal/browser/Driver.ts";
+import { fromNativeAttempt } from "../../src/internal/browser/NativeAttempt.ts";
 import type { Ticket } from "../../src/internal/browser/Owner.ts";
 import { acquireSession } from "../../src/internal/browser/Session.ts";
 import { makeScriptedBrowser, type EngineTimers } from "../../src/internal/testing/Engine.ts";

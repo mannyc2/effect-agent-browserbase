@@ -4,7 +4,8 @@ import type { OpenOptions } from "./Browser.ts";
 import { type AutomationOptions, BrowserPolicy, type Viewport } from "./BrowserData.ts";
 import { type BrowserBinding, make as makeRuntime } from "./BrowserRuntime.ts";
 import { BrowserError, Reasons, type InitializationError } from "./Errors.ts";
-import { fromNativeAttempt, issueBinding, type NativeAttempt } from "./internal/browser/Binding.ts";
+import { issueBinding } from "./internal/browser/Binding.ts";
+import { fromNativeAttempt, type NativeAttempt } from "./internal/browser/NativeAttempt.ts";
 import { checked } from "./internal/browser/PublicSession.ts";
 import { makeSequentialCrypto } from "./internal/testing/Crypto.ts";
 import {

@@ -2,8 +2,8 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { BrowserError, BrowserOperation, Reasons } from "effect-browser/errors";
 
-import { fromNativeAttempt } from "../src/internal/browser/Binding.ts";
 import type { Driver } from "../src/internal/browser/Driver.ts";
+import { fromNativeAttempt } from "../src/internal/browser/NativeAttempt.ts";
 import {
   failure,
   nativeDetail,
