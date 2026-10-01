@@ -1,4 +1,14 @@
-import { Deferred, Effect, Fiber, FiberSet, Queue, Schema, Semaphore, Stream } from "effect";
+import {
+  type Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  FiberSet,
+  Queue,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -310,9 +320,12 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
     ...(step.attemptId === undefined ? {} : { attemptId: step.attemptId }),
   });
 
-  const cues = yield* Queue.dropping<Cue>(MaxCues);
+  const cues = yield* Queue.dropping<Cue, Cause.Done>(MaxCues);
 
-  /** Airs each queued cue in order; a cue from before a presentation reset is dropped. */
+  /**
+   * Airs each queued cue in order; a cue from before a presentation reset is dropped. Once the
+   * line is ended, it airs what is still waiting and stops.
+   */
   const presenter = yield* Queue.take(cues).pipe(
     Effect.flatMap((cue) =>
       airAt(cue.at).pipe(
@@ -322,6 +335,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
       ),
     ),
     Effect.forever,
+    Effect.catchTag("Done", () => Effect.void),
     Effect.forkScoped,
   );
 
@@ -719,7 +733,13 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
     Effect.timeoutOption(Number(delay + MaxDisplayNanos) / 1e6),
   );
   yield* Fiber.join(airing);
-  yield* Effect.forEach([...readers, presenter], Fiber.interrupt, { discard: true });
+  // A pointer, address or terminal cue can be stamped after the last picture, so it airs after
+  // the pictures have. Stop the readers so nothing new is queued, then let the waiting cues air
+  // at their own delayed times within the same bound.
+  yield* Effect.forEach(readers, Fiber.interrupt, { discard: true });
+  yield* Queue.end(cues);
+  yield* Fiber.join(presenter).pipe(Effect.timeoutOption(Number(delay + MaxDisplayNanos) / 1e6));
+  yield* Fiber.interrupt(presenter);
   if (!presentationEnded) {
     presentationEnded = true;
     yield* presentation.withPermits(1)(
