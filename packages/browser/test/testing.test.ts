@@ -746,6 +746,7 @@ it.live("a plan can pause before the first navigation its bootstrap requires", (
 
       // A duration pause reads no document, so the starting document's readiness is irrelevant.
       expect((yield* browser.initialPage.ready())._tag).toBe("RequiresNavigation");
+
       const ran = yield* browser.initialPage.run({
         version: 1,
         steps: [
