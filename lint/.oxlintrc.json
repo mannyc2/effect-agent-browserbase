@@ -148,17 +148,51 @@
       "rules": { "exports/public-entrypoint": "error" }
     },
     {
-      // The Playwright driver and the scripted engine implement `Driver`, a Promise-based
-      // interface around Playwright. The owner's `native` bridge is where they meet Effect.
+      // `Driver` is a Promise-based interface around Playwright, and only its side may use
+      // Promises and timers; everything else under internal/ follows the Effect rules.
+      // - The Playwright driver: its actions, observation, input, targets, capture source,
+      //   initialization, settling, native bindings, page control, page execution port, and the
+      //   native callbacks and cleanup it owns.
+      // - The boundary helpers where the owner meets it: native calls and the fiber exit bridge,
+      //   the native connect attempt, the pacing performed drivers await, and a plan step's
+      //   native preparation inside its first admitted operation.
+      // - The scripted engine, which implements the same `Driver` for tests and
+      //   `effect-browser/testing`.
       "files": [
-        "**/packages/browser/src/internal/browser/**/*.ts",
-        "**/packages/browser/src/internal/testing/**/*.ts"
+        "**/packages/browser/src/internal/browser/Playwright.ts",
+        "**/packages/browser/src/internal/browser/Actions.ts",
+        "**/packages/browser/src/internal/browser/ElementAccess.ts",
+        "**/packages/browser/src/internal/browser/Observation.ts",
+        "**/packages/browser/src/internal/browser/Keyboard.ts",
+        "**/packages/browser/src/internal/browser/Pointer.ts",
+        "**/packages/browser/src/internal/browser/Targets.ts",
+        "**/packages/browser/src/internal/browser/CaptureSource.ts",
+        "**/packages/browser/src/internal/browser/Initialization.ts",
+        "**/packages/browser/src/internal/browser/Settled.ts",
+        "**/packages/browser/src/internal/browser/NativeBindings.ts",
+        "**/packages/browser/src/internal/browser/NativePageControl.ts",
+        "**/packages/browser/src/internal/browser/PageExecution.ts",
+        "**/packages/browser/src/internal/browser/CallbackTasks.ts",
+        "**/packages/browser/src/internal/browser/PolicyCleanup.ts",
+        "**/packages/browser/src/internal/browser/NativeCalls.ts",
+        "**/packages/browser/src/internal/browser/NativeAttempt.ts",
+        "**/packages/browser/src/internal/browser/NativePacing.ts",
+        "**/packages/browser/src/internal/browser/StepPreparation.ts",
+        "**/packages/browser/src/internal/testing/Engine.ts"
       ],
       "rules": {
         "effecttsgo/async-function": "off",
         "effecttsgo/new-promise": "off",
         "effecttsgo/global-timers": "off"
       }
+    },
+    {
+      // Session admits each operation and hands the driver its native body as an async
+      // callback. Those bodies read and update the session's own page registry, admission and
+      // timeline state, so moving them out would split every operation across two files. It
+      // constructs no Promise and starts no timer.
+      "files": ["**/packages/browser/src/internal/browser/Session.ts"],
+      "rules": { "effecttsgo/async-function": "off" }
     },
     {
       // Tests, fixtures, hosted checks and examples drive the platform itself: they fake
