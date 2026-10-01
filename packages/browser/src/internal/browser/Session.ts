@@ -84,6 +84,7 @@ import type {
 } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
 import type { AdmissionPolicy, ResolvedElement, ResolvedGroup } from "./Observation.ts";
+import { OperationPolicies } from "./OperationPolicy.ts";
 import {
   makeOwner,
   native,
@@ -990,39 +991,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   };
 
   /**
-   * Work that depends on an initialized document waits for the current document's readiness.
-   * Navigation, selection and page management deliberately do not: initialization must never
-   * deadlock the navigation that produces the document it is waiting for.
+   * Waits for the current document's readiness. Only work whose policy depends on an initialized
+   * document asks: navigation, selection and page management deliberately do not, because
+   * initialization must never deadlock the navigation that produces the document it waits for.
    */
-  const dependent = [
-    "read-text",
-    "checkpoint",
-    "control-facts",
-    "revalidate",
-    "click",
-    "fill",
-    "fill-form",
-    "scroll",
-    "pointer-move",
-    "hover",
-    "wheel",
-    "press",
-    "type",
-    "screenshot",
-    "observe",
-    "wait",
-    "click-and-wait",
-    "download-action",
-    "select-files",
-    "file-chooser",
-  ];
-
   const requireReady = async (
     operation: BrowserOperation,
     ticket: Ticket,
     target: DriverTarget,
   ) => {
-    if (!dependent.includes(operation)) return;
     const state = await getDriver().documentReadiness(ticket, target);
 
     if (state._tag === "Ready" || state._tag === "NotApplicable") return;
@@ -1038,17 +1015,21 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     });
   };
 
-  /**
-   * `dependent` is false for lifecycle observations, which report what is actually on the
-   * reattached page. Readiness governs work that depends on initialization, not the reading
-   * that tells a caller whether this document was initialized at all.
-   */
+  /** The policy's native checks on the exact target, before any of the work's own commands. */
+  const prepare = async (operation: BrowserOperation, ticket: Ticket, target: DriverTarget) => {
+    const policy = OperationPolicies[operation];
+
+    if (policy.work !== "page") return;
+    // A held page is refused, never woken.
+    if (policy.refuseHeld) await getDriver().pageControl?.checkTarget(target, ticket);
+    if (policy.ready) await requireReady(operation, ticket, target);
+  };
+
   const observeInside = (
     ticket: Ticket,
-    maximumBytes = Math.min(options.maxReturnedBytes, 16384),
-    controls = 32,
-    dependent = true,
-    scope: "document" | "viewport" = "document",
+    maximumBytes: number,
+    controls: number,
+    scope: "document" | "viewport",
     match: string | undefined,
     target: DriverTarget,
   ) =>
@@ -1056,8 +1037,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       const revision = owner.revision(target.pageId);
 
       return native("observe", ticket, async () => {
-        await getDriver().pageControl?.checkTarget(target, ticket);
-        if (dependent) await requireReady("observe", ticket, target);
+        await prepare("observe", ticket, target);
 
         return getDriver().observe(scope, maximumBytes, controls, ticket, match, target);
       }).pipe(
@@ -1289,33 +1269,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           operation,
           (ticket) =>
             native(operation, ticket, async () => {
-              const target = options.target;
-
               // Registry work (selection, page creation) has no target and reads no document.
-              if (target !== undefined) {
-                // A held page is refused, never woken: none of these may run against one.
-                if (
-                  [
-                    "resolve",
-                    "run",
-                    "settled",
-                    "resize",
-                    "scroll",
-                    "wait",
-                    "click-and-wait",
-                    "download-action",
-                    "select-files",
-                    "select-option",
-                    "fill-form",
-                    "file-chooser",
-                    "checkpoint",
-                    "control-facts",
-                    "revalidate",
-                  ].includes(operation)
-                )
-                  await getDriver().pageControl?.checkTarget(target, ticket);
-                await requireReady(operation, ticket, target);
-              }
+              if (options.target !== undefined) await prepare(operation, ticket, options.target);
 
               await options.beforeNative?.(getDriver(), ticket);
               ticket.check();
@@ -1399,9 +1354,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               let started = false;
 
               try {
-                await driver.pageControl?.checkTarget(target, ticket);
-                ticket.check();
-                await requireReady(operation, ticket, target);
+                await prepare(operation, ticket, target);
                 ticket.check();
                 await operationOptions?.beforeNative?.(driver, ticket);
                 ticket.check();
@@ -1498,8 +1451,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             operation,
             (ticket) =>
               native(operation, ticket, async () => {
-                await getDriver().pageControl?.checkTarget(browserTarget, ticket);
-                await requireReady(operation, ticket, browserTarget);
+                await prepare(operation, ticket, browserTarget);
 
                 await operationOptions?.beforeNative?.(getDriver(), ticket);
                 ticket.check();
@@ -2237,7 +2189,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                       ticket,
                       bytes,
                       reading.maxControls ?? 32,
-                      true,
                       reading.scope,
                       reading.match,
                       target,
