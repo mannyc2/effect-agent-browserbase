@@ -1,8 +1,9 @@
-import { Schema } from "effect";
+import { Schema, Struct } from "effect";
 
 import { Identifier } from "./BrowserData.ts";
 import { CaptureQualification } from "./CaptureData.ts";
-import { BrowserOperation, BrowserOutcome, Containment } from "./Errors.ts";
+import { BrowserOperation, BrowserOutcome, Containment, Reasons } from "./Errors.ts";
+import { Action } from "./PlanData.ts";
 
 /** One journal identity on one captured host clock; neither is a native credential. */
 export const StoreIdentity = Schema.Struct({ storeId: Identifier, clockId: Identifier });
@@ -39,26 +40,26 @@ const Sequence = Schema.BigInt.check(
   Schema.isLessThanOrEqualToBigInt(maximumInteger),
 );
 
-const SequenceJson = Schema.BigIntFromString.check(
-  Schema.isGreaterThanOrEqualToBigInt(0n),
-  Schema.isLessThanOrEqualToBigInt(maximumInteger),
-);
-
 const Counter = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
 const Geometry = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 
+/*
+ * Each `*Json` codec is derived from its schema: bigint sequences and offsets encode as decimal
+ * strings and every other field as itself, so the wire format cannot drift from the types.
+ */
+
 export const Cursor = Schema.Struct({ ...StoreIdentity.fields, sequence: Sequence });
 export type Cursor = typeof Cursor.Type;
-export const CursorJson = Schema.Struct({ ...StoreIdentity.fields, sequence: SequenceJson });
+export const CursorJson = Schema.toCodecJson(Cursor);
 
 /** An offset from this clock domain's origin, never a portable absolute monotonic instant. */
 export const Stamp = Schema.Struct({ clockId: Identifier, offsetNanos: Sequence });
 export type Stamp = typeof Stamp.Type;
-export const StampJson = Schema.Struct({ clockId: Identifier, offsetNanos: SequenceJson });
+export const StampJson = Schema.toCodecJson(Stamp);
 
 export const Selector = Schema.Union([Cursor, Schema.Struct({ at: Stamp })]);
 export type Selector = typeof Selector.Type;
-export const SelectorJson = Schema.Union([CursorJson, Schema.Struct({ at: StampJson })]);
+export const SelectorJson = Schema.toCodecJson(Selector);
 
 /** Null frame/document fields disclose unavailable attribution instead of inventing it. */
 export const EvidenceTarget = Schema.Struct({
@@ -107,60 +108,11 @@ export const CaptureReason = Schema.Literals([
 export type CaptureReason = typeof CaptureReason.Type;
 const TerminalScope = Schema.Literals(["session", "page"]);
 
-const ActionKind = Schema.Literals([
-  "Navigate",
-  "Click",
-  "Hover",
-  "Fill",
-  "Type",
-  "Press",
-  "Select",
-  "Scroll",
-  "PointerMove",
-  "Wheel",
-  "Wait",
-  "FillForm",
-]);
+/** The planned action's tag, from the plan schema itself. */
+const ActionKind = Schema.Literals(Struct.keys(Action.cases));
 
-const FailureReason = Schema.Literals([
-  "Configuration",
-  "UnregisteredSession",
-  "Unsupported",
-  "Busy",
-  "QueueFull",
-  "QueueExpired",
-  "Closed",
-  "Stale",
-  "NotFound",
-  "Missing",
-  "Ambiguous",
-  "Incomplete",
-  "Drifted",
-  "Malformed",
-  "Limit",
-  "Timeout",
-  "ScheduleMissed",
-  "TimingBudgetExceeded",
-  "Transport",
-  "Provider",
-  "Authorization",
-  "RateLimited",
-  "Disconnected",
-  "Active",
-  "Disabled",
-  "Expired",
-  "Failed",
-  "UnsafeUrl",
-  "ContentType",
-  "Timestamp",
-  "Resized",
-  "TargetChanged",
-  "Interrupted",
-  "ContextLease",
-  "NotVisible",
-  "Denied",
-  "NotFocused",
-]);
+/** A failure records only its reason's tag, from the host reasons themselves. */
+const FailureReason = Schema.Literals(Struct.keys(Reasons));
 
 /** Every payload tag; an omission names the one it stands for when that tag was readable. */
 export const PayloadTag = Schema.Literals([
@@ -194,22 +146,16 @@ export const PayloadTag = Schema.Literals([
 
 export type PayloadTag = typeof PayloadTag.Type;
 
-const makeInterval = <S extends typeof Stamp | typeof StampJson>(stamp: S) =>
-  Schema.Struct({
-    start: stamp,
-    end: stamp,
-    qualification: Schema.Literal("native-call-interval"),
-  });
+export const Interval = Schema.Struct({
+  start: Stamp,
+  end: Stamp,
+  qualification: Schema.Literal("native-call-interval"),
+});
 
-export const Interval = makeInterval(Stamp);
 export type Interval = typeof Interval.Type;
-export const IntervalJson = makeInterval(StampJson);
+export const IntervalJson = Schema.toCodecJson(Interval);
 
-const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema.Struct.Fields>(
-  stamp: S,
-  address: A,
-) => {
-  const interval = makeInterval(stamp);
+const makePayload = <A extends Schema.Struct.Fields>(address: A) => {
   const operationId = Schema.optionalKey(Identifier);
 
   const phase = {
@@ -238,7 +184,7 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
     Schema.TaggedStruct("Pointer", {
       kind: Schema.Literals(["pointer-move", "hover"]),
       position: Schema.NullOr(Geometry),
-      interval,
+      interval: Interval,
       operationId,
     }),
     Schema.TaggedStruct("Press", {
@@ -250,27 +196,27 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
           qualification: Schema.Literal("checked-exact-node-sample"),
         }),
       ),
-      interval,
+      interval: Interval,
       operationId,
     }),
     Schema.TaggedStruct("Keys", {
       kind: Schema.Literals(["press", "type"]),
       count: Counter,
       countUnit: Schema.Literals(["unicode-codepoints", "logical-strokes"]),
-      interval,
+      interval: Interval,
       operationId,
     }),
     Schema.TaggedStruct("Scroll", {
       kind: Schema.Literals(["wheel", "scroll"]),
       delta: Schema.NullOr(Geometry),
-      interval,
+      interval: Interval,
       operationId,
       qualification: Schema.optionalKey(Schema.Literal("exact-node-scroll-into-view")),
     }),
     /** Reserved for an actual bounded intended schedule; individual pointer calls are Pointer. */
     Schema.TaggedStruct("Glide", {
       operationId,
-      schedule: Schema.Array(Schema.Struct({ at: stamp, position: Geometry })).check(
+      schedule: Schema.Array(Schema.Struct({ at: Stamp, position: Geometry })).check(
         Schema.isMinLength(2),
         Schema.isMaxLength(128),
       ),
@@ -283,7 +229,7 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
       captureDocument: Counter,
       sameDocument: Schema.Boolean,
       afterSequence: Schema.NullOr(Counter),
-      observed: stamp,
+      observed: Stamp,
       qualification: Schema.Literal("received-boundary-attribution"),
       ...address,
     }),
@@ -291,7 +237,7 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
       captureId: Identifier,
       phase: Schema.Literals(["Reserved", "Watching", "Started", "Ended", "Stopped"]),
       latePhase: Schema.Boolean,
-      observed: stamp,
+      observed: Stamp,
       captureBoundary: Counter,
       captureDocument: Counter,
       qualification: CaptureQualification,
@@ -313,7 +259,7 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
       captureBoundary: Counter,
       sourceTimeMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
       sourceClock: Schema.Literal("presentation-unix-millis"),
-      received: stamp,
+      received: Stamp,
       width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
       height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
       viewportWidth: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
@@ -322,8 +268,8 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
     }),
     Schema.TaggedStruct("Picture", {
       mediaType: Schema.Literals(["image/png", "image/jpeg"]),
-      nativeRequest: stamp,
-      nativeReturn: stamp,
+      nativeRequest: Stamp,
+      nativeReturn: Stamp,
       requestDocument: Schema.NullOr(Counter),
       returnDocument: Schema.NullOr(Counter),
       width: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 }))),
@@ -382,12 +328,12 @@ const hostAddress = {
 };
 
 /** Host metadata: addresses are qualified facts; text, descriptors, bytes and native objects stay absent. */
-export const Payload = makePayload(Stamp, hostAddress);
+export const Payload = makePayload(hostAddress);
 export type Payload = typeof Payload.Type;
-export const PayloadJson = makePayload(StampJson, hostAddress);
-export const ClientPayload = makePayload(Stamp, {});
+export const PayloadJson = Schema.toCodecJson(Payload);
+export const ClientPayload = makePayload({});
 export type ClientPayload = typeof ClientPayload.Type;
-export const ClientPayloadJson = makePayload(StampJson, {});
+export const ClientPayloadJson = Schema.toCodecJson(ClientPayload);
 
 const envelopeFields = {
   version: Schema.Literal(1),
@@ -467,12 +413,7 @@ export const Event = Schema.Struct({
 
 export type Event = typeof Event.Type;
 
-export const EventJson = Schema.Struct({
-  ...envelopeFields,
-  sequence: SequenceJson,
-  at: StampJson,
-  event: PayloadJson,
-}).check(clockCheck);
+export const EventJson = Schema.toCodecJson(Event);
 
 export const ClientEvent = Schema.Struct({
   ...envelopeFields,
@@ -483,12 +424,7 @@ export const ClientEvent = Schema.Struct({
 
 export type ClientEvent = typeof ClientEvent.Type;
 
-export const ClientEventJson = Schema.Struct({
-  ...envelopeFields,
-  sequence: SequenceJson,
-  at: StampJson,
-  event: ClientPayloadJson,
-}).check(clockCheck);
+export const ClientEventJson = Schema.toCodecJson(ClientEvent);
 
 export const Terminal = Schema.Struct({
   cursor: Cursor,
@@ -499,12 +435,7 @@ export const Terminal = Schema.Struct({
 
 export type Terminal = typeof Terminal.Type;
 
-export const TerminalJson = Schema.Struct({
-  cursor: CursorJson,
-  at: StampJson,
-  scope: TerminalScope,
-  reason: TerminalReason,
-});
+export const TerminalJson = Schema.toCodecJson(Terminal);
 
 const snapshotFields = { evicted: Counter, retainedBytes: Counter };
 
@@ -520,15 +451,7 @@ export const Snapshot = Schema.Struct({
 
 export type Snapshot = typeof Snapshot.Type;
 
-export const SnapshotJson = Schema.Struct({
-  ...snapshotFields,
-  events: Schema.Array(EventJson).check(Schema.isMaxLength(65536)),
-  oldest: Schema.NullOr(CursorJson),
-  newest: Schema.NullOr(CursorJson),
-  resumeAfter: CursorJson,
-  evictedThrough: CursorJson,
-  terminal: Schema.NullOr(TerminalJson),
-});
+export const SnapshotJson = Schema.toCodecJson(Snapshot);
 
 export const SnapshotOptions = Schema.Struct({ from: Schema.optionalKey(Selector) });
 export type SnapshotOptions = typeof SnapshotOptions.Type;
@@ -608,10 +531,4 @@ export type ClientPagesInventory = typeof ClientPagesInventory.Type;
 export const ClientPageEvent = Schema.Union([ClientPagesInventory, ClientEvent]);
 export type ClientPageEvent = typeof ClientPageEvent.Type;
 
-export const ClientPageEventJson = Schema.Union([
-  Schema.TaggedStruct("Inventory", {
-    pages: Schema.Array(ClientPage).check(Schema.isMaxLength(32)),
-    resumeAfter: CursorJson,
-  }),
-  ClientEventJson,
-]);
+export const ClientPageEventJson = Schema.toCodecJson(ClientPageEvent);
