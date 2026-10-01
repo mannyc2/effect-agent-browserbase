@@ -35,51 +35,89 @@ export interface NativePictureBoundary {
   readonly byteLength?: number;
 }
 
-/** Bounded metadata observed from the original admission; these callbacks grant no authority. */
-export interface TicketObserver {
-  readonly phase: (
-    phase: Exclude<NonNullable<Ticket["phase"]>, "Terminal">,
-    mutation: boolean,
-    acknowledgement?: AcknowledgementFact,
-  ) => void;
-  readonly picture: (boundary: NativePictureBoundary) => void;
-  readonly input: (
-    receipt: InputReceipt,
-    keys?: { readonly count: number; readonly countUnit: "unicode-codepoints" | "logical-strokes" },
-  ) => void;
-  readonly scroll: (facts: {
-    readonly target: DriverTarget;
-    readonly x?: number;
-    readonly y?: number;
-    readonly qualification?: "exact-node-scroll-into-view";
-    readonly startedMonotonicNanos: bigint;
-    readonly completedMonotonicNanos: bigint;
-  }) => void;
-  readonly glide: (facts: {
-    readonly target: DriverTarget;
-    readonly startedMonotonicNanos: bigint;
-    readonly samples: ReadonlyArray<{
-      readonly offsetMillis: number;
-      readonly position: { readonly x: number; readonly y: number };
-    }>;
-  }) => void;
-  readonly settled: (evidence: SettledEvidence, target: DriverTarget) => void;
-  readonly finished: (summary: {
-    readonly kind: "Completed" | "Failed" | "Cancelled";
-    readonly outcome: BrowserOutcome;
-    readonly error?: BrowserError;
-    readonly containment: Containment;
-  }) => void;
+/** One native scroll a driver performed for an admitted operation. */
+export interface ScrollFacts {
+  readonly target: DriverTarget;
+  readonly x?: number;
+  readonly y?: number;
+  readonly qualification?: "exact-node-scroll-into-view";
+  readonly startedMonotonicNanos: bigint;
+  readonly completedMonotonicNanos: bigint;
 }
 
-export type ObserveTicket = (facts: {
+/** The pointer path a driver intends for an admitted operation, before the pointer moves. */
+export interface GlideFacts {
+  readonly target: DriverTarget;
+  readonly startedMonotonicNanos: bigint;
+  readonly samples: ReadonlyArray<{
+    readonly offsetMillis: number;
+    readonly position: { readonly x: number; readonly y: number };
+  }>;
+}
+
+/** How much logical keyboard input a press or type receipt carried. */
+export interface KeyCount {
+  readonly count: number;
+  readonly countUnit: "unicode-codepoints" | "logical-strokes";
+}
+
+/**
+ * One fact about one operation. Its ticket emits each fact once, to every listener, and decides
+ * once whether the fact is late: whether it arrived after the operation ended (for any fact but
+ * the end itself), after the operation was given up, or past its deadline. `Finished` is the
+ * only fact of an operation that was refused before it was admitted.
+ */
+export type OperationEvent =
+  | {
+      readonly _tag: "Phase";
+      readonly phase: Exclude<NonNullable<Ticket["phase"]>, "Terminal">;
+      /** Whether the phase sends a native command or acknowledges the one pending. */
+      readonly mutation: boolean;
+      readonly acknowledgement?: AcknowledgementFact;
+      readonly late: boolean;
+      readonly atMonotonicNanos: bigint;
+    }
+  | {
+      readonly _tag: "Terminal";
+      /** The owner's classification of everything this operation's native commands did. */
+      readonly outcome: BrowserOutcome;
+      readonly containment: Containment;
+      readonly late: boolean;
+      readonly atMonotonicNanos: bigint;
+    }
+  | { readonly _tag: "Picture"; readonly boundary: NativePictureBoundary }
+  | { readonly _tag: "Input"; readonly receipt: InputReceipt; readonly keys?: KeyCount }
+  | {
+      readonly _tag: "Scroll";
+      readonly facts: ScrollFacts;
+      /** The connection generation the scrolling ticket was admitted under. */
+      readonly generation: number;
+      readonly late: boolean;
+    }
+  | { readonly _tag: "Glide"; readonly facts: GlideFacts }
+  | { readonly _tag: "Settled"; readonly evidence: SettledEvidence; readonly target: DriverTarget }
+  | {
+      readonly _tag: "Finished";
+      readonly kind: "Completed" | "Failed" | "Cancelled";
+      readonly outcome: BrowserOutcome;
+      readonly error?: BrowserError;
+      readonly containment: Containment;
+    };
+
+/** What a listener learns about one operation before its first event. */
+export interface OperationFacts {
   readonly operation: BrowserOperation;
   readonly operationId: string;
-  readonly ticket: () => Ticket | undefined;
   readonly generation: number;
   readonly scope: ObservationScope | undefined;
-  readonly correlation: () => Correlation | null;
-}) => TicketObserver;
+  readonly correlation: Correlation | null;
+}
+
+/**
+ * Subscribes to operations: called once for each one the owner guards, it returns the receiver
+ * of that operation's events. Listeners observe; they grant no authority.
+ */
+export type OperationListener = (operation: OperationFacts) => (event: OperationEvent) => void;
 
 const outcomeRank: Record<BrowserOutcome, number> = {
   undispatched: 0,
@@ -153,11 +191,11 @@ export interface Ticket extends ReadTicket {
   /** Original-owner sleep, bounded by this admission and fenced before and after waiting. */
   readonly pauseUntil?: (atNanos: bigint) => Promise<void>;
   readonly operationId?: string;
-  readonly picture?: TicketObserver["picture"];
-  readonly recordInput?: TicketObserver["input"];
-  readonly recordScroll?: TicketObserver["scroll"];
-  readonly recordGlide?: TicketObserver["glide"];
-  readonly recordSettled?: TicketObserver["settled"];
+  readonly picture?: (boundary: NativePictureBoundary) => void;
+  readonly recordInput?: (receipt: InputReceipt, keys?: KeyCount) => void;
+  readonly recordScroll?: (facts: ScrollFacts) => void;
+  readonly recordGlide?: (facts: GlideFacts) => void;
+  readonly recordSettled?: (evidence: SettledEvidence, target: DriverTarget) => void;
   /** Native work keeps capacity until settlement, independently of the request fiber. */
   readonly retainNative?: () => () => void;
   readonly dispatched: boolean;
@@ -177,15 +215,13 @@ export interface Ticket extends ReadTicket {
   ) => void;
 }
 
-/** Synchronous host evidence from the original ticket, never dispatch authority. */
+/**
+ * A composite operation's own evidence about the operations it admits: their correlation, its
+ * subscription to their events, and the exact targets they checked. Never dispatch authority.
+ */
 export interface ExecutionEvidence {
-  readonly scroll?: (facts: Parameters<TicketObserver["scroll"]>[0], ticket: Ticket) => void;
   readonly correlation?: () => Correlation | null;
-  readonly phase?: (
-    phase: NonNullable<Ticket["phase"]>,
-    ticket: Ticket,
-    acknowledgement?: AcknowledgementFact,
-  ) => void;
+  readonly listener?: OperationListener;
   readonly target?: NonNullable<Ticket["captureTarget"]>;
 }
 
@@ -224,7 +260,7 @@ export interface Limits {
 
 export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   const clock = yield* Clock.Clock;
-  let observeTicket: ObserveTicket | undefined;
+  let listener: OperationListener | undefined;
   let observePhase: ((phase: Phase) => void) | undefined;
   let operationSequence = 0n;
 
@@ -696,7 +732,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     Effect.suspend(() => {
       const requested = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
       const operationId = (++operationSequence).toString();
-      let observedTicket: Ticket | undefined;
+      let admitted = false;
 
       const deadline = Math.min(
         requested +
@@ -716,14 +752,20 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       const queueDeadline = options.queueDeadline ?? requested + queueMillis;
       const scope = options.targetScope?.() ?? options.mutationScope?.();
 
-      const observer = observeTicket?.({
+      const facts: OperationFacts = {
         operation,
         operationId,
         generation: state.generation,
-        ticket: () => observedTicket,
         scope,
-        correlation: options.evidence?.correlation ?? (() => null),
-      });
+        correlation: options.evidence?.correlation?.() ?? null,
+      };
+
+      // The operation's own subscriber first, then the session's: each fact is emitted once.
+      const receivers = [options.evidence?.listener?.(facts), listener?.(facts)];
+
+      const emit = (event: OperationEvent) => {
+        for (const receive of receivers) receive?.(event);
+      };
 
       const pageLane =
         scope !== undefined && scope !== "all" && scope !== "none"
@@ -853,6 +895,30 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             });
         };
 
+        /**
+         * The one decision, for every listener, of whether a fact is late: it arrived after this
+         * operation ended (unless it is the end itself), after it was given up, or past its
+         * deadline.
+         */
+        const late = (end = false) =>
+          (!end && phase === "Terminal") ||
+          controller.signal.aborted ||
+          Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline;
+
+        const reportPhase = (
+          reached: Exclude<NonNullable<Ticket["phase"]>, "Terminal">,
+          mutation: boolean,
+          acknowledgement?: AcknowledgementFact,
+        ) =>
+          emit({
+            _tag: "Phase",
+            phase: reached,
+            mutation,
+            ...(acknowledgement === undefined ? {} : { acknowledgement }),
+            late: late(),
+            atMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+          });
+
         const ticket: Ticket = {
           ...(options.performance === undefined ? {} : { performance: options.performance }),
           monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
@@ -879,14 +945,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             check();
           },
           operationId,
-          picture: (boundary) => observer?.picture(boundary),
-          recordInput: (receipt, keys) => observer?.input(receipt, keys),
-          recordScroll: (facts) => {
-            options.evidence?.scroll?.(facts, ticket);
-            observer?.scroll(facts);
-          },
-          recordGlide: (facts) => observer?.glide(facts),
-          recordSettled: (evidence, target) => observer?.settled(evidence, target),
+          picture: (boundary) => emit({ _tag: "Picture", boundary }),
+          recordInput: (receipt, keys) =>
+            emit({ _tag: "Input", receipt, ...(keys === undefined ? {} : { keys }) }),
+          recordScroll: (scrolled) =>
+            emit({ _tag: "Scroll", facts: scrolled, generation, late: late() }),
+          recordGlide: (glide) => emit({ _tag: "Glide", facts: glide }),
+          recordSettled: (evidence, target) => emit({ _tag: "Settled", evidence, target }),
           ...(options.evidence?.target === undefined
             ? {}
             : { captureTarget: options.evidence.target }),
@@ -923,8 +988,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               controller,
               scope !== undefined && scope !== "all" && scope !== "none" ? scope.pageId : undefined,
             );
-            options.evidence?.phase?.("Dispatched", ticket);
-            observer?.phase("Dispatched", true);
+            reportPhase("Dispatched", true);
           },
           acknowledge(fact) {
             const mutation = pending;
@@ -948,22 +1012,19 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             }
             if (phase !== "Terminal") phase = "Acknowledged";
             if (!unknownDecided) unresolved.delete(controller);
-            options.evidence?.phase?.("Acknowledged", ticket, fact);
-            observer?.phase("Acknowledged", mutation, fact);
+            reportPhase("Acknowledged", mutation, fact);
             changed();
           },
           followUp() {
             if (phase === "Acknowledged") {
               phase = "FollowUp";
-              options.evidence?.phase?.("FollowUp", ticket);
-              observer?.phase("FollowUp", false);
+              reportPhase("FollowUp", false);
             }
           },
         };
 
-        observedTicket = ticket;
-        options.evidence?.phase?.("Prepared", ticket);
-        observer?.phase("Prepared", false);
+        admitted = true;
+        reportPhase("Prepared", false);
 
         // A revocation freezes the pending attempt synchronously, before a late native
         // acknowledgement can run and before the interrupted Effect resumes its handler.
@@ -1100,7 +1161,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                   ? failure.value
                   : undefined;
 
-              observer?.finished({
+              emit({
+                _tag: "Finished",
                 kind: Exit.isSuccess(exit)
                   ? "Completed"
                   : Cause.hasInterrupts(exit.cause)
@@ -1118,7 +1180,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           Effect.ensuring(
             Effect.sync(() => {
               phase = "Terminal";
-              options.evidence?.phase?.("Terminal", ticket);
+              emit({
+                _tag: "Terminal",
+                outcome: currentOutcome(),
+                containment,
+                late: late(true),
+                atMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+              });
               controller.signal.removeEventListener("abort", freezeUnknown);
               controller.abort();
               admission.deactivate(lane, controller);
@@ -1174,7 +1242,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         ),
         Effect.onExit((exit) =>
           Effect.sync(() => {
-            if (observedTicket !== undefined) return;
+            if (admitted) return;
 
             const failure = Exit.isFailure(exit)
               ? Cause.findErrorOption(exit.cause)
@@ -1185,7 +1253,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                 ? failure.value
                 : undefined;
 
-            observer?.finished({
+            emit({
+              _tag: "Finished",
               kind: Exit.isSuccess(exit)
                 ? "Completed"
                 : Cause.hasInterrupts(exit.cause)
@@ -1203,8 +1272,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   /** Lifecycle transitions are performed while holding guard's permit; close alone preempts it. */
   return {
     clock,
-    observeTickets: (observer: ObserveTicket) => {
-      observeTicket = observer;
+    /** The session's subscription to every operation it guards, such as its timeline's. */
+    observeOperations: (subscribe: OperationListener) => {
+      listener = subscribe;
     },
     observePhase: (observer: (phase: Phase) => void) => {
       observePhase = observer;

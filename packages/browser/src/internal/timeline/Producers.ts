@@ -1,4 +1,4 @@
-import { type Clock, Predicate, Schema } from "effect";
+import { Predicate, Schema } from "effect";
 
 import {
   type Correlation,
@@ -9,7 +9,7 @@ import {
 } from "../../TimelineData.ts";
 import type { CaptureMetadata } from "../browser/Association.ts";
 import type { NativeCachedPage } from "../browser/Driver.ts";
-import type { ObserveTicket, TicketObserver } from "../browser/Owner.ts";
+import type { OperationListener } from "../browser/Owner.ts";
 import type { AppendInput, makeStore } from "./Store.ts";
 
 export type Store = ReturnType<typeof makeStore>;
@@ -73,14 +73,16 @@ export const cachedTarget = (page: NativeCachedPage, generation: number): Eviden
   document: page.documentEpoch,
 });
 
-export const observeTickets =
+/**
+ * The timeline's subscription to every operation the owner guards. It records each fact as the
+ * owner reported it, lateness included, and an operation's end as its Finished facts.
+ */
+export const operationEvents =
   (configuration: {
     readonly store: () => Store;
-    readonly clock: Clock.Clock;
     readonly originNanos: bigint;
-    readonly cachedPages: () => readonly NativeCachedPage[];
     readonly retain: (pageId: string | undefined) => () => void;
-  }): ObserveTicket =>
+  }): OperationListener =>
   (facts) => {
     // One closure per original admitted ticket, with no registry of historical stores.
     const store = configuration.store();
@@ -101,7 +103,7 @@ export const observeTickets =
             document: null,
           };
 
-    const correlation = facts.correlation();
+    const correlation = facts.correlation;
 
     const append = (event: Payload, actualTarget: EvidenceTarget | null = target) =>
       publish(store, { target: actualTarget, correlation, event });
@@ -128,186 +130,202 @@ export const observeTickets =
       document: null,
     });
 
-    const observer: TicketObserver = {
-      phase: (phase, mutation, acknowledgement) => {
-        const ticket = facts.ticket();
+    return (event) => {
+      switch (event._tag) {
+        case "Phase": {
+          if (event.phase === "Dispatched") ordinal++;
 
-        if (ticket === undefined) return;
-        if (phase === "Dispatched") ordinal++;
+          const common = {
+            operation: facts.operation,
+            operationId: facts.operationId,
+            nativeOrdinal: ordinal,
+            mutation: event.mutation,
+            late: event.late,
+          };
 
-        const common = {
-          operation: facts.operation,
-          operationId: facts.operationId,
-          nativeOrdinal: ordinal,
-          mutation,
-          late:
-            ticket.phase === "Terminal" ||
-            ticket.signal.aborted ||
-            Number(configuration.clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= ticket.deadline,
-        };
+          // Consumers tell a preparatory or burst reply from completed logical input by its fact.
+          append(
+            event.phase === "Acknowledged" && event.acknowledgement !== undefined
+              ? {
+                  _tag: event.phase,
+                  ...common,
+                  acknowledgement: {
+                    subphase: event.acknowledgement.subphase,
+                    logicalComplete: event.acknowledgement.logicalComplete,
+                  },
+                }
+              : { _tag: event.phase, ...common },
+          );
 
-        // Consumers tell a preparatory or burst reply from completed logical input by its fact.
-        append(
-          phase === "Acknowledged" && acknowledgement !== undefined
-            ? {
-                _tag: phase,
-                ...common,
-                acknowledgement: {
-                  subphase: acknowledgement.subphase,
-                  logicalComplete: acknowledgement.logicalComplete,
-                },
-              }
-            : { _tag: phase, ...common },
-        );
-      },
-      picture: (boundary) => {
-        const captured: EvidenceTarget = {
-          generation: facts.generation,
-          ...boundary.target,
-          document: boundary.documentEpoch,
-        };
+          return;
+        }
+        // The timeline records an operation's end through its Finished facts.
+        case "Terminal":
+          return;
+        case "Picture": {
+          const boundary = event.boundary;
 
-        const now = store.now();
+          const captured: EvidenceTarget = {
+            generation: facts.generation,
+            ...boundary.target,
+            document: boundary.documentEpoch,
+          };
 
-        if (boundary.phase === "Requested") picture = { at: now, target: captured };
-        else if (picture !== undefined) {
-          const requested = picture;
+          const now = store.now();
 
-          picture = undefined;
+          if (boundary.phase === "Requested") picture = { at: now, target: captured };
+          else if (picture !== undefined) {
+            const requested = picture;
+
+            picture = undefined;
+            append(
+              {
+                _tag: "Picture",
+                operationId: facts.operationId,
+                mediaType: "image/png",
+                nativeRequest: requested.at,
+                nativeReturn: now,
+                qualification: "native-call-interval",
+                requestDocument: requested.target.document,
+                returnDocument: boundary.documentEpoch,
+              },
+              {
+                ...requested.target,
+                document:
+                  requested.target.document === boundary.documentEpoch
+                    ? boundary.documentEpoch
+                    : null,
+              },
+            );
+          }
+
+          return;
+        }
+        case "Input": {
+          const { receipt, keys } = event;
+          const timing = interval(receipt.startedMonotonicNanos, receipt.completedMonotonicNanos);
+          const correlated = { operationId: facts.operationId, interval: timing };
+          let payload: Payload | undefined;
+
+          switch (receipt.kind) {
+            case "pointer-move":
+            case "hover":
+              payload = {
+                _tag: "Pointer",
+                kind: receipt.kind,
+                position: receipt.position === null ? null : geometry(receipt.position),
+                ...correlated,
+              };
+              break;
+            case "click":
+              payload = {
+                _tag: "Press",
+                position: receipt.position === null ? null : geometry(receipt.position),
+                ...(receipt.intended === undefined
+                  ? {}
+                  : {
+                      intended: {
+                        position: geometry(receipt.intended.position),
+                        relativePosition: geometry(receipt.intended.relativePosition),
+                        qualification: receipt.intended.qualification,
+                      },
+                    }),
+                ...correlated,
+              };
+              break;
+            case "wheel":
+              payload = {
+                _tag: "Scroll",
+                kind: "wheel",
+                delta:
+                  receipt.delta === undefined || receipt.delta === null
+                    ? null
+                    : geometry(receipt.delta),
+                ...correlated,
+              };
+              break;
+            case "press":
+            case "type":
+              if (keys === undefined) return;
+              payload = { _tag: "Keys", kind: receipt.kind, ...keys, ...correlated };
+              break;
+          }
+          append(
+            payload ?? { _tag: "MetadataOmitted", reason: "Malformed", originalTag: null },
+            actualTarget(receipt.target),
+          );
+
+          return;
+        }
+        case "Scroll": {
+          const value = event.facts;
+
           append(
             {
-              _tag: "Picture",
-              operationId: facts.operationId,
-              mediaType: "image/png",
-              nativeRequest: requested.at,
-              nativeReturn: now,
-              qualification: "native-call-interval",
-              requestDocument: requested.target.document,
-              returnDocument: boundary.documentEpoch,
-            },
-            {
-              ...requested.target,
-              document:
-                requested.target.document === boundary.documentEpoch
-                  ? boundary.documentEpoch
-                  : null,
-            },
-          );
-        }
-      },
-      input: (receipt, keys) => {
-        const timing = interval(receipt.startedMonotonicNanos, receipt.completedMonotonicNanos);
-        const correlation = { operationId: facts.operationId, interval: timing };
-        let event: Payload | undefined;
-
-        switch (receipt.kind) {
-          case "pointer-move":
-          case "hover":
-            event = {
-              _tag: "Pointer",
-              kind: receipt.kind,
-              position: receipt.position === null ? null : geometry(receipt.position),
-              ...correlation,
-            };
-            break;
-          case "click":
-            event = {
-              _tag: "Press",
-              position: receipt.position === null ? null : geometry(receipt.position),
-              ...(receipt.intended === undefined
-                ? {}
-                : {
-                    intended: {
-                      position: geometry(receipt.intended.position),
-                      relativePosition: geometry(receipt.intended.relativePosition),
-                      qualification: receipt.intended.qualification,
-                    },
-                  }),
-              ...correlation,
-            };
-            break;
-          case "wheel":
-            event = {
               _tag: "Scroll",
-              kind: "wheel",
+              operationId: facts.operationId,
+              kind: "scroll",
+              // A scroll-into-view moves by whatever the browser chose; it has no requested delta.
               delta:
-                receipt.delta === undefined || receipt.delta === null
-                  ? null
-                  : geometry(receipt.delta),
-              ...correlation,
-            };
-            break;
-          case "press":
-          case "type":
-            if (keys === undefined) return;
-            event = { _tag: "Keys", kind: receipt.kind, ...keys, ...correlation };
-            break;
-        }
-        append(
-          event ?? { _tag: "MetadataOmitted", reason: "Malformed", originalTag: null },
-          actualTarget(receipt.target),
-        );
-      },
-      scroll: (value) =>
-        append(
-          {
-            _tag: "Scroll",
-            operationId: facts.operationId,
-            kind: "scroll",
-            // A scroll-into-view moves by whatever the browser chose; it has no requested delta.
-            delta:
-              value.x === undefined || value.y === undefined ? null : { x: value.x, y: value.y },
-            ...(value.qualification === undefined ? {} : { qualification: value.qualification }),
-            interval: interval(value.startedMonotonicNanos, value.completedMonotonicNanos),
-          },
-          actualTarget(value.target),
-        ),
-      settled: (evidence, value) =>
-        append(
-          {
-            _tag: "Settled",
-            operationId: facts.operationId,
-            quietMillis: evidence.quietMillis,
-            withinMillis: evidence.withinMillis,
-            signals: evidence.signals,
-          },
-          actualTarget(value),
-        ),
-      glide: (value) => {
-        if (value.samples.length < 2) return;
-        append(
-          {
-            _tag: "Glide",
-            operationId: facts.operationId,
-            qualification: "intended-schedule",
-            schedule: value.samples.map((sample) => ({
-              at: at(
-                value.startedMonotonicNanos + BigInt(Math.round(sample.offsetMillis * 1_000_000)),
-              ),
-              position: geometry(sample.position),
-            })),
-          },
-          actualTarget(value.target),
-        );
-      },
-      finished: (summary) => {
-        if (summary.containment._tag !== "NotRequired")
-          append({ _tag: "Contained", containment: summary.containment });
-        if (summary.kind === "Cancelled")
-          append({ _tag: "Cancelled", operationId: facts.operationId, outcome: summary.outcome });
-        else if (summary.kind === "Failed")
-          append({
-            _tag: "Failed",
-            operationId: facts.operationId,
-            operation: facts.operation,
-            reason: summary.error?.reason._tag ?? "Failed",
-            outcome: summary.outcome,
-          });
-        release();
-      },
-    };
+                value.x === undefined || value.y === undefined ? null : { x: value.x, y: value.y },
+              ...(value.qualification === undefined ? {} : { qualification: value.qualification }),
+              interval: interval(value.startedMonotonicNanos, value.completedMonotonicNanos),
+            },
+            actualTarget(value.target),
+          );
 
-    return observer;
+          return;
+        }
+        case "Settled":
+          append(
+            {
+              _tag: "Settled",
+              operationId: facts.operationId,
+              quietMillis: event.evidence.quietMillis,
+              withinMillis: event.evidence.withinMillis,
+              signals: event.evidence.signals,
+            },
+            actualTarget(event.target),
+          );
+
+          return;
+        case "Glide": {
+          const value = event.facts;
+
+          if (value.samples.length < 2) return;
+          append(
+            {
+              _tag: "Glide",
+              operationId: facts.operationId,
+              qualification: "intended-schedule",
+              schedule: value.samples.map((sample) => ({
+                at: at(
+                  value.startedMonotonicNanos + BigInt(Math.round(sample.offsetMillis * 1_000_000)),
+                ),
+                position: geometry(sample.position),
+              })),
+            },
+            actualTarget(value.target),
+          );
+
+          return;
+        }
+        case "Finished":
+          if (event.containment._tag !== "NotRequired")
+            append({ _tag: "Contained", containment: event.containment });
+          if (event.kind === "Cancelled")
+            append({ _tag: "Cancelled", operationId: facts.operationId, outcome: event.outcome });
+          else if (event.kind === "Failed")
+            append({
+              _tag: "Failed",
+              operationId: facts.operationId,
+              operation: facts.operation,
+              reason: event.error?.reason._tag ?? "Failed",
+              outcome: event.outcome,
+            });
+          release();
+      }
+    };
   };
 
 export const captureMetadata =

@@ -22,7 +22,6 @@ import {
 import { BrowserError, Reasons, type BrowserOutcome, type Containment } from "../../Errors.ts";
 import { type RunOperation, type RunOptions, StepFailed } from "../../Plan.ts";
 import type {
-  AcknowledgementFact,
   AttemptResult,
   AttemptSnapshot,
   DescriptorCapture,
@@ -41,7 +40,7 @@ import type {
 } from "../../PlanData.ts";
 import type { Correlation, Payload } from "../../TimelineData.ts";
 import type { DescriptorSample, ResolvedElement } from "./Descriptor.ts";
-import { strongestOutcome, type Ticket } from "./Owner.ts";
+import { type OperationEvent, type ScrollFacts, strongestOutcome } from "./Owner.ts";
 import { prepare, type PerformancePlan } from "./Performance.ts";
 import { capture, inputSlots, pathKey, type TargetSample, validateInputs } from "./Recording.ts";
 import type { ExecutionOptions } from "./Session.ts";
@@ -413,7 +412,6 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 seed: performance.seed,
                 profile: performance.profile,
               });
-            const finishedTickets = new WeakSet<Ticket>();
 
             const targetBindings = new Map<
               ObservedElement | ResolvedElement | string,
@@ -422,8 +420,9 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
 
             const retainedInputs = new WeakSet<InputReceipt>();
             const checkedSamples = new Set<string>();
-            let lastDispatchTicket: Ticket | undefined;
-            let lastBurstTicket: Ticket | undefined;
+            // Bursts fold only within one admitted operation, named by its owner's operation id.
+            let lastDispatchOperation: string | undefined;
+            let lastBurstOperation: string | undefined;
 
             const append = (evidence: PhaseEvidence): void => {
               if (state.phases.length >= maximumPhases) {
@@ -440,8 +439,8 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
               state.phases.push(Object.freeze(evidence));
             };
 
-            const appendPhase = (evidence: PhaseEvidence, ticket: Ticket): void => {
-              if (evidence.phase === "Dispatched") lastDispatchTicket = ticket;
+            const appendPhase = (evidence: PhaseEvidence, operationId: string): void => {
+              if (evidence.phase === "Dispatched") lastDispatchOperation = operationId;
               const fact = evidence.acknowledgement;
 
               if (
@@ -449,9 +448,9 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 fact === undefined ||
                 fact.logicalComplete ||
                 (fact.subphase !== "key-burst" && fact.subphase !== "scroll-burst") ||
-                lastDispatchTicket !== ticket
+                lastDispatchOperation !== operationId
               ) {
-                if (evidence.phase !== "Dispatched") lastBurstTicket = undefined;
+                if (evidence.phase !== "Dispatched") lastBurstOperation = undefined;
                 append(evidence);
 
                 return;
@@ -473,7 +472,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
               const dispatched = state.phases[start];
 
               if (dispatched === undefined) {
-                lastBurstTicket = undefined;
+                lastBurstOperation = undefined;
                 append(evidence);
 
                 return;
@@ -482,7 +481,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
               const previous = state.phases[start - 1];
 
               const combine =
-                lastBurstTicket === ticket &&
+                lastBurstOperation === operationId &&
                 previous?.phase === "Acknowledged" &&
                 previous.burst?.subphase === fact.subphase &&
                 previous.operation === evidence.operation &&
@@ -504,24 +503,13 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
               if (combine) {
                 state.phases[start - 1] = Object.freeze({ ...previous, ...evidence, burst });
               } else append({ ...evidence, burst });
-              lastBurstTicket = ticket;
+              lastBurstOperation = operationId;
             };
 
-            const retainScroll = (
-              facts: Parameters<
-                NonNullable<NonNullable<ExecutionOptions["evidence"]>["scroll"]>
-              >[0],
-              ticket: Ticket,
-            ): void => {
-              const late =
-                state.completed ||
-                finishedTickets.has(ticket) ||
-                ticket.signal.aborted ||
-                now() >= ticket.deadline;
-
+            const retainScroll = (facts: ScrollFacts, generation: number, late: boolean): void => {
               const scroll: NonNullable<PhaseEvidence["scroll"]> = Object.freeze({
                 target: Object.freeze({
-                  generation: ticket.generation,
+                  generation,
                   pageId: facts.target.pageId,
                   frameId: facts.target.frameId,
                 }),
@@ -567,7 +555,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
 
                 return;
               }
-              lastBurstTicket = undefined;
+              lastBurstOperation = undefined;
               append({
                 phase: "SubphaseReceipt",
                 operation: state.phase,
@@ -664,45 +652,55 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 ...(queueDeadline === undefined ? {} : { queueDeadline }),
                 evidence: {
                   correlation,
-                  phase: (
-                    phase: NonNullable<Ticket["phase"]>,
-                    ticket: Ticket,
-                    acknowledgement?: AcknowledgementFact,
-                  ) => {
-                    const late =
-                      state.completed ||
-                      finishedTickets.has(ticket) ||
-                      ticket.signal.aborted ||
-                      now() >= ticket.deadline;
+                  // Each admitted operation's facts, with the owner's lateness; evidence that
+                  // arrives after this attempt completed is late for the attempt as well.
+                  listener:
+                    ({ operationId }) =>
+                    (event: OperationEvent) => {
+                      switch (event._tag) {
+                        case "Phase":
+                        case "Terminal":
+                          appendPhase(
+                            {
+                              phase: event._tag === "Terminal" ? "Terminal" : event.phase,
+                              operation: state.phase,
+                              atMonotonicNanos: event.atMonotonicNanos,
+                              late: state.completed || event.late,
+                              ...(state.fieldIndex === undefined
+                                ? {}
+                                : { fieldIndex: state.fieldIndex }),
+                              ...(event._tag === "Terminal" || event.acknowledgement === undefined
+                                ? {}
+                                : { acknowledgement: Object.freeze({ ...event.acknowledgement }) }),
+                            },
+                            operationId,
+                          );
+                          if (event._tag === "Terminal") {
+                            if (!state.completed)
+                              state.reached = strongestOutcome(state.reached, event.outcome);
+                            if (event.containment._tag !== "NotRequired")
+                              state.containment = Object.freeze({ ...event.containment });
+                          }
 
-                    appendPhase(
-                      {
-                        phase,
-                        operation: state.phase,
-                        atMonotonicNanos: configuration.clock.monotonicTimeNanosUnsafe(),
-                        late,
-                        ...(state.fieldIndex === undefined ? {} : { fieldIndex: state.fieldIndex }),
-                        ...(acknowledgement === undefined
-                          ? {}
-                          : { acknowledgement: Object.freeze({ ...acknowledgement }) }),
-                      },
-                      ticket,
-                    );
-                    if (phase === "Terminal") {
-                      finishedTickets.add(ticket);
-                      if (!state.completed)
-                        state.reached = strongestOutcome(
-                          state.reached,
-                          ticket.outcome ?? "undispatched",
-                        );
-                      if (
-                        ticket.containment !== undefined &&
-                        ticket.containment._tag !== "NotRequired"
-                      )
-                        state.containment = Object.freeze({ ...ticket.containment });
-                    }
-                  },
-                  scroll: retainScroll,
+                          return;
+                        case "Scroll":
+                          retainScroll(
+                            event.facts,
+                            event.generation,
+                            state.completed || event.late,
+                          );
+
+                          return;
+                        // Pictures, input receipts, glides, settling and the operation's
+                        // own summary reach the plan through its receipts, not as phases.
+                        case "Picture":
+                        case "Input":
+                        case "Glide":
+                        case "Settled":
+                        case "Finished":
+                          return;
+                      }
+                    },
                   target: (target, sample) => {
                     if (state.completed) return;
                     for (const path of targetBindings.get(target) ?? []) {

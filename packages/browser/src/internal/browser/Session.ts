@@ -56,7 +56,7 @@ import {
 import {
   cachedTarget,
   captureMetadata,
-  observeTickets,
+  operationEvents,
   planPublisher,
   publish,
 } from "../timeline/Producers.ts";
@@ -439,12 +439,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     publish(domain.store, { target: null, correlation: null, event: { _tag: "Lifecycle", phase } });
   });
 
-  owner.observeTickets(
-    observeTickets({
+  owner.observeOperations(
+    operationEvents({
       store: () => domain.store,
-      clock,
       originNanos,
-      cachedPages: () => driver?.cachedPages() ?? [],
       retain: (pageId) => {
         const releaseDomain = domain.retirement.retain();
 
