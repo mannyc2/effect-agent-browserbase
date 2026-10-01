@@ -56,6 +56,12 @@ slow.addEventListener("input", () => { mirror.textContent = String(slow.value.le
 <script>
 text.addEventListener("input", () => { mirror.textContent = text.value; });
 </script>`,
+  // A control its container clips at the bottom, though its center stays visible.
+  "/clipped": `<p id="hovered"></p>
+<div style="position: relative; height: 120px; overflow: hidden">
+  <button style="position: absolute; top: 40px; left: 10px; width: 200px; height: 120px"
+    onmouseover="hovered.textContent = 'hovered'">Clipped</button>
+</div>`,
   // A control far below the fold; the page reports its scroll offset and any hover.
   "/below": `<p id="scrolled">0</p><p id="hovered"></p><div style="height: 4000px"></div>
 <button onmouseover="hovered.textContent = 'hovered'">Far</button>
@@ -457,6 +463,42 @@ it.live("real CDP: a long shifted performed Type keeps complete recording eviden
       expect((yield* page.readText({ selector: "#mirror" })).text).toBe(text);
       expect(ran.steps.map((step) => step.recorded._tag)).toEqual(["Complete", "Complete"]);
       expect((yield* Plan.recorded(ran)).steps).toHaveLength(2);
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed Hover reaches a partly clipped control a plain one reaches", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const hovered = (style: { readonly seed: number } | undefined) =>
+        Effect.gen(function* () {
+          const session = yield* open("/clipped");
+          const page = session.initialPage;
+
+          yield* page.run(
+            {
+              version: 1,
+              steps: [
+                {
+                  id: "hover",
+                  action: {
+                    _tag: "Hover",
+                    target: {
+                      _tag: "Descriptor",
+                      descriptor: { kind: "button", label: "Clipped", matchScope: "document" },
+                    },
+                  },
+                },
+              ],
+            },
+            style === undefined ? {} : { style },
+          );
+
+          return (yield* page.readText({ selector: "#hovered" })).text;
+        });
+
+      expect(yield* hovered(undefined)).toBe("hovered");
+      expect(yield* hovered({ seed: 11 })).toBe("hovered");
     }).pipe(Effect.provide(layer)),
   ),
 );

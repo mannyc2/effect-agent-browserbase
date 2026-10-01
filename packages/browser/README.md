@@ -848,7 +848,7 @@ const receipt =
 
 Coordinates are CSS pixels in the main frame's viewport. Each logical input is one action on its issued Page or Frame. Performed plans add bounded pacing and output-only glide evidence; viewers draw cursor artwork from projected evidence without injecting presentation DOM into the website.
 
-`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`page.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
+`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`page.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`. A performed hover aims inside the part of the element its viewport and overflow ancestors leave visible, so it reaches a partly clipped element a plain hover reaches, and refuses only one with no visible part.
 
 For a child-frame element, hover checks the commanded point through each ancestor
 frame and then the exact node, including cross-origin documents. The receipt
