@@ -236,7 +236,10 @@ const privateState = (node: Element, maximumBytes: number): string | null => {
   const encode = (value: ReadonlyArray<string | boolean | ReadonlyArray<string>>) => {
     const text = JSON.stringify(value);
 
-    return text.length <= maximumBytes && new TextEncoder().encode(text).length <= maximumBytes
+    // A page can replace JSON.stringify; only a bounded string may cross to the host.
+    return typeof text === "string" &&
+      text.length <= maximumBytes &&
+      new TextEncoder().encode(text).length <= maximumBytes
       ? text
       : null;
   };
