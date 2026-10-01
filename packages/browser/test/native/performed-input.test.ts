@@ -5,7 +5,9 @@ import { expect, it } from "@effect/vitest";
 import { Clock, Effect, Exit, Layer } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
+import * as Plan from "effect-browser/plan";
 import type { StepFailed } from "effect-browser/plan";
+import { DefaultMotionProfile } from "effect-browser/plan-data";
 
 import { externalChromium } from "../fixtures/StandaloneBrowser.ts";
 
@@ -60,6 +62,15 @@ text.addEventListener("input", () => { mirror.textContent = text.value; });
 <script>
 addEventListener("scroll", () => { scrolled.textContent = String(Math.round(scrollY)); });
 </script>`,
+};
+
+// Performed keys without pauses, so long texts stay fast while keeping every stroke's events.
+const instant = {
+  ...DefaultMotionProfile,
+  keys: {
+    interval: { minMillis: 0, maxMillis: 0 },
+    hold: { minMillis: 0, maxMillis: 0 },
+  },
 };
 
 const site = Effect.acquireRelease(
@@ -377,6 +388,75 @@ it.live("real CDP: a performed Hover refuses an unseen control instead of scroll
       });
       expect((yield* page.readText({ selector: "#scrolled" })).text).toBe("0");
       expect((yield* page.readText({ selector: "#hovered" })).text).toBe("");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed Press with modifiers sends the same key events as a plain one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const pressed = (style: { readonly seed: number } | undefined) =>
+        Effect.gen(function* () {
+          const session = yield* open("/keys");
+          const page = session.initialPage;
+
+          yield* page.run(
+            {
+              version: 1,
+              steps: [
+                { id: "focus", action: { _tag: "Click", target: input("First") } },
+                {
+                  id: "letter",
+                  action: { _tag: "Press", target: input("First"), key: "a", modifiers: ["Shift"] },
+                },
+                {
+                  id: "digit",
+                  action: { _tag: "Press", target: input("First"), key: "1", modifiers: ["Shift"] },
+                },
+              ],
+            },
+            style === undefined ? {} : { style },
+          );
+
+          return [
+            (yield* page.readText({ selector: "#log" })).text,
+            (yield* page.readText({ selector: "#values" })).text,
+          ];
+        });
+
+      expect(yield* pressed({ seed: 17 })).toEqual(yield* pressed(undefined));
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a long shifted performed Type keeps complete recording evidence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/shift");
+      const page = session.initialPage;
+      const text = "AZ".repeat(128);
+
+      const ran = yield* page.run(
+        {
+          version: 1,
+          steps: [
+            { id: "focus", action: { _tag: "Click", target: input("Text") } },
+            {
+              id: "text",
+              action: {
+                _tag: "Type",
+                target: input("Text"),
+                text: { _tag: "Literal", value: text },
+              },
+            },
+          ],
+        },
+        { style: { seed: 23, motion: instant }, within: "60 seconds" },
+      );
+
+      expect((yield* page.readText({ selector: "#mirror" })).text).toBe(text);
+      expect(ran.steps.map((step) => step.recorded._tag)).toEqual(["Complete", "Complete"]);
+      expect((yield* Plan.recorded(ran)).steps).toHaveLength(2);
     }).pipe(Effect.provide(layer)),
   ),
 );
