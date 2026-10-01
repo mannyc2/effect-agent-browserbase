@@ -251,7 +251,7 @@ enabled, `PageControl.state(page)`, `PageControl.suspend(page)` and
 
 ### Actions, plans and recording
 
-Issued Pages and Frames expose `run(plan, options)` and scoped `start(plan, options)` on their original owner. `effect-browser/plan-data` supplies one tagged action schema for navigation, exact target input, selection, forms, scrolling and bounded waits. A live plan can name an observed Ref or a Descriptor; durable version-1 plans contain only descriptors and named inputs. `Plan.make` validates live intent, `Plan.decode` validates stored intent, and `Plan.encode` serializes normalized defaults. Ingress checks finite data cost before semantic decoding: at most 128 distinct steps and 1 MiB of encoded data.
+Issued Pages and Frames expose `run(plan, options)` and scoped `start(plan, options)` on their original owner. `effect-browser/plan-data` supplies one tagged action schema for navigation, exact target input, selection, forms, scrolling and bounded waits. A live plan can name an observed Ref or a Descriptor; durable version-1 targets are descriptor-only, with authored literal values or named inputs. Recording replaces input literals with named slots. `Plan.make` validates live intent, `Plan.decode` validates stored intent, and `Plan.encode` serializes normalized defaults. Ingress checks finite data cost before semantic decoding: at most 128 distinct steps and 1 MiB of encoded data.
 
 ```ts
 import * as Plan from "effect-browser/plan";

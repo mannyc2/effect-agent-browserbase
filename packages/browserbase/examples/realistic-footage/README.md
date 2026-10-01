@@ -37,9 +37,10 @@ film and are out of scope here.
 
 ## How it fits the library
 
-The library sends one native pointer move or key per action, and it lets a page
-call the host but never the reverse. A glide is sixty positions a second, so
-the example builds on what makes that affordable:
+Individual pointer moves and key presses are bounded native commands; plain typing can
+emit ordered keys under one action receipt. The library lets a page call the host
+but never the reverse. A glide is sixty positions a second, so the example builds
+on what makes that affordable:
 
 ```
 host                                            page (allowed origins only)
