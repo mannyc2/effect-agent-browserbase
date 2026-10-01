@@ -175,7 +175,6 @@ export const Descriptor = Schema.Struct({
     }).annotate(closed),
   ),
   ordinal: Schema.optionalKey(Ordinal),
-  near: Schema.optionalKey(ViewportRect),
   frame: Schema.optionalKey(FrameDescriptor),
 }).annotate(closed);
 
@@ -359,19 +358,11 @@ export const RecordedStep = stepSchema(RecordedAction);
 
 export type RecordedStep = typeof RecordedStep.Type;
 
-export const PlanProvenance = Schema.Struct({
-  library: Schema.Literal("effect-browser"),
-  version: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
-}).annotate(closed);
-
-export type PlanProvenance = typeof PlanProvenance.Type;
-
 const planSchema = <S extends Schema.Constraint & { readonly Type: { readonly id: string } }>(
   step: S,
 ) =>
   Schema.Struct({
     version: Schema.Literal(1),
-    provenance: Schema.optionalKey(PlanProvenance),
     steps: Schema.Array(step).check(
       Schema.isMinLength(1),
       Schema.isMaxLength(Limits.steps),
@@ -406,7 +397,6 @@ export const CaptureIncompleteReason = Schema.Literals([
   "DestinationOmitted",
   "IdentityOmitted",
   "FrameUnavailable",
-  "CardinalityUnavailable",
   "TargetUnavailable",
   "EvidenceLimit",
 ]);

@@ -251,7 +251,6 @@ const descriptor = (sample: DescriptorSample): Descriptor | CaptureIncompleteRea
     ...(facts.destination === undefined ? {} : { destination: facts.destination }),
     ...(Object.keys(identity).length === 0 ? {} : { identity }),
     ...(sample.ordinal === undefined ? {} : { ordinal: sample.ordinal }),
-    near: facts.box,
     ...(sample.frame === undefined ? {} : { frame: sample.frame }),
   };
 };
