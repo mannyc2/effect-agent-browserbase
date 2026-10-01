@@ -514,7 +514,7 @@ export interface Driver {
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;
   readonly fenceInitializationPage?: (pageId: string) => void;
-  readonly restoreInitializationPage?: (pageId: string) => void;
+  readonly restoreInitializationPage?: (pageId: string, held: (pageId: string) => boolean) => void;
   /** Work on a `quarantined` page belongs to its operator and cannot block a handoff. */
   readonly handoffDrained?: (quarantined: (pageId: string) => boolean) => boolean;
   readonly retireInitializationPage?: (pageId: string) => void;

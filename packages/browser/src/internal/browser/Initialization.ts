@@ -122,13 +122,16 @@ export const makeInitialization = (
     if (page !== undefined) revokedPages.add(page);
   };
 
-  /** The owner calls this only after the global handoff drain and operator release. */
-  const restorePage = (pageId: string) => {
+  /**
+   * The owner calls this only after the global handoff drain and operator release. Pending work
+   * on this page, or on a page still `held`, was exempt from that drain and cannot refuse it now.
+   */
+  const restorePage = (pageId: string, held: (pageId: string) => boolean = () => false) => {
     const page = entries.get(pageId)?.page;
 
     if (
       initializationClosed ||
-      !drained() ||
+      !drained((candidate) => candidate === pageId || held(candidate)) ||
       page === undefined ||
       page.isClosed() ||
       targets.pageIdOf(page) !== pageId

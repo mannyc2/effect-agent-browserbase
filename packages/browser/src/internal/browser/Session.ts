@@ -517,7 +517,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const restorePageAuthority = (pageId: string) => {
     owner.restorePageAdmission(pageId);
-    driver?.restoreInitializationPage?.(pageId);
+    driver?.restoreInitializationPage?.(pageId, owner.paused);
     activeBindings?.resumePage(pageId);
   };
 
