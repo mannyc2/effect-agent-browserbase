@@ -182,6 +182,14 @@ const pageBundle = (
  * These are child CDP sessions on the existing owned Playwright connection, not another owner,
  * websocket, browser resource or publicly exposed raw-protocol capability.
  */
+/**
+ * Whether a native call failed with this Playwright refusal. Playwright prefixes the text with the
+ * calling API, which differs between runtimes and between `newCDPSession` and `send`, so only the
+ * stable refusal itself is compared.
+ */
+const nativeRefusal = (cause: unknown, refusal: string): boolean =>
+  cause instanceof Error && cause.message.includes(refusal);
+
 export const makeNativeBindings = (
   context: BrowserContext,
   /** Unpredictable and never reported, so no page can define these globals before they install. */
@@ -247,17 +255,9 @@ export const makeNativeBindings = (
         cdp = await context.newCDPSession(subject);
       } catch (cause) {
         // Chromium routes same-process child frames through their parent's target. Only this
-        // exact pinned Playwright refusal selects that already-owned session. Node and Bun
-        // supply different API prefixes; other failures remain faults rather than silently
-        // omitting an out-of-process frame.
-        if (
-          subject !== page &&
-          cause instanceof Error &&
-          (cause.message ===
-            "browserContext.newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session" ||
-            cause.message ===
-              "newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session")
-        )
+        // Playwright refusal selects that already-owned session; other failures remain faults
+        // rather than silently omitting an out-of-process frame.
+        if (subject !== page && nativeRefusal(cause, "does not have a separate CDP session"))
           return;
         throw cause;
       }
@@ -485,15 +485,8 @@ export const makeNativeBindings = (
             timeout: 2000,
           })
           .catch((cause: unknown) => {
-            if (
-              !current() &&
-              cause instanceof Error &&
-              (cause.message ===
-                "cdpSession.send: Protocol error (Runtime.evaluate): uniqueContextId not found" ||
-                cause.message ===
-                  "send: Protocol error (Runtime.evaluate): uniqueContextId not found")
-            )
-              throw retirementError("stale");
+            // The document's own retirement, not the wording of the failure, decides this.
+            if (!current()) throw retirementError("stale");
             throw cause;
           });
 
@@ -506,16 +499,11 @@ export const makeNativeBindings = (
           });
       }
     } catch (cause) {
-      // These are exact errors emitted by the pinned public Playwright calls. The error text
-      // only classifies a failure after this exact native subject has positively retired;
-      // it never supplies page, frame or document authority. Other protocol failures remain
-      // failures even when a close event happened before their rejection reached this code.
+      // The error text only classifies a failure after this exact native subject has positively
+      // retired; it never supplies page, frame or document authority. Other protocol failures
+      // remain failures even when a close event happened before their rejection reached this code.
       if (
-        cause instanceof Error &&
-        (cause.message === "cdpSession.send: Target page, context or browser has been closed" ||
-          cause.message === "send: Target page, context or browser has been closed" ||
-          cause.message ===
-            "browserContext.newCDPSession: Target page, context or browser has been closed") &&
+        nativeRefusal(cause, "Target page, context or browser has been closed") &&
         (page.isClosed() ||
           nativeClosed ||
           (subject !== page && "isDetached" in subject && subject.isDetached()))
