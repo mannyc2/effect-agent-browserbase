@@ -295,16 +295,15 @@ export const makeKeyboard = (
     const pacing = ownerPacing(ticket);
 
     pacing.requireDuration(stroke.holdMillis);
-
-    const authority = async () => {
-      check();
-      if (element !== undefined)
-        await requireFocus(element, ticket.dispatched ? "unknown" : "undispatched");
-      check();
-    };
+    // Focus is required once, before the stroke's first command. The key's own default action
+    // may move it (Tab, an Enter that submits, an auto-advancing field), and the releases still
+    // belong to this stroke: like plain typing's, they are fenced by the ticket alone.
+    check();
+    if (element !== undefined) await requireFocus(element);
+    check();
 
     const submit = async (command: () => Promise<unknown>) => {
-      await authority();
+      check();
       ticket.dispatch();
       // The one current reply is observed before another command can be submitted.
       await command();
