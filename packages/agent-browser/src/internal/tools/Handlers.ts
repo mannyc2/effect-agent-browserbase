@@ -149,14 +149,17 @@ export const makeOperations = (
 
   /**
    * A fixed performed seed is the base of a sequence: the nth run these handlers start uses
-   * `seed + n - 1`, so every call draws its own timing and the same calls reproduce it.
+   * `seed + n - 1`, so every call draws its own timing and the same calls reproduce it. Past the
+   * largest safe integer the sequence continues from the smallest, so every seed stays valid.
    */
   const execution = (): ResolvedOptions["execution"] => {
     const { style } = options.execution;
 
     if (style === undefined || style === "plain" || style.seed === undefined)
       return options.execution;
-    const seed = Number((BigInt(style.seed) + runs++) % BigInt(Number.MAX_SAFE_INTEGER));
+    const smallest = BigInt(Number.MIN_SAFE_INTEGER);
+    const span = BigInt(Number.MAX_SAFE_INTEGER) - smallest + 1n;
+    const seed = Number(smallest + ((BigInt(style.seed) - smallest + runs++) % span));
 
     return { ...options.execution, style: { ...style, seed } };
   };

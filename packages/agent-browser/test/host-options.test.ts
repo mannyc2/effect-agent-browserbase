@@ -65,36 +65,45 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
   }),
 );
 
-it.effect("a fixed execution seed is a base: each run draws its own, reproducibly", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const seeds = Effect.fnUntraced(function* () {
-        const browser = yield* scriptedSession();
+it.effect.each([
+  [94, [94, 95, 96]],
+  // The sequence keeps every valid seed and wraps only past the largest safe integer.
+  [
+    Number.MAX_SAFE_INTEGER - 1,
+    [Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER],
+  ],
+] as const)(
+  "a fixed execution seed %d is a base: each run draws its own, reproducibly",
+  ([seed, expected]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const seeds = Effect.fnUntraced(function* () {
+          const browser = yield* scriptedSession();
 
-        const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
-          execution: { style: { seed: 94 } },
+          const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+            execution: { style: { seed } },
+          });
+
+          const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+          for (const id of ["first", "second", "third"])
+            yield* Stream.runCollect(
+              yield* tools.handle("browser_scroll", { deltaX: 0, deltaY: 10 }, id),
+            );
+
+          return yield* Effect.forEach((yield* host.receipts).receipts, (receipt) =>
+            receipt._tag === "Run"
+              ? receipt.operation.completed.pipe(Effect.map((ran) => ran.timing.seed))
+              : Effect.die("Expected an original run"),
+          );
         });
 
-        const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+        const first = yield* seeds();
 
-        for (const id of ["first", "second", "third"])
-          yield* Stream.runCollect(
-            yield* tools.handle("browser_scroll", { deltaX: 0, deltaY: 10 }, id),
-          );
-
-        return yield* Effect.forEach((yield* host.receipts).receipts, (receipt) =>
-          receipt._tag === "Run"
-            ? receipt.operation.completed.pipe(Effect.map((ran) => ran.timing.seed))
-            : Effect.die("Expected an original run"),
-        );
-      });
-
-      const first = yield* seeds();
-
-      expect(first).toEqual([94, 95, 96]);
-      expect(yield* seeds()).toEqual(first);
-    }),
-  ),
+        expect(first).toEqual(expected);
+        expect(yield* seeds()).toEqual(first);
+      }),
+    ),
 );
 
 it.effect("the host's lane bounds how many calls wait and for how long", () =>
