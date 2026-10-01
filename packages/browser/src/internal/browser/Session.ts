@@ -16,7 +16,6 @@ import {
 import type { OperationOptions, PageStatus } from "../../Browser.ts";
 import {
   type FillFormRequest,
-  type FormField,
   type FrameInfo,
   InputReceipt,
   ActionResult,
@@ -170,10 +169,40 @@ const effectiveTarget = (value: ElementTarget | undefined, fallback: DriverTarge
     ? value.target
     : fallback;
 
-export interface FormBindings {
-  readonly reference: (id: string) => ObservedElement | ResolvedElement;
-  readonly field: (field: FormField) => NativeFormField;
+/**
+ * A form as the form engine runs it. Each field and the submit carry the ID the outcome reports
+ * for them and the exact node they act on, read when that step runs, so an outcome names only the
+ * controls the caller named: there is no placeholder ID to translate back.
+ */
+export interface FormSteps {
+  readonly fields: ReadonlyArray<{
+    readonly reportedId: string;
+    readonly reference: () => ObservedElement | ResolvedElement;
+    readonly field: () => NativeFormField;
+  }>;
+  readonly submit?: {
+    readonly reportedId: string;
+    readonly reference: () => ObservedElement | ResolvedElement;
+  };
+  /** An observation's steps keep it usable for each other; resolved targets need no such care. */
+  readonly retainObservation: boolean;
 }
+
+/** A form over one observation's controls, reporting the IDs the caller named. */
+export const observedForm = (request: FillFormRequest): FormSteps => {
+  const at = (elementId: string) => () => ({ observationId: request.observationId, elementId });
+  const submit = request.submit;
+
+  return {
+    fields: request.fields.map((field) => ({
+      reportedId: field.elementId,
+      reference: at(field.elementId),
+      field: () => field,
+    })),
+    ...(submit === undefined ? {} : { submit: { reportedId: submit, reference: at(submit) } }),
+    retainObservation: true,
+  };
+};
 
 /** What a form did; the public boundary decodes it. */
 export interface FormOutcome {
@@ -2178,11 +2207,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
        * refusal, and whatever it dispatched retires the observation when it ends, however it ends.
        */
       fillForm: (
-        request: FillFormRequest,
+        form: FormSteps,
         policy: AdmissionPolicy | undefined,
-        form: FormSettings,
+        settings: FormSettings,
         operationOptions?: ExecutionOptions,
-        bindings?: FormBindings,
       ) =>
         Effect.suspend(() => {
           // Each field, the verification read and the submit is its own admitted action, so each
@@ -2192,12 +2220,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
           // The page whose observation the steps kept usable, known once one of them dispatched.
           let pageId: string | undefined;
-
-          const reference = (elementId: string): ObservedElement | ResolvedElement =>
-            bindings?.reference(elementId) ?? {
-              observationId: request.observationId,
-              elementId,
-            };
 
           const body = Effect.gen(function* () {
             const fields: Array<{
@@ -2220,7 +2242,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               stopped: { stage, error, ...(elementId === undefined ? {} : { elementId }) },
             });
 
-            for (const [fieldIndex, field] of request.fields.entries()) {
+            for (const [fieldIndex, step] of form.fields.entries()) {
               formOptions.phase?.("Field", fieldIndex);
 
               const exit = yield* Effect.exit(
@@ -2228,17 +2250,16 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   "fill-form",
                   async (driver, ticket) => {
                     try {
+                      const reference = step.reference();
+
                       return await driver.formStep(
-                        reference(field.elementId),
-                        bindings?.field(field) ?? field,
+                        reference,
+                        step.field(),
                         ticket,
                         policy,
-                        form.settleMillis,
-                        captureClickAt(
-                          targetData(effectiveTarget(reference(field.elementId), target)),
-                          ticket,
-                        ),
-                        effectiveTarget(reference(field.elementId), target),
+                        settings.settleMillis,
+                        captureClickAt(targetData(effectiveTarget(reference, target)), ticket),
+                        effectiveTarget(reference, target),
                       );
                     } finally {
                       if (ticket.dispatched) pageId ??= target.pageId;
@@ -2247,7 +2268,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   {
                     ...bound,
                     ...formOptions,
-                    ...(bindings === undefined ? { retainObservation: true } : {}),
+                    ...(form.retainObservation ? { retainObservation: true } : {}),
                   },
                 ),
               );
@@ -2260,18 +2281,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 if (Option.isNone(error) || fields.length === 0)
                   return yield* Effect.failCause(exit.cause);
 
-                return stop("field", error.value, field.elementId);
+                return stop("field", error.value, step.reportedId);
               }
-              const step = exit.value;
+              const done = exit.value;
 
               fields.push({
-                elementId: field.elementId,
-                status: step.status,
-                ...(step.input === undefined ? {} : { input: step.input }),
+                elementId: step.reportedId,
+                status: done.status,
+                ...(done.input === undefined ? {} : { input: done.input }),
               });
-              states.push(step.state);
-              url = step.url;
-              if (!step.reached)
+              states.push(done.state);
+              url = done.url;
+              if (!done.reached)
                 return stop(
                   "field",
                   BrowserError.make({
@@ -2279,11 +2300,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     reason: Reasons.Failed.make({}),
                     outcome: "rejected",
                   }),
-                  field.elementId,
+                  step.reportedId,
                 );
             }
 
-            if (form.verify) {
+            if (settings.verify) {
               formOptions.phase?.("Verification");
 
               // Not charged, like revalidation: it sends no input and reads nodes already issued.
@@ -2292,7 +2313,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   "fill-form",
                   (driver, ticket) =>
                     driver.formState(
-                      request.fields.map((field) => reference(field.elementId)),
+                      form.fields.map((step) => step.reference()),
                       ticket,
                       target,
                     ),
@@ -2307,7 +2328,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
                 return stop("verify", error.value);
               }
-              for (const [index, field] of request.fields.entries()) {
+              for (const [index, step] of form.fields.entries()) {
                 const expected = states[index];
 
                 if (expected === undefined || exit.value[index] !== expected)
@@ -2318,27 +2339,31 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                       reason: Reasons.Stale.make({}),
                       outcome: "undispatched",
                     }),
-                    field.elementId,
+                    step.reportedId,
                   );
               }
             }
 
-            if (request.submit === undefined) return finish(false);
-            const submit = request.submit;
+            const submit = form.submit;
+
+            if (submit === undefined) return finish(false);
 
             formOptions.phase?.("Submit");
 
             const exit = yield* Effect.exit(
               execute(
                 "fill-form",
-                (driver, ticket) =>
-                  driver.formSubmit(
-                    reference(submit),
+                (driver, ticket) => {
+                  const reference = submit.reference();
+
+                  return driver.formSubmit(
+                    reference,
                     ticket,
-                    captureClickAt(targetData(effectiveTarget(reference(submit), target)), ticket),
+                    captureClickAt(targetData(effectiveTarget(reference, target)), ticket),
                     policy,
-                    effectiveTarget(reference(submit), target),
-                  ),
+                    effectiveTarget(reference, target),
+                  );
+                },
                 { ...bound, ...formOptions },
               ),
             );
@@ -2348,7 +2373,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
               if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
 
-              return stop("submit", error.value, submit);
+              return stop("submit", error.value, submit.reportedId);
             }
             url = exit.value.url;
 
@@ -2772,108 +2797,62 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             }
             case "FillForm":
               return Effect.gen(function* () {
-                const fieldId = (index: number) => {
-                  const field = action.fields[index];
-
-                  return field?.target._tag === "Ref"
-                    ? field.target.reference.elementId
-                    : `field_${index}`;
-                };
+                // Each control reports the ID its plan target named; a descriptor its position.
+                const reported = (target: ActionTarget, fallback: string) =>
+                  target._tag === "Ref" ? target.reference.elementId : fallback;
 
                 const fields = yield* Effect.forEach(
                   action.fields,
-                  (field, index): Effect.Effect<FormField, BrowserError> =>
-                    field._tag === "Value"
+                  (field, index): Effect.Effect<FormSteps["fields"][number], BrowserError> => {
+                    const reportedId = reported(field.target, `field_${index}`);
+                    const reference = indexed(field.target);
+
+                    return field._tag === "Value"
                       ? inputValue(field.value).pipe(
-                          Effect.map((value) => ({ elementId: `field_${index}`, value })),
+                          Effect.map((value) => ({
+                            reportedId,
+                            reference,
+                            field: () => ({ elementId: reportedId, value }),
+                          })),
                         )
-                      : Effect.succeed(
-                          field._tag === "Checked"
-                            ? { elementId: `field_${index}`, checked: field.checked }
-                            : {
-                                elementId: `field_${index}`,
-                                options: field.options.map(
-                                  (_, option) => `option_${index}_${option}`,
-                                ),
-                              },
-                        ),
+                      : Effect.succeed({
+                          reportedId,
+                          reference,
+                          field:
+                            field._tag === "Checked"
+                              ? () => ({ elementId: reportedId, checked: field.checked })
+                              : () => ({
+                                  elementId: reportedId,
+                                  options: field.options.map((option) => indexed(option)()),
+                                }),
+                        });
+                  },
                 );
 
-                const request = {
-                  observationId: "private_plan",
-                  fields,
-                  ...(action.submit === undefined ? {} : { submit: "private_submit" }),
-                };
-
-                const references = new Map<string, () => ResolvedElement>();
-                const reportedIds = new Map<string, string>();
-
-                action.fields.forEach((field, index) => {
-                  const id = `field_${index}`;
-
-                  references.set(id, indexed(field.target));
-                  reportedIds.set(id, fieldId(index));
-                });
-                if (action.submit !== undefined) {
-                  references.set("private_submit", indexed(action.submit));
-                  // A stop at submit names the control the caller named, never the private slot.
-                  reportedIds.set(
-                    "private_submit",
-                    action.submit._tag === "Ref" ? action.submit.reference.elementId : "submit",
-                  );
-                }
+                const submit = action.submit;
 
                 const result = yield* controls.fillForm(
-                  request,
+                  {
+                    fields,
+                    ...(submit === undefined
+                      ? {}
+                      : {
+                          submit: {
+                            reportedId: reported(submit, "submit"),
+                            reference: indexed(submit),
+                          },
+                        }),
+                    retainObservation: false,
+                  },
                   policy,
                   {
                     verify: action.options?.verify ?? true,
                     settleMillis: action.options?.settleMillis ?? 50,
                   },
                   planOptions,
-                  {
-                    reference: (id) => {
-                      const ref = references.get(id);
-
-                      if (ref === undefined)
-                        throw BrowserError.make({
-                          operation: "fill-form",
-                          reason: Reasons.Incomplete.make({}),
-                          outcome: "undispatched",
-                        });
-
-                      return ref();
-                    },
-                    field: (field) => {
-                      const index = action.fields.findIndex(
-                        (_, index) => field.elementId === `field_${index}`,
-                      );
-
-                      const source = action.fields[index];
-
-                      return source?._tag === "Options"
-                        ? { ...field, options: source.options.map((option) => indexed(option)()) }
-                        : field;
-                    },
-                  },
                 );
 
-                const receipt = yield* decodeReceipt(FillFormResult, {
-                  ...result,
-                  fields: result.fields.map((field) => ({
-                    ...field,
-                    elementId: reportedIds.get(field.elementId) ?? field.elementId,
-                  })),
-                  ...(result.stopped?.elementId === undefined
-                    ? {}
-                    : {
-                        stopped: {
-                          ...result.stopped,
-                          elementId:
-                            reportedIds.get(result.stopped.elementId) ?? result.stopped.elementId,
-                        },
-                      }),
-                });
+                const receipt = yield* decodeReceipt(FillFormResult, result);
 
                 context.retainReceipt(receipt);
                 if (result.stopped !== undefined) return yield* result.stopped.error;

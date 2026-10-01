@@ -62,12 +62,13 @@ import {
   checkedSettled,
 } from "./PlanOptions.ts";
 import { schemaPath } from "./SchemaPath.ts";
-import type {
-  TargetControls,
-  SessionControls,
-  SessionLease,
-  PageControls,
-  FormOutcome,
+import {
+  observedForm,
+  type TargetControls,
+  type SessionControls,
+  type SessionLease,
+  type PageControls,
+  type FormOutcome,
 } from "./Session.ts";
 
 export const checked = <A>(
@@ -413,7 +414,7 @@ const makePageOperations = (controls: PageControls): PageOperations => {
             Effect.flatMap((settings) =>
               withOperationOptions(operationOptions, "fill-form", (options) =>
                 controls.fillForm(
-                  form,
+                  observedForm(form),
                   admission?.admit,
                   {
                     verify: settings.verify ?? true,
