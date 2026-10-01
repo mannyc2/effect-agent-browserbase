@@ -129,6 +129,47 @@ it.effect("a stopped form preserves actual completed fields and its native refus
   ),
 );
 
+it.effect.each([
+  ["verify", 3, undefined],
+  ["submit", 4, "element-5"],
+] as const)(
+  "a form stopped at %s reports every completed field and the control the model named",
+  ([stage, passes, elementId]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* scriptedSession();
+        const open = yield* browser.control.gate;
+
+        // Every earlier fill-form step passes through an open gate; the next one is refused.
+        yield* open.open;
+        for (let step = 0; step < passes; step++)
+          yield* browser.control.next("fill-form", { _tag: "Hold", gate: open, dispatched: true });
+        yield* browser.control.next("fill-form", {
+          _tag: "Fail",
+          reason: Reasons.Stale.make({}),
+          outcome: "undispatched",
+        });
+
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
+        const ready = yield* tools.pipe(Effect.provide(host.layer));
+
+        expect(yield* fill(ready)).toEqual([
+          expect.objectContaining({
+            isFailure: true,
+            encodedResult: {
+              _tag: "BrowserFormFailure",
+              reason: "stale",
+              outcome: "undispatched",
+              stage,
+              ...(elementId === undefined ? {} : { elementId }),
+              completed: fields,
+            },
+          }),
+        ]);
+      }),
+    ),
+);
+
 it.effect("an input callback failure preserves completed fields and the original form stop", () =>
   Effect.scoped(
     Effect.gen(function* () {

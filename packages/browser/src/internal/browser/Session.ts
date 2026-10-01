@@ -3107,8 +3107,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   references.set(id, indexed(field.target));
                   reportedIds.set(id, fieldId(index));
                 });
-                if (action.submit !== undefined)
+                if (action.submit !== undefined) {
                   references.set("private_submit", indexed(action.submit));
+                  // A stop at submit names the control the caller named, never the private slot.
+                  reportedIds.set(
+                    "private_submit",
+                    action.submit._tag === "Ref" ? action.submit.reference.elementId : "submit",
+                  );
+                }
 
                 const result = yield* controls.fillForm(
                   request,
