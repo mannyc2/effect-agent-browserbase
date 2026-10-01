@@ -1,11 +1,19 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Exit, Schema, Scope, Stream } from "effect";
+import { Effect, Exit, Redacted, Schema, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import { InputReceipt, Observation, SessionStatus } from "effect-browser/browser-data";
+import {
+  BrowserPolicy,
+  InputReceipt,
+  Observation,
+  SessionStatus,
+} from "effect-browser/browser-data";
+import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
+import * as Testing from "effect-browser/testing";
 import { Toolkit } from "effect/unstable/ai";
 
-import { scriptedSession } from "./fixtures/ScriptedSession.ts";
+import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 
 const reference = { observationId: "observation-1", elementId: "element-1" };
 const selection = { reference: { ...reference, elementId: "element-3" }, options: ["option-1"] };
@@ -375,6 +383,65 @@ it.effect.each(["page", "session"] as const)(
             (yield* Stream.runCollect(yield* tools.handle(name, request, name)))[0]?.encodedResult,
           ).toEqual({ _tag: "BrowserToolFailure", reason: "closed", outcome: "undispatched" });
         expect((yield* host.toolFailures).failures).toHaveLength(requests.length);
+      }),
+    ),
+);
+
+it.effect(
+  "after a keep-alive reconnection, every Tool on the old Page tells the model it is closed",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scripted = yield* Testing.binding(fixtureScript);
+
+        const runtime = yield* BrowserRuntime.make({
+          implementation: "tools-under-test",
+          binding: scripted.binding,
+          keepAlive: true,
+        }).pipe(Effect.provide(NodeCrypto.layer));
+
+        const acquired = yield* runtime.acquire(BrowserPolicy.unrestricted(), (cleanup) =>
+          Effect.gen(function* () {
+            const release = yield* Effect.cached(
+              cleanup.fence.pipe(
+                Effect.andThen(cleanup.capture),
+                Effect.andThen(cleanup.initialization),
+                Effect.andThen(cleanup.disconnect),
+                Effect.orDie,
+                Effect.asVoid,
+              ),
+            );
+
+            yield* Effect.addFinalizer(() => release);
+
+            return {
+              reference: "tools-under-test",
+              connection: () => Effect.succeed(Redacted.make("wss://keep-alive.test/")),
+              release,
+              cleanupResult: Effect.succeedNone,
+              closeChecked: release,
+              verifyReconnect: Effect.void,
+            };
+          }),
+        );
+
+        const { session, operations } = yield* acquired.connect;
+        const host = yield* BrowserTools.makeHost(session, session.initialPage);
+        const tools = yield* allTools.pipe(Effect.provide(host.layer));
+
+        yield* operations.detach;
+        yield* operations.reconnect(true);
+        // Reconnection issues fresh Pages; the bound one is stale for good, so inspecting it
+        // again can never help.
+        expect(yield* session.initialPage.status).toMatchObject({ phase: "stale" });
+
+        for (const [name, request] of requests)
+          expect(
+            (yield* Stream.runCollect(yield* tools.handle(name, request, name)))[0]?.encodedResult,
+          ).toEqual({ _tag: "BrowserToolFailure", reason: "closed", outcome: "undispatched" });
+        expect((yield* host.toolFailures).failures.map(({ error }) => error.reason._tag)).toEqual(
+          requests.map(() => "Stale"),
+        );
       }),
     ),
 );
