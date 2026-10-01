@@ -739,6 +739,25 @@ const settings = Bootstrap.combine(
   }),
 );
 
+it.live("a plan can pause before the first navigation its bootstrap requires", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(shop, { bootstrap: settings });
+
+      // A duration pause reads no document, so the starting document's readiness is irrelevant.
+      expect((yield* browser.initialPage.ready())._tag).toBe("RequiresNavigation");
+      const ran = yield* browser.initialPage.run({
+        version: 1,
+        steps: [
+          { id: "pause", action: { _tag: "Wait", mode: { _tag: "Duration", milliseconds: 5 } } },
+        ],
+      });
+
+      expect(ran.steps.map((step) => step.id)).toEqual(["pause"]);
+    }),
+  ),
+);
+
 it.effect("typed callbacks run through the real admission and fail the session as declared", () =>
   Effect.scoped(
     Effect.gen(function* () {

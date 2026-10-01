@@ -1030,13 +1030,23 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   };
 
   /** The policy's native checks on the exact target, before any of the work's own commands. */
-  const prepare = async (operation: ExecutedOperation, ticket: Ticket, target: DriverTarget) => {
+  /**
+   * The page checks an operation's policy requires before its native call. Work that reads no
+   * document (`document: false`, a plan's duration pause) keeps the held-page refusal but never
+   * waits for document readiness, so it can run before a navigation the bootstrap requires.
+   */
+  const prepare = async (
+    operation: ExecutedOperation,
+    ticket: Ticket,
+    target: DriverTarget,
+    reads: { readonly document?: boolean } = {},
+  ) => {
     const policy = policyOf(operation);
 
     if (policy.work !== "page") return;
     // A held page is refused, never woken.
     if (policy.refuseHeld) await getDriver().pageControl?.checkTarget(target, ticket);
-    if (policy.ready) await requireReady(operation, ticket, target);
+    if (policy.ready && reads.document !== false) await requireReady(operation, ticket, target);
   };
 
   const observeInside = (
@@ -2577,7 +2587,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             "wait",
             (ticket) =>
               native("wait", ticket, async () => {
-                await prepare("wait", ticket, target);
+                await prepare("wait", ticket, target, { document: false });
                 await operationOptions.beforeNative?.(getDriver(), ticket);
               }).pipe(
                 Effect.andThen(Effect.sleep(milliseconds)),
