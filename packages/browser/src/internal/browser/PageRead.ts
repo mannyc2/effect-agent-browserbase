@@ -577,7 +577,7 @@ export const readPage = (
       node.getAttribute("aria-label") ??
       node.getAttribute("placeholder") ??
       (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
-        ? node.labels?.[0]?.textContent
+        ? (node.labels?.[0]?.textContent ?? node.getAttribute("aria-placeholder"))
         : node instanceof HTMLOptionElement
           ? node.label
           : editable
