@@ -296,8 +296,8 @@ formats remain unchanged.
 
 `onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
 
-`host.receipts` returns an immutable window of the latest 32 host CallReceipts, plus a dropped
-count. Run entries hold the original RunOperation; its attempts remain available after interruption
+`host.receipts` returns an immutable `ToolCallSnapshot`: the latest 32 `ToolCallRecord`s, plus a
+dropped count. Run entries hold the original RunOperation; its attempts remain available after interruption
 or timeline eviction. Navigation entries hold the original NavigationOperation and carry no
 invented Plan IDs. Preparation refusals retain the original StepFailed or BrowserError. A local
 invocation ID distinguishes repeated or omitted toolCallIds; overlong toolCallIds are omitted

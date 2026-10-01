@@ -112,8 +112,8 @@ export interface ToolFailureSnapshot {
   readonly dropped: number;
 }
 
-/** Original live execution evidence, deliberately outside any model or durable schema. */
-export type CallReceipt = {
+/** The host's record of one Tool call: live execution evidence, outside any model or durable schema. */
+export type ToolCallRecord = {
   readonly invocationId: string;
   readonly toolName: string;
   readonly toolCallId: string | undefined;
@@ -124,8 +124,10 @@ export type CallReceipt = {
   | { readonly _tag: "Refused"; readonly error: StepFailed | BrowserError }
 );
 
-export interface CallReceiptSnapshot {
-  readonly receipts: ReadonlyArray<CallReceipt>;
+/** A memory-only snapshot of the latest 32 Tool call records, oldest first. */
+export interface ToolCallSnapshot {
+  readonly receipts: ReadonlyArray<ToolCallRecord>;
+  /** Entries evicted from the bounded window; saturates at Number.MAX_SAFE_INTEGER. */
   readonly dropped: number;
 }
 
@@ -145,7 +147,7 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   /** Original ordinary action errors. Reading never enters browser admission and works after close. */
   readonly toolFailures: Effect.Effect<ToolFailureSnapshot>;
   /** Latest 32 original capabilities, retained independently of timeline eviction. */
-  readonly receipts: Effect.Effect<CallReceiptSnapshot>;
+  readonly receipts: Effect.Effect<ToolCallSnapshot>;
   /** Provide this host's handlers and supervise the program without closing the borrowed browser. */
   readonly run: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -185,6 +187,37 @@ const laneKeys = {
   maxOutstanding: true,
   maxQueueMillis: true,
 } as const satisfies Record<keyof LaneOptions, true>;
+
+/**
+ * The latest `capacity` entries, oldest first. Evictions are counted, saturating at
+ * Number.MAX_SAFE_INTEGER; a snapshot copies and freezes the window.
+ */
+const boundedWindow = <A>(capacity: number) => {
+  const entries: A[] = [];
+  let dropped = 0;
+
+  return {
+    push: (entry: A) => {
+      if (entries.length === capacity) {
+        entries.shift();
+        dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1);
+      }
+      entries.push(entry);
+    },
+    snapshot: () => ({ entries: Object.freeze([...entries]), dropped }),
+  };
+};
+
+/** The Tool and its call ID; IDs longer than 256 UTF-16 code units are omitted, never shortened. */
+const callIdentity = (call: Call) => {
+  const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
+
+  return {
+    toolName: call.tool,
+    toolCallId: toolCallIdOmitted ? undefined : call.id,
+    toolCallIdOmitted,
+  };
+};
 
 /**
  * Scoped host composition over the same maintained handlers. Options are checked here, once;
@@ -232,11 +265,9 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const clock = yield* Clock.Clock;
   const identity = {};
   const { onNavigation, onInput } = options;
-  const toolFailures: ToolFailureDiagnostic[] = [];
-  const receipts: CallReceipt[] = [];
+  const toolFailures = boundedWindow<ToolFailureDiagnostic>(32);
+  const receipts = boundedWindow<ToolCallRecord>(32);
   let receiptSequence = 0n;
-  let receiptDropped = 0;
-  let dropped = 0;
   let closed = false;
   let outstanding = 0;
 
@@ -247,20 +278,8 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
       | { readonly _tag: "Navigation"; readonly operation: NavigationOperation }
       | { readonly _tag: "Refused"; readonly error: StepFailed | BrowserError },
   ) => {
-    const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
-
-    if (receipts.length === 32) {
-      receipts.shift();
-      receiptDropped = Math.min(Number.MAX_SAFE_INTEGER, receiptDropped + 1);
-    }
     receipts.push(
-      Object.freeze({
-        ...value,
-        invocationId: `call-${++receiptSequence}`,
-        toolName: call.tool,
-        toolCallId: toolCallIdOmitted ? undefined : call.id,
-        toolCallIdOmitted,
-      }),
+      Object.freeze({ ...value, invocationId: `call-${++receiptSequence}`, ...callIdentity(call) }),
     );
   };
 
@@ -269,12 +288,6 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
     // Only a BrowserError that bypassed its constructor's validation fails to encode.
     if (Result.isFailure(encoded)) throw encoded.failure;
-    const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
-
-    if (toolFailures.length === 32) {
-      toolFailures.shift();
-      dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1);
-    }
     toolFailures.push(
       Object.freeze({
         error: Object.freeze({
@@ -284,9 +297,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
             ? {}
             : { containment: Object.freeze({ ...encoded.success.containment }) }),
         }),
-        toolName: call.tool,
-        toolCallId: toolCallIdOmitted ? undefined : call.id,
-        toolCallIdOmitted,
+        ...callIdentity(call),
       }),
     );
   };
@@ -567,19 +578,15 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     failure: Deferred.await(failure),
     toolFailures: Effect.gen(function* () {
       const status = yield* browser.status;
+      const { entries, dropped } = toolFailures.snapshot();
 
-      return Object.freeze({
-        status,
-        failures: Object.freeze([...toolFailures]),
-        dropped,
-      });
+      return Object.freeze({ status, failures: entries, dropped });
     }),
-    receipts: Effect.sync(() =>
-      Object.freeze({
-        receipts: Object.freeze([...receipts]),
-        dropped: receiptDropped,
-      }),
-    ),
+    receipts: Effect.sync(() => {
+      const { entries, dropped } = receipts.snapshot();
+
+      return Object.freeze({ receipts: entries, dropped });
+    }),
     run: supervise,
   };
 });
