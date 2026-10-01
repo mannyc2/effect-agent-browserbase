@@ -8,6 +8,7 @@ import { CleanupIssue, CleanupResult } from "../../Cleanup.ts";
 import type { SessionReference } from "../../References.ts";
 import type { SessionStatus } from "../../SessionData.ts";
 import type { BrowserbaseSessions } from "../../Sessions.ts";
+import * as Trace from "../Trace.ts";
 
 export const noLocalConnection = noConnection;
 
@@ -49,7 +50,14 @@ export const makeCleanup = Effect.fnUntraced(function* (
           action: Effect.Effect<A, E>,
           milliseconds: number,
         ) =>
-          cleanupStep(action, milliseconds).pipe(
+          cleanupStep(
+            action.pipe(
+              Trace.span("Browserbase.cleanup.step", {
+                attributes: { "browser.cleanup.step": name, "browser.ownership": ownership },
+              }),
+            ),
+            milliseconds,
+          ).pipe(
             Effect.tap((result) =>
               Effect.sync(() => {
                 if (result._tag === "Failure")
@@ -107,8 +115,19 @@ export const makeCleanup = Effect.fnUntraced(function* (
         latest = Object.freeze(result);
         report(latest);
 
+        yield* Trace.annotate({
+          "browser.cleanup.local": latest.local,
+          "browser.cleanup.remote": latest.remote,
+          "browser.cleanup.releaseRequested": latest.releaseRequested,
+          "browser.cleanup.issueCount": latest.issues.length,
+        });
+
         return latest;
-      }),
+      }).pipe(
+        Trace.span("Browserbase.cleanup", {
+          attributes: { "browser.ownership": ownership },
+        }),
+      ),
     ),
   );
 

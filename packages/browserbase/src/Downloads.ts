@@ -4,6 +4,7 @@ import { BrowserbaseClient } from "./Client.ts";
 import { type ClientError, FileError } from "./Errors.ts";
 import { downloadTransferPolicy } from "./internal/artifact/TransferPolicy.ts";
 import { deadlineAfter, nowMillis, until } from "./internal/Deadline.ts";
+import * as Trace from "./internal/Trace.ts";
 import { Identifier, type SessionReference } from "./References.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
 import { type ArtifactTransferPolicy, DownloadMetadata } from "./Transfers.ts";
@@ -148,7 +149,7 @@ export class BrowserbaseDownloads extends Context.Service<
         }
 
         return { ...raw, offset, complete: offset + raw.downloads.length >= raw.total };
-      });
+      }, Trace.span("BrowserbaseDownloads.list"));
 
       const metadata = Effect.fnUntraced(function* (ref: SessionReference, id: string) {
         yield* Schema.decodeEffect(Identifier)(id).pipe(
@@ -170,7 +171,7 @@ export class BrowserbaseDownloads extends Context.Service<
           return yield* failure("download-metadata", "malformed");
 
         return value;
-      });
+      }, Trace.span("BrowserbaseDownloads.metadata"));
 
       const stream = (ref: SessionReference, id: string, policy: DownloadPolicy) =>
         Stream.unwrap(
@@ -214,7 +215,7 @@ export class BrowserbaseDownloads extends Context.Service<
                 ),
               );
           }),
-        );
+        ).pipe(Trace.stream("BrowserbaseDownloads.stream"));
 
       const waitForNew = Effect.fnUntraced(function* (
         ref: SessionReference,
@@ -233,7 +234,9 @@ export class BrowserbaseDownloads extends Context.Service<
         const deadline = yield* deadlineAfter(timeoutMillis);
 
         do {
-          const result = yield* within(list(ref), deadline, "download-wait");
+          const result = yield* within(list(ref), deadline, "download-wait").pipe(
+            Effect.withTracerEnabled(false),
+          );
 
           // Never claim a complete candidate set from a partial listing.
           if (!result.complete) return yield* failure("download-wait", "limit");
@@ -247,7 +250,7 @@ export class BrowserbaseDownloads extends Context.Service<
         } while ((yield* nowMillis) < deadline);
 
         return yield* failure("download-wait", "timeout");
-      });
+      }, Trace.span("BrowserbaseDownloads.waitForNew"));
 
       const remove = Effect.fnUntraced(function* (ref: SessionReference, id: string) {
         yield* Schema.decodeEffect(Identifier)(id).pipe(
@@ -278,7 +281,7 @@ export class BrowserbaseDownloads extends Context.Service<
         yield* client
           .noContent("DELETE", `/v1/downloads/${encodeURIComponent(id)}`)
           .pipe(Effect.mapError(fromClient("download-delete")));
-      });
+      }, Trace.span("BrowserbaseDownloads.delete"));
 
       return BrowserbaseDownloads.of({ list, metadata, stream, waitForNew, delete: remove });
     }),

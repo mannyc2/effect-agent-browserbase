@@ -842,7 +842,7 @@ export const makeObservation = (
               observed: data.controls.length,
             }),
           );
-        if (keepNodes) {
+        if (keepNodes && data.controls.length > 0) {
           nodesHandle = await holder.evaluateHandle((read) => read.nodes);
           check();
           const nodes = await nodesHandle.getProperties();

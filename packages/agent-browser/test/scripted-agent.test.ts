@@ -1,6 +1,6 @@
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Cause, Effect, Exit, Layer, Schema, Tracer } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -76,8 +76,26 @@ const toolResults = (request: LanguageModel.ProviderOptions, name: string) =>
     .flatMap((message) => (message.role === "tool" ? message.content : []))
     .filter((part) => part.type === "tool-result" && part.name === name);
 
-it.effect("the agent clicks the observed control exactly once and finishes", () =>
-  Browser.scoped(Testing.open(shop), (browser) =>
+it.effect("the agent clicks the observed control exactly once and finishes", () => {
+  const spans: Tracer.NativeSpan[] = [];
+  const ends: string[] = [];
+
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+      const end = span.end.bind(span);
+
+      span.end = (time, exit) => {
+        ends.push(span.spanId);
+        end(time, exit);
+      };
+      spans.push(span);
+
+      return span;
+    },
+  });
+
+  return Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
       const turns = [
         call("c1", "browser_navigate", { url: `${origin}/` }),
@@ -113,8 +131,52 @@ it.effect("the agent clicks the observed control exactly once and finishes", () 
       ]);
       expect((yield* browser.control.document.current).url).toBe(`${origin}/?consent=1`);
     }),
-  ),
-);
+  ).pipe(
+    Effect.withTracer(tracer),
+    Effect.tap(() =>
+      Effect.sync(() => {
+        // Scan the owned library spans in a real AgentRuntime run. Upstream/application spans
+        // retain their own telemetry policy; Toolkit's parameter scratch span is not exported.
+        const owned = spans.filter(
+          (span) => span.name.startsWith("Browser") || span.name.startsWith("Chromium."),
+        );
+
+        expect(owned.some((span) => span.name === "BrowserTools.execute")).toBe(true);
+        expect(owned.some((span) => span.name === "Browser.observe")).toBe(true);
+        expect(owned.some((span) => span.name === "Browser.navigation")).toBe(true);
+        for (const span of owned) {
+          expect(span.status._tag).toBe("Ended");
+          expect(ends.filter((id) => id === span.spanId)).toHaveLength(1);
+          if (span.status._tag === "Ended" && Exit.isSuccess(span.status.exit))
+            expect(span.status.exit).toEqual(Exit.void);
+        }
+
+        const exported = JSON.stringify(
+          owned.map((span) => ({
+            name: span.name,
+            attributes: [...span.attributes],
+            events: span.events,
+            status: span.status,
+            cause:
+              span.status._tag === "Ended" && Exit.isFailure(span.status.exit)
+                ? Cause.pretty(span.status.exit.cause)
+                : undefined,
+          })),
+          (_, value: unknown) => (typeof value === "bigint" ? String(value) : value),
+        );
+
+        for (const privateValue of [
+          origin,
+          "We use cookies.",
+          "Welcome back.",
+          "accept the banner",
+          "observation-1",
+        ])
+          expect(exported).not.toContain(privateValue);
+      }),
+    ),
+  );
+});
 
 it.effect("an unknown click outcome reaches the model as a failure and is never replayed", () =>
   Browser.scoped(Testing.open(shop), (browser) =>

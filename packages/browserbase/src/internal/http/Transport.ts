@@ -9,11 +9,15 @@ import {
 import type { ClientMethod, ClientOptions, MultipartFile, UploadLimits } from "../../Client.ts";
 import { ClientError } from "../../Errors.ts";
 import { Identifier } from "../../References.ts";
+import * as Trace from "../Trace.ts";
 import { encodeFilePart } from "./Multipart.ts";
 
 const API_ORIGIN = "https://api.browserbase.com";
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_JSON_DEPTH = 64;
+
+const traceMethod = (method: string) =>
+  ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method) ? method : "invalid";
 
 const Options = Schema.Struct({
   projectId: Identifier,
@@ -240,6 +244,12 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           ...(outcome === undefined ? {} : { outcome }),
         }),
       ),
+      Trace.span("BrowserbaseClient.execute", {
+        attributes: {
+          "browser.operation": operation,
+          "http.request.method": traceMethod(request.method),
+        },
+      }),
     );
 
   /** A rejected path is a typed, undispatched configuration failure, never a defect. */
@@ -355,7 +365,7 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         }),
       ),
     );
-  });
+  }, Trace.span("BrowserbaseClient.decodeJson"));
 
   const jsonOnce = Effect.fnUntraced(function* (
     method: ClientMethod,
@@ -385,131 +395,156 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
    * One bounded in-memory file part. The encoder proves its delimiter absent from the
    * content, and an accepted multipart mutation is never retried: a lost reply is unknown.
    */
-  const upload = Effect.fnUntraced(function* (
-    path: string,
-    part: MultipartFile,
-    limits: UploadLimits,
-    outerDeadline?: number,
-  ) {
-    const operation = "provider-upload";
-    const timeoutMillis = limits.timeoutMillis ?? 60_000;
+  const upload = Effect.fnUntraced(
+    function* (path: string, part: MultipartFile, limits: UploadLimits, outerDeadline?: number) {
+      const operation = "provider-upload";
+      const timeoutMillis = limits.timeoutMillis ?? 60_000;
 
-    if (!Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
-      return yield* ClientError.make({
-        operation,
-        reason: "configuration",
-        outcome: "undispatched",
-      });
-    }
+      if (!Number.isSafeInteger(timeoutMillis) || timeoutMillis < 1 || timeoutMillis > 600_000) {
+        return yield* ClientError.make({
+          operation,
+          reason: "configuration",
+          outcome: "undispatched",
+        });
+      }
 
-    const encoded = yield* encodeFilePart(part, limits.maxBytes);
+      const encoded = yield* encodeFilePart(part, limits.maxBytes);
 
-    if (encoded._tag === "Rejected") {
-      return yield* ClientError.make({
-        operation,
-        reason: encoded.reason,
-        outcome: "undispatched",
-      });
-    }
+      if (encoded._tag === "Rejected") {
+        return yield* ClientError.make({
+          operation,
+          reason: encoded.reason,
+          outcome: "undispatched",
+        });
+      }
 
-    const request = HttpClientRequest.bodyUint8Array(
-      yield* apiRequest("POST", path, "application/json", operation),
-      encoded.body,
-      encoded.contentType,
-    );
+      const request = HttpClientRequest.bodyUint8Array(
+        yield* apiRequest("POST", path, "application/json", operation),
+        encoded.body,
+        encoded.contentType,
+      );
 
-    const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
+      const deadline = Math.min(yield* deadlineAfter(timeoutMillis), outerDeadline ?? Infinity);
 
-    return yield* within(
-      Effect.scoped(
-        execute(request, operation, "unknown").pipe(
-          Effect.flatMap((response) => readJson("POST", response, operation)),
+      return yield* within(
+        Effect.scoped(
+          execute(request, operation, "unknown").pipe(
+            Effect.flatMap((response) => readJson("POST", response, operation)),
+          ),
         ),
-      ),
-      deadline,
-      operation,
-      "unknown",
-    );
-  });
-
-  const json = Effect.fnUntraced(function* (
-    method: ClientMethod,
-    path: string,
-    body?: Schema.Json,
-    outerDeadline?: number,
-  ) {
-    const deadline = Math.min(
-      yield* deadlineAfter(requestTimeoutMillis),
-      outerDeadline ?? Infinity,
-    );
-
-    for (let attempt = 0; ; attempt++) {
-      const result = yield* within(
-        Effect.scoped(jsonOnce(method, path, body)),
         deadline,
-        // A request that times out is labelled like the same request failing any other way.
-        method === "GET" ? "provider-read" : "provider-mutation",
-        method === "GET" ? undefined : "unknown",
-      ).pipe(Effect.result);
-
-      if (result._tag === "Success") return result.success;
-      const error = result.failure;
-
-      const retryable =
-        error.reason === "transport" ||
-        error.reason === "rate-limited" ||
-        (error.reason === "provider" && (error.status ?? 0) >= 500);
-
-      if (method !== "GET" || !retryable || attempt >= 2) return yield* error;
-      const delay = error.retryAfterMillis ?? (attempt + 1) * 150;
-
-      if ((yield* nowMillis) + delay >= deadline) return yield* error;
-      yield* Effect.sleep(delay);
-    }
-  });
-
-  const noContent = Effect.fnUntraced(function* (
-    method: Exclude<ClientMethod, "GET">,
-    path: string,
-    body?: Schema.Json,
-    outerDeadline?: number,
-  ) {
-    const operation = "provider-mutation";
-    let request = yield* apiRequest(method, path, "*/*", operation);
-
-    if (body !== undefined) {
-      request = yield* HttpClientRequest.bodyJson(request, body).pipe(
-        Effect.mapError(() =>
-          ClientError.make({
-            operation,
-            reason: "configuration",
-            outcome: "undispatched",
-          }),
-        ),
-      );
-    }
-
-    const deadline = Math.min(
-      yield* deadlineAfter(requestTimeoutMillis),
-      outerDeadline ?? Infinity,
-    );
-
-    const response = yield* within(
-      Effect.scoped(execute(request, operation, "unknown")),
-      deadline,
-      operation,
-      "unknown",
-    );
-
-    if (![200, 202, 204].includes(response.status)) {
-      return yield* statusError(
-        method,
-        response.status,
         operation,
-        retryAfter(response.headers["retry-after"], yield* Clock.currentTimeMillis),
+        "unknown",
       );
-    }
-  });
+    },
+    Trace.span("BrowserbaseClient.upload", {
+      attributes: { "browser.operation": "provider-upload", "http.request.method": "POST" },
+    }),
+  );
+
+  const json = Effect.fnUntraced(
+    function* (method: ClientMethod, path: string, body?: Schema.Json, outerDeadline?: number) {
+      const deadline = Math.min(
+        yield* deadlineAfter(requestTimeoutMillis),
+        outerDeadline ?? Infinity,
+      );
+
+      for (let attempt = 0; ; attempt++) {
+        const result = yield* within(
+          Effect.scoped(jsonOnce(method, path, body)),
+          deadline,
+          // A request that times out is labelled like the same request failing any other way.
+          method === "GET" ? "provider-read" : "provider-mutation",
+          method === "GET" ? undefined : "unknown",
+        ).pipe(
+          Trace.span("BrowserbaseClient.request", {
+            attributes: {
+              "browser.operation": method === "GET" ? "provider-read" : "provider-mutation",
+              "http.request.method": traceMethod(method),
+            },
+          }),
+          Effect.result,
+        );
+
+        if (result._tag === "Success") return result.success;
+        const error = result.failure;
+
+        const retryable =
+          error.reason === "transport" ||
+          error.reason === "rate-limited" ||
+          (error.reason === "provider" && (error.status ?? 0) >= 500);
+
+        if (method !== "GET" || !retryable || attempt >= 2) return yield* error;
+        const delay = error.retryAfterMillis ?? (attempt + 1) * 150;
+
+        if ((yield* nowMillis) + delay >= deadline) return yield* error;
+        yield* Effect.sleep(delay);
+      }
+    },
+    (effect, method) =>
+      effect.pipe(
+        Trace.span("BrowserbaseClient.json", {
+          attributes: {
+            "browser.operation": method === "GET" ? "provider-read" : "provider-mutation",
+            "http.request.method": traceMethod(method),
+          },
+        }),
+      ),
+  );
+
+  const noContent = Effect.fnUntraced(
+    function* (
+      method: Exclude<ClientMethod, "GET">,
+      path: string,
+      body?: Schema.Json,
+      outerDeadline?: number,
+    ) {
+      const operation = "provider-mutation";
+      let request = yield* apiRequest(method, path, "*/*", operation);
+
+      if (body !== undefined) {
+        request = yield* HttpClientRequest.bodyJson(request, body).pipe(
+          Effect.mapError(() =>
+            ClientError.make({
+              operation,
+              reason: "configuration",
+              outcome: "undispatched",
+            }),
+          ),
+        );
+      }
+
+      const deadline = Math.min(
+        yield* deadlineAfter(requestTimeoutMillis),
+        outerDeadline ?? Infinity,
+      );
+
+      const response = yield* within(
+        Effect.scoped(execute(request, operation, "unknown")),
+        deadline,
+        operation,
+        "unknown",
+      );
+
+      if (![200, 202, 204].includes(response.status)) {
+        return yield* statusError(
+          method,
+          response.status,
+          operation,
+          retryAfter(response.headers["retry-after"], yield* Clock.currentTimeMillis),
+        );
+      }
+    },
+    (effect, method) =>
+      effect.pipe(
+        Trace.span("BrowserbaseClient.noContent", {
+          attributes: {
+            "browser.operation": "provider-mutation",
+            "http.request.method": traceMethod(method),
+          },
+        }),
+      ),
+  );
 
   const inspectBytes = Effect.fnUntraced(function* (
     response: HttpClientResponse.HttpClientResponse,
@@ -589,7 +624,12 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           Effect.succeed(within(pull, deadline, operation)),
         );
       }),
-    ).pipe(Stream.scoped);
+    ).pipe(
+      Stream.scoped,
+      Trace.stream("BrowserbaseClient.bytes", {
+        attributes: { "browser.operation": "provider-read", "http.request.method": "GET" },
+      }),
+    );
 
   const text = (path: string, maximum: number, types: ReadonlyArray<string>) =>
     collect(bytes(path, maximum, types), maximum, "provider-read").pipe(
@@ -603,6 +643,9 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
         duration: Duration.millis(requestTimeoutMillis),
         orElse: () =>
           Effect.fail(ClientError.make({ operation: "provider-read", reason: "timeout" })),
+      }),
+      Trace.span("BrowserbaseClient.text", {
+        attributes: { "browser.operation": "provider-read", "http.request.method": "GET" },
       }),
     );
 
@@ -659,7 +702,12 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
           Effect.succeed(within(pull, deadline, "media-download")),
         );
       }),
-    ).pipe(Stream.scoped);
+    ).pipe(
+      Stream.scoped,
+      Trace.stream("BrowserbaseClient.media", {
+        attributes: { "browser.operation": "media-download", "http.request.method": "GET" },
+      }),
+    );
 
   return {
     projectId: configured.projectId,
@@ -671,4 +719,4 @@ export const makeTransport = Effect.fnUntraced(function* (options: ClientOptions
     media,
     validateMediaUrl,
   };
-});
+}, Trace.span("BrowserbaseClient.configure"));

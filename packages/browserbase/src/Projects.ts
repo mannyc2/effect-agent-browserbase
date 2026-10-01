@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { ProjectError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
+import * as Trace from "./internal/Trace.ts";
 import { Identifier } from "./References.ts";
 
 const Timestamp = Schema.String.check(Schema.isMaxLength(64));
@@ -66,7 +67,7 @@ export class BrowserbaseProjects extends Context.Service<
         )
         .pipe(
           Effect.map((rows) => rows.map(project)),
-          Effect.withSpan("BrowserbaseProjects.list"),
+          Trace.span("BrowserbaseProjects.list"),
         );
 
       const retrieve = api.request("GET", own, ProviderProject, "project-retrieve").pipe(
@@ -75,7 +76,7 @@ export class BrowserbaseProjects extends Context.Service<
             ? Effect.succeed(project(value))
             : Effect.fail(api.malformed("project-retrieve", false)),
         ),
-        Effect.withSpan("BrowserbaseProjects.retrieve"),
+        Trace.span("BrowserbaseProjects.retrieve"),
       );
 
       const usage = api
@@ -87,7 +88,7 @@ export class BrowserbaseProjects extends Context.Service<
         )
         .pipe(
           Effect.map((value) => ProjectUsage.make({ projectId: client.projectId, ...value })),
-          Effect.withSpan("BrowserbaseProjects.usage"),
+          Trace.span("BrowserbaseProjects.usage"),
         );
 
       return BrowserbaseProjects.of({ list, retrieve, usage });

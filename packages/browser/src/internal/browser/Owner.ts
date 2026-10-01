@@ -1,4 +1,4 @@
-import { Clock, Deferred, Duration, Effect, Schema, Semaphore } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Schema, Semaphore } from "effect";
 
 import {
   BrowserDiagnostic,
@@ -8,6 +8,7 @@ import {
   type SessionPhase,
 } from "../../BrowserData.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
 import { providerReason, publicError } from "./NativeCalls.ts";
 
@@ -443,255 +444,286 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         | undefined;
     } = {},
   ): Effect.Effect<A, E | BrowserError, R> =>
-    Effect.suspend(() => {
-      let admitted: Ticket | undefined;
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const admission = yield* Trace.start("Browser.admission", {
+          attributes: { "browser.operation": operation },
+        });
 
-      const waitUntil =
-        options.waitUntil ??
-        (options.queue === true
-          ? Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 +
-            Math.min(
-              options.timeoutMillis ?? limits.actionTimeoutMillis,
-              limits.actionTimeoutMillis,
-            )
-          : undefined);
+        let admitted: Ticket | undefined;
 
-      const work = Effect.gen(function* () {
-        holdingPermit = true;
-        if (!(options.phases ?? ["open"]).includes(state.phase) || policies.size > 0) {
-          return yield* BrowserError.make({
-            operation,
-            reason:
-              terminalReason === "expired"
-                ? Reasons.Expired.make({})
-                : state.phase === "paused" || (terminalReason === null && policies.size > 0)
-                  ? Reasons.Busy.make({})
-                  : Reasons.Closed.make({}),
-            outcome: "undispatched",
-          });
-        }
-        yield* options.preflight ?? Effect.void;
-        const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
-
-        if (now >= lifetimeDeadline) {
-          expire();
-
-          return yield* BrowserError.make({
-            operation,
-            reason: Reasons.Expired.make({}),
-            outcome: "undispatched",
-          });
-        }
-
-        const deadline = Math.min(
-          waitUntil ?? now + limits.actionTimeoutMillis,
-          options.timeoutMillis === undefined
-            ? Number.POSITIVE_INFINITY
-            : now + options.timeoutMillis,
-          lifetimeDeadline,
-        );
-
-        if (now >= deadline)
-          return yield* BrowserError.make({
-            operation,
-            reason: Reasons.Timeout.make({}),
-            outcome: "undispatched",
-          });
-        if (options.charge !== false) {
-          const hostRead = options.charge === "host-read";
-          const maximum = hostRead ? limits.maxHostReads : limits.maxActions;
-          const observed = hostRead ? state.hostReads : state.actions;
-
-          if (observed >= maximum)
-            return yield* BrowserError.make({
-              operation,
-              reason: Reasons.Limit.make({
-                dimension: hostRead ? "host-reads" : "actions",
-                maximum,
-                observed,
-              }),
-              outcome: "undispatched",
-            });
-          if (hostRead) state.hostReads++;
-          else state.actions++;
-        }
-        // The lifecycle fence must actively abort admitted native work outside the current fiber.
-        // @effect-diagnostics-next-line abortControllerInEffect:off
-        const controller = new AbortController();
-
-        active = controller;
-        let dispatched = false;
-        const generation = state.generation;
-        const allowed = options.phases ?? ["open"];
-
-        const check = () => {
-          if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
-          if (
-            controller.signal.aborted ||
-            state.generation !== generation ||
-            !allowed.includes(state.phase)
-          ) {
-            throw BrowserError.make({
-              operation,
-              reason: Reasons.Stale.make({}),
-              outcome: dispatched ? "unknown" : "undispatched",
-            });
-          }
-          if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline)
-            throw BrowserError.make({
-              operation,
-              reason: Reasons.Timeout.make({}),
-              outcome: dispatched ? "unknown" : "undispatched",
-            });
-        };
-
-        const ticket: Ticket = {
-          signal: controller.signal,
-          deadline,
-          generation,
-          remainingMillis: () =>
-            Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
-          get dispatched() {
-            return dispatched;
-          },
-          check,
-          dispatch() {
-            check();
-            if (!dispatched && options.mutation)
-              invalidate("observation", options.mutationScope?.() ?? "all");
-            dispatched = true;
-            unresolved.add(controller);
-          },
-        };
-
-        admitted = ticket;
-
-        // Dispatched work this admission gave up on, whose outcome no fence has decided yet.
-        let abandoned = false;
-
-        const abandon = () => {
-          // The action timer can win the same instant as the independent lifetime timer.
-          if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
-          const fenced = controller.signal.aborted;
-
-          controller.abort();
-          if (dispatched && !fenced && state.phase !== "closing" && state.phase !== "closed")
-            abandoned = true;
-        };
-
-        const current = () => state.generation === generation && state.phase === "open";
-
-        /**
-         * Work given up after dispatch fences the owner, since nothing knows what it did or
-         * whether more of it will land. An operation confined to one page it may close instead
-         * closes that page: once the browser confirms it closed, nothing still bound for it can
-         * land anywhere, and every other page keeps working. It is still never replayed.
-         */
-        const settle = Effect.uninterruptible(
+        return yield* restore(
           Effect.suspend(() => {
-            if (!abandoned) return Effect.void;
-            abandoned = false;
-            const page = current() ? options.contain?.() : undefined;
+            const waitUntil =
+              options.waitUntil ??
+              (options.queue === true
+                ? Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 +
+                  Math.min(
+                    options.timeoutMillis ?? limits.actionTimeoutMillis,
+                    limits.actionTimeoutMillis,
+                  )
+                : undefined);
 
-            if (page === undefined) return Effect.sync(() => fence("uncertain", "uncertain"));
+            const work = Effect.gen(function* () {
+              admission?.end(Exit.void);
+              holdingPermit = true;
+              if (!(options.phases ?? ["open"]).includes(state.phase) || policies.size > 0) {
+                return yield* BrowserError.make({
+                  operation,
+                  reason:
+                    terminalReason === "expired"
+                      ? Reasons.Expired.make({})
+                      : state.phase === "paused" || (terminalReason === null && policies.size > 0)
+                        ? Reasons.Busy.make({})
+                        : Reasons.Closed.make({}),
+                  outcome: "undispatched",
+                });
+              }
+              yield* options.preflight ?? Effect.void;
+              const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
-            return page.close.pipe(
-              Effect.map((closed) => {
-                if (!closed || !current()) {
-                  fence("uncertain", "uncertain");
+              if (now >= lifetimeDeadline) {
+                expire();
 
-                  return;
+                return yield* BrowserError.make({
+                  operation,
+                  reason: Reasons.Expired.make({}),
+                  outcome: "undispatched",
+                });
+              }
+
+              const deadline = Math.min(
+                waitUntil ?? now + limits.actionTimeoutMillis,
+                options.timeoutMillis === undefined
+                  ? Number.POSITIVE_INFINITY
+                  : now + options.timeoutMillis,
+                lifetimeDeadline,
+              );
+
+              if (now >= deadline)
+                return yield* BrowserError.make({
+                  operation,
+                  reason: Reasons.Timeout.make({}),
+                  outcome: "undispatched",
+                });
+              if (options.charge !== false) {
+                const hostRead = options.charge === "host-read";
+                const maximum = hostRead ? limits.maxHostReads : limits.maxActions;
+                const observed = hostRead ? state.hostReads : state.actions;
+
+                if (observed >= maximum)
+                  return yield* BrowserError.make({
+                    operation,
+                    reason: Reasons.Limit.make({
+                      dimension: hostRead ? "host-reads" : "actions",
+                      maximum,
+                      observed,
+                    }),
+                    outcome: "undispatched",
+                  });
+                if (hostRead) state.hostReads++;
+                else state.actions++;
+              }
+              // The lifecycle fence must actively abort admitted native work outside the current fiber.
+              // @effect-diagnostics-next-line abortControllerInEffect:off
+              const controller = new AbortController();
+
+              active = controller;
+              let dispatched = false;
+              const generation = state.generation;
+              const allowed = options.phases ?? ["open"];
+
+              const check = () => {
+                if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline)
+                  expire();
+                if (
+                  controller.signal.aborted ||
+                  state.generation !== generation ||
+                  !allowed.includes(state.phase)
+                ) {
+                  throw BrowserError.make({
+                    operation,
+                    reason: Reasons.Stale.make({}),
+                    outcome: dispatched ? "unknown" : "undispatched",
+                  });
                 }
-                unresolved.delete(controller);
-                // A navigation this operation dispatched, and reserved, ended with its page.
-                const reservation = reservations.get(page.pageId);
+                if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline)
+                  throw BrowserError.make({
+                    operation,
+                    reason: Reasons.Timeout.make({}),
+                    outcome: dispatched ? "unknown" : "undispatched",
+                  });
+              };
 
-                if (reservation !== undefined) {
-                  reservations.delete(page.pageId);
-                  unresolved.delete(reservation);
-                  reservation.abort();
-                }
-                record("page-contained", "confirmed");
-              }),
+              const ticket: Ticket = {
+                signal: controller.signal,
+                deadline,
+                generation,
+                remainingMillis: () =>
+                  Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
+                get dispatched() {
+                  return dispatched;
+                },
+                check,
+                dispatch() {
+                  check();
+                  if (!dispatched && options.mutation)
+                    invalidate("observation", options.mutationScope?.() ?? "all");
+                  dispatched = true;
+                  unresolved.add(controller);
+                },
+              };
+
+              admitted = ticket;
+
+              // Dispatched work this admission gave up on, whose outcome no fence has decided yet.
+              let abandoned = false;
+
+              const abandon = () => {
+                // The action timer can win the same instant as the independent lifetime timer.
+                if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline)
+                  expire();
+                const fenced = controller.signal.aborted;
+
+                controller.abort();
+                if (dispatched && !fenced && state.phase !== "closing" && state.phase !== "closed")
+                  abandoned = true;
+              };
+
+              const current = () => state.generation === generation && state.phase === "open";
+
+              /**
+               * Work given up after dispatch fences the owner, since nothing knows what it did or
+               * whether more of it will land. An operation confined to one page it may close instead
+               * closes that page: once the browser confirms it closed, nothing still bound for it can
+               * land anywhere, and every other page keeps working. It is still never replayed.
+               */
+              const settle = Effect.uninterruptible(
+                Effect.suspend(() => {
+                  if (!abandoned) return Effect.void;
+                  abandoned = false;
+                  const page = current() ? options.contain?.() : undefined;
+
+                  if (page === undefined) return Effect.sync(() => fence("uncertain", "uncertain"));
+
+                  return page.close.pipe(
+                    Effect.map((closed) => {
+                      if (!closed || !current()) {
+                        fence("uncertain", "uncertain");
+
+                        return;
+                      }
+                      unresolved.delete(controller);
+                      // A navigation this operation dispatched, and reserved, ended with its page.
+                      const reservation = reservations.get(page.pageId);
+
+                      if (reservation !== undefined) {
+                        reservations.delete(page.pageId);
+                        unresolved.delete(reservation);
+                        reservation.abort();
+                      }
+                      record("page-contained", "confirmed");
+                    }),
+                  );
+                }),
+              );
+
+              return yield* within(body(ticket), ticket.deadline, () => {
+                abandon();
+
+                return BrowserError.make({
+                  operation,
+                  reason: Reasons.Timeout.make({}),
+                  outcome: dispatched ? "unknown" : "undispatched",
+                });
+              }).pipe(
+                Effect.tap(() =>
+                  options.verifyAfter === false
+                    ? Effect.void
+                    : Effect.try({
+                        try: check,
+                        catch: () =>
+                          BrowserError.make({
+                            operation,
+                            reason: Reasons.Stale.make({}),
+                            outcome: dispatched ? "unknown" : "undispatched",
+                          }),
+                      }),
+                ),
+                Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
+                  if (dispatched) abandon();
+
+                  // The permit adds dispatch evidence only to browser-operation errors. Typed
+                  // initialization/consumer failures retain their identity and original family.
+                  const failure: Effect.Effect<never, E | BrowserError> = Schema.is(BrowserError)(
+                    error,
+                  )
+                    ? Effect.fail(
+                        BrowserError.make({
+                          operation,
+                          reason: error.reason,
+                          outcome: error.outcome,
+                        }),
+                      )
+                    : Effect.fail(error);
+
+                  return settle.pipe(Effect.andThen(failure));
+                }),
+                Effect.onInterrupt(() => Effect.sync(abandon).pipe(Effect.andThen(settle))),
+                Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    controller.abort();
+                    if (active === controller) active = undefined;
+                  }),
+                ),
+              );
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  holdingPermit = false;
+                }),
+              ),
             );
-          }),
-        );
 
-        return yield* within(body(ticket), ticket.deadline, () => {
-          abandon();
+            if (waitUntil !== undefined)
+              return within(
+                semaphore.withPermits(1)(work),
+                Math.min(waitUntil, lifetimeDeadline),
+                () =>
+                  BrowserError.make({
+                    operation,
+                    reason: Reasons.Timeout.make({}),
+                    outcome: admitted?.dispatched === true ? "unknown" : "undispatched",
+                  }),
+              );
 
-          return BrowserError.make({
-            operation,
-            reason: Reasons.Timeout.make({}),
-            outcome: dispatched ? "unknown" : "undispatched",
-          });
-        }).pipe(
-          Effect.tap(() =>
-            options.verifyAfter === false
-              ? Effect.void
-              : Effect.try({
-                  try: check,
-                  catch: () =>
+            return semaphore
+              .withPermitsIfAvailable(1)(work)
+              .pipe(
+                Effect.flatMap(
+                  Effect.fromOption(() =>
                     BrowserError.make({
                       operation,
-                      reason: Reasons.Stale.make({}),
-                      outcome: dispatched ? "unknown" : "undispatched",
+                      reason: Reasons.Busy.make({}),
+                      outcome: "undispatched",
                     }),
-                }),
-          ),
-          Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
-            if (dispatched) abandon();
-
-            // The permit adds dispatch evidence only to browser-operation errors. Typed
-            // initialization/consumer failures retain their identity and original family.
-            const failure: Effect.Effect<never, E | BrowserError> = Schema.is(BrowserError)(error)
-              ? Effect.fail(
-                  BrowserError.make({ operation, reason: error.reason, outcome: error.outcome }),
-                )
-              : Effect.fail(error);
-
-            return settle.pipe(Effect.andThen(failure));
+                  ),
+                ),
+              );
           }),
-          Effect.onInterrupt(() => Effect.sync(abandon).pipe(Effect.andThen(settle))),
-          Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
-          Effect.ensuring(
-            Effect.sync(() => {
-              controller.abort();
-              if (active === controller) active = undefined;
+        ).pipe(
+          Effect.onExit((exit) =>
+            Effect.sync(() => admission?.end(exit, { "browser.outcome": "undispatched" })),
+          ),
+          Effect.onInterrupt(() =>
+            Trace.annotate({
+              "browser.outcome": admitted?.dispatched === true ? "unknown" : "undispatched",
             }),
           ),
         );
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            holdingPermit = false;
-          }),
-        ),
-      );
-
-      if (waitUntil !== undefined)
-        return within(semaphore.withPermits(1)(work), Math.min(waitUntil, lifetimeDeadline), () =>
-          BrowserError.make({
-            operation,
-            reason: Reasons.Timeout.make({}),
-            outcome: admitted?.dispatched === true ? "unknown" : "undispatched",
-          }),
-        );
-
-      return semaphore
-        .withPermitsIfAvailable(1)(work)
-        .pipe(
-          Effect.flatMap(
-            Effect.fromOption(() =>
-              BrowserError.make({
-                operation,
-                reason: Reasons.Busy.make({}),
-                outcome: "undispatched",
-              }),
-            ),
-          ),
-        );
-    });
+      }),
+    ).pipe(Trace.span(`Browser.${operation}`, { attributes: { "browser.operation": operation } }));
 
   /** Lifecycle transitions are performed while holding guard's permit; close alone preempts it. */
   return {
@@ -827,4 +859,9 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
     }
 
     return Effect.sync(cleanup);
-  });
+  }).pipe(
+    Effect.onInterrupt(() =>
+      Trace.annotate({ "browser.outcome": ticket.dispatched ? "unknown" : "undispatched" }),
+    ),
+    Trace.span(`Browser.native.${operation}`, { attributes: { "browser.operation": operation } }),
+  );

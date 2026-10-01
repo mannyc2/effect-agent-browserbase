@@ -33,6 +33,7 @@ import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driv
 import { connectPlaywrightEndpoint } from "./internal/browser/Playwright.ts";
 import { checked, decoded, makeSession } from "./internal/browser/PublicSession.ts";
 import { acquireSession } from "./internal/browser/Session.ts";
+import * as Trace from "./internal/Trace.ts";
 
 export {
   cleanupStep,
@@ -312,112 +313,115 @@ export const make = Effect.fnUntraced(function* (
 
   const crypto = yield* Crypto.Crypto;
 
-  const acquire = Effect.fnUntraced(function* <L extends Lifetime, AE, AR, E = never, R = never>(
-    policy: BrowserPolicy,
-    source: Source<L, AE, AR>,
-    request: AcquireOptions<E, R> = {},
-  ) {
-    const fixed = yield* checked(BrowserPolicy, policy, "configure");
-    const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
+  const acquire = Effect.fnUntraced(
+    function* <L extends Lifetime, AE, AR, E = never, R = never>(
+      policy: BrowserPolicy,
+      source: Source<L, AE, AR>,
+      request: AcquireOptions<E, R> = {},
+    ) {
+      const fixed = yield* checked(BrowserPolicy, policy, "configure");
+      const plan = yield* preparePlan<E, R>(request.bootstrap ?? Bootstrap.empty);
 
-    const existing =
-      request.existingTarget === undefined
-        ? undefined
-        : yield* checked(
-            Schema.Struct({ targetId: Schema.optionalKey(Identifier) }),
-            request.existingTarget,
-            "configure",
-          );
-
-    // Even a parent with parallel finalizers closes this connection before callback scopes end.
-    const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-    const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
-    const bootstrap = compileBootstrap(plan);
-
-    const connectionDriver: DriverOptions =
-      existing === undefined
-        ? driver
-        : {
-            viewport,
-            pageControl,
-            maxPages: driver.maxPages,
-            popupPolicy,
-            dialogPolicy,
-            newPage: false,
-            preserveViewport: true,
-            ...(existing.targetId === undefined ? {} : { initialTargetId: existing.targetId }),
-          };
-
-    const acquired = yield* acquireSession(
-      {
-        maxActions: fixed.maxActions,
-        maxElapsedMillis: fixed.maxElapsedMillis,
-        actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
-        maxHostReads: automation.maxHostReads ?? 10_000,
-      },
-      {
-        implementation,
-        remote: source,
-        engine,
-        keepAlive: existing === undefined && keepAlive,
-        driver: { ...connectionDriver, ...(bootstrap === undefined ? {} : { bootstrap }) },
-        connectBindings: bindings.connect,
-        maxReturnedBytes: fixed.maxReturnedBytes,
-      },
-    ).pipe(Scope.provide(scope), Effect.provideService(Crypto.Crypto, crypto));
-
-    const connected = yield* Effect.cached(
-      acquired.connect.pipe(
-        Effect.map((controls): Connection<L["reference"], E> => {
-          const fileOperation = (
-            operation: "select-files" | "file-chooser",
-            request: FileRequest,
-          ) =>
-            checked(Selector, request.selector, operation).pipe(
-              Effect.flatMap((selector) =>
-                resolveFiles(request.selection, operation).pipe(
-                  Effect.flatMap((files) =>
-                    operation === "select-files"
-                      ? controls.selectFiles(selector, files)
-                      : controls.clickForFileSelection(selector, files),
-                  ),
-                ),
-              ),
-              Effect.flatMap((url) => decoded(ActionResult, "action-result", "unknown")({ url })),
+      const existing =
+        request.existingTarget === undefined
+          ? undefined
+          : yield* checked(
+              Schema.Struct({ targetId: Schema.optionalKey(Identifier) }),
+              request.existingTarget,
+              "configure",
             );
 
-          return {
-            session: makeSession(controls, bindings),
-            operations: {
-              clickForDownload: (request) =>
-                checked(ClickRequest, request, "download-action").pipe(
-                  Effect.flatMap((value) => controls.clickForDownload(value.selector)),
-                  Effect.flatMap(decoded(DownloadEvent, "download-action", "unknown")),
-                ),
-              selectFiles: (request) => fileOperation("select-files", request),
-              clickForFileSelection: (request) => fileOperation("file-chooser", request),
-              liveView: controls.liveView,
-              beginHandoff: controls.beginHandoff,
-              resume: controls.resume,
-              detach: controls.detach,
-              reconnect: controls.reconnect,
-            },
-          };
-        }),
-      ),
-    );
+      // Even a parent with parallel finalizers closes this connection before callback scopes end.
+      const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+      const bindings = yield* makeBindings(plan).pipe(Scope.provide(scope));
+      const bootstrap = compileBootstrap(plan);
 
-    return {
-      reference: acquired.reference,
-      lifetime: acquired.lease,
-      failure: bindings.failure,
-      close: acquired.close,
-      connect: Effect.raceFirst(
-        bindings.failure,
-        acquired.connect.pipe(Effect.andThen(connected)),
-      ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid))),
-    } satisfies Acquisition<L, E>;
-  });
+      const connectionDriver: DriverOptions =
+        existing === undefined
+          ? driver
+          : {
+              viewport,
+              pageControl,
+              maxPages: driver.maxPages,
+              popupPolicy,
+              dialogPolicy,
+              newPage: false,
+              preserveViewport: true,
+              ...(existing.targetId === undefined ? {} : { initialTargetId: existing.targetId }),
+            };
+
+      const acquired = yield* acquireSession(
+        {
+          maxActions: fixed.maxActions,
+          maxElapsedMillis: fixed.maxElapsedMillis,
+          actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
+          maxHostReads: automation.maxHostReads ?? 10_000,
+        },
+        {
+          implementation,
+          remote: source,
+          engine,
+          keepAlive: existing === undefined && keepAlive,
+          driver: { ...connectionDriver, ...(bootstrap === undefined ? {} : { bootstrap }) },
+          connectBindings: bindings.connect,
+          maxReturnedBytes: fixed.maxReturnedBytes,
+        },
+      ).pipe(Scope.provide(scope), Effect.provideService(Crypto.Crypto, crypto));
+
+      const connected = yield* Effect.cached(
+        acquired.connect.pipe(
+          Effect.map((controls): Connection<L["reference"], E> => {
+            const fileOperation = (
+              operation: "select-files" | "file-chooser",
+              request: FileRequest,
+            ) =>
+              checked(Selector, request.selector, operation).pipe(
+                Effect.flatMap((selector) =>
+                  resolveFiles(request.selection, operation).pipe(
+                    Effect.flatMap((files) =>
+                      operation === "select-files"
+                        ? controls.selectFiles(selector, files)
+                        : controls.clickForFileSelection(selector, files),
+                    ),
+                  ),
+                ),
+                Effect.flatMap((url) => decoded(ActionResult, "action-result", "unknown")({ url })),
+              );
+
+            return {
+              session: makeSession(controls, bindings),
+              operations: {
+                clickForDownload: (request) =>
+                  checked(ClickRequest, request, "download-action").pipe(
+                    Effect.flatMap((value) => controls.clickForDownload(value.selector)),
+                    Effect.flatMap(decoded(DownloadEvent, "download-action", "unknown")),
+                  ),
+                selectFiles: (request) => fileOperation("select-files", request),
+                clickForFileSelection: (request) => fileOperation("file-chooser", request),
+                liveView: controls.liveView,
+                beginHandoff: controls.beginHandoff,
+                resume: controls.resume,
+                detach: controls.detach,
+                reconnect: controls.reconnect,
+              },
+            };
+          }),
+        ),
+      );
+
+      return {
+        reference: acquired.reference,
+        lifetime: acquired.lease,
+        failure: bindings.failure,
+        close: acquired.close,
+        connect: Effect.raceFirst(
+          bindings.failure,
+          acquired.connect.pipe(Effect.andThen(connected)),
+        ).pipe(Effect.onError(() => acquired.close.pipe(Effect.asVoid))),
+      } satisfies Acquisition<L, E>;
+    },
+    Trace.span("Browser.acquire", { attributes: { "browser.operation": "acquire" } }),
+  );
 
   return { acquire } satisfies Runtime;
 });

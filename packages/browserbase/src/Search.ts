@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { PlatformError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
+import * as Trace from "./internal/Trace.ts";
 
 const Text = Schema.String.check(Schema.isMaxLength(16_384));
 
@@ -44,11 +45,11 @@ export class BrowserbaseSearch extends Context.Service<
         PlatformError.make({ ...failure, service: "search" }),
       );
 
-      const web = Effect.fn("BrowserbaseSearch.web")(function* (query: SearchQuery) {
+      const web = Effect.fnUntraced(function* (query: SearchQuery) {
         const value = yield* api.input(SearchQuery, query, "search-web");
 
         return yield* api.request("POST", "/v1/search", SearchResults, "search-web", value);
-      });
+      }, Trace.span("BrowserbaseSearch.web"));
 
       return BrowserbaseSearch.of({ web });
     }),

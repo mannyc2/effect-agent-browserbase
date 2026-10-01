@@ -4,6 +4,7 @@ import { BrowserbaseClient } from "./Client.ts";
 import { ArtifactError, type ClientError } from "./Errors.ts";
 import { requireTerminalSession } from "./internal/artifact/Authorization.ts";
 import { transferPolicy } from "./internal/artifact/TransferPolicy.ts";
+import * as Trace from "./internal/Trace.ts";
 import { Identifier, type SessionReference } from "./References.ts";
 import { BrowserbaseSessions } from "./Sessions.ts";
 import {
@@ -144,7 +145,7 @@ export class BrowserbaseReplays extends Context.Service<
             endTimeMs: page.endTimeMs,
           }),
         );
-      });
+      }, Trace.span("BrowserbaseReplays.metadata"));
 
       const openPage = Effect.fnUntraced(function* (ref: RecordingPageReference) {
         yield* Schema.decodeEffect(RecordingPageReference)(ref).pipe(
@@ -179,33 +180,35 @@ export class BrowserbaseReplays extends Context.Service<
           media: (index: number, limits: DownloadLimits) => {
             const url = Number.isSafeInteger(index) ? urls[index] : undefined;
 
-            return url === undefined
-              ? Stream.fail(failure("replay-media", "not-found"))
-              : Stream.unwrap(
-                  transferPolicy(
-                    {
-                      maxBytes: limits.maxBytes,
-                      ...(limits.timeoutMillis === undefined
-                        ? {}
-                        : { timeoutMillis: limits.timeoutMillis }),
-                    },
-                    () => failure("replay-media", "configuration"),
-                  ).pipe(
-                    Effect.map(({ maxBytes, timeoutMillis }) =>
-                      client
-                        .media(
-                          Redacted.make(url),
-                          maxBytes,
-                          ["video/mp4", "video/iso.segment", "application/octet-stream"],
-                          timeoutMillis,
-                        )
-                        .pipe(Stream.mapError(fromClient("replay-media"))),
+            return (
+              url === undefined
+                ? Stream.fail(failure("replay-media", "not-found"))
+                : Stream.unwrap(
+                    transferPolicy(
+                      {
+                        maxBytes: limits.maxBytes,
+                        ...(limits.timeoutMillis === undefined
+                          ? {}
+                          : { timeoutMillis: limits.timeoutMillis }),
+                      },
+                      () => failure("replay-media", "configuration"),
+                    ).pipe(
+                      Effect.map(({ maxBytes, timeoutMillis }) =>
+                        client
+                          .media(
+                            Redacted.make(url),
+                            maxBytes,
+                            ["video/mp4", "video/iso.segment", "application/octet-stream"],
+                            timeoutMillis,
+                          )
+                          .pipe(Stream.mapError(fromClient("replay-media"))),
+                      ),
                     ),
-                  ),
-                );
+                  )
+            ).pipe(Trace.stream("BrowserbaseReplays.media"));
           },
         } satisfies ReplayAccess;
-      });
+      }, Trace.span("BrowserbaseReplays.openPage"));
 
       return BrowserbaseReplays.of({ metadata, openPage });
     }),

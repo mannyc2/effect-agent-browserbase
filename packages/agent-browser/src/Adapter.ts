@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Scope } from "effect";
+import { Context, Effect, Layer, Schema, Scope, Tracer } from "effect";
 import {
   BrowserActionResult,
   BrowserNavigationResult,
@@ -20,6 +20,8 @@ import { SandboxImplementation } from "effect-agent/sandbox";
 import type { AnySession, BrowserSession, TargetOperations } from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
+
+import * as Trace from "./internal/Trace.ts";
 
 /**
  * One owned browser presented to the Effect Agent runtime. `browser` keeps the generic
@@ -247,6 +249,7 @@ export const interactiveLayer = <E, R>(
         open: (policy) =>
           Effect.gen(function* () {
             const scope = yield* Scope.Scope;
+            const cause = yield* Trace.capture;
 
             const fixed = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(policy).pipe(
               Effect.mapError(() =>
@@ -275,6 +278,13 @@ export const interactiveLayer = <E, R>(
                 }),
               ),
             ).pipe(
+              Trace.span("BrowserAdapter.open", {
+                parent: cause.parent,
+                root: cause.parent === undefined,
+              }),
+              Effect.withTracerEnabled(cause.enabled),
+              Effect.provideService(Tracer.CurrentTraceLevel, cause.level),
+              Effect.provideService(Tracer.MinimumTraceLevel, cause.minimum),
               Effect.provideContext(Context.add(context, Scope.Scope, scope)),
               Effect.mapError((error) =>
                 Schema.is(BrowserError)(error)

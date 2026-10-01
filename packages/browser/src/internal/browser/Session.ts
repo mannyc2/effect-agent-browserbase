@@ -8,6 +8,7 @@ import {
   Option,
   Redacted,
   Schema,
+  Tracer,
   Scope,
 } from "effect";
 
@@ -27,6 +28,7 @@ import {
 } from "../../BrowserData.ts";
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 import { type CaptureParent } from "./Association.ts";
 import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
@@ -513,24 +515,30 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         }
 
         const acquired = yield* restore(
-          engine.connect({
-            connection: Redacted.value(url),
-            identity,
-            options: {
-              ...nativeOptions,
-              ...(bindings === undefined
-                ? {}
-                : {
-                    bindings: bindings.bindings,
-                    onBindingFault: bindings.reportFailure,
-                  }),
-            },
-            events,
-            onAbandoned: () => bindings?.close(),
-            onSettled: () => {
-              if (activeConnection === connectionLease) connectPending = false;
-            },
-          }),
+          engine
+            .connect({
+              connection: Redacted.value(url),
+              identity,
+              options: {
+                ...nativeOptions,
+                ...(bindings === undefined
+                  ? {}
+                  : {
+                      bindings: bindings.bindings,
+                      onBindingFault: bindings.reportFailure,
+                    }),
+              },
+              events,
+              onAbandoned: () => bindings?.close(),
+              onSettled: () => {
+                if (activeConnection === connectionLease) connectPending = false;
+              },
+            })
+            .pipe(
+              Trace.span("Browser.driver.connect", {
+                attributes: { "browser.operation": "connect" },
+              }),
+            ),
         );
 
         driver = acquired;
@@ -549,7 +557,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 reason: Reasons.Provider.make({}),
                 outcome: "unknown",
               }),
-          }).pipe(Effect.ignore);
+          }).pipe(Trace.span("Browser.driver.abandoned-disconnect"), Effect.ignore);
           driver = undefined;
 
           return yield* BrowserError.make({
@@ -623,6 +631,35 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     });
   };
 
+  /** Attribute readiness without changing the Promise's dispatch or cancellation boundary. */
+  const readyNative = <A>(
+    operation: BrowserOperation,
+    ticket: Ticket,
+    prepare: () => Promise<void>,
+    action: () => Promise<A>,
+  ) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const readiness = yield* Trace.start("Browser.readiness", {
+          attributes: { "browser.operation": operation },
+        });
+
+        return yield* restore(
+          native(operation, ticket, async () => {
+            try {
+              await prepare();
+              readiness?.end(Exit.void);
+            } catch (error) {
+              readiness?.end(Exit.fail(error));
+              throw error;
+            }
+
+            return action();
+          }),
+        ).pipe(Effect.onExit((exit) => Effect.sync(() => readiness?.end(exit))));
+      }),
+    );
+
   /**
    * `dependent` is false for lifecycle observations, which report what is actually on the
    * reattached page. Readiness governs work that depends on initialization, not the reading
@@ -639,12 +676,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     Effect.suspend(() => {
       const revision = owner.state.revision;
 
-      return native("observe", ticket, async () => {
-        await getDriver().pageControl?.checkTarget(undefined, ticket);
-        if (dependent) await requireReady("observe", ticket);
-
-        return getDriver().observe(scope, maximumBytes, controls, ticket, match);
-      }).pipe(
+      return readyNative(
+        "observe",
+        ticket,
+        async () => {
+          await getDriver().pageControl?.checkTarget(undefined, ticket);
+          if (dependent) await requireReady("observe", ticket);
+        },
+        () => getDriver().observe(scope, maximumBytes, controls, ticket, match),
+      ).pipe(
         Effect.flatMap((raw) =>
           Effect.gen(function* () {
             if (owner.state.revision !== revision)
@@ -690,7 +730,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             }
 
             return result;
-          }),
+          }).pipe(
+            Trace.span("Browser.observe.result", {
+              attributes: { "browser.operation": "observe" },
+            }),
+          ),
         ),
       );
     });
@@ -818,28 +862,31 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     owner.guard(
       operation,
       (ticket) =>
-        native(operation, ticket, async () => {
-          // A held page is refused, never woken: none of these may run against one.
-          if (
-            [
-              "resize",
-              "wait",
-              "click-and-wait",
-              "download-action",
-              "select-files",
-              "select-option",
-              "fill-form",
-              "file-chooser",
-              "checkpoint",
-              "control-facts",
-              "revalidate",
-            ].includes(operation)
-          )
-            await getDriver().pageControl?.checkTarget(undefined, ticket);
-          await requireReady(operation, ticket);
-
-          return action(getDriver(), ticket);
-        }),
+        readyNative(
+          operation,
+          ticket,
+          async () => {
+            // A held page is refused, never woken: none of these may run against one.
+            if (
+              [
+                "resize",
+                "wait",
+                "click-and-wait",
+                "download-action",
+                "select-files",
+                "select-option",
+                "fill-form",
+                "file-chooser",
+                "checkpoint",
+                "control-facts",
+                "revalidate",
+              ].includes(operation)
+            )
+              await getDriver().pageControl?.checkTarget(undefined, ticket);
+            await requireReady(operation, ticket);
+          },
+          () => action(getDriver(), ticket),
+        ),
       {
         ...options,
         mutationScope: options.mutationScope ?? (() => ({ pageId: getDriver().selected().pageId })),
@@ -910,7 +957,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           Effect.flatMap((operation) => operation.completed),
           Effect.ensuring(Effect.sync(() => owned?.cancel())),
         );
-    });
+    }).pipe(Trace.span("Browser.wait.completed", { attributes: { "browser.operation": "wait" } }));
 
   /**
    * Direct operations resolve selection under admission. Retained operations capture selection
@@ -965,12 +1012,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       owner.guard(
         operation,
         (ticket) =>
-          native(operation, ticket, async () => {
-            await getDriver().pageControl?.checkTarget(browserTarget, ticket);
-            await requireReady(operation, ticket, browserTarget);
-
-            return action(getDriver(), ticket);
-          }),
+          readyNative(
+            operation,
+            ticket,
+            async () => {
+              await getDriver().pageControl?.checkTarget(browserTarget, ticket);
+              await requireReady(operation, ticket, browserTarget);
+            },
+            () => action(getDriver(), ticket),
+          ),
         {
           mutation,
           mutationScope: () => ({ pageId: browserTarget?.pageId ?? getDriver().selected().pageId }),
@@ -1025,248 +1075,268 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
      * navigation that fails after dispatch, fences the owner exactly as an interrupted mutation
      * always has. Interrupting a waiter on `completed` stops nothing; `stop` is the one way to.
      */
-    const startNavigation = Effect.fnUntraced(function* (
-      url: string,
-      timeoutMillis: number = limits.actionTimeoutMillis,
-    ) {
-      let active = true;
-      let dismissals = 0;
-      let beforeUnload = false;
-      let dismissalUnknown = false;
-      let rejected: BrowserError | undefined;
-      let reconsider = () => {};
+    const startNavigation = (url: string, timeoutMillis: number = limits.actionTimeoutMillis) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          // Native dispatch remains interruptible; synchronous ownership registration is atomic.
+          let active = true;
+          let dismissals = 0;
+          let beforeUnload = false;
+          let dismissalUnknown = false;
+          let rejected: BrowserError | undefined;
+          let reconsider = () => {};
 
-      const control: NavigationControl = {
-        identity: {},
-        beforeUnload: () => {
-          if (!active) return { dismissed: () => {} };
-          beforeUnload = true;
-          dismissals++;
-          let settled = false;
+          const control: NavigationControl = {
+            identity: {},
+            beforeUnload: () => {
+              if (!active) return { dismissed: () => {} };
+              beforeUnload = true;
+              dismissals++;
+              let settled = false;
 
-          return {
-            dismissed: (confirmed) => {
-              if (settled || !active) return;
-              settled = true;
-              dismissals--;
-              if (!confirmed) dismissalUnknown = true;
+              return {
+                dismissed: (confirmed) => {
+                  if (settled || !active) return;
+                  settled = true;
+                  dismissals--;
+                  if (!confirmed) dismissalUnknown = true;
+                  reconsider();
+                },
+              };
+            },
+          };
+
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              active = false;
+            }),
+          );
+
+          const begun = yield* restore(
+            run(
+              "navigate",
+              async (driver, ticket) => {
+                const target = operationTarget();
+
+                const loadingStarted = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+                const remainingLifetime = owner.lifetimeDeadline - loadingStarted;
+
+                if (remainingLifetime <= 0)
+                  throw BrowserError.make({
+                    operation: "navigate",
+                    reason: Reasons.Expired.make({}),
+                    outcome: "undispatched",
+                  });
+
+                const loadingTimeout = Math.min(timeoutMillis, remainingLifetime);
+
+                const navigation = await driver.beginNavigation(
+                  url,
+                  loadingTimeout,
+                  ticket,
+                  browserTarget,
+                  control,
+                );
+
+                // A continuation that outlived its permit takes no reservation: whatever gave that
+                // permit up has already decided this dispatch's outcome.
+                ticket.check();
+
+                return {
+                  target,
+                  navigation,
+                  reservation: owner.reserve(navigation.pageId),
+                  recoveryDeadline: Math.min(
+                    loadingStarted + loadingTimeout + 3000,
+                    owner.lifetimeDeadline,
+                  ),
+                };
+              },
+              true,
+            ),
+          );
+
+          const { navigation, reservation } = begun;
+
+          const execution = yield* Trace.start("Browser.navigation", {
+            attributes: { "browser.operation": "navigate" },
+          });
+
+          const executionIdentity =
+            execution === undefined
+              ? undefined
+              : yield* Trace.capture.pipe(Effect.provideService(Tracer.ParentSpan, execution.span));
+
+          const outcome = yield* Deferred.make<string, BrowserError>();
+          const timeoutRecovery = yield* Deferred.make<boolean>();
+          let stopDispatched = false;
+          let timedOut = false;
+          let deciding = false;
+
+          const failed = (reason: BrowserError["reason"]) =>
+            Exit.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
+
+          /**
+           * A navigation has exactly one outcome, and whoever decides it first settles the
+           * reservation. It is released before anyone waiting is told, so the operation a waiter
+           * runs next is admitted rather than finding its own page still reserved.
+           */
+          const decide = (result: Exit.Exit<string, BrowserError>, known: boolean) => {
+            if (deciding || Deferred.isDoneUnsafe(outcome)) return;
+            deciding = true;
+            active = false;
+            reservation.settle(known ? "known" : "unknown");
+            execution?.end(result, { "browser.navigation.retired": known });
+            Deferred.doneUnsafe(outcome, result);
+            Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
+            deciding = false;
+          };
+
+          reconsider = () => {
+            if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
+            if (beforeUnload) {
+              // Both facts are required: this goto rejected and its exact dialog was dismissed.
+              decide(
+                dismissalUnknown ? Exit.fail(rejected) : failed(Reasons.Interrupted.make({})),
+                !dismissalUnknown,
+              );
+            } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
+              timedOut = true;
+              Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
+            } else {
+              decide(Exit.fail(rejected), false);
+            }
+          };
+
+          navigation.settled.then(
+            (url) => {
+              if (!stopDispatched) decide(Exit.succeed(url), true);
+            },
+            (error: unknown) => {
+              if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
+
+              rejected = publicError(error, "navigate", {
+                reason: Reasons.Provider.make({}),
+                outcome: "unknown",
+              });
               reconsider();
             },
-          };
-        },
-      };
-
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          active = false;
-        }),
-      );
-
-      const begun = yield* run(
-        "navigate",
-        async (driver, ticket) => {
-          const target = operationTarget();
-
-          const loadingStarted = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
-          const remainingLifetime = owner.lifetimeDeadline - loadingStarted;
-
-          if (remainingLifetime <= 0)
-            throw BrowserError.make({
-              operation: "navigate",
-              reason: Reasons.Expired.make({}),
-              outcome: "undispatched",
-            });
-
-          const loadingTimeout = Math.min(timeoutMillis, remainingLifetime);
-
-          const navigation = await driver.beginNavigation(
-            url,
-            loadingTimeout,
-            ticket,
-            browserTarget,
-            control,
           );
 
-          // A continuation that outlived its permit takes no reservation: whatever gave that
-          // permit up has already decided this dispatch's outcome.
-          ticket.check();
+          // A fence already cleared the reservation; this only releases anyone still waiting.
+          const aborted = () =>
+            decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), true);
 
-          return {
-            target,
-            navigation,
-            reservation: owner.reserve(navigation.pageId),
-            recoveryDeadline: Math.min(
-              loadingStarted + loadingTimeout + 3000,
-              owner.lifetimeDeadline,
-            ),
-          };
-        },
-        true,
-      );
-
-      const { navigation, reservation } = begun;
-      const outcome = yield* Deferred.make<string, BrowserError>();
-      const timeoutRecovery = yield* Deferred.make<boolean>();
-      let stopDispatched = false;
-      let timedOut = false;
-      let deciding = false;
-
-      const failed = (reason: BrowserError["reason"]) =>
-        Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
-
-      /**
-       * A navigation has exactly one outcome, and whoever decides it first settles the
-       * reservation. It is released before anyone waiting is told, so the operation a waiter
-       * runs next is admitted rather than finding its own page still reserved.
-       */
-      const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
-        if (deciding || Deferred.isDoneUnsafe(outcome)) return;
-        deciding = true;
-        active = false;
-        reservation.settle(known ? "known" : "unknown");
-        Deferred.doneUnsafe(outcome, result);
-        Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
-        deciding = false;
-      };
-
-      reconsider = () => {
-        if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
-        if (beforeUnload) {
-          // Both facts are required: this goto rejected and its exact dialog was dismissed.
-          decide(
-            dismissalUnknown ? Effect.fail(rejected) : failed(Reasons.Interrupted.make({})),
-            !dismissalUnknown,
-          );
-        } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
-          timedOut = true;
-          Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
-        } else {
-          decide(Effect.fail(rejected), false);
-        }
-      };
-
-      navigation.settled.then(
-        (url) => {
-          if (!stopDispatched) decide(Effect.succeed(url), true);
-        },
-        (error: unknown) => {
-          if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
-
-          rejected = publicError(error, "navigate", {
-            reason: Reasons.Provider.make({}),
-            outcome: "unknown",
+          reservation.signal.addEventListener("abort", aborted, {
+            once: true,
           });
-          reconsider();
-        },
-      );
+          // Left unsettled, nothing knows what the browser did with it.
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), false);
+              reservation.signal.removeEventListener("abort", aborted);
+            }),
+          );
 
-      // A fence already cleared the reservation; this only releases anyone still waiting.
-      const aborted = () =>
-        decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), true);
+          const stop = yield* makeNavigationStopCoordinator(
+            () => Deferred.isDoneUnsafe(outcome),
+            (onDispatch, retainSetup, deadline) =>
+              owner.guard(
+                "navigate-stop",
+                (ticket) =>
+                  Effect.suspend(() =>
+                    deadline !== undefined && stopSetupPending !== undefined
+                      ? Deferred.await(stopSetupPending)
+                      : Effect.void,
+                  ).pipe(
+                    Effect.andThen(
+                      native("navigate-stop", ticket, () =>
+                        navigation.stop(
+                          ticket,
+                          () => !Deferred.isDoneUnsafe(outcome),
+                          () => {
+                            onDispatch();
+                            stopDispatched = true;
+                          },
+                          () => {
+                            if (stopSetupPending !== undefined)
+                              throw BrowserError.make({
+                                operation: "navigate-stop",
+                                reason: Reasons.Busy.make({}),
+                                outcome: "undispatched",
+                              });
+                            const setup = Deferred.makeUnsafe<void>();
 
-      reservation.signal.addEventListener("abort", aborted, {
-        once: true,
-      });
-      // Left unsettled, nothing knows what the browser did with it.
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), false);
-          reservation.signal.removeEventListener("abort", aborted);
-        }),
-      );
+                            stopSetupPending = setup;
+                            const retired = retainSetup();
 
-      const stop = yield* makeNavigationStopCoordinator(
-        () => Deferred.isDoneUnsafe(outcome),
-        (onDispatch, retainSetup, deadline) =>
-          owner.guard(
-            "navigate-stop",
-            (ticket) =>
-              Effect.suspend(() =>
-                deadline !== undefined && stopSetupPending !== undefined
-                  ? Deferred.await(stopSetupPending)
-                  : Effect.void,
-              ).pipe(
-                Effect.andThen(
-                  native("navigate-stop", ticket, () =>
-                    navigation.stop(
-                      ticket,
-                      () => !Deferred.isDoneUnsafe(outcome),
-                      () => {
-                        onDispatch();
-                        stopDispatched = true;
-                      },
-                      () => {
-                        if (stopSetupPending !== undefined)
-                          throw BrowserError.make({
-                            operation: "navigate-stop",
-                            reason: Reasons.Busy.make({}),
-                            outcome: "undispatched",
-                          });
-                        const setup = Deferred.makeUnsafe<void>();
-
-                        stopSetupPending = setup;
-                        const retired = retainSetup();
-
-                        return () => {
-                          if (stopSetupPending === setup) stopSetupPending = undefined;
-                          Deferred.doneUnsafe(setup, Effect.void);
-                          retired();
-                        };
-                      },
+                            return () => {
+                              if (stopSetupPending === setup) stopSetupPending = undefined;
+                              Deferred.doneUnsafe(setup, Effect.void);
+                              retired();
+                            };
+                          },
+                        ),
+                      ),
                     ),
+                    Effect.timeoutOrElse({
+                      duration: Math.min(3000, ticket.remainingMillis()),
+                      orElse: () =>
+                        Effect.fail(
+                          BrowserError.make({
+                            operation: "navigate-stop",
+                            reason: Reasons.Timeout.make({}),
+                            outcome: ticket.dispatched ? "unknown" : "undispatched",
+                          }),
+                        ),
+                    }),
                   ),
-                ),
-                Effect.timeoutOrElse({
-                  duration: Math.min(3000, ticket.remainingMillis()),
-                  orElse: () =>
-                    Effect.fail(
-                      BrowserError.make({
-                        operation: "navigate-stop",
-                        reason: Reasons.Timeout.make({}),
-                        outcome: ticket.dispatched ? "unknown" : "undispatched",
+                {
+                  mutation: true,
+                  mutationScope: () => ({ pageId: navigation.pageId }),
+                  charge: false,
+                  ...(deadline === undefined ? {} : { waitUntil: deadline }),
+                },
+              ),
+            () =>
+              decide(
+                failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Interrupted.make({})),
+                true,
+              ),
+          );
+
+          // One operation-scoped supervisor, signalled only by the exact native timeout classifier.
+          // Its absolute deadline bounds joined public stops, permit wait and late setup retirement too.
+          yield* Deferred.await(timeoutRecovery).pipe(
+            Effect.flatMap((recover) =>
+              recover
+                ? stop.recover(begun.recoveryDeadline).pipe(
+                    Trace.span("Browser.navigation.recovery", {
+                      parent: executionIdentity?.parent,
+                    }),
+                    Effect.onExit((exit) =>
+                      Effect.sync(() => {
+                        if (Exit.isFailure(exit)) decide(failed(Reasons.Timeout.make({})), false);
                       }),
                     ),
-                }),
-              ),
-            {
-              mutation: true,
-              mutationScope: () => ({ pageId: navigation.pageId }),
-              charge: false,
-              ...(deadline === undefined ? {} : { waitUntil: deadline }),
-            },
-          ),
-        () =>
-          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Interrupted.make({})), true),
-      );
+                  )
+                : Effect.void,
+            ),
+            Effect.ignoreCause,
+            Effect.forkScoped,
+          );
 
-      // One operation-scoped supervisor, signalled only by the exact native timeout classifier.
-      // Its absolute deadline bounds joined public stops, permit wait and late setup retirement too.
-      yield* Deferred.await(timeoutRecovery).pipe(
-        Effect.flatMap((recover) =>
-          recover
-            ? stop.recover(begun.recoveryDeadline).pipe(
-                Effect.onExit((exit) =>
-                  Effect.sync(() => {
-                    if (Exit.isFailure(exit)) decide(failed(Reasons.Timeout.make({})), false);
-                  }),
-                ),
-              )
-            : Effect.void,
-        ),
-        Effect.ignoreCause,
-        Effect.forkScoped,
+          return {
+            target: begun.target,
+            completed: Deferred.await(outcome).pipe(Trace.span("Browser.navigation.wait")),
+            /**
+             * The browser's acknowledgement is the known outcome. Playwright's own promise is not
+             * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
+             */
+            stop: stop.stop,
+          };
+        }),
       );
-
-      return {
-        target: begun.target,
-        completed: Deferred.await(outcome),
-        /**
-         * The browser's acknowledgement is the known outcome. Playwright's own promise is not
-         * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
-         */
-        stop: stop.stop,
-      };
-    });
 
     return {
       startNavigation,

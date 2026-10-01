@@ -5,6 +5,7 @@ import { PlatformError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
 import { proxy } from "./internal/provider/Launch.ts";
 import { isContextWriterBusy } from "./internal/session/ContextWriter.ts";
+import * as Trace from "./internal/Trace.ts";
 import { ProxyRule } from "./Launch.ts";
 import { ContextReference, Identifier } from "./References.ts";
 
@@ -249,15 +250,15 @@ export class BrowserbaseAgents extends Context.Service<
           return value;
         });
 
-      const create = Effect.fn("BrowserbaseAgents.create")(function* (definition: AgentDefinition) {
+      const create = Effect.fnUntraced(function* (definition: AgentDefinition) {
         const value = yield* api.input(AgentDefinition, definition, "agent-create");
 
         return yield* api
           .request("POST", "/v1/agents", ProviderAgent, "agent-create", value)
           .pipe(Effect.flatMap(agent("agent-create", true)));
-      });
+      }, Trace.span("BrowserbaseAgents.create"));
 
-      const list = Effect.fn("BrowserbaseAgents.list")(function* (query: AgentListQuery = {}) {
+      const list = Effect.fnUntraced(function* (query: AgentListQuery = {}) {
         const value = yield* api.input(AgentListQuery, query, "agent-list");
 
         const page = yield* api.request(
@@ -271,20 +272,17 @@ export class BrowserbaseAgents extends Context.Service<
           items: page.data.map((row) => AgentMetadata.make(row)),
           nextCursor: page.nextCursor ?? undefined,
         };
-      });
+      }, Trace.span("BrowserbaseAgents.list"));
 
-      const retrieve = Effect.fn("BrowserbaseAgents.retrieve")(function* (agentId: string) {
+      const retrieve = Effect.fnUntraced(function* (agentId: string) {
         const id = yield* api.input(Identifier, agentId, "agent-retrieve");
 
         return yield* api
           .request("GET", agentPath(id), ProviderAgent, "agent-retrieve")
           .pipe(Effect.flatMap(agent("agent-retrieve", false, id)));
-      });
+      }, Trace.span("BrowserbaseAgents.retrieve"));
 
-      const update = Effect.fn("BrowserbaseAgents.update")(function* (
-        agentId: string,
-        changes: AgentUpdate,
-      ) {
+      const update = Effect.fnUntraced(function* (agentId: string, changes: AgentUpdate) {
         const id = yield* api.input(Identifier, agentId, "agent-update");
         const value = yield* api.input(AgentUpdate, changes, "agent-update");
 
@@ -293,15 +291,15 @@ export class BrowserbaseAgents extends Context.Service<
         return yield* api
           .request("PATCH", agentPath(id), ProviderAgent, "agent-update", value)
           .pipe(Effect.flatMap(agent("agent-update", true, id)));
-      });
+      }, Trace.span("BrowserbaseAgents.update"));
 
-      const remove = Effect.fn("BrowserbaseAgents.delete")(function* (agentId: string) {
+      const remove = Effect.fnUntraced(function* (agentId: string) {
         const id = yield* api.input(Identifier, agentId, "agent-delete");
 
         yield* api.remove(agentPath(id), "agent-delete");
-      });
+      }, Trace.span("BrowserbaseAgents.delete"));
 
-      const start = Effect.fn("BrowserbaseAgents.run")(function* (request: AgentRunRequest) {
+      const start = Effect.fnUntraced(function* (request: AgentRunRequest) {
         const value = yield* api.input(AgentRunRequest, request, "agent-run");
         const settings = value.browserSettings;
         const context = settings?.context;
@@ -349,19 +347,17 @@ export class BrowserbaseAgents extends Context.Service<
         };
 
         return yield* api.request("POST", "/v1/agents/runs", AgentRun, "agent-run", body);
-      });
+      }, Trace.span("BrowserbaseAgents.run"));
 
-      const retrieveRun = Effect.fn("BrowserbaseAgents.retrieveRun")(function* (runId: string) {
+      const retrieveRun = Effect.fnUntraced(function* (runId: string) {
         const id = yield* api.input(Identifier, runId, "agent-run-retrieve");
 
         return yield* api
           .request("GET", runPath(id), AgentRun, "agent-run-retrieve")
           .pipe(Effect.flatMap(run("agent-run-retrieve", false, id)));
-      });
+      }, Trace.span("BrowserbaseAgents.retrieveRun"));
 
-      const listRuns = Effect.fn("BrowserbaseAgents.listRuns")(function* (
-        query: AgentRunListQuery = {},
-      ) {
+      const listRuns = Effect.fnUntraced(function* (query: AgentRunListQuery = {}) {
         const value = yield* api.input(AgentRunListQuery, query, "agent-run-list");
 
         const page = yield* api.request(
@@ -372,20 +368,17 @@ export class BrowserbaseAgents extends Context.Service<
         );
 
         return { items: page.data, nextCursor: page.nextCursor ?? undefined };
-      });
+      }, Trace.span("BrowserbaseAgents.listRuns"));
 
-      const stopRun = Effect.fn("BrowserbaseAgents.stopRun")(function* (runId: string) {
+      const stopRun = Effect.fnUntraced(function* (runId: string) {
         const id = yield* api.input(Identifier, runId, "agent-run-stop");
 
         return yield* api
           .request("POST", `${runPath(id)}/stop`, AgentRun, "agent-run-stop")
           .pipe(Effect.flatMap(run("agent-run-stop", true, id)));
-      });
+      }, Trace.span("BrowserbaseAgents.stopRun"));
 
-      const messages = Effect.fn("BrowserbaseAgents.messages")(function* (
-        runId: string,
-        query: AgentMessageQuery = {},
-      ) {
+      const messages = Effect.fnUntraced(function* (runId: string, query: AgentMessageQuery = {}) {
         const id = yield* api.input(Identifier, runId, "agent-run-messages");
         const value = yield* api.input(AgentMessageQuery, query, "agent-run-messages");
 
@@ -407,17 +400,14 @@ export class BrowserbaseAgents extends Context.Service<
           ),
           nextSince: page.nextSince ?? undefined,
         };
-      });
+      }, Trace.span("BrowserbaseAgents.messages"));
 
-      const waitForRun = Effect.fn("BrowserbaseAgents.waitForRun")(function* (
-        runId: string,
-        options: AgentRunWaitOptions,
-      ) {
+      const waitForRun = Effect.fnUntraced(function* (runId: string, options: AgentRunWaitOptions) {
         const bounds = yield* api.input(AgentRunWaitOptions, options, "agent-run-wait");
         const deadline = (yield* now) + bounds.timeoutMillis;
 
         for (;;) {
-          const current = yield* retrieveRun(runId);
+          const current = yield* retrieveRun(runId).pipe(Effect.withTracerEnabled(false));
 
           if (isTerminalAgentRunStatus(current.status)) return current;
           const remaining = deadline - (yield* now);
@@ -426,7 +416,7 @@ export class BrowserbaseAgents extends Context.Service<
             return yield* api.make({ operation: "agent-run-wait", reason: "timeout" });
           yield* Effect.sleep(Math.min(bounds.pollIntervalMillis ?? 2_000, remaining));
         }
-      });
+      }, Trace.span("BrowserbaseAgents.waitForRun"));
 
       return BrowserbaseAgents.of({
         create,

@@ -43,6 +43,7 @@ import {
   type BrowserOutcome,
   InitializationError,
 } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 import { associate } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
@@ -62,6 +63,7 @@ export const checked = <A>(
         outcome: "undispatched",
       }),
     ),
+    Trace.span("Browser.validate", { attributes: { "browser.operation": operation } }),
   );
 
 export const decoded =
@@ -79,6 +81,7 @@ export const decoded =
           outcome,
         }),
       ),
+      Trace.span("Browser.result", { attributes: { "browser.operation": operation } }),
     );
 
 const action = decoded(ActionResult, "action-result", "unknown");

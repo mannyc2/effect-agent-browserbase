@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { CertificateError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
+import * as Trace from "./internal/Trace.ts";
 import { Identifier } from "./References.ts";
 import { SafeFilename } from "./Transfers.ts";
 
@@ -76,9 +77,7 @@ export class BrowserbaseCertificates extends Context.Service<
             return CertificateMetadata.make({ certificateId: id, ...rest });
           });
 
-        const create = Effect.fn("BrowserbaseCertificates.create")(function* (
-          upload: CertificateUpload,
-        ) {
+        const create = Effect.fnUntraced(function* (upload: CertificateUpload) {
           const { bytes, ...options } = upload;
           const value = yield* api.input(Upload, options, "certificate-create");
           const owned = new Uint8Array(bytes);
@@ -106,7 +105,7 @@ export class BrowserbaseCertificates extends Context.Service<
           );
 
           return yield* own("certificate-create", true)(created);
-        });
+        }, Trace.span("BrowserbaseCertificates.create"));
 
         const list = api
           .request(
@@ -117,12 +116,10 @@ export class BrowserbaseCertificates extends Context.Service<
           )
           .pipe(
             Effect.flatMap(Effect.forEach(own("certificate-list", false))),
-            Effect.withSpan("BrowserbaseCertificates.list"),
+            Trace.span("BrowserbaseCertificates.list"),
           );
 
-        const retrieve = Effect.fn("BrowserbaseCertificates.retrieve")(function* (
-          certificateId: string,
-        ) {
+        const retrieve = Effect.fnUntraced(function* (certificateId: string) {
           const id = yield* api.input(Identifier, certificateId, "certificate-retrieve");
 
           const value = yield* api.request(
@@ -135,15 +132,13 @@ export class BrowserbaseCertificates extends Context.Service<
           if (value.id !== id) return yield* api.malformed("certificate-retrieve", false);
 
           return yield* own("certificate-retrieve", false)(value);
-        });
+        }, Trace.span("BrowserbaseCertificates.retrieve"));
 
-        const remove = Effect.fn("BrowserbaseCertificates.delete")(function* (
-          certificateId: string,
-        ) {
+        const remove = Effect.fnUntraced(function* (certificateId: string) {
           const id = yield* api.input(Identifier, certificateId, "certificate-delete");
 
           yield* api.remove(`/v1/certificates/${api.segment(id)}`, "certificate-delete");
-        });
+        }, Trace.span("BrowserbaseCertificates.delete"));
 
         return BrowserbaseCertificates.of({ create, list, retrieve, delete: remove });
       }),

@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { PlatformError } from "./Errors.ts";
 import { resource } from "./internal/http/Resource.ts";
+import * as Trace from "./internal/Trace.ts";
 import { Identifier } from "./References.ts";
 
 const Timestamp = Schema.String.check(Schema.isMaxLength(64));
@@ -143,7 +144,7 @@ export class BrowserbaseWebhooks extends Context.Service<
 
       const path = (id: string) => `/v1/webhooks/${api.segment(id)}`;
 
-      const create = Effect.fn("BrowserbaseWebhooks.create")(function* (settings: WebhookSettings) {
+      const create = Effect.fnUntraced(function* (settings: WebhookSettings) {
         const value = yield* api.input(WebhookSettings, settings, "webhook-create");
 
         const created = yield* api.request(
@@ -160,9 +161,9 @@ export class BrowserbaseWebhooks extends Context.Service<
           webhook: yield* decode("webhook-create", true)(webhook),
           secret: Redacted.make(secret),
         };
-      });
+      }, Trace.span("BrowserbaseWebhooks.create"));
 
-      const list = Effect.fn("BrowserbaseWebhooks.list")(function* (query: WebhookListQuery = {}) {
+      const list = Effect.fnUntraced(function* (query: WebhookListQuery = {}) {
         const value = yield* api.input(WebhookListQuery, query, "webhook-list");
 
         const page = yield* api.request(
@@ -176,19 +177,16 @@ export class BrowserbaseWebhooks extends Context.Service<
           webhooks: yield* Effect.forEach(page.data, decode("webhook-list", false)),
           nextCursor: page.nextCursor ?? undefined,
         };
-      });
+      }, Trace.span("BrowserbaseWebhooks.list"));
 
-      const retrieve = Effect.fn("BrowserbaseWebhooks.retrieve")(function* (webhookId: string) {
+      const retrieve = Effect.fnUntraced(function* (webhookId: string) {
         const id = yield* api.input(Identifier, webhookId, "webhook-retrieve");
         const value = yield* api.request("GET", path(id), ProviderWebhook, "webhook-retrieve");
 
         return yield* decode("webhook-retrieve", false, id)(value);
-      });
+      }, Trace.span("BrowserbaseWebhooks.retrieve"));
 
-      const update = Effect.fn("BrowserbaseWebhooks.update")(function* (
-        webhookId: string,
-        changes: WebhookUpdate,
-      ) {
+      const update = Effect.fnUntraced(function* (webhookId: string, changes: WebhookUpdate) {
         const id = yield* api.input(Identifier, webhookId, "webhook-update");
         const value = yield* api.input(WebhookUpdate, changes, "webhook-update");
 
@@ -204,15 +202,15 @@ export class BrowserbaseWebhooks extends Context.Service<
         );
 
         return yield* decode("webhook-update", true, id)(updated);
-      });
+      }, Trace.span("BrowserbaseWebhooks.update"));
 
-      const remove = Effect.fn("BrowserbaseWebhooks.delete")(function* (webhookId: string) {
+      const remove = Effect.fnUntraced(function* (webhookId: string) {
         const id = yield* api.input(Identifier, webhookId, "webhook-delete");
 
         yield* api.remove(path(id), "webhook-delete");
-      });
+      }, Trace.span("BrowserbaseWebhooks.delete"));
 
-      const rotateSecret = Effect.fn("BrowserbaseWebhooks.rotateSecret")(function* (
+      const rotateSecret = Effect.fnUntraced(function* (
         webhookId: string,
         options: { readonly revokeImmediately?: boolean } = {},
       ) {
@@ -233,7 +231,7 @@ export class BrowserbaseWebhooks extends Context.Service<
         );
 
         return Redacted.make(rotated.secret);
-      });
+      }, Trace.span("BrowserbaseWebhooks.rotateSecret"));
 
       return BrowserbaseWebhooks.of({
         create,
