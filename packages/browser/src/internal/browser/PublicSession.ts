@@ -51,7 +51,12 @@ import {
 } from "../../Errors.ts";
 import { StepFailed, type RunOptions } from "../../Plan.ts";
 import type { LivePlanEncoded, PlanEncoded } from "../../PlanData.ts";
-import { associate, associatePageAuthority, forPage } from "./Association.ts";
+import {
+  associate,
+  associateFrameAuthority,
+  associatePageAuthority,
+  forPage,
+} from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { OperationOptionsSchema } from "./OperationOptions.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
@@ -591,21 +596,27 @@ export const makeSession = <E>(
               controls.frame(value.record.info, info, value.record.identity.generation, options),
             ),
           ),
-          Effect.map((frame): Frame => ({
-            ...makePageOperations(frame.controls),
-            ...makePlanOperations(frame.controls),
-            identity: Object.freeze(frame.identity),
-            status: value.status.pipe(
-              Effect.map((status) =>
-                Object.freeze({
-                  ...status,
-                  identity: frame.identity,
-                  phase:
-                    status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
-                }),
+          Effect.map((frame): Frame => {
+            const issuedFrame: Frame = {
+              ...makePageOperations(frame.controls),
+              ...makePlanOperations(frame.controls),
+              identity: Object.freeze(frame.identity),
+              status: value.status.pipe(
+                Effect.map((status) =>
+                  Object.freeze({
+                    ...status,
+                    identity: frame.identity,
+                    phase:
+                      status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
+                  }),
+                ),
               ),
-            ),
-          })),
+            };
+
+            associateFrameAuthority(issuedFrame, controls.capture.owner, frame.controls);
+
+            return issuedFrame;
+          }),
         ),
       resizeViewport: (viewport, options) =>
         checked(Viewport, viewport, "resize").pipe(

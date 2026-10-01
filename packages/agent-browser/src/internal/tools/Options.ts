@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { Page, ElementAdmission } from "effect-browser/browser";
+import type { ElementAdmission, Frame, Page } from "effect-browser/browser";
 import { FillFormOptions, type Observation } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { type RunOptions, validateOptions } from "effect-browser/plan";
@@ -17,13 +17,14 @@ export interface InspectionRequest {
 
 /**
  * How the Tools read the page, for `browser_inspect` and for the observation after an action.
- * The default is `page.observe(request)`. A replacement may wait, retry or narrow first, but
- * must return a reading the same browser issued, because its references are what later actions
- * name. A failure is reported like any other failed reading.
+ * The default is `page.observe(request)` on the Page or Frame the Tools are bound to. A
+ * replacement may wait, retry or narrow first, but must return a reading the same browser
+ * issued, because its references are what later actions name. A failure is reported like any
+ * other failed reading.
  */
 export type Observe = (
   request: InspectionRequest,
-  page: Page,
+  page: Page | Frame,
 ) => Effect.Effect<Observation, BrowserError>;
 
 export interface HandlerOptions {

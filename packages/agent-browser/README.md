@@ -4,7 +4,7 @@
 
 ## Public entry points
 
-`tools` exports the maintained Toolkit, handlers over an issued Page and its owning session, supervised host composition and separate reading, pointer/wheel, keyboard, option-selection, wait and form opt-ins. `adapter` exports `fromSession` and `interactiveLayer` for Effect Agent's original `InteractiveBrowser` contract. The root exports those two namespaces. Tests acquire real owners through `effect-browser/testing` or `effect-browserbase/testing`; forged structural objects carry no Page authority.
+`tools` exports the maintained Toolkit, handlers over an issued Page (or a Frame one of its Pages issued) and its owning session, supervised host composition and separate reading, pointer/wheel, keyboard, option-selection, wait and form opt-ins. `adapter` exports `fromSession` and `interactiveLayer` for Effect Agent's original `InteractiveBrowser` contract. The root exports those two namespaces. Tests acquire real owners through `effect-browser/testing` or `effect-browserbase/testing`; forged structural objects carry no Page authority.
 
 ## One session, chosen by the host
 
@@ -27,6 +27,11 @@ const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (b
 ```
 
 Both browser Layers take Effect's `Crypto` from the host platform, here `NodeServices.layer`.
+
+To work inside an iframe, bind the Tools to the Frame its Page issued instead:
+`BrowserTools.makeHost(browser, yield* browser.initialPage.frame(info))`, with `info` from
+`listFrames()`. Readings, references and input then stay inside that frame; a detached frame or
+a closed Page fails like any retired target, and nothing retargets the Tools to another frame.
 
 A complete agent declares the Tools it may use and takes its instructions and policy from them:
 
@@ -74,7 +79,7 @@ const browserLayer = interactiveLayer({
 
 The opener's services are captured when the Layer is built; each `open` uses its caller's execution Scope. Building the Layer allocates nothing. Unsupported containment fails before acquisition. The handle binds the acquired owner's checked initial Page, and acquisition failures are sanitized into the framework's error contract.
 
-`fromSession<S>(browser, page)` keeps the exact concrete `S` beside a handle for that issued Page. Adaptation validates authority when its Effect executes and allocates no browser:
+`fromSession<S>(browser, page)` keeps the exact concrete `S` beside a handle for that issued Page, or for a Frame one of its Pages issued. Adaptation validates authority when its Effect executes and allocates no browser:
 
 ```ts
 import * as Adapter from "effect-agent-browser/adapter";
@@ -122,7 +127,7 @@ Viewport observations retain the generic reading's geometry budgets and its clip
 
 Every result is fitted under `resultMaxBytes` (16 KiB–1 MiB, 48 KiB by default, under Effect Agent's default 50 KiB `toolResultBounds`), so the engine never cuts one in the middle of its JSON. A reading that does not fit loses text first and then trailing controls, never part of a reference it keeps, and says so through `textTruncated`, `controlsTruncated` and a select's `optionsTruncated`.
 
-`observe` replaces how the Tools read the page, for `browser_inspect` and for the reading after an action. It receives the request (scope, optional `match`, text and control bounds) and the issued Page, and must return a reading that Page issued, because later actions name its references. A host can wait for its own readiness signal first, retry, or narrow the request:
+`observe` replaces how the Tools read the page, for `browser_inspect` and for the reading after an action. It receives the request (scope, optional `match`, text and control bounds) and the issued Page or Frame the Tools are bound to, and must return a reading that target issued, because later actions name its references. A host can wait for its own readiness signal first, retry, or narrow the request:
 
 ```ts
 const host =
@@ -500,6 +505,7 @@ Native framework tests prove that the adapter Layer captures configured services
 | `Adapter.fromSession(browser, { selection })`                                               | `yield* Adapter.fromSession(browser, page)` validates exact owner/Page authority; display selection cannot retarget the handle.                                    |
 | `AgentSession<E>` and `adapted.currentHandle`                                               | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                            |
 | `BoundTarget`, `browser.bind()` and `browser.currentTarget`                                 | Use an issued `Page` from `initialPage` or `yield* browser.page(info)`; input and observation stay on that Page.                                                   |
+| Tools inside a child frame after `selectFrame`                                              | Bind the Tools to an issued Frame: `yield* page.frame(info)`; display or frame selection never retargets them.                                                     |
 | A string from `createPage`, passed to select/close                                          | `createPage` returns `PageInfo`; display selection uses `selectPage(info)`, while `(yield* browser.page(info)).close()` closes that issued Page.                   |
 | `error.reason === "limit"`, top-level `status` or `retryAfterMillis`                        | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                             |
 | Full host reason names in model failures                                                    | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                                |

@@ -1,13 +1,15 @@
+import { createServer } from "node:http";
+
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Predicate, Schedule, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
-import { BrowserPolicy } from "effect-browser/browser-data";
+import { BrowserPolicy, Observation } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import { Model, Toolkit } from "effect/unstable/ai";
@@ -575,4 +577,98 @@ it.live(
         );
       }),
     ),
+);
+
+// An outer page whose child frame holds its own counter; each button reports only to its own.
+const framedSite = Effect.acquireRelease(
+  Effect.promise(
+    () =>
+      new Promise<{ readonly url: string; readonly close: () => void }>((resolve) => {
+        const server = createServer((request, response) => {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          if (request.url === "/inner")
+            return void response.end(`<!doctype html><title>Inner</title>
+<button id="inner" onclick="count.textContent=Number(count.textContent)+1">Inner</button>
+<output id="count">0</output>`);
+          response.end(`<!doctype html><title>Outer</title>
+<button id="outer" onclick="count.textContent=Number(count.textContent)+1">Outer</button>
+<output id="count">0</output>
+<iframe src="/inner" width="300" height="120"></iframe>`);
+        });
+
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          const port = typeof address === "object" && address !== null ? address.port : 0;
+
+          resolve({ url: `http://127.0.0.1:${String(port)}/`, close: () => server.close() });
+        });
+      }),
+  ),
+  (site) => Effect.sync(site.close),
+);
+
+it.live("real Chromium: Tools bound to an issued Frame read and act inside that frame", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* framedSite;
+
+      yield* Browser.scoped(
+        Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
+        (local) =>
+          Effect.gen(function* () {
+            const page = local.initialPage;
+
+            yield* page.navigate({ url: site.url });
+
+            // The child document loads after its parent's DOMContentLoaded.
+            const inner = yield* page.listFrames().pipe(
+              Effect.map((frames) => frames.find((frame) => frame.url.endsWith("/inner"))),
+              Effect.filterOrFail(Predicate.isNotUndefined, () => "child frame not loaded yet"),
+              Effect.retry({ times: 50, schedule: Schedule.spaced("100 millis") }),
+            );
+
+            const frame = yield* page.frame(inner);
+            const host = yield* BrowserTools.makeHost(local, frame);
+            const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+            const inspected = yield* Stream.runCollect(
+              yield* tools.handle("browser_inspect", { scope: "document" }),
+            );
+
+            expect(inspected).toMatchObject([{ isFailure: false }]);
+
+            const observation = yield* Schema.decodeUnknownEffect(Observation)(
+              inspected[0]?.result,
+            );
+
+            expect(observation.controls.map((control) => control.label)).toEqual(["Inner"]);
+
+            const clicked = yield* Stream.runCollect(
+              yield* tools.handle("browser_click", {
+                observationId: observation.observationId,
+                elementId: observation.controls[0]?.elementId ?? "",
+              }),
+            );
+
+            expect(clicked).toMatchObject([{ isFailure: false }]);
+            expect((yield* frame.readText({ selector: "#count" })).text).toBe("1");
+            expect((yield* page.readText({ selector: "#count" })).text).toBe("0");
+            expect((yield* host.toolFailures).failures).toEqual([]);
+          }),
+      ).pipe(
+        Effect.provide(
+          Chromium.layer({
+            launch: {
+              ...(process.env.BROWSERBASE_CHROMIUM === undefined
+                ? {}
+                : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+              chromiumSandbox: false,
+              startupTimeoutMillis: 25000,
+            },
+            viewport: { width: 640, height: 480 },
+          }).pipe(Layer.provide(NodeCrypto.layer)),
+        ),
+      );
+    }),
+  ),
 );

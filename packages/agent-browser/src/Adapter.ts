@@ -21,6 +21,7 @@ import {
   checkPage,
   type AnySession,
   type BrowserSession,
+  type Frame,
   type Page,
   type PageOperations,
 } from "effect-browser/browser";
@@ -196,10 +197,13 @@ const makeHandle = (
   ),
 });
 
-/** Adapt one issued Page and its exact owner. Framework close is owner-wide checked cleanup. */
+/**
+ * Adapt one issued Page, or one Frame a Page issued, and its exact owner. Framework close is
+ * owner-wide checked cleanup.
+ */
 export const fromSession = Effect.fnUntraced(function* <S extends AnySession>(
   browser: S,
-  page: Page,
+  page: Page | Frame,
 ): Effect.fn.Return<AdaptedSession<S>, BrowserError> {
   yield* checkPage(browser, page);
 

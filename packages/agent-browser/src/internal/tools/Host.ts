@@ -17,6 +17,7 @@ import { RunToolScheduling } from "effect-agent/run-options";
 import {
   checkPage,
   type BrowserSession,
+  type Frame,
   type NavigationOperation,
   type Page,
 } from "effect-browser/browser";
@@ -175,7 +176,7 @@ const HostSettings = {
  */
 export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = never>(
   browser: BrowserSession<OwnerError>,
-  page: Page,
+  page: Page | Frame,
   options: HostOptions<E, R> = {},
 ): Effect.fn.Return<ToolHost<OwnerError, E>, BrowserError, Exclude<R, Scope.Scope> | Scope.Scope> {
   yield* checkPage(browser, page);
@@ -563,7 +564,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 /** Scope one Tool host and each program run, provide handlers, and supervise without owning the browser. */
 export const run = <OwnerError, A, E2, R2, CallbackError = never, CallbackR = never>(
   browser: BrowserSession<OwnerError>,
-  page: Page,
+  page: Page | Frame,
   effect: Effect.Effect<A, E2, R2>,
   options: HostOptions<CallbackError, CallbackR> = {},
 ): Effect.Effect<

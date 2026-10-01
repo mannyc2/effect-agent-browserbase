@@ -185,6 +185,44 @@ export const resolvePageControlsForSession = (
     return controls.validate.pipe(Effect.as(controls));
   });
 
+const frameAuthorities = new WeakMap<
+  object,
+  { readonly owner: Owner; readonly controls: PageControls }
+>();
+
+/** An issued Frame keeps its own exact controls and the owner of the session that issued it. */
+export const associateFrameAuthority = (
+  frame: object,
+  owner: Owner,
+  controls: PageControls,
+): void => {
+  frameAuthorities.set(frame, { owner, controls });
+};
+
+/**
+ * Tools borrow an exact issued Page, or an exact Frame one of its Pages issued, on this session's
+ * original owner. Capture, page control and provider transfers stay Page-only.
+ */
+export const resolveTargetControlsForSession = (
+  session: object,
+  target: object,
+): Effect.Effect<PageControls, BrowserError> =>
+  Effect.suspend(() => {
+    const frame = frameAuthorities.get(target);
+
+    if (frame === undefined) return resolvePageControlsForSession(session, target);
+    if (parents.get(session)?.owner !== frame.owner)
+      return Effect.fail(
+        BrowserError.make({
+          operation: "target",
+          reason: Reasons.UnregisteredSession.make({}),
+          outcome: "undispatched",
+        }),
+      );
+
+    return frame.controls.validate.pipe(Effect.as(frame.controls));
+  });
+
 /** Capture binds only to original issued Page authority; a session association is insufficient. */
 export const capturePageParent = (page: object): CaptureParent | undefined =>
   pageAuthorities.has(page) ? parents.get(page) : undefined;

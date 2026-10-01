@@ -21,7 +21,7 @@ import {
   type ToolFailureSnapshot,
 } from "effect-agent-browser/tools";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
-import type { BrowserSession, Page } from "effect-browser/browser";
+import type { BrowserSession, Frame, Page } from "effect-browser/browser";
 import type { BrowserPolicy } from "effect-browser/browser-data";
 import type { ChromiumSession } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
@@ -67,7 +67,8 @@ const adaptationServices: Same<
   never
 > = true;
 
-const explicitPage: Same<Parameters<typeof fromSession>[1], Page> = true;
+/** An exact issued Page, or a Frame one of its Pages issued. */
+const explicitPage: Same<Parameters<typeof fromSession>[1], Page | Frame> = true;
 
 const singleHandle: Same<keyof AdaptedSession<BrowserSession>, "browser" | "handle"> = true;
 
@@ -88,8 +89,8 @@ const observedBorrowed: Same<LayerRequirements<ReturnType<typeof observedHandler
 const formBorrowed: Same<LayerRequirements<ReturnType<typeof formHandlers>>, never> = true;
 const readingBorrowed: Same<LayerRequirements<ReturnType<typeof readingHandlers>>, never> = true;
 
-/** A replacement reading sees the borrowed session and returns an ordinary typed reading. */
-const observeHook: Same<Parameters<NonNullable<HandlerOptions["observe"]>>[1], Page> = true;
+/** A replacement reading sees the bound Page or Frame and returns an ordinary typed reading. */
+const observeHook: Same<Parameters<NonNullable<HandlerOptions["observe"]>>[1], Page | Frame> = true;
 
 const retainedFailure: Same<
   Effect.Error<AdaptedSession<BrowserbaseSession<CallbackFailure>>["browser"]["failure"]>,

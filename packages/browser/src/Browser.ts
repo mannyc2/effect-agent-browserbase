@@ -40,7 +40,7 @@ import type {
   Viewport,
 } from "./BrowserData.ts";
 import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
-import { resolvePageControlsForSession } from "./internal/browser/Association.ts";
+import { resolveTargetControlsForSession } from "./internal/browser/Association.ts";
 import type { PlanOperations } from "./Plan.ts";
 import type { DescriptorEncoded, ResolveGuard, SettledEvidence } from "./PlanData.ts";
 import type { Timeline } from "./Timeline.ts";
@@ -403,9 +403,12 @@ export interface BrowserSession<E = never> {
 /** Helpers that do not supervise callback failures accept any live browser session. */
 export type AnySession = BrowserSession<unknown>;
 
-/** Check the exact issued Page and its current authority on this original session. */
-export const checkPage = (session: AnySession, page: Page): Effect.Effect<void, BrowserError> =>
-  resolvePageControlsForSession(session, page).pipe(Effect.asVoid);
+/** Check the exact issued Page or Frame and its current authority on this original session. */
+export const checkPage = (
+  session: AnySession,
+  page: Page | Frame,
+): Effect.Effect<void, BrowserError> =>
+  resolveTargetControlsForSession(session, page).pipe(Effect.asVoid);
 
 /** Dependencies are captured at acquisition, not erased into an environment-free service Layer. */
 export interface OpenOptions<E = never, R = never> {

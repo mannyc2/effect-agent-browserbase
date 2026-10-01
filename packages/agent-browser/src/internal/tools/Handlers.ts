@@ -4,7 +4,7 @@ import {
   type BrowserNavigateRequest,
   BrowserNavigationResult,
 } from "effect-agent/interactive-browser";
-import type { Page } from "effect-browser/browser";
+import type { Frame, Page } from "effect-browser/browser";
 import {
   ActionResult,
   FillFormResult,
@@ -111,7 +111,7 @@ const oversized = (maximum: number, observed: number) =>
  * its `_and_inspect` variant runs the same operation and then one fitted reading in that lane.
  */
 export const makeOperations = (
-  page: Page,
+  page: Page | Frame,
   options: ResolvedOptions,
   hooks: Hooks,
   continuation: Continuation,
@@ -440,11 +440,11 @@ export const makeOperations = (
         },
         call,
       ),
-    pointerMove: (request: Parameters<Page["pointerMove"]>[0], call: Call) =>
+    pointerMove: (request: Parameters<Frame["pointerMove"]>[0], call: Call) =>
       input({ _tag: "PointerMove", ...request }, call),
     hover: (reference: ObservedElement, call: Call) =>
       input({ _tag: "Hover", target: { _tag: "Ref", reference } }, call),
-    wheel: (request: Parameters<Page["wheel"]>[0], call: Call) =>
+    wheel: (request: Parameters<Frame["wheel"]>[0], call: Call) =>
       input({ _tag: "Wheel", ...request }, call),
     press: (request: KeyStroke & { readonly reference: ObservedElement }, call: Call) => {
       const { reference, ...stroke } = request;
@@ -461,7 +461,7 @@ export const makeOperations = (
         call,
         { text: request.text },
       ),
-    wait: (request: Parameters<Page["waitForElement"]>[0], call: Call) =>
+    wait: (request: Parameters<Frame["waitForElement"]>[0], call: Call) =>
       execute(
         {
           _tag: "Wait",
@@ -488,9 +488,9 @@ export const makeOperations = (
   };
 };
 
-/** Every maintained handler Layer over one browser, one resolved configuration and one host. */
+/** Every maintained handler Layer over one bound target, one resolved configuration and one host. */
 export const makeLayers = (
-  page: Page,
+  page: Page | Frame,
   options: ResolvedOptions,
   hooks: Hooks,
   continuation: Continuation,
