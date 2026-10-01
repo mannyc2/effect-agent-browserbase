@@ -42,6 +42,7 @@ import {
   ObservedNavigationResult,
   projectFailure,
   ReadMoreResult,
+  retire,
 } from "./Model.ts";
 import type { InspectionRequest, ResolvedOptions } from "./Options.ts";
 import { type Continuation, fitObservation, measure } from "./Results.ts";
@@ -69,6 +70,21 @@ export interface Hooks {
 }
 
 export const direct: Hooks = { run: (effect) => effect };
+
+/**
+ * A bound Page or Frame that is no longer open refuses every later call too, so its `Stale`
+ * refusals are projected as `closed`. A replaced document or reference on an open target stays
+ * `stale`, which a fresh inspection answers.
+ */
+export const noticeRetirement = (target: Page | Frame) => (error: BrowserError) =>
+  error.reason._tag === "Stale"
+    ? target.status.pipe(
+        Effect.map((status) => {
+          if (status.phase === "closed" || status.phase === "closing" || status.phase === "stale")
+            retire(error);
+        }),
+      )
+    : Effect.void;
 
 /** Records the original error on the host, then gives the model its compact projection. */
 export const failureWith = (hooks: Hooks, call: Call) => (error: BrowserError) => {
@@ -134,41 +150,50 @@ export const makeOperations = (
   };
 
   /** One original executor owns authority, recording, attempts and interruption evidence. */
-  const execute = Effect.fnUntraced(function* (
-    intent: Action,
-    call: Call,
-    inputs: InputBindings = {},
-  ): Effect.fn.Return<RunReceipt, BrowserError, Scope.Scope> {
-    const operation = yield* page
-      .start(
-        { version: 1, steps: [{ id: call.tool, action: intent }] },
-        { ...execution(), inputs, ...(policy === undefined ? {} : { policy }) },
-      )
-      .pipe(
-        Effect.tapError((error) => Effect.sync(() => hooks.refused?.(error, call))),
-        Effect.mapError((error) => error.error),
+  const execute = Effect.fnUntraced(
+    function* (
+      intent: Action,
+      call: Call,
+      inputs: InputBindings = {},
+    ): Effect.fn.Return<RunReceipt, BrowserError, Scope.Scope> {
+      const operation = yield* page
+        .start(
+          { version: 1, steps: [{ id: call.tool, action: intent }] },
+          { ...execution(), inputs, ...(policy === undefined ? {} : { policy }) },
+        )
+        .pipe(
+          Effect.tapError((error) => Effect.sync(() => hooks.refused?.(error, call))),
+          Effect.mapError((error) => error.error),
+        );
+
+      hooks.operation?.(operation, call);
+
+      return yield* operation.completed.pipe(
+        Effect.flatMap((ran) =>
+          ran.steps[0] === undefined
+            ? Effect.fail(malformed("run"))
+            : Effect.succeed(ran.steps[0].receipt),
+        ),
+        Effect.catchTag("StepFailed", (error) =>
+          intent._tag === "FillForm" &&
+          error.attempt?.receipt !== undefined &&
+          "stopped" in error.attempt.receipt
+            ? Effect.succeed(error.attempt.receipt)
+            : Effect.fail(error.error),
+        ),
       );
-
-    hooks.operation?.(operation, call);
-
-    return yield* operation.completed.pipe(
-      Effect.flatMap((ran) =>
-        ran.steps[0] === undefined
-          ? Effect.fail(malformed("run"))
-          : Effect.succeed(ran.steps[0].receipt),
-      ),
-      Effect.catchTag("StepFailed", (error) =>
-        intent._tag === "FillForm" &&
-        error.attempt?.receipt !== undefined &&
-        "stopped" in error.attempt.receipt
-          ? Effect.succeed(error.attempt.receipt)
-          : Effect.fail(error.error),
-      ),
-    );
-  }, Effect.scoped);
+    },
+    Effect.scoped,
+    Effect.tapError(noticeRetirement(page)),
+  );
 
   const observe = (request: InspectionRequest) =>
-    options.observe(request, page).pipe(Effect.flatMap(decoded(Observation, "observe")));
+    options
+      .observe(request, page)
+      .pipe(
+        Effect.tapError(noticeRetirement(page)),
+        Effect.flatMap(decoded(Observation, "observe")),
+      );
 
   /** A reading, with the continuation read beside it; a policy that returns less reads less. */
   const reading = (choice: InspectRequest) => {
@@ -312,6 +337,9 @@ export const makeOperations = (
       formInputs(request.fields),
     ).pipe(
       Effect.flatMap(decoded(FillFormResult, "fill-form")),
+      Effect.tap((result) =>
+        result.stopped === undefined ? Effect.void : noticeRetirement(page)(result.stopped.error),
+      ),
       Effect.mapError((error) => stopped(failureWith(hooks, call)(error), [])),
       Effect.flatMap((result) => {
         const completed = result.fields.map(({ elementId, status }) => ({ elementId, status }));

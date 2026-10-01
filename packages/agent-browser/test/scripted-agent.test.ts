@@ -150,9 +150,10 @@ it.effect.each([false, true])(
             },
           },
           answer((request) => {
+            // Containment closed the bound Page or fenced its owner: inspecting cannot help.
             expect(toolResults(request, "browser_click").at(-1)).toMatchObject({
               isFailure: true,
-              result: { reason: "stale", outcome: "undispatched" },
+              result: { reason: "closed", outcome: "undispatched" },
             });
           }),
         ];

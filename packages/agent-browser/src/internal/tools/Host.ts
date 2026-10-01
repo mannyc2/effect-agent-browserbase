@@ -37,7 +37,14 @@ import type {
   WaitToolHandlers,
 } from "./Definitions.ts";
 import { sequentialScheduling } from "./Guidance.ts";
-import { type Call, failureWith, type Hooks, makeLayers, navigationResult } from "./Handlers.ts";
+import {
+  type Call,
+  failureWith,
+  type Hooks,
+  makeLayers,
+  navigationResult,
+  noticeRetirement,
+} from "./Handlers.ts";
 import { BrowserToolFailure } from "./Model.ts";
 import { type HandlerOptions, knownKeys, option, resolveOptions } from "./Options.ts";
 import { continuationFor } from "./Results.ts";
@@ -434,6 +441,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         Effect.tapError((error) =>
           Effect.sync(() => recordReceipt(call, { _tag: "Refused", error })),
         ),
+        Effect.tapError(noticeRetirement(page)),
         Effect.mapError(onFailure),
       );
 
@@ -446,6 +454,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
           if (Exit.isSuccess(exit) || !Cause.hasInterruptsOnly(exit.cause)) settled = true;
         }),
       ),
+      Effect.tapError(noticeRetirement(page)),
       Effect.flatMap((result) => navigationResult(result.url)),
       Effect.mapError(onFailure),
     );
@@ -475,6 +484,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
           ? Effect.void
           : operation.stop.pipe(
               Effect.onError((cause) => Deferred.failCause(failure, cause)),
+              Effect.tapError(noticeRetirement(page)),
               Effect.mapError(onFailure),
             ),
       ),

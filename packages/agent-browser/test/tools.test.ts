@@ -358,6 +358,26 @@ it.effect(
     ),
 );
 
+it.effect.each(["page", "session"] as const)(
+  "after its bound %s closes, every Tool tells the model the browser is closed, not stale",
+  (retired) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* scriptedSession();
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
+        const tools = yield* allTools.pipe(Effect.provide(host.layer));
+
+        yield* retired === "page" ? browser.initialPage.close() : browser.closeChecked;
+
+        for (const [name, request] of requests)
+          expect(
+            (yield* Stream.runCollect(yield* tools.handle(name, request, name)))[0]?.encodedResult,
+          ).toEqual({ _tag: "BrowserToolFailure", reason: "closed", outcome: "undispatched" });
+        expect((yield* host.toolFailures).failures).toHaveLength(requests.length);
+      }),
+    ),
+);
+
 it.effect("a malformed replacement reading is recorded without input or replay", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -74,9 +74,24 @@ const toolReasons = {
   ContextLease: "failed",
 } as const satisfies Record<BrowserError["reason"]["_tag"], BrowserToolFailure["reason"]>;
 
+/** Refusals a host found its own bound Page or Frame retired for; see `retire`. */
+const retiredRefusals = new WeakSet<BrowserError>();
+
+/**
+ * Marks an original error as coming from a bound target that is no longer open. Nothing on that
+ * target can succeed again, so the model is told `closed` instead of being sent to inspect again;
+ * the host still records the original error unchanged.
+ */
+export const retire = (error: BrowserError): void => {
+  retiredRefusals.add(error);
+};
+
 /** The compact projection a model sees. Provider facts, paths and measurements stay on the host. */
 export const projectFailure = (error: BrowserError): BrowserToolFailure =>
-  BrowserToolFailure.make({ reason: toolReasons[error.reason._tag], outcome: error.outcome });
+  BrowserToolFailure.make({
+    reason: retiredRefusals.has(error) ? "closed" : toolReasons[error.reason._tag],
+    outcome: error.outcome,
+  });
 
 const ObservationIdParameter = Identifier.annotate({
   description: "observationId of the latest observation, from browser_inspect or an action result",

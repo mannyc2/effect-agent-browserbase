@@ -41,6 +41,7 @@ export const instructions = (toolkit?: { readonly tools: object }): string => {
         ]
       : []),
     "A failure with outcome unknown may still have happened: inspect before anything else and never repeat it blindly. An undispatched failure changed nothing.",
+    "A closed failure means the page these tools act on is gone: stop using the browser and report what you have.",
     "If a control you need is not in the observation, scroll, or inspect with find; scope document searches the whole page.",
     ...(has("browser_read_more")
       ? ["When an observation's text is truncated, browser_read_more continues it."]
