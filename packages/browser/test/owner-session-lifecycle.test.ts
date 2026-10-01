@@ -390,7 +390,7 @@ const closeBehindDetach = Effect.fnUntraced(function* (actionMillis?: number) {
 
   yield* Effect.promise(() => listing.promise);
   // Page closure is bounded cleanup, admitted even while the lifecycle barrier is up.
-  const closure = yield* Effect.forkChild(issued.controls.closePage(second));
+  const closure = yield* Effect.forkChild(issued.controls.close());
 
   yield* Effect.promise(() => closing.promise);
   listed.resolve();

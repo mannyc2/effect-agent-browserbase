@@ -581,11 +581,11 @@ export const makeSession = <E>(
       status: value.status,
       describe: (options = {}) =>
         checkedOperationOptions(options, "describe-page").pipe(
-          Effect.flatMap((options) => value.controls.describePage(value.record.info, options)),
+          Effect.flatMap((options) => value.controls.describe(options)),
         ),
       listFrames: (options = {}) =>
         checkedOperationOptions(options, "list-frames").pipe(
-          Effect.flatMap((options) => value.controls.framesOf(value.record.info, options)),
+          Effect.flatMap((options) => value.controls.listFrames(options)),
         ),
       frame: (info, options) =>
         checked(FrameInfo, info, "target").pipe(
@@ -627,7 +627,7 @@ export const makeSession = <E>(
         ),
       close: (options = {}) =>
         checkedOperationOptions(options, "close-page").pipe(
-          Effect.flatMap((options) => value.controls.closePage(value.record.info, options)),
+          Effect.flatMap((options) => value.controls.close(options)),
         ),
     };
 

@@ -221,7 +221,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       yield* session.selectPage(second);
       yield* original.pointerMove({ x: 1, y: 2 });
       assert.deepEqual(f.state.input, ["move page-1 1,2"]);
-      yield* authority.controls.closePage(authority.record.info);
+      yield* authority.controls.close();
       yield* expectReason(original.pointerMove({ x: 1, y: 2 }), "Closed");
       yield* expectReason(original.hover("#target"), "Closed");
       yield* expectReason(original.wheel(0, 120), "Closed");

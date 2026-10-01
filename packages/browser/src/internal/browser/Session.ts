@@ -2184,14 +2184,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return port;
   };
 
-  const makePageControls = (target: DriverTarget, generation: number) => {
-    const authority = pages.get(target.pageId);
-    const frameAuthority = authority?.frames.get(target.frameId);
+  const makePageControls = (
+    authority: typeof pages extends Map<string, infer A> ? A : never,
+    target: DriverTarget,
+    generation: number,
+  ) => {
+    const frameAuthority = authority.frames.get(target.frameId);
 
     // Validation failures keep the operation the caller asked for.
     const validate = (operation: BrowserOperation) =>
       Effect.suspend(() =>
-        (authority !== undefined && authority.phase !== "open") || frameAuthority?.detached === true
+        authority.phase !== "open" || frameAuthority?.detached === true
           ? Effect.fail(unavailable(operation, authority))
           : checkTarget(operation, target, generation),
       );
@@ -2591,44 +2594,21 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             ),
           ),
         ),
-      pages: (operationOptions?: ExecutionOptions) => listPages(operationOptions),
-      listPages: (operationOptions?: ExecutionOptions) => listPages(operationOptions),
-      describePage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
-        nativeOperation("describe-page", (driver, ticket) => driver.describePage(page, ticket), {
-          charge: false,
-          ...bound,
-          ...operationOptions,
-          targetScope: () => ({ pageId: page.pageId }),
-        }),
-      frames: (operationOptions?: ExecutionOptions) =>
+      describe: (operationOptions?: ExecutionOptions) =>
+        nativeOperation(
+          "describe-page",
+          (driver, ticket) => driver.describePage(authority.info, ticket),
+          { charge: false, ...bound, ...operationOptions },
+        ),
+      listFrames: (operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "list-frames",
-          async (driver, ticket) => {
-            const page =
-              authority?.info ??
-              (await driver.listPages(ticket)).find((info) => info.pageId === target.pageId);
-
-            if (page === undefined)
-              throw BrowserError.make({
-                operation: "list-frames",
-                reason: Reasons.Stale.make({}),
-                outcome: "undispatched",
-              });
-
-            return driver.listFrames(ticket, page);
-          },
-          { ...bound, ...operationOptions, charge: false },
+          (driver, ticket) => driver.listFrames(ticket, authority.info),
+          { charge: false, ...bound, ...operationOptions },
         ),
-      framesOf: (page: PageInfo, operationOptions?: ExecutionOptions) =>
-        nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket, page), {
-          charge: false,
-          ...bound,
-          ...operationOptions,
-          targetScope: () => ({ pageId: page.pageId }),
-        }),
-      closePage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
+      close: (operationOptions?: ExecutionOptions) =>
         Effect.suspend(() => {
-          const record = authority ?? pages.get(page.pageId);
+          const page = authority.info;
 
           const deadline = Math.min(
             Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 +
@@ -2641,12 +2621,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
           // Closure has reserved recovery admission, which neither a policy cleanup nor a
           // lifecycle barrier refuses.
-          const stale = () => unavailable("close-page", record, { recovery: true });
+          const stale = () => unavailable("close-page", authority, { recovery: true });
 
           const checked = Effect.suspend(() =>
-            (generation !== undefined && generation !== owner.state.generation) ||
-            (record !== undefined && record.info.targetId !== page.targetId) ||
-            (authority !== undefined && pages.get(page.pageId) !== authority)
+            generation !== owner.state.generation || pages.get(page.pageId) !== authority
               ? Effect.fail(stale())
               : Effect.void,
           );
@@ -2662,7 +2640,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               Effect.flatMap((closed) =>
                 closed
                   ? Effect.void
-                  : owner.contain(containment(page.pageId, record), generation).pipe(
+                  : owner.contain(containment(page.pageId, authority), generation).pipe(
                       Effect.flatMap((containment) =>
                         Effect.fail(
                           BrowserError.make({
@@ -2677,8 +2655,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               ),
             );
 
-          if (record?.attempt !== undefined)
-            return checked.pipe(Effect.andThen(joined(record.attempt)));
+          if (authority.attempt !== undefined)
+            return checked.pipe(Effect.andThen(joined(authority.attempt)));
 
           return checked.pipe(
             Effect.andThen(
@@ -2686,28 +2664,25 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 "close-page",
                 (ticket) =>
                   Effect.gen(function* () {
-                    const resolved = yield* native("close-page", ticket, () =>
+                    yield* native("close-page", ticket, () =>
                       getDriver().resolvePage(page, ticket),
                     );
 
-                    const canonical =
-                      record ?? registerPage(page, resolved, ticket.generation).record;
-
-                    if (canonical.attempt !== undefined) return yield* joined(canonical.attempt);
+                    if (authority.attempt !== undefined) return yield* joined(authority.attempt);
                     const attempt = Deferred.makeUnsafe<boolean>();
 
                     return yield* native("close-page", ticket, async () => {
                       try {
                         await getDriver().closePage(page, ticket, () => {
-                          canonical.attempt = attempt;
+                          authority.attempt = attempt;
                           revokePage(page.pageId, ticket.signal);
                         });
                         pageClosed(page.pageId);
                       } catch (error) {
-                        if (canonical.attempt === attempt)
+                        if (authority.attempt === attempt)
                           Deferred.doneUnsafe(
                             attempt,
-                            Effect.succeed(canonical.phase === "closed"),
+                            Effect.succeed(authority.phase === "closed"),
                           );
                         throw error;
                       }
@@ -2724,13 +2699,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   preflight: checked.pipe(
                     Effect.andThen(
                       Effect.suspend(() =>
-                        record !== undefined && record.phase !== "open" && record.phase !== "paused"
+                        authority.phase !== "open" && authority.phase !== "paused"
                           ? Effect.fail(stale())
                           : Effect.void,
                       ),
                     ),
                   ),
-                  contain: () => containment(page.pageId, record),
+                  contain: () => containment(page.pageId, authority),
                 },
               ),
             ),
@@ -3214,20 +3189,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       newSeed: crypto.randomInt,
       publish: () => {
         const releaseDomain = domain.retirement.retain();
-        const releasePage = authority?.retirement.retain();
+        const releasePage = authority.retirement.retain();
 
         return {
           append: planPublisher(domain.store, { generation, ...target, document: null }),
           release: () => {
-            releasePage?.();
+            releasePage();
             releaseDomain();
           },
         };
       },
       retired: Effect.suspend(() =>
-        authority === undefined
-          ? domain.retirement.requested
-          : Effect.raceFirst(domain.retirement.requested, authority.retirement.requested),
+        Effect.raceFirst(domain.retirement.requested, authority.retirement.requested),
       ),
       reserve: Effect.suspend(() => {
         const pageId = target.pageId;
@@ -3324,7 +3297,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         record.identity.generation,
         () => record.terminal,
       ),
-      controls: makePageControls(target, generation),
+      controls: makePageControls(record, target, generation),
       status: Effect.sync((): PageStatus =>
         Object.freeze({
           identity: Object.freeze({ ...record.identity }),
@@ -3563,7 +3536,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             return {
               identity: Target.make({ generation, ...target }),
               record,
-              controls: makePageControls(target, generation),
+              controls: makePageControls(page, target, generation),
             };
           }),
         {
