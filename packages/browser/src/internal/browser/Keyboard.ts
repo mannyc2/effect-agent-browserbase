@@ -205,7 +205,7 @@ const typeWindow = async (port: CDPSession, characters: ReadonlyArray<string>, t
 };
 
 /**
- * Real key input to the selected page. Every stroke is one the browser would receive from a
+ * Real key input to the exact target page. Every stroke is one the browser would receive from a
  * keyboard, so handlers see trusted `keydown` and `keyup`, and the browser itself decides what
  * has focus. Nothing here focuses, paces or retries: a caller that wants a cadence sends its keys.
  */

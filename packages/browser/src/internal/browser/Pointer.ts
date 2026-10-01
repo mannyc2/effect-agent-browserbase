@@ -118,7 +118,7 @@ const hitPoint = (
 };
 
 /**
- * Real pointer input to the selected page. Every command is one the browser would receive from
+ * Real pointer input to the exact target page. Every command is one the browser would receive from
  * a person, so handlers see trusted events and the browser decides what is under the pointer.
  * Nothing here scrolls, eases or retries: a caller that wants a trajectory sends its points.
  */
