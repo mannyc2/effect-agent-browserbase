@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect";
-import type { AnySession, ElementAdmission } from "effect-browser/browser";
+import type { Page, ElementAdmission } from "effect-browser/browser";
 import { FillFormOptions, type Observation } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import { type RunOptions, validateOptions } from "effect-browser/plan";
 
 import { ResultMaxBytes } from "./Model.ts";
 
@@ -16,13 +17,13 @@ export interface InspectionRequest {
 
 /**
  * How the Tools read the page, for `browser_inspect` and for the observation after an action.
- * The default is `browser.observe(request)`. A replacement may wait, retry or narrow first, but
+ * The default is `page.observe(request)`. A replacement may wait, retry or narrow first, but
  * must return a reading the same browser issued, because its references are what later actions
  * name. A failure is reported like any other failed reading.
  */
 export type Observe = (
   request: InspectionRequest,
-  browser: AnySession,
+  page: Page,
 ) => Effect.Effect<Observation, BrowserError>;
 
 export interface HandlerOptions {
@@ -44,7 +45,12 @@ export interface HandlerOptions {
    */
   readonly continuationBytes?: number;
   /** Synchronous, on fresh exact-node facts under the owner's permit. Never a Tool parameter. */
-  readonly admission?: ElementAdmission;
+  readonly policy?: ElementAdmission;
+  /** Host-only single-step timing and queue configuration; never a model parameter. */
+  readonly execution?: Pick<
+    RunOptions,
+    "style" | "within" | "admission" | "timeoutMillis" | "checkpoint"
+  >;
   /** How `browser_fill_form` proceeds: verification before submit and settling between steps. */
   readonly form?: FillFormOptions;
   /** Replaces how the Tools read the page; see `Observe`. */
@@ -58,7 +64,8 @@ export interface ResolvedOptions {
   readonly observationScope: "document" | "viewport";
   readonly resultMaxBytes: number;
   readonly continuationBytes: number;
-  readonly admission: ElementAdmission | undefined;
+  readonly policy: ElementAdmission | undefined;
+  readonly execution: RunOptions;
   readonly form: FillFormOptions;
   readonly observe: Observe;
 }
@@ -121,10 +128,22 @@ export const resolveOptions = Effect.fnUntraced(function* (options: HandlerOptio
 
   const form = yield* option("form", FillFormOptions, options.form, {});
 
-  if (options.admission !== undefined && typeof options.admission?.admit !== "function")
-    return yield* configuration("admission");
+  if (options.policy !== undefined && typeof options.policy?.admit !== "function")
+    return yield* configuration("policy");
   if (options.observe !== undefined && typeof options.observe !== "function")
     return yield* configuration("observe");
+
+  const execution = yield* validateOptions(
+    options.execution === undefined ? {} : options.execution,
+  );
+
+  if (
+    execution.inputs !== undefined ||
+    execution.through !== undefined ||
+    execution.policy !== undefined ||
+    execution.startAt !== undefined
+  )
+    return yield* configuration("execution");
 
   return {
     maxTextBytes,
@@ -133,7 +152,8 @@ export const resolveOptions = Effect.fnUntraced(function* (options: HandlerOptio
     resultMaxBytes,
     continuationBytes,
     // A host's later edits to its own object never change an admitted policy.
-    admission: options.admission === undefined ? undefined : { admit: options.admission.admit },
+    policy: options.policy === undefined ? undefined : { admit: options.policy.admit },
+    execution,
     form,
     observe: options.observe ?? defaultObserve,
   } satisfies ResolvedOptions;

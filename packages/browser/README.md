@@ -8,7 +8,7 @@ This package has no Browserbase or Effect Agent dependency. Its common entry poi
 
 A `BrowserSession<E>` is the live, host-only capability returned by the supplying implementation. It preserves callback failures and diagnostics of type `E`, one action budget, one native connection and one set of capture/page-control reservations. `implementation` identifies the control implementation. `closeChecked` performs the owner's cleanup and fails if its required cleanup was not confirmed. On concrete Chromium and Browserbase sessions it returns that same frozen cleanup receipt on success; the generic session permits discarding that value. Helpers that only use operations take `AnySession`, an alias for `BrowserSession<unknown>`. Helpers that supervise callback failures must stay generic in `E` or the concrete session so they retain those failures.
 
-All callers use this exact session. Issued `Page` and `Frame` objects keep authority on its original connection. `Capture.start`, `Capture.stream` and `PageControl` authenticate the original session or Page privately; spreading or decoding an object cannot copy authority. An absent registration fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered session with page control disabled still fails `Unsupported`. `Tools.run` from `effect-agent-browser/tools` uses the original session directly; `yield* Adapter.fromSession(session, { selection: "current" | "retained" })` adapts it to the framework's handle with an explicit target policy. Neither opens another browser.
+All browser operations use issued `Page` and `Frame` objects on the original connection. `Capture.start`, `Capture.stream` and `PageControl` authenticate the exact Page privately; spreading or decoding an object cannot copy authority. An absent registration fails with reason `UnregisteredSession` and outcome `undispatched`. A copy, fabricated value or separately loaded runtime can cause that refusal; it does not establish which occurred. A registered Page with page control disabled still fails `Unsupported`. Tools and adapters bind the issued Page together with its original session for callback supervision and checked owner cleanup. Neither opens another browser.
 
 Mutations on one Page share its permit with its Frames; healthy Pages can proceed independently. Registry operations remain serialized. An observed node remains usable only until an invalidating event; a replaced node is never searched for again. A timed-out or interrupted mutation with an unacknowledged native command has an `unknown` outcome and is never automatically replayed. Its exact page is revoked before bounded closure. Positive closure reports `containment: PageClosed` and preserves healthy pages; unconfirmed closure fences the session and reports `SessionFenced`. This applies to the selected page too. Containment does not make the original action known. `performed` means dispatched input was acknowledged before a later step failed; it also must not be replayed blindly. `undispatched`, `rejected`, `performed` and `unknown` remain distinct outcomes.
 
@@ -25,8 +25,8 @@ import { Chromium } from "effect-browser/chromium";
 
 const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
   Effect.gen(function* () {
-    yield* browser.navigate({ url: "https://example.com" });
-    return yield* browser.observe({ scope: "viewport" });
+    yield* browser.initialPage.navigate({ url: "https://example.com" });
+    return yield* browser.initialPage.observe({ scope: "viewport" });
   }),
 ).pipe(
   Effect.provide(
@@ -43,7 +43,7 @@ The Layer requires Effect's `Crypto`, which the host platform supplies: `NodeSer
 
 `Browser.scoped(open, use)` is the common workflow supervisor for both sources, including borrowed attachment. It runs the acquisition once in its own scope, retains the concrete browser type in `use`, and races workflow completion against typed fail-session callbacks. The workflow has its own child scope: fibers and finalizers finish before `closeChecked` runs, so callback cleanup may still use a healthy browser. Checked closure runs on success, failure, thrown defects and cancellation. A body failure and a cleanup failure both remain in this workflow's own final Effect cause; neither is overwritten. An outer race or timeout can select another result and discard that losing cause even though cleanup ran. Configure the provider's `onCleanup` to record its receipt in a host-owned sink outside the raced workflow when cleanup evidence must survive that composition. A body that completes concurrently with a fail-session callback can still win the race; supervision does not establish failure priority. The ownership finalizer still runs if acquisition itself fails. No failed acquisition or action is replayed.
 
-The same combinator supports `open.pipe(Browser.scoped(use))`, including a reusable `const use = Browser.scoped((browser) => browser.observe())` stored before choosing the provider. That unannotated callback sees common browser operations; use an annotated callback or the data-first form for provider-specific members or typed binding diagnostics. The returned function infers the supplying session's callback error independently of its acquisition error. Explicit generic applications must follow the curried overload's revised parameter lists: four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`). It removes the scopes it owns while preserving other required services and error types. Returning a browser, stream or other live capability from `use` does not extend that resource's lifetime. The old provider-specific `withBrowser` methods and `BrowserRuntime.withBrowser` are replaced by this one public operation.
+The same combinator supports `open.pipe(Browser.scoped(use))`, including a reusable `const use = Browser.scoped((browser) => browser.initialPage.observe())` stored before choosing the provider. That unannotated callback sees common browser operations; use an annotated callback or the data-first form for provider-specific members or typed binding diagnostics. The returned function infers the supplying session's callback error independently of its acquisition error. Explicit generic applications must follow the curried overload's revised parameter lists: four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`). It removes the scopes it owns while preserving other required services and error types. Returning a browser, stream or other live capability from `use` does not extend that resource's lifetime. The old provider-specific `withBrowser` methods and `BrowserRuntime.withBrowser` are replaced by this one public operation.
 
 ### A long-lived session in a Layer
 
@@ -69,7 +69,7 @@ const shared = Layer.effect(
 
 const program = Effect.gen(function* () {
   const browser = yield* SharedBrowser;
-  return yield* browser.observe({ scope: "viewport" });
+  return yield* browser.initialPage.observe({ scope: "viewport" });
 }).pipe(Effect.provide(shared));
 ```
 
@@ -91,7 +91,7 @@ Place the receipt sink outside that race when those facts must remain observable
 let receipt: ChromiumCleanupResult | undefined;
 const result =
   yield *
-  Browser.scoped(Chromium.launch(policy), (browser) => browser.navigate({ url })).pipe(
+  Browser.scoped(Chromium.launch(policy), (browser) => browser.initialPage.navigate({ url })).pipe(
     Effect.timeoutOption("30 seconds"),
     Effect.provide(
       Chromium.layer({
@@ -402,8 +402,8 @@ The operation deadline and queue deadline start when the Effect executes. Waitin
 `timeoutMillis`, the policy deadline and the browser lifetime; admission never renews them.
 The queue deadline bounds only waiting, so admitted work can finish after that deadline. An
 operation deadline that ends first reports `Timeout`. These options do not queue away a stale
-target, a Page hold, a navigation reservation or a native-wait conflict. The selected-session
-adapter freezes its target before waiting; selection changes cannot redirect queued input.
+target, a Page hold, a navigation reservation or a native-wait conflict. The issued Page/frame
+authority remains fixed while waiting; display selection cannot redirect queued input.
 `Capture.start` and `Capture.stream` accept admission through their capture options. Exact-node
 methods keep the host's `ElementAdmission` callback separate from trailing operation options.
 
@@ -420,46 +420,41 @@ preempts work. Handoff, resume and reconnect refuse
 an existing ordinary permit holder before installing their exclusive lifecycle barrier; handoff
 then drains retained native work within its bound before granting operator control.
 
-`ready`, `retain`, `target`, `listPages`, `frames` and `createPage` are methods, including calls
-without options: use `yield* session.ready()` rather than yielding the former Effect property.
+### Exact Pages and Frames
 
-### Selected, retained and pinned targets
-
-The session itself is the convenient selected-target API. Its `navigate`, `readText`, `click`,
-`fill`, pointer/key input and screenshot Effects resolve the selected page/frame when the Effect
-actually executes. Constructing an Effect does not freeze the current selection:
+The session owns lifecycle, display selection and the page registry. `initialPage` is the Page
+issued on the first connection; it remains that original lifetime fact after reconnect. Browser
+input and reads belong to issued Pages and Frames. Constructing or running an operation on one
+never follows display selection:
 
 ```ts
-const navigateScout = session.navigate({ url: scoutUrl });
-yield * session.selectPage(scoutInfo);
-yield * navigateScout; // navigates the scout selected above
+const stage = session.initialPage;
+const scout = yield * session.page(yield * session.createPage());
+const navigateStage = stage.navigate({ url: stageUrl });
+
+yield * session.selectPage(yield * scout.describe());
+yield * navigateStage; // still navigates the original stage
+const seen = yield * scout.observe({ scope: "viewport" });
 ```
 
-`yield* session.retain()` is the deliberate retained-selection form. Acquisition resolves and
-validates selection under the owner's permit, then remembers its generation and selection revision.
-Selecting another page or frame, including moving away and back, makes that handle fail
-`Stale/undispatched`. The shared operation interface is `TargetOperations`; the session, retained
-view and pinned view choose their target at different times. The old `bind()` and `currentTarget`
-members have been removed; `session.target()` remains a checked metadata read.
+`session.page(pageInfo)` checks both local and native identity under owner admission.
+`createPage()` returns checked metadata without selecting the page. `selectPage(pageInfo)` and
+`selectFrame(frameId)` affect display selection only. Use `page.describe()`, `page.listFrames()`,
+`page.frame(frameInfo)`, `page.resizeViewport(viewport)` and `page.close()` for exact page work.
+The selected-session actions, `retain`, `pinPage`, `pinFrame` and their target-view types are
+removed. The shared operation contract is `PageOperations`.
 
-| Previous API                                                        | Current API                                                                                       |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `bind()` / `currentTarget`, `BoundTarget`                           | `retain`, `RetainedTarget` and shared `TargetOperations`; direct operations remain on the session |
-| `selectPage(id)` / `closePage(id)`, string returned by `createPage` | Checked `PageInfo` in and out; `selectPage` and `selectFrame` return `void`                       |
-| String `BrowserError.reason`, optional outcome                      | Tagged reason, `catchReason`/`catchReasons`, and required dispatch outcome                        |
-| Concrete `closeChecked` returns `undefined`                         | The canonical frozen receipt after the existing ownership check passes                            |
-| Capture `dropped`                                                   | `discarded` and disjoint `overflow`, `late`, `duplicates`, `rejected`                             |
-| Default-never `BrowserSession` on a non-supervising helper          | `AnySession`; supervisors preserve their actual `E` or concrete session                           |
+| Previous API                                                      | Current API                                                             |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Session actions, `observe`, `checkpoint`, `ready`, `target`       | Issued `Page`/`Frame` methods and immutable `identity`                  |
+| `retain`, `pinPage`, `pinFrame`                                   | `initialPage`, checked `session.page(info)` and `page.frame(info)`      |
+| Session `describePage`, `framesOf`, `closePage`, `resizeViewport` | `page.describe`, `page.listFrames`, `page.close`, `page.resizeViewport` |
+| Session capture and PageInfo capture target                       | `Capture.start(page)` / `Capture.stream(page)`                          |
+| Session PageControl adapters                                      | `PageControl.state(page)`, `suspend(page)`, `resume(page, receipt)`     |
 
-The [root migration table](../../README.md#api-migration) also covers the adapter's required
-selection option, compact tool reasons/host diagnostics, binding defaults, common navigation
-deadline, optional control state and the explicit C1 generic-arity edge.
-
-`createPage` returns `PageInfo` for the exact created entry and does not select it. Both
-`selectPage(pageInfo)` and `closePage(pageInfo)` verify its local and native identities under
-owner admission. Page/frame selection returns `void`; request `retain` separately when a retained
-sequence is intended. Failed metadata acquisition after creation keeps the creation's dispatch
-evidence and never creates a second page.
+Failed metadata acquisition after creation keeps its original dispatch evidence and never
+creates a second page. Page operations preserve typed failures and scoped ownership; a terminal
+Page's retained status and timeline remain readable, while new work refuses undispatched.
 
 Each page `createPage` opens is a window of its own, not a tab. Chromium paints only the front
 tab of a window, so a screenshot of a tab behind another waits seconds for a compositor frame, or
@@ -474,51 +469,32 @@ when it is occupied. Pass `{ admission: { queue: "1 second" } }` to wait FIFO wi
 operation deadline. It does not wait behind another Page's ordinary operation. A refused or
 expired caller opens nothing.
 
-Inventory authenticates each native Page before adopting it into the owner's registry, including
-popups. Selection authenticates and adopts its exact Page before subsequent operations can use it.
-If the browser selects an unadopted Page after another closes, selected actions refuse
-`Stale/undispatched`; `listPages()` or checked `retain()` establishes fresh authority before input.
-
-`describePage(pageInfo)` reads one exact page's current address and title, and whether it is
-selected, without reading every other page. `listPages` reads every page's title at once rather than
-one after another, but each title is still a round trip to the browser.
-
-For work that must stay on a page while selection moves elsewhere, pin it explicitly:
+Inventory authenticates each native Page before adopting it into the owner's registry,
+including popups. `page.describe()` reads its current address and title without reading every
+other page. `session.listPages()` reads every page's title concurrently under bounded admission.
+Metadata does not itself grant live input authority.
 
 ```ts
-const stageInfo = (yield * session.listPages()).find((page) => page.title === "Stage")!;
-const stage = yield * session.pinPage(stageInfo);
-const childInfo = (yield * session.framesOf(stageInfo)).find(
-  (frame) => frame.parentFrameId !== null,
-)!;
-const child = yield * session.pinFrame(stageInfo, childInfo);
+const stageInfo = (yield * session.listPages()).find((info) => info.title === "Stage")!;
+const stage = yield * session.page(stageInfo);
+const childInfo = (yield * stage.listFrames()).find((info) => info.parentFrameId !== null)!;
+const child = yield * stage.frame(childInfo);
 
 yield * session.selectPage(scoutInfo);
 yield * stage.click({ selector: "#advance" });
 const childText = yield * child.readText({ selector: "#status" });
 ```
 
-Pinning never changes global selection and opens no second browser connection. A pinned handle
-contains only modeled operations plus its immutable `Target`; every operation re-resolves the
-connection-local page/frame identity through the same owner. Reconnect makes the old generation
-stale, closing its page or detaching its frame makes it unusable, and an in-flight navigation
-reservation or page hold is checked on the pinned page rather than whichever page happens to be
-selected.
+Issuance changes no display selection and opens no second connection. Each operation keeps its
+exact connection-local page/frame authority. Closing its Page, detaching its Frame or reconnecting
+makes it stale. Navigation preserves the Page/Frame authority and retires that document's node
+references. Holds and in-flight navigation reservations are checked on the issued target.
 
-Page and frame IDs are opaque and namespaced per connection. Old `PageInfo`, IDs and live handles
-are invalid after reconnect. In the same known browser lifetime, read fresh `listPages`, match exactly
-one saved `targetId`, and use that fresh page record; zero matches means gone and multiple matches
-mean ambiguous. Never fall back to order, local serial, URL or title. Then reacquire frames with
-`framesOf(freshPage)`. A surviving native target can identify the same page, but cannot make old
-local metadata or handles current again.
-
-Pinned operations retain their selector-based interface. Use issued Page and Frame objects for
-the complete observation and exact-node API. The session's convenience operations use the
-selected page/frame, so passing another frame's reference through that selected view refuses
-`Stale/undispatched`. An explicit Page or Frame keeps operating on its own target while selection
-moves. Returning to a selection can use its original reference only if the document and exact
-control remain valid. This does not revive a retained-selection handle: `retain` still becomes
-stale after every selection change, including away and back.
+IDs are opaque and namespaced per connection. After reconnect, read fresh `listPages()`, match
+exactly one saved native `targetId`, issue `session.page(freshInfo)`, and reacquire its Frames with
+`page.listFrames()` / `page.frame(info)`. Zero matches means gone and multiple matches mean
+ambiguous. Never fall back to ordering, local serial, URL or title. A surviving native target
+cannot make an old Page or copied metadata current again.
 
 Dispatched input on the observation's own page still retires its references, including `hover`,
 `pointerMove`, `wheel` and `scroll`. Hover then click therefore deliberately needs a new inspection.
@@ -528,12 +504,48 @@ even while another page is selected. IDs are opaque and connection-specific; con
 inspection result rather than predicting serials. Attachment, identity and fresh-state checks at
 dispatch remain necessary even when the last input targeted a different page.
 
+### Performed plans and absolute starts
+
+`page.run(plan, { style: {} })` uses the named default performed profile; omitted style or
+`style: "plain"` keeps plain input. `Plan.validateOptions(value)` validates and normalizes host
+options, preserving public `within`, queue admission and performed defaults. Profiles have finite
+pointer duration/inset/curvature, key interval/hold and scroll duration/interval bounds. `seed` is
+an optional safe integer; the actual chosen seed is retained in run and attempt receipts.
+Step-local planning depends on that seed and stable step ID, independently of other Pages or
+ambient Random use. It reproduces planned paths for the same geometry, not website behavior or
+remote delivery timing. Slips default to probability zero and require explicit opt-in.
+
+The pointer timing uses a chosen bounded Shannon-form policy for measured targets, and explicit
+coordinates use a chosen bounded distance policy. The fifth-order progress polynomial gives zero
+endpoint velocity/acceleration; applying it to a curved policy path does not claim globally minimum
+Cartesian jerk. Constants are library policy, not calibrated human guarantees. Scheduled glides are
+output-only compositor metadata: they do not generate hover along the drawn path. Exact native hit
+checks and selected node identity remain required immediately before real input. A missing actual
+click position stays null even when an intended aim is retained.
+
+A schedule has at most 128 geometry samples, 256 Unicode code points, 768 expanded strokes and
+64 KiB of encoded policy data, independently of action and pending-native capacity. Performed Fill
+may focus/select/replace inside its action; Type still requires existing focus. Each performed
+logical action costs the same action budget as its plain counterpart. FillForm retains its
+per-field admission, verification, partial results and guarded submit.
+
+`startAt` is an absolute bigint on this owner's host monotonic clock, available through
+`session.monotonicTimeNanos`. Future starts wait before admission and reserve no Page permit.
+`within` starts at the intended boundary and bounds queueing, preparation, pacing, input and
+postconditions together, capped by owner lifetime and each action deadline. Missed preparation
+reports `ScheduleMissed` without inventing an attempt; an insufficient pacing budget reports
+`TimingBudgetExceeded` before new input. Receipts retain requested/intended/actual start, deadline
+and lateness. Cancellation stops future submissions and keeps readable attempt history with the
+original Effect Cause. Known preparatory work followed by refusal is rejected with its subphase
+receipts; pending input remains unknown, and acknowledged logical input stays performed when a
+later check fails.
+
 ### An unknown outcome on an exact Page
 
 A mutation whose outcome becomes unknown after dispatch, because it timed out, failed or was
 interrupted, never runs again automatically. When the owner can attribute it to an exact Page,
 it revokes that Page's admission and asks the browser to close it within two seconds. This
-includes selected-page operations, issued Page/Frame and pinned operations, forms, file transfers,
+includes issued Page/Frame operations, forms, file transfers,
 navigation, initialization and callback retirement. Concurrent close requests join the same
 owned closure attempt. Once the browser confirms closure, healthy Pages, their observations and
 captures can continue. The original operation still fails with its own reason and `unknown`
@@ -546,7 +558,7 @@ can after a known outcome. Unconfirmed closure or a failure without trustworthy 
 fences the session conservatively and reports `SessionFenced`. A late response never reopens
 fenced control. Containment reports owner safety independently of the original action outcome.
 
-The complete [multi-page example](examples/multi-page.ts) keeps a presentation page pinned while
+The complete [multi-page example](examples/multi-page.ts) keeps an issued presentation Page while
 the selected scout supplies observations. It reads and captures the presentation page without
 switching selection and returns only data after the shared browser scope closes.
 
@@ -580,7 +592,7 @@ retain the originals in the bounded, host-only `ToolHost.toolFailures` snapshot.
 `navigate` holds nothing open that you can see into: it returns when the document reaches DOMContentLoaded. `startNavigation` is the same single dispatch, left in flight, so a recorder can look at a page while it is still arriving, hold it, and let it finish:
 
 Both accept optional `timeoutMillis` from 1 to 600000, capped by the remaining session lifetime.
-Omitting it uses the configured action timeout. Direct, retained and pinned calls share the
+Omitting it uses the configured action timeout. Page and Frame calls share the
 same navigator; the maintained model `browser_navigate` tool still accepts only its upstream URL
 request. This field is the loading deadline, not a promise of rollback on timeout. On a main-frame
 timeout from the pinned engine, up to 3000 ms of recovery may follow that deadline. One absolute
@@ -591,9 +603,9 @@ by the remaining session lifetime. It is never renewed and cannot extend that li
 const operation =
   yield * handle.startNavigation(StartNavigationRequest.make({ url, timeoutMillis: 30_000 }));
 
-const early = yield * session.checkpoint({ picture: true }); // what has loaded so far
-const receipt = yield * PageControl.suspend(session, page); // timers, CSS and parsing stop
-yield * PageControl.resume(session, receipt);
+const early = yield * page.checkpoint({ picture: true }); // what has loaded so far
+const receipt = yield * PageControl.suspend(page); // timers, CSS and parsing stop
+yield * PageControl.resume(page, receipt);
 const { url: loaded } = yield * operation.completed;
 ```
 
@@ -611,10 +623,10 @@ Locally, a hold during an incremental response stops parsing as well as timers: 
 
 ### What is on screen, and what a host may know about it
 
-`session.observe()` reads the whole document. `session.observe({ scope: "viewport" })` keeps only text and controls that are on screen and reachable, and says what it left out:
+`page.observe()` reads the whole document. `page.observe({ scope: "viewport" })` keeps only text and controls that are on screen and reachable, and says what it left out:
 
 ```ts
-const seen = yield * session.observe({ scope: "viewport" });
+const seen = yield * page.observe({ scope: "viewport" });
 seen.viewport; // { clippedText, coveredText, uncertainText, unreachableControls, exhausted, ... }
 ```
 
@@ -623,7 +635,7 @@ Visibility here is geometry and hit-testing, never a pixel comparison, and the c
 `match` narrows a reading, in either scope, to what contains a piece of text, ignoring case: text lines, and controls whose label contains it. A select is kept when its own label or any of its option labels matches, with its options beside it. The filter runs inside the page before `maxControls` and `maxTextBytes` are spent, so twenty header links cannot crowd out the one control asked for:
 
 ```ts
-const found = yield * session.observe({ scope: "document", match: "create account" });
+const found = yield * page.observe({ scope: "document", match: "create account" });
 found.match; // "create account"
 ```
 
@@ -719,7 +731,7 @@ The first refused or uncertain step ends the form, and nothing after it is sent.
 ### Bounded waits that leave room for recording
 
 `waitFor({ selector, state })` still supports the host's bounded selector conditions: `visible`,
-`hidden`, `attached` and `detached`. It captures the selected page, frame and document when admitted.
+`hidden`, `attached` and `detached`. It captures the issued page, frame and document when admitted.
 `waitForElement({ reference, state, timeoutMillis? })` instead waits on an exact node issued by the
 current observation, with `visible`, `hidden`, `enabled` or `disabled`. It never searches for a node
 that replaced the reference. Hidden includes detachment of the original node; for the other
@@ -749,10 +761,10 @@ the observation is replaced, and its late cleanup cannot dispose a successor's r
 
 ### Passive checkpoints for a recorder
 
-`page.observe()` replaces that frame's current observation, so a recorder calling it on the same frame would retire the references an agent is about to use. `page.checkpoint()` (or the selected-session adapter) is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.
+`page.observe()` replaces that frame's current observation, so a recorder calling it on the same frame would retire the references an agent is about to use. `page.checkpoint()` is the passive path: viewport text, control facts and, when asked, a PNG of the viewport.
 
 ```ts
-const checkpoint = yield * session.checkpoint({ picture: true });
+const checkpoint = yield * page.checkpoint({ picture: true });
 ```
 
 It issues no references, is not a mutation, and leaves the action observation and the selection exactly as they were, so inspect, checkpoint, then act on the inspected node all compose. It is host-only, because it carries control facts. Text and picture are read one after the other, never atomically: the interval is on the host monotonic clock, and `documentChanged` says the document was replaced in between. A held page is refused `busy` rather than woken to be read: take the checkpoint before the hold and keep it.
@@ -772,7 +784,7 @@ has not become mutations-only.
 `pointerMove`, `hover` and `wheel` send the input a person's hardware would, so pages see trusted events, `:hover` applies, and the browser itself decides what is under the pointer. `scroll` stays what it was: script in the page, instantaneous, raising no wheel event. That difference is how a recording tells one from the other.
 
 ```ts
-const handle = session; // ordinary selected-page operations
+const handle = session.initialPage; // exact original Page authority
 
 yield * handle.pointerMove(PointerMoveRequest.make({ to: { x: 140, y: 100 } }));
 yield * handle.hover(HoverRequest.make({ selector: "#menu" }));
@@ -781,9 +793,9 @@ const receipt =
   yield * handle.wheel(WheelRequest.make({ deltaX: 0, deltaY: 240, at: { x: 420, y: 120 } }));
 ```
 
-Coordinates are CSS pixels in the main frame's viewport. Each call is charged as one action and uses its issued Page or Frame; a retained-selection handle instead goes stale when selection changes. Easing, pacing and cursor artwork are yours: send the points you want, and draw the cursor from the positions the receipts report.
+Coordinates are CSS pixels in the main frame's viewport. Each logical input is one action on its issued Page or Frame. Performed plans add bounded pacing and output-only glide evidence; viewers draw cursor artwork from projected evidence without injecting presentation DOM into the website.
 
-`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`session.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
+`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`page.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
 
 For a child-frame element, hover checks the commanded point through each ancestor
 frame and then the exact node, including cross-origin documents. The receipt
@@ -801,7 +813,7 @@ An `InputReceipt` carries the target it was sent to, the position this owner com
 `fill` sets a field's value in one step: the page gets an `input` event and no `keydown`, `keypress` or `keyup`, so anything that reacts to keys behaves differently under a recorder than it does for a person. `press` and `type` send the strokes a keyboard would. Handlers see trusted key events, and the browser does what it does for a person: Tab moves focus and selects the field it lands in, Enter submits a form that has a submit button, and Backspace edits.
 
 ```ts
-const handle = session; // ordinary selected-page operations
+const handle = session.initialPage; // exact original Page authority
 
 // Focus is the page's business. A real click gives it, and keys then follow it.
 yield * handle.click(ClickRequest.make({ selector: "#from" }));
@@ -812,7 +824,7 @@ yield * handle.press(PressRequest.make({ key: "k", modifiers: ["Control"] }));
 yield * handle.press(PressRequest.make({ key: "Enter", into: "#from" }));
 ```
 
-Keys go to whatever has focus in the selected page, in whichever frame that is, because that is where the browser sends them. `into` narrows that to one exact element, which must already have focus or hold the element that does, through any open shadow root. If it does not, the call fails `not-focused` and `undispatched`. It never focuses the element for you, for the reason `hover` never scrolls: that would hide a scripted focus inside a native-input operation. `session.pressElement` and `session.typeElement` apply the same rule to the node an observation named and take the same host admission as `fillElement`, so switching from `fill` to real typing gives up neither exactness nor the check on fresh control facts.
+Keys go to whatever has focus in the issued page, in whichever frame that is, because that is where the browser sends them. `into` narrows that to one exact element, which must already have focus or hold the element that does, through any open shadow root. If it does not, the call fails `not-focused` and `undispatched`. It never focuses the element for you, for the reason `hover` never scrolls: that would hide a scripted focus inside a native-input operation. `page.pressElement` and `page.typeElement` apply the same rule to the node an observation named and take the same host admission as `fillElement`, so switching from `fill` to real typing gives up neither exactness nor the check on fresh control facts.
 
 A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabulary is closed: `Enter`, `Tab`, `Backspace`, `Delete`, `Escape`, the four arrows, `Home`, `End`, `PageUp`, `PageDown`, or one printable ASCII character (a space is `" "`), with `Shift`, `Control`, `Alt` and `Meta` as modifiers. The native engine parses a key string, chords included, and begins holding the modifiers before it has validated the key, so nothing reaches it that was not reviewed here. A modifier other than Shift makes a chord rather than a character, and nothing is typed.
 
@@ -820,7 +832,7 @@ A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabular
 
 With `into`, the original node and document must still have focus before each subsequent window. Focus is never repaired. Commands already submitted in a window can land after focus moves. Once that window has successfully drained, a later `not-focused` refusal reports `performed`: earlier input was acknowledged, and the refused window sends nothing.
 
-Two limits follow the pinned engine's semantics. A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. And a shifted character arrives as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Pacing is yours, as easing is for the pointer: for a typist's cadence, send one character per call and sleep between them, at one action each.
+A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. Plain `type` sends a shifted character as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Performed plans hold Shift for uppercase and shifted punctuation and pace complete balanced strokes under one logical action. A stroke remains unresolved until its key and modifiers are released; quiet intervals do not renew the absolute deadline or retain unresolved native replies.
 
 A press waits for native input acknowledgement, without waiting for resulting navigation. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Both operations are available in the model-facing toolkit in `effect-agent-browser`.
 
@@ -879,9 +891,9 @@ const run = Browser.scoped(
   Chromium.launch(BrowserPolicy.unrestricted(), { bootstrap }),
   (session) =>
     Effect.gen(function* () {
-      yield* session.navigate({ url: "https://portal.example.com" });
-      yield* session.ready();
-      return yield* session.observe();
+      yield* session.initialPage.navigate({ url: "https://portal.example.com" });
+      yield* session.initialPage.ready();
+      return yield* page.observe();
     }),
 );
 // run requires Chromium and ShowSettings. Browser.scoped discharges both the
@@ -898,19 +910,19 @@ Plans admit at most 16 uniquely named bindings. Omitted binding options default 
 
 `Browser.scoped` supervises fail-session errors and requires the owner's checked cleanup. Explicit `acquire`/`launch` retain the typed failure signal and detailed cleanup receipt for callers that need to manage that decision themselves. Teardown synchronously closes callback admission, interrupts managed callback fibers, removes this connection's registrations, disconnects locally, and still invokes the supplying lifetime’s release when a prior cleanup step fails. Reconnect installs fresh callable registrations, never replays an old invocation or a consumer init script into an already-running document, and cannot reuse quarantined callback capacity.
 
-Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.ready()` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
+Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.initialPage.ready()` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
 
 The reviewed permission subset is exercised against real Chromium. Provider extensions, persistent contexts and provider reconnect evidence belong to the supplying integration; see the [Browserbase guide](../browserbase/README.md).
 
 ## Live capture and presentation
 
-For a frame-processing pipeline, use `Capture.stream(session, options)`. It starts only when consumed and owns one interval per subscription. `Stream.take`, consumer failure and interruption all finish that interval before the stream completes, while the enclosing browser stays open. A new subscription creates a new interval; concurrent subscriptions on the same page still fail `busy` under the existing reservation. Capture bounds and native-stop quarantine rules are unchanged.
+For a frame-processing pipeline, use `Capture.stream(page, options)`. It starts only when consumed and owns one interval per subscription. `Stream.take`, consumer failure and interruption all finish that interval before the stream completes, while the enclosing browser stays open. A new subscription creates a new interval; concurrent subscriptions on the same page still fail `busy` under the existing reservation. Capture bounds and native-stop quarantine rules are unchanged.
 
 ```ts
 import { Stream } from "effect";
 import * as Capture from "effect-browser/capture";
 
-const firstFrame = Capture.stream(session, { lifetime: "page" }).pipe(
+const firstFrame = Capture.stream(page, { lifetime: "page" }).pipe(
   Stream.take(1),
   Stream.runCollect,
 );
@@ -938,7 +950,7 @@ import { Clock, Effect, Stream } from "effect";
 
 const interval =
   yield *
-  Capture.start(session, {
+  Capture.start(page, {
     lifetime: "page",
     size: { width: 1280, height: 720 },
     maxFrames: 400,
@@ -957,14 +969,14 @@ const delayed = interval.frames.pipe(
 
 `Capture.multipart(frames)` turns frames into one `multipart/x-mixed-replace` response for an `<img>`, the motion JPEG that WHATWG HTML defines for images. It closes each frame with the next part's delimiter and headers at once, because a browser shows a part only when it has read the headers of the one after it: without that, a viewer runs one frame behind and never shows the last picture of a page that has gone still. It writes no metadata, so nothing but pictures reaches a viewer, and it draws a new boundary from `Crypto` for each response. Call it once per viewer, over one fan-out of the interval, for example a sliding `PubSub` with `replay: 1` so that a slow viewer skips frames without slowing anyone else and a new one is shown the current picture. End that fan-out before the HTTP server stops: a server waits for its open responses.
 
-Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. `Capture.start(session, { lifetime: "page" })` instead follows a page's main frame across documents: start it before a navigation and it covers the loading in between. Same-document URL changes leave document-lifetime capture and observations active. A page-lifetime interval records those changes with `sameDocument: true` and keeps the current document number; only a cross-document commit advances it. The native screencast is never restarted for a navigation, so a boundary is not a gap this package introduced. Each frame carries the `document` it was received during (0, then one more per new document), and the summary's bounded `documentBoundaries` give the last sequence before each URL change and the address it reached, with `initialUrl` for document 0. That is attribution by receipt order, not proof of whose pixels a frame shows: one received just after a navigation can still show the document before it. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined until a late stop confirms or the page definitively closes. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in [the caller encoder example](../browserbase/examples/record-video.ts); the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence. Filming across a navigation with one page-lifetime interval, resampled onto a constant-rate reel with the address of each document reported, is demonstrated in [the footage example](../browserbase/examples/realistic-footage/README.md).
+Closing, navigating, detaching a relevant frame, or resizing the captured page ends its interval explicitly without ending a sibling page's capture. `Capture.start(page, { lifetime: "page" })` instead follows a page's main frame across documents: start it before a navigation and it covers the loading in between. Same-document URL changes leave document-lifetime capture and observations active. A page-lifetime interval records those changes with `sameDocument: true` and keeps the current document number; only a cross-document commit advances it. The native screencast is never restarted for a navigation, so a boundary is not a gap this package introduced. Each frame carries the `document` it was received during (0, then one more per new document), and the summary's bounded `documentBoundaries` give the last sequence before each URL change and the address it reached, with `initialUrl` for document 0. That is attribution by receipt order, not proof of whose pixels a frame shows: one received just after a navigation can still show the document before it. Selecting another page or frame does not invalidate an unrelated interval. Handoff pause, connection loss, an uncertain owner and session closure still invalidate all child intervals. A confirmed native stop releases only its own reservation; a failed stop on a live page keeps that target quarantined until a late stop confirms or the page definitively closes. Stopping a child capture does not close its browser. The frame seam has **no website-audio source**, so this package does not synthesize silent samples or infer audio support from a video container. Caller encoding is demonstrated in [the caller encoder example](../browserbase/examples/record-video.ts); the example decodes every generated frame with the caller's FFmpeg and checks presentation timestamps and pixel checksums. Native acceptance requires changing pixels and source-time agreement rather than accepting container headers as video evidence. Filming across a navigation with one page-lifetime interval, resampled onto a constant-rate reel with the address of each document reported, is demonstrated in [the footage example](../browserbase/examples/realistic-footage/README.md).
 
 Same-document detection uses the pinned Playwright 1.63.0 client `Frame` event `navigated`: `newDocument` is absent for URL-only changes, and the client emits this event synchronously before `Page` emits `framenavigated`. A runtime missing that private signal fails explicitly rather than treating URL changes as document commits.
 
 ### Read metadata while capture is running
 
 ```ts
-const interval = yield * Capture.start(session, { lifetime: "page" });
+const interval = yield * Capture.start(page, { lifetime: "page" });
 const current = yield * interval.snapshot;
 // current.phase is "capturing"; initialUrl and recorded documentBoundaries are available now.
 ```
@@ -1004,13 +1016,13 @@ Footage from `capture` is the page surface. It has no pointer, no tab strip and 
 - an `InputReceipt` for each exposed native pointer, click and key operation, with a known position when the owner has one and an interval on that same clock. Internal download and file-chooser clicks clear the remembered pointer position but do not expose a receipt;
 - an address for every document a frame can name: `initialUrl` for document 0, read in the same turn the watch is installed, and a `url` on each cross-document boundary, read inside the navigation event that committed it. Page-lifetime captures separately mark same-document URL changes without advancing the document number. An application that samples `observe()` between actions can learn an address, but never when it became the address. One longer than 8192 characters is `null`, never cut into an address the page did not show.
 
-A cross-document boundary is the commit, and it is the only moment of a navigation an application cannot see for itself. A same-document boundary records a URL change without claiming that a new document committed. When a cross-document navigation started and when its document finished loading are yours to stamp around the operation that caused it, because you made the call: `startNavigation` returns at dispatch and its `completed` resolves at DOMContentLoaded. Frames and receipts use the session's captured Effect `Clock`; a later caller Clock override does not change their domain. Capture `yield* Clock.Clock` when opening the session if you need raw host stamps on that same clock. `session.timeline.now` supplies the qualified offsets used by journal intervals. A title is page state that changes whenever the page likes, not part of a transition: read it with `session.describePage(page)` when you need one, and stamp that read yourself.
+A cross-document boundary is the commit, and it is the only moment of a navigation an application cannot see for itself. A same-document boundary records a URL change without claiming that a new document committed. When a cross-document navigation started and when its document finished loading are yours to stamp around the operation that caused it, because you made the call: `startNavigation` returns at dispatch and its `completed` resolves at DOMContentLoaded. Frames and receipts use the session's captured Effect `Clock`; a later caller Clock override does not change their domain. Capture `yield* Clock.Clock` when opening the session if you need raw host stamps on that same clock. `session.timeline.now` supplies the qualified offsets used by journal intervals. A title is page state that changes whenever the page likes, not part of a transition: read it with `page.describe()` when you need one, and stamp that read yourself.
 
 The two clocks are never related for you. `sourceTimeMillis` is the browser's wall clock; everything above is the host's monotonic clock; on a hosted session they differ by an offset this package cannot observe. Every frame it receives is already late by the very capture latency it would be trying to measure, and nothing else it is handed carries the browser's time. Relating them takes a round trip into the page, which costs either a charged action or a registered binding, on a schedule only the application can choose, and it fails on a held page. So place input on frames by receipt time, which is always available and late by the capture latency, or measure the offset yourself with a four-timestamp exchange over a typed binding, as NTP does: the page stamps when it called and when the reply arrived, the host stamps when it received and when it replied, and half the best round trip is the error bound to report beside the offset.
 
 ## Explicit stage-page holds (opt-in)
 
-Set `pageControl: true` on `Chromium.layer` or `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.listPages()`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `session.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
+Set `pageControl: true` on `Chromium.layer` or `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(page)` returns a live `PageSuspension`; `PageControl.resume(page, receipt)` consumes that exact receipt. Use an issued Page from `session.page(info)` or `initialPage`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `page.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
 
 This opt-in uses maintained CDP attachment with `noDefaults: true` and owner-controlled per-page focus emulation. It intentionally does not support `keepAlive`, reattachment, human handoff, or popup/dialog `pause` policies. These combinations fail before acquisition; use the existing `retain`/`close` popup policies and `dismiss` dialog policy. Resume explicitly activates the native page without changing SDK selection. Do not enable it where another native client owns focus. Modeled input, DOM reads, waits and viewport changes on held/unknown pages fail before dispatch; the scout remains operable. Page close and session close remain available. Capture does not thaw a held page; frame consumption and acknowledgements never suspend/resume it implicitly.
 
@@ -1064,7 +1076,7 @@ it.effect("an unknown click is never replayed", () =>
           reason: Reasons.Timeout.make({}),
           outcome: "unknown",
         });
-        const observation = yield* browser.observe();
+        const observation = yield* browser.initialPage.observe();
         const accept = { observationId: observation.observationId, elementId: "accept" };
 
         const first = yield* browser.clickElement(accept).pipe(Effect.flip);

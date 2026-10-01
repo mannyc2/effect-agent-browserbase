@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it, vi } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Redacted, Schedule } from "effect";
-import type { AnySession } from "effect-browser/browser";
+import type { AnySession, Frame as IssuedFrame, Page as IssuedPage } from "effect-browser/browser";
 import {
   BrowserPolicy,
   type Observation,
@@ -38,7 +38,7 @@ const fixture = Effect.fnUntraced(function* () {
     policy: BrowserPolicy.unrestricted({ maxActions: 100, maxElapsedMillis: 60000 }),
   });
 
-  yield* session.navigate({ url: site.url });
+  yield* session.initialPage.navigate({ url: site.url });
   const page = operator.contexts()[0]?.pages()[0];
 
   assert.ok(page);
@@ -195,17 +195,17 @@ it.live(
       Effect.gen(function* () {
         const { session, page, site } = yield* fixture();
         const stage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
-        const stageTarget = yield* session.pinPage(stage);
+        const stageTarget = yield* session.page(stage);
         const scout = yield* session.createPage();
-        const scoutTarget = yield* session.pinPage(scout);
+        const scoutTarget = yield* session.page(scout);
 
         yield* scoutTarget.navigate({ url: `${site.url}?scout` });
-        const seen = yield* session.observe();
+        const seen = yield* session.initialPage.observe();
         const act = reference(seen, "Act");
         const watch = yield* watchSelectorWait(page);
 
         const pending = yield* forkWait(
-          session.waitFor({ selector: "#arrived", state: "visible" }),
+          session.initialPage.waitFor({ selector: "#arrived", state: "visible" }),
         );
 
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -213,7 +213,7 @@ it.live(
         expect(yield* Effect.promise(() => page.locator("#arrived").count())).toBe(0);
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
         expect(
-          (yield* session.checkpoint({ picture: true })).picture?.bytes.length,
+          (yield* session.initialPage.checkpoint({ picture: true })).picture?.bytes.length,
         ).toBeGreaterThan(0);
         expect(yield* session.listPages()).toHaveLength(2);
         expect(yield* session.status).toMatchObject({
@@ -222,22 +222,26 @@ it.live(
           unresolvedDispatch: false,
         });
 
-        expect(yield* Effect.result(session.clickElement(act))).toMatchObject(busy);
+        expect(yield* Effect.result(session.initialPage.clickElement(act))).toMatchObject(busy);
         expect(yield* Effect.result(stageTarget.navigate({ url: site.url }))).toMatchObject(busy);
-        expect(yield* Effect.result(PageControl.suspend(session, stage))).toMatchObject(busy);
-        expect(yield* Effect.result(session.observe())).toMatchObject(busy);
+        expect(yield* Effect.result(PageControl.suspend(yield* session.page(stage)))).toMatchObject(
+          busy,
+        );
+        expect(yield* Effect.result(session.initialPage.observe())).toMatchObject(busy);
         expect(
-          yield* Effect.result(session.waitFor({ selector: "#target", state: "attached" })),
+          yield* Effect.result(
+            session.initialPage.waitFor({ selector: "#target", state: "attached" }),
+          ),
         ).toMatchObject(busy);
         expect(yield* Effect.promise(() => page.locator("#count").textContent())).toBe("0");
 
         yield* scoutTarget.click({ selector: "#increment" });
         expect((yield* scoutTarget.readText({ selector: "#count" })).text).toBe("1");
         yield* session.selectPage(scout);
-        expect((yield* session.checkpoint()).target.pageId).toBe(scout.pageId);
+        expect((yield* scoutTarget.checkpoint()).target.pageId).toBe(scout.pageId);
         expect(yield* Effect.result(stageTarget.click({ selector: "#act" }))).toMatchObject(busy);
         // B's observation is independent of the exact wait protecting A and its retained nodes.
-        expect((yield* session.observe()).target.pageId).toBe(scout.pageId);
+        expect((yield* scoutTarget.observe()).target.pageId).toBe(scout.pageId);
         yield* session.selectPage(stage);
         yield* session.selectPage(scout);
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
@@ -253,18 +257,24 @@ it.live(
         yield* Fiber.join(pending.fiber);
         expect(pending.successes()).toBe(1);
         expect(watch.disposals()).toBe(1);
-        expect((yield* session.target()).pageId).toBe(scout.pageId);
+        expect(
+          (yield* session
+            .listPages()
+            .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+        ).toBe(scout.pageId);
         yield* session.selectPage(stage);
-        expect((yield* session.controlFacts(act)).label).toBe("Act");
-        yield* session.waitFor({ selector: "#arrived", state: "attached" });
+        expect((yield* session.initialPage.controlFacts(act)).label).toBe("Act");
+        yield* session.initialPage.waitFor({ selector: "#arrived", state: "attached" });
         expect(watch.calls()).toBe(2);
-        const held = yield* PageControl.suspend(session, stage);
+        const held = yield* PageControl.suspend(yield* session.page(stage));
 
         expect(
-          yield* Effect.result(session.waitFor({ selector: "#arrived", state: "visible" })),
+          yield* Effect.result(
+            session.initialPage.waitFor({ selector: "#arrived", state: "visible" }),
+          ),
         ).toMatchObject(busy);
         expect(watch.calls()).toBe(2);
-        yield* PageControl.resume(session, held);
+        yield* PageControl.resume(session.initialPage, held);
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
       }),
     ).pipe(Effect.provide(layer)),
@@ -286,11 +296,11 @@ it.live.each(["enabled", "disabled", "visible", "hidden"] as const)(
             }
           }, state),
         );
-        const target = reference(yield* session.observe());
+        const target = reference(yield* session.initialPage.observe());
         const watch = yield* watchElementWait(page);
 
         const pending = yield* forkWait(
-          session.waitForElement(
+          session.initialPage.waitForElement(
             WaitForElementRequest.make({ reference: target, state, timeoutMillis: 10000 }),
           ),
         );
@@ -300,8 +310,8 @@ it.live.each(["enabled", "disabled", "visible", "hidden"] as const)(
         expect(native.signal).toBeDefined();
         yield* Effect.promise(() => page.evaluate(() => true));
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
-        expect((yield* session.checkpoint()).text).toContain("Wait fixture");
-        expect(yield* Effect.result(session.observe())).toMatchObject(busy);
+        expect((yield* session.initialPage.checkpoint()).text).toContain("Wait fixture");
+        expect(yield* Effect.result(session.initialPage.observe())).toMatchObject(busy);
         if (scout !== undefined) yield* session.selectPage(scout);
         yield* Effect.promise(() =>
           page.locator("#target").evaluate((node, state) => {
@@ -315,7 +325,12 @@ it.live.each(["enabled", "disabled", "visible", "hidden"] as const)(
         yield* Fiber.join(pending.fiber);
         expect(pending.successes()).toBe(1);
         expect(watch.calls()).toBe(1);
-        if (scout !== undefined) expect((yield* session.target()).pageId).toBe(scout.pageId);
+        if (scout !== undefined)
+          expect(
+            (yield* session
+              .listPages()
+              .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+          ).toBe(scout.pageId);
         expect(yield* Effect.promise(() => page.locator("#count").textContent())).toBe("0");
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
       }),
@@ -328,11 +343,15 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page } = yield* fixture();
-        const target = reference(yield* session.observe());
+        const target = reference(yield* session.initialPage.observe());
         const watch = yield* watchElementWait(page);
 
         const pending = yield* forkWait(
-          session.waitForElement({ reference: target, state: "hidden", timeoutMillis: 250 }),
+          session.initialPage.waitForElement({
+            reference: target,
+            state: "hidden",
+            timeoutMillis: 250,
+          }),
         );
 
         const native = yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -345,7 +364,7 @@ it.live(
         });
         yield* Deferred.await(watch.settled).pipe(Effect.timeout("5 seconds"));
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
-        yield* session.waitForElement({ reference: target, state: "visible" });
+        yield* session.initialPage.waitForElement({ reference: target, state: "visible" });
         expect(watch.calls()).toBe(2);
         expect(pending.successes()).toBe(0);
         expect(yield* Effect.promise(() => page.locator("#count").textContent())).toBe("0");
@@ -368,11 +387,11 @@ it.live.each(["enabled", "visible"] as const)(
             }
           }, state),
         );
-        const target = reference(yield* session.observe());
+        const target = reference(yield* session.initialPage.observe());
         const watch = yield* watchElementWait(page);
 
         const pending = yield* forkWait(
-          session.waitForElement({ reference: target, state, timeoutMillis: 10000 }),
+          session.initialPage.waitForElement({ reference: target, state, timeoutMillis: 10000 }),
         );
 
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -389,7 +408,10 @@ it.live.each(["enabled", "visible"] as const)(
         expect(yield* Effect.result(Fiber.join(pending.fiber))).toMatchObject(stale);
         expect(pending.successes()).toBe(0);
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
-        yield* session.waitForElement({ reference: reference(yield* session.observe()), state });
+        yield* session.initialPage.waitForElement({
+          reference: reference(yield* session.initialPage.observe()),
+          state,
+        });
         expect(watch.calls()).toBe(2);
       }),
     ).pipe(Effect.provide(layer)),
@@ -402,6 +424,7 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
       Effect.gen(function* () {
         const { session, page, site } = yield* fixture();
         let frame = page.mainFrame();
+        let exact: IssuedPage | IssuedFrame = session.initialPage;
         const stage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
 
         if (change !== "page-navigation") {
@@ -416,18 +439,19 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
           frame = child;
           yield* Effect.promise(() => frame.setContent(content));
 
-          const info = (yield* session.frames()).find(
+          const info = (yield* session.initialPage.listFrames()).find(
             (candidate) => candidate.name === "wait-child",
           );
 
           assert.ok(info);
+          exact = yield* session.initialPage.frame(info);
           yield* session.selectFrame(info.frameId);
         }
-        const target = reference(yield* session.observe());
+        const target = reference(yield* exact.observe());
         const watch = yield* watchElementWait(page);
 
         const pending = yield* forkWait(
-          session.waitForElement({ reference: target, state: "hidden", timeoutMillis: 10000 }),
+          exact.waitForElement({ reference: target, state: "hidden", timeoutMillis: 10000 }),
         );
 
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -469,7 +493,7 @@ it.live(
             if (node instanceof HTMLButtonElement) node.disabled = true;
           }),
         );
-        const target = reference(yield* session.observe());
+        const target = reference(yield* session.initialPage.observe());
         let release: () => void = () => {};
 
         const acknowledgement = new Promise<void>((resolve) => {
@@ -480,7 +504,11 @@ it.live(
         const watch = yield* watchElementWait(page, () => acknowledgement);
 
         const pending = yield* forkWait(
-          session.waitForElement({ reference: target, state: "enabled", timeoutMillis: 10000 }),
+          session.initialPage.waitForElement({
+            reference: target,
+            state: "enabled",
+            timeoutMillis: 10000,
+          }),
         );
 
         const native = yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -502,15 +530,18 @@ it.live(
         expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         expect(native.signal?.aborted).toBe(true);
         yield* Deferred.await(watch.settled).pipe(Effect.timeout("5 seconds"));
-        expect((yield* session.checkpoint()).text).toContain("Wait fixture");
-        const fresh = yield* session.observe();
+        expect((yield* session.initialPage.checkpoint()).text).toContain("Wait fixture");
+        const fresh = yield* session.initialPage.observe();
         const freshAct = reference(fresh, "Act");
 
         expect(disposals).toBe(0);
         for (let i = 0; i < 2; i++)
           expect(
             yield* Effect.result(
-              session.waitForElement({ reference: reference(fresh), state: "disabled" }),
+              session.initialPage.waitForElement({
+                reference: reference(fresh),
+                state: "disabled",
+              }),
             ),
           ).toMatchObject(busy);
         expect(watch.calls()).toBe(1);
@@ -519,14 +550,17 @@ it.live(
           busy: true,
           unresolvedDispatch: false,
         });
-        expect((yield* session.controlFacts(freshAct)).label).toBe("Act");
+        expect((yield* session.initialPage.controlFacts(freshAct)).label).toBe("Act");
         release();
         yield* Deferred.await(disposed).pipe(Effect.timeout("5 seconds"));
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
         expect(disposals).toBe(1);
-        expect((yield* session.controlFacts(freshAct)).label).toBe("Act");
-        yield* session.waitForElement({ reference: reference(fresh), state: "disabled" });
-        yield* session.clickElement(freshAct);
+        expect((yield* session.initialPage.controlFacts(freshAct)).label).toBe("Act");
+        yield* session.initialPage.waitForElement({
+          reference: reference(fresh),
+          state: "disabled",
+        });
+        yield* session.initialPage.clickElement(freshAct);
         expect(yield* Effect.promise(() => page.locator("#count").textContent())).toBe("1");
         expect(pending.successes()).toBe(0);
         expect(disposals).toBe(1);
@@ -550,7 +584,7 @@ it.live(
         const watch = yield* watchSelectorWait(page, () => acknowledgement);
 
         const pending = yield* forkWait(
-          session.waitFor({ selector: "#arrived", state: "visible" }),
+          session.initialPage.waitFor({ selector: "#arrived", state: "visible" }),
         );
 
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -567,15 +601,17 @@ it.live(
         yield* Fiber.interrupt(pending.fiber);
         expect(watch.disposals()).toBe(0);
         expect(
-          yield* Effect.result(session.waitFor({ selector: "#arrived", state: "visible" })),
+          yield* Effect.result(
+            session.initialPage.waitFor({ selector: "#arrived", state: "visible" }),
+          ),
         ).toMatchObject(busy);
         expect(watch.calls()).toBe(1);
-        expect((yield* session.checkpoint()).text).toContain("Arrived");
+        expect((yield* session.initialPage.checkpoint()).text).toContain("Arrived");
         release();
         yield* Deferred.await(watch.disposed).pipe(Effect.timeout("5 seconds"));
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
         expect(watch.disposals()).toBe(1);
-        yield* session.waitFor({ selector: "#arrived", state: "visible" });
+        yield* session.initialPage.waitFor({ selector: "#arrived", state: "visible" });
         expect(watch.calls()).toBe(2);
         expect(pending.successes()).toBe(0);
       }),
@@ -590,17 +626,19 @@ it.live.each(["page", "session"] as const)(
         const { session, page, site, host } = yield* fixture();
         const original = (yield* session.listPages()).find((candidate) => candidate.selected)!;
         const survivor = closing === "page" ? yield* session.createPage() : undefined;
+        const survivorPage = survivor === undefined ? undefined : yield* session.page(survivor);
 
-        if (survivor !== undefined) {
-          const pinned = yield* session.pinPage(survivor);
-
-          yield* pinned.navigate({ url: `${site.url}?survivor` });
-        }
-        const target = reference(yield* session.observe());
+        if (survivorPage !== undefined)
+          yield* survivorPage.navigate({ url: `${site.url}?survivor` });
+        const target = reference(yield* session.initialPage.observe());
         const watch = yield* watchElementWait(page);
 
         const pending = yield* forkWait(
-          session.waitForElement({ reference: target, state: "hidden", timeoutMillis: 10000 }),
+          session.initialPage.waitForElement({
+            reference: target,
+            state: "hidden",
+            timeoutMillis: 10000,
+          }),
         );
 
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
@@ -608,11 +646,12 @@ it.live.each(["page", "session"] as const)(
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
         if (survivor !== undefined) {
           yield* session.selectPage(survivor);
-          yield* session.closePage(original);
+          yield* session.page(original).pipe(Effect.flatMap((page) => page.close()));
           expect(yield* Effect.result(Fiber.join(pending.fiber))).toMatchObject(stale);
           expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
-          yield* session.click({ selector: "#increment" });
-          expect((yield* session.readText({ selector: "#count" })).text).toBe("1");
+          assert.ok(survivorPage);
+          yield* survivorPage.click({ selector: "#increment" });
+          expect((yield* survivorPage.readText({ selector: "#count" })).text).toBe("1");
         } else {
           const receipt = yield* session.closeChecked;
 
@@ -627,10 +666,12 @@ it.live.each(["page", "session"] as const)(
             unresolvedDispatch: false,
           });
           expect(
-            yield* Effect.result(session.waitFor({ selector: "#act", state: "visible" })),
+            yield* Effect.result(
+              session.initialPage.waitFor({ selector: "#act", state: "visible" }),
+            ),
           ).toMatchObject({
             _tag: "Failure",
-            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+            failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
           });
         }
         yield* Deferred.await(watch.settled).pipe(Effect.timeout("5 seconds"));

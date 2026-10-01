@@ -199,19 +199,21 @@ it.live(
 
         yield* Browser.scoped(Effect.succeed(session), (browser) =>
           Effect.gen(function* () {
-            yield* browser.navigate({ url });
-            yield* browser.click({ selector: "#first" });
+            yield* browser.initialPage.navigate({ url });
+            yield* browser.initialPage.click({ selector: "#first" });
             yield* Effect.promise(() => page.keyboard.type(text));
-            const expectedEvents = (yield* browser.readText({ selector: "#events" })).text;
 
-            yield* browser.navigate({ url });
-            yield* browser.click({ selector: "#first" });
+            const expectedEvents = (yield* browser.initialPage.readText({ selector: "#events" }))
+              .text;
+
+            yield* browser.initialPage.navigate({ url });
+            yield* browser.initialPage.click({ selector: "#first" });
             const before = (yield* browser.status).actions.used;
-            const receipt = yield* browser.type({ text, into: "#first" });
+            const receipt = yield* browser.initialPage.type({ text, into: "#first" });
 
             expect(receipt.kind).toBe("type");
             expect((yield* browser.status).actions.used).toBe(before + 1);
-            const events = (yield* browser.readText({ selector: "#events" })).text;
+            const events = (yield* browser.initialPage.readText({ selector: "#events" })).text;
 
             expect(events).toBe(expectedEvents);
             expect(
@@ -219,21 +221,21 @@ it.live(
                 (event) => event[11] === true,
               ),
             ).toBe(true);
-            expect((yield* browser.readText({ selector: "#values" })).text).toBe(
+            expect((yield* browser.initialPage.readText({ selector: "#values" })).text).toBe(
               JSON.stringify([text, ""]),
             );
 
-            yield* browser.navigate({ url });
-            yield* browser.click({ selector: "#first" });
-            yield* browser.type({ text: "a", into: "#first" });
-            yield* browser.press({ key: "A", modifiers: ["Shift"], into: "#first" });
-            yield* browser.type({ text: "b", into: "#first" });
-            expect((yield* browser.readText({ selector: "#values" })).text).toBe(
+            yield* browser.initialPage.navigate({ url });
+            yield* browser.initialPage.click({ selector: "#first" });
+            yield* browser.initialPage.type({ text: "a", into: "#first" });
+            yield* browser.initialPage.press({ key: "A", modifiers: ["Shift"], into: "#first" });
+            yield* browser.initialPage.type({ text: "b", into: "#first" });
+            expect((yield* browser.initialPage.readText({ selector: "#values" })).text).toBe(
               JSON.stringify(["aAb", ""]),
             );
 
             const finalEvents = JSON.parse(
-              (yield* browser.readText({ selector: "#events" })).text,
+              (yield* browser.initialPage.readText({ selector: "#events" })).text,
             ) as ReadonlyArray<ReadonlyArray<unknown>>;
 
             const finalKeyDown = finalEvents.filter(
@@ -244,10 +246,12 @@ it.live(
             expect(finalKeyDown[0]?.[4]).toBe(false);
             expect(finalKeyDown[0]?.[5]).toBe(false);
 
-            yield* browser.click({ selector: "#second" });
-            const previousEvents = (yield* browser.readText({ selector: "#events" })).text;
+            yield* browser.initialPage.click({ selector: "#second" });
 
-            const notFocused = yield* browser
+            const previousEvents = (yield* browser.initialPage.readText({ selector: "#events" }))
+              .text;
+
+            const notFocused = yield* browser.initialPage
               .type({ text: "must not land", into: "#first" })
               .pipe(Effect.flip);
 
@@ -255,7 +259,9 @@ it.live(
               reason: { _tag: "NotFocused" },
               outcome: "undispatched",
             });
-            expect((yield* browser.readText({ selector: "#events" })).text).toBe(previousEvents);
+            expect((yield* browser.initialPage.readText({ selector: "#events" })).text).toBe(
+              previousEvents,
+            );
           }),
         );
         expect(host.running()).toBe(false);
@@ -295,11 +301,11 @@ it.live("guarded plain typing stops future windows when the original input loses
 
       yield* Browser.scoped(Effect.succeed(session), (browser) =>
         Effect.gen(function* () {
-          yield* browser.navigate({ url: `${url}?moveAfter=1` });
-          yield* browser.click({ selector: "#first" });
+          yield* browser.initialPage.navigate({ url: `${url}?moveAfter=1` });
+          yield* browser.initialPage.click({ selector: "#first" });
           const before = (yield* browser.status).actions.used;
 
-          const result = yield* browser
+          const result = yield* browser.initialPage
             .type({ text: "a".repeat(80), into: "#first" })
             .pipe(Effect.exit);
 
@@ -349,9 +355,9 @@ it.live("Browser.scoped joins callback resources before checked owned cleanup", 
       const result = yield* Browser.scoped(Chromium.launch(policy), (browser) =>
         Effect.gen(function* () {
           checked = browser.closeChecked;
-          yield* browser.navigate({ url: site.url });
+          yield* browser.initialPage.navigate({ url: site.url });
           yield* Effect.addFinalizer(() =>
-            browser.readText({ selector: "#count" }).pipe(
+            browser.initialPage.readText({ selector: "#count" }).pipe(
               Effect.tap((value) => Effect.sync(() => events.push(`callback:${value.text}`))),
               Effect.orDie,
             ),
@@ -477,12 +483,16 @@ it.live(
 
         yield* Browser.scoped(Chromium.launch(policy), (browser) =>
           Effect.gen(function* () {
-            yield* browser.navigate({ url: site.url });
-            const frames = Capture.stream(browser, { lifetime: "page", maxDurationMillis: 10000 });
+            yield* browser.initialPage.navigate({ url: site.url });
+
+            const frames = Capture.stream(browser.initialPage, {
+              lifetime: "page",
+              maxDurationMillis: 10000,
+            });
 
             // Constructing a stream must not reserve the page. A separate explicit interval can start.
             yield* Effect.scoped(
-              Capture.start(browser).pipe(Effect.flatMap((interval) => interval.stop)),
+              Capture.start(browser.initialPage).pipe(Effect.flatMap((interval) => interval.stop)),
             );
 
             const first = yield* frames.pipe(Stream.take(1), Stream.runCollect);
@@ -512,8 +522,8 @@ it.live(
             const restarted = yield* frames.pipe(Stream.take(1), Stream.runCollect);
 
             expect(restarted).toHaveLength(1);
-            yield* browser.click({ selector: "#increment" });
-            expect((yield* browser.readText({ selector: "#count" })).text).toBe("1");
+            yield* browser.initialPage.click({ selector: "#increment" });
+            expect((yield* browser.initialPage.readText({ selector: "#count" })).text).toBe("1");
           }),
         ).pipe(Effect.provide(Chromium.layer({ launch }).pipe(Layer.provide(NodeCrypto.layer))));
       }),

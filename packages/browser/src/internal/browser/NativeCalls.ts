@@ -9,6 +9,12 @@ import {
 } from "../../Errors.ts";
 import type { ReadTicket } from "./Owner.ts";
 
+/** Carries a captured Clock defect/interruption across the native Promise boundary unchanged. */
+export class NativeEffectFailure extends Schema.TaggedError<NativeEffectFailure>()(
+  "NativeEffectFailure",
+  { cause: Schema.Cause(Schema.Never, Schema.Unknown) },
+) {}
+
 /**
  * A native step failed. It names no operation: the owner stamps the one the caller asked for
  * when it admits the work, so a step's own vocabulary can never become public API.
@@ -102,7 +108,9 @@ export const sanitize = <A>(action: () => Promise<A>): Promise<A> =>
   Promise.resolve()
     .then(action)
     .catch((error: unknown) => {
-      throw Schema.is(BrowserError)(error) || Schema.is(NativeFailure)(error)
+      throw Schema.is(NativeEffectFailure)(error) ||
+        Schema.is(BrowserError)(error) ||
+        Schema.is(NativeFailure)(error)
         ? error
         : failure(providerReason(error));
     });

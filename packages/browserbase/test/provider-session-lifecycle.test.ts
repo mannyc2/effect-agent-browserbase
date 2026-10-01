@@ -46,7 +46,7 @@ it.effect.each([false, true])(
         yield* browser!.next("navigate", { _tag: "Hold", gate: loading, dispatched: true });
 
       const operation = pending
-        ? yield* session.startNavigation({ url: "https://example.test/slow" })
+        ? yield* session.initialPage.startNavigation({ url: "https://example.test/slow" })
         : undefined;
 
       yield* TestClock.adjust(100);
@@ -71,9 +71,9 @@ it.effect.each([false, true])(
         reason: "expired",
         unresolvedDispatch: false,
       });
-      expect(yield* Effect.result(session.click({ selector: "#act" }))).toMatchObject({
+      expect(yield* Effect.result(session.initialPage.click({ selector: "#act" }))).toMatchObject({
         _tag: "Failure",
-        failure: { reason: { _tag: "Expired" }, outcome: "undispatched" },
+        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
       });
       expect((yield* scripted.provider.sessions)[0]).toMatchObject({ releaseRequests: 1 });
       expect((yield* browser!.calls).filter((call) => call.operation === "click")).toEqual([]);
@@ -99,7 +99,7 @@ it.effect("unconfirmed owned release cannot retire a dispatched operation's cont
       reason: Reasons.Provider.make({}),
       outcome: "unknown",
     });
-    expect(yield* Effect.result(session.click({ selector: "#act" }))).toMatchObject({
+    expect(yield* Effect.result(session.initialPage.click({ selector: "#act" }))).toMatchObject({
       _tag: "Failure",
       failure: { outcome: "unknown", containment: { _tag: "SessionFenced" } },
     });

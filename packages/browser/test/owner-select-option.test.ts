@@ -55,7 +55,7 @@ it.effect(
         ]) {
           // Exercise untyped callers at the actual public boundary.
           expect(
-            yield* Effect.result(session.selectOption(reference, options as never)),
+            yield* Effect.result(session.initialPage.selectOption(reference, options as never)),
           ).toMatchObject({
             _tag: "Failure",
             failure: {
@@ -101,12 +101,14 @@ it.effect.each(["before", "after"] as const)(
           }
         });
 
-        const selecting = yield* session
+        const selecting = yield* session.initialPage
           .selectOption(reference, ["element-1"])
           .pipe(Effect.result, Effect.forkChild);
 
         yield* Effect.promise(() => entered.promise);
-        expect(yield* Effect.result(session.selectOption(reference, ["element-2"]))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage.selectOption(reference, ["element-2"])),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
@@ -128,9 +130,9 @@ it.effect.each(["before", "after"] as const)(
         expect(dispatches).toBe(position === "before" ? 0 : 1);
         expect(yield* session.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
         if (position === "before")
-          expect((yield* session.readText({}, { admission: { queue: "1 second" } })).text).toBe(
-            "initial",
-          );
+          expect(
+            (yield* session.initialPage.readText({}, { admission: { queue: "1 second" } })).text,
+          ).toBe("initial");
         else {
           expect(yield* session.initialPage.status).toMatchObject({ phase: "closed" });
           expect(
@@ -171,7 +173,7 @@ it.effect("closing a session cancels selection admission before any late dispatc
         }
       });
 
-      const selecting = yield* session
+      const selecting = yield* session.initialPage
         .selectOption(reference, ["element-1"])
         .pipe(Effect.result, Effect.forkChild);
 

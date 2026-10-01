@@ -58,6 +58,8 @@ const toolReasons = {
   Limit: "limit",
   Timeout: "timeout",
   QueueExpired: "timeout",
+  ScheduleMissed: "timeout",
+  TimingBudgetExceeded: "timeout",
   Closed: "closed",
   Expired: "closed",
   Disconnected: "closed",

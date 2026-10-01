@@ -5,17 +5,10 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
-import {
-  FillFormResult,
-  FormStop,
-  InputReceipt,
-  Observation,
-  Target,
-} from "effect-browser/browser-data";
-import { BrowserError, Reasons } from "effect-browser/errors";
+import { Reasons } from "effect-browser/errors";
 import { Model, Toolkit } from "effect/unstable/ai";
 
-import { scriptedSession } from "./fixtures/ScriptedSession.ts";
+import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 
 const url = "https://example.test/";
 
@@ -42,63 +35,74 @@ const fill = (
 const fields = [
   { elementId: "element-1", status: "set" as const },
   { elementId: "element-2", status: "unchanged" as const },
+  { elementId: "element-3", status: "set" as const },
 ];
 
-it.effect(
-  "a completed form reports each field and the submit, and passes host options through",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const calls: Array<unknown> = [];
-
-        const browser = scriptedSession({
-          fillForm: (form, admission, options) =>
-            Effect.sync(() => {
-              calls.push({ form, admitted: admission?.admit({} as never), options });
-
-              return FillFormResult.make({ fields, submitted: true, url });
-            }),
-        });
-
-        const host = yield* BrowserTools.makeHost(browser, {
-          admission: { admit: () => true },
-          form: { verify: false, settleMillis: 0 },
-        });
-
-        const ready = yield* tools.pipe(Effect.provide(host.layer));
-
-        expect(yield* fill(ready)).toMatchObject([
-          { isFailure: false, encodedResult: { fields, submitted: true, url } },
-        ]);
-        expect(calls).toEqual([
-          { form: request, admitted: true, options: { verify: false, settleMillis: 0 } },
-        ]);
-      }),
+const stoppedScript = (withClick = false) => ({
+  documents: fixtureScript.documents.map((document) => ({
+    ...document,
+    controls: document.controls?.map((control) =>
+      control.id === "element-3"
+        ? { ...control, disabled: true }
+        : withClick && control.id === "element-2"
+          ? { ...control, checked: false }
+          : control,
     ),
-);
+  })),
+});
 
-it.effect("a form that stopped fails with what it completed, where it stopped and why", () =>
+it.effect("a completed form reports actual fields and forwards host policy and options", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const stop = BrowserError.make({
-        operation: "fill-form",
-        reason: Reasons.Stale.make({}),
-        outcome: "undispatched",
+      const calls: Array<unknown> = [];
+      const labels: string[] = [];
+
+      const browser = yield* scriptedSession({
+        beforeStart: (action, options) =>
+          Effect.sync(() => {
+            if (action._tag === "FillForm")
+              calls.push({ form: action.options, inputs: Object.keys(options?.inputs ?? {}) });
+          }),
       });
 
-      const browser = scriptedSession({
-        fillForm: () =>
-          Effect.succeed(
-            FillFormResult.make({
-              fields,
-              submitted: false,
-              url,
-              stopped: FormStop.make({ stage: "verify", elementId: "element-1", error: stop }),
-            }),
-          ),
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        policy: {
+          admit: (facts) => {
+            labels.push(facts.label);
+
+            return true;
+          },
+        },
+        form: { verify: false, settleMillis: 0 },
       });
 
-      const host = yield* BrowserTools.makeHost(browser);
+      const ready = yield* tools.pipe(Effect.provide(host.layer));
+
+      expect(yield* fill(ready)).toMatchObject([
+        { isFailure: false, encodedResult: { fields, submitted: true, url } },
+      ]);
+      expect(calls).toEqual([{ form: { verify: false, settleMillis: 0 }, inputs: ["field-0"] }]);
+      expect(labels).toContain("Name");
+      expect(labels).toContain("Send");
+      expect((yield* browser.control.document.values).get("element-1")).toBe("ada@example.test");
+      const receipts = yield* host.receipts;
+
+      expect(receipts.receipts).toHaveLength(1);
+      const receipt = receipts.receipts[0];
+
+      if (receipt?._tag !== "Run") return yield* Effect.die("Expected original form run");
+      expect((yield* receipt.operation.attempts).attempts).toMatchObject([
+        { action: "FillForm", outcome: "performed", completed: true },
+      ]);
+    }),
+  ),
+);
+
+it.effect("a stopped form preserves actual completed fields and its native refusal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* scriptedSession({ script: stoppedScript() });
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const ready = yield* tools.pipe(Effect.provide(host.layer));
 
       expect(yield* fill(ready)).toMatchObject([
@@ -106,11 +110,11 @@ it.effect("a form that stopped fails with what it completed, where it stopped an
           isFailure: true,
           encodedResult: {
             _tag: "BrowserFormFailure",
-            reason: "stale",
+            reason: "disabled",
             outcome: "undispatched",
-            stage: "verify",
-            elementId: "element-1",
-            completed: fields,
+            stage: "field",
+            elementId: "element-3",
+            completed: fields.slice(0, 2),
           },
         },
       ]);
@@ -118,7 +122,7 @@ it.effect("a form that stopped fails with what it completed, where it stopped an
         {
           toolName: "browser_fill_form",
           toolCallId: "form-call",
-          error: { operation: "fill-form", reason: { _tag: "Stale" }, outcome: "undispatched" },
+          error: { operation: "fill-form", reason: { _tag: "Disabled" }, outcome: "undispatched" },
         },
       ]);
     }),
@@ -128,36 +132,10 @@ it.effect("a form that stopped fails with what it completed, where it stopped an
 it.effect("an input callback failure preserves completed fields and the original form stop", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const stop = BrowserError.make({
-        operation: "fill-form",
-        reason: Reasons.Stale.make({}),
-        outcome: "undispatched",
-      });
+      const browser = yield* scriptedSession({ script: stoppedScript(true) });
 
-      const input = InputReceipt.make({
-        target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
-        kind: "click",
-        position: null,
-        startedMonotonicNanos: 1n,
-        completedMonotonicNanos: 2n,
-      });
-
-      const browser = scriptedSession({
-        fillForm: () =>
-          Effect.succeed(
-            FillFormResult.make({
-              fields: [{ ...fields[0]!, input }, fields[1]!],
-              submitted: false,
-              url,
-              stopped: FormStop.make({ stage: "verify", elementId: "element-3", error: stop }),
-            }),
-          ),
-      });
-
-      const callbackError = "PRIVATE-CALLBACK";
-
-      const host = yield* BrowserTools.makeHost(browser, {
-        onInput: () => Effect.fail(callbackError),
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        onInput: () => Effect.fail("PRIVATE-CALLBACK"),
       });
 
       const ready = yield* tools.pipe(Effect.provide(host.layer));
@@ -167,98 +145,34 @@ it.effect("an input callback failure preserves completed fields and the original
           isFailure: true,
           encodedResult: {
             _tag: "BrowserFormFailure",
-            reason: "stale",
+            reason: "disabled",
             outcome: "undispatched",
-            stage: "verify",
+            stage: "field",
             elementId: "element-3",
-            completed: fields,
+            completed: [
+              { elementId: "element-1", status: "set" },
+              { elementId: "element-2", status: "set" },
+            ],
           },
         },
       ]);
       expect((yield* host.toolFailures).failures).toMatchObject([
-        {
-          toolName: "browser_fill_form",
-          toolCallId: "form-call",
-          error: { operation: "fill-form", reason: { _tag: "Stale" }, outcome: "undispatched" },
-        },
+        { error: { reason: { _tag: "Disabled" } } },
       ]);
-      expect(yield* host.failure.pipe(Effect.flip)).toBe(callbackError);
+      expect(yield* host.failure.pipe(Effect.flip)).toBe("PRIVATE-CALLBACK");
     }),
   ),
 );
 
-it.effect(
-  "a failed receipt callback after form submission reports completed fields as unknown",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const input = InputReceipt.make({
-          target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
-          kind: "click",
-          position: null,
-          startedMonotonicNanos: 1n,
-          completedMonotonicNanos: 2n,
-        });
-
-        let fills = 0;
-
-        const browser = scriptedSession({
-          fillForm: () =>
-            Effect.sync(() => {
-              fills++;
-
-              return FillFormResult.make({
-                fields: [{ ...fields[0]!, input }, fields[1]!],
-                submitted: true,
-                url,
-              });
-            }),
-        });
-
-        const host = yield* BrowserTools.makeHost(browser, {
-          onInput: () => Effect.fail("PRIVATE-CALLBACK"),
-        });
-
-        const ready = yield* tools.pipe(Effect.provide(host.layer));
-
-        expect(yield* fill(ready)).toMatchObject([
-          {
-            isFailure: true,
-            encodedResult: {
-              _tag: "BrowserFormFailure",
-              reason: "failed",
-              outcome: "unknown",
-              completed: fields,
-            },
-          },
-        ]);
-        expect(fills).toBe(1);
-      }),
-    ),
-);
-
-it.effect("a refused first step and a refused lane both report that nothing was completed", () =>
+it.effect("a callback failure after acknowledged submission preserves performed fields", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      let forms = 0;
+      const browser = yield* scriptedSession();
 
-      const browser = scriptedSession({
-        fillForm: () =>
-          Effect.suspend(() => {
-            forms++;
-
-            return Effect.fail(
-              BrowserError.make({
-                operation: "fill-form",
-                reason: Reasons.Unsupported.make({}),
-                outcome: "undispatched",
-              }),
-            );
-          }),
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        onInput: () => Effect.fail("PRIVATE-CALLBACK"),
       });
 
-      const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-      const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
       const ready = yield* tools.pipe(Effect.provide(host.layer));
 
       expect(yield* fill(ready)).toMatchObject([
@@ -266,102 +180,93 @@ it.effect("a refused first step and a refused lane both report that nothing was 
           isFailure: true,
           encodedResult: {
             _tag: "BrowserFormFailure",
-            reason: "unsupported",
-            outcome: "undispatched",
-            completed: [],
+            reason: "failed",
+            outcome: "performed",
+            completed: fields,
           },
         },
       ]);
-      yield* Scope.close(scope, Exit.void);
-      expect(yield* fill(ready)).toMatchObject([
-        {
-          isFailure: true,
-          encodedResult: {
-            _tag: "BrowserFormFailure",
-            reason: "closed",
-            outcome: "undispatched",
-            completed: [],
-          },
-        },
-      ]);
-      expect(forms).toBe(1);
+      expect((yield* host.receipts).receipts).toHaveLength(1);
     }),
   ),
 );
 
-it.effect(
-  "the observed form returns a fresh reading, and malformed forms never reach the browser",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let forms = 0;
+it.effect("a refused first field and a closed lane report no completed work", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* scriptedSession();
 
-        const browser = scriptedSession({
-          fillForm: () =>
-            Effect.sync(() => {
-              forms++;
+      yield* browser.control.next("fill-form", {
+        _tag: "Fail",
+        reason: Reasons.Unsupported.make({}),
+        outcome: "undispatched",
+      });
+      const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
 
-              return FillFormResult.make({ fields, submitted: true, url });
-            }),
-          observe: () =>
-            Effect.succeed(
-              Observation.make({
-                target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
-                observationId: "after",
-                revision: 1,
-                scope: "viewport",
-                url,
-                text: "Thanks",
-                controls: [],
-                controlsTruncated: false,
-                textTruncated: false,
-                viewport: {
-                  width: 640,
-                  height: 480,
-                  clippedText: 0,
-                  coveredText: 0,
-                  uncertainText: 0,
-                  unreachableControls: 0,
-                  exhausted: false,
-                },
-              }),
-            ),
-        });
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage).pipe(
+        Scope.provide(scope),
+      );
 
-        const host = yield* BrowserTools.makeHost(browser);
-        const ready = yield* tools.pipe(Effect.provide(host.layer));
+      const ready = yield* tools.pipe(Effect.provide(host.layer));
 
-        expect(yield* fill(ready, request, "browser_fill_form_and_inspect")).toMatchObject([
-          {
-            isFailure: false,
-            encodedResult: {
-              action: { submitted: true, url },
-              observation: { _tag: "Available", observation: { observationId: "after" } },
-            },
+      expect(yield* fill(ready)).toMatchObject([
+        {
+          isFailure: true,
+          encodedResult: { reason: "unsupported", outcome: "undispatched", completed: [] },
+        },
+      ]);
+      const beforeClose = (yield* browser.control.calls).length;
+
+      yield* Scope.close(scope, Exit.void);
+      expect(yield* fill(ready)).toMatchObject([
+        {
+          isFailure: true,
+          encodedResult: { reason: "closed", outcome: "undispatched", completed: [] },
+        },
+      ]);
+      expect((yield* browser.control.calls).length).toBe(beforeClose);
+    }),
+  ),
+);
+
+it.effect("observed forms return a new reading and malformed parameters cause no input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* scriptedSession();
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
+      const ready = yield* tools.pipe(Effect.provide(host.layer));
+
+      expect(yield* fill(ready, request, "browser_fill_form_and_inspect")).toMatchObject([
+        {
+          isFailure: false,
+          encodedResult: {
+            action: { submitted: true, url },
+            observation: { _tag: "Available", observation: { observationId: "observation-3" } },
           },
-        ]);
+        },
+      ]);
+      const before = (yield* browser.control.calls).length;
 
-        for (const malformed of [
-          { observationId: "o", fields: [] },
-          { observationId: "o", fields: [{ elementId: "e", value: "x", checked: true }] },
-          { observationId: "o", fields: [{ elementId: "e" }] },
-          {
-            observationId: "o",
-            fields: [
-              { elementId: "e", value: "x" },
-              { elementId: "e", value: "y" },
-            ],
-          },
-          { observationId: "o", fields: [{ elementId: "e", value: "x" }], submit: "e" },
-        ]) {
-          // Parameter validation fails the call, or returns its failure, before any browser work.
-          const exit = yield* Effect.exit(fill(ready, malformed));
+      for (const malformed of [
+        { observationId: "o", fields: [] },
+        { observationId: "o", fields: [{ elementId: "e", value: "x", checked: true }] },
+        { observationId: "o", fields: [{ elementId: "e" }] },
+        {
+          observationId: "o",
+          fields: [
+            { elementId: "e", value: "x" },
+            { elementId: "e", value: "y" },
+          ],
+        },
+        { observationId: "o", fields: [{ elementId: "e", value: "x" }], submit: "e" },
+      ]) {
+        const exit = yield* Effect.exit(fill(ready, malformed));
 
-          expect(Exit.isFailure(exit) || exit.value.every((result) => result.isFailure)).toBe(true);
-        }
-        expect(forms).toBe(1);
-      }),
-    ),
+        expect(Exit.isFailure(exit) || exit.value.every((result) => result.isFailure)).toBe(true);
+      }
+      expect((yield* browser.control.calls).length).toBe(before);
+    }),
+  ),
 );
 
 it.effect(
@@ -373,17 +278,16 @@ it.effect(
         const asked: Array<unknown> = [];
         const usage = { inputTokens: {}, outputTokens: {} };
 
-        const browser = scriptedSession({
-          fillForm: (form) =>
+        const browser = yield* scriptedSession({
+          beforeStart: (action) =>
             Effect.sync(() => {
-              forms.push(form);
-
-              return FillFormResult.make({ fields, submitted: form.submit !== undefined, url });
+              if (action._tag === "FillForm") forms.push(action);
             }),
         });
 
         // Only a form that would be sent asks first.
         const gated = Toolkit.make(
+          BrowserTools.toolkit.tools.browser_inspect,
           BrowserTools.formToolkit.tools.browser_fill_form.setNeedsApproval(
             (params) => params.submit !== undefined,
           ),
@@ -417,7 +321,7 @@ it.effect(
           termination: { _tag: "Complete" },
         };
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
         const run = (decision: "approved" | "denied", turns: ReadonlyArray<ScriptedTurnInput>) =>
           host.run(
@@ -445,18 +349,29 @@ it.effect(
           );
 
         const { submit: _, ...unsent } = request;
+        const sent = { ...request, observationId: "observation-3" };
+
+        const inspectTurn: ScriptedTurnInput = {
+          _tag: "Stream",
+          parts: [
+            { type: "tool-call", id: "inspect", name: "browser_inspect", params: {} },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          termination: { _tag: "Complete" },
+        };
 
         const approved = yield* run("approved", [
           call("fill", unsent),
-          call("send", request),
+          inspectTurn,
+          call("send", sent),
           answer,
         ]);
 
         expect(approved.output.done).toBe(true);
-        expect(forms).toEqual([unsent, request]);
-        expect(asked).toEqual([{ toolName: "browser_fill_form", parameters: request }]);
+        expect(forms).toHaveLength(2);
+        expect(asked).toEqual([{ toolName: "browser_fill_form", parameters: sent }]);
 
-        const denied = yield* run("denied", [call("send", request), answer]).pipe(Effect.flip);
+        const denied = yield* run("denied", [call("send", sent), answer]).pipe(Effect.flip);
 
         expect(denied).toMatchObject({
           _tag: "AgentApprovalDenied",

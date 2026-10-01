@@ -41,7 +41,7 @@ it.live("real CDP: an <img> shows the last picture of a page that has gone still
         policy: BrowserPolicy.unrestricted({ maxActions: 20, maxElapsedMillis: 60_000 }),
       });
 
-      yield* session.resizeViewport({ width: 320, height: 240 });
+      yield* session.initialPage.resizeViewport({ width: 320, height: 240 });
       const page = operator.contexts()[0]?.pages()[0];
 
       assert.ok(page);
@@ -50,7 +50,10 @@ it.live("real CDP: an <img> shows the last picture of a page that has gone still
       );
 
       // One interval, fanned out: a viewer that joins late is shown the current picture.
-      const interval = yield* Capture.start(session, { size: { width: 320, height: 240 } });
+      const interval = yield* Capture.start(session.initialPage, {
+        size: { width: 320, height: 240 },
+      });
+
       const frames = yield* PubSub.sliding<Capture.CapturedFrame>({ capacity: 2, replay: 1 });
 
       yield* interval.frames.pipe(

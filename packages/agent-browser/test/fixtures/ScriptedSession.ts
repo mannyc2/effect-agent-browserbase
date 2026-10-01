@@ -1,143 +1,88 @@
-import { Effect, Stream } from "effect";
-import type { BrowserSession, Page, TargetOperations } from "effect-browser/browser";
-import { BrowserDiagnostics, SessionStatus, Target } from "effect-browser/browser-data";
+import { Effect } from "effect";
+import type { BrowserSession, Page } from "effect-browser/browser";
+import { BrowserPolicy } from "effect-browser/browser-data";
+import { type BrowserError } from "effect-browser/errors";
+import { StepFailed, type RunOptions } from "effect-browser/plan";
+import * as Testing from "effect-browser/testing";
 
-/** Typed operation double for adapter/Toolkit tests; it issues no native or capture authority. */
-export const scriptedSession = (overrides: Partial<BrowserSession> = {}): BrowserSession => {
-  const unexpected = Effect.die("Unexpected scripted session operation");
-
-  const operations: TargetOperations = {
-    navigate: () => unexpected,
-    startNavigation: () => unexpected,
-    readText: () => unexpected,
-    click: () => unexpected,
-    fill: () => unexpected,
-    scroll: () => unexpected,
-    pointerMove: () => unexpected,
-    hover: () => unexpected,
-    wheel: () => unexpected,
-    press: () => unexpected,
-    type: () => unexpected,
-    screenshot: () => unexpected,
-  };
-
-  const timeline = {
-    snapshot: () => unexpected,
-    events: () => Stream.fromEffect(unexpected),
-    now: unexpected,
-  };
-
-  // An unused typed operation stub, deliberately absent from the runtime's authority registries.
-  const initialPage: Page = {
-    ...operations,
-    timeline,
-    start: () => unexpected,
-    run: () => unexpected,
-    resolve: () => unexpected,
-    settled: () => unexpected,
-    identity: Target.make({ generation: 1, pageId: "scripted-page", frameId: "scripted-frame" }),
-    status: unexpected,
-    observe: () => unexpected,
-    checkpoint: () => unexpected,
-    controlFacts: () => unexpected,
-    revalidateElement: () => unexpected,
-    clickElement: () => unexpected,
-    fillElement: () => unexpected,
-    selectOption: () => unexpected,
-    fillForm: () => unexpected,
-    hoverElement: () => unexpected,
-    pressElement: () => unexpected,
-    typeElement: () => unexpected,
-    waitFor: () => unexpected,
-    waitForElement: () => unexpected,
-    clickAndWait: () => unexpected,
-    ready: () => unexpected,
-    describe: () => unexpected,
-    listFrames: () => unexpected,
-    frame: () => unexpected,
-    resizeViewport: () => unexpected,
-    close: () => unexpected,
-  };
-
-  return {
-    ...operations,
-    timeline,
-    pages: Stream.fromEffect(unexpected),
-    initialPage,
-    page: () => unexpected,
-    listPages: () => unexpected,
-    implementation: "scripted-browser",
-    status: Effect.sync(() =>
-      Object.freeze(
-        SessionStatus.make({
-          phase: "open",
-          reason: null,
-          generation: 1,
-          busy: false,
-          unresolvedDispatch: false,
-          actions: { used: 0, maximum: 100 },
-        }),
-      ),
-    ),
-    diagnostics: Effect.sync(() =>
-      Object.freeze(
-        BrowserDiagnostics.make({
-          records: Object.freeze([]),
-          total: 0,
-          dropped: 0,
-          truncated: false,
-        }),
-      ),
-    ),
-    admission: Effect.succeed(
-      Object.freeze({
-        waiting: 0,
-        maximum: 128,
-        nativePending: 0,
-        nativeMaximum: 128,
-        nativeWaits: 0,
-        stopSetups: 0,
-        registry: Object.freeze({
-          active: null,
-          waiting: 0,
-          maximum: 32,
-          oldestWaitMillis: null,
-          nativePending: 0,
-          nativeWaitPending: false,
-          stopSetupPending: false,
-        }),
-      }),
-    ),
-    closeChecked: Effect.void,
-    failure: Effect.never,
-    bindingDiagnostics: unexpected,
-    retain: () => Effect.succeed(operations),
-    target: () => unexpected,
-    observe: () => unexpected,
-    checkpoint: () => unexpected,
-    controlFacts: () => unexpected,
-    revalidateElement: () => unexpected,
-    clickElement: () => unexpected,
-    fillElement: () => unexpected,
-    selectOption: () => unexpected,
-    fillForm: () => unexpected,
-    hoverElement: () => unexpected,
-    pressElement: () => unexpected,
-    typeElement: () => unexpected,
-    describePage: () => unexpected,
-    frames: () => unexpected,
-    framesOf: () => unexpected,
-    pinPage: () => unexpected,
-    pinFrame: () => unexpected,
-    selectPage: () => unexpected,
-    selectFrame: () => unexpected,
-    createPage: () => unexpected,
-    closePage: () => unexpected,
-    resizeViewport: () => unexpected,
-    waitFor: () => unexpected,
-    waitForElement: () => unexpected,
-    clickAndWait: () => unexpected,
-    ready: () => unexpected,
-    ...overrides,
-  };
+export const fixtureScript: Testing.Script = {
+  documents: [
+    {
+      url: "https://example.test/",
+      text: "Example",
+      controls: [
+        { id: "element-1", kind: "input", label: "Name", inputType: "text" },
+        { id: "element-2", kind: "input", label: "Consent", inputType: "checkbox", checked: true },
+        { id: "element-3", kind: "select", label: "Country", multiple: false },
+        { id: "element-4", kind: "other", label: "France", selectElementId: "element-3" },
+        { id: "element-5", kind: "button", label: "Send", inputType: "submit" },
+        { id: "option-1", kind: "other", label: "Belgium", selectElementId: "element-3" },
+        { id: "control", kind: "button", label: "Control" },
+      ],
+    },
+  ],
 };
+
+/** The ordinary browser runtime issues every Session, Page, reference and RunOperation here. */
+export const scriptedSession = Effect.fnUntraced(function* (
+  options: {
+    readonly beforeStart?: (
+      action: Parameters<Page["start"]>[0]["steps"][number]["action"],
+      options: RunOptions | undefined,
+    ) => Effect.Effect<unknown, BrowserError>;
+    readonly beforeNavigation?: () => Effect.Effect<unknown, BrowserError>;
+    readonly observe?: Page["observe"];
+    readonly readText?: Page["readText"];
+    readonly status?: BrowserSession["status"];
+    readonly failure?: BrowserSession["failure"];
+    readonly script?: Testing.Script;
+  } = {},
+) {
+  const session = yield* Testing.open(options.script ?? fixtureScript, {
+    policy: BrowserPolicy.unrestricted({ maxActions: 1000, maxElapsedMillis: 600000 }),
+  });
+
+  const page = session.initialPage;
+
+  // Seed real exact-node references before installing a bounded result-projection seam.
+  yield* page.observe();
+  const beforeStart = options.beforeStart;
+
+  if (beforeStart !== undefined) {
+    const original = page.start;
+
+    const start: Page["start"] = (plan, configuration) =>
+      Effect.suspend(() => {
+        const action = plan.steps[0]?.action;
+
+        return action === undefined
+          ? original(plan, configuration)
+          : beforeStart(action, configuration).pipe(
+              Effect.mapError(
+                (error) => new StepFailed({ stage: "PreparationFailed", completed: [], error }),
+              ),
+              Effect.andThen(original(plan, configuration)),
+            );
+      });
+
+    Object.assign(page, { start });
+  }
+  const beforeNavigation = options.beforeNavigation;
+
+  if (beforeNavigation !== undefined) {
+    const original = page.startNavigation;
+
+    Object.assign(page, {
+      startNavigation: ((request, configuration) =>
+        beforeNavigation().pipe(
+          Effect.andThen(original(request, configuration)),
+        )) satisfies Page["startNavigation"],
+    });
+  }
+  if (options.observe !== undefined) Object.assign(page, { observe: options.observe });
+  if (options.readText !== undefined) Object.assign(page, { readText: options.readText });
+  if (options.status !== undefined) Object.assign(session, { status: options.status });
+  if (options.failure !== undefined) Object.assign(session, { failure: options.failure });
+
+  return session;
+});

@@ -21,7 +21,7 @@ export interface PageControlPort {
 
 export interface PageControlAssociation {
   readonly port: PageControlPort;
-  readonly page?: PageInfo;
+  readonly page: PageInfo;
 }
 
 const owners = new WeakMap<object, PageControlAssociation>();
@@ -29,11 +29,11 @@ const owners = new WeakMap<object, PageControlAssociation>();
 export const associatePageControl = (
   session: object,
   port: PageControlPort,
-  page?: PageInfo,
+  page: PageInfo,
 ): void => {
   owners.set(session, {
     port,
-    ...(page === undefined ? {} : { page: Object.freeze({ ...page }) }),
+    page: Object.freeze({ ...page }),
   });
 };
 

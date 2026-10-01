@@ -15,7 +15,7 @@ const scheduling = Effect.service(RunToolScheduling);
 
 it.effect("every option is checked once, when the host or a handler Layer is built", () =>
   Effect.gen(function* () {
-    const browser = scriptedSession();
+    const browser = yield* scriptedSession();
 
     for (const [path, options] of [
       ["maxTextBytes", { maxTextBytes: 0 }],
@@ -26,7 +26,7 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
       ["continuationBytes", { maxTextBytes: 16384, continuationBytes: 8192 }],
       ["form", { form: { settleMillis: 5001 } }],
       ["form", { form: { verify: true, retries: 2 } }],
-      ["admission", { admission: { admit: true } }],
+      ["policy", { policy: { admit: true } }],
       ["observe", { observe: "document" }],
       ["lane.maxOutstanding", { lane: { maxOutstanding: 0 } }],
       ["lane.maxQueueMillis", { lane: { maxQueueMillis: 600001 } }],
@@ -34,7 +34,9 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
     ] as const)
       expect(
         // @ts-expect-error Each case is an invalid, untyped host input.
-        yield* Effect.scoped(BrowserTools.makeHost(browser, options)).pipe(Effect.flip),
+        yield* Effect.scoped(BrowserTools.makeHost(browser, browser.initialPage, options)).pipe(
+          Effect.flip,
+        ),
       ).toMatchObject({
         operation: "configure",
         reason: { _tag: "Configuration", path },
@@ -43,7 +45,7 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
 
     expect(
       yield* BrowserTools.toolkit.pipe(
-        Effect.provide(BrowserTools.handlers(browser, { maxControls: 65 })),
+        Effect.provide(BrowserTools.handlers(browser, browser.initialPage, { maxControls: 65 })),
         Effect.flip,
       ),
     ).toMatchObject({ reason: { _tag: "Configuration", path: "maxControls" } });
@@ -56,15 +58,24 @@ it.effect("the host's lane bounds how many calls wait and for how long", () =>
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
 
-      const browser = scriptedSession({
-        scroll: () =>
-          Deferred.succeed(entered, undefined).pipe(
-            Effect.andThen(Deferred.await(release)),
-            Effect.as(ActionResult.make({ url })),
-          ),
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(ActionResult.make({ url })),
+              ))();
+          }
+
+          return Effect.void;
+        },
       });
 
-      const single = yield* BrowserTools.makeHost(browser, { lane: { maxOutstanding: 1 } });
+      const single = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        lane: { maxOutstanding: 1 },
+      });
+
       const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(single.handlers));
 
       const scroll = () =>
@@ -84,16 +95,23 @@ it.effect("the host's lane bounds how many calls wait and for how long", () =>
       const blocked = yield* Deferred.make<void>();
       const waiting = yield* Deferred.make<void>();
 
-      const slow = yield* BrowserTools.makeHost(
-        scriptedSession({
-          scroll: () =>
-            Deferred.succeed(waiting, undefined).pipe(
-              Effect.andThen(Deferred.await(blocked)),
-              Effect.as(ActionResult.make({ url })),
-            ),
-        }),
-        { lane: { maxQueueMillis: 50 } },
-      );
+      const slowerBrowser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Deferred.succeed(waiting, undefined).pipe(
+                Effect.andThen(Deferred.await(blocked)),
+                Effect.as(ActionResult.make({ url })),
+              ))();
+          }
+
+          return Effect.void;
+        },
+      });
+
+      const slow = yield* BrowserTools.makeHost(slowerBrowser, slowerBrowser.initialPage, {
+        lane: { maxQueueMillis: 50 },
+      });
 
       const queued = yield* BrowserTools.toolkit.pipe(Effect.provide(slow.handlers));
 
@@ -120,8 +138,8 @@ it.effect("the host's lane bounds how many calls wait and for how long", () =>
 it.effect("host.run makes browser Tools sequential and keeps the caller's own scheduling", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const browser = scriptedSession();
-      const sequential = yield* BrowserTools.makeHost(browser);
+      const browser = yield* scriptedSession();
+      const sequential = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const inside = yield* sequential.run(scheduling);
 
       expect(inside.toolRequiresSequential?.("browser_click")).toBe(true);
@@ -142,7 +160,9 @@ it.effect("host.run makes browser Tools sequential and keeps the caller's own sc
       expect(merged.toolRequiresSequential?.("browser_scroll")).toBe(true);
       expect(merged.toolRequiresSequential?.("other")).toBe(false);
 
-      const lane = yield* BrowserTools.makeHost(browser, { scheduling: "lane" });
+      const lane = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        scheduling: "lane",
+      });
 
       expect(
         yield* lane.run(scheduling).pipe(Effect.provideService(RunToolScheduling, caller)),
@@ -207,15 +227,14 @@ it.effect("describe replaces what the model reads and keeps each Tool's identity
       expect(described.tools.browser_fill).toBe(BrowserTools.toolkit.tools.browser_fill);
       expect(BrowserTools.toolkit.tools.browser_click.description).not.toMatch(/deployment/);
 
-      const host = yield* BrowserTools.makeHost(
-        scriptedSession({ clickElement: () => Effect.succeed(ActionResult.make({ url })) }),
-      );
+      const browser = yield* scriptedSession();
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
       const ready = yield* described.pipe(Effect.provide(host.handlers));
 
       expect(
         yield* ready
-          .handle("browser_click", { observationId: "o", elementId: "e" })
+          .handle("browser_click", { observationId: "observation-1", elementId: "element-1" })
           .pipe(Effect.flatMap(Stream.runCollect)),
       ).toMatchObject([{ isFailure: false, encodedResult: { url } }]);
       expect(BrowserTools.isBrowserTool("browser_click")).toBe(true);

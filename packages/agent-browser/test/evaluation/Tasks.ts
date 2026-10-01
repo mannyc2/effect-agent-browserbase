@@ -540,7 +540,7 @@ const drive =
   (journal: Journal, driver: Driver, start: string) =>
   <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
     Effect.gen(function* () {
-      const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, hostOptions(journal));
 
       yield* host
         .run(runAgent(journal, driver, start))
@@ -780,7 +780,11 @@ const onReceipt = (
 
     yield* Browser.scoped(Testing.open(receipt, scriptedOptions(journal)), (browser) =>
       Effect.gen(function* () {
-        const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+        const host = yield* BrowserTools.makeHost(
+          browser,
+          browser.initialPage,
+          hostOptions(journal),
+        );
 
         yield* host
           .run(runAgent(journal, driver, null))
@@ -826,7 +830,13 @@ const onCancelledWaiter = (
           const gate = yield* browser.control.gate;
 
           yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
-          const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+
+          const host = yield* BrowserTools.makeHost(
+            browser,
+            browser.initialPage,
+            hostOptions(journal),
+          );
+
           const running = yield* host.run(runAgent(journal, driver, null)).pipe(Effect.forkChild);
 
           // Either way the gate is missed, the run cannot show a held dispatch: a harness fault.
@@ -848,7 +858,7 @@ const onCancelledWaiter = (
           );
           yield* Fiber.interrupt(running);
 
-          const retry = yield* browser
+          const retry = yield* browser.initialPage
             .clickElement({ observationId: "observation-1", elementId: "accept" })
             .pipe(Effect.result);
 

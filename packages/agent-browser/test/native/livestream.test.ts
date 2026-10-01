@@ -183,16 +183,21 @@ it.live(
             ),
             (session) =>
               Effect.gen(function* () {
-                const outcome = yield* livestream(session, "Open the pricing page.", {
-                  delayMillis: Delay,
-                  size: { width: 640, height: 480 },
-                  onAir: (event) =>
-                    Effect.sync(() => {
-                      aired.push(event);
-                    }),
-                });
+                const outcome = yield* livestream(
+                  session,
+                  session.initialPage,
+                  "Open the pricing page.",
+                  {
+                    delayMillis: Delay,
+                    size: { width: 640, height: 480 },
+                    onAir: (event) =>
+                      Effect.sync(() => {
+                        aired.push(event);
+                      }),
+                  },
+                );
 
-                const text = (yield* session.observe({ scope: "document" })).text;
+                const text = (yield* session.initialPage.observe({ scope: "document" })).text;
 
                 return { ...outcome, text };
               }),

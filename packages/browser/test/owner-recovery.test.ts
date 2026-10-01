@@ -51,7 +51,7 @@ const recoveryCases: ReadonlyArray<Case> = [
         const session = yield* (yield* f.acquisition).connect;
         const initial = session.initialPage();
 
-        yield* session.observe();
+        yield* session.initialPage().controls.observe();
         yield* session.detach;
         const inventory = yield* session.reconnect(true);
         const [info] = inventory.pages;
@@ -80,7 +80,7 @@ const recoveryCases: ReadonlyArray<Case> = [
         assert.ok(fresh.record.identity.generation > initial.record.identity.generation);
         assert.equal((yield* fresh.status).phase, "open");
         connections[0]!.disconnected();
-        assert.equal(yield* session.operations.readText(), "initial");
+        assert.equal(yield* fresh.controls.operations.readText(), "initial");
         assert.equal(f.state.connects, 2);
         const closed = yield* session.close;
 
@@ -104,15 +104,19 @@ const recoveryCases: ReadonlyArray<Case> = [
 
         const session = yield* (yield* f.acquisition).connect;
 
-        yield* session.observe();
+        yield* session.initialPage().controls.observe();
         yield* session.detach;
-        yield* session.reconnect(true);
-        const fresh = yield* session.observe();
+        const inventory = yield* session.reconnect(true);
+        const info = inventory.pages[0];
+
+        assert.ok(info !== undefined);
+        const issued = yield* session.page(info);
+        const fresh = yield* issued.controls.observe();
 
         connections[0]!.invalidate("target-changed");
-        assert.equal((yield* session.observe()).revision, fresh.revision);
+        assert.equal((yield* issued.controls.observe()).revision, fresh.revision);
         connections[1]!.invalidate("observation");
-        assert.equal((yield* session.observe()).revision, fresh.revision + 1);
+        assert.equal((yield* issued.controls.observe()).revision, fresh.revision + 1);
       }),
     ),
   },
@@ -131,18 +135,23 @@ const recoveryCases: ReadonlyArray<Case> = [
 
         const session = yield* (yield* f.acquisition).connect;
 
-        yield* session.observe();
+        yield* session.initialPage().controls.observe();
         yield* session.detach;
-        yield* session.reconnect(true);
-        yield* session.observe();
+        const inventory = yield* session.reconnect(true);
+        const info = inventory.pages[0];
+
+        assert.ok(info !== undefined);
+        const issued = yield* session.page(info);
+
+        yield* issued.controls.observe();
         connections[0]!.pause();
         connections[0]!.fault({ source: "native", reason: "connection", disposition: "unknown" });
-        assert.equal(yield* session.operations.readText(), "initial");
+        assert.equal(yield* issued.controls.operations.readText(), "initial");
         connections[1]!.disconnected();
-        const stopped = yield* session.operations.readText().pipe(Effect.result);
+        const stopped = yield* issued.controls.operations.readText().pipe(Effect.result);
 
         assert.equal(stopped._tag, "Failure");
-        if (stopped._tag === "Failure") assert.equal(stopped.failure.reason._tag, "Closed");
+        if (stopped._tag === "Failure") assert.equal(stopped.failure.reason._tag, "Stale");
       }),
     ),
   },

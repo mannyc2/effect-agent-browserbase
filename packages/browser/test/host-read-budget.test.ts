@@ -47,20 +47,22 @@ it.effect(
 
         const session = yield* (yield* f.acquisition).connect;
 
-        yield* session.checkpoint({ picture: false });
-        expect(yield* session.controlFacts(reference)).toEqual(facts);
-        yield* session.operations.click("#act");
-        expect(yield* session.operations.readText()).toBe("initial");
+        yield* session.initialPage().controls.checkpoint({ picture: false });
+        expect(yield* session.initialPage().controls.controlFacts(reference)).toEqual(facts);
+        yield* session.initialPage().controls.operations.click("#act");
+        expect(yield* session.initialPage().controls.operations.readText()).toBe("initial");
         // Model actions are exhausted, while one independently charged host sample remains.
-        yield* session.checkpoint({ picture: true });
-        expect(yield* Effect.result(session.controlFacts(reference))).toMatchObject({
+        yield* session.initialPage().controls.checkpoint({ picture: true });
+        expect(
+          yield* Effect.result(session.initialPage().controls.controlFacts(reference)),
+        ).toMatchObject({
           _tag: "Failure",
           failure: {
             reason: { _tag: "Limit", dimension: "host-reads", maximum: 3, observed: 3 },
             outcome: "undispatched",
           },
         });
-        expect(yield* Effect.result(session.observe())).toMatchObject({
+        expect(yield* Effect.result(session.initialPage().controls.observe())).toMatchObject({
           _tag: "Failure",
           failure: {
             reason: { _tag: "Limit", dimension: "actions", maximum: 2, observed: 2 },
@@ -120,7 +122,7 @@ it.effect("host reads retain permit and deadline bounds without claiming uncerta
       const session = yield* (yield* f.acquisition).connect;
 
       const sampling = yield* Effect.forkChild(
-        session.checkpoint({ picture: false }).pipe(Effect.result),
+        session.initialPage().controls.checkpoint({ picture: false }).pipe(Effect.result),
       );
 
       yield* Effect.promise(() => entered.promise);
@@ -129,7 +131,9 @@ it.effect("host reads retain permit and deadline bounds without claiming uncerta
         busy: true,
         unresolvedDispatch: false,
       });
-      expect(yield* Effect.result(session.controlFacts(reference))).toMatchObject({
+      expect(
+        yield* Effect.result(session.initialPage().controls.controlFacts(reference)),
+      ).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
       });
@@ -142,7 +146,9 @@ it.effect("host reads retain permit and deadline bounds without claiming uncerta
       yield* Effect.promise(() => retired.promise);
       expect(
         yield* Effect.result(
-          session.checkpoint({ picture: false }, { admission: { queue: "1 second" } }),
+          session
+            .initialPage()
+            .controls.checkpoint({ picture: false }, { admission: { queue: "1 second" } }),
         ),
       ).toMatchObject({
         _tag: "Failure",
@@ -151,7 +157,7 @@ it.effect("host reads retain permit and deadline bounds without claiming uncerta
           outcome: "undispatched",
         },
       });
-      yield* session.operations.click("#act");
+      yield* session.initialPage().controls.operations.click("#act");
       expect(nativeReads).toBe(1);
       expect(f.state.clicks).toBe(1);
       expect(yield* session.status).toMatchObject({

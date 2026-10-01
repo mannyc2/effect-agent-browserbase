@@ -641,6 +641,13 @@ export class InputReceipt extends Schema.Class<InputReceipt>("BrowserInputReceip
   target: Target,
   kind: Schema.Literals(["pointer-move", "hover", "wheel", "click", "press", "type"]),
   position: Schema.NullOr(ViewportPoint),
+  intended: Schema.optionalKey(
+    Schema.Struct({
+      position: ViewportPoint,
+      relativePosition: ViewportPoint,
+      qualification: Schema.Literal("checked-exact-node-sample"),
+    }),
+  ),
   delta: Schema.optionalKey(Schema.Struct({ x: WheelDelta, y: WheelDelta })),
   startedMonotonicNanos: Schema.BigInt,
   completedMonotonicNanos: Schema.BigInt,

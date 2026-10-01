@@ -1,3 +1,4 @@
+import { Result } from "effect";
 import type { CDPSession, ElementHandle, Page } from "playwright-core";
 
 import type { KeyModifier } from "../../BrowserData.ts";
@@ -5,8 +6,10 @@ import { Reasons } from "../../Errors.ts";
 import type { makeActions } from "./Actions.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import { failure, sanitize } from "./NativeCalls.ts";
+import { ownerPacing } from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
+import { keys as keySchedule, type KeySchedule, type Stroke } from "./Performance.ts";
 import type { NativeInput } from "./Pointer.ts";
 import type { Targets } from "./Targets.ts";
 
@@ -46,6 +49,26 @@ const keyDescription = (
 
     return { code: `Key${upper}`, keyCode: upper.charCodeAt(0) };
   }
+
+  const named: ReadonlyArray<readonly [string, string, number]> = [
+    ["Enter", "Enter", 13],
+    ["Tab", "Tab", 9],
+    ["Backspace", "Backspace", 8],
+    ["Delete", "Delete", 46],
+    ["Escape", "Escape", 27],
+    ["ArrowLeft", "ArrowLeft", 37],
+    ["ArrowRight", "ArrowRight", 39],
+    ["ArrowUp", "ArrowUp", 38],
+    ["ArrowDown", "ArrowDown", 40],
+    ["Home", "Home", 36],
+    ["End", "End", 35],
+    ["PageUp", "PageUp", 33],
+    ["PageDown", "PageDown", 34],
+  ];
+
+  const special = named.find(([name]) => name === key);
+
+  if (special !== undefined) return { code: special[1], keyCode: special[2] };
   const description = punctuation.find(([characters]) => characters.includes(key));
 
   return description === undefined ? undefined : { code: description[1], keyCode: description[2] };
@@ -239,20 +262,211 @@ export const makeKeyboard = (
     if (focused !== true) throw failure(Reasons.NotFocused.make({}), outcome);
   };
 
+  const planKeys = (text: string, ticket: Ticket): KeySchedule => {
+    const performance = ticket.performance;
+
+    ownerPacing(ticket);
+    if (performance === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
+    const planned = keySchedule(performance.plan, text, performance.fieldIndex);
+
+    if (Result.isFailure(planned)) throw planned.failure;
+
+    return planned.success;
+  };
+
+  const prepareKeys = (text: string, ticket: Ticket): KeySchedule => {
+    const schedule = planKeys(text, ticket);
+
+    ownerPacing(ticket).requireDuration(schedule.durationMillis);
+
+    return schedule;
+  };
+
+  /** One paired native stroke remains unresolved until its key and modifiers are all released. */
+  const pacedStroke = async (
+    port: CDPSession,
+    stroke: Stroke,
+    ticket: Ticket,
+    check: () => void,
+    element?: ElementHandle<Element>,
+    modifiers: ReadonlyArray<KeyModifier> = [],
+    typed = true,
+  ) => {
+    const pacing = ownerPacing(ticket);
+
+    pacing.requireDuration(stroke.holdMillis);
+
+    const authority = async () => {
+      check();
+      if (element !== undefined)
+        await requireFocus(element, ticket.dispatched ? "unknown" : "undispatched");
+      check();
+    };
+
+    const submit = async (command: () => Promise<unknown>) => {
+      await authority();
+      ticket.dispatch();
+      // The one current reply is observed before another command can be submitted.
+      await command();
+    };
+
+    const description = keyDescription(stroke.key);
+
+    if (description === undefined) {
+      await submit(() => port.send("Input.insertText", { text: stroke.key }));
+      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+      if (stroke.holdMillis > 0)
+        await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
+
+      return;
+    }
+    const held = [...modifiers];
+
+    if (typed && /^[A-Z~!@#$%^&*()_+{}|:"<>?]$/u.test(stroke.key) && !held.includes("Shift"))
+      held.push("Shift");
+
+    const modifierFacts: Record<
+      KeyModifier,
+      { readonly code: string; readonly keyCode: number; readonly mask: number }
+    > = {
+      Shift: { code: "ShiftLeft", keyCode: 16, mask: 8 },
+      Control: { code: "ControlLeft", keyCode: 17, mask: 2 },
+      Alt: { code: "AltLeft", keyCode: 18, mask: 1 },
+      Meta: { code: "MetaLeft", keyCode: 91, mask: 4 },
+    };
+
+    let mask = 0;
+
+    for (const modifier of held) {
+      const facts = modifierFacts[modifier];
+
+      mask |= facts.mask;
+      await submit(() =>
+        port.send("Input.dispatchKeyEvent", {
+          type: "rawKeyDown",
+          modifiers: mask,
+          key: modifier,
+          code: facts.code,
+          windowsVirtualKeyCode: facts.keyCode,
+          location: 1,
+          autoRepeat: false,
+        }),
+      );
+    }
+
+    const text =
+      (mask & ~8) !== 0
+        ? ""
+        : stroke.key === "Enter"
+          ? "\r"
+          : stroke.key.length === 1
+            ? stroke.key
+            : "";
+
+    const unmodifiedText = /^[A-Z]$/u.test(stroke.key) ? stroke.key.toLowerCase() : stroke.key;
+
+    await submit(() =>
+      port.send("Input.dispatchKeyEvent", {
+        type: text.length > 0 ? "keyDown" : "rawKeyDown",
+        modifiers: mask,
+        windowsVirtualKeyCode: description.keyCode,
+        code: description.code,
+        key: stroke.key,
+        text,
+        unmodifiedText: text.length > 0 ? (stroke.key === "Enter" ? "\r" : unmodifiedText) : "",
+        commands: [],
+        autoRepeat: false,
+        location: 0,
+        isKeypad: false,
+      }),
+    );
+    if (stroke.holdMillis > 0)
+      await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
+    await submit(() =>
+      port.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        modifiers: mask,
+        key: stroke.key,
+        windowsVirtualKeyCode: description.keyCode,
+        code: description.code,
+        location: 0,
+      }),
+    );
+    for (const modifier of held.toReversed()) {
+      const facts = modifierFacts[modifier];
+
+      mask &= ~facts.mask;
+      await submit(() =>
+        port.send("Input.dispatchKeyEvent", {
+          type: "keyUp",
+          modifiers: mask,
+          key: modifier,
+          code: facts.code,
+          windowsVirtualKeyCode: facts.keyCode,
+          location: 1,
+        }),
+      );
+    }
+    ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+  };
+
+  const pacedKeys = async (
+    port: CDPSession,
+    schedule: KeySchedule,
+    ticket: Ticket,
+    check: () => void,
+    element?: ElementHandle<Element>,
+  ) => {
+    const pacing = ownerPacing(ticket);
+
+    pacing.requireDuration(schedule.durationMillis);
+
+    for (const stroke of schedule.strokes) {
+      check();
+      if (stroke.intervalMillis > 0)
+        await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.intervalMillis * 1e6)));
+      await pacedStroke(port, stroke, ticket, check, element);
+    }
+  };
+
+  /** Focus/select happens only for Fill, on its already admitted exact node. */
+  const fillElement = (
+    page: Page,
+    element: ElementHandle<Element>,
+    schedule: KeySchedule,
+    ticket: Ticket,
+    check: () => void,
+  ) =>
+    withTypingPort(page, ticket, async (port) => {
+      check();
+      ownerPacing(ticket).requireDuration(schedule.durationMillis);
+      ticket.dispatch();
+      await element.selectText({ timeout: ticket.remainingMillis() });
+      ticket.acknowledge?.({ subphase: "focus", logicalComplete: false });
+      check();
+      await requireFocus(element, ticket.dispatched ? "unknown" : "undispatched");
+      check();
+      ticket.dispatch();
+      await page.keyboard.press("Backspace");
+      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+      check();
+      await pacedKeys(port, schedule, ticket, check, element);
+    });
+
   /** Sends under one dispatch, either to whatever has focus or to the one element that must. */
   const send = async (
     into: ElementTarget | undefined,
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
-    keys: (page: Page, element?: ElementHandle<Element>) => Promise<void>,
+    keys: (page: Page, element?: ElementHandle<Element>, check?: () => void) => Promise<void>,
     browserTarget?: DriverTarget,
   ): Promise<NativeInput> => {
     if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
     const { page } = current(browserTarget).entry;
 
     if (into === undefined) {
-      ticket.dispatch();
-      await keys(page);
+      if (ticket.performance === undefined) ticket.dispatch();
+      await keys(page, undefined, () => ticket.check());
       ticket.acknowledge?.();
       ticket.followUp?.();
     } else
@@ -260,9 +474,11 @@ export const makeKeyboard = (
         into,
         ticket,
         (element) => requireFocus(element),
-        (element) => keys(page, element),
+        (element, _admitted, check) => keys(page, element, check),
         policy,
         browserTarget,
+        false,
+        ticket.performance === undefined,
       );
     ticket.check();
 
@@ -277,16 +493,45 @@ export const makeKeyboard = (
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
   ) =>
-    sanitize(() =>
+    sanitize(async () => {
+      if (ticket.performance !== undefined) {
+        const schedule = planKeys(" ", ticket);
+        const planned = schedule.strokes[0];
+
+        if (planned === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+        ownerPacing(ticket).requireDuration(planned.holdMillis);
+        if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
+        const { page } = current(browserTarget).entry;
+
+        return withTypingPort(page, ticket, (port) =>
+          send(
+            into,
+            ticket,
+            policy,
+            (_page, element, check) =>
+              pacedStroke(
+                port,
+                { ...planned, key },
+                ticket,
+                check ?? (() => ticket.check()),
+                element,
+                modifiers,
+                false,
+              ),
+            browserTarget,
+          ),
+        );
+      }
+
       // Both halves are closed vocabularies by now, so the engine's `+` syntax is only ever ours.
-      send(
+      return send(
         into,
         ticket,
         policy,
         (page) => page.keyboard.press([...modifiers, key].join("+")),
         browserTarget,
-      ),
-    );
+      );
+    });
 
   const type = (
     text: string,
@@ -298,6 +543,7 @@ export const makeKeyboard = (
     sanitize(async () => {
       if (into !== undefined) browserTarget = actions.targetFor(into, browserTarget);
       const { page } = current(browserTarget).entry;
+      const schedule = ticket.performance === undefined ? undefined : prepareKeys(text, ticket);
 
       return withTypingPort(page, ticket, async (port) => {
         if (current(browserTarget).entry.page !== page)
@@ -307,7 +553,12 @@ export const makeKeyboard = (
           into,
           ticket,
           policy,
-          async (_page, element) => {
+          async (_page, element, check) => {
+            if (schedule !== undefined) {
+              await pacedKeys(port, schedule, ticket, check ?? (() => ticket.check()), element);
+
+              return;
+            }
             const characters = [...text];
 
             for (let start = 0; start < characters.length; start += 16) {
@@ -328,6 +579,8 @@ export const makeKeyboard = (
   return {
     press,
     type,
+    prepareKeys,
+    fillElement,
     retire,
     retirePage,
     drained: () => [...typing.values()].every((slot) => slot.idle !== undefined),

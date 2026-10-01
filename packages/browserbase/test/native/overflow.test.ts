@@ -37,7 +37,7 @@ for (const maxPages of [1, 2]) {
             Effect.gen(function* () {
               const session = yield* BrowserbaseBrowser.open(policy);
 
-              yield* session.navigate({ url: `${f.url}viewport` });
+              yield* session.initialPage.navigate({ url: `${f.url}viewport` });
               const [native] = f.nativePages(session.reference.sessionId);
 
               assert.ok(native);
@@ -58,7 +58,7 @@ for (const maxPages of [1, 2]) {
 
               native.context().on("page", pageOpened);
               try {
-                yield* session.click({ selector: "#popup" });
+                yield* session.initialPage.click({ selector: "#popup" });
                 yield* Effect.promise(() => nativeClosed.promise);
                 const state = yield* settle(session.status, (status) => !status.busy);
 
@@ -67,7 +67,9 @@ for (const maxPages of [1, 2]) {
                   generation: initial.generation,
                   unresolvedDispatch: false,
                 });
-                expect((yield* session.readText({ selector: "#count" })).text).toBe("1");
+                expect((yield* session.initialPage.readText({ selector: "#count" })).text).toBe(
+                  "1",
+                );
                 expect(yield* session.listPages()).toHaveLength(1);
                 const diagnostics = yield* session.diagnostics;
 
@@ -79,8 +81,10 @@ for (const maxPages of [1, 2]) {
                   maxPages === 1 ? ["pending", "confirmed"] : [],
                 );
                 expect(closeCalls).toBe(1);
-                yield* session.click({ selector: "#next" });
-                expect((yield* session.readText({ selector: "#count" })).text).toBe("2");
+                yield* session.initialPage.click({ selector: "#next" });
+                expect((yield* session.initialPage.readText({ selector: "#count" })).text).toBe(
+                  "2",
+                );
               } finally {
                 native.context().off("page", pageOpened);
               }
@@ -109,7 +113,7 @@ for (const acknowledge of [true, false]) {
             Effect.gen(function* () {
               const session = yield* BrowserbaseBrowser.open(policy);
 
-              yield* session.navigate({ url: `${f.url}viewport` });
+              yield* session.initialPage.navigate({ url: `${f.url}viewport` });
               const [native] = f.nativePages(session.reference.sessionId);
 
               assert.ok(native);
@@ -129,14 +133,17 @@ for (const acknowledge of [true, false]) {
 
               native.context().on("page", pageOpened);
               try {
-                yield* session.click({ selector: "#popup" });
+                yield* session.initialPage.click({ selector: "#popup" });
                 yield* Effect.promise(() => closed.promise);
                 expect(yield* session.status).toMatchObject({
                   phase: "open",
                   busy: true,
                   generation: initial.generation,
                 });
-                const blocked = yield* session.click({ selector: "#next" }).pipe(Effect.result);
+
+                const blocked = yield* session.initialPage
+                  .click({ selector: "#next" })
+                  .pipe(Effect.result);
 
                 expect(blocked).toMatchObject({
                   _tag: "Failure",
@@ -183,17 +190,17 @@ for (const acknowledge of [true, false]) {
                     busy: false,
                     generation: initial.generation,
                   });
-                  yield* session.click({ selector: "#next" });
+                  yield* session.initialPage.click({ selector: "#next" });
                 } else {
                   expect(yield* session.status).toMatchObject({
                     phase: "uncertain",
                     reason: "popup-overflow",
                   });
                   expect(
-                    yield* session.click({ selector: "#next" }).pipe(Effect.result),
+                    yield* session.initialPage.click({ selector: "#next" }).pipe(Effect.result),
                   ).toMatchObject({
                     _tag: "Failure",
-                    failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+                    failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
                   });
                 }
                 expect(calls).toBe(1);

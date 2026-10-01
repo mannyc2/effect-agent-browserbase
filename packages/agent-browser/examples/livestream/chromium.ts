@@ -18,7 +18,7 @@ export const watchChromium = (
   options: { readonly delayMillis: number; readonly port: number },
 ) =>
   Browser.scoped(Chromium.launch(policy), (session) =>
-    livestream(session, task, { delayMillis: options.delayMillis }),
+    livestream(session, session.initialPage, task, { delayMillis: options.delayMillis }),
   ).pipe(
     Effect.provide(
       Layer.mergeAll(

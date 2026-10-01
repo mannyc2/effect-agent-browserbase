@@ -32,7 +32,6 @@ interface PreviousFrame {
 
 interface PreviousOptions {
   readonly admission?: AdmissionOptions;
-  readonly target?: PageInfo;
   readonly maxFrames?: number;
   readonly maxBufferedBytes?: number;
   readonly maxFrameBytes?: number;

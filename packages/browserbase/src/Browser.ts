@@ -61,19 +61,19 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly closeChecked: Effect.Effect<CleanupResult, BrowserError>;
   readonly clickForDownload: (
     request: ClickRequest,
-    page?: Page,
+    page: Page,
     options?: OperationOptions,
   ) => Effect.Effect<DownloadObservation, BrowserError>;
   /** Attaches to an existing file input; an uploaded branch needs a receipt for this session. */
   readonly selectFiles: (
     request: SelectFilesRequest,
-    page?: Page,
+    page: Page,
     options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
   /** Registers the chooser observation before the single click that opens it. */
   readonly clickForFileSelection: (
     request: SelectFilesRequest,
-    page?: Page,
+    page: Page,
     options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
   readonly liveView: (
@@ -173,10 +173,8 @@ const makeSession = <E>(
 ): BrowserbaseSession<E> => {
   const { session, operations } = connection;
 
-  const transfers = (
-    page?: Page,
-  ): Effect.Effect<BrowserRuntime.TransferOperations, BrowserError> =>
-    page === undefined ? Effect.succeed(operations) : operations.forPage(page);
+  const transfers = (page: Page): Effect.Effect<BrowserRuntime.TransferOperations, BrowserError> =>
+    operations.forPage(page);
 
   // Decorating the same object preserves its private capture and page-control associations.
   return Object.assign(session, {

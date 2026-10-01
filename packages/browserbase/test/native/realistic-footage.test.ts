@@ -10,9 +10,8 @@ import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import { chromium } from "playwright-core";
 
 import { Broadcast } from "../../examples/realistic-footage/Broadcast.ts";
-import { Director } from "../../examples/realistic-footage/Director.ts";
+import * as ClockProbe from "../../examples/realistic-footage/ClockProbe.ts";
 import * as Footage from "../../examples/realistic-footage/Footage.ts";
-import * as Stagehand from "../../examples/realistic-footage/Stagehand.ts";
 import { StageSite } from "../../examples/realistic-footage/StageSite.ts";
 import { Telemetry } from "../../examples/realistic-footage/Telemetry.ts";
 import { localBrowser, localLaunch, policy, withProvider } from "../fixtures/LocalBrowser.ts";
@@ -99,7 +98,7 @@ it.live(
             const browser = yield* BrowserbaseBrowser;
 
             const session = yield* browser.open(policy, {
-              bootstrap: Stagehand.plan([site.origin]),
+              bootstrap: ClockProbe.plan([site.origin]),
             });
 
             const seen = yield* Ref.make(0);
@@ -123,7 +122,7 @@ it.live(
               url: `${site.origin}/`,
               storyboard: Footage.demo,
               outputPath,
-              seed: "night-rail-atlas",
+              seed: 94007,
             });
 
             const { metrics } = footage;
@@ -140,10 +139,14 @@ it.live(
             }
 
             // The storyboard's own actions landed: the page says the berth is held.
-            const held = yield* session.readText(ReadTextRequest.make({ selector: "#held" }));
+            const held = yield* session.initialPage.readText(
+              ReadTextRequest.make({ selector: "#held" }),
+            );
 
             expect(held.text).toContain("Held for twenty minutes");
-            expect((yield* session.observe()).url).toBe(`${site.origin}/routes/vienna-venice`);
+            expect((yield* session.initialPage.observe()).url).toBe(
+              `${site.origin}/routes/vienna-venice`,
+            );
 
             // One interval filmed both documents. The link's navigation did not end it, so the
             // loading is on film, and the library says what each document was and when the
@@ -177,7 +180,7 @@ it.live(
             expect(latency.p50).toBeLessThan(500);
 
             // Four original Plan Click steps and one whole-text Type are timed around the run.
-            // Every input duration is an actual receipt, including the four presentation moves.
+            // Every input duration is an actual receipt, including the four authored native Hover actions.
             expect(metrics.control.actionMillis.click?.count).toBe(4);
             expect(metrics.control.actionMillis.clickAndWait).toBeUndefined();
             expect(metrics.control.actionMillis.type?.count).toBe(1);
@@ -185,9 +188,11 @@ it.live(
             expect(metrics.control.inputMillis.key).toBeUndefined();
             expect(metrics.control.inputMillis.type?.count).toBe(1);
             expect(metrics.control.inputMillis.click?.count).toBe(4);
-            expect(metrics.control.inputMillis.pointerMove?.count).toBe(4);
-            expect(metrics.control.clickToFrameMillis?.count).toBe(4);
-            expect(metrics.control.cueRoundTripMillis?.count).toBeGreaterThan(5);
+            expect(metrics.control.inputMillis.hover?.count).toBe(4);
+            expect(metrics.control.nativeReturnToNextFrameMillis?.count).toBe(4);
+            expect(metrics.control.timeline.events).toBeGreaterThan(10);
+            expect(metrics.control.timeline.gaps).toEqual({ graphics: 0, metrics: 0 });
+            expect(metrics.output.compositionMillis).toBeGreaterThan(0);
 
             // Constant rate: the decoded frame count is the duration at thirty per second, and
             // what the encoder was sent is what the file holds.
@@ -219,7 +224,6 @@ it.live(
       Effect.provide(
         Layer.mergeAll(
           StageSite.layer,
-          Director.layer,
           Broadcast.layer({ port: livePort === undefined ? 0 : Number(livePort) }),
           NodeServices.layer,
         ).pipe(Layer.provideMerge(Telemetry.layer)),

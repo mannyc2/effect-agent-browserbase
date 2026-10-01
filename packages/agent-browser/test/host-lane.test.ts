@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import { ActionResult, InputReceipt, NavigationResult, Target } from "effect-browser/browser-data";
+import { ActionResult, InputReceipt, Target } from "effect-browser/browser-data";
 import { BrowserError, InitializationError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
@@ -18,7 +18,7 @@ const allTools = Toolkit.merge(
 type Ready = Toolkit.WithHandler<Toolkit.Tools<typeof allTools>>;
 const url = "https://example.test/";
 const target = Target.make({ generation: 1, pageId: "page-1", frameId: "frame-1" });
-const reference = { observationId: "observed-1", elementId: "element-1" };
+const reference = { observationId: "observation-1", elementId: "element-1" };
 const result = ActionResult.make({ url });
 
 const receipt = (kind: InputReceipt["kind"]) =>
@@ -72,14 +72,26 @@ it.effect("one host sequences all four handler layers across independent program
           ),
         );
 
-      const browser = scriptedSession({
-        scroll: () => operation("scroll", result),
-        pointerMove: () => operation("pointer", receipt("pointer-move")),
-        pressElement: () => operation("press", receipt("press")),
-        selectOption: () => operation("select-option", result),
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() => operation("scroll", result))();
+          }
+          if (action._tag === "PointerMove") {
+            return (() => operation("pointer", receipt("pointer-move")))();
+          }
+          if (action._tag === "Press") {
+            return (() => operation("press", receipt("press")))();
+          }
+          if (action._tag === "Select") {
+            return (() => operation("select-option", result))();
+          }
+
+          return Effect.void;
+        },
       });
 
-      const host = yield* BrowserTools.makeHost(browser);
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const tools = yield* allTools.pipe(Effect.provide(host.layer));
       const first = yield* host.run(scroll(tools)).pipe(Effect.forkScoped);
 
@@ -96,8 +108,12 @@ it.effect("one host sequences all four handler layers across independent program
       yield* Deferred.succeed(release, undefined);
       expect(yield* Fiber.join(first)).toMatchObject([{ isFailure: false }]);
       expect(yield* Fiber.join(second)).toMatchObject([{ isFailure: false }]);
-      expect(yield* Fiber.join(third)).toMatchObject([{ isFailure: false }]);
-      expect(yield* Fiber.join(fourth)).toMatchObject([{ isFailure: false }]);
+      expect(yield* Fiber.join(third)).toMatchObject([
+        { isFailure: true, encodedResult: { reason: "stale" } },
+      ]);
+      expect(yield* Fiber.join(fourth)).toMatchObject([
+        { isFailure: true, encodedResult: { reason: "stale" } },
+      ]);
       expect(calls.slice().sort()).toEqual(["pointer", "press", "scroll", "select-option"]);
       expect(peak).toBe(1);
       expect(active).toBe(0);
@@ -112,20 +128,26 @@ it.effect("capacity includes the active call, and cancelling a waiter returns it
       const release = yield* Deferred.make<void>();
       let calls = 0;
 
-      const browser = scriptedSession({
-        scroll: () =>
-          Effect.gen(function* () {
-            calls++;
-            if (calls === 1) {
-              yield* Deferred.succeed(entered, undefined);
-              yield* Deferred.await(release);
-            }
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.gen(function* () {
+                calls++;
+                if (calls === 1) {
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                }
 
-            return result;
-          }),
+                return result;
+              }))();
+          }
+
+          return Effect.void;
+        },
       });
 
-      const host = yield* BrowserTools.makeHost(browser);
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const tools = yield* allTools.pipe(Effect.provide(host.layer));
       const first = yield* scroll(tools, "active").pipe(Effect.forkScoped);
 
@@ -172,18 +194,24 @@ it.effect("an expired queue wait sends nothing and cannot time out the active ha
       const release = yield* Deferred.make<void>();
       let calls = 0;
 
-      const browser = scriptedSession({
-        scroll: () =>
-          Effect.gen(function* () {
-            calls++;
-            yield* Deferred.succeed(entered, undefined);
-            yield* Deferred.await(release);
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.gen(function* () {
+                calls++;
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
 
-            return result;
-          }),
+                return result;
+              }))();
+          }
+
+          return Effect.void;
+        },
       });
 
-      const host = yield* BrowserTools.makeHost(browser);
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const tools = yield* allTools.pipe(Effect.provide(host.layer));
       const active = yield* scroll(tools).pipe(Effect.forkScoped);
 
@@ -214,19 +242,25 @@ it.effect(
         const secondRelease = yield* Deferred.make<void>();
         let calls = 0;
 
-        const browser = scriptedSession({
-          scroll: () =>
-            Effect.gen(function* () {
-              const first = ++calls === 1;
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Scroll") {
+              return (() =>
+                Effect.gen(function* () {
+                  const first = ++calls === 1;
 
-              yield* Deferred.succeed(first ? firstEntered : secondEntered, undefined);
-              yield* Deferred.await(first ? firstRelease : secondRelease);
+                  yield* Deferred.succeed(first ? firstEntered : secondEntered, undefined);
+                  yield* Deferred.await(first ? firstRelease : secondRelease);
 
-              return result;
-            }),
+                  return result;
+                }))();
+            }
+
+            return Effect.void;
+          },
         });
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
         const tools = yield* allTools.pipe(Effect.provide(host.layer));
         const first = yield* scroll(tools).pipe(Effect.forkScoped);
 
@@ -251,29 +285,35 @@ it.effect("closing a raw-layer host joins its active call and cancels every acce
       const entered = yield* Deferred.make<void>();
       let calls = 0;
       let finalizers = 0;
-      let browserCloses = 0;
 
-      const browser = scriptedSession({
-        closeChecked: Effect.sync(() => {
-          browserCloses++;
-        }),
-        scroll: () =>
-          Effect.gen(function* () {
-            calls++;
-            yield* Deferred.succeed(entered, undefined);
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.gen(function* () {
+                calls++;
+                yield* Deferred.succeed(entered, undefined);
 
-            return yield* Effect.never;
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                finalizers++;
-              }),
-            ),
-          ),
+                return yield* Effect.never;
+              }).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    finalizers++;
+                  }),
+                ),
+              ))();
+          }
+
+          return Effect.void;
+        },
       });
 
       const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-      const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
+
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage).pipe(
+        Scope.provide(scope),
+      );
+
       const tools = yield* allTools.pipe(Effect.provide(host.layer));
       const first = yield* scroll(tools).pipe(Effect.forkScoped);
 
@@ -286,7 +326,7 @@ it.effect("closing a raw-layer host joins its active call and cancels every acce
       expect(Exit.isFailure(yield* Fiber.await(waiting))).toBe(true);
       expect(calls).toBe(1);
       expect(finalizers).toBe(1);
-      expect(browserCloses).toBe(0);
+      expect(yield* browser.control.connections).toEqual(["open"]);
       expect(yield* scroll(tools, "closed")).toMatchObject([
         { isFailure: true, encodedResult: { reason: "closed", outcome: "undispatched" } },
       ]);
@@ -308,18 +348,24 @@ it.effect("a browser failure wakes raw-layer waiters without dispatch or cause p
 
       let calls = 0;
 
-      const browser = scriptedSession({
-        failure: Deferred.await(failure),
-        scroll: () =>
-          Effect.gen(function* () {
-            calls++;
-            yield* Deferred.succeed(entered, undefined);
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.gen(function* () {
+                calls++;
+                yield* Deferred.succeed(entered, undefined);
 
-            return yield* Effect.never;
-          }),
+                return yield* Effect.never;
+              }))();
+          }
+
+          return Effect.void;
+        },
+        failure: Deferred.await(failure),
       });
 
-      const host = yield* BrowserTools.makeHost(browser);
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const tools = yield* allTools.pipe(Effect.provide(host.layer));
       const first = yield* scroll(tools).pipe(Effect.forkScoped);
 
@@ -359,22 +405,30 @@ it.effect(
         let tools: Ready | undefined;
         let captured: Ready | undefined;
 
-        const browser = scriptedSession({
-          pointerMove: () =>
-            Effect.gen(function* () {
-              seen.push(yield* callerValue);
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "PointerMove") {
+              return (() =>
+                Effect.gen(function* () {
+                  seen.push(yield* callerValue);
 
-              return receipt("pointer-move");
-            }),
-          scroll: () =>
-            Effect.sync(() => {
-              scrolls++;
+                  return receipt("pointer-move");
+                }))();
+            }
+            if (action._tag === "Scroll") {
+              return (() =>
+                Effect.sync(() => {
+                  scrolls++;
 
-              return result;
-            }),
+                  return result;
+                }))();
+            }
+
+            return Effect.void;
+          },
         });
 
-        const host = yield* BrowserTools.makeHost(browser, {
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
           onInput: (): Effect.Effect<
             void,
             Effect.Error<ReturnType<typeof scroll>>,
@@ -437,17 +491,25 @@ it.effect(
         let innerTools: Ready | undefined;
         let scrolls = 0;
 
-        const browser = scriptedSession({
-          pointerMove: () => Effect.succeed(receipt("pointer-move")),
-          scroll: () =>
-            Effect.sync(() => {
-              scrolls++;
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "PointerMove") {
+              return (() => Effect.succeed(receipt("pointer-move")))();
+            }
+            if (action._tag === "Scroll") {
+              return (() =>
+                Effect.sync(() => {
+                  scrolls++;
 
-              return result;
-            }),
+                  return result;
+                }))();
+            }
+
+            return Effect.void;
+          },
         });
 
-        const outer = yield* BrowserTools.makeHost(browser, {
+        const outer = yield* BrowserTools.makeHost(browser, browser.initialPage, {
           onInput: () =>
             Effect.gen(function* () {
               if (innerTools === undefined) return yield* Effect.die("Inner toolkit missing");
@@ -455,7 +517,7 @@ it.effect(
             }),
         });
 
-        const inner = yield* BrowserTools.makeHost(browser, {
+        const inner = yield* BrowserTools.makeHost(browser, browser.initialPage, {
           onInput: () =>
             Effect.gen(function* () {
               if (outerTools === undefined) return yield* Effect.die("Outer toolkit missing");
@@ -490,7 +552,6 @@ for (const cancel of [false, true])
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const completed = yield* Deferred.make<NavigationResult, BrowserError>();
           const callbackEntered = yield* Deferred.make<void>();
           const finalizerEntered = yield* Deferred.make<void>();
           const finalizerRelease = yield* Deferred.make<void>();
@@ -500,14 +561,24 @@ for (const cancel of [false, true])
           let stops = 0;
           let callbackTools: Ready | undefined;
 
-          const stopped = BrowserError.make({
-            operation: "navigate",
-            reason: Reasons.Interrupted.make({}),
-            outcome: "unknown",
+          const browser = yield* scriptedSession({
+            beforeStart: (action) =>
+              Effect.sync(() => {
+                if (action._tag === "Scroll") order.push("scroll");
+              }),
           });
 
-          const browser = scriptedSession({
-            startNavigation: () =>
+          const nativeGate = yield* browser.control.gate;
+
+          yield* browser.control.next("navigate", {
+            _tag: "Hold",
+            gate: nativeGate,
+            dispatched: true,
+          });
+          const originalStart = browser.initialPage.startNavigation;
+
+          Object.assign(browser.initialPage, {
+            startNavigation: ((request, options) =>
               Effect.gen(function* () {
                 order.push("navigate");
                 yield* Effect.addFinalizer(() =>
@@ -515,29 +586,25 @@ for (const cancel of [false, true])
                     order.push("operation-finalized");
                   }),
                 );
+                const operation = yield* originalStart(request, options);
+                const originalStop = operation.stop;
 
-                return {
-                  target,
-                  completed: Deferred.await(completed),
+                Object.assign(operation, {
                   stop: Effect.gen(function* () {
                     stops++;
                     order.push("stop");
                     yield* Deferred.succeed(stopEntered, undefined);
                     yield* Deferred.await(stopRelease);
-                    yield* Deferred.fail(completed, stopped);
+                    yield* originalStop;
                     order.push("stopped");
                   }),
-                };
-              }),
-            scroll: () =>
-              Effect.sync(() => {
-                order.push("scroll");
+                });
 
-                return result;
-              }),
+                return operation;
+              })) satisfies typeof originalStart,
           });
 
-          const host = yield* BrowserTools.makeHost(browser, {
+          const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
             onNavigation: () =>
               Effect.gen(function* () {
                 if (callbackTools === undefined)
@@ -584,7 +651,7 @@ for (const cancel of [false, true])
             ? yield* Fiber.interrupt(navigation).pipe(Effect.forkScoped)
             : undefined;
 
-          if (!cancel) yield* Deferred.succeed(completed, NavigationResult.make({ url }));
+          if (!cancel) yield* nativeGate.open;
           yield* Deferred.await(finalizerEntered);
           expect(order).not.toContain("scroll");
           yield* Deferred.succeed(finalizerRelease, undefined);
@@ -612,32 +679,40 @@ it.effect("a queued stale reference is refused once and is never refreshed or re
       let valid = true;
       let exactCalls = 0;
 
-      const browser = scriptedSession({
-        scroll: () =>
-          Effect.gen(function* () {
-            yield* Deferred.succeed(entered, undefined);
-            yield* Deferred.await(release);
-            valid = false;
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                valid = false;
 
-            return result;
-          }),
-        pressElement: () =>
-          Effect.suspend(() => {
-            exactCalls++;
+                return result;
+              }))();
+          }
+          if (action._tag === "Press") {
+            return (() =>
+              Effect.suspend(() => {
+                exactCalls++;
 
-            return valid
-              ? Effect.succeed(receipt("press"))
-              : Effect.fail(
-                  BrowserError.make({
-                    operation: "press",
-                    reason: Reasons.Stale.make({}),
-                    outcome: "undispatched",
-                  }),
-                );
-          }),
+                return valid
+                  ? Effect.succeed(receipt("press"))
+                  : Effect.fail(
+                      BrowserError.make({
+                        operation: "press",
+                        reason: Reasons.Stale.make({}),
+                        outcome: "undispatched",
+                      }),
+                    );
+              }))();
+          }
+
+          return Effect.void;
+        },
       });
 
-      const host = yield* BrowserTools.makeHost(browser);
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
       const tools = yield* allTools.pipe(Effect.provide(host.layer));
       const first = yield* scroll(tools).pipe(Effect.forkScoped);
 
@@ -665,25 +740,31 @@ it.effect("plain handler layers remain caller-managed and unsequenced", () =>
       let active = 0;
       let peak = 0;
 
-      const browser = scriptedSession({
-        scroll: () =>
-          Effect.gen(function* () {
-            peak = Math.max(peak, ++active);
-            if (active === 2) yield* Deferred.succeed(entered, undefined);
-            yield* Deferred.await(release);
-            active--;
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.gen(function* () {
+                peak = Math.max(peak, ++active);
+                if (active === 2) yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                active--;
 
-            return result;
-          }),
+                return result;
+              }))();
+          }
+
+          return Effect.void;
+        },
       });
 
       const tools = yield* allTools.pipe(
         Effect.provide(
           Layer.mergeAll(
-            BrowserTools.handlers(browser),
-            BrowserTools.nativeHandlers(browser),
-            BrowserTools.keyboardHandlers(browser),
-            BrowserTools.selectionHandlers(browser),
+            BrowserTools.handlers(browser, browser.initialPage),
+            BrowserTools.nativeHandlers(browser, browser.initialPage),
+            BrowserTools.keyboardHandlers(browser, browser.initialPage),
+            BrowserTools.selectionHandlers(browser, browser.initialPage),
           ),
         ),
       );

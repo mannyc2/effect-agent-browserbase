@@ -30,32 +30,41 @@ it.live("real CDP: in-memory selection reaches the page without any provisioning
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const h = session;
+          const h = session.initialPage;
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
 
-          yield* session.selectFiles({
-            selector: "#file",
-            selection: {
-              _tag: "Inline",
-              files: [inline("notes.txt", "in-memory bytes"), inline("second.txt", "two")],
+          yield* session.selectFiles(
+            {
+              selector: "#file",
+              selection: {
+                _tag: "Inline",
+                files: [inline("notes.txt", "in-memory bytes"), inline("second.txt", "two")],
+              },
             },
-          });
+            session.initialPage,
+          );
 
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#chosen" }))).text).toBe(
             "notes.txt:15,second.txt:3",
           );
           yield* h.click(ClickRequest.make({ selector: "#readFile" }));
-          yield* session.waitFor({ selector: "#content:not(:empty)", state: "visible" });
+          yield* session.initialPage.waitFor({
+            selector: "#content:not(:empty)",
+            state: "visible",
+          });
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#content" }))).text).toBe(
             "in-memory bytes",
           );
 
           // A chooser opened by a click is satisfied by exactly one attachment.
-          yield* session.clickForFileSelection({
-            selector: "#choose",
-            selection: { _tag: "Inline", files: [inline("chosen.txt", "picked")] },
-          });
+          yield* session.clickForFileSelection(
+            {
+              selector: "#choose",
+              selection: { _tag: "Inline", files: [inline("chosen.txt", "picked")] },
+            },
+            session.initialPage,
+          );
 
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#chosen" }))).text).toBe(
             "chosen.txt:6",
@@ -197,7 +206,7 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const h = session;
+          const h = session.initialPage;
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
 
@@ -216,36 +225,45 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
 
           expect(receipt.remotePath).toBe(f.uploadedPaths[0]);
 
-          yield* session.selectFiles({
-            selector: "#file",
-            selection: { _tag: "Uploaded", uploads: [receipt] },
-          });
+          yield* session.selectFiles(
+            {
+              selector: "#file",
+              selection: { _tag: "Uploaded", uploads: [receipt] },
+            },
+            session.initialPage,
+          );
 
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#chosen" }))).text).toBe(
             "stored.txt:21",
           );
           yield* h.click(ClickRequest.make({ selector: "#readFile" }));
-          yield* session.waitFor({ selector: "#content:not(:empty)", state: "visible" });
+          yield* session.initialPage.waitFor({
+            selector: "#content:not(:empty)",
+            state: "visible",
+          });
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#content" }))).text).toBe(
             "provider-stored bytes",
           );
 
           // A receipt this package never issued carries no attachment authority.
           const forged = yield* session
-            .selectFiles({
-              selector: "#file",
-              selection: {
-                _tag: "Uploaded",
-                uploads: [
-                  UploadReceipt.make({
-                    reference: session.reference,
-                    filename: "stored.txt",
-                    bytes: 21,
-                    remotePath: "/etc/hostname",
-                  }),
-                ],
+            .selectFiles(
+              {
+                selector: "#file",
+                selection: {
+                  _tag: "Uploaded",
+                  uploads: [
+                    UploadReceipt.make({
+                      reference: session.reference,
+                      filename: "stored.txt",
+                      bytes: 21,
+                      remotePath: "/etc/hostname",
+                    }),
+                  ],
+                },
               },
-            })
+              session.initialPage,
+            )
             .pipe(Effect.result);
 
           expect(forged._tag).toBe("Failure");
@@ -260,10 +278,13 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
 
           // A chooser cannot open a provider-stored path from this client.
           const chooser = yield* session
-            .clickForFileSelection({
-              selector: "#choose",
-              selection: { _tag: "Uploaded", uploads: [receipt] },
-            })
+            .clickForFileSelection(
+              {
+                selector: "#choose",
+                selection: { _tag: "Uploaded", uploads: [receipt] },
+              },
+              session.initialPage,
+            )
             .pipe(Effect.result);
 
           expect(chooser._tag).toBe("Failure");

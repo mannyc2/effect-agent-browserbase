@@ -23,8 +23,10 @@ import { Chromium } from "effect-browser/chromium";
 
 const program = Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
   Effect.gen(function* () {
-    yield* browser.navigate({ url: "https://example.com" });
-    return yield* browser.observe({ scope: "viewport" });
+    const page = browser.initialPage;
+
+    yield* page.navigate({ url: "https://example.com" });
+    return yield* page.observe({ scope: "viewport" });
   }),
 ).pipe(Effect.provide(Chromium.layer().pipe(Layer.provide(NodeServices.layer))));
 ```
@@ -45,12 +47,13 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 
 // The host acquired browser through Chromium or Browserbase, in the active execution scope.
-const result = BrowserTools.run(browser, AgentRuntime.run(agent, request), {
+const page = browser.initialPage;
+const result = BrowserTools.run(browser, page, AgentRuntime.run(agent, request), {
   maxControls: 32,
 });
 ```
 
-Every agent turn borrows that session. `BrowserTools.run` provides the maintained handlers, runs browser calls one at a time in the order the model declared them, and supervises both browser and host callback failures; the host still supplies its selected LanguageModel and other Agent services. An agent declares the tools it may see: the original five, optional reading, pointer/wheel, keyboard, option-selection, wait and form tools, and `_and_inspect` variants that return the page an action leaves behind. `BrowserTools.instructions(toolkit)` and `BrowserTools.policy(...)` give the agent instructions and policy that match its tools, and every host option is checked once, when the host is built. `Adapter.fromSession` remains available for the framework's `InteractiveBrowser` handle. The complete [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) use one shared agent definition.
+Every agent turn borrows that exact Page and its original session. `BrowserTools.run` provides the maintained handlers, runs browser calls one at a time in the order the model declared them, and supervises both browser and host callback failures; the host still supplies its LanguageModel and other Agent services. Display selection cannot redirect tools or continuations. Separate hosts on distinct Pages can progress independently. An agent declares the tools it may see: the original five, optional reading, pointer/wheel, keyboard, option-selection, wait and form tools, and `_and_inspect` variants. `BrowserTools.instructions(toolkit)` and `BrowserTools.policy(...)` match those tools, and host options are checked at acquisition. `Adapter.fromSession(browser, page)` adapts the same authority for the framework's `InteractiveBrowser` handle. The [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) share one agent definition.
 
 ## API migration
 
@@ -64,13 +67,13 @@ for independent observations, bounded retention and separate action/containment 
 | Previous composition                                                   | Current API                                                                                                                                                             |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider-specific `withBrowser(policy, options, use)`                  | `Browser.scoped(Chromium.launch(policy, options), use)` or the same combinator with `BrowserbaseBrowser.open`                                                           |
-| `session.bind().navigate(request)` for ordinary selected-page work     | `session.navigate(request)` captures selection when the Effect runs; `yield* session.retain()` explicitly acquires a checked retained handle                            |
-| `bind()` / `currentTarget` and `BoundTarget`                           | `retain(options?)` and the shared `TargetOperations` interface; `target(options?)` remains metadata                                                                     |
-| `selectPage(id)` / `closePage(id)`                                     | Pass the exact `PageInfo`; selection returns `void`. `createPage` returns the created page's metadata without selecting it                                              |
-| Synchronous `Adapter.fromSession(browser)` / `currentHandle`           | `yield* Adapter.fromSession(browser, { selection: "current" })` or explicit `"retained"`; one handle beside the original browser                                        |
-| Select a page, perform work, then restore selection                    | `session.pinPage(page)` or `session.pinFrame(page, frame)` addresses that target without changing selection                                                             |
-| `Tools.handlers(Adapter.fromSession(session))`                         | `Tools.handlers(session)`; use `Tools.run(session, program, options)` for handler provisioning and failure supervision                                                  |
-| Manually acquire an interval just to consume frames                    | `Capture.stream(session, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                                                    |
+| `session.bind().navigate(request)` for ordinary selected-page work     | `session.initialPage.navigate(request)`; all target work belongs to an issued Page or Frame                                                                             |
+| `bind()` / `currentTarget` and `BoundTarget`                           | Issued `Page` / `Frame` with `PageOperations`; `page.identity` is metadata, not fresh authority                                                                         |
+| `selectPage(id)` / `closePage(id)`                                     | Display selection takes exact `PageInfo`; close with `page.close()`. `createPage` returns metadata without selecting it                                                 |
+| Synchronous `Adapter.fromSession(browser)` / `currentHandle`           | `yield* Adapter.fromSession(browser, page)`; one exact Page beside its original owner                                                                                   |
+| Select a page, perform work, then restore selection                    | `yield* session.page(info)` and `yield* page.frame(info)` issue exact authority without changing display                                                                |
+| `Tools.handlers(Adapter.fromSession(session))`                         | `Tools.handlers(session, page)`; `Tools.run(session, page, program, options)` provides handlers and supervision                                                         |
+| Manually acquire an interval just to consume frames                    | `Capture.stream(page, options)`; retain `Capture.start` for explicit snapshots and stop summaries                                                                       |
 | Treat every `framenavigated` event as a new document                   | Same-document URL changes leave observations and document capture active; page capture marks them with `sameDocument: true` without advancing the document number       |
 | `error.reason === "busy"`; optional dispatch evidence                  | `error.reason._tag === "Busy"` or `Effect.catchReason("BrowserError", "Busy", ...)`; `outcome` is required                                                              |
 | Provider `status` / retry timing on the outer browser error            | `Provider` / `Transport` reason carries `status`; `RateLimited` carries `retryAfterMillis`; `Limit` carries actual dimension, maximum and observed facts                |
@@ -85,7 +88,7 @@ for independent observations, bounded retention and separate action/containment 
 | A common navigation needs a different loading deadline                 | Optional `NavigateRequest.timeoutMillis`, 1–600000 ms, capped by remaining session lifetime; the model tool still accepts only URL                                      |
 | Click receipts and following key positions                             | Click `ActionResult.input` and form toggle/submit receipts; Playwright's click position is `null` when its internal hit-tested point is unavailable                     |
 | Control kind/label/disabled only                                       | Optional checked/selected/inputType/required state, collected with defined native/ARIA semantics and rechecked on the same node                                         |
-| Several model fill/click calls for one form                            | `session.fillForm` / `browser_fill_form`: one gated operation that submits only after every field was set and still holds                                               |
+| Several model fill/click calls for one form                            | `page.fillForm` / `browser_fill_form`: one gated operation that submits only after every field was set and still holds                                                  |
 | Tool options checked on every call; `observedResultMaxBytes`           | Options checked once when the host is built; `resultMaxBytes` fits every result. See the [agent guide](packages/agent-browser/README.md#api-migration)                  |
 | Browser Layers and `Allocation.scoped` required no platform service    | `Chromium.layer`, `BrowserbaseBrowser.layer`, `BrowserRuntime.make` and `Allocation.scoped` require Effect's `Crypto`, such as the platform's `NodeServices.layer`      |
 | `maxActions` at most 1000, with no reading of what a session has used  | `BrowserPolicy.maxActions` accepts up to 1,000,000 (default 100), and `status.actions` reports `{ used, maximum }`; code that builds a `SessionStatus` supplies it      |
@@ -93,18 +96,30 @@ for independent observations, bounded retention and separate action/containment 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 
 The unreleased Page admission API adds trailing host `OperationOptions` to admitted operations.
-Use `session.ready()`, `retain()`, `target()`, `listPages()`, `frames()` and `createPage()` in place of
-their former Effect properties. Ordinary operations share a permit only with their Page and its
-Frames; positive finite `admission.queue` opts into bounded FIFO waiting. Queue omission and zero
-remain fail-fast, including page creation. See the [browser admission guide](packages/browser/README.md#admission-and-deadlines)
-for deadline accounting, configured bounds, typed refusals and passive host diagnostics.
+Session owns the registry, display selection and checked lifetime. Page owns navigation,
+readiness, observation, actions and capture; Frame owns exact frame operations. Selected-session,
+retained-selection and pinned-target action wrappers are removed. Capture and PageControl require
+an issued Page, and provider file operations require that Page explicitly.
+
+`page.run(plan, { style: { seed: 94 }, within: "10 seconds" })` performs the same canonical actions
+with bounded cursor schedules, key intervals/holds and scrolling. Omitted style is plain. Seeded
+policy is reproducible; native geometry and delivery remain measured. `startAt` uses this owner's
+host monotonic runtime; `within` starts at that intended boundary and never renews per step.
+Type requires existing focus; Fill may focus its exact node. Authored Hover remains a native action.
+The complete/incomplete host recording contract retains original attempts and Causes; unresolved
+mutations never become replayable plans.
+
+Tools use `policy` for checked element admission and `execution` for bounded run style,
+duration and ordinary queue settings. `ToolHost.receipts` retains a bounded snapshot of original
+Run/Navigation capabilities and pre-capability refusals, with unique invocation correlation.
+It does not expose receipts or motion settings to the model.
 
 The timeline API replaces the native inventory alias `session.pages()` with `session.listPages()`.
 `session.pages` is now the cached Inventory/lifecycle stream, and `session.timeline`/`page.timeline`
 provide bounded evidence snapshots and resumable streams. Host encoding preserves qualified
 addresses; client projections remove them explicitly.
 
-These are the coordinated shape changes of `0.2.0-beta.0` through `0.2.0-beta.2`. `0.2.0-beta.2` raised the action allowance and added `status.actions`; `0.2.0-beta.1` added the latest-64 boundaries, the capture limits, `Capture.multipart`, `fillForm`, build-time tool options with `resultMaxBytes`, the required `Crypto` and two more tool reasons. Remove old retained and adapter members rather than mixing both APIs. Old page/frame IDs, metadata and handles become stale after reconnect; within the same known browser lifetime, re-list pages and match exactly one saved native `targetId`, then use fresh metadata. Never substitute title, URL, order or the old local ID for that match. Explicit generic applications of curried `Browser.scoped` use four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`); ordinary inferred calls retain their syntax.
+Earlier coordinated shape changes are retained in release history. `0.2.0-beta.2` raised the action allowance and added `status.actions`; `0.2.0-beta.1` added the latest-64 boundaries, the capture limits, `Capture.multipart`, `fillForm`, build-time tool options with `resultMaxBytes`, the required `Crypto` and two more tool reasons. Remove old retained and adapter members rather than mixing both APIs. Old page/frame IDs, metadata and handles become stale after reconnect; within the same known browser lifetime, re-list pages and match exactly one saved native `targetId`, then use fresh metadata. Never substitute title, URL, order or the old local ID for that match. Explicit generic applications of curried `Browser.scoped` use four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`); ordinary inferred calls retain their syntax.
 
 ## Ownership and boundaries
 
@@ -112,7 +127,7 @@ A browser belongs to its Effect Scope, with one connection, action budget and ca
 
 Actions retain exact observed-node identity and distinguish `undispatched`, `rejected` and `unknown` outcomes. An uncertain mutation is never replayed. Callback errors and services remain typed. Credentials, endpoints, control facts and native diagnostics stay with the host.
 
-Live capture supplies bounded JPEG frames and metadata from the same owner. `Capture.stream(browser)` acquires lazily and releases its interval when consumption finishes, fails or is interrupted. `Capture.start` gives hosts the explicit interval, metadata snapshots and final summary. A caller owns encoding and presentation. Browserbase recording and replay services have independent resource lifetimes. No second debugger connection or raw driver is exposed.
+Live capture supplies bounded JPEG frames and metadata from the same owner. `Capture.stream(page)` acquires lazily and releases its interval when consumption finishes, fails or is interrupted. `Capture.start` gives hosts the explicit interval, metadata snapshots and final summary. A caller owns encoding and presentation. Browserbase recording and replay services have independent resource lifetimes. No second debugger connection or raw driver is exposed.
 
 The implementation targets trusted Node/Bun hosts and supports only explicit `Unrestricted` network policy. Chromium launch supports Linux/macOS; borrowed attachment currently accepts concrete loopback CDP WebSockets. Native local validation and hosted-provider evidence are distinct; see [Status](docs/STATUS.md).
 

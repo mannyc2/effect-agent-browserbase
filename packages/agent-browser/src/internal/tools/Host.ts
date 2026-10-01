@@ -3,6 +3,7 @@ import {
   Clock,
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -13,9 +14,15 @@ import {
   Semaphore,
 } from "effect";
 import { RunToolScheduling } from "effect-agent/run-options";
-import type { BrowserSession, NavigationOperation } from "effect-browser/browser";
+import {
+  checkPage,
+  type BrowserSession,
+  type NavigationOperation,
+  type Page,
+} from "effect-browser/browser";
 import type { InputReceipt, SessionStatus } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
+import type { RunOperation, StepFailed } from "effect-browser/plan";
 
 import type {
   FormToolHandlers,
@@ -97,6 +104,23 @@ export interface ToolFailureSnapshot {
   readonly dropped: number;
 }
 
+/** Original live execution evidence, deliberately outside any model or durable schema. */
+export type CallReceipt = {
+  readonly invocationId: string;
+  readonly toolName: string;
+  readonly toolCallId: string | undefined;
+  readonly toolCallIdOmitted: boolean;
+} & (
+  | { readonly _tag: "Run"; readonly operation: RunOperation }
+  | { readonly _tag: "Navigation"; readonly operation: NavigationOperation }
+  | { readonly _tag: "Refused"; readonly error: StepFailed | BrowserError }
+);
+
+export interface CallReceiptSnapshot {
+  readonly receipts: ReadonlyArray<CallReceipt>;
+  readonly dropped: number;
+}
+
 export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly handlers: Layer.Layer<ToolHandlers>;
   readonly readingHandlers: Layer.Layer<ReadingToolHandlers>;
@@ -112,6 +136,8 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly failure: Effect.Effect<never, ToolHostFailure<OwnerError, CallbackError>>;
   /** Original ordinary action errors. Reading never enters browser admission and works after close. */
   readonly toolFailures: Effect.Effect<ToolFailureSnapshot>;
+  /** Latest 32 original capabilities, retained independently of timeline eviction. */
+  readonly receipts: Effect.Effect<CallReceiptSnapshot>;
   /** Provide this host's handlers and supervise the program without closing the borrowed browser. */
   readonly run: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -149,8 +175,10 @@ const HostSettings = {
  */
 export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = never>(
   browser: BrowserSession<OwnerError>,
+  page: Page,
   options: HostOptions<E, R> = {},
 ): Effect.fn.Return<ToolHost<OwnerError, E>, BrowserError, Exclude<R, Scope.Scope> | Scope.Scope> {
+  yield* checkPage(browser, page);
   const resolved = yield* resolveOptions(options);
 
   const maximumInvocations = yield* option(
@@ -182,9 +210,36 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const identity = {};
   const { onNavigation, onInput } = options;
   const toolFailures: ToolFailureDiagnostic[] = [];
+  const receipts: CallReceipt[] = [];
+  let receiptSequence = 0n;
+  let receiptDropped = 0;
   let dropped = 0;
   let closed = false;
   let outstanding = 0;
+
+  const recordReceipt = (
+    call: Call,
+    value:
+      | { readonly _tag: "Run"; readonly operation: RunOperation }
+      | { readonly _tag: "Navigation"; readonly operation: NavigationOperation }
+      | { readonly _tag: "Refused"; readonly error: StepFailed | BrowserError },
+  ) => {
+    const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
+
+    if (receipts.length === 32) {
+      receipts.shift();
+      receiptDropped = Math.min(Number.MAX_SAFE_INTEGER, receiptDropped + 1);
+    }
+    receipts.push(
+      Object.freeze({
+        ...value,
+        invocationId: `call-${++receiptSequence}`,
+        toolName: call.tool,
+        toolCallId: toolCallIdOmitted ? undefined : call.id,
+        toolCallIdOmitted,
+      }),
+    );
+  };
 
   const recordFailure = (error: BrowserError, call: Call) => {
     const encoded = encodeBrowserError(error);
@@ -226,9 +281,13 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     Effect.forkIn(scope, { startImmediately: true }),
   );
 
-  const callbackFailed = () => BrowserToolFailure.make({ reason: "failed", outcome: "unknown" });
+  const callbackFailed = (outcome: "performed" | "unknown" = "unknown") =>
+    BrowserToolFailure.make({ reason: "failed", outcome });
 
-  const invoke = Effect.fnUntraced(function* (effect: Effect.Effect<void, E, R | Scope.Scope>) {
+  const invoke = Effect.fnUntraced(function* (
+    effect: Effect.Effect<void, E, R | Scope.Scope>,
+    outcome: "performed" | "unknown" = "unknown",
+  ) {
     const enclosing = yield* invocations;
 
     return yield* Effect.scoped(effect).pipe(
@@ -237,7 +296,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
 
         return Deferred.failCause(failure, cause).pipe(
-          Effect.andThen(Effect.fail(callbackFailed())),
+          Effect.andThen(Effect.fail(callbackFailed(outcome))),
         );
       }),
     );
@@ -325,7 +384,44 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
   const navigate: NonNullable<Hooks["navigate"]> = Effect.fnUntraced(function* (request, call) {
     const onFailure = failureWith({ run, failure: recordFailure }, call);
-    const operation = yield* browser.startNavigation(request).pipe(Effect.mapError(onFailure));
+
+    const within =
+      resolved.execution.within === undefined
+        ? undefined
+        : Math.floor(Duration.toMillis(resolved.execution.within));
+
+    if (within !== undefined && within < 1) {
+      const error = BrowserError.make({
+        operation: "navigate",
+        reason: Reasons.TimingBudgetExceeded.make({}),
+        outcome: "undispatched",
+      });
+
+      recordReceipt(call, { _tag: "Refused", error });
+
+      return yield* onFailure(error);
+    }
+
+    const timeoutMillis =
+      within === undefined
+        ? resolved.execution.timeoutMillis
+        : Math.min(within, resolved.execution.timeoutMillis ?? 60000);
+
+    const operation = yield* page
+      .startNavigation(request, {
+        ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
+        ...(resolved.execution.admission === undefined
+          ? {}
+          : { admission: resolved.execution.admission }),
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => recordReceipt(call, { _tag: "Refused", error })),
+        ),
+        Effect.mapError(onFailure),
+      );
+
+    recordReceipt(call, { _tag: "Navigation", operation });
     let settled = false;
 
     const completed = operation.completed.pipe(
@@ -351,7 +447,10 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         ? completed
         : Effect.raceFirst(Fiber.join(callback).pipe(Effect.andThen(Effect.never)), completed).pipe(
             Effect.ensuring(Fiber.interrupt(callback)),
-            Effect.filterOrFail(() => !Deferred.isDoneUnsafe(failure), callbackFailed),
+            Effect.filterOrFail(
+              () => !Deferred.isDoneUnsafe(failure),
+              () => callbackFailed(settled ? "performed" : "unknown"),
+            ),
           );
 
     return yield* observed.pipe(
@@ -370,13 +469,18 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     run,
     navigate,
     failure: recordFailure,
+    operation: (operation, call) => recordReceipt(call, { _tag: "Run", operation }),
+    refused: (error, call) => recordReceipt(call, { _tag: "Refused", error }),
     input: (receipt, call) =>
       onInput === undefined
         ? Effect.void
-        : invoke(Effect.suspend(() => onInput({ receipt, toolCallId: call.id }))),
+        : invoke(
+            Effect.suspend(() => onInput({ receipt, toolCallId: call.id })),
+            "performed",
+          ),
   };
 
-  const layers = makeLayers(browser, resolved, hooks, continuationFor(browser));
+  const layers = makeLayers(page, resolved, hooks, continuationFor(page));
 
   const layer = Layer.mergeAll(
     layers.handlers,
@@ -446,6 +550,12 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         dropped,
       });
     }),
+    receipts: Effect.sync(() =>
+      Object.freeze({
+        receipts: Object.freeze([...receipts]),
+        dropped: receiptDropped,
+      }),
+    ),
     run: supervise,
   };
 });
@@ -453,10 +563,12 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 /** Scope one Tool host and each program run, provide handlers, and supervise without owning the browser. */
 export const run = <OwnerError, A, E2, R2, CallbackError = never, CallbackR = never>(
   browser: BrowserSession<OwnerError>,
+  page: Page,
   effect: Effect.Effect<A, E2, R2>,
   options: HostOptions<CallbackError, CallbackR> = {},
 ): Effect.Effect<
   A,
   E2 | ToolHostFailure<OwnerError, CallbackError>,
   ToolRunRequirements<R2> | Exclude<CallbackR, Scope.Scope>
-> => Effect.scoped(makeHost(browser, options).pipe(Effect.flatMap((host) => host.run(effect))));
+> =>
+  Effect.scoped(makeHost(browser, page, options).pipe(Effect.flatMap((host) => host.run(effect))));

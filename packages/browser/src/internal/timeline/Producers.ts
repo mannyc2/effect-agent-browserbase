@@ -8,6 +8,12 @@ import type { AppendInput, makeStore } from "./Store.ts";
 
 export type Store = ReturnType<typeof makeStore>;
 
+/** Native receipts may contain checked Schema classes; journal metadata is plain data. */
+const geometry = (value: { readonly x: number; readonly y: number }) => ({
+  x: value.x,
+  y: value.y,
+});
+
 /** Refusing an external fact must never change the native operation's original outcome. */
 export const publish = (store: Store, input: AppendInput) => {
   const result = store.append(input);
@@ -153,15 +159,36 @@ export const observeTickets =
             event = {
               _tag: "Pointer",
               kind: receipt.kind,
-              position: receipt.position,
+              position: receipt.position === null ? null : geometry(receipt.position),
               ...correlation,
             };
             break;
           case "click":
-            event = { _tag: "Press", position: receipt.position, ...correlation };
+            event = {
+              _tag: "Press",
+              position: receipt.position === null ? null : geometry(receipt.position),
+              ...(receipt.intended === undefined
+                ? {}
+                : {
+                    intended: {
+                      position: geometry(receipt.intended.position),
+                      relativePosition: geometry(receipt.intended.relativePosition),
+                      qualification: receipt.intended.qualification,
+                    },
+                  }),
+              ...correlation,
+            };
             break;
           case "wheel":
-            event = { _tag: "Scroll", kind: "wheel", delta: receipt.delta ?? null, ...correlation };
+            event = {
+              _tag: "Scroll",
+              kind: "wheel",
+              delta:
+                receipt.delta === undefined || receipt.delta === null
+                  ? null
+                  : geometry(receipt.delta),
+              ...correlation,
+            };
             break;
           case "press":
           case "type":
@@ -181,6 +208,7 @@ export const observeTickets =
             operationId: facts.operationId,
             kind: "scroll",
             delta: null,
+            ...(value.qualification === undefined ? {} : { qualification: value.qualification }),
             interval: interval(value.startedMonotonicNanos, value.completedMonotonicNanos),
           },
           actualTarget(value.target),
@@ -196,6 +224,23 @@ export const observeTickets =
           },
           actualTarget(value),
         ),
+      glide: (value) => {
+        if (value.samples.length < 2) return;
+        append(
+          {
+            _tag: "Glide",
+            operationId: facts.operationId,
+            qualification: "intended-schedule",
+            schedule: value.samples.map((sample) => ({
+              at: at(
+                value.startedMonotonicNanos + BigInt(Math.round(sample.offsetMillis * 1_000_000)),
+              ),
+              position: geometry(sample.position),
+            })),
+          },
+          actualTarget(value.target),
+        );
+      },
       finished: (summary) => {
         if (summary.containment._tag !== "NotRequired")
           append({ _tag: "Contained", containment: summary.containment });

@@ -173,7 +173,10 @@ it.effect(
 
         const session = yield* (yield* f.acquisition).connect;
         const prior = yield* session.status;
-        const click = yield* Effect.forkChild(session.operations.click("#act"));
+
+        const click = yield* Effect.forkChild(
+          session.initialPage().controls.operations.click("#act"),
+        );
 
         yield* Effect.promise(() => entered.promise);
         const during = yield* session.status;
@@ -187,7 +190,9 @@ it.effect(
         });
         clicked.resolve();
         yield* Fiber.join(click);
-        expect(yield* Effect.result(session.operations.readText())).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.readText()),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
@@ -197,7 +202,7 @@ it.effect(
           token,
           disposition: "confirmed",
         });
-        expect(yield* session.operations.readText()).toBe("initial");
+        expect(yield* session.initialPage().controls.operations.readText()).toBe("initial");
         const diagnostics = yield* session.diagnostics;
 
         expect(diagnostics.records.map(({ disposition }) => disposition)).toEqual([
@@ -281,9 +286,11 @@ it.effect(
           reason: "dialog-overflow",
           unresolvedDispatch: false,
         });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
         const before = yield* session.diagnostics;
 
@@ -338,7 +345,12 @@ it.effect("an old connection cannot change replacement status or diagnostics", (
         reason: "detached",
         unresolvedDispatch: false,
       });
-      yield* session.reconnect(true);
+      const inventory = yield* session.reconnect(true);
+      const info = inventory.pages[0];
+
+      expect(info).toBeDefined();
+      if (info === undefined) return;
+      const fresh = yield* session.page(info);
       const before = yield* session.status;
       const diagnostics = yield* session.diagnostics;
 
@@ -348,7 +360,7 @@ it.effect("an old connection cannot change replacement status or diagnostics", (
       old?.disconnected();
       expect(yield* session.status).toEqual(before);
       expect(yield* session.diagnostics).toEqual(diagnostics);
-      yield* session.operations.click("#act");
+      yield* fresh.controls.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -435,7 +447,7 @@ it.effect(
 
         const session = yield* (yield* f.acquisition).connect;
 
-        operations = session.operations;
+        operations = session.initialPage().controls.operations;
         const hold = connection?.bindings.find(({ name }) => name === "hold");
         const fail = connection?.bindings.find(({ name }) => name === "fail");
 
@@ -447,7 +459,10 @@ it.effect(
           .catch(() => "rejected");
 
         yield* Deferred.await(entered);
-        const input = yield* Effect.forkChild(session.operations.click("#act").pipe(Effect.result));
+
+        const input = yield* Effect.forkChild(
+          session.initialPage().controls.operations.click("#act").pipe(Effect.result),
+        );
 
         yield* Effect.promise(() => inputEntered.promise);
         yield* Effect.promise(async () => {
@@ -518,7 +533,9 @@ it.effect("capacity refusal is a known terminal block without invented native un
           generation: 0,
         }),
       ]);
-      expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+      expect(
+        yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+      ).toMatchObject({
         _tag: "Failure",
         failure: { outcome: "undispatched" },
       });
@@ -557,13 +574,20 @@ it.effect(
         });
 
         const session = yield* (yield* f.acquisition).connect;
-        const predecessor = yield* session.operations.startNavigation("https://example.test/first");
+
+        const predecessor = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/first");
+
         const captured = controls[0]?.beforeUnload();
 
         expect(captured).toBeDefined();
         first.resolve("https://example.test/first");
         expect(yield* predecessor.completed).toBe("https://example.test/first");
-        const successor = yield* session.operations.startNavigation("https://example.test/second");
+
+        const successor = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/second");
 
         captured?.dismissed(false);
         controls[0]?.beforeUnload().dismissed(false);
@@ -644,7 +668,9 @@ it.effect.each(["consumer", "consumer-initialization-error", "registration"] as 
           reason: origin === "registration" ? "registration-failure" : "callback-failure",
           unresolvedDispatch: origin === "registration",
         });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { outcome: "undispatched" },
         });
@@ -682,7 +708,11 @@ it.effect.each(["ack-first", "reject-first", "unconfirmed"] as const)(
 
         const session = yield* (yield* f.acquisition).connect;
         const page = session.initialPage();
-        const operation = yield* session.operations.startNavigation("https://example.test/first");
+
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/first");
+
         const dialog = control?.beforeUnload();
 
         expect(dialog).toBeDefined();
@@ -716,14 +746,16 @@ it.effect.each(["ack-first", "reject-first", "unconfirmed"] as const)(
           ).toMatchObject([
             { pageId: page.record.identity.pageId, dispatched: true, settled: "completed" },
           ]);
-          expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+          expect(
+            yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+          ).toMatchObject({
             _tag: "Failure",
             failure: { outcome: "undispatched" },
           });
           expect(f.state.clicks).toBe(0);
           expect(dispatches).toBe(1);
         } else {
-          yield* session.operations.click("#act");
+          yield* session.initialPage().controls.operations.click("#act");
           expect(f.state.clicks).toBe(1);
         }
       }),

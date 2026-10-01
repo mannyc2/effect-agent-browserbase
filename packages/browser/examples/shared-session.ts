@@ -25,7 +25,7 @@ export const sharedLayer = (onCleanup: (receipt: ChromiumCleanupResult) => Effec
 export const readSharedPage = Effect.gen(function* () {
   const browser = yield* SharedBrowser;
 
-  return yield* browser.observe({ scope: "viewport" });
+  return yield* browser.initialPage.observe({ scope: "viewport" });
 });
 
 /** The single receipt slot belongs to the host, outside the workflow selected by the timeout. */
@@ -33,7 +33,7 @@ export const racedWorkflow = Effect.fnUntraced(function* (url: string) {
   let receipt: ChromiumCleanupResult | undefined;
 
   const result = yield* Browser.scoped(Chromium.launch(policy), (browser) =>
-    browser.navigate({ url }),
+    browser.initialPage.navigate({ url }),
   ).pipe(
     Effect.timeoutOption("30 seconds"),
     Effect.provide(
@@ -53,7 +53,7 @@ export const racedWorkflow = Effect.fnUntraced(function* (url: string) {
 export const checkedWorkflow = (url: string) =>
   Browser.scoped(Chromium.launch(policy), (browser) =>
     Effect.gen(function* () {
-      yield* browser.navigate({ url });
+      yield* browser.initialPage.navigate({ url });
 
       return yield* browser.closeChecked;
     }),

@@ -22,6 +22,7 @@ import {
 import { BrowserError, Reasons, type BrowserOutcome, type Containment } from "../../Errors.ts";
 import { type RunOperation, type RunOptions, StepFailed } from "../../Plan.ts";
 import type {
+  AcknowledgementFact,
   AttemptResult,
   AttemptSnapshot,
   DescriptorCapture,
@@ -32,12 +33,16 @@ import type {
   RanStep,
   RunPhase,
   RunReceipt,
+  RunTiming,
+  Performed,
+  PerformanceEvidence,
   Step,
   StepAttempt,
 } from "../../PlanData.ts";
 import type { Correlation, Payload } from "../../TimelineData.ts";
 import type { DescriptorSample, ResolvedElement } from "./Descriptor.ts";
 import type { Ticket } from "./Owner.ts";
+import { prepare, type PerformancePlan } from "./Performance.ts";
 import { capture, inputSlots, pathKey, type TargetSample, validateInputs } from "./Recording.ts";
 import type { ExecutionOptions } from "./Session.ts";
 
@@ -57,9 +62,11 @@ export interface StepExecution {
   readonly targets: (bindings: ReadonlyArray<TargetBinding>) => void;
   /** Partial form/input evidence survives a later failed verification, submit or postcondition. */
   readonly retainReceipt: (receipt: RunReceipt) => void;
+  readonly performance?: PerformancePlan;
 }
 
 export interface ValidatedRunOptions extends RunOptions {
+  readonly style?: "plain" | Performed;
   readonly withinMillis?: number;
   readonly queueMillis?: number;
 }
@@ -75,6 +82,7 @@ export interface PlanExecutionOptions {
   readonly lifetimeDeadline: number;
   readonly actionTimeoutMillis: number;
   readonly newId: Effect.Effect<string>;
+  readonly newSeed?: Effect.Effect<number>;
   /** Captured at run execution and retained with its original domain, never an evidence owner. */
   readonly publish?: () => {
     readonly append: (correlation: Correlation, event: Payload) => void;
@@ -118,6 +126,7 @@ interface AttemptState {
   completed: boolean;
   pending: number;
   acknowledged: boolean;
+  partialAcknowledged: boolean;
   capture?: DescriptorCapture;
   receipt?: RunReceipt;
   outcome?: BrowserOutcome;
@@ -125,6 +134,7 @@ interface AttemptState {
   cause?: Cause.Cause<BrowserError>;
   result?: AttemptResult;
   containment: Containment;
+  performance?: PerformanceEvidence;
 }
 
 const attemptSnapshot = (state: AttemptState): StepAttempt =>
@@ -143,11 +153,13 @@ const attemptSnapshot = (state: AttemptState): StepAttempt =>
     ...(state.result === undefined ? {} : { result: state.result }),
     containment: state.containment,
     completed: state.completed,
+    ...(state.performance === undefined ? {} : { performance: state.performance }),
   });
 
 const outcome = (state: AttemptState, error?: BrowserError): BrowserOutcome => {
-  if (error?.outcome === "unknown" || (error === undefined && state.pending > 0)) return "unknown";
-  if (error?.outcome === "performed" || state.acknowledged) return "performed";
+  if (error?.outcome === "unknown" || state.pending > 0) return "unknown";
+  if (state.acknowledged) return "performed";
+  if (state.partialAcknowledged) return "rejected";
 
   return error?.outcome ?? "undispatched";
 };
@@ -181,7 +193,9 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
   ): Effect.Effect<RunOperation, StepFailed, Scope.Scope> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const began = now();
+        const requestedMonotonicNanos = configuration.clock.monotonicTimeNanosUnsafe();
+        const intendedMonotonicNanos = options.startAt ?? requestedMonotonicNanos;
+        const began = Number(intendedMonotonicNanos) / 1_000_000;
 
         const runDeadline = Math.min(
           configuration.lifetimeDeadline,
@@ -207,6 +221,40 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
 
         yield* restore(configuration.validate).pipe(Effect.mapError(preparationFailure));
         yield* restore(validateInputs(plan, inputs)).pipe(Effect.mapError(preparationFailure));
+        if (!Number.isFinite(began) || !Number.isFinite(runDeadline))
+          return yield* preparationFailure(
+            BrowserError.make({
+              operation: "run",
+              reason: Reasons.Configuration.make({ path: "startAt" }),
+              outcome: "undispatched",
+            }),
+          );
+        if (began >= runDeadline || now() >= runDeadline)
+          return yield* preparationFailure(
+            BrowserError.make({
+              operation: "run",
+              reason: Reasons.ScheduleMissed.make({}),
+              outcome: "undispatched",
+            }),
+          );
+
+        const style =
+          options.style === undefined || options.style === "plain" ? undefined : options.style;
+
+        const seed =
+          style === undefined
+            ? undefined
+            : (style.seed ??
+              (configuration.newSeed === undefined
+                ? yield* preparationFailure(
+                    BrowserError.make({
+                      operation: "run",
+                      reason: Reasons.Configuration.make({ path: "style.seed" }),
+                      outcome: "undispatched",
+                    }),
+                  )
+                : yield* restore(configuration.newSeed)));
+
         const runId = yield* restore(configuration.newId);
         const ids = yield* restore(Effect.forEach(plan.steps, () => configuration.newId));
         const release = yield* configuration.reserve.pipe(Effect.mapError(preparationFailure));
@@ -214,12 +262,14 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
         const publish = publication?.append;
         let released = false;
 
-        const releaseOnce = Effect.sync(() => {
+        const releaseAll = () => {
           if (released) return;
           released = true;
           release();
           publication?.release();
-        });
+        };
+
+        const releaseOnce = Effect.sync(releaseAll);
 
         yield* Effect.addFinalizer(() => releaseOnce);
         freezeData(plan);
@@ -229,15 +279,46 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
         const completion = yield* Deferred.make<Ran, StepFailed>();
         let terminal = false;
 
+        let timing: RunTiming = Object.freeze({
+          requestedMonotonicNanos,
+          intendedMonotonicNanos,
+          startedMonotonicNanos: null,
+          deadlineMonotonicNanos: BigInt(Math.floor(runDeadline * 1_000_000)),
+          latenessNanos: null,
+          ...(seed === undefined ? {} : { seed }),
+        });
+
         const snapshot = (): AttemptSnapshot =>
           Object.freeze({
             runId,
             attempts: Object.freeze(attempts.map(attemptSnapshot)),
             completed: Object.freeze([...completed]),
             terminal,
+            timing,
           });
 
         const worker = Effect.gen(function* () {
+          const remaining = began - now();
+
+          if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
+          const startedMonotonicNanos = configuration.clock.monotonicTimeNanosUnsafe();
+
+          timing = Object.freeze({
+            ...timing,
+            startedMonotonicNanos,
+            latenessNanos:
+              startedMonotonicNanos > intendedMonotonicNanos
+                ? startedMonotonicNanos - intendedMonotonicNanos
+                : 0n,
+          });
+          if (now() >= runDeadline)
+            return yield* preparationFailure(
+              BrowserError.make({
+                operation: "run",
+                reason: Reasons.ScheduleMissed.make({}),
+                outcome: "undispatched",
+              }),
+            );
           for (let index = 0; index <= last; index++) {
             const step = plan.steps[index];
             const attemptId = ids[index];
@@ -279,6 +360,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
               completed: false,
               pending: 0,
               acknowledged: false,
+              partialAcknowledged: false,
               containment: { _tag: "NotRequired" },
             };
 
@@ -292,6 +374,17 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
             });
 
             publish?.(correlation(), { _tag: "Planned", action: step.action._tag });
+
+            const performance =
+              style === undefined || seed === undefined
+                ? undefined
+                : yield* prepare(style, seed, step.id);
+
+            if (performance !== undefined)
+              state.performance = Object.freeze({
+                seed: performance.seed,
+                profile: performance.profile,
+              });
             const finishedTickets = new WeakSet<Ticket>();
             const pendingTickets = new WeakMap<Ticket, boolean>();
 
@@ -302,6 +395,8 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
 
             const retainedInputs = new WeakSet<InputReceipt>();
             const checkedSamples = new Set<string>();
+            let lastDispatchTicket: Ticket | undefined;
+            let lastBurstTicket: Ticket | undefined;
 
             const append = (evidence: PhaseEvidence): void => {
               if (state.phases.length >= maximumPhases) {
@@ -316,6 +411,144 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 return;
               }
               state.phases.push(Object.freeze(evidence));
+            };
+
+            const appendPhase = (evidence: PhaseEvidence, ticket: Ticket): void => {
+              if (evidence.phase === "Dispatched") lastDispatchTicket = ticket;
+              const fact = evidence.acknowledgement;
+
+              if (
+                evidence.phase !== "Acknowledged" ||
+                fact === undefined ||
+                fact.logicalComplete ||
+                (fact.subphase !== "key-burst" && fact.subphase !== "scroll-burst") ||
+                lastDispatchTicket !== ticket
+              ) {
+                if (evidence.phase !== "Dispatched") lastBurstTicket = undefined;
+                append(evidence);
+
+                return;
+              }
+              let start = state.phases.length;
+
+              while (start > 0) {
+                const previous = state.phases[start - 1];
+
+                if (
+                  previous?.phase !== "Dispatched" ||
+                  previous.operation !== evidence.operation ||
+                  previous.fieldIndex !== evidence.fieldIndex ||
+                  previous.late !== evidence.late
+                )
+                  break;
+                start--;
+              }
+              const dispatched = state.phases[start];
+
+              if (dispatched === undefined) {
+                lastBurstTicket = undefined;
+                append(evidence);
+
+                return;
+              }
+              const dispatches = state.phases.length - start;
+              const previous = state.phases[start - 1];
+
+              const combine =
+                lastBurstTicket === ticket &&
+                previous?.phase === "Acknowledged" &&
+                previous.burst?.subphase === fact.subphase &&
+                previous.operation === evidence.operation &&
+                previous.fieldIndex === evidence.fieldIndex &&
+                previous.late === evidence.late;
+
+              state.phases.splice(start);
+
+              const burst = Object.freeze({
+                subphase: fact.subphase,
+                dispatches: dispatches + (combine ? (previous.burst?.dispatches ?? 0) : 0),
+                acknowledgements: 1 + (combine ? (previous.burst?.acknowledgements ?? 0) : 0),
+                firstDispatchedMonotonicNanos: combine
+                  ? (previous.burst?.firstDispatchedMonotonicNanos ?? dispatched.atMonotonicNanos)
+                  : dispatched.atMonotonicNanos,
+                lastAcknowledgedMonotonicNanos: evidence.atMonotonicNanos,
+              });
+
+              if (combine) {
+                state.phases[start - 1] = Object.freeze({ ...previous, ...evidence, burst });
+              } else append({ ...evidence, burst });
+              lastBurstTicket = ticket;
+            };
+
+            const retainScroll = (
+              facts: Parameters<
+                NonNullable<NonNullable<ExecutionOptions["evidence"]>["scroll"]>
+              >[0],
+              ticket: Ticket,
+            ): void => {
+              const late =
+                state.completed ||
+                finishedTickets.has(ticket) ||
+                ticket.signal.aborted ||
+                now() >= ticket.deadline;
+
+              const scroll: NonNullable<PhaseEvidence["scroll"]> = Object.freeze({
+                target: Object.freeze({
+                  generation: ticket.generation,
+                  pageId: facts.target.pageId,
+                  frameId: facts.target.frameId,
+                }),
+                startedMonotonicNanos: facts.startedMonotonicNanos,
+                completedMonotonicNanos: facts.completedMonotonicNanos,
+                qualification: facts.qualification ?? "native-call-interval",
+                ...(facts.x === undefined || facts.y === undefined
+                  ? {}
+                  : { delta: Object.freeze({ x: facts.x, y: facts.y }) }),
+              });
+
+              const index = state.phases.length - 1;
+              const previous = state.phases[index];
+
+              if (
+                !late &&
+                previous?.phase === "Acknowledged" &&
+                !previous.late &&
+                previous.operation === state.phase &&
+                previous.fieldIndex === state.fieldIndex
+              ) {
+                const original = previous.scroll;
+
+                const delta =
+                  original?.delta !== undefined && scroll.delta !== undefined
+                    ? Object.freeze({
+                        x: original.delta.x + scroll.delta.x,
+                        y: original.delta.y + scroll.delta.y,
+                      })
+                    : scroll.delta;
+
+                state.phases[index] = Object.freeze({
+                  ...previous,
+                  scroll:
+                    original === undefined
+                      ? scroll
+                      : Object.freeze({
+                          ...scroll,
+                          startedMonotonicNanos: original.startedMonotonicNanos,
+                          ...(delta === undefined ? {} : { delta }),
+                        }),
+                });
+
+                return;
+              }
+              lastBurstTicket = undefined;
+              append({
+                phase: "SubphaseReceipt",
+                operation: state.phase,
+                atMonotonicNanos: facts.completedMonotonicNanos,
+                late,
+                scroll,
+                ...(state.fieldIndex === undefined ? {} : { fieldIndex: state.fieldIndex }),
+              });
             };
 
             const retainInput = (
@@ -371,6 +604,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
             };
 
             const context: StepExecution = {
+              ...(performance === undefined ? {} : { performance }),
               ...(options.policy === undefined ? {} : { policy: options.policy }),
               ...(options.checkpoint === undefined
                 ? {}
@@ -403,7 +637,11 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 ...(queueDeadline === undefined ? {} : { queueDeadline }),
                 evidence: {
                   correlation,
-                  phase: (phase, ticket) => {
+                  phase: (
+                    phase: NonNullable<Ticket["phase"]>,
+                    ticket: Ticket,
+                    acknowledgement?: AcknowledgementFact,
+                  ) => {
                     const late =
                       state.completed ||
                       finishedTickets.has(ticket) ||
@@ -418,15 +656,28 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
 
                       if (pending) state.pending--;
                       pendingTickets.set(ticket, false);
-                      if (pending && !late) state.acknowledged = true;
+                      if (!late) {
+                        if (
+                          (acknowledgement === undefined || acknowledgement.logicalComplete) &&
+                          ticket.dispatched
+                        )
+                          state.acknowledged = true;
+                        else if (pending) state.partialAcknowledged = true;
+                      }
                     }
-                    append({
-                      phase,
-                      operation: state.phase,
-                      atMonotonicNanos: configuration.clock.monotonicTimeNanosUnsafe(),
-                      late,
-                      ...(state.fieldIndex === undefined ? {} : { fieldIndex: state.fieldIndex }),
-                    });
+                    appendPhase(
+                      {
+                        phase,
+                        operation: state.phase,
+                        atMonotonicNanos: configuration.clock.monotonicTimeNanosUnsafe(),
+                        late,
+                        ...(state.fieldIndex === undefined ? {} : { fieldIndex: state.fieldIndex }),
+                        ...(acknowledgement === undefined
+                          ? {}
+                          : { acknowledgement: Object.freeze({ ...acknowledgement }) }),
+                      },
+                      ticket,
+                    );
                     if (phase === "Terminal") {
                       finishedTickets.add(ticket);
                       if (
@@ -436,6 +687,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                         state.containment = Object.freeze({ ...ticket.containment });
                     }
                   },
+                  scroll: retainScroll,
                   target: (target, sample) => {
                     if (state.completed) return;
                     for (const path of targetBindings.get(target) ?? []) {
@@ -578,6 +830,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
           return freezeData({
             runId,
             version: 1 as const,
+            timing,
             steps: Object.freeze([...completed]),
             completion:
               options.through === undefined
@@ -588,18 +841,20 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                     next: next === undefined ? null : { index: last + 1, stepId: next.id },
                   },
           });
-        }).pipe(
-          Effect.onExit((exit) =>
-            Effect.sync(() => {
-              terminal = true;
-              Deferred.doneUnsafe(completion, exit);
-            }).pipe(Effect.andThen(releaseOnce)),
-          ),
-        );
+        });
 
         const fiber = yield* worker.pipe(
           Effect.forkScoped({ startImmediately: false, uninterruptible: false }),
         );
+
+        // Fiber observers cover interruption before the deferred worker evaluates any onExit.
+        yield* Effect.sync(() => {
+          fiber.addObserver((exit) => {
+            terminal = true;
+            Deferred.doneUnsafe(completion, exit);
+            releaseAll();
+          });
+        });
 
         return Object.freeze({
           id: runId,

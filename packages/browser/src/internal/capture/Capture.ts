@@ -619,7 +619,7 @@ export const startCapture = Effect.fnUntraced(function* (
   yield* parent.validate ?? Effect.void;
 
   const requested = yield* Effect.try({
-    try: () => options.target ?? parent.selectedPage(),
+    try: () => parent.selectedPage(),
     catch: () =>
       BrowserError.make({
         operation: "capture-start",

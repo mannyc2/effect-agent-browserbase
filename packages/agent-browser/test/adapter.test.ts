@@ -82,46 +82,24 @@ it.effect(
     ),
 );
 
-it.effect("adaptation retains lazily and the framework layer translates failed retention", () =>
+it.effect("adaptation authenticates the exact Session and Page when acquired", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      let retained = 0;
-
-      const expected = BrowserError.make({
-        operation: "handle",
-        reason: Reasons.Busy.make({}),
-        outcome: "undispatched",
-      });
-
-      const browser = scriptedSession({
-        retain: () =>
-          Effect.suspend(() => {
-            retained++;
-
-            return Effect.fail(expected);
-          }),
-      });
-
-      const pending = fromSession(browser, { selection: "retained" });
-
-      expect(retained).toBe(0);
-      const invalid = { selection: "current" as const };
-
-      Reflect.deleteProperty(invalid, "selection");
-      const invalidSelection = yield* fromSession(browser, invalid).pipe(Effect.flip);
-
-      expect(invalidSelection).toMatchObject({
-        operation: "configure",
-        reason: { _tag: "Configuration", path: "selection" },
-        outcome: "undispatched",
-      });
-      expect(retained).toBe(0);
-      const current = yield* fromSession(browser, { selection: "current" });
+      const browser = yield* scriptedSession();
+      const foreign = yield* scriptedSession();
+      const pending = fromSession(browser, browser.initialPage);
+      const current = yield* pending;
 
       expect(current.browser).toBe(browser);
-      expect(retained).toBe(0);
-      expect(yield* pending.pipe(Effect.flip)).toBe(expected);
-      expect(retained).toBe(1);
+      for (const page of [foreign.initialPage, { ...browser.initialPage }]) {
+        expect(yield* fromSession(browser, page).pipe(Effect.flip)).toMatchObject({
+          operation: "target",
+          reason: { _tag: "UnregisteredSession" },
+          outcome: "undispatched",
+        });
+      }
+      yield* browser.initialPage.close();
+      expect(yield* pending.pipe(Effect.flip)).toMatchObject({ reason: { _tag: "Stale" } });
 
       const context = yield* Layer.build(
         interactiveLayer({
@@ -130,10 +108,9 @@ it.effect("adaptation retains lazily and the framework layer translates failed r
         }),
       );
 
-      const error = yield* Context.get(context, InteractiveBrowser).open(policy).pipe(Effect.flip);
-
-      expect(error._tag).toBe("InteractiveBrowserBusyError");
-      expect(retained).toBe(2);
+      expect(
+        yield* Context.get(context, InteractiveBrowser).open(policy).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
     }),
   ),
 );
@@ -154,8 +131,8 @@ it.effect("only factual supported limits map to the framework's stricter limit s
         outcome: "undispatched",
       });
 
-      const browser = scriptedSession({ readText: () => Effect.fail(source) });
-      const adapted = yield* fromSession(browser, { selection: "current" });
+      const browser = yield* scriptedSession({ readText: () => Effect.fail(source) });
+      const adapted = yield* fromSession(browser, browser.initialPage);
       const error = yield* adapted.handle.readText({}).pipe(Effect.flip);
 
       if (limit === undefined) {
@@ -179,22 +156,28 @@ it.effect(
   "a concrete checked receipt is retained on the browser while framework close returns void",
   () =>
     Effect.gen(function* () {
-      const receipt = Object.freeze({ confirmed: true });
       let closes = 0;
+      const browser = yield* scriptedSession();
+      const original = browser.closeChecked;
 
-      const browser = {
-        ...scriptedSession(),
-        closeChecked: Effect.sync(() => {
-          closes++;
+      Object.assign(browser, {
+        closeChecked: original.pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              closes++;
+            }),
+          ),
+        ),
+      });
 
-          return receipt;
-        }),
-      };
-
-      const adapted = yield* fromSession(browser, { selection: "current" });
+      const adapted = yield* fromSession(browser, browser.initialPage);
 
       expect(adapted.browser).toBe(browser);
       expect(yield* adapted.handle.close).toBeUndefined();
       expect(closes).toBe(1);
+      expect(yield* adapted.browser.closeChecked).toMatchObject({
+        reference: browser.reference,
+        connection: "closed",
+      });
     }),
 );

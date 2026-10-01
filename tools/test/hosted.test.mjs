@@ -59,7 +59,11 @@ test("the hosted runner refuses to allocate without an explicit operator opt-in"
 
 const hostedDirectory = "packages/browserbase/hosted";
 const registry = await loadRegistry(join(root, hostedDirectory, "checks.ts"));
-const knownSettings = new Set(["BROWSERBASE_ARTIFACT_ORIGINS", "BROWSERBASE_PAGE_AUTHORITY_URL"]);
+const knownSettings = new Set([
+  "BROWSERBASE_ARTIFACT_ORIGINS",
+  "BROWSERBASE_PAGE_AUTHORITY_URL",
+  "BROWSERBASE_PERFORMED_PRESENTATION_URL",
+]);
 
 test("every registered check is a case that passes through the one gate", () => {
   const files = readdirSync(join(root, hostedDirectory)).filter((name) => name.endsWith(".ts"));

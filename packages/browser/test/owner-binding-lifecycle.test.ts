@@ -10,7 +10,7 @@ import {
   makeBindings,
   preparePlan,
 } from "../src/internal/browser/Bindings.ts";
-import type { SessionControls } from "../src/internal/browser/Session.ts";
+import type { PageControls } from "../src/internal/browser/Session.ts";
 import { fixture } from "./fixtures/ScriptedOwner.ts";
 
 for (const strategy of ["sequential", "parallel"] as const) {
@@ -27,7 +27,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
 
         const state: {
           connection?: ConnectionBindings;
-          controls?: Pick<SessionControls, "operations">;
+          controls?: Pick<PageControls, "operations">;
           finalizerError?: BrowserError;
           finalizerSucceeded: boolean;
         } = { finalizerSucceeded: false };
@@ -91,7 +91,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
 
           const acquired = yield* scripted.acquisition;
 
-          state.controls = yield* acquired.connect;
+          state.controls = (yield* acquired.connect).initialPage().controls;
           const binding = state.connection?.bindings[0];
 
           assert.ok(binding);
@@ -116,7 +116,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
         yield* Scope.close(parent, Exit.void);
         assert.equal(yield* Effect.promise(() => reply), "rejected");
         assert.equal(state.finalizerSucceeded, false);
-        assert.equal(state.finalizerError?.reason._tag, "Closed");
+        assert.equal(state.finalizerError?.reason._tag, "Stale");
         assert.equal(state.finalizerError?.outcome, "undispatched");
         assert.equal(scripted.state.clicks, 0);
         assert.ok(order.indexOf("fence") < order.indexOf("callback-finalizer"));

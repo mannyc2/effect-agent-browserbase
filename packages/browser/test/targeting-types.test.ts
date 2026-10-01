@@ -1,13 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import type { Effect, Scope } from "effect";
-import type {
-  BrowserSession,
-  Frame,
-  Page,
-  TargetOperations,
-  RetainedTarget,
-  PinnedTarget,
-} from "effect-browser/browser";
+import type { BrowserSession, Frame, Page, PageOperations } from "effect-browser/browser";
 import type {
   FrameInfo,
   Observation,
@@ -22,15 +15,13 @@ import * as PageControl from "effect-browser/page-control";
 type Same<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
-const pinPage = (session: BrowserSession, page: PageInfo) => session.pinPage(page);
+const page = (session: BrowserSession, info: PageInfo) => session.page(info);
 
-const pinFrame = (session: BrowserSession, page: PageInfo, frame: FrameInfo) =>
-  session.pinFrame(page, frame);
+const frame = (page: Page, info: FrameInfo) => page.frame(info);
 
-const framesOf = (session: BrowserSession, page: PageInfo) => session.framesOf(page);
-const directRead = (session: BrowserSession) => session.readText({});
-const asOperations = (session: BrowserSession): TargetOperations => session;
-const retain = (session: BrowserSession) => session.retain();
+const framesOf = (page: Page) => page.listFrames();
+const directRead = (session: BrowserSession) => session.initialPage.readText({});
+const asOperations = (page: Page): PageOperations => page;
 const create = (session: BrowserSession) => session.createPage();
 const select = (session: BrowserSession, page: PageInfo) => session.selectPage(page);
 
@@ -39,22 +30,19 @@ const removedInputs = (session: BrowserSession) => {
   void session.selectPage("page-1");
   // @ts-expect-error Closure checks the same PageInfo and native target identity as selection.
   void session.closePage("page-1");
-  // @ts-expect-error Retention is an admitted Effect, not an unchecked synchronous factory.
+  // @ts-expect-error Removed selected factories cannot manufacture Page authority.
   void session.bind();
-  // @ts-expect-error Current operations and checked retention have separate explicit APIs.
+  // @ts-expect-error Selection metadata cannot manufacture executable Page authority.
   void session.currentTarget;
 };
 
-const pageResult: Same<Effect.Success<ReturnType<typeof pinPage>>, PinnedTarget> = true;
-const frameResult: Same<Effect.Success<ReturnType<typeof pinFrame>>, PinnedTarget> = true;
+const pageResult: Same<Effect.Success<ReturnType<typeof page>>, Page> = true;
+const frameResult: Same<Effect.Success<ReturnType<typeof frame>>, Frame> = true;
 const frameList: Same<Effect.Success<ReturnType<typeof framesOf>>, ReadonlyArray<FrameInfo>> = true;
 const readResult: Same<Effect.Success<ReturnType<typeof directRead>>, TextResult> = true;
 const readError: Same<Effect.Error<ReturnType<typeof directRead>>, BrowserError> = true;
 const readServices: Same<Effect.Services<ReturnType<typeof directRead>>, never> = true;
-const targetIdentity: Same<PinnedTarget["target"], Target> = true;
-const retainedResult: Same<Effect.Success<ReturnType<typeof retain>>, RetainedTarget> = true;
-const retainedError: Same<Effect.Error<ReturnType<typeof retain>>, BrowserError> = true;
-const retainedServices: Same<Effect.Services<ReturnType<typeof retain>>, never> = true;
+const targetIdentity: Same<Page["identity"], Target> = true;
 const createdResult: Same<Effect.Success<ReturnType<typeof create>>, PageInfo> = true;
 const selectedResult: Same<Effect.Success<ReturnType<typeof select>>, void> = true;
 
@@ -113,7 +101,7 @@ it("issued Page and Frame operations retain typed errors and require Scope for o
   ).toBe(true);
 });
 
-it("direct selected operations and pinned targets preserve the public Effect contract", () => {
+it("issued exact Page and Frame targets preserve the public Effect contract", () => {
   expect(
     pageResult &&
       frameResult &&
@@ -122,9 +110,6 @@ it("direct selected operations and pinned targets preserve the public Effect con
       readError &&
       readServices &&
       targetIdentity &&
-      retainedResult &&
-      retainedError &&
-      retainedServices &&
       createdResult &&
       selectedResult,
   ).toBe(true);

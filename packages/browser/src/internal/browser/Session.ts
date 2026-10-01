@@ -117,6 +117,7 @@ export interface FormSettings {
 
 /** Private composite bounds and evidence cannot enter through decoded public options. */
 export interface ExecutionOptions extends OperationOptions {
+  readonly performance?: Ticket["performance"];
   readonly operationDeadline?: number;
   readonly queueDeadline?: number;
   readonly evidence?: ExecutionEvidence;
@@ -340,7 +341,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const clock = owner.clock;
   let activeRuns = 0;
   const pageRuns = new Map<string, number>();
-  const uuid = randomUuid(yield* Crypto.Crypto);
+  const crypto = yield* Crypto.Crypto;
+  const uuid = randomUuid(crypto);
   const clockId = yield* uuid;
   const originNanos = clock.monotonicTimeNanosUnsafe();
 
@@ -1169,54 +1171,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       : Effect.succeed(bytes);
   };
 
-  // Reading a target is an ownership operation too. A native mutation that times out
-  // after dispatch fences the owner as uncertain; retaining the last native target
-  // must not manufacture a fresh usable handle in that state.
-  const readSelected = (operationOptions?: ExecutionOptions) =>
-    Effect.try({
-      try: capture.target,
-      catch: (cause) =>
-        publicError(cause, "target", {
-          reason: Reasons.Closed.make({}),
-          outcome: "undispatched",
-        }),
-    }).pipe(
-      Effect.flatMap((selected) =>
-        owner.guard(
-          "target",
-          (ticket) =>
-            pages.has(selected.pageId)
-              ? Effect.succeed(selected)
-              : native("target", ticket, async () => {
-                  const current = getDriver();
-
-                  const info = (await current.listPages(ticket)).find(
-                    (info) => info.pageId === selected.pageId,
-                  );
-
-                  if (info === undefined)
-                    throw BrowserError.make({
-                      operation: "target",
-                      reason: Reasons.Stale.make({}),
-                      outcome: "undispatched",
-                    });
-                  const target = await current.resolvePage(info, ticket);
-
-                  ticket.check();
-                  registerPage(info, target, ticket.generation);
-
-                  return selected;
-                }),
-          {
-            ...operationOptions,
-            charge: false,
-            targetScope: () => ({ pageId: selected.pageId }),
-            preflight: checkTarget(selected, selected.generation),
-          },
-        ),
-      ),
-    );
-
   /**
    * While a navigation is in flight on the selected page, nothing else may change that page.
    * Reads, checkpoints, holds and every other page proceed.
@@ -1348,6 +1302,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly operationDeadline?: number;
       readonly queueDeadline?: number;
       readonly evidence?: ExecutionEvidence;
+      readonly performance?: Ticket["performance"];
       readonly beforeNative?: (driver: Driver, ticket: Ticket) => Promise<void>;
       readonly validate?: Effect.Effect<void, BrowserError>;
       readonly containPageId?: string;
@@ -1517,10 +1472,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         );
     });
 
-  /**
-   * Direct operations capture selection at execution before admission. Retained operations
-   * capture selection and generation; pinned operations capture their explicit page/frame.
-   */
+  /** Input receipt boundaries retain the admitted exact target and original owner clock. */
   const captureClickAt =
     (target: Target, ticket: Ticket): InputCapture =>
     async (dispatch, dispatched) => {
@@ -1541,22 +1493,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       return receipt;
     };
 
-  const makeOperations = (retained?: {
+  const makeOperations = (issued: {
     readonly generation: number;
-    readonly selection?: number;
-    readonly target?: DriverTarget;
+    readonly target: DriverTarget;
   }) => {
-    const browserTarget = retained?.target;
-    const authority = browserTarget === undefined ? undefined : pages.get(browserTarget.pageId);
-
-    const frameAuthority =
-      browserTarget === undefined ? undefined : authority?.frames.get(browserTarget.frameId);
+    const browserTarget = issued.target;
+    const authority = pages.get(browserTarget.pageId);
+    const frameAuthority = authority?.frames.get(browserTarget.frameId);
 
     const check = () => {
       if (
-        (retained !== undefined &&
-          (owner.state.generation !== retained.generation ||
-            (retained.selection !== undefined && owner.state.selection !== retained.selection))) ||
+        owner.state.generation !== issued.generation ||
         (authority !== undefined && authority.phase !== "open") ||
         frameAuthority?.detached === true
       ) {
@@ -1582,7 +1529,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         return Effect.suspend(check).pipe(
           Effect.andThen(
             Effect.try({
-              try: () => browserTarget ?? getDriver().selected(),
+              try: () => browserTarget,
               catch: (cause) =>
                 publicError(cause, operation, {
                   reason: Reasons.Closed.make({}),
@@ -1621,10 +1568,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         );
       });
 
-    const operationTarget = (target?: DriverTarget) =>
-      target === undefined
-        ? capture.target()
-        : Target.make({ generation: retained?.generation ?? owner.state.generation, ...target });
+    const operationTarget = (target: DriverTarget) =>
+      Target.make({ generation: issued.generation, ...target });
 
     /**
      * Native input, stamped on the host monotonic clock that stamps captured frames, around
@@ -2061,13 +2006,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
             const result = await driver.scroll(x, y, ticket, browserTarget);
 
-            ticket.recordScroll?.({
-              target: browserTarget,
-              x,
-              y,
-              startedMonotonicNanos,
-              completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
-            });
+            if (ticket.performance === undefined)
+              ticket.recordScroll?.({
+                target: browserTarget,
+                x,
+                y,
+                startedMonotonicNanos,
+                completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+              });
 
             return result;
           },
@@ -2228,51 +2174,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return port;
   };
 
-  const pinned = (
-    info: PageInfo,
-    resolve: (driver: Driver, ticket: Ticket) => Promise<DriverTarget>,
-    operationOptions?: ExecutionOptions,
-  ) =>
-    owner.guard(
-      "target",
-      (ticket) =>
-        native("target", ticket, async () => {
-          const value = await resolve(getDriver(), ticket);
-
-          ticket.check();
-          if (!pages.has(info.pageId)) {
-            const main = await getDriver().resolvePage(info, ticket);
-
-            ticket.check();
-            registerPage(info, main, ticket.generation);
-          }
-
-          return {
-            target: Target.make({ generation: ticket.generation, ...value }),
-            operations: makeOperations({ generation: ticket.generation, target: value }),
-          };
-        }),
-      { ...operationOptions, charge: false, targetScope: () => ({ pageId: info.pageId }) },
-    );
-
-  const retain = (operationOptions?: ExecutionOptions) =>
-    Effect.suspend(() => {
-      const selection = owner.state.selection;
-
-      return readSelected(operationOptions).pipe(
-        Effect.map((target) =>
-          makeOperations({
-            generation: target.generation,
-            selection,
-            target: { pageId: target.pageId, frameId: target.frameId },
-          }),
-        ),
-      );
-    });
-
-  const makePageControls = (target?: DriverTarget, generation?: number) => {
-    const authority = target === undefined ? undefined : pages.get(target.pageId);
-    const frameAuthority = target === undefined ? undefined : authority?.frames.get(target.frameId);
+  const makePageControls = (target: DriverTarget, generation: number) => {
+    const authority = pages.get(target.pageId);
+    const frameAuthority = authority?.frames.get(target.frameId);
 
     const validate = Effect.suspend(() =>
       (authority !== undefined && authority.phase !== "open") || frameAuthority?.detached === true
@@ -2288,22 +2192,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     const bound = {
       validate,
-      targetScope: () => (target === undefined ? ("none" as const) : { pageId: target.pageId }),
-      ...(target === undefined ? {} : { target }),
-      ...(generation === undefined ? {} : { generation }),
+      targetScope: () => ({ pageId: target.pageId }),
+      target,
+      generation,
     };
 
-    const targetData = (actual: DriverTarget | undefined = target) =>
-      actual === undefined
-        ? capture.target()
-        : Target.make({ generation: generation ?? owner.state.generation, ...actual });
+    const targetData = (actual: DriverTarget = target) => Target.make({ generation, ...actual });
 
     const controls = {
       resolve: (descriptor: Descriptor, guard: ResolveGuard, operationOptions?: ExecutionOptions) =>
         nativeOperation(
           "resolve",
-          (driver, ticket) =>
-            driver.resolveDescriptor(descriptor, ticket, target ?? driver.selected(), guard),
+          (driver, ticket) => driver.resolveDescriptor(descriptor, ticket, target, guard),
           { ...bound, ...operationOptions, charge: "host-read" },
         ),
       settled: (
@@ -2365,11 +2265,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             preflight: waitFree("page-resume", receipt.pageId),
           }),
       },
-      operations: makeOperations(
-        target === undefined
-          ? undefined
-          : { generation: generation ?? owner.state.generation, target },
-      ),
+      operations: makeOperations({ generation, target }),
       observe: (reading: Reading = { scope: "document" }, operationOptions?: ExecutionOptions) =>
         textBudget("observe", reading.maxTextBytes).pipe(
           Effect.flatMap((bytes) =>
@@ -2391,7 +2287,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     ...operationOptions,
                     targetScope: bound.targetScope,
                     preflight: checkTarget(target, generation).pipe(
-                      Effect.andThen(waitFree("observe", target?.pageId)),
+                      Effect.andThen(waitFree("observe", target.pageId)),
                     ),
                   },
                 ),
@@ -2462,7 +2358,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               typeof options === "function" ? options() : options,
               ticket,
               policy,
-              effectiveTarget(ref, target ?? driver.selected()),
+              effectiveTarget(ref, target),
             );
           },
           { ...bound, ...operationOptions, mutation: true },
@@ -2548,18 +2444,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                         policy,
                         form.settleMillis,
                         captureClickAt(
-                          targetData(
-                            effectiveTarget(
-                              reference(field.elementId),
-                              target ?? driver.selected(),
-                            ),
-                          ),
+                          targetData(effectiveTarget(reference(field.elementId), target)),
                           ticket,
                         ),
-                        effectiveTarget(reference(field.elementId), target ?? driver.selected()),
+                        effectiveTarget(reference(field.elementId), target),
                       );
                     } finally {
-                      if (ticket.dispatched) pageId ??= target?.pageId ?? driver.selected().pageId;
+                      if (ticket.dispatched) pageId ??= target.pageId;
                     }
                   },
                   {
@@ -2654,12 +2545,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   driver.formSubmit(
                     reference(submit),
                     ticket,
-                    captureClickAt(
-                      targetData(effectiveTarget(reference(submit), target ?? driver.selected())),
-                      ticket,
-                    ),
+                    captureClickAt(targetData(effectiveTarget(reference(submit), target)), ticket),
                     policy,
-                    effectiveTarget(reference(submit), target ?? driver.selected()),
+                    effectiveTarget(reference(submit), target),
                   ),
                 { ...bound, ...formOptions, mutation: true },
               ),
@@ -2730,7 +2618,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           async (driver, ticket) => {
             const page =
               authority?.info ??
-              (await driver.listPages(ticket)).find((info) => info.pageId === target?.pageId);
+              (await driver.listPages(ticket)).find((info) => info.pageId === target.pageId);
 
             if (page === undefined)
               throw BrowserError.make({
@@ -2750,58 +2638,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           ...operationOptions,
           targetScope: () => ({ pageId: page.pageId }),
         }),
-      pinPage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
-        pinned(page, (driver, ticket) => driver.resolvePage(page, ticket), operationOptions),
-      pinFrame: (page: PageInfo, frame: FrameInfo, operationOptions?: ExecutionOptions) =>
-        pinned(
-          page,
-          (driver, ticket) => driver.resolveFrame(page, frame, ticket),
-          operationOptions,
-        ),
-      selectPage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
-        nativeOperation(
-          "select-page",
-          async (driver, ticket) => {
-            const target = await driver.resolvePage(page, ticket);
-
-            ticket.check();
-            registerPage(page, target, ticket.generation);
-            await driver.selectPage(page, ticket);
-            owner.state.selection++;
-          },
-          { ...operationOptions, charge: false },
-        ),
-      selectFrame: (id: string, operationOptions?: ExecutionOptions) =>
-        nativeOperation(
-          "select-frame",
-          async (driver, ticket) => {
-            await driver.selectFrame(id, ticket);
-            owner.state.selection++;
-          },
-          { ...operationOptions, charge: false },
-        ),
-      /** Creation and adoption use the registry lane, independently of Page work. */
-      createPage: (operationOptions?: ExecutionOptions) =>
-        nativeOperation(
-          "new-page",
-          async (driver, ticket) => {
-            const info = await driver.newPage(ticket);
-
-            ticket.check();
-            const target = await driver.resolvePage(info, ticket);
-
-            registerPage(info, target, ticket.generation);
-
-            return info;
-          },
-          {
-            ...operationOptions,
-            mutation: true,
-            mutationScope: () => "none",
-            charge: false,
-            anyPage: true,
-          },
-        ),
       closePage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
         Effect.suspend(() => {
           const record = authority ?? pages.get(page.pageId);
@@ -2841,23 +2677,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               Effect.flatMap((closed) =>
                 closed
                   ? Effect.void
-                  : owner
-                      .contain(
-                        containment(page.pageId, record),
-                        generation ?? owner.state.generation,
-                      )
-                      .pipe(
-                        Effect.flatMap((containment) =>
-                          Effect.fail(
-                            BrowserError.make({
-                              operation: "close-page",
-                              reason: Reasons.Provider.make({}),
-                              outcome: "unknown",
-                              containment,
-                            }),
-                          ),
+                  : owner.contain(containment(page.pageId, record), generation).pipe(
+                      Effect.flatMap((containment) =>
+                        Effect.fail(
+                          BrowserError.make({
+                            operation: "close-page",
+                            reason: Reasons.Provider.make({}),
+                            outcome: "unknown",
+                            containment,
+                          }),
                         ),
                       ),
+                    ),
               ),
             );
 
@@ -3024,6 +2855,16 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
         const planOptions: ExecutionOptions = {
           ...context.options,
+          ...(context.performance === undefined
+            ? {}
+            : {
+                performance: {
+                  plan: context.performance,
+                  get fieldIndex() {
+                    return currentField;
+                  },
+                },
+              }),
           phase: (phase, fieldIndex) => {
             currentPhase = phase;
             currentField = fieldIndex;
@@ -3034,17 +2875,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               if (step.expect?.before !== undefined) {
                 context.phase("Precondition");
                 owner.chargeHostRead(ticket, "run");
-                await driver.expectations(step.expect.before, ticket, target ?? driver.selected());
+                await driver.expectations(step.expect.before, ticket, target);
               }
               if (requests.length > 0) {
                 context.phase("Resolution");
                 owner.chargeHostRead(ticket, "resolve");
-                group = await driver.resolveGroup(
-                  requests,
-                  ticket,
-                  target ?? driver.selected(),
-                  step.resolution,
-                );
+                group = await driver.resolveGroup(requests, ticket, target, step.resolution);
                 context.targets(
                   requests.map((request, index) => ({
                     value: groupElement(index),
@@ -3229,6 +3065,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             }
             case "FillForm":
               return Effect.gen(function* () {
+                const fieldId = (index: number) => {
+                  const field = action.fields[index];
+
+                  return field?.target._tag === "Ref"
+                    ? field.target.reference.elementId
+                    : `field_${index}`;
+                };
+
                 const fields = yield* Effect.forEach(
                   action.fields,
                   (field, index): Effect.Effect<FormField, BrowserError> =>
@@ -3255,10 +3099,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 };
 
                 const references = new Map<string, () => ResolvedElement>();
+                const reportedIds = new Map<string, string>();
 
-                action.fields.forEach((field, index) =>
-                  references.set(`field_${index}`, indexed(field.target)),
-                );
+                action.fields.forEach((field, index) => {
+                  const id = `field_${index}`;
+
+                  references.set(id, indexed(field.target));
+                  reportedIds.set(id, fieldId(index));
+                });
                 if (action.submit !== undefined)
                   references.set("private_submit", indexed(action.submit));
 
@@ -3297,7 +3145,22 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   },
                 );
 
-                const receipt = yield* decodeReceipt(FillFormResult, result);
+                const receipt = yield* decodeReceipt(FillFormResult, {
+                  ...result,
+                  fields: result.fields.map((field) => ({
+                    ...field,
+                    elementId: reportedIds.get(field.elementId) ?? field.elementId,
+                  })),
+                  ...(result.stopped?.elementId === undefined
+                    ? {}
+                    : {
+                        stopped: {
+                          ...result.stopped,
+                          elementId:
+                            reportedIds.get(result.stopped.elementId) ?? result.stopped.elementId,
+                        },
+                      }),
+                });
 
                 context.retainReceipt(receipt);
                 if (result.stopped !== undefined) return yield* result.stopped.error;
@@ -3321,11 +3184,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     return nativeOperation(
                       "run",
                       async (driver, ticket) => {
-                        await driver.expectations(
-                          step.expect?.after ?? [],
-                          ticket,
-                          target ?? driver.selected(),
-                        );
+                        await driver.expectations(step.expect?.after ?? [], ticket, target);
                       },
                       { ...bound, ...context.options, charge: "host-read" },
                     );
@@ -3361,17 +3220,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       lifetimeDeadline: owner.lifetimeDeadline,
       actionTimeoutMillis: limits.actionTimeoutMillis,
       newId: uuid,
+      newSeed: crypto.randomInt,
       publish: () => {
         const releaseDomain = domain.retirement.retain();
         const releasePage = authority?.retirement.retain();
 
         return {
-          append: planPublisher(
-            domain.store,
-            target === undefined
-              ? null
-              : { generation: generation ?? owner.state.generation, ...target, document: null },
-          ),
+          append: planPublisher(domain.store, { generation, ...target, document: null }),
           release: () => {
             releasePage?.();
             releaseDomain();
@@ -3379,7 +3234,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         };
       },
       reserve: Effect.suspend(() => {
-        const pageId = target?.pageId ?? getDriver().selected().pageId;
+        const pageId = target.pageId;
         const count = pageRuns.get(pageId) ?? 0;
 
         if (activeRuns >= 128 || count >= 32)
@@ -3423,10 +3278,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       let terminal: Terminal | null = null;
 
       const retirement = makeRetirement((reason) => {
+        // Native closure can request retirement before the original containment receipt settles.
+        // Logical owners retain this record until that confirmed outcome is available.
+        const terminalReason = page?.containment._tag === "PageClosed" ? "contained" : reason;
+
         const result = publish(store, {
           target: { ...identity, document: null },
           correlation: null,
-          event: { _tag: "Terminal", scope: "page", reason },
+          event: { _tag: "Terminal", scope: "page", reason: terminalReason },
         });
 
         terminal = Object.freeze({
@@ -3440,7 +3299,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               : store.cursor(),
           at: result._tag === "Appended" ? result.event.at : store.now(),
           scope: "page",
-          reason,
+          reason: terminalReason,
         });
       });
 
@@ -3549,50 +3408,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return initialAuthority;
   };
 
-  const onSelected = <A, E, R>(
-    work: (page: ReturnType<typeof makePageControls>) => Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E | BrowserError, R> =>
-    Effect.suspend(() =>
-      owner.state.phase !== "open"
-        ? owner.status.pipe(
-            Effect.flatMap((status) =>
-              Effect.fail(
-                BrowserError.make({
-                  operation: "target",
-                  reason:
-                    status.reason === "expired"
-                      ? Reasons.Expired.make({})
-                      : status.phase === "paused"
-                        ? Reasons.Busy.make({})
-                        : Reasons.Closed.make({}),
-                  outcome: "undispatched",
-                }),
-              ),
-            ),
-          )
-        : Effect.try({
-            try: () => {
-              const target = getDriver().selected();
-
-              if (!pages.has(target.pageId))
-                throw BrowserError.make({
-                  operation: "target",
-                  reason: Reasons.Stale.make({}),
-                  outcome: "undispatched",
-                });
-
-              return makePageControls(target, owner.state.generation);
-            },
-            catch: (cause) =>
-              publicError(cause, "target", {
-                reason: Reasons.Closed.make({}),
-                outcome: "undispatched",
-              }),
-          }).pipe(Effect.flatMap(work)),
-    );
-
-  const selectedControls = makePageControls();
-
   const lifecycle = <A, E, R>(
     operation: BrowserOperation,
     supported: () => boolean,
@@ -3640,72 +3455,55 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     });
 
   const controls = {
-    ...selectedControls,
+    listPages,
+    selectPage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
+      nativeOperation(
+        "select-page",
+        async (driver, ticket) => {
+          const target = await driver.resolvePage(page, ticket);
+
+          ticket.check();
+          registerPage(page, target, ticket.generation);
+          await driver.selectPage(page, ticket);
+          owner.state.selection++;
+        },
+        { ...operationOptions, charge: false },
+      ),
+    selectFrame: (id: string, operationOptions?: ExecutionOptions) =>
+      nativeOperation(
+        "select-frame",
+        async (driver, ticket) => {
+          await driver.selectFrame(id, ticket);
+          owner.state.selection++;
+        },
+        { ...operationOptions, charge: false },
+      ),
+    /** Creation and adoption use the registry lane, independently of Page work. */
+    createPage: (operationOptions?: ExecutionOptions) =>
+      nativeOperation(
+        "new-page",
+        async (driver, ticket) => {
+          const info = await driver.newPage(ticket);
+
+          ticket.check();
+          const target = await driver.resolvePage(info, ticket);
+
+          registerPage(info, target, ticket.generation);
+
+          return info;
+        },
+        {
+          ...operationOptions,
+          mutation: true,
+          mutationScope: () => "none",
+          charge: false,
+          anyPage: true,
+        },
+      ),
+
+    monotonicTimeNanos: clock.monotonicTimeNanos,
     timeline: journal.timeline,
     pageEvents: journal.pageEvents,
-    operations: {
-      startNavigation: (
-        ...args: Parameters<ReturnType<typeof makePageControls>["operations"]["startNavigation"]>
-      ) => onSelected((page) => page.operations.startNavigation(...args)),
-      navigate: (
-        ...args: Parameters<ReturnType<typeof makePageControls>["operations"]["navigate"]>
-      ) => onSelected((page) => page.operations.navigate(...args)),
-      readText: (
-        ...args: Parameters<ReturnType<typeof makePageControls>["operations"]["readText"]>
-      ) => onSelected((page) => page.operations.readText(...args)),
-      click: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["click"]>) =>
-        onSelected((page) => page.operations.click(...args)),
-      fill: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["fill"]>) =>
-        onSelected((page) => page.operations.fill(...args)),
-      scroll: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["scroll"]>) =>
-        onSelected((page) => page.operations.scroll(...args)),
-      pointerMove: (
-        ...args: Parameters<ReturnType<typeof makePageControls>["operations"]["pointerMove"]>
-      ) => onSelected((page) => page.operations.pointerMove(...args)),
-      hover: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["hover"]>) =>
-        onSelected((page) => page.operations.hover(...args)),
-      wheel: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["wheel"]>) =>
-        onSelected((page) => page.operations.wheel(...args)),
-      press: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["press"]>) =>
-        onSelected((page) => page.operations.press(...args)),
-      type: (...args: Parameters<ReturnType<typeof makePageControls>["operations"]["type"]>) =>
-        onSelected((page) => page.operations.type(...args)),
-      screenshot: (
-        ...args: Parameters<ReturnType<typeof makePageControls>["operations"]["screenshot"]>
-      ) => onSelected((page) => page.operations.screenshot(...args)),
-    },
-    observe: (...args: Parameters<ReturnType<typeof makePageControls>["observe"]>) =>
-      onSelected((page) => page.observe(...args)),
-    checkpoint: (...args: Parameters<ReturnType<typeof makePageControls>["checkpoint"]>) =>
-      onSelected((page) => page.checkpoint(...args)),
-    controlFacts: (...args: Parameters<ReturnType<typeof makePageControls>["controlFacts"]>) =>
-      onSelected((page) => page.controlFacts(...args)),
-    selectOption: (...args: Parameters<ReturnType<typeof makePageControls>["selectOption"]>) =>
-      onSelected((page) => page.selectOption(...args)),
-    fillForm: (...args: Parameters<ReturnType<typeof makePageControls>["fillForm"]>) =>
-      onSelected((page) => page.fillForm(...args)),
-    revalidate: (...args: Parameters<ReturnType<typeof makePageControls>["revalidate"]>) =>
-      onSelected((page) => page.revalidate(...args)),
-    readiness: (...args: Parameters<ReturnType<typeof makePageControls>["readiness"]>) =>
-      onSelected((page) => page.readiness(...args)),
-    resize: (...args: Parameters<ReturnType<typeof makePageControls>["resize"]>) =>
-      onSelected((page) => page.resize(...args)),
-    frames: (...args: Parameters<ReturnType<typeof makePageControls>["frames"]>) =>
-      onSelected((page) => page.frames(...args)),
-    waitFor: (...args: Parameters<ReturnType<typeof makePageControls>["waitFor"]>) =>
-      onSelected((page) => page.waitFor(...args)),
-    waitForElement: (...args: Parameters<ReturnType<typeof makePageControls>["waitForElement"]>) =>
-      onSelected((page) => page.waitForElement(...args)),
-    clickAndWait: (...args: Parameters<ReturnType<typeof makePageControls>["clickAndWait"]>) =>
-      onSelected((page) => page.clickAndWait(...args)),
-    clickForDownload: (
-      ...args: Parameters<ReturnType<typeof makePageControls>["clickForDownload"]>
-    ) => onSelected((page) => page.clickForDownload(...args)),
-    selectFiles: (...args: Parameters<ReturnType<typeof makePageControls>["selectFiles"]>) =>
-      onSelected((page) => page.selectFiles(...args)),
-    clickForFileSelection: (
-      ...args: Parameters<ReturnType<typeof makePageControls>["clickForFileSelection"]>
-    ) => onSelected((page) => page.clickForFileSelection(...args)),
     initialPage,
     page,
     frame: (
@@ -3765,8 +3563,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     admissionStatus: owner.admissionStatus,
     reference: ref,
     capture,
-    retain,
-    target: readSelected,
     cleanupResult,
     close: release.pipe(
       Effect.tap(() => retireControl),
@@ -4096,6 +3892,6 @@ export type SessionControls<L extends SessionLease = SessionLease> =
     ? A
     : never;
 
-export type TargetControls = SessionControls["operations"];
+export type TargetControls = PageControls["operations"];
 
 export type PageControls = ReturnType<SessionControls["initialPage"]>["controls"];

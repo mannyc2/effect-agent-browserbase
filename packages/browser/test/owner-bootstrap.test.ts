@@ -106,7 +106,7 @@ it.effect("a document that predates the registrations cannot admit dependent wor
     Effect.gen(function* () {
       const f = yield* fixture({ readiness: () => ({ _tag: "RequiresNavigation" }) });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = yield* session.retain();
+      const handle = session.initialPage().controls.operations;
 
       // Navigation is what produces an initialized document: it is never gated.
       yield* handle.navigate("https://example.test/next");
@@ -115,7 +115,7 @@ it.effect("a document that predates the registrations cannot admit dependent wor
       const dependents: ReadonlyArray<Effect.Effect<unknown, BrowserError>> = [
         handle.readText(),
         handle.click("#action"),
-        session.observe(),
+        session.initialPage().controls.observe(),
         handle.screenshot(false),
       ];
 
@@ -130,7 +130,9 @@ it.effect("a document that predates the registrations cannot admit dependent wor
       }
       assert.equal(f.state.clicks, 0);
       assert.equal(f.state.readinessChecks, 4);
-      assert.deepEqual(yield* session.readiness(), { _tag: "RequiresNavigation" });
+      assert.deepEqual(yield* session.initialPage().controls.readiness(), {
+        _tag: "RequiresNavigation",
+      });
       yield* session.close;
     }),
   ),
@@ -144,7 +146,11 @@ it.effect("an unmet readiness deadline stops dependent work without a dispatch",
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const failed = yield* session.operations.click("#action").pipe(Effect.result);
+
+      const failed = yield* session
+        .initialPage()
+        .controls.operations.click("#action")
+        .pipe(Effect.result);
 
       assert.equal(failed._tag, "Failure");
       if (failed._tag === "Failure") {

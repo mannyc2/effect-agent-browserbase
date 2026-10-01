@@ -6,11 +6,11 @@ import { BrowserError, Reasons } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
 
-import { scriptedSession } from "./fixtures/ScriptedSession.ts";
+import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 
 const url = "https://example.test/";
 const target = Target.make({ generation: 1, pageId: "page", frameId: "frame" });
-const reference = { observationId: "old", elementId: "element-1" };
+const reference = { observationId: "observation-1", elementId: "element-1" };
 
 const observation = (text = "fresh", id = "fresh") =>
   Observation.make({
@@ -55,7 +55,7 @@ const calls = [
   ["browser_click_and_inspect", reference],
   ["browser_fill_and_inspect", { reference, value: "PRIVATE-VALUE" }],
   ["browser_scroll_and_inspect", { deltaX: 0, deltaY: 1 }],
-  ["browser_select_option_and_inspect", { reference, options: ["option"] }],
+  ["browser_select_option_and_inspect", { reference, options: ["option-1"] }],
   ["browser_pointer_move_and_inspect", { to: { x: 1, y: 1 } }],
   ["browser_hover_and_inspect", reference],
   ["browser_wheel_and_inspect", { deltaX: 0, deltaY: 1 }],
@@ -71,30 +71,40 @@ it.effect(
         let actions = 0;
         let reads = 0;
 
-        const acted = <A>(value: A) =>
-          Effect.sync(() => {
-            actions++;
+        const browser = yield* scriptedSession({
+          beforeStart: () =>
+            Effect.sync(() => {
+              actions++;
+            }),
+        });
 
-            return value;
-          });
+        const originalObserve = browser.initialPage.observe;
 
-        const browser = scriptedSession({
-          navigate: () => acted({ url }),
-          clickElement: () => acted({ url }),
-          fillElement: () => acted({ url }),
-          scroll: () => acted({ url }),
-          selectOption: () => acted({ url }),
-          pointerMove: () => acted(receipt("pointer-move")),
-          hoverElement: () => acted(receipt("hover")),
-          wheel: () => acted(receipt("wheel")),
-          pressElement: () => acted(receipt("press")),
-          typeElement: () => acted(receipt("type")),
+        Object.assign(browser.initialPage, {
           observe: () => Effect.sync(() => observation("fresh", `fresh-${++reads}`)),
         });
 
-        const ready = yield* variants.pipe(Effect.provide(Tools.observedHandlers(browser)));
+        const ready = yield* variants.pipe(
+          Effect.provide(Tools.observedHandlers(browser, browser.initialPage)),
+        );
 
-        for (const [index, [name, params]] of calls.entries()) {
+        for (const [index, [name, originalParams]] of calls.entries()) {
+          if (name.includes("press") || name.includes("type"))
+            yield* browser.initialPage.click({ selector: "#element-1" });
+          const fresh = yield* originalObserve();
+
+          const current = {
+            observationId: fresh.observationId,
+            elementId: name.includes("select_option") ? "element-3" : "element-1",
+          };
+
+          const params =
+            "reference" in originalParams
+              ? { ...originalParams, reference: current }
+              : "observationId" in originalParams
+                ? current
+                : originalParams;
+
           const results = yield* Stream.runCollect(yield* ready.handle(name, params));
 
           expect(results).toMatchObject([
@@ -122,10 +132,18 @@ it.effect(
         expect(Tools.toolkit.tools.browser_click.id).not.toBe(
           Tools.observedToolkit.tools.browser_click_and_inspect.id,
         );
-        const ordinary = yield* Tools.toolkit.pipe(Effect.provide(Tools.handlers(browser)));
+
+        const ordinary = yield* Tools.toolkit.pipe(
+          Effect.provide(Tools.handlers(browser, browser.initialPage)),
+        );
 
         expect(
-          yield* Stream.runCollect(yield* ordinary.handle("browser_click", reference)),
+          yield* Stream.runCollect(
+            yield* ordinary.handle("browser_click", {
+              observationId: (yield* originalObserve()).observationId,
+              elementId: "element-1",
+            }),
+          ),
         ).toMatchObject([{ isFailure: false, encodedResult: { url } }]);
         expect(reads).toBe(calls.length);
       }),
@@ -151,13 +169,19 @@ it.effect(
             outcome: "undispatched",
           });
 
-          const browser = scriptedSession({
-            clickElement: () =>
-              Effect.sync(() => {
-                actions++;
+          const browser = yield* scriptedSession({
+            beforeStart: (action) => {
+              if (action._tag === "Click") {
+                return (() =>
+                  Effect.sync(() => {
+                    actions++;
 
-                return { url };
-              }),
+                    return { url };
+                  }))();
+              }
+
+              return Effect.void;
+            },
             observe: () =>
               Effect.suspend(() => {
                 reads++;
@@ -166,7 +190,7 @@ it.effect(
               }),
           });
 
-          const host = yield* Tools.makeHost(browser);
+          const host = yield* Tools.makeHost(browser, browser.initialPage);
           const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));
 
           const result = yield* Stream.runCollect(
@@ -211,18 +235,19 @@ it.effect(
         const longUrl = url + "a".repeat(4000);
         let actions = 0;
 
-        const host = yield* Tools.makeHost(
-          scriptedSession({
-            clickElement: () =>
-              Effect.sync(() => {
-                actions++;
+        const browser = yield* scriptedSession({
+          script: { documents: [{ ...fixtureScript.documents[0]!, url: longUrl }] },
+          beforeStart: () =>
+            Effect.sync(() => {
+              actions++;
+            }),
+          observe: () => Effect.succeed(large),
+        });
 
-                return { url: longUrl };
-              }),
-            observe: () => Effect.succeed(large),
-          }),
-          { maxTextBytes: 65536, resultMaxBytes: maximum },
-        );
+        const host = yield* Tools.makeHost(browser, browser.initialPage, {
+          maxTextBytes: 65536,
+          resultMaxBytes: maximum,
+        });
 
         const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));
 
@@ -261,19 +286,25 @@ it.effect(
         let actions = 0;
         let reads = 0;
 
-        const browser = scriptedSession({
-          clickElement: () =>
-            Effect.suspend(() => {
-              actions++;
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Click") {
+              return (() =>
+                Effect.suspend(() => {
+                  actions++;
 
-              return Effect.fail(
-                BrowserError.make({
-                  operation: "click",
-                  reason: Reasons.Stale.make({}),
-                  outcome: "undispatched",
-                }),
-              );
-            }),
+                  return Effect.fail(
+                    BrowserError.make({
+                      operation: "click",
+                      reason: Reasons.Stale.make({}),
+                      outcome: "undispatched",
+                    }),
+                  );
+                }))();
+            }
+
+            return Effect.void;
+          },
           observe: () =>
             Effect.sync(() => {
               reads++;
@@ -291,8 +322,10 @@ it.effect(
           null,
         ])
           expect(
-            // @ts-expect-error Explicit null is an untyped invalid host input, not omission.
-            yield* Effect.result(Tools.makeHost(browser, { resultMaxBytes: maximum })),
+            yield* Effect.result(
+              // @ts-expect-error Explicit null is an untyped invalid host input, not omission.
+              Tools.makeHost(browser, browser.initialPage, { resultMaxBytes: maximum }),
+            ),
           ).toMatchObject({
             _tag: "Failure",
             failure: {
@@ -303,7 +336,7 @@ it.effect(
           });
         expect(actions).toBe(0);
         expect(reads).toBe(0);
-        const host = yield* Tools.makeHost(browser);
+        const host = yield* Tools.makeHost(browser, browser.initialPage);
         const ready = yield* Tools.observedToolkit.pipe(Effect.provide(host.observedHandlers));
 
         expect(
@@ -324,13 +357,27 @@ it.effect("the invocation lane spans the fresh read and queued input cannot over
       const release = yield* Deferred.make<void>();
       const order: string[] = [];
 
-      const browser = scriptedSession({
-        clickElement: () =>
-          Effect.sync(() => {
-            order.push("click");
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Click") {
+            return (() =>
+              Effect.sync(() => {
+                order.push("click");
 
-            return { url };
-          }),
+                return { url };
+              }))();
+          }
+          if (action._tag === "Scroll") {
+            return (() =>
+              Effect.sync(() => {
+                order.push("scroll");
+
+                return { url };
+              }))();
+          }
+
+          return Effect.void;
+        },
         observe: () =>
           Effect.gen(function* () {
             order.push("observe-start");
@@ -340,15 +387,9 @@ it.effect("the invocation lane spans the fresh read and queued input cannot over
 
             return observation();
           }),
-        scroll: () =>
-          Effect.sync(() => {
-            order.push("scroll");
-
-            return { url };
-          }),
       });
 
-      const host = yield* Tools.makeHost(browser);
+      const host = yield* Tools.makeHost(browser, browser.initialPage);
 
       const ready = yield* Toolkit.merge(Tools.toolkit, Tools.observedToolkit).pipe(
         Effect.provide(host.layer),
@@ -385,13 +426,27 @@ it.effect(
         let readsFinalized = 0;
         let laterInput = 0;
 
-        const browser = scriptedSession({
-          clickElement: () =>
-            Effect.sync(() => {
-              actions++;
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Click") {
+              return (() =>
+                Effect.sync(() => {
+                  actions++;
 
-              return { url };
-            }),
+                  return { url };
+                }))();
+            }
+            if (action._tag === "Scroll") {
+              return (() =>
+                Effect.sync(() => {
+                  laterInput++;
+
+                  return { url };
+                }))();
+            }
+
+            return Effect.void;
+          },
           observe: () =>
             Deferred.succeed(entered, undefined).pipe(
               Effect.andThen(Effect.never),
@@ -401,15 +456,9 @@ it.effect(
                 }),
               ),
             ),
-          scroll: () =>
-            Effect.sync(() => {
-              laterInput++;
-
-              return { url };
-            }),
         });
 
-        const host = yield* Tools.makeHost(browser).pipe(Scope.provide(scope));
+        const host = yield* Tools.makeHost(browser, browser.initialPage).pipe(Scope.provide(scope));
 
         const ready = yield* Toolkit.merge(Tools.toolkit, Tools.observedToolkit).pipe(
           Effect.provide(host.layer),
@@ -443,13 +492,19 @@ it.effect(
       Effect.gen(function* () {
         const order: string[] = [];
 
-        const browser = scriptedSession({
-          pointerMove: () =>
-            Effect.sync(() => {
-              order.push("input");
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "PointerMove") {
+              return (() =>
+                Effect.sync(() => {
+                  order.push("input");
 
-              return receipt("pointer-move");
-            }),
+                  return receipt("pointer-move");
+                }))();
+            }
+
+            return Effect.void;
+          },
           observe: () =>
             Effect.sync(() => {
               order.push("observe");
@@ -458,7 +513,7 @@ it.effect(
             }),
         });
 
-        const host = yield* Tools.makeHost(browser, {
+        const host = yield* Tools.makeHost(browser, browser.initialPage, {
           onInput: () =>
             Effect.addFinalizer(() =>
               Effect.sync(() => {
@@ -478,7 +533,7 @@ it.effect(
         ).toMatchObject([{ isFailure: false }]);
         expect(order).toEqual(["input", "callback-finalizer", "observe"]);
 
-        const failing = yield* Tools.makeHost(browser, {
+        const failing = yield* Tools.makeHost(browser, browser.initialPage, {
           onInput: () => Effect.fail("PRIVATE-CALLBACK"),
         });
 
@@ -491,7 +546,7 @@ it.effect(
         );
 
         expect(result).toMatchObject([
-          { isFailure: true, encodedResult: { reason: "failed", outcome: "unknown" } },
+          { isFailure: true, encodedResult: { reason: "failed", outcome: "performed" } },
         ]);
         expect(JSON.stringify(result)).not.toContain("PRIVATE-CALLBACK");
         expect(order.filter((item) => item === "observe")).toHaveLength(1);

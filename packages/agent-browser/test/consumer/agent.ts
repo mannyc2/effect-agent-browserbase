@@ -105,6 +105,7 @@ const program = Effect.scoped(
 
             const run = yield* BrowserTools.run(
               generic,
+              generic.initialPage,
               AgentRuntime.run(browserAgent, "open the fixture page").pipe(
                 Effect.provide(Layer.mergeAll(InMemory.layer, model(script))),
               ),
@@ -112,7 +113,7 @@ const program = Effect.scoped(
 
             expect(run.output.done === true, "the agent completed its declared output");
 
-            const observation = yield* generic.observe({ maxTextBytes: 4096 });
+            const observation = yield* generic.initialPage.observe({ maxTextBytes: 4096 });
 
             expect(
               observation.text.includes("Local browser fixture"),
@@ -136,7 +137,7 @@ const program = Effect.scoped(
 
             const captured = yield* Effect.scoped(
               Effect.gen(function* () {
-                const interval = yield* Capture.start(generic, {
+                const interval = yield* Capture.start(generic.initialPage, {
                   maxFrames: 2,
                   maxDurationMillis: 5000,
                 });
@@ -162,7 +163,9 @@ const program = Effect.scoped(
             let exhausted = false;
 
             for (let index = 0; index < 4; index++) {
-              const next = yield* generic.observe({ maxTextBytes: 1024 }).pipe(Effect.result);
+              const next = yield* generic.initialPage
+                .observe({ maxTextBytes: 1024 })
+                .pipe(Effect.result);
 
               if (next._tag === "Failure") {
                 expect(
@@ -235,6 +238,7 @@ const scripted = await Effect.runPromise(
 
       const run = yield* BrowserTools.run(
         browser,
+        browser.initialPage,
         AgentRuntime.run(browserAgent, "accept the banner").pipe(
           Effect.provide(
             Layer.mergeAll(

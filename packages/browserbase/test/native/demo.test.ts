@@ -45,7 +45,7 @@ it.live(
             expect(demo.distinctFrames).toBeGreaterThan(1);
             expect((yield* Effect.promise(() => stat(output))).size).toBeGreaterThan(1_000);
             // Scrolling borrows the live page; it must not end the session.
-            expect((yield* session.observe()).text).toContain("Local browser fixture");
+            expect((yield* session.initialPage.observe()).text).toContain("Local browser fixture");
             expect((yield* session.close).remote).toBe("confirmed");
           }),
         );

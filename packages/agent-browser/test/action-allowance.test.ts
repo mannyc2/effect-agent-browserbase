@@ -31,7 +31,7 @@ it.effect(
       Testing.open(site, { policy: BrowserPolicy.unrestricted({ maxActions: 8 }) }),
       (browser) =>
         Effect.gen(function* () {
-          const host = yield* BrowserTools.makeHost(browser);
+          const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
           const ready = yield* tools.pipe(Effect.provide(host.layer));
 
           const used = browser.status.pipe(Effect.map((status) => status.actions.used));

@@ -156,6 +156,17 @@ export const checks = {
     operator: false,
     media: false,
   },
+  "performed-presentation": {
+    question: "H7",
+    claim:
+      "On a controlled animated HTTPS scene, performed Page plans retain logical action costs, original-owner timing and trusted document-focus-qualified shifted typing; two independent journal readers observe one original capture, and canceling one reader leaves the other, captured frames and peer references intact before confirmed provider release. Remote pacing is measured rather than promised.",
+    evidence: null,
+    budget: { sessions: 1, browserSeconds: 180, actions: 30, captureSeconds: 10, transferBytes: 0 },
+    env: ["BROWSERBASE_PERFORMED_PRESENTATION_URL"],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
   "replay-delivery": {
     question: "H7",
     claim:

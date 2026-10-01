@@ -4,6 +4,7 @@ import type { ElementAdmission, OperationOptions } from "./Browser.ts";
 import type { CheckpointOptions } from "./BrowserData.ts";
 import type { BrowserError } from "./Errors.ts";
 import { guardedDecode } from "./internal/browser/PlanInput.ts";
+import { checkedRunOptions } from "./internal/browser/PlanOptions.ts";
 import {
   type AttemptSnapshot,
   type InputBindings,
@@ -11,6 +12,7 @@ import {
   type LivePlanEncoded,
   Plan,
   type PlanEncoded,
+  type PerformedEncoded,
   type Ran,
   type RanStep,
   type StepAttempt,
@@ -18,13 +20,21 @@ import {
 
 /** All execution stays on the issued Page/Frame and its original scoped owner. */
 export interface RunOptions extends OperationOptions {
-  readonly style?: "plain";
+  readonly style?: "plain" | PerformedEncoded;
+  /** Intended boundary in this owner's original monotonic runtime, measured when executed. */
+  readonly startAt?: bigint;
   readonly within?: Duration.Input;
   readonly through?: string;
   readonly inputs?: InputBindings;
   readonly policy?: ElementAdmission;
   readonly checkpoint?: CheckpointOptions;
 }
+
+/** Normalize host options without exposing private deadline/queue accounting fields. */
+export const validateOptions = (value: unknown): Effect.Effect<RunOptions, BrowserError> =>
+  checkedRunOptions(value).pipe(
+    Effect.map(({ withinMillis: _withinMillis, queueMillis: _queueMillis, ...options }) => options),
+  );
 
 /** Live host failure evidence is not a durable plan or a serialization schema. */
 export class StepFailed extends Data.TaggedError("StepFailed")<{

@@ -39,6 +39,69 @@ export const Limits = {
 const utf8 = new TextEncoder();
 const closed = { parseOptions: { onExcessProperty: "error" } } as const;
 
+const motionRange = (maximum: number, minimum = 0) =>
+  Schema.Struct({
+    minMillis: Schema.Finite.check(Schema.isBetween({ minimum, maximum })),
+    maxMillis: Schema.Finite.check(Schema.isBetween({ minimum, maximum })),
+  })
+    .check(
+      Schema.makeFilter((value) => value.minMillis <= value.maxMillis, {
+        title: "ordered finite duration bounds",
+      }),
+    )
+    .annotate(closed);
+
+/** Chosen bounded presentation policy; these constants are not scientific calibration. */
+export const MotionProfile = Schema.Struct({
+  name: Schema.Literal("default"),
+  pointer: Schema.Struct({
+    duration: motionRange(5000),
+    aimInset: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 0.49 })),
+    curvature: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 0.25 })),
+  }).annotate(closed),
+  keys: Schema.Struct({
+    interval: motionRange(1000),
+    hold: motionRange(500),
+  }).annotate(closed),
+  scroll: Schema.Struct({
+    duration: motionRange(5000),
+    intervalMillis: Schema.Finite.check(Schema.isBetween({ minimum: 8, maximum: 250 })),
+  }).annotate(closed),
+}).annotate(closed);
+
+export type MotionProfile = typeof MotionProfile.Type;
+
+export const DefaultMotionProfile: MotionProfile = Object.freeze({
+  name: "default",
+  pointer: Object.freeze({
+    duration: Object.freeze({ minMillis: 120, maxMillis: 1500 }),
+    aimInset: 0.15,
+    curvature: 0.08,
+  }),
+  keys: Object.freeze({
+    interval: Object.freeze({ minMillis: 30, maxMillis: 70 }),
+    hold: Object.freeze({ minMillis: 10, maxMillis: 30 }),
+  }),
+  scroll: Object.freeze({
+    duration: Object.freeze({ minMillis: 120, maxMillis: 800 }),
+    intervalMillis: 20,
+  }),
+});
+
+/** Serialized style contains policy data, never callbacks, random services or native authority. */
+export const Performed = Schema.Struct({
+  motion: MotionProfile.pipe(Schema.withDecodingDefaultKey(Effect.succeed(DefaultMotionProfile))),
+  seed: Schema.optionalKey(Schema.Int),
+  slips: Schema.Struct({
+    probability: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  })
+    .annotate(closed)
+    .pipe(Schema.withDecodingDefaultKey(Effect.succeed({ probability: 0 }))),
+}).annotate(closed);
+
+export type Performed = typeof Performed.Type;
+export type PerformedEncoded = typeof Performed.Encoded;
+
 export const StepId = Identifier.check(Schema.isMaxLength(Limits.identifierLength));
 
 export type StepId = typeof StepId.Type;
@@ -381,15 +444,42 @@ export type RunPhase =
 
 export type NativePhase = "Prepared" | "Dispatched" | "Acknowledged" | "FollowUp" | "Terminal";
 
+/** A preparatory native acknowledgement does not imply completed logical input. */
+export interface AcknowledgementFact {
+  readonly subphase: "scroll-into-view" | "focus" | "key-burst" | "scroll-burst";
+  readonly logicalComplete: boolean;
+}
+
 /** Host-only evidence retains the exact acknowledgement separately from an optional input receipt. */
 export interface PhaseEvidence {
-  readonly phase: NativePhase | "InputReceipt";
+  readonly phase: NativePhase | "InputReceipt" | "SubphaseReceipt";
   readonly operation?: RunPhase;
   readonly atMonotonicNanos: bigint;
   /** A late native reply never repairs an already decided unknown outcome. */
   readonly late: boolean;
   readonly input?: InputReceipt;
   readonly fieldIndex?: number;
+  readonly acknowledgement?: AcknowledgementFact;
+  /** Completed adjacent bursts are summarized; an unresolved dispatch is never folded. */
+  readonly burst?: {
+    readonly subphase: "key-burst" | "scroll-burst";
+    readonly dispatches: number;
+    readonly acknowledgements: number;
+    readonly firstDispatchedMonotonicNanos: bigint;
+    readonly lastAcknowledgedMonotonicNanos: bigint;
+  };
+  readonly scroll?: {
+    readonly target: {
+      readonly generation: number;
+      readonly pageId: string;
+      readonly frameId: string;
+    };
+    readonly startedMonotonicNanos: bigint;
+    readonly completedMonotonicNanos: bigint;
+    readonly qualification: "native-call-interval" | "exact-node-scroll-into-view";
+    /** Commanded deltas, when exposed by the original native scroll capability. */
+    readonly delta?: { readonly x: number; readonly y: number };
+  };
 }
 
 export interface SettledEvidence extends SettledOptions {
@@ -425,6 +515,22 @@ export interface StepAttempt<Id extends string = string, E = BrowserError | Init
   readonly completed: boolean;
   readonly cause?: Cause.Cause<E>;
   readonly receipt?: RunReceipt;
+  readonly performance?: PerformanceEvidence;
+}
+
+/** Host timing is measured in the original owner's monotonic domain, never a remote clock. */
+export interface RunTiming {
+  readonly requestedMonotonicNanos: bigint;
+  readonly intendedMonotonicNanos: bigint;
+  readonly startedMonotonicNanos: bigint | null;
+  readonly deadlineMonotonicNanos: bigint;
+  readonly latenessNanos: bigint | null;
+  readonly seed?: number;
+}
+
+export interface PerformanceEvidence {
+  readonly seed: number;
+  readonly profile: MotionProfile;
 }
 
 export type RunReceipt =
@@ -452,11 +558,13 @@ export interface AttemptSnapshot<E = BrowserError | InitializationError> {
   readonly attempts: ReadonlyArray<StepAttempt<string, E>>;
   readonly completed: ReadonlyArray<RanStep>;
   readonly terminal: boolean;
+  readonly timing: RunTiming;
 }
 
 export interface Ran<P extends LivePlan = LivePlan> {
   readonly runId: string;
   readonly version: 1;
+  readonly timing: RunTiming;
   readonly steps: ReadonlyArray<RanStep<P["steps"][number]["id"]>>;
   readonly completion:
     | { readonly _tag: "Complete" }

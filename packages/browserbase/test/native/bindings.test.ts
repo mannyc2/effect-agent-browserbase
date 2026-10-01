@@ -147,17 +147,19 @@ it.live(
 
             const session = yield* acquisition.connect;
 
-            const reading = yield* session
+            const reading = yield* session.initialPage
               .navigate(NavigateRequest.make({ url: fixture.url }))
               .pipe(
-                Effect.andThen(session.readText(ReadTextRequest.make({ selector: "#settings" }))),
+                Effect.andThen(
+                  session.initialPage.readText(ReadTextRequest.make({ selector: "#settings" })),
+                ),
                 Effect.forkScoped,
               );
 
             yield* Deferred.await(entered).pipe(Effect.timeout(3000));
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(reading)).text).toBe("host settings:7");
-            expect(yield* session.ready()).toEqual({ _tag: "Ready" });
+            expect(yield* session.initialPage.ready()).toEqual({ _tag: "Ready" });
             expect(versions.length).toBeGreaterThan(0);
             expect(versions.every((version) => version === 7)).toBe(true);
 
@@ -236,7 +238,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
             const args = (label: string) => JSON.stringify({ label, claimedOrigin: first });
 
@@ -364,7 +366,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
 
             yield* native("wait for the fixture child document", () =>
@@ -443,7 +445,7 @@ it.live(
               );
               expect(retiring.isDetached()).toBe(true);
             }
-            expect((yield* session.observe()).url).toBe(fixture.url);
+            expect((yield* session.initialPage.observe()).url).toBe(fixture.url);
             expect(yield* call(child, "frameReply", '"still-current"')).toEqual({
               _tag: "Returned",
               value: "still-current",
@@ -608,7 +610,7 @@ it.live(
 
             return yield* Browser.scoped(browser.open(policy, { bootstrap }), (session) =>
               Effect.gen(function* () {
-                yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
                 const page = pageFor(fixture, session.reference.sessionId);
                 const context = page.context();
                 // oxlint-disable-next-line typescript/unbound-method -- called on this context
@@ -753,7 +755,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
 
             for (const source of [
@@ -799,7 +801,7 @@ it.live(
               "large-output",
               "healthy",
             ]);
-            expect((yield* session.observe()).url).toBe(fixture.url);
+            expect((yield* session.initialPage.observe()).url).toBe(fixture.url);
           }),
         );
       }),
@@ -843,7 +845,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
             const held = yield* call(page, "boundedWork", '"hold"').pipe(Effect.forkScoped);
 
@@ -896,7 +898,7 @@ it.live(
             const browser = yield* BrowserbaseBrowser;
             const session = yield* browser.open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const failed = yield* session.failure.pipe(Effect.result, Effect.forkScoped);
 
             expect(
@@ -921,12 +923,12 @@ it.live(
               expect(retained._tag).toBe("Failure");
               if (retained._tag === "Failure") expect(retained.failure).toBe(secret);
             }
-            expect((yield* session.observe().pipe(Effect.result))._tag).toBe("Failure");
+            expect((yield* session.initialPage.observe().pipe(Effect.result))._tag).toBe("Failure");
             yield* session.close;
 
             const supervised = yield* Browser.scoped(browser.open(policy, { bootstrap }), (owned) =>
               Effect.gen(function* () {
-                yield* owned.navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* owned.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
                 yield* call(pageFor(fixture, owned.reference.sessionId), "fatalSettings", "null");
 
                 return yield* Effect.never;
@@ -976,7 +978,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
             const frame = page.mainFrame();
 
@@ -986,7 +988,7 @@ it.live(
             );
 
             yield* Deferred.await(entered).pipe(Effect.timeout(3000));
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             expect(page.mainFrame()).toBe(frame);
             expect(page.url()).toBe(fixture.url);
             expect(yield* call(page, "documentReply", '"new"')).toEqual({
@@ -1053,7 +1055,7 @@ for (const transition of ["close", "reconnect"] as const) {
             Effect.gen(function* () {
               const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-              yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+              yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
               const page = pageFor(fixture, session.reference.sessionId);
 
               const old = yield* call(page, "connectionReply", '"old"').pipe(
@@ -1066,8 +1068,12 @@ for (const transition of ["close", "reconnect"] as const) {
               else yield* session.detach;
               yield* Deferred.await(finalized).pipe(Effect.timeout(3000));
               if (transition === "reconnect") {
-                yield* session.reconnect(true);
-                yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+                const inventory = yield* session.reconnect(true);
+
+                expect(inventory.pages).toHaveLength(1);
+                const reissued = yield* session.page(inventory.pages[0]!);
+
+                yield* reissued.navigate(NavigateRequest.make({ url: fixture.url }));
                 expect(
                   yield* call(
                     pageFor(fixture, session.reference.sessionId),
@@ -1130,7 +1136,7 @@ it.live(
             const browser = yield* BrowserbaseBrowser;
             const owner = yield* browser.open(policy);
 
-            yield* owner.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* owner.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const detached = yield* owner.detach;
 
             yield* Effect.scoped(
@@ -1141,7 +1147,7 @@ it.live(
                   target: { targetId: detached.targetId },
                 });
 
-                yield* attached.navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* attached.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
                 expect(
                   yield* call(
                     pageFor(fixture, attached.reference.sessionId),
@@ -1207,7 +1213,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            reentrant = session.observe().pipe(
+            reentrant = session.initialPage.observe().pipe(
               Effect.result,
               Effect.map((result) => {
                 if (result._tag === "Success")
@@ -1219,9 +1225,9 @@ it.live(
                 };
               }),
             );
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
-            expect(yield* session.ready()).toEqual({ _tag: "Ready" });
-            expect((yield* session.observe()).url).toBe(fixture.url);
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
+            expect(yield* session.initialPage.ready()).toEqual({ _tag: "Ready" });
+            expect((yield* session.initialPage.observe()).url).toBe(fixture.url);
             expect((yield* session.bindingDiagnostics).faulted).toBe(false);
           }),
         );

@@ -96,6 +96,7 @@ it.effect("the agent clicks the observed control exactly once and finishes", () 
       const result = yield* Effect.gen(function* () {
         const run = yield* BrowserTools.run(
           browser,
+          browser.initialPage,
           AgentRuntime.run(consent, "accept the banner"),
         );
 
@@ -109,6 +110,7 @@ it.effect("the agent clicks the observed control exactly once and finishes", () 
       expect((yield* browser.control.calls).map((call) => call.operation)).toEqual([
         "navigate",
         "observe",
+        "resolve",
         "click",
       ]);
       expect((yield* browser.control.document.current).url).toBe(`${origin}/?consent=1`);
@@ -150,12 +152,12 @@ it.effect.each([false, true])(
           answer((request) => {
             expect(toolResults(request, "browser_click").at(-1)).toMatchObject({
               isFailure: true,
-              result: { reason: "closed", outcome: "undispatched" },
+              result: { reason: "stale", outcome: "undispatched" },
             });
           }),
         ];
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
         const result = yield* host
           .run(AgentRuntime.run(consent, "accept the banner"))
@@ -171,7 +173,7 @@ it.effect.each([false, true])(
           failures.failures.map((failure) => [failure.error.reason._tag, failure.error.outcome]),
         ).toEqual([
           ["Timeout", "unknown"],
-          ["Closed", "undispatched"],
+          ["Stale", "undispatched"],
         ]);
         expect(failures.failures[0]?.error.containment).toMatchObject(
           failedContainment
@@ -253,6 +255,7 @@ it.effect("a model's null for none reaches the browser as the parameter it leave
 
           yield* BrowserTools.run(
             browser,
+            browser.initialPage,
             AgentRuntime.run(signupAgent, "Fill in the form without sending it.", {
               approval: {
                 request: ({ toolName }) =>

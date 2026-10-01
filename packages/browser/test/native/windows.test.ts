@@ -47,11 +47,11 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
       const site = yield* localSite;
       const session = yield* (yield* Chromium).launch(policy);
 
-      yield* session.navigate(NavigateRequest.make({ url: site.url }));
+      yield* session.initialPage.navigate(NavigateRequest.make({ url: site.url }));
       const earlier = yield* session.createPage();
       const later = yield* session.createPage();
-      const behind = yield* session.pinPage(earlier);
-      const front = yield* session.pinPage(later);
+      const behind = yield* session.page(earlier);
+      const front = yield* session.page(later);
 
       yield* behind.navigate({ url: new URL("/pinned?name=behind", site.url).href });
       yield* front.navigate({ url: new URL("/pinned?name=front", site.url).href });
@@ -72,7 +72,10 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
       expect(size(yield* front.screenshot(visible))).toEqual({ width: 640, height: 480 });
 
       // The selected page, animated, still streams while two later windows exist.
-      const onAir = yield* Capture.start(session, { lifetime: "page", maxDurationMillis: 10000 });
+      const onAir = yield* Capture.start(session.initialPage, {
+        lifetime: "page",
+        maxDurationMillis: 10000,
+      });
 
       const frames = yield* onAir.frames.pipe(
         Stream.take(3),
@@ -84,7 +87,9 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
       yield* onAir.stop;
 
       // One page's current address and title, without listing the others.
-      expect(yield* session.describePage(earlier)).toMatchObject({
+      expect(
+        yield* session.page(earlier).pipe(Effect.flatMap((page) => page.describe())),
+      ).toMatchObject({
         pageId: earlier.pageId,
         targetId: earlier.targetId,
         title: "Pinned behind",

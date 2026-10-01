@@ -262,7 +262,10 @@ export const makePlaywrightDriver = async (
   const pointer = makePointer(targets, actions);
 
   actions.setPointerInvalidator(pointer.invalidate);
+  actions.setPerformedPointer(pointer.preparePress);
   const keyboard = makeKeyboard(targets, actions, pointer.receipt);
+
+  actions.setPerformedKeys({ prepare: keyboard.prepareKeys, fill: keyboard.fillElement });
   const captures = makeCaptureSources(targets);
 
   sameDocumentCapture = captures.sameDocumentNavigated;

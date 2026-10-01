@@ -75,7 +75,7 @@ export const recordInterval = (session: AnySession, outputPath: string, duration
 
       const captureStarted = yield* Effect.sync(() => process.hrtime.bigint());
 
-      const interval = yield* Capture.start(session, {
+      const interval = yield* Capture.start(session.initialPage, {
         maxFrames: 64,
         maxBufferedBytes: 32 * 1024 * 1024,
         maxFrameBytes: 4 * 1024 * 1024,

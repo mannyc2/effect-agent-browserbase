@@ -63,10 +63,9 @@ it.effect.each(["recovery-first", "public-first"] as const)(
         const f = yield* fixture({ onNavigate: navigation.script, lifetimeMillis: 10000 });
         const session = yield* (yield* f.acquisition).connect;
 
-        const operation = yield* session.operations.startNavigation(
-          "https://example.test/slow",
-          100,
-        );
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow", 100);
 
         const first =
           order === "public-first" ? yield* Effect.forkChild(operation.stop) : undefined;
@@ -92,8 +91,8 @@ it.effect.each(["recovery-first", "public-first"] as const)(
           failure: { operation: "navigate", reason: { _tag: "Timeout" }, outcome: "unknown" },
         });
         expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 1, closes: 1 });
-        expect(yield* session.operations.readText()).toBe("initial");
-        yield* session.operations.click("#act");
+        expect(yield* session.initialPage().controls.operations.readText()).toBe("initial");
+        yield* session.initialPage().controls.operations.click("#act");
         expect(f.state.clicks).toBe(1);
         expect(f.state.connects).toBe(1);
       }),
@@ -142,10 +141,9 @@ it.effect.each(["recovery", "lifetime"] as const)(
         const session = yield* (yield* f.acquisition).connect;
         const started = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
-        const operation = yield* session.operations.startNavigation(
-          "https://example.test/slow",
-          100,
-        );
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow", 100);
 
         const completed = yield* Effect.forkChild(
           operation.completed.pipe(
@@ -158,7 +156,7 @@ it.effect.each(["recovery", "lifetime"] as const)(
           ),
         );
 
-        const holder = yield* Effect.forkChild(session.observe());
+        const holder = yield* Effect.forkChild(session.initialPage().controls.observe());
 
         yield* Effect.promise(() => observing.promise);
         // Delivery is later than the loading deadline: the recovery budget must not restart here.
@@ -187,10 +185,12 @@ it.effect.each(["recovery", "lifetime"] as const)(
         setup.resolve();
         yield* Effect.promise(() => navigation.retired.promise);
         expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 0, closes: 1 });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: {
-            reason: { _tag: bound === "lifetime" ? "Expired" : "Closed" },
+            reason: { _tag: "Stale" },
             outcome: "undispatched",
           },
         });
@@ -227,7 +227,11 @@ it.effect("recovery waits for a canceled public setup to retire before its only 
 
       const f = yield* fixture({ onNavigate: navigation.script, lifetimeMillis: 10000 });
       const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/slow", 100);
+
+      const operation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow", 100);
+
       const publicStop = yield* Effect.forkChild(operation.stop);
 
       yield* Effect.promise(() => opened.promise);
@@ -245,7 +249,7 @@ it.effect("recovery waits for a canceled public setup to retire before its only 
       });
       expect({ opens, sends, closes }).toEqual({ opens: 2, sends: 1, closes: 2 });
       yield* operation.stop;
-      yield* session.operations.click("#act");
+      yield* session.initialPage().controls.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -269,10 +273,9 @@ it.effect(
         const f = yield* fixture({ onNavigate: navigation.script });
         const session = yield* (yield* f.acquisition).connect;
 
-        const operation = yield* session.operations.startNavigation(
-          "https://example.test/slow",
-          100,
-        );
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow", 100);
 
         yield* TestClock.adjust(100);
         navigation.completed.reject(loadingTimeout());
@@ -288,9 +291,11 @@ it.effect(
         expect(sends).toBe(1);
         // What the engine said about the failed acknowledgement stays with the host.
         expect(JSON.stringify(first)).toContain('"detail":"PRIVATE-ACKNOWLEDGEMENT-FAILURE"');
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
         expect(f.state.clicks).toBe(0);
       }),
@@ -334,12 +339,11 @@ it.effect(
 
         const session = yield* (yield* f.acquisition).connect;
 
-        const operation = yield* session.operations.startNavigation(
-          "https://example.test/slow",
-          100,
-        );
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow", 100);
 
-        const holder = yield* Effect.forkChild(session.observe());
+        const holder = yield* Effect.forkChild(session.initialPage().controls.observe());
 
         yield* Effect.promise(() => observing.promise);
         const canceled = yield* Effect.forkChild(operation.stop);
@@ -370,7 +374,7 @@ it.effect(
           reason: { _tag: "Stale" },
           outcome: "undispatched",
         });
-        yield* session.operations.click("#act");
+        yield* session.initialPage().controls.operations.click("#act");
         expect(f.state.clicks).toBe(1);
       }),
     ),
@@ -414,14 +418,21 @@ it.effect("successor recovery waits for a canceled predecessor's native setup to
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const first = yield* session.operations.startNavigation("https://example.test/first", 100);
+
+      const first = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/first", 100);
+
       const canceled = yield* Effect.forkChild(first.stop);
 
       yield* Effect.promise(() => opened.promise);
       yield* Fiber.interrupt(canceled);
       predecessor.completed.resolve("https://example.test/first");
       expect(yield* first.completed).toBe("https://example.test/first");
-      const second = yield* session.operations.startNavigation("https://example.test/second", 100);
+
+      const second = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/second", 100);
 
       yield* TestClock.adjust(100);
       successor.completed.reject(loadingTimeout());
@@ -443,7 +454,7 @@ it.effect("successor recovery waits for a canceled predecessor's native setup to
         successorOpens: 1,
         successorSends: 1,
       });
-      yield* session.operations.click("#act");
+      yield* session.initialPage().controls.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -475,7 +486,10 @@ it.effect("a recovery acknowledgement past the absolute deadline cannot reopen o
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/slow", 100);
+
+      const operation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow", 100);
 
       yield* TestClock.adjust(100);
       navigation.completed.reject(loadingTimeout());
@@ -493,9 +507,11 @@ it.effect("a recovery acknowledgement past the absolute deadline cannot reopen o
       yield* Effect.promise(() => navigation.retired.promise);
       expect({ sends, closes }).toEqual({ sends: 1, closes: 1 });
       expect(yield* Effect.exit(operation.stop)).toEqual(original);
-      expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+      expect(
+        yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+      ).toMatchObject({
         _tag: "Failure",
-        failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
       });
       expect(f.state.clicks).toBe(0);
     }),
@@ -514,7 +530,10 @@ it.effect("a failed recovery setup fences with the loading timeout and does not 
 
       const f = yield* fixture({ onNavigate: navigation.script });
       const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/slow", 100);
+
+      const operation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow", 100);
 
       yield* TestClock.adjust(100);
       navigation.completed.reject(loadingTimeout());
@@ -528,9 +547,11 @@ it.effect("a failed recovery setup fences with the loading timeout and does not 
       yield* operation.stop;
       yield* operation.stop;
       expect(opens).toBe(1);
-      expect(yield* Effect.result(session.operations.readText())).toMatchObject({
+      expect(
+        yield* Effect.result(session.initialPage().controls.operations.readText()),
+      ).toMatchObject({
         _tag: "Failure",
-        failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
       });
     }),
   ),
@@ -556,10 +577,9 @@ it.effect.each(["child-timeout", "named-timeout", "replacement"] as const)(
         const f = yield* fixture({ onNavigate: navigation.script });
         const session = yield* (yield* f.acquisition).connect;
 
-        const operation = yield* session.operations.startNavigation(
-          "https://example.test/slow",
-          100,
-        );
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow", 100);
 
         const error =
           kind === "child-timeout"
@@ -581,9 +601,11 @@ it.effect.each(["child-timeout", "named-timeout", "replacement"] as const)(
         expect(JSON.stringify(result)).not.toContain("PRIVATE-NAVIGATION-FAILURE");
         yield* operation.stop;
         expect(sends).toBe(0);
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
+          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
       }),
     ),

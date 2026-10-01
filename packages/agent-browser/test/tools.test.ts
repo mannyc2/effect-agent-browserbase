@@ -1,8 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Exit, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import type { BrowserSession } from "effect-browser/browser";
-import { InputReceipt, Observation, SessionStatus, Target } from "effect-browser/browser-data";
+import { Observation, SessionStatus } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -48,7 +47,7 @@ it.effect(
         let reads = 0;
         let actions = 0;
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           status: Effect.sync(() => {
             reads++;
 
@@ -69,7 +68,11 @@ it.effect(
         });
 
         const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-        const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
+
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage).pipe(
+          Scope.provide(scope),
+        );
+
         const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
         const result = yield* Stream.runCollect(
@@ -124,21 +127,43 @@ it.effect(
             return Effect.fail(error);
           });
 
-        const browser = scriptedSession({
-          startNavigation: refuse("navigate"),
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Click") {
+              return refuse("click")();
+            }
+            if (action._tag === "Fill") {
+              return refuse("fill")();
+            }
+            if (action._tag === "Scroll") {
+              return refuse("scroll")();
+            }
+            if (action._tag === "PointerMove") {
+              return refuse("pointer-move")();
+            }
+            if (action._tag === "Hover") {
+              return refuse("hover")();
+            }
+            if (action._tag === "Wheel") {
+              return refuse("wheel")();
+            }
+            if (action._tag === "Press") {
+              return refuse("press")();
+            }
+            if (action._tag === "Type") {
+              return refuse("type")();
+            }
+            if (action._tag === "Select") {
+              return refuse("select-option")();
+            }
+
+            return Effect.void;
+          },
+          beforeNavigation: refuse("navigate"),
           observe: refuse("observe"),
-          clickElement: refuse("click"),
-          fillElement: refuse("fill"),
-          scroll: refuse("scroll"),
-          pointerMove: refuse("pointer-move"),
-          hoverElement: refuse("hover"),
-          wheel: refuse("wheel"),
-          pressElement: refuse("press"),
-          typeElement: refuse("type"),
-          selectOption: refuse("select-option"),
         });
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
         const tools = yield* allTools.pipe(Effect.provide(host.layer));
 
         for (const [name, request, operation] of requests) {
@@ -194,6 +219,8 @@ const projections: ReadonlyArray<
   [Reasons.NotFocused.make({}), "not-focused"],
   [Reasons.Limit.make({ dimension: "pages", maximum: 1, observed: 2 }), "limit"],
   [Reasons.Timeout.make({}), "timeout"],
+  [Reasons.ScheduleMissed.make({}), "timeout"],
+  [Reasons.TimingBudgetExceeded.make({}), "timeout"],
   [Reasons.QueueExpired.make({}), "timeout"],
   [Reasons.Closed.make({}), "closed"],
   [Reasons.Expired.make({}), "closed"],
@@ -223,12 +250,12 @@ it.effect(
           outcome: "undispatched",
         });
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           observe: () => Effect.suspend(() => Effect.fail(error)),
         });
 
         const tools = yield* BrowserTools.toolkit.pipe(
-          Effect.provide(BrowserTools.handlers(browser)),
+          Effect.provide(BrowserTools.handlers(browser, browser.initialPage)),
         );
 
         expect(projections.map(([reason]) => reason._tag).sort()).toEqual(
@@ -261,7 +288,7 @@ it.effect(
         const reason = Reasons.Provider.make({ status: 503 });
         const error = BrowserError.make({ operation: "observe", reason, outcome: "rejected" });
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           observe: () =>
             Effect.suspend(() => {
               calls++;
@@ -271,7 +298,11 @@ it.effect(
         });
 
         const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-        const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
+
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage).pipe(
+          Scope.provide(scope),
+        );
+
         const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
         yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}, "first"));
@@ -327,111 +358,48 @@ it.effect(
     ),
 );
 
-it.effect(
-  "malformed typed results are recorded once before projection without replay or receipt callbacks",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const target = Target.make({ generation: 1, pageId: "page", frameId: "frame" });
+it.effect("a malformed replacement reading is recorded without input or replay", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let reads = 0;
+      let inputs = 0;
+      const browser = yield* scriptedSession();
+      const original = yield* browser.initialPage.observe();
+      const malformed = Observation.make({ ...original });
 
-        const receipt = InputReceipt.make({
-          target,
-          kind: "pointer-move",
-          position: null,
-          startedMonotonicNanos: 1n,
-          completedMonotonicNanos: 2n,
-        });
+      Reflect.set(malformed, "scope", "PRIVATE-MALFORMED-OBSERVATION");
 
-        const observation = Observation.make({
-          target,
-          observationId: "observation",
-          revision: 0,
-          scope: "document",
-          url: "https://example.test/",
-          text: "",
-          controls: [],
-          controlsTruncated: false,
-          textTruncated: false,
-          viewport: {
-            width: 1,
-            height: 1,
-            clippedText: 0,
-            coveredText: 0,
-            uncertainText: 0,
-            unreachableControls: 0,
-            exhausted: false,
-          },
-        });
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        observe: () =>
+          Effect.sync(() => {
+            reads++;
 
-        Reflect.set(receipt, "kind", "PRIVATE-MALFORMED-RECEIPT");
-        Reflect.set(observation, "scope", "PRIVATE-MALFORMED-OBSERVATION");
-        let starts = 0;
-        let stops = 0;
-        let inputs = 0;
-        const invalidAction = () => Effect.succeed({ url: "PRIVATE-MALFORMED-URL" });
-        const invalidInput = () => Effect.succeed(receipt);
+            return malformed;
+          }),
+        onInput: () =>
+          Effect.sync(() => {
+            inputs++;
+          }),
+      });
 
-        const browser = scriptedSession({
-          startNavigation: () =>
-            Effect.sync(() => {
-              starts++;
+      const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
-              return {
-                target,
-                completed: invalidAction(),
-                stop: Effect.sync(() => {
-                  stops++;
-                }),
-              };
-            }),
-          observe: () => Effect.succeed(observation),
-          clickElement: invalidAction,
-          fillElement: invalidAction,
-          scroll: invalidAction,
-          pointerMove: invalidInput,
-          hoverElement: invalidInput,
-          wheel: invalidInput,
-          pressElement: invalidInput,
-          typeElement: invalidInput,
-          selectOption: invalidAction,
-        });
+      expect(
+        yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}, "malformed")),
+      ).toMatchObject([
+        { isFailure: true, encodedResult: { reason: "failed", outcome: "unknown" } },
+      ]);
+      const snapshot = yield* host.toolFailures;
 
-        const host = yield* BrowserTools.makeHost(browser, {
-          onInput: () =>
-            Effect.sync(() => {
-              inputs++;
-            }),
-        });
-
-        const tools = yield* allTools.pipe(Effect.provide(host.layer));
-
-        for (const [name, request] of requests) {
-          const results = yield* Stream.runCollect(yield* tools.handle(name, request, name));
-
-          expect(results[0]?.encodedResult).toEqual({
-            _tag: "BrowserToolFailure",
-            reason: "failed",
-            outcome: "unknown",
-          });
-        }
-        const snapshot = yield* host.toolFailures;
-
-        expect(snapshot.failures).toHaveLength(11);
-        expect(snapshot.failures.map((entry) => entry.toolCallId)).toEqual(
-          requests.map(([name]) => name),
-        );
-        expect(
-          snapshot.failures.every(
-            (entry) => entry.error.reason._tag === "Malformed" && entry.error.outcome === "unknown",
-          ),
-        ).toBe(true);
-        expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-");
-        expect(starts).toBe(1);
-        expect(stops).toBe(0);
-        expect(inputs).toBe(0);
-        expect(yield* host.run(Effect.succeed(true))).toBe(true);
-      }),
-    ),
+      expect(snapshot.failures).toMatchObject([
+        { toolCallId: "malformed", error: { reason: { _tag: "Malformed" } } },
+      ]);
+      expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-");
+      expect(reads).toBe(1);
+      expect(inputs).toBe(0);
+      expect(yield* host.run(Effect.succeed(true))).toBe(true);
+    }),
+  ),
 );
 
 it.effect(
@@ -445,20 +413,15 @@ it.effect(
           outcome: "unknown",
         });
 
-        let stops = 0;
+        const browser = yield* scriptedSession();
 
-        const browser: BrowserSession = scriptedSession({
-          startNavigation: () =>
-            Effect.succeed({
-              target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
-              completed: Effect.fail(error),
-              stop: Effect.sync(() => {
-                stops++;
-              }),
-            }),
+        yield* browser.control.next("navigate", {
+          _tag: "Fail",
+          reason: error.reason,
+          outcome: "undispatched",
         });
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
         const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
         const results = yield* Stream.runCollect(
@@ -468,16 +431,18 @@ it.effect(
         expect(results[0]?.encodedResult).toEqual({
           _tag: "BrowserToolFailure",
           reason: "stale",
-          outcome: "unknown",
+          outcome: "undispatched",
         });
         const snapshot = yield* host.toolFailures;
 
         expect(snapshot.failures).toHaveLength(1);
         expect(snapshot.failures[0]).toMatchObject({
-          error: { reason: { _tag: "Interrupted" }, outcome: "unknown" },
+          error: { reason: { _tag: "Interrupted" }, outcome: "undispatched" },
           toolCallId: "completed",
         });
-        expect(stops).toBe(0);
+        expect(
+          (yield* browser.control.calls).filter((call) => call.operation === "navigate-stop"),
+        ).toHaveLength(0);
       }),
     ),
 );
@@ -487,20 +452,17 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        let calls = 0;
+        const browser = yield* scriptedSession();
+        const selected = { ...reference, elementId: "element-3" };
 
-        const browser = scriptedSession({
-          selectOption: (selected, options) =>
-            Effect.sync(() => {
-              calls++;
-              expect(selected).toEqual(reference);
-              expect(options).toEqual(["option-1"]);
+        const calls = () =>
+          browser.control.calls.pipe(
+            Effect.map(
+              (records) => records.filter((call) => call.operation === "select-option").length,
+            ),
+          );
 
-              return { url: "https://example.test/" };
-            }),
-        });
-
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
         const tools = yield* BrowserTools.selectionToolkit.pipe(
           Effect.provide(host.selectionHandlers),
@@ -516,20 +478,23 @@ it.effect(
         ]) {
           const results = yield* Stream.runCollect(
             // @ts-expect-error Exercise invalid model parameters at the actual decoding boundary.
-            yield* tools.handle("browser_select_option", { reference, options }),
+            yield* tools.handle("browser_select_option", { reference: selected, options }),
           );
 
           expect(results).toHaveLength(1);
           expect(results[0]?.isFailure).toBe(true);
         }
-        expect(calls).toBe(0);
+        expect(yield* calls()).toBe(0);
         expect((yield* host.toolFailures).failures).toEqual([]);
         expect(
           yield* Stream.runCollect(
-            yield* tools.handle("browser_select_option", { reference, options: ["option-1"] }),
+            yield* tools.handle("browser_select_option", {
+              reference: selected,
+              options: ["option-1"],
+            }),
           ),
         ).toMatchObject([{ isFailure: false }]);
-        expect(calls).toBe(1);
+        expect(yield* calls()).toBe(1);
       }),
     ),
 );

@@ -182,7 +182,7 @@ export interface TransferOperations {
 }
 
 /** The transfer bridge accepts only a Page issued by this exact session on its original owner. */
-export interface Integration<Reference> extends TransferOperations {
+export interface Integration<Reference> {
   readonly forPage: (page: Page) => Effect.Effect<TransferOperations, BrowserError>;
   readonly liveView: <A>(
     issue: Effect.Effect<A, BrowserError>,
@@ -462,7 +462,6 @@ export const make = Effect.fnUntraced(function* (
           return {
             session,
             operations: {
-              ...makeTransferOperations(controls),
               forPage: (page) =>
                 resolvePageControlsForSession(session, page).pipe(
                   Effect.map(makeTransferOperations),

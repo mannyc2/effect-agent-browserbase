@@ -80,7 +80,7 @@ const result = await Effect.runPromise(
         target: { targetId: handoff.targetId },
       });
 
-      const target = session;
+      const target = session.initialPage;
       const heading = (yield* target.readText(ReadTextRequest.make({ selector: "h1" }))).text;
 
       yield* target.click(ClickRequest.make({ selector: "#increment" }));

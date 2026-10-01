@@ -13,9 +13,9 @@ const policy = BrowserPolicy.unrestricted({ maxActions: 20, maxElapsedMillis: 60
 export const inspectChromium = (url: string) =>
   Browser.scoped(Chromium.launch(policy), (session) =>
     Effect.gen(function* () {
-      yield* session.navigate({ url });
-      const observation = yield* session.observe({ scope: "viewport" });
-      const interval = yield* Capture.start(session, { maxDurationMillis: 10000 });
+      yield* session.initialPage.navigate({ url });
+      const observation = yield* session.initialPage.observe({ scope: "viewport" });
+      const interval = yield* Capture.start(session.initialPage, { maxDurationMillis: 10000 });
       const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
       const summary = yield* interval.stop;
 
@@ -27,5 +27,5 @@ export const inspectChromium = (url: string) =>
 /** Borrow an existing loopback CDP browser. Closing this scope leaves its process running. */
 export const inspectExistingChromium = (endpoint: Redacted.Redacted<string>) =>
   Browser.scoped(Chromium.attach(endpoint, { policy }), (session) =>
-    session.observe({ scope: "viewport" }),
+    session.initialPage.observe({ scope: "viewport" }),
   ).pipe(Effect.provide(Chromium.layer()));

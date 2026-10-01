@@ -62,9 +62,9 @@ const Seen = Schema.fromJsonString(
 );
 
 const read = Effect.fnUntraced(function* (session: AnySession) {
-  yield* session.navigate(NavigateRequest.make({ url: `${origin}/` }));
+  yield* session.initialPage.navigate(NavigateRequest.make({ url: `${origin}/` }));
 
-  const { text } = yield* session.readText(
+  const { text } = yield* session.initialPage.readText(
     ReadTextRequest.make({ selector: "#effect-agent-crash" }),
   );
 

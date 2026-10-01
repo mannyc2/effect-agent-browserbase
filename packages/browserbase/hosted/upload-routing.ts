@@ -62,7 +62,7 @@ await h.run(
     Effect.gen(function* () {
       const session = yield* h.open({ bootstrap: chooser });
 
-      yield* session.navigate(NavigateRequest.make({ url: "https://example.com/" }));
+      yield* session.initialPage.navigate(NavigateRequest.make({ url: "https://example.com/" }));
 
       const receipt = yield* (yield* BrowserbaseUploads).create(session.reference, {
         filename,
@@ -81,15 +81,18 @@ await h.run(
         yield* Effect.sleep(Math.max(0, delay - elapsed));
         const afterMillis = (yield* Clock.currentTimeMillis) - uploadedAt;
 
-        yield* session.selectFiles({
-          selector: `#effect-agent-file-${index}`,
-          selection: { _tag: "Uploaded", uploads: [receipt] },
-        });
+        yield* session.selectFiles(
+          {
+            selector: `#effect-agent-file-${index}`,
+            selection: { _tag: "Uploaded", uploads: [receipt] },
+          },
+          session.initialPage,
+        );
         yield* Effect.sleep(1_000);
 
-        const { text } = yield* session
-
-          .readText(ReadTextRequest.make({ selector: `#effect-agent-file-out-${index}` }));
+        const { text } = yield* session.initialPage.readText(
+          ReadTextRequest.make({ selector: `#effect-agent-file-out-${index}` }),
+        );
 
         const seen = text === "" ? null : (JSON.parse(text) as Seen);
 

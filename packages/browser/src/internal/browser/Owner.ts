@@ -18,12 +18,13 @@ import {
   type BrowserOutcome,
   type Containment,
 } from "../../Errors.ts";
-import type { SettledEvidence } from "../../PlanData.ts";
+import type { AcknowledgementFact, SettledEvidence } from "../../PlanData.ts";
 import type { Correlation } from "../../TimelineData.ts";
 import { makeAdmission } from "./Admission.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
-import { providerReason, publicError } from "./NativeCalls.ts";
+import { NativeEffectFailure, providerReason, publicError } from "./NativeCalls.ts";
 import type { DescriptorSample, ResolvedElement } from "./Observation.ts";
+import type { PerformancePlan } from "./Performance.ts";
 
 export interface NativePictureBoundary {
   readonly phase: "Requested" | "Returned";
@@ -46,10 +47,19 @@ export interface TicketObserver {
   ) => void;
   readonly scroll: (facts: {
     readonly target: DriverTarget;
-    readonly x: number;
-    readonly y: number;
+    readonly x?: number;
+    readonly y?: number;
+    readonly qualification?: "exact-node-scroll-into-view";
     readonly startedMonotonicNanos: bigint;
     readonly completedMonotonicNanos: bigint;
+  }) => void;
+  readonly glide: (facts: {
+    readonly target: DriverTarget;
+    readonly startedMonotonicNanos: bigint;
+    readonly samples: ReadonlyArray<{
+      readonly offsetMillis: number;
+      readonly position: { readonly x: number; readonly y: number };
+    }>;
   }) => void;
   readonly settled: (evidence: SettledEvidence, target: DriverTarget) => void;
   readonly finished: (summary: {
@@ -120,20 +130,29 @@ export interface ReadTicket {
 
 /** One admitted native operation; checks at dispatch also fence late Promise continuations. */
 export interface Ticket extends ReadTicket {
+  readonly performance?: { readonly plan: PerformancePlan; readonly fieldIndex?: number };
+  readonly monotonicTimeNanosUnsafe?: () => bigint;
+  /** Exact original-owner time left; native SDK timeouts retain their separate millisecond floor. */
+  readonly remainingTimeNanos?: () => bigint;
+  /** Original-owner sleep, bounded by this admission and fenced before and after waiting. */
+  readonly pauseUntil?: (atNanos: bigint) => Promise<void>;
   readonly operationId?: string;
   readonly picture?: TicketObserver["picture"];
   readonly recordInput?: TicketObserver["input"];
   readonly recordScroll?: TicketObserver["scroll"];
+  readonly recordGlide?: TicketObserver["glide"];
   readonly recordSettled?: TicketObserver["settled"];
   /** Native work keeps capacity until settlement, independently of the request fiber. */
   readonly retainNative?: () => () => void;
   readonly dispatched: boolean;
+  /** Original phase-aware native outcome; preparatory acknowledgement is not logical success. */
+  readonly outcome?: BrowserOutcome;
   readonly phase?: "Prepared" | "Dispatched" | "Acknowledged" | "FollowUp" | "Terminal";
   /** Actual owner's containment, including pure interruption without a typed failure. */
   readonly containment?: Containment;
   dispatch(): void;
   /** Called only for positive completion of all native commands in the current mutation phase. */
-  acknowledge?(): void;
+  acknowledge?(fact?: AcknowledgementFact): void;
   followUp?(): void;
   /** Facts from the checked node immediately before dispatch; no separate recording read. */
   readonly captureTarget?: (
@@ -144,8 +163,13 @@ export interface Ticket extends ReadTicket {
 
 /** Synchronous host evidence from the original ticket, never dispatch authority. */
 export interface ExecutionEvidence {
+  readonly scroll?: (facts: Parameters<TicketObserver["scroll"]>[0], ticket: Ticket) => void;
   readonly correlation?: () => Correlation | null;
-  readonly phase?: (phase: NonNullable<Ticket["phase"]>, ticket: Ticket) => void;
+  readonly phase?: (
+    phase: NonNullable<Ticket["phase"]>,
+    ticket: Ticket,
+    acknowledgement?: AcknowledgementFact,
+  ) => void;
   readonly target?: NonNullable<Ticket["captureTarget"]>;
 }
 
@@ -599,6 +623,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly operationDeadline?: number;
       readonly queueDeadline?: number;
       readonly evidence?: ExecutionEvidence;
+      readonly performance?: Ticket["performance"];
       /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
       readonly waitUntil?: number;
       /** Recovery and lifecycle cleanup own independent, bounded capacity. */
@@ -737,11 +762,22 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         lane.active = { controller, operation };
         let dispatched = false;
         let pending = false;
+        let logicalAcknowledged = false;
+        let partialAcknowledged = false;
         let phase: NonNullable<Ticket["phase"]> = "Prepared";
         let unknownDecided = false;
         let containment: Containment = { _tag: "NotRequired" };
         const generation = state.generation;
         const allowed = options.phases ?? ["open"];
+
+        const currentOutcome = (fallback: BrowserOutcome = "undispatched"): BrowserOutcome =>
+          pending || unknownDecided
+            ? "unknown"
+            : logicalAcknowledged
+              ? "performed"
+              : partialAcknowledged
+                ? "rejected"
+                : fallback;
 
         const check = () => {
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
@@ -753,24 +789,50 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             throw BrowserError.make({
               operation,
               reason: Reasons.Stale.make({}),
-              outcome:
-                pending || unknownDecided ? "unknown" : dispatched ? "performed" : "undispatched",
+              outcome: currentOutcome(),
             });
           }
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline)
             throw BrowserError.make({
               operation,
               reason: Reasons.Timeout.make({}),
-              outcome:
-                pending || unknownDecided ? "unknown" : dispatched ? "performed" : "undispatched",
+              outcome: currentOutcome(),
             });
         };
 
         const ticket: Ticket = {
+          ...(options.performance === undefined ? {} : { performance: options.performance }),
+          monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+          remainingTimeNanos: () =>
+            BigInt(Math.floor(deadline * 1_000_000)) - clock.monotonicTimeNanosUnsafe(),
+          pauseUntil: async (atNanos) => {
+            check();
+            if (atNanos >= BigInt(Math.floor(deadline * 1_000_000)))
+              throw BrowserError.make({
+                operation,
+                reason: Reasons.TimingBudgetExceeded.make({}),
+                outcome: currentOutcome(),
+              });
+            const remaining = atNanos - clock.monotonicTimeNanosUnsafe();
+
+            if (remaining > 0n) {
+              // oxlint-disable-next-line no-restricted-properties -- the native Promise callback awaits only its captured Clock and carries the original Exit back to Effect
+              const exit = await Effect.runPromiseExit(clock.sleep(Duration.nanos(remaining)), {
+                signal: controller.signal,
+              });
+
+              if (Exit.isFailure(exit)) throw NativeEffectFailure.make({ cause: exit.cause });
+            }
+            check();
+          },
           operationId,
           picture: (boundary) => observer?.picture(boundary),
           recordInput: (receipt, keys) => observer?.input(receipt, keys),
-          recordScroll: (facts) => observer?.scroll(facts),
+          recordScroll: (facts) => {
+            options.evidence?.scroll?.(facts, ticket);
+            observer?.scroll(facts);
+          },
+          recordGlide: (facts) => observer?.glide(facts),
           recordSettled: (evidence, target) => observer?.settled(evidence, target),
           ...(options.evidence?.target === undefined
             ? {}
@@ -783,6 +845,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             Math.max(1, deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000),
           get dispatched() {
             return dispatched;
+          },
+          get outcome() {
+            return currentOutcome();
           },
           get phase() {
             return phase;
@@ -807,13 +872,22 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             options.evidence?.phase?.("Dispatched", ticket);
             observer?.phase("Dispatched", true);
           },
-          acknowledge() {
+          acknowledge(fact) {
             const mutation = pending;
 
             pending = false;
+            if (
+              dispatched &&
+              !unknownDecided &&
+              !controller.signal.aborted &&
+              phase !== "Terminal"
+            ) {
+              if (fact === undefined || fact.logicalComplete) logicalAcknowledged = true;
+              else if (mutation) partialAcknowledged = true;
+            }
             if (phase !== "Terminal") phase = "Acknowledged";
             if (!unknownDecided) unresolved.delete(controller);
-            options.evidence?.phase?.("Acknowledged", ticket);
+            options.evidence?.phase?.("Acknowledged", ticket, fact);
             observer?.phase("Acknowledged", mutation);
           },
           followUp() {
@@ -886,8 +960,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           return BrowserError.make({
             operation,
             reason: Reasons.Timeout.make({}),
-            outcome:
-              pending || unknownDecided ? "unknown" : dispatched ? "performed" : "undispatched",
+            outcome: currentOutcome(),
           });
         }).pipe(
           Effect.tap(() =>
@@ -901,24 +974,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                       : BrowserError.make({
                           operation,
                           reason: Reasons.Stale.make({}),
-                          outcome:
-                            pending || unknownDecided
-                              ? "unknown"
-                              : dispatched
-                                ? "performed"
-                                : "undispatched",
+                          outcome: currentOutcome(),
                         }),
                 }),
           ),
           Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
-            const outcome =
-              pending || unknownDecided
-                ? "unknown"
-                : dispatched
-                  ? "performed"
-                  : Schema.is(BrowserError)(error)
-                    ? error.outcome
-                    : "undispatched";
+            const outcome = currentOutcome(
+              Schema.is(BrowserError)(error) ? error.outcome : "undispatched",
+            );
 
             if (pending || unknownDecided) abandon();
 
@@ -944,7 +1007,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               ),
             );
           }),
-          Effect.onInterrupt(() => Effect.sync(abandon).pipe(Effect.andThen(settle))),
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) && containment._tag === "NotRequired"
+              ? Effect.sync(abandon).pipe(Effect.andThen(settle))
+              : Effect.void,
+          ),
           Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
           Effect.onExit((exit) =>
             Effect.sync(() => {
@@ -963,12 +1030,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                   : Cause.hasInterrupts(exit.cause)
                     ? "Cancelled"
                     : "Failed",
-                outcome:
-                  pending || unknownDecided
-                    ? "unknown"
-                    : dispatched
-                      ? "performed"
-                      : (error?.outcome ?? "undispatched"),
+                outcome: currentOutcome(error?.outcome),
                 ...(error === undefined ? {} : { error }),
                 containment:
                   containment._tag === "NotRequired"
@@ -1258,7 +1320,7 @@ export type Owner = Effect.Success<ReturnType<typeof makeOwner>>;
 /** Without a native answer, whether the step was sent is all the owner knows about it. */
 const unsettled = (ticket: Ticket, error: unknown): Pick<BrowserError, "reason" | "outcome"> => ({
   reason: providerReason(error),
-  outcome: ticket.dispatched ? "unknown" : "undispatched",
+  outcome: ticket.outcome ?? (ticket.dispatched ? "unknown" : "undispatched"),
 });
 
 /**
@@ -1283,7 +1345,7 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
           BrowserError.make({
             operation,
             reason: Reasons.Stale.make({}),
-            outcome: ticket.dispatched ? "unknown" : "undispatched",
+            outcome: ticket.outcome ?? (ticket.dispatched ? "unknown" : "undispatched"),
           }),
         ),
       );
@@ -1306,14 +1368,22 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
           retire?.();
           if (!done) {
             cleanup();
-            resume(Effect.fail(publicError(error, operation, unsettled(ticket, error))));
+            resume(
+              Schema.is(NativeEffectFailure)(error)
+                ? Effect.failCause(error.cause)
+                : Effect.fail(publicError(error, operation, unsettled(ticket, error))),
+            );
           }
         },
       );
     } catch (error) {
       retire?.();
       cleanup();
-      resume(Effect.fail(publicError(error, operation, unsettled(ticket, error))));
+      resume(
+        Schema.is(NativeEffectFailure)(error)
+          ? Effect.failCause(error.cause)
+          : Effect.fail(publicError(error, operation, unsettled(ticket, error))),
+      );
     }
 
     return Effect.sync(cleanup);

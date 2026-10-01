@@ -146,35 +146,25 @@ const fixture = Effect.fnUntraced(function* (onRead?: () => Promise<void>) {
   };
 });
 
-it.effect(
-  "direct selection is resolved at admission while retained and pinned targets keep their contracts",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* fixture();
-        const direct = f.session.readText({});
-        const retained = yield* f.session.retain();
-        const pinned = yield* f.session.pinPage(f.pages[0]!);
+it.effect("issued Pages keep their exact target across display selection changes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const initial = f.session.initialPage;
+      const direct = initial.readText({});
+      const scout = yield* f.session.page(f.pages[1]!);
 
-        yield* f.session.selectPage(f.pages[1]!);
-        expect((yield* direct).text).toBe("page-b");
-        expect(yield* Effect.result(retained.readText({}))).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-        });
-        expect((yield* pinned.readText({})).text).toBe("page-a");
-        yield* f.session.selectPage(f.pages[0]!);
-        expect(yield* Effect.result(retained.readText({}))).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-        });
-        expect(f.reads).toEqual(["page-b", "page-a"]);
-        expect((yield* (yield* f.session.retain()).readText({})).text).toBe("page-a");
-      }),
-    ),
+      yield* f.session.selectPage(f.pages[1]!);
+      expect((yield* direct).text).toBe("page-a");
+      expect((yield* scout.readText({})).text).toBe("page-b");
+      yield* f.session.selectPage(f.pages[0]!);
+      expect((yield* initial.readText({})).text).toBe("page-a");
+      expect(f.reads).toEqual(["page-a", "page-b", "page-a"]);
+    }),
+  ),
 );
 
-it.effect("retain captures Page selection before Busy refusal and never reads a closed owner", () =>
+it.effect("Page issuance respects Busy refusal and never reads a closed owner", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
@@ -189,23 +179,23 @@ it.effect("retain captures Page selection before Busy refusal and never reads a 
         await gate;
       });
 
-      const reading = yield* Effect.forkChild(f.session.readText({}));
+      const reading = yield* Effect.forkChild(f.session.initialPage.readText({}));
 
       yield* Deferred.await(entered);
       const before = f.selectedReads();
 
-      expect(yield* Effect.result(f.session.retain())).toMatchObject({
+      expect(yield* Effect.result(f.session.page(f.pages[0]!))).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
       });
-      expect(f.selectedReads()).toBe(before + 1);
+      expect(f.selectedReads()).toBe(before);
       release();
       yield* Fiber.join(reading);
-      yield* f.session.retain();
+      yield* f.session.page(f.pages[0]!);
       yield* f.session.closeChecked;
       const closed = f.selectedReads();
 
-      expect(yield* Effect.result(f.session.retain())).toMatchObject({
+      expect(yield* Effect.result(f.session.page(f.pages[0]!))).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
       });
@@ -216,12 +206,17 @@ it.effect("retain captures Page selection before Busy refusal and never reads a 
 );
 
 it.effect(
-  "all target modes propagate the loading timeout independently of admission and cap it by lifetime",
+  "issued Pages propagate loading timeout independently of admission and cap it by lifetime",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const f = yield* fixture();
-        const views = [f.session, yield* f.session.retain(), yield* f.session.pinPage(f.pages[0]!)];
+
+        const views = [
+          f.session.initialPage,
+          yield* f.session.page(f.pages[0]!),
+          yield* f.session.page(f.pages[1]!),
+        ];
 
         for (const view of views) yield* view.navigate({ url: "https://example.test/default" });
         for (const view of views)

@@ -139,11 +139,11 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const scripted = yield* Testing.ScriptedBrowserbase;
       const acquired = yield* BrowserbaseBrowser.acquire(policy);
       const session = yield* acquired.connect;
-      const handle = yield* session.retain();
+      const handle = session.initialPage;
 
       yield* handle.navigate({ url: "https://example.test/next" });
       assert.equal((yield* handle.readText({})).text, "initial");
-      assert.equal((yield* session.observe()).url, "https://example.test/next");
+      assert.equal((yield* session.initialPage.observe()).url, "https://example.test/next");
       const report = yield* session.close;
 
       assert.equal(report.remote, "confirmed");
@@ -259,7 +259,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const long = BrowserPolicy.unrestricted({ maxActions: 20, maxElapsedMillis: 900_000 });
       const session = yield* (yield* BrowserbaseBrowser.acquire(long)).connect;
 
-      assert.equal((yield* session.readText({})).text, "initial");
+      assert.equal((yield* session.initialPage.readText({})).text, "initial");
       assert.equal((yield* session.close).remote, "confirmed");
     }).pipe(
       Effect.scoped,
@@ -318,7 +318,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       // Dispatched, and never acknowledged.
       yield* browser.next("click", { _tag: "Hold", gate: entered, dispatched: true });
 
-      const fiber = yield* session
+      const fiber = yield* session.initialPage
         .click({ selector: "#button" })
         .pipe(Effect.result, Effect.forkChild);
 
@@ -335,7 +335,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
       const browser = yield* scriptedBrowser;
       const observed = yield* browser.gate;
-      const old = yield* session.retain();
+      const old = session.initialPage;
       const handoff = yield* session.beginHandoff(60);
 
       yield* browser.document.update({
@@ -346,7 +346,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const resumed = yield* session.resume(handoff.token, true).pipe(Effect.forkChild);
 
       yield* observed.reached;
-      yield* expectReason(session.click({ selector: "#button" }), "Busy");
+      yield* expectReason(session.initialPage.click({ selector: "#button" }), "Stale");
       yield* observed.open;
       const inventory = yield* Fiber.join(resumed);
       const [info] = inventory.pages;
@@ -364,7 +364,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
 
       yield* expectReason(session.beginHandoff(60), "Authorization");
-      yield* expectReason(session.click({ selector: "#button" }), "Busy");
+      yield* expectReason(session.initialPage.click({ selector: "#button" }), "Stale");
     }).pipe(Effect.scoped, Effect.provide(layer({ provider: { liveView: "denied" } })))),
   test("resume requires the operator acknowledgement and matching token", () =>
     Effect.gen(function* () {
@@ -373,13 +373,13 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
 
       yield* expectReason(session.resume(handoff.token, false), "Authorization");
       yield* expectReason(session.resume(Redacted.make("wrong"), true), "Authorization");
-      yield* expectReason(session.click({ selector: "#button" }), "Busy");
+      yield* expectReason(session.initialPage.click({ selector: "#button" }), "Stale");
     }).pipe(Effect.scoped, Effect.provide(layer()))),
   test("keep-alive reconnect establishes fresh inventory for explicit observation", () =>
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
       const browser = yield* scriptedBrowser;
-      const old = yield* session.retain();
+      const old = session.initialPage;
 
       yield* session.detach;
       yield* browser.document.update({

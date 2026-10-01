@@ -14,6 +14,7 @@ import {
   InputBindings,
   Limits,
   LivePlan,
+  Performed,
   ResolveGuard,
   SettledOptions,
 } from "../../PlanData.ts";
@@ -23,6 +24,7 @@ import { schemaPath } from "./SchemaPath.ts";
 
 /** Frozen host durations, never model-facing inputs or native authority. */
 export interface PlanExecutionOptions extends RunOptions {
+  readonly style?: "plain" | Performed;
   readonly withinMillis?: number;
   readonly queueMillis?: number;
 }
@@ -154,7 +156,7 @@ const operationData = (fields: Record<string, unknown>, operation: BrowserOperat
   });
 
 const RunData = Schema.Struct({
-  style: Schema.optionalKey(Schema.Literal("plain")),
+  style: Schema.optionalKey(Schema.Union([Schema.Literal("plain"), Performed])),
   through: Schema.optionalKey(Identifier),
   inputs: Schema.optionalKey(InputBindings),
   checkpoint: Schema.optionalKey(CheckpointOptions),
@@ -172,6 +174,7 @@ export const checkedRunOptions = (
       value,
       [
         "style",
+        "startAt",
         "within",
         "through",
         "inputs",
@@ -187,6 +190,20 @@ export const checkedRunOptions = (
 
     const withinMillis =
       fields.within === undefined ? undefined : yield* millis(fields.within, true, "run");
+
+    const startAt =
+      fields.startAt === undefined
+        ? undefined
+        : yield* Schema.decodeUnknownEffect(
+            Schema.BigInt.check(
+              Schema.makeFilter(
+                (value) =>
+                  Number.isFinite(Number(value)) &&
+                  Math.abs(Number(value) / 1_000_000) <= Number.MAX_SAFE_INTEGER,
+                { title: "finite runtime monotonic instant" },
+              ),
+            ),
+          )(fields.startAt).pipe(Effect.mapError(() => configuration("run")));
 
     let policy: ElementAdmission | undefined;
 
@@ -213,7 +230,34 @@ export const checkedRunOptions = (
 
     return Object.freeze({
       ...operation,
-      ...(withinMillis === undefined ? {} : { withinMillis }),
+      ...(withinMillis === undefined ? {} : { within: withinMillis, withinMillis }),
+      ...(data.style === undefined
+        ? {}
+        : {
+            style:
+              data.style === "plain"
+                ? "plain"
+                : Object.freeze({
+                    ...data.style,
+                    motion: Object.freeze({
+                      ...data.style.motion,
+                      pointer: Object.freeze({
+                        ...data.style.motion.pointer,
+                        duration: Object.freeze({ ...data.style.motion.pointer.duration }),
+                      }),
+                      keys: Object.freeze({
+                        interval: Object.freeze({ ...data.style.motion.keys.interval }),
+                        hold: Object.freeze({ ...data.style.motion.keys.hold }),
+                      }),
+                      scroll: Object.freeze({
+                        ...data.style.motion.scroll,
+                        duration: Object.freeze({ ...data.style.motion.scroll.duration }),
+                      }),
+                    }),
+                    slips: Object.freeze({ ...data.style.slips }),
+                  }),
+          }),
+      ...(startAt === undefined ? {} : { startAt }),
       ...(operation.admission?.queue === undefined
         ? {}
         : { queueMillis: Duration.toMillis(Duration.fromInputUnsafe(operation.admission.queue)) }),

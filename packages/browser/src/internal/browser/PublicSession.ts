@@ -3,8 +3,6 @@ import { Duration, Effect, Schema } from "effect";
 import type * as Bootstrap from "../../Bootstrap.ts";
 import type {
   BrowserSession,
-  TargetOperations,
-  PinnedTarget,
   Page,
   Frame,
   PageOperations,
@@ -36,7 +34,6 @@ import {
   ScrollRequest,
   SelectOptions,
   StartNavigationRequest,
-  Target,
   TextResult,
   TypeRequest,
   Viewport,
@@ -161,7 +158,23 @@ const formed = (value: FormOutcome) => {
   return decoded(FillFormResult, "fill-form", outcome, stopped?.containment)(value);
 };
 
-const makeTarget = (bound: TargetControls): TargetOperations => ({
+const makeTarget = (
+  bound: TargetControls,
+): Pick<
+  PageOperations,
+  | "navigate"
+  | "startNavigation"
+  | "readText"
+  | "click"
+  | "fill"
+  | "scroll"
+  | "pointerMove"
+  | "hover"
+  | "wheel"
+  | "press"
+  | "type"
+  | "screenshot"
+> => ({
   navigate: (request, options) =>
     checked(NavigateRequest, request, "navigate").pipe(
       Effect.flatMap((value) =>
@@ -288,15 +301,6 @@ const makeTarget = (bound: TargetControls): TargetOperations => ({
       ),
     ),
 });
-
-const makePinnedTarget = (value: {
-  readonly target: Target;
-  readonly operations: TargetControls;
-}): PinnedTarget =>
-  Object.freeze({
-    ...makeTarget(value.operations),
-    target: Object.freeze(Target.make({ ...value.target })),
-  });
 
 /** A browser-operation failure keeps its meaning when it is reported as an initialization one. */
 const initialization = (reason: BrowserError["reason"]): InitializationError["reason"] =>
@@ -629,7 +633,7 @@ export const makeSession = <E>(
   };
 
   const session: BrowserSession<E> = {
-    ...makePageOperations(controls),
+    monotonicTimeNanos: controls.monotonicTimeNanos,
     timeline: controls.timeline,
     pages: controls.pageEvents,
     initialPage: issuedPage(controls.initialPage()),
@@ -651,50 +655,6 @@ export const makeSession = <E>(
     closeChecked: controls.closeChecked,
     failure: bindings.failure,
     bindingDiagnostics: bindings.diagnostics,
-    retain: (options) =>
-      withOperationOptions(options, "target", (options) =>
-        controls.retain(options).pipe(Effect.map(makeTarget)),
-      ),
-    target: (options) =>
-      withOperationOptions(options, "target", (options) => controls.target(options)),
-    describePage: (page, options) =>
-      checked(PageInfo, page, "describe-page").pipe(
-        Effect.flatMap((page) =>
-          withOperationOptions(options, "describe-page", (options) =>
-            controls.describePage(page, options),
-          ),
-        ),
-      ),
-    frames: (options) =>
-      withOperationOptions(options, "list-frames", (options) => controls.frames(options)),
-    framesOf: (page, options) =>
-      checked(PageInfo, page, "list-frames").pipe(
-        Effect.flatMap((page) =>
-          withOperationOptions(options, "list-frames", (options) =>
-            controls.framesOf(page, options),
-          ),
-        ),
-      ),
-    pinPage: (page, options) =>
-      checked(PageInfo, page, "target").pipe(
-        Effect.flatMap((page) =>
-          withOperationOptions(options, "target", (options) => controls.pinPage(page, options)),
-        ),
-        Effect.map(makePinnedTarget),
-      ),
-    pinFrame: (page, frame, options) =>
-      checked(PageInfo, page, "target").pipe(
-        Effect.flatMap((checkedPage) =>
-          checked(FrameInfo, frame, "target").pipe(
-            Effect.flatMap((checkedFrame) =>
-              withOperationOptions(options, "target", (options) =>
-                controls.pinFrame(checkedPage, checkedFrame, options),
-              ),
-            ),
-          ),
-        ),
-        Effect.map(makePinnedTarget),
-      ),
     selectPage: (page, options) =>
       checked(PageInfo, page, "select-page").pipe(
         Effect.flatMap((page) =>
@@ -713,24 +673,9 @@ export const makeSession = <E>(
       ),
     createPage: (options) =>
       withOperationOptions(options, "new-page", (options) => controls.createPage(options)),
-    closePage: (page, options) =>
-      checked(PageInfo, page, "close-page").pipe(
-        Effect.flatMap((page) =>
-          withOperationOptions(options, "close-page", (options) =>
-            controls.closePage(page, options),
-          ),
-        ),
-      ),
-    resizeViewport: (viewport, options) =>
-      checked(Viewport, viewport, "resize").pipe(
-        Effect.flatMap((viewport) =>
-          withOperationOptions(options, "resize", (options) => controls.resize(viewport, options)),
-        ),
-      ),
   };
 
   associate(session, controls.capture);
-  associatePageControl(session, controls.pageControl);
 
   return session;
 };

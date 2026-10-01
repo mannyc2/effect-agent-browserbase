@@ -14,6 +14,9 @@ export interface OnAir {
   readonly address: string | null;
   readonly title: string | null;
   readonly caption: string | null;
+  readonly pointer: { readonly x: number; readonly y: number } | null;
+  readonly viewport: { readonly width: number; readonly height: number } | null;
+  readonly status: "live" | "gap" | "ended" | "failed";
 }
 
 /**
@@ -52,7 +55,15 @@ export class Stage extends Context.Service<
             }),
         );
 
-        const initial: OnAir = { address: null, title: null, caption: null };
+        const initial: OnAir = {
+          address: null,
+          title: null,
+          caption: null,
+          pointer: null,
+          viewport: null,
+          status: "live",
+        };
+
         const current = yield* Ref.make(initial);
 
         // A viewer that joins is replayed the latest state, then follows it.
@@ -92,7 +103,17 @@ export class Stage extends Context.Service<
 
             return Stage.of({
               url: HttpServer.formatAddress(server.address),
-              show: (frame) => Effect.asVoid(PubSub.publish(pictures, frame)),
+              show: (frame) =>
+                Effect.asVoid(PubSub.publish(pictures, frame)).pipe(
+                  Effect.andThen(
+                    Ref.updateAndGet(current, (state) => ({
+                      ...state,
+                      viewport: { width: frame.viewportWidth, height: frame.viewportHeight },
+                    })),
+                  ),
+                  Effect.flatMap((state) => PubSub.publish(states, state)),
+                  Effect.asVoid,
+                ),
               update: (change) =>
                 Ref.updateAndGet(current, (state) => ({ ...state, ...change })).pipe(
                   Effect.flatMap((state) => PubSub.publish(states, state)),

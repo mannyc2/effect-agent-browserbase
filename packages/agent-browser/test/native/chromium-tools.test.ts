@@ -1,7 +1,7 @@
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Deferred, Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -53,9 +53,9 @@ it.live(
             Effect.gen(function* () {
               expect(local.reference.provider).toBe("chromium");
 
-              const host = yield* BrowserTools.makeHost(local, {
+              const host = yield* BrowserTools.makeHost(local, local.initialPage, {
                 observationScope: "viewport",
-                admission: { admit: (facts) => facts.kind === "button" },
+                policy: { admit: (facts) => facts.kind === "button" },
                 onNavigation: ({ toolCallId }) =>
                   Effect.gen(function* () {
                     navigationCallbacks++;
@@ -113,9 +113,11 @@ it.live(
               expect(result.output.done).toBe(true);
               expect(navigationCallbacks).toBe(1);
               expect(callbackFinalizers).toBe(1);
-              expect((yield* local.readText({ selector: "#log" })).text).toContain('"clicks":1');
+              expect((yield* local.initialPage.readText({ selector: "#log" })).text).toContain(
+                '"clicks":1',
+              );
 
-              const interval = yield* Capture.start(local, {
+              const interval = yield* Capture.start(local.initialPage, {
                 lifetime: "page",
                 maxDurationMillis: 5000,
               });
@@ -181,6 +183,7 @@ it.live(
             Effect.gen(function* () {
               const result = yield* BrowserTools.run(
                 browser,
+                browser.initialPage,
                 AgentRuntime.run(agent, "inspect the partial page after a loading deadline").pipe(
                   Effect.provide(
                     Layer.mergeAll(
@@ -244,16 +247,18 @@ it.live(
               );
 
               expect(result.output.done).toBe(true);
-              expect((yield* browser.readText({ selector: "#act" })).text).toBe("clicked");
+              expect((yield* browser.initialPage.readText({ selector: "#act" })).text).toBe(
+                "clicked",
+              );
               expect((yield* browser.listPages()).length).toBe(1);
-              expect((yield* browser.target()).pageId).toBe(
+              expect(browser.initialPage.identity.pageId).toBe(
                 (yield* browser.listPages())[0]!.pageId,
               );
-              yield* browser.navigate({ url: site.url });
-              expect((yield* browser.observe()).text).toContain("VISIBLE WORDS");
+              yield* browser.initialPage.navigate({ url: site.url });
+              expect((yield* browser.initialPage.observe()).text).toContain("VISIBLE WORDS");
               const created = yield* browser.createPage();
 
-              yield* browser.closePage(created);
+              yield* (yield* browser.page(created)).close();
             }),
         ).pipe(
           Effect.provide(
@@ -315,10 +320,8 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              yield* browser.navigate({ url: site.url });
-              const bothConstructed = yield* Deferred.make<void>();
-              const originalScroll = browser.scroll;
-              const originalPointer = browser.pointerMove;
+              yield* browser.initialPage.navigate({ url: site.url });
+              const originalStart = browser.initialPage.start;
               let prepared = 0;
               let active = 0;
               let peak = 0;
@@ -326,14 +329,12 @@ it.live(
 
               const tracked = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) => {
                 prepared++;
-                if (prepared === 2) Deferred.doneUnsafe(bothConstructed, Effect.void);
 
                 return Effect.gen(function* () {
                   calls.push(name);
                   peak = Math.max(peak, ++active);
-                  // Both actual Toolkit handlers construct their operations in the same model turn.
-                  // The host lane alone decides when each complete operation may execute.
-                  yield* Deferred.await(bothConstructed);
+                  // The original Page plan executes only after the host admits its call.
+                  yield* Effect.sleep(20);
 
                   return yield* effect;
                 }).pipe(
@@ -345,24 +346,22 @@ it.live(
                 );
               };
 
-              const scroll: typeof originalScroll = (request) =>
-                tracked("scroll", originalScroll(request));
-
-              const pointerMove: typeof originalPointer = (request) =>
-                tracked("pointer", originalPointer(request));
+              const start: typeof originalStart = (plan, options) =>
+                tracked(
+                  plan.steps[0]?.action._tag === "PointerMove" ? "pointer" : "scroll",
+                  originalStart(plan, options).pipe(Effect.tap((operation) => operation.completed)),
+                );
 
               yield* Effect.acquireRelease(
-                Effect.sync(() => Object.assign(browser, { scroll, pointerMove })),
+                Effect.sync(() => Object.assign(browser.initialPage, { start })),
                 () =>
-                  Effect.sync(() =>
-                    Object.assign(browser, {
-                      scroll: originalScroll,
-                      pointerMove: originalPointer,
-                    }),
-                  ),
+                  Effect.sync(() => Object.assign(browser.initialPage, { start: originalStart })),
               );
+
               // The engine may start both calls at once; only the host lane orders them.
-              const host = yield* BrowserTools.makeHost(browser, { scheduling: "lane" });
+              const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+                scheduling: "lane",
+              });
 
               const result = yield* host.run(
                 AgentRuntime.run(concurrent, "scroll and move the pointer").pipe(
@@ -462,9 +461,8 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              yield* browser.navigate({ url: site.url });
-              const originalScroll = browser.scroll;
-              const originalPointer = browser.pointerMove;
+              yield* browser.initialPage.navigate({ url: site.url });
+              const originalStart = browser.initialPage.start;
               const log: string[] = [];
 
               // A handler builds its browser operation when the engine starts the call, so the
@@ -481,26 +479,22 @@ it.live(
 
               let scrolls = 0;
 
-              const scroll: typeof originalScroll = (request) =>
+              const start: typeof originalStart = (plan, options) =>
                 tracked(
-                  ++scrolls === 1 ? "first-scroll" : "second-scroll",
-                  originalScroll(request),
+                  plan.steps[0]?.action._tag === "PointerMove"
+                    ? "pointer"
+                    : ++scrolls === 1
+                      ? "first-scroll"
+                      : "second-scroll",
+                  originalStart(plan, options).pipe(Effect.tap((operation) => operation.completed)),
                 );
 
-              const pointerMove: typeof originalPointer = (request) =>
-                tracked("pointer", originalPointer(request));
-
               yield* Effect.acquireRelease(
-                Effect.sync(() => Object.assign(browser, { scroll, pointerMove })),
+                Effect.sync(() => Object.assign(browser.initialPage, { start })),
                 () =>
-                  Effect.sync(() =>
-                    Object.assign(browser, {
-                      scroll: originalScroll,
-                      pointerMove: originalPointer,
-                    }),
-                  ),
+                  Effect.sync(() => Object.assign(browser.initialPage, { start: originalStart })),
               );
-              const host = yield* BrowserTools.makeHost(browser);
+              const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
               const result = yield* host.run(
                 AgentRuntime.run(ordered, "scroll twice and move the pointer").pipe(

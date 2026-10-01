@@ -19,11 +19,13 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;background:#1f212
 .screen img{width:100%;display:block}
 .caption{position:absolute;left:50%;bottom:6%;transform:translateX(-50%);max-width:80%;padding:8px 16px;border-radius:8px;background:rgba(0,0,0,.8);color:#fff;font:500 20px/1.35 system-ui,sans-serif;text-align:center;line-height:1.35}
 .caption:empty{display:none}
+.pointer{position:absolute;width:24px;height:24px;pointer-events:none;filter:drop-shadow(0 1px 2px #0008)}
+.pointer[hidden]{display:none}
 </style>
 <div class="window">
   <div class="tabs"><span class="dots"><i></i><i></i><i></i></span><span class="tab" id="title">New Tab</span></div>
   <div class="bar"><span>&#8592;</span><span>&#8594;</span><span>&#8635;</span><span class="address" id="address"></span></div>
-  <div class="screen"><img src="/live.mjpeg" alt="The browser, as it was a moment ago"><div class="caption" id="caption" aria-live="polite"></div></div>
+  <div class="screen"><img src="/live.mjpeg" alt="The browser, as it was a moment ago"><svg class="pointer" id="pointer" viewBox="0 0 24 24" hidden><path d="M3 2v17.2l4.6-4.4 3 7 2.9-1.2-3-6.9H17z" fill="#111" stroke="#fff" stroke-width="1.4"/></svg><div class="caption" id="caption" aria-live="polite"></div></div>
 </div>
 <script>
 const set = (id, value) => { document.getElementById(id).textContent = value ?? ""; };
@@ -32,5 +34,13 @@ new EventSource("/events").addEventListener("state", (event) => {
   set("address", state.address);
   set("title", state.title ?? state.address ?? "New Tab");
   set("caption", state.caption);
+  const pointer = document.getElementById("pointer");
+  const hidden = !state.pointer || !state.viewport;
+  pointer.toggleAttribute("hidden", hidden);
+  if (!hidden) {
+    pointer.style.left = (100 * state.pointer.x / state.viewport.width) + "%";
+    pointer.style.top = (100 * state.pointer.y / state.viewport.height) + "%";
+  }
+  document.querySelector(".window").dataset.status = state.status;
 });
 </script>`;

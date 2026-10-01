@@ -139,6 +139,8 @@ const FailureReason = Schema.Literals([
   "Malformed",
   "Limit",
   "Timeout",
+  "ScheduleMissed",
+  "TimingBudgetExceeded",
   "Transport",
   "Provider",
   "Authorization",
@@ -198,7 +200,18 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
       interval,
       operationId,
     }),
-    Schema.TaggedStruct("Press", { position: Schema.NullOr(Geometry), interval, operationId }),
+    Schema.TaggedStruct("Press", {
+      position: Schema.NullOr(Geometry),
+      intended: Schema.optionalKey(
+        Schema.Struct({
+          position: Geometry,
+          relativePosition: Geometry,
+          qualification: Schema.Literal("checked-exact-node-sample"),
+        }),
+      ),
+      interval,
+      operationId,
+    }),
     Schema.TaggedStruct("Keys", {
       kind: Schema.Literals(["press", "type"]),
       count: Counter,
@@ -211,9 +224,11 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
       delta: Schema.NullOr(Geometry),
       interval,
       operationId,
+      qualification: Schema.optionalKey(Schema.Literal("exact-node-scroll-into-view")),
     }),
     /** Reserved for an actual bounded intended schedule; individual pointer calls are Pointer. */
     Schema.TaggedStruct("Glide", {
+      operationId,
       schedule: Schema.Array(Schema.Struct({ at: stamp, position: Geometry })).check(
         Schema.isMinLength(2),
         Schema.isMaxLength(128),

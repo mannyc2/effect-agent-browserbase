@@ -42,8 +42,8 @@ and finite native observation retention. Exact-page containment now includes sel
 navigation, initialization and callback retirement: positive closure preserves healthy peers;
 unconfirmed closure fences the owner without replaying the original unknown action. Acknowledged
 input followed by failure reports `performed`. Plain typing uses bounded ordered command windows
-and reuses its private port after acknowledged success. The session's selected, retained and
-pinned interfaces remain adapters over the same operation implementation.
+and reuses its private port after acknowledged success. Target work belongs to issued Pages and
+Frames; selected, retained-selection and pinned-target action adapters are removed.
 Handoff drains admitted native work before granting operator control. Resume and reconnect return
 fresh bounded Page inventory; content observation is explicit. Capture summaries qualify target
 authority and owner containment separately from native stop and their original end reason.
@@ -56,18 +56,27 @@ native capacity until actual settlement or exact positive retirement; generation
 reset it. Native waits and keyboard ports are bounded per Page. Recovery has reserved cleanup
 admission, and global lifecycle barriers have one owner through bounded drain and authorization.
 Passive host admission snapshots expose capacity without native authority. Effect-valued
-`ready`, `retain`, `target`, `pages`, `frames` and `createPage` become methods accepting operation
-options; implicit page-creation waiting becomes explicit. The action-plan milestone adds bounded
+Page readiness and session registry methods accept operation options;
+implicit page-creation waiting becomes explicit. The action-plan milestone adds bounded
 version-1 live and durable schemas, explicit checked descriptor resolution, plain per-step execution,
 scoped run handles and native phase evidence, input-slot recording and one owned settled observer.
-The footage example consumes public action intent while retaining its application presentation cues.
+The footage example consumes public performed Page plans with authored Hover, scrolling and
+bounded application captions/reading pauses. Its website receives no presentation artwork.
 The timeline milestone adds one bounded session-domain metadata journal, filtered Page views,
 independent retained/live consumers, explicit cursor gaps and clock-qualified bigint JSON codecs.
 The lifecycle `session.pages` stream atomically attaches a cached Inventory; native metadata reads
 use `listPages()`. Capture intervals retain their own bytes, stop ownership and qualified accounting;
-the journal publishes metadata references only. Presentation scheduling remains later work. The registered `page-authority` hosted check has no
-provider evidence; exact-commit PR
-acceptance supplies the local qualification record.
+the journal publishes metadata references only. Performed style uses one canonical executor and
+bounded seeded motion/key/scroll schedules with the original action budgets, exact-node leases,
+focus rules and phase-aware pending replies. Absolute startAt/within timing uses the captured
+owner Clock; immediate scheduled cancellation retains its original terminal Exit. Preparatory
+acknowledgements do not imply logical input completion. Agent tools and adapters bind one exact
+issued Page and retain bounded original operation receipts outside model projections. The film
+and livestream consume independent public timelines and render audience artwork outside the
+website. The film measures its additional host composition pass; neither consumer interprets
+the next received frame as proof of an input's pixel effect. The registered `page-authority` and
+`performed-presentation` hosted checks have no provider evidence; exact-commit PR acceptance
+supplies the local qualification record.
 
 The agent Tools were then reworked around what a real model does with them. `browser_inspect`
 takes object parameters (`find`, `scope`): its former empty struct was refused by the pinned

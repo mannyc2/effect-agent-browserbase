@@ -18,8 +18,8 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: f.url }));
-          yield* session.click(ClickRequest.make({ selector: "#popup" }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.initialPage.click(ClickRequest.make({ selector: "#popup" }));
 
           // A dispatched click is not a registered target: the popup reaches this
           // session only once Chromium reports it and the owner registers it.
@@ -35,21 +35,19 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           assert.ok(original, "the fixture page must still be selected");
           assert.ok(popup, "the popup must be registered as a second page");
           yield* session.selectPage(popup);
-          const popupHandle = session;
+          const popupHandle = yield* session.page(popup);
 
           yield* popupHandle.navigate(NavigateRequest.make({ url: f.url }));
           const pages = yield* session.listPages();
           const pinnedOriginal = pages.find((page) => page.pageId === original.pageId)!;
           const pinnedPopup = pages.find((page) => page.pageId === popup.pageId)!;
 
-          const originalCapture = yield* Capture.start(session, {
-            target: pinnedOriginal,
+          const originalCapture = yield* Capture.start(yield* session.page(pinnedOriginal), {
             maxFrames: 8,
             maxDurationMillis: 5000,
           });
 
-          const popupCapture = yield* Capture.start(session, {
-            target: pinnedPopup,
+          const popupCapture = yield* Capture.start(yield* session.page(pinnedPopup), {
             maxFrames: 8,
             maxDurationMillis: 5000,
           });
@@ -74,17 +72,15 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           );
 
           // Restart A, close only A, and prove B remains usable and recordable.
-          const closingCapture = yield* Capture.start(session, {
-            target: pinnedOriginal,
+          const closingCapture = yield* Capture.start(yield* session.page(pinnedOriginal), {
             maxDurationMillis: 5000,
           });
 
-          const survivingCapture = yield* Capture.start(session, {
-            target: pinnedPopup,
+          const survivingCapture = yield* Capture.start(yield* session.page(pinnedPopup), {
             maxDurationMillis: 5000,
           });
 
-          yield* session.closePage(original);
+          yield* (yield* session.page(original)).close();
           const closed = yield* closingCapture.completed;
 
           expect(closed.error?.reason._tag).toBe("TargetChanged");
@@ -98,7 +94,9 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
             const replacementPage = yield* session.createPage();
 
             replacements.push(
-              yield* Capture.start(session, { target: replacementPage, maxDurationMillis: 5000 }),
+              yield* Capture.start(yield* session.page(replacementPage), {
+                maxDurationMillis: 5000,
+              }),
             );
           }
           for (const replacement of replacements) {
@@ -110,7 +108,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           expect(survivor.target.pageId).toBe(popup.pageId);
           expect(survivor.received).toBeGreaterThan(0);
-          expect((yield* session.retain().pipe(Effect.result))._tag).toBe("Success");
+          expect((yield* popupHandle.describe().pipe(Effect.result))._tag).toBe("Success");
           yield* session.close;
         }),
       );

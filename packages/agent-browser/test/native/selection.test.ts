@@ -42,14 +42,14 @@ const selectAgent = Agent.make("exact-option-selection", {
 });
 
 const exercise = Effect.fnUntraced(function* <E>(browser: Browser.BrowserSession<E>, url: string) {
-  yield* browser.navigate({ url });
+  yield* browser.initialPage.navigate({ url });
   const reference = { observationId: "unobserved", elementId: "unobserved" };
   const options: string[] = [];
   let admissions = 0;
 
-  const host = yield* BrowserTools.makeHost(browser, {
+  const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
     observationScope: "viewport",
-    admission: {
+    policy: {
       admit: (facts) => {
         admissions++;
 
@@ -148,8 +148,8 @@ const exercise = Effect.fnUntraced(function* <E>(browser: Browser.BrowserSession
 
   expect(result.output.done).toBe(true);
   expect(admissions).toBe(1);
-  expect((yield* browser.readText({ selector: "#changes" })).text).toBe("1");
-  expect((yield* browser.readText({ selector: "#selection" })).text).toBe("2");
+  expect((yield* browser.initialPage.readText({ selector: "#changes" })).text).toBe("1");
+  expect((yield* browser.initialPage.readText({ selector: "#selection" })).text).toBe("2");
   expect((yield* host.toolFailures).failures).toEqual([]);
   expect((yield* browser.status).phase).toBe("open");
 });

@@ -160,34 +160,36 @@ const cases: ReadonlyArray<Case> = [
     name: "a dispatched click retires the observation it was named from",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
-        const clicked = yield* session.clickElement(named(observation, "Accept all"));
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
+        const clicked = yield* session.initialPage.clickElement(named(observation, "Accept all"));
 
         expect(clicked.url).toBe(`${origin}/?consent=1`);
-        expect(yield* failure(session.clickElement(named(observation, "Accept all")))).toEqual({
+        expect(
+          yield* failure(session.initialPage.clickElement(named(observation, "Accept all"))),
+        ).toEqual({
           reason: "Stale",
           outcome: "undispatched",
         });
-        expect((yield* session.observe()).text).toContain("Welcome back.");
+        expect((yield* session.initialPage.observe()).text).toContain("Welcome back.");
       }),
   },
   {
     name: "admission refuses before anything is dispatched",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
         expect(
           yield* failure(
-            session.clickElement(named(observation, "Terms"), {
+            session.initialPage.clickElement(named(observation, "Terms"), {
               admit: (facts) => facts.destination === undefined,
             }),
           ),
         ).toEqual({ reason: "Denied", outcome: "undispatched" });
         // Nothing was sent, so the observation is still current and the button still admissible.
-        yield* session.clickElement(named(observation, "Accept all"), {
+        yield* session.initialPage.clickElement(named(observation, "Accept all"), {
           admit: (facts) => facts.destination === undefined,
         });
       }),
@@ -197,9 +199,9 @@ const cases: ReadonlyArray<Case> = [
     policy: BrowserPolicy.unrestricted({ maxActions: 2 }),
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        yield* session.observe();
-        const refused = yield* session.observe().pipe(Effect.result);
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        yield* session.initialPage.observe();
+        const refused = yield* session.initialPage.observe().pipe(Effect.result);
 
         expect(refused._tag === "Failure" ? refused.failure : refused).toMatchObject({
           reason: { _tag: "Limit", dimension: "actions", maximum: 2, observed: 2 },
@@ -212,12 +214,12 @@ const cases: ReadonlyArray<Case> = [
     policy: BrowserPolicy.unrestricted({ maxActions: 6 }),
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
-        yield* session.checkpoint({ picture: false });
+        yield* session.initialPage.checkpoint({ picture: false });
 
-        const result = yield* session.fillForm({
+        const result = yield* session.initialPage.fillForm({
           observationId: observation.observationId,
           fields: [
             { elementId: named(observation, "Name").elementId, value: "Ada" },
@@ -228,8 +230,8 @@ const cases: ReadonlyArray<Case> = [
 
         expect(result.submitted).toBe(true);
         expect((yield* session.status).actions).toEqual({ used: 5, maximum: 6 });
-        yield* session.observe();
-        expect(yield* failure(session.observe())).toEqual({
+        yield* session.initialPage.observe();
+        expect(yield* failure(session.initialPage.observe())).toEqual({
           reason: "Limit",
           outcome: "undispatched",
         });
@@ -243,8 +245,8 @@ const cases: ReadonlyArray<Case> = [
     name: "a selector that matches nothing is not found",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        expect(yield* failure(session.click({ selector: "#missing" }))).toEqual({
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        expect(yield* failure(session.initialPage.click({ selector: "#missing" }))).toEqual({
           reason: "NotFound",
           outcome: "undispatched",
         });
@@ -254,10 +256,12 @@ const cases: ReadonlyArray<Case> = [
     name: "real key input needs focus and is never sent without it",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
-        expect(yield* failure(session.typeElement(named(observation, "Name"), "Ada"))).toEqual({
+        expect(
+          yield* failure(session.initialPage.typeElement(named(observation, "Name"), "Ada")),
+        ).toEqual({
           reason: "NotFocused",
           outcome: "undispatched",
         });
@@ -267,10 +271,12 @@ const cases: ReadonlyArray<Case> = [
     name: "a disabled input is refused before any text is sent",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
-        expect(yield* failure(session.fillElement(named(observation, "Code"), "42"))).toEqual({
+        expect(
+          yield* failure(session.initialPage.fillElement(named(observation, "Code"), "42")),
+        ).toEqual({
           reason: "Disabled",
           outcome: "undispatched",
         });
@@ -280,10 +286,10 @@ const cases: ReadonlyArray<Case> = [
     name: "a form sets fields in order and stops, undispatched, at a disabled one",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
-        const result = yield* session.fillForm({
+        const result = yield* session.initialPage.fillForm({
           observationId: observation.observationId,
           fields: [
             { elementId: named(observation, "Name").elementId, value: "Ada" },
@@ -307,7 +313,9 @@ const cases: ReadonlyArray<Case> = [
           outcome: "undispatched",
         });
         // What the form dispatched retired its observation.
-        expect(yield* failure(session.fillElement(named(observation, "Name"), "Grace"))).toEqual({
+        expect(
+          yield* failure(session.initialPage.fillElement(named(observation, "Name"), "Grace")),
+        ).toEqual({
           reason: "Stale",
           outcome: "undispatched",
         });
@@ -317,10 +325,10 @@ const cases: ReadonlyArray<Case> = [
     name: "a verified form submits once and reports where it led",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
-        const result = yield* session.fillForm({
+        const result = yield* session.initialPage.fillForm({
           observationId: observation.observationId,
           fields: [
             { elementId: named(observation, "Name").elementId, value: "Ada" },
@@ -346,8 +354,8 @@ const cases: ReadonlyArray<Case> = [
     name: "a matched reading keeps only the controls that match",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const matched = yield* session.observe({ match: "NEWS" });
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const matched = yield* session.initialPage.observe({ match: "NEWS" });
 
         expect({
           match: matched.match,
@@ -360,14 +368,14 @@ const cases: ReadonlyArray<Case> = [
     actionTimeoutMillis: 1500,
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
+        yield* session.initialPage.navigate({ url: `${origin}/` });
         const home = (yield* session.listPages()).find((page) => page.selected);
 
         expect(home).toBeDefined();
         if (home === undefined) return;
 
         const pending = yield* failure(
-          session.waitFor({ selector: "#never", state: "attached" }),
+          session.initialPage.waitFor({ selector: "#never", state: "attached" }),
         ).pipe(Effect.forkChild);
 
         // The wait's short admission guard retires once the native wait has started.
@@ -381,10 +389,12 @@ const cases: ReadonlyArray<Case> = [
     name: "an off-screen control cannot be hovered",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
-        const observation = yield* session.observe();
+        yield* session.initialPage.navigate({ url: `${origin}/` });
+        const observation = yield* session.initialPage.observe();
 
-        expect(yield* failure(session.hoverElement(named(observation, "Report")))).toEqual({
+        expect(
+          yield* failure(session.initialPage.hoverElement(named(observation, "Report"))),
+        ).toEqual({
           reason: "NotVisible",
           outcome: "undispatched",
         });
@@ -394,22 +404,26 @@ const cases: ReadonlyArray<Case> = [
     name: "an input receipt reports the pointer placed on its own page",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
+        yield* session.initialPage.navigate({ url: `${origin}/` });
         const home = (yield* session.listPages()).find((page) => page.selected);
 
         expect(home).toBeDefined();
         if (home === undefined) return;
-        expect((yield* session.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual({
-          x: 12,
-          y: 34,
-        });
+        expect((yield* session.initialPage.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual(
+          {
+            x: 12,
+            y: 34,
+          },
+        );
         const other = yield* session.createPage();
 
         yield* session.selectPage(other);
         // Chromium keeps a pointer position per page: nothing was placed on this one yet.
-        expect((yield* session.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
+        expect(
+          (yield* (yield* session.page(other)).wheel({ deltaX: 0, deltaY: 40 })).position,
+        ).toBeNull();
         yield* session.selectPage(home);
-        expect((yield* session.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({
+        expect((yield* session.initialPage.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({
           x: 12,
           y: 34,
         });
@@ -419,10 +433,10 @@ const cases: ReadonlyArray<Case> = [
     name: "a closed session refuses undispatched",
     run: (session, origin) =>
       Effect.gen(function* () {
-        yield* session.navigate({ url: `${origin}/` });
+        yield* session.initialPage.navigate({ url: `${origin}/` });
         yield* session.closeChecked;
-        expect(yield* failure(session.observe())).toEqual({
-          reason: "Closed",
+        expect(yield* failure(session.initialPage.observe())).toEqual({
+          reason: "Stale",
           outcome: "undispatched",
         });
         expect((yield* session.status).phase).toBe("closed");

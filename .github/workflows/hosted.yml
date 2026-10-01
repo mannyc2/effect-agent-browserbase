@@ -90,6 +90,7 @@ jobs:
           BROWSERBASE_ARTIFACT_ORIGINS: ${{ secrets.BROWSERBASE_ARTIFACT_ORIGINS }}
           BROWSERBASE_DEMO_URL: ${{ inputs.demo_url }}
           BROWSERBASE_PAGE_AUTHORITY_URL: ${{ vars.BROWSERBASE_PAGE_AUTHORITY_URL }}
+          BROWSERBASE_PERFORMED_PRESENTATION_URL: ${{ vars.BROWSERBASE_PERFORMED_PRESENTATION_URL }}
           CHECKS: ${{ inputs.checks }}
         run: |
           set -euo pipefail

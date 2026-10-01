@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 import type {
   BrowserContext,
   Download,
@@ -26,6 +26,7 @@ import {
   sanitize,
   timeout,
 } from "./NativeCalls.ts";
+import { ownerPacing } from "./NativePacing.ts";
 import {
   type AdmissionPolicy,
   holdsChecked,
@@ -33,6 +34,8 @@ import {
   readFieldState,
 } from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
+import { scroll as scrollSchedule, type KeySchedule } from "./Performance.ts";
+import type { NativeInput } from "./Pointer.ts";
 import { makeSettledResource } from "./Settled.ts";
 import type { Entry, Targets } from "./Targets.ts";
 
@@ -277,6 +280,36 @@ export const makeActions = (
   const { current } = targets;
   let invalidatePointer = (_page: Page): void => {};
 
+  let preparePress:
+    | ((
+        page: Page,
+        element: ElementHandle<Element>,
+        ticket: Ticket,
+        check: () => void,
+      ) => Promise<NativeInput & { readonly intended: NonNullable<InputReceipt["intended"]> }>)
+    | undefined;
+
+  let performedKeys:
+    | {
+        readonly prepare: (text: string, ticket: Ticket) => KeySchedule;
+        readonly fill: (
+          page: Page,
+          element: ElementHandle<Element>,
+          schedule: KeySchedule,
+          ticket: Ticket,
+          check: () => void,
+        ) => Promise<void>;
+      }
+    | undefined;
+
+  const setPerformedPointer = (prepare: NonNullable<typeof preparePress>) => {
+    preparePress = prepare;
+  };
+
+  const setPerformedKeys = (keys: NonNullable<typeof performedKeys>) => {
+    performedKeys = keys;
+  };
+
   const setPointerInvalidator = (invalidate: (page: Page) => void) => {
     invalidatePointer = invalidate;
   };
@@ -327,10 +360,11 @@ export const makeActions = (
     target: ElementTarget,
     ticket: Ticket,
     admit: (element: ElementHandle<Element>, facts: ControlFacts | undefined) => Promise<Admitted>,
-    action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
+    action: (element: ElementHandle<Element>, admitted: Admitted, check: () => void) => Promise<A>,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
     enablement = false,
+    automaticDispatch = true,
   ): Promise<A> => {
     const { element, check, facts, capture, release } = await observation.resolve(
       target,
@@ -339,6 +373,7 @@ export const makeActions = (
       false,
       targetFor(target, browserTarget),
       enablement,
+      ticket.performance !== undefined,
     );
 
     try {
@@ -349,9 +384,9 @@ export const makeActions = (
       ticket.check();
       ticket.captureTarget?.(target, capture);
       // ElementHandle actions do not re-resolve the selector onto a replacement node.
-      ticket.dispatch();
+      if (automaticDispatch) ticket.dispatch();
 
-      const result = await action(element, admitted);
+      const result = await action(element, admitted, check);
 
       ticket.acknowledge?.();
       ticket.followUp?.();
@@ -365,11 +400,21 @@ export const makeActions = (
   const withElement = <A>(
     target: ElementTarget,
     ticket: Ticket,
-    action: (element: ElementHandle<Element>) => Promise<A>,
+    action: (element: ElementHandle<Element>, admitted: void, check: () => void) => Promise<A>,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
+    automaticDispatch = true,
   ): Promise<A> =>
-    withAdmittedElement(target, ticket, async () => {}, action, policy, browserTarget);
+    withAdmittedElement(
+      target,
+      ticket,
+      async () => {},
+      action,
+      policy,
+      browserTarget,
+      false,
+      automaticDispatch,
+    );
 
   /** Refuses, undispatched, what `inputRefusal` finds on this exact node right now. */
   const refuseInput = async (element: ElementHandle<Element>, text?: string) => {
@@ -390,7 +435,32 @@ export const makeActions = (
     element: ElementHandle<Element>,
     ticket: Ticket,
     capture?: InputCapture,
+    check: () => void = () => ticket.check(),
   ): Promise<InputReceipt | undefined> => {
+    if (ticket.performance !== undefined) {
+      if (preparePress === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
+      ownerPacing(ticket);
+
+      return preparePress(page, element, ticket, check).then(async (planned) => {
+        const dispatch = async () => {
+          check();
+          ticket.dispatch();
+          invalidatePointer(page);
+          await element.click({
+            timeout: timeout(ticket),
+            scroll: "none",
+            position: planned.intended.relativePosition,
+          });
+          ticket.acknowledge?.();
+          ticket.followUp?.();
+        };
+
+        return capture === undefined
+          ? dispatch().then(() => undefined)
+          : capture(dispatch, planned);
+      });
+    }
+
     const dispatch = async () => {
       invalidatePointer(page);
       await element.click({ timeout: timeout(ticket) });
@@ -408,12 +478,15 @@ export const makeActions = (
       browserTarget = targetFor(target, browserTarget);
       const { page } = current(browserTarget).entry;
 
-      const input = await withElement(
+      const input = await withAdmittedElement(
         target,
         ticket,
-        (element) => clickElement(page, element, ticket, capture),
+        (element) => (ticket.performance === undefined ? Promise.resolve() : refuseInput(element)),
+        (element, _admitted, check) => clickElement(page, element, ticket, capture, check),
         policy,
         browserTarget,
+        false,
+        ticket.performance === undefined,
       );
 
       ticket.check();
@@ -434,9 +507,10 @@ export const makeActions = (
     await withElement(
       target,
       ticket,
-      (element) => clickElement(page, element, ticket),
+      (element, _admitted, check) => clickElement(page, element, ticket, undefined, check),
       undefined,
       browserTarget,
+      ticket.performance === undefined,
     );
     ticket.check();
 
@@ -561,10 +635,34 @@ export const makeActions = (
       await withAdmittedElement(
         target,
         ticket,
-        (element) => refuseInput(element, value),
-        (element) => element.fill(value, { timeout: timeout(ticket) }),
+        async (element, facts) => {
+          await refuseInput(element, value);
+          if (ticket.performance === undefined) return undefined;
+          if (
+            performedKeys === undefined ||
+            (facts?.inputType !== undefined &&
+              ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
+                facts.inputType,
+              ))
+          )
+            throw failure(Reasons.Unsupported.make({}), "undispatched");
+
+          return performedKeys.prepare(value, ticket);
+        },
+        (element, schedule, check) =>
+          schedule === undefined
+            ? element.fill(value, { timeout: timeout(ticket) })
+            : (performedKeys?.fill(
+                current(browserTarget).entry.page,
+                element,
+                schedule,
+                ticket,
+                check,
+              ) ?? Promise.reject(failure(Reasons.Unsupported.make({}), "undispatched"))),
         policy,
         browserTarget,
+        false,
+        ticket.performance === undefined,
       );
       ticket.check();
 
@@ -592,11 +690,20 @@ export const makeActions = (
 
       const {
         element,
+        reference: leasedReference,
         check,
         facts,
         capture: sampled,
         release,
-      } = await observation.resolve(target, ticket, policy, false, browserTarget, true);
+      } = await observation.resolve(
+        target,
+        ticket,
+        policy,
+        false,
+        browserTarget,
+        true,
+        ticket.performance !== undefined,
+      );
 
       try {
         check();
@@ -642,6 +749,7 @@ export const makeActions = (
                 element,
                 ticket,
                 capture,
+                check,
               );
             };
           }
@@ -649,9 +757,32 @@ export const makeActions = (
           const text = field.value ?? "";
 
           await refuseInput(element, text);
+          const performance = ticket.performance;
+          let schedule: KeySchedule | undefined;
+
+          if (performance !== undefined) {
+            if (
+              performedKeys === undefined ||
+              (facts.inputType !== undefined &&
+                ["color", "date", "time", "datetime-local", "month", "range", "week"].includes(
+                  facts.inputType,
+                ))
+            )
+              throw failure(Reasons.Unsupported.make({}), "undispatched");
+            schedule = performedKeys.prepare(text, ticket);
+          }
           act = async () => {
-            await element.fill(text, { timeout: timeout(ticket) });
-            ticket.acknowledge?.();
+            if (schedule === undefined) await element.fill(text, { timeout: timeout(ticket) });
+            else if (performedKeys !== undefined)
+              await performedKeys.fill(
+                current(browserTarget).entry.page,
+                element,
+                schedule,
+                ticket,
+                check,
+              );
+            ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+            check();
             ticket.dispatch();
             await element.evaluate((node) => {
               if (node instanceof HTMLElement && node.ownerDocument.activeElement === node)
@@ -666,12 +797,12 @@ export const makeActions = (
         ticket.captureTarget?.(target, sampled);
         if (act !== undefined) {
           // ElementHandle actions do not re-resolve onto a replacement node.
-          ticket.dispatch();
+          if (ticket.performance === undefined || field.options !== undefined) ticket.dispatch();
           await act();
           if (settleMillis > 0)
             await bounded(
               observation.passiveRead(
-                target,
+                leasedReference ?? target,
                 ticket,
                 () => element.evaluate(settleInPage, settleMillis),
                 browserTarget,
@@ -682,7 +813,12 @@ export const makeActions = (
         }
 
         const state = await bounded(
-          observation.passiveRead(target, ticket, () => readFieldState(element), browserTarget),
+          observation.passiveRead(
+            leasedReference ?? target,
+            ticket,
+            () => readFieldState(element),
+            browserTarget,
+          ),
           readBack(ticket, 1000),
           undefined,
         );
@@ -714,10 +850,11 @@ export const makeActions = (
         target,
         ticket,
         (element) => refuseInput(element),
-        (element) => clickElement(page, element, ticket, capture),
+        (element, _admitted, check) => clickElement(page, element, ticket, capture, check),
         policy,
         browserTarget,
         true,
+        ticket.performance === undefined,
       );
 
       ticket.check();
@@ -761,6 +898,42 @@ export const makeActions = (
     sanitize(async () => {
       const { frame } = current(target);
 
+      if (ticket.performance !== undefined) {
+        const pacing = ownerPacing(ticket);
+        const planned = scrollSchedule(ticket.performance.plan, deltaX, deltaY);
+
+        if (Result.isFailure(planned)) throw planned.failure;
+        pacing.requireDuration(planned.success.durationMillis);
+        const epoch = targets.epochOf(frame);
+        const started = pacing.now();
+
+        for (const sample of planned.success.samples) {
+          await pacing.pauseUntil(started + BigInt(Math.round(sample.offsetMillis * 1e6)));
+          ticket.check();
+          if (current(target).frame !== frame || targets.epochOf(frame) !== epoch)
+            throw failure(Reasons.Stale.make({}), "undispatched");
+          const requested = pacing.now();
+
+          ticket.dispatch();
+          await frame.evaluate(
+            ({ x, y }) => window.scrollBy({ left: x, top: y, behavior: "instant" }),
+            { x: sample.deltaX, y: sample.deltaY },
+          );
+          ticket.acknowledge?.({ subphase: "scroll-burst", logicalComplete: false });
+          ticket.recordScroll?.({
+            target: target ?? targets.selected(),
+            x: sample.deltaX,
+            y: sample.deltaY,
+            startedMonotonicNanos: requested,
+            completedMonotonicNanos: pacing.now(),
+          });
+        }
+        ticket.acknowledge?.();
+        ticket.followUp?.();
+        ticket.check();
+
+        return postUrl(target);
+      }
       ticket.dispatch();
       await frame.evaluate(
         ({ x, y }) => window.scrollBy({ left: x, top: y, behavior: "instant" }),
@@ -1043,6 +1216,8 @@ export const makeActions = (
 
   return {
     setPointerInvalidator,
+    setPerformedPointer,
+    setPerformedKeys,
     withAdmittedElement,
     targetFor,
     beginNavigation,

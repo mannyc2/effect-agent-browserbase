@@ -620,6 +620,7 @@ export const makeObservation = (
     ticket: ReadTicket,
     reservedHandles: number,
     reservedBytes: number,
+    ownPhase = false,
   ) => {
     ticket.check();
     if (connectionRetired) throw failure(Reasons.Stale.make({}), "undispatched");
@@ -630,7 +631,8 @@ export const makeObservation = (
       documentEpoch: targets.epochOf(current(target).frame),
       generation: ticket.generation,
       scope: "document",
-      private: false,
+      private: ownPhase,
+      ...(ownPhase ? { origin: ticket.signal } : {}),
       validity: "reading",
       nodes: new Map(),
       revalidated: new Set(),
@@ -649,6 +651,7 @@ export const makeObservation = (
 
     return {
       retention,
+      check: () => checkPrivate(snapshot, ticket),
       release: (): Promise<void> => {
         releasing ??= (async () => {
           snapshot.reading = false;
@@ -1509,14 +1512,60 @@ export const makeObservation = (
     allowSuspended = false,
     browserTarget?: DriverTarget,
     enablement = false,
+    ownPhase = false,
   ): Promise<{
     readonly element: ElementHandle<Element>;
+    readonly reference: ObservedElement | ResolvedElement | undefined;
     readonly kept: boolean;
     readonly check: () => void;
     readonly facts: ControlFacts | undefined;
     readonly capture: DescriptorSample | undefined;
     readonly release: () => Promise<void>;
   }> => {
+    if (ownPhase && typeof target !== "string" && !("_tag" in target)) {
+      const group = await resolveGroup(
+        [{ target: { _tag: "Ref", reference: target } }],
+        ticket,
+        browserTarget ?? targets.selected(),
+        { _tag: "Strict" },
+      );
+
+      try {
+        group.activate(ticket);
+        const leased = group.elements[0];
+
+        if (leased === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+
+        const resolved = await resolve(
+          leased,
+          ticket,
+          policy,
+          allowSuspended,
+          browserTarget,
+          enablement,
+        );
+
+        let released: Promise<void> | undefined;
+
+        return {
+          ...resolved,
+          release: () => {
+            released ??= (async () => {
+              try {
+                await resolved.release();
+              } finally {
+                await group.release();
+              }
+            })();
+
+            return released;
+          },
+        };
+      } catch (error) {
+        await group.release();
+        throw error;
+      }
+    }
     const kept = typeof target !== "string";
 
     const retainedNode =
@@ -1528,8 +1577,11 @@ export const makeObservation = (
 
     const node = retainedNode?.node;
     const resolvedTarget = retainedNode?.snapshot.target ?? browserTarget ?? targets.selected();
-    const check = retainedNode?.check ?? (() => ticket.check());
-    const owned = kept ? undefined : temporary(resolvedTarget, ticket, 3, 4096);
+    const owned = kept ? undefined : temporary(resolvedTarget, ticket, 3, 4096, ownPhase);
+
+    const check =
+      retainedNode?.check ?? (ownPhase ? owned?.check : undefined) ?? (() => ticket.check());
+
     let released: Promise<void> | undefined;
 
     if (node !== undefined) node.leases++;
@@ -1592,7 +1644,12 @@ export const makeObservation = (
 
       check();
       if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
-      if (node !== undefined || policy !== undefined || ticket.captureTarget !== undefined) {
+      if (
+        node !== undefined ||
+        policy !== undefined ||
+        ticket.captureTarget !== undefined ||
+        ownPhase
+      ) {
         const sampled = safeDecode(
           Facts,
           await sampleFacts(element, ticket, check, resolvedTarget),
@@ -1639,7 +1696,15 @@ export const makeObservation = (
       }
       check();
 
-      return { element, kept, check, facts, capture, release };
+      return {
+        element,
+        reference: typeof target === "string" ? undefined : target,
+        kept,
+        check,
+        facts,
+        capture,
+        release,
+      };
     } catch (error) {
       await closeWithin(release).catch(() => {});
       check();

@@ -184,3 +184,7 @@ export const resolvePageControlsForSession = (
 
     return controls.validate.pipe(Effect.as(controls));
   });
+
+/** Capture binds only to original issued Page authority; a session association is insufficient. */
+export const capturePageParent = (page: object): CaptureParent | undefined =>
+  pageAuthorities.has(page) ? parents.get(page) : undefined;

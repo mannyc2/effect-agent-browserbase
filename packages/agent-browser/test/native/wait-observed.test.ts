@@ -64,8 +64,11 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              yield* browser.navigate({ url: `${site.url}wait` });
-              yield* browser.waitFor({ selector: "#ready[data-connected]", state: "attached" });
+              yield* browser.initialPage.navigate({ url: `${site.url}wait` });
+              yield* browser.initialPage.waitFor({
+                selector: "#ready[data-connected]",
+                state: "attached",
+              });
               const requested = yield* Deferred.make<void>();
               const waitRef = { observationId: "unobserved", elementId: "unobserved" };
               const clickRef = { observationId: "unobserved", elementId: "unobserved" };
@@ -80,7 +83,7 @@ it.live(
 
                 // Admission setup may briefly own the permit; only an explicit undispatched Busy read is retried.
                 const read = yield* settle(
-                  browser.checkpoint().pipe(
+                  browser.initialPage.checkpoint().pipe(
                     Effect.catchIf(
                       (error) => error.reason._tag === "Busy" && error.outcome === "undispatched",
                       () => Effect.void,
@@ -99,6 +102,7 @@ it.live(
 
               const result = yield* Tools.run(
                 browser,
+                browser.initialPage,
                 AgentRuntime.run(agent, "Wait, then click once").pipe(
                   Effect.provide(
                     Layer.mergeAll(
@@ -190,7 +194,9 @@ it.live(
               yield* Fiber.join(recorder);
               expect(result.output.done).toBe(true);
               expect(seenWaitSuccess).toBe(true);
-              expect((yield* browser.readText({ selector: "#count" })).text).toBe("Clicks: 1");
+              expect((yield* browser.initialPage.readText({ selector: "#count" })).text).toBe(
+                "Clicks: 1",
+              );
               expect((yield* browser.status).unresolvedDispatch).toBe(false);
             }),
         ).pipe(Effect.provide(layer));
@@ -209,12 +215,12 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 3, maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              yield* browser.navigate({ url: `${site.url}wait-enabled` });
-              const observed = yield* browser.observe();
+              yield* browser.initialPage.navigate({ url: `${site.url}wait-enabled` });
+              const observed = yield* browser.initialPage.observe();
               const control = observed.controls.find((control) => control.label === "Continue");
 
               assert.ok(control);
-              const host = yield* Tools.makeHost(browser);
+              const host = yield* Tools.makeHost(browser, browser.initialPage);
 
               const tools = yield* Tools.observedToolkit.pipe(
                 Effect.provide(host.observedHandlers),
@@ -240,7 +246,7 @@ it.live(
                   },
                 },
               ]);
-              expect((yield* browser.checkpoint()).text).toContain("Clicks: 1");
+              expect((yield* browser.initialPage.checkpoint()).text).toContain("Clicks: 1");
               expect((yield* host.toolFailures).failures).toMatchObject([
                 {
                   error: {

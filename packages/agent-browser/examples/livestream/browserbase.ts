@@ -23,7 +23,7 @@ export const watchBrowserbase = (
   options: { readonly delayMillis: number; readonly port: number },
 ) =>
   Browser.scoped(BrowserbaseBrowser.open(policy), (session) =>
-    livestream(session, task, { delayMillis: options.delayMillis }),
+    livestream(session, session.initialPage, task, { delayMillis: options.delayMillis }),
   ).pipe(
     Effect.provide(
       Layer.mergeAll(

@@ -138,6 +138,8 @@ export const Reasons = {
     observed: Schema.Natural,
   }),
   Timeout: Schema.TaggedStruct("Timeout", {}),
+  ScheduleMissed: Schema.TaggedStruct("ScheduleMissed", {}),
+  TimingBudgetExceeded: Schema.TaggedStruct("TimingBudgetExceeded", {}),
   Transport: Schema.TaggedStruct("Transport", { status: Schema.optionalKey(Schema.Int) }),
   Provider: Schema.TaggedStruct("Provider", {
     status: Schema.optionalKey(Schema.Int),

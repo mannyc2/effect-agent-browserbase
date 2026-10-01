@@ -1,12 +1,15 @@
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 import type { ElementHandle, Page } from "playwright-core";
 
+import type { InputReceipt } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { makeActions } from "./Actions.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import { failure, safeDecode, sanitize } from "./NativeCalls.ts";
+import { ownerPacing } from "./NativePacing.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
+import { move as moveSchedule, pointer as pointerSchedule } from "./Performance.ts";
 import type { Targets } from "./Targets.ts";
 
 export interface NativePoint {
@@ -18,6 +21,7 @@ export interface NativePoint {
 export interface NativeInput {
   /** The last point this driver commanded on the page, or null if it never placed the pointer. */
   readonly position: NativePoint | null;
+  readonly intended?: InputReceipt["intended"];
 }
 
 const Reach = Schema.Struct({
@@ -136,8 +140,44 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
 
   const pointerMove = (point: NativePoint, ticket: Ticket, target?: DriverTarget) =>
     sanitize(async () => {
-      const { page } = current(target).entry;
+      const { entry, frame } = current(target);
+      const { page } = entry;
+      const epoch = targets.epochOf(frame);
 
+      if (ticket.performance !== undefined) {
+        const pacing = ownerPacing(ticket);
+
+        const viewport = safeDecode(
+          Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
+          await page.mainFrame().evaluate(() => ({ width: innerWidth, height: innerHeight })),
+        );
+
+        ticket.check();
+
+        const planned = moveSchedule(ticket.performance.plan, {
+          from: positions.get(page) ?? null,
+          to: point,
+          viewport,
+        });
+
+        if (Result.isFailure(planned)) throw planned.failure;
+        pacing.requireDuration(planned.success.durationMillis);
+        const started = pacing.now();
+
+        if (planned.success.samples.length >= 2)
+          ticket.recordGlide?.({
+            target: { pageId: entry.id, frameId: targets.frameId(frame) },
+            startedMonotonicNanos: started,
+            samples: planned.success.samples,
+          });
+        if (planned.success.durationMillis > 0)
+          await pacing.pauseUntil(
+            started + BigInt(Math.round(planned.success.durationMillis * 1e6)),
+          );
+        ticket.check();
+        if (current(target).frame !== frame || targets.epochOf(frame) !== epoch)
+          throw failure(Reasons.Stale.make({}), "undispatched");
+      }
       ticket.dispatch();
       await moveTo(page, point);
       ticket.acknowledge?.();
@@ -156,18 +196,25 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
   const reachablePoint = async (
     page: Page,
     element: ElementHandle<Element>,
+    requested?: NativePoint,
+    check: () => void = () => {},
   ): Promise<NativePoint> => {
+    check();
     const box = await element.boundingBox();
+
+    check();
 
     if (box === null || box.width <= 0 || box.height <= 0)
       throw failure(Reasons.NotVisible.make({}), "undispatched");
-    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const point = requested ?? { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 
     const ancestors: Array<ElementHandle<Node>> = [];
 
     try {
+      check();
       let frame = await element.ownerFrame();
 
+      check();
       if (frame === null || frame.page() !== page)
         throw failure(Reasons.Stale.make({}), "undispatched");
       while (frame !== page.mainFrame()) {
@@ -180,7 +227,9 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
             }),
             "undispatched",
           );
+        check();
         ancestors.push(await frame.frameElement());
+        check();
         frame = frame.parentFrame();
         if (frame === null) throw failure(Reasons.Stale.make({}), "undispatched");
       }
@@ -190,26 +239,183 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       // A visible node in a child can still sit behind an overlay in any ancestor. Check the
       // actual commanded point from the main viewport down, then hit-test the exact node.
       for (const ancestor of ancestors.reverse()) {
+        check();
+
         const reached = safeDecode(
           Reach,
           await ancestor.evaluate(hitPoint, { ...localPoint, child: true }),
         );
 
+        check();
         if (!reached.reachable) throw failure(Reasons.NotVisible.make({}), "undispatched");
         localPoint = { x: reached.x, y: reached.y };
       }
+
+      check();
 
       const reached = safeDecode(
         Reach,
         await element.evaluate(hitPoint, { ...localPoint, child: false }),
       );
 
+      check();
       if (!reached.reachable) throw failure(Reasons.NotVisible.make({}), "undispatched");
     } finally {
       await Promise.all(ancestors.map((ancestor) => ancestor.dispose()));
     }
 
     return point;
+  };
+
+  const preparePress = async (
+    page: Page,
+    element: ElementHandle<Element>,
+    ticket: Ticket,
+    check: () => void,
+  ): Promise<NativeInput & { readonly intended: NonNullable<InputReceipt["intended"]> }> => {
+    const pacing = ownerPacing(ticket);
+    const performance = ticket.performance;
+
+    if (performance === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
+    check();
+    const frame = await element.ownerFrame();
+
+    check();
+    const pageId = targets.pageIdOf(page);
+
+    if (frame === null || frame.page() !== page || pageId === undefined)
+      throw failure(Reasons.Stale.make({}), "undispatched");
+    const target = { pageId, frameId: targets.frameId(frame) };
+
+    const needsScroll: unknown = await element.evaluate((node) => {
+      if (!node.isConnected) return null;
+      const rect = node.getBoundingClientRect();
+
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      if (rect.left < 0 || rect.top < 0 || rect.right > innerWidth || rect.bottom > innerHeight)
+        return true;
+      let ancestor: Element | null = node.parentElement;
+
+      for (let depth = 0; ancestor !== null; depth++) {
+        if (depth >= 128) return null;
+        const style = getComputedStyle(ancestor);
+        const clip = ancestor.getBoundingClientRect();
+
+        if (
+          (style.overflowX !== "visible" && (rect.left < clip.left || rect.right > clip.right)) ||
+          (style.overflowY !== "visible" && (rect.top < clip.top || rect.bottom > clip.bottom))
+        )
+          return true;
+        const root = ancestor.getRootNode();
+
+        ancestor = ancestor.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+      }
+
+      return false;
+    });
+
+    check();
+    if (typeof needsScroll !== "boolean")
+      throw failure(Reasons.NotVisible.make({}), "undispatched");
+
+    const viewport = safeDecode(
+      Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
+      await page.mainFrame().evaluate(() => ({ width: innerWidth, height: innerHeight })),
+    );
+
+    check();
+    let box = await element.boundingBox();
+
+    check();
+    if (box === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
+    if (
+      needsScroll ||
+      box.x < 0 ||
+      box.y < 0 ||
+      box.x + box.width > viewport.width ||
+      box.y + box.height > viewport.height
+    ) {
+      const startedMonotonicNanos = pacing.now();
+
+      ticket.dispatch();
+      await element.scrollIntoViewIfNeeded({ timeout: ticket.remainingMillis() });
+      ticket.acknowledge?.({ subphase: "scroll-into-view", logicalComplete: false });
+      ticket.recordScroll?.({
+        target,
+        qualification: "exact-node-scroll-into-view",
+        startedMonotonicNanos,
+        completedMonotonicNanos: pacing.now(),
+      });
+      check();
+      box = await element.boundingBox();
+      check();
+      if (box === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
+    }
+
+    const planned = pointerSchedule(performance.plan, {
+      from: positions.get(page) ?? null,
+      box,
+      viewport,
+    });
+
+    if (Result.isFailure(planned)) throw planned.failure;
+    const schedule = planned.success;
+
+    pacing.requireDuration(schedule.durationMillis);
+
+    await reachablePoint(page, element, schedule.aim, check);
+    check();
+
+    const border = safeDecode(
+      Schema.Struct({ left: Schema.Finite, top: Schema.Finite }),
+      await element.evaluate((node) => {
+        const style = getComputedStyle(node);
+
+        return {
+          left: Number.parseFloat(style.borderLeftWidth),
+          top: Number.parseFloat(style.borderTopWidth),
+        };
+      }),
+    );
+
+    check();
+
+    const relativePosition = {
+      x: schedule.aim.x - box.x - border.left,
+      y: schedule.aim.y - box.y - border.top,
+    };
+
+    if (relativePosition.x < 0 || relativePosition.y < 0)
+      throw failure(Reasons.NotVisible.make({}), "undispatched");
+    const started = pacing.now();
+
+    if (schedule.samples.length >= 2)
+      ticket.recordGlide?.({ target, startedMonotonicNanos: started, samples: schedule.samples });
+    if (schedule.durationMillis > 0)
+      await pacing.pauseUntil(started + BigInt(Math.round(schedule.durationMillis * 1e6)));
+    check();
+    const beforeInput = await element.boundingBox();
+
+    check();
+    if (
+      beforeInput === null ||
+      Math.abs(beforeInput.x - box.x) > 0.01 ||
+      Math.abs(beforeInput.y - box.y) > 0.01 ||
+      Math.abs(beforeInput.width - box.width) > 0.01 ||
+      Math.abs(beforeInput.height - box.height) > 0.01
+    )
+      throw failure(Reasons.Stale.make({}), "undispatched");
+    await reachablePoint(page, element, schedule.aim, check);
+    check();
+
+    return {
+      position: null,
+      intended: {
+        position: schedule.aim,
+        relativePosition,
+        qualification: "checked-exact-node-sample",
+      },
+    };
   };
 
   const hover = (
@@ -225,10 +431,24 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       await actions.withAdmittedElement(
         target,
         ticket,
-        (element) => reachablePoint(page, element),
-        (_element, point) => moveTo(page, point),
+        (element) =>
+          ticket.performance === undefined
+            ? reachablePoint(page, element)
+            : Promise.resolve(undefined),
+        async (element, point, check) => {
+          if (ticket.performance === undefined && point !== undefined) await moveTo(page, point);
+          else {
+            const planned = await preparePress(page, element, ticket, check);
+
+            check();
+            ticket.dispatch();
+            await moveTo(page, planned.intended.position);
+          }
+        },
         policy,
         browserTarget,
+        false,
+        ticket.performance === undefined,
       );
       ticket.check();
 
@@ -260,5 +480,5 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       return receipt(page);
     });
 
-  return { pointerMove, hover, wheel, receipt, invalidate };
+  return { pointerMove, hover, wheel, receipt, invalidate, preparePress };
 };
