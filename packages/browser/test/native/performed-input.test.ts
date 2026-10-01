@@ -54,6 +54,12 @@ slow.addEventListener("input", () => { mirror.textContent = String(slow.value.le
 <script>
 text.addEventListener("input", () => { mirror.textContent = text.value; });
 </script>`,
+  // A control far below the fold; the page reports its scroll offset and any hover.
+  "/below": `<p id="scrolled">0</p><p id="hovered"></p><div style="height: 4000px"></div>
+<button onmouseover="hovered.textContent = 'hovered'">Far</button>
+<script>
+addEventListener("scroll", () => { scrolled.textContent = String(Math.round(scrollY)); });
+</script>`,
 };
 
 const site = Effect.acquireRelease(
@@ -335,6 +341,42 @@ it.live("real CDP: the same seed plans the same glide for the same geometry", ()
 
       expect(first).toHaveLength(1);
       expect(yield* glide).toEqual(first);
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed Hover refuses an unseen control instead of scrolling to it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/below");
+      const page = session.initialPage;
+
+      const exit = yield* page
+        .run(
+          {
+            version: 1,
+            steps: [
+              {
+                id: "hover",
+                action: {
+                  _tag: "Hover",
+                  target: {
+                    _tag: "Descriptor",
+                    descriptor: { kind: "button", label: "Far", matchScope: "document" },
+                  },
+                },
+              },
+            ],
+          },
+          { style: { seed: 3 } },
+        )
+        .pipe(Effect.exit);
+
+      expect(stepFailure(exit)).toMatchObject({
+        error: { reason: { _tag: "NotVisible" }, outcome: "undispatched" },
+      });
+      expect((yield* page.readText({ selector: "#scrolled" })).text).toBe("0");
+      expect((yield* page.readText({ selector: "#hovered" })).text).toBe("");
     }).pipe(Effect.provide(layer)),
   ),
 );

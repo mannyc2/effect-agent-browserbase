@@ -275,11 +275,16 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     return point;
   };
 
+  /**
+   * Plans and paces the glide to one exact node. A press may first scroll its node into view; a
+   * hover never scrolls (`scrollIntoView: false`) and refuses an unseen node `NotVisible`.
+   */
   const preparePress = async (
     page: Page,
     element: ElementHandle<Element>,
     ticket: Ticket,
     check: () => void,
+    options: { readonly scrollIntoView?: boolean } = {},
   ): Promise<NativeInput & { readonly intended: NonNullable<InputReceipt["intended"]> }> => {
     const pacing = ownerPacing(ticket);
     const performance = ticket.performance;
@@ -343,6 +348,8 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       box.x + box.width > viewport.width ||
       box.y + box.height > viewport.height
     ) {
+      if (options.scrollIntoView === false)
+        throw failure(Reasons.NotVisible.make({}), "undispatched");
       const startedMonotonicNanos = pacing.now();
 
       ticket.dispatch();
@@ -446,7 +453,9 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
         async (element, point, check, readmit) => {
           if (ticket.performance === undefined && point !== undefined) await moveTo(page, point);
           else {
-            const planned = await preparePress(page, element, ticket, check);
+            const planned = await preparePress(page, element, ticket, check, {
+              scrollIntoView: false,
+            });
 
             await readmit();
             check();
