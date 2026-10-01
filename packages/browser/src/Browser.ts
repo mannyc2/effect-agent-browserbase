@@ -48,7 +48,7 @@ export interface OperationOptions {
 /** Terminal facts remain readable after this page loses live authority. */
 export interface PageStatus {
   readonly identity: Target;
-  readonly phase: "open" | "closing" | "closed" | "stale";
+  readonly phase: "open" | "paused" | "closing" | "closed" | "stale";
   readonly containment: Containment;
 }
 

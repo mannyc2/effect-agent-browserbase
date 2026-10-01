@@ -1279,7 +1279,12 @@ it.effect("a keep-alive reconnection finds the pages its browser kept while deta
       yield* operations.detach;
       // A person changes the page while no connection is open.
       yield* control.document.update({ url: `${origin}/`, text: "Changed while detached." });
-      const observed = yield* operations.reconnect(true);
+      const inventory = yield* operations.reconnect(true);
+      const [freshInfo] = inventory.pages;
+
+      expect(freshInfo).toBeDefined();
+      if (freshInfo === undefined) return;
+      const observed = yield* (yield* session.page(freshInfo)).observe();
 
       expect(observed.text).toBe("Changed while detached.");
       expect(session.initialPage).toBe(original);

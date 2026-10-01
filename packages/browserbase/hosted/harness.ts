@@ -108,6 +108,8 @@ export const hostedCase = (name: CheckName) => {
     output: resolve(env.BROWSERBASE_HOSTED_OUTPUT ?? `hosted-output/${name}`),
     /** Only the optional settings the registry entry names are readable. */
     setting: (key: (typeof check.optionalEnv)[number]): string | undefined => env[key],
+    /** Required settings have already passed the allocation gate and have no implicit default. */
+    requiredSetting: (key: (typeof check.env)[number]): string => setting(key),
     /** A browser whose account, timeouts and cleanup reporting come from the gate. */
     browser: (
       options: Omit<BrowserOptions, "onCleanup" | "onAllocationUncertain" | "actionTimeoutMillis">,

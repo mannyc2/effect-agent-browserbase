@@ -14,7 +14,7 @@ import type {
   AutomationOptions,
   BrowserPolicy,
   ClickRequest,
-  Observation,
+  Inventory,
 } from "effect-browser/browser-data";
 import * as BrowserRuntime from "effect-browser/browser-runtime";
 import {
@@ -78,14 +78,18 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly resume: (
     token: Redacted.Redacted<string>,
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError>;
+  ) => Effect.Effect<Inventory, BrowserError>;
   readonly detach: Effect.Effect<
-    { readonly reference: SessionReference; readonly targetId: string },
+    {
+      readonly reference: SessionReference;
+      readonly targetId: string;
+      readonly inventory: Inventory;
+    },
     BrowserError
   >;
   readonly reconnect: (
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError | InitializationError>;
+  ) => Effect.Effect<Inventory, BrowserError | InitializationError>;
   readonly close: Effect.Effect<CleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
 }

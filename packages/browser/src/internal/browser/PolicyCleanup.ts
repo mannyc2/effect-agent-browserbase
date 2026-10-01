@@ -152,4 +152,8 @@ export class PolicyCleanup {
   async settle(): Promise<void> {
     await Promise.all(this.pending);
   }
+
+  drained(): boolean {
+    return this.pending.size === 0;
+  }
 }

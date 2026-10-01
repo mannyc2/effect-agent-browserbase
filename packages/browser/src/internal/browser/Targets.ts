@@ -542,6 +542,9 @@ export const makeTargets = (
         creatingPage = false;
       }
 
+      ticket.acknowledge?.();
+      ticket.followUp?.();
+
       // Creation never selects or relists. A failed metadata read cannot repeat the creation.
       return pageInfo(entry, ticket);
     });
@@ -554,6 +557,7 @@ export const makeTargets = (
       await entry.page.close({ runBeforeUnload: false });
       if (!entry.page.isClosed()) throw failure(Reasons.Failed.make({}), "unknown");
       ticket.acknowledge?.();
+      ticket.followUp?.();
       retire(entry);
       ticket.check();
     });

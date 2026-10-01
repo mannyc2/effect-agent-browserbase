@@ -11,6 +11,12 @@ const target = Target.make({ generation: 1, pageId: "PRIVATE-PAGE", frameId: "PR
 const summary = (delivered: number, received = delivered, duplicates = 0) =>
   CaptureSummary.make({
     target,
+    qualification: {
+      authority: "open",
+      containment: { _tag: "NotRequired" },
+      ownerPhase: "open",
+      ownerGeneration: target.generation,
+    },
     reason: "duration",
     received,
     delivered,

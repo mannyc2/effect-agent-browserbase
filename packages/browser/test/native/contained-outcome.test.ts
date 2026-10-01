@@ -343,6 +343,14 @@ it.live(
           outcome: "undispatched",
         });
         expect((yield* doomedCapture.completed).reason).toBe("target-changed");
+        expect(yield* doomedCapture.completed).toMatchObject({
+          qualification: {
+            authority: "closed",
+            containment: { _tag: "PageClosed", pageId: selected.identity.pageId },
+            ownerPhase: "open",
+          },
+          error: { containment: { _tag: "PageClosed", pageId: selected.identity.pageId } },
+        });
         expect(yield* Capture.start(selected).pipe(Effect.flip)).toMatchObject({
           outcome: "undispatched",
         });
@@ -519,5 +527,154 @@ it.live("a click that never lands on a background page closes only that page", (
     Effect.provide(
       Chromium.layer({ launch, actionTimeoutMillis: 2000 }).pipe(Layer.provide(NodeCrypto.layer)),
     ),
+  ),
+);
+
+it.live("a delayed genuine native registration failure still faults after its page closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* localSite;
+      const host = yield* externalChromium;
+      const entered = yield* Deferred.make<void>();
+      const finished = yield* Deferred.make<void>();
+      let nativePage: PlaywrightPage | undefined;
+      let nativeFailure: unknown;
+      let release = () => {};
+
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const runtime = yield* BrowserRuntime.make({
+        implementation: "native-retired-registration-failure",
+        automation: { actionTimeoutMillis: 2000 },
+        binding: BrowserRuntime.playwright({
+          onConnected: ({ native }) => {
+            const browser = native as PlaywrightBrowser;
+            const context = browser.contexts()[0];
+            const first = context?.pages()[0];
+
+            if (context === undefined || first === undefined)
+              throw new Error("The native fixture has no initial page");
+            const connect = context.newCDPSession.bind(context);
+
+            context.newCDPSession = async (subject) => {
+              const cdp = await connect(subject);
+
+              if (subject !== first && "mainFrame" in subject) {
+                nativePage = subject;
+                const send = cdp.send.bind(cdp);
+
+                cdp.send = (method, params) => {
+                  if (method !== "Runtime.enable") return send(method, params);
+
+                  // Chromium rejects this real registration before closure. Only delivery of
+                  // its original rejection is delayed; closure must not erase that failure.
+                  return send("Runtime.addBinding", {
+                    name: "retiredRegistrationFailure",
+                    executionContextId: -1,
+                  })
+                    .then(() => send(method, params))
+                    .catch((cause: unknown) => {
+                      nativeFailure = cause;
+                      Deferred.doneUnsafe(entered, Effect.void);
+
+                      return held.then(() => {
+                        throw cause;
+                      });
+                    })
+                    .finally(() => Deferred.doneUnsafe(finished, Effect.void));
+                };
+              }
+
+              return cdp;
+            };
+          },
+        }),
+      }).pipe(Effect.provide(NodeCrypto.layer));
+
+      const bootstrap = Bootstrap.binding({
+        name: "registrationWork",
+        origins: [new URL(site.url).origin],
+        input: Schema.String,
+        output: Schema.String,
+        handle: Effect.succeed,
+      });
+
+      const acquired = yield* runtime.acquire(
+        BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
+        (cleanup) =>
+          Effect.gen(function* () {
+            const close = yield* Effect.cached(
+              cleanup.fence.pipe(
+                Effect.andThen(cleanup.capture),
+                Effect.andThen(cleanup.initialization),
+                Effect.andThen(cleanup.disconnect),
+                Effect.orDie,
+                Effect.ensuring(Effect.promise(host.close)),
+                Effect.asVoid,
+              ),
+            );
+
+            yield* Effect.addFinalizer(() => close);
+
+            return {
+              reference: "native-retired-registration-failure",
+              connection: () => Effect.succeed(host.endpoint),
+              release: close,
+              cleanupResult: Effect.succeedNone,
+              closeChecked: close,
+              controlRetired: Effect.sync(() => !host.running()),
+            };
+          }),
+        { bootstrap },
+      );
+
+      const { session } = yield* acquired.connect;
+
+      yield* Effect.addFinalizer(() => Effect.sync(release));
+      const healthy = session.initialPage;
+
+      yield* healthy.navigate({ url: new URL("/pinned?name=healthy", site.url).href });
+      const retired = yield* session.page(yield* session.createPage);
+
+      yield* Deferred.await(entered);
+      expect(nativeFailure).toBeInstanceOf(Error);
+      if (!(nativeFailure instanceof Error)) throw new Error("Native registration did not fail");
+      expect(nativeFailure.message).toBe(
+        "cdpSession.send: Protocol error (Runtime.addBinding): Cannot find execution context with given executionContextId",
+      );
+      if (nativePage === undefined) throw new Error("The native fixture has no registration page");
+      yield* retired.close();
+      expect(nativePage.isClosed()).toBe(true);
+      expect(yield* session.status).toMatchObject({ phase: "open" });
+      yield* healthy.click({ selector: "#increment" });
+      expect((yield* healthy.readText({ selector: "#count" })).text).toBe("1");
+
+      yield* Effect.sync(release);
+      yield* Deferred.await(finished);
+      const failure = yield* session.failure.pipe(Effect.flip, Effect.timeoutOption(1000));
+
+      expect(failure).toMatchObject({
+        _tag: "Some",
+        value: {
+          _tag: "InitializationError",
+          operation: "register",
+          step: "bindings",
+          reason: "native",
+        },
+      });
+      expect((yield* session.bindingDiagnostics).faulted).toBe(true);
+      yield* Effect.yieldNow;
+      expect(yield* session.status).toMatchObject({
+        phase: "uncertain",
+        reason: "registration-failure",
+      });
+      expect(yield* healthy.click({ selector: "#increment" }).pipe(Effect.flip)).toMatchObject({
+        outcome: "undispatched",
+      });
+      yield* session.closeChecked;
+      expect(host.running()).toBe(false);
+    }),
   ),
 );

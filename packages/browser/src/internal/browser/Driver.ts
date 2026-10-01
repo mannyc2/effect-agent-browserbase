@@ -94,7 +94,7 @@ export interface DriverEvents {
   readonly pageClosed?: (pageId: string) => void;
   /** Native uncertainty confined to one known page; the owner contains that page. */
   readonly pageFault?: (pageId: string) => void;
-  readonly pause: (reason?: "popup" | "dialog") => void;
+  readonly pause: (reason?: "popup" | "dialog", pageId?: string) => void;
   readonly fault: (event: DriverFault) => void;
 }
 
@@ -436,6 +436,8 @@ export interface Driver {
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;
   readonly fenceInitializationPage?: (pageId: string) => void;
+  readonly restoreInitializationPage?: (pageId: string) => void;
+  readonly handoffDrained?: () => boolean;
   readonly retireInitializationPage?: (pageId: string) => void;
   /** Remove this connection's registrations while its native connection is still usable. */
   readonly disposeInitialization?: () => Promise<void>;

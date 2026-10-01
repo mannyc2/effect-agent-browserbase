@@ -268,6 +268,46 @@ it.effect("a connection fault during dispatched input reports the existing sessi
   }),
 );
 
+it.effect("a late acknowledgement cannot revise an already revoked unknown attempt", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner(limits);
+    let closes = 0;
+
+    owner.transition("open");
+
+    const error = yield* owner
+      .guard(
+        "click",
+        (ticket) =>
+          native("click", ticket, async () => {
+            ticket.dispatch();
+            owner.revokePage("page-a");
+            ticket.acknowledge?.();
+          }),
+        {
+          mutation: true,
+          targetScope: () => ({ pageId: "page-a" }),
+          contain: () => ({
+            pageId: "page-a",
+            close: Effect.sync(() => {
+              closes++;
+
+              return true;
+            }),
+          }),
+        },
+      )
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      outcome: "unknown",
+      containment: { _tag: "PageClosed", pageId: "page-a" },
+    });
+    expect(closes).toBe(1);
+    expect(yield* owner.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+  }),
+);
+
 it.effect("a refused connection keeps the reason the native attempt gave", () =>
   Effect.gen(function* () {
     const request = {

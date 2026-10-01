@@ -1483,6 +1483,54 @@ export const makeObservation = (
       }
     });
 
+  /** The picture alone. Its caller has already reserved `4096 + maximumBytes` for it. */
+  const picture = (fullPage: boolean, maximumBytes: number, ticket: Ticket, exact: DriverTarget) =>
+    reading(async () => {
+      const page = current(exact).entry.page;
+
+      ticket.check();
+
+      const raw: unknown = await page.evaluate(
+        (full) => ({
+          width: full
+            ? Math.max(document.documentElement.scrollWidth, window.innerWidth)
+            : window.innerWidth,
+          height: full
+            ? Math.max(document.documentElement.scrollHeight, window.innerHeight)
+            : window.innerHeight,
+        }),
+        fullPage,
+      );
+
+      const geometry = safeDecode(Geometry, raw);
+
+      checkScreenshotGeometry(geometry);
+      ticket.check();
+
+      const bytes: unknown = await page.screenshot({
+        type: "png",
+        fullPage,
+        scale: "css",
+        timeout: timeout(ticket),
+      });
+
+      if (!(bytes instanceof Uint8Array)) throw failure(Reasons.Malformed.make({}));
+      if (bytes.length > maximumBytes)
+        throw failure(
+          Reasons.Limit.make({
+            dimension: "returned-bytes",
+            maximum: maximumBytes,
+            observed: bytes.length,
+          }),
+        );
+      const actual = pngGeometry(bytes);
+
+      checkScreenshotGeometry(actual);
+      ticket.check();
+
+      return new Uint8Array(bytes);
+    }, exact);
+
   const screenshot = (
     fullPage: boolean,
     maximumBytes: number,
@@ -1493,51 +1541,7 @@ export const makeObservation = (
       const exact = target ?? targets.selected();
 
       return withTemporary(exact, ticket, 0, 4096 + maximumBytes, () =>
-        reading(async () => {
-          const page = current(exact).entry.page;
-
-          ticket.check();
-
-          const raw: unknown = await page.evaluate(
-            (full) => ({
-              width: full
-                ? Math.max(document.documentElement.scrollWidth, window.innerWidth)
-                : window.innerWidth,
-              height: full
-                ? Math.max(document.documentElement.scrollHeight, window.innerHeight)
-                : window.innerHeight,
-            }),
-            fullPage,
-          );
-
-          const geometry = safeDecode(Geometry, raw);
-
-          checkScreenshotGeometry(geometry);
-          ticket.check();
-
-          const bytes: unknown = await page.screenshot({
-            type: "png",
-            fullPage,
-            scale: "css",
-            timeout: timeout(ticket),
-          });
-
-          if (!(bytes instanceof Uint8Array)) throw failure(Reasons.Malformed.make({}));
-          if (bytes.length > maximumBytes)
-            throw failure(
-              Reasons.Limit.make({
-                dimension: "returned-bytes",
-                maximum: maximumBytes,
-                observed: bytes.length,
-              }),
-            );
-          const actual = pngGeometry(bytes);
-
-          checkScreenshotGeometry(actual);
-          ticket.check();
-
-          return new Uint8Array(bytes);
-        }, exact),
+        picture(fullPage, maximumBytes, ticket, exact),
       );
     });
 
@@ -1580,10 +1584,11 @@ export const makeObservation = (
             exact,
           );
 
-          const picture =
+          // This read's own reservation already includes the picture's bytes.
+          const pictured =
             pictureBytes === undefined
               ? undefined
-              : await screenshot(false, pictureBytes, ticket, exact);
+              : await picture(false, pictureBytes, ticket, exact);
 
           const result: NativeCheckpoint = {
             url: targets.url(exact),
@@ -1592,7 +1597,7 @@ export const makeObservation = (
             controls: data.controls,
             controlsTruncated: data.controlsTruncated,
             viewport: data.viewport,
-            ...(picture === undefined ? {} : { picture }),
+            ...(pictured === undefined ? {} : { picture: pictured }),
             documentChanged: targets.epochOf(frame) !== epoch,
           };
 
@@ -1602,6 +1607,13 @@ export const makeObservation = (
     });
 
   return {
+    drained: () =>
+      [...reservations].every(
+        (snapshot) =>
+          !snapshot.reading &&
+          snapshot.pending === 0 &&
+          [...snapshot.resources.values()].every((resource) => resource.disposal === undefined),
+      ),
     invalidate,
     changed,
     held,

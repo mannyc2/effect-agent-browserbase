@@ -184,7 +184,11 @@ Lost acknowledgement fences control without replay; a late acknowledgement canno
 Capacity refusal before dispatch is a known block rather than fabricated uncertainty. Dialog-cap
 overflow follows the same bounded dismissal rules. An acknowledged before-unload dismissal can
 retire only the exact navigation captured when its dialog arrived and subsequently rejected.
-Existing popup/dialog pause policies still require their explicit host recovery path.
+An attributed popup/dialog pause quarantines its exact Page and stops its capture and bindings;
+healthy peers keep working. The original Page reports `paused` and permits explicit close, while
+input remains refused. Recovery requires a drained session handoff and explicit operator release,
+then newly acquired Page/Frame authority. Unattributed policy or shared connection failures fence
+the session conservatively.
 
 ## Browser operations
 
@@ -219,7 +223,11 @@ observation of the same frame retires its predecessor. A reference passed throug
 Page or Frame fails `Stale/undispatched` before input. Mutation invalidation remains conservative
 for the affected page. A detached frame, closed page or old connection generation cannot acquire
 fresh authority. `page.status` is passive host state, including terminal containment facts, and
-remains readable after closure. Reconnect and handoff resume require freshly issued capabilities.
+remains readable after closure. Reconnect and handoff resume return a bounded `Inventory` with
+the current generation and fresh Page metadata. Acquire a Page from that inventory and call
+`page.observe()` explicitly; old capabilities stay stale. Native title and URL reads are
+non-atomic. The future lifecycle stream must commit its registry snapshot and cursor together;
+this milestone adds no event journal.
 
 Observation storage is finite, including snapshots awaiting native disposal. Optional
 `automation.observationLimits` sets all six bounds together: defaults are 16 snapshots,
@@ -227,6 +235,12 @@ Observation storage is finite, including snapshots awaiting native disposal. Opt
 Reads reserve capacity before native allocation and return `Limit/undispatched` when it is
 unavailable. Timeout or caller cancellation does not return a reservation until native work
 and disposal settle, or exact positive page/connection retirement proves it unusable.
+The snapshot bounds include temporary reads such as facts, screenshots and checkpoints. Leave
+one slot beyond each retained frame observation for an action's fresh read; a one-slot bound
+supports passive reads alone but cannot read facts or act while an observation occupies it.
+Extraction reserves 4 KiB plus the requested text bytes and 512 KiB per requested control;
+a picture checkpoint also reserves its picture allowance. A standalone screenshot reserves
+4 KiB plus its returned-byte allowance. Released native resources reduce the retained reservation.
 
 `page.ready({ timeoutMillis })`, `page.describe({ timeoutMillis })`,
 `page.listFrames({ timeoutMillis })`, `page.close({ timeoutMillis })` and
@@ -638,7 +652,11 @@ The connection endpoint is read through the exact allocated session, so a provid
 
 Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`; reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
 
-Human handoff pauses automation before returning host-only Live View material. Resume requires an explicit operator-release signal and obtains a fresh observation while holding the same mutation permit. A failed handoff does not silently resume automation. Live View URLs are temporary bearer material; iframe styling is not an authorization boundary. Live View is also where browser-window presentation already exists for watching a session as it runs, and it is the provider's: beside each full-screen URL Browserbase issues a bordered one (`debuggerUrl`, "mimic a real browser with borders"), and a navbar that `navbar=false` hides. This package decodes and returns only the full-screen URL. The bordered one carries the same control authority and would be issued under the same rules, so surfacing it is a small host-only addition whenever something needs it; nothing here does yet, so it is not exported.
+Human handoff blocks new admission and drains native work within a bounded interval before
+pausing automation and returning host-only Live View material. Failure to establish that drain
+fences the session and grants no handoff. Resume requires an explicit operator-release signal
+and returns fresh bounded Page inventory under the lifecycle permit; observing a newly acquired
+Page is explicit. A failed handoff does not silently resume automation. Live View URLs are temporary bearer material; iframe styling is not an authorization boundary. Live View is also where browser-window presentation already exists for watching a session as it runs, and it is the provider's: beside each full-screen URL Browserbase issues a bordered one (`debuggerUrl`, "mimic a real browser with borders"), and a navbar that `navbar=false` hides. This package decodes and returns only the full-screen URL. The bordered one carries the same control authority and would be issued under the same rules, so surfacing it is a small host-only addition whenever something needs it; nothing here does yet, so it is not exported.
 
 ## Registrations, capabilities and document readiness
 
@@ -783,6 +801,13 @@ record keeps the latest 64 boundaries; `documentBoundariesTruncated` reports tha
 ones were let go, and `currentDocument` continues counting. Addresses longer than the existing
 bound remain `null`. The model should not receive these host-only addresses by
 accident merely because it can inspect the page.
+
+Every summary and snapshot includes `qualification`: this exact target's authority phase,
+containment facts, and the owner's phase and generation. A revoked Page may still be awaiting
+closure; `PageClosed` appears only after positive native closure, independently of `nativeStop`.
+Later `snapshot` and `completed` reads can retain that confirmation even when capture ended
+earlier. The original action outcome and capture end reason remain unchanged. A terminal Page
+requires explicitly fresh authority and intent before another capture can start.
 
 While capturing, `reason` and `nativeStop` are `null`. `phase: "stopping"` means
 capture has stopped accepting frames but native cleanup is pending. `"stopped"`

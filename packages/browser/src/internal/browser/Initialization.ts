@@ -61,7 +61,9 @@ export const makeInitialization = (
       try {
         await action();
       } catch (cause) {
-        if (!livePage(page)) return;
+        // Revocation does not erase a registration or transport failure. Only native setup
+        // that positively identified retirement can settle locally after its page is fenced.
+        if (bindings?.retiredRegistration(cause)) return;
         initializationFault(
           Schema.is(InitializationError)(cause)
             ? cause
@@ -91,8 +93,10 @@ export const makeInitialization = (
             initializationFault(
               InitializationError.make({ operation: "register", step: "bindings", reason: "busy" }),
             ),
-          targets.pageIdOf,
+          (page) => (livePage(page) ? targets.pageIdOf(page) : undefined),
         );
+
+  const drained = () => pendingReadiness.size === 0 && (bindings?.drained() ?? true);
 
   const attach = async (page: Page) => {
     if (bindings === undefined) return;
@@ -110,6 +114,21 @@ export const makeInitialization = (
     const page = entries.get(pageId)?.page;
 
     if (page !== undefined) revokedPages.add(page);
+  };
+
+  /** The owner calls this only after the global handoff drain and operator release. */
+  const restorePage = (pageId: string) => {
+    const page = entries.get(pageId)?.page;
+
+    if (
+      initializationClosed ||
+      !drained() ||
+      page === undefined ||
+      page.isClosed() ||
+      targets.pageIdOf(page) !== pageId
+    )
+      throw failure(Reasons.Stale.make({}));
+    revokedPages.delete(page);
   };
 
   const retirePage = (pageId: string) => {
@@ -291,6 +310,8 @@ export const makeInitialization = (
     attachFrame,
     fence,
     fencePage,
+    restorePage,
+    drained,
     retirePage,
     dispose,
     install,

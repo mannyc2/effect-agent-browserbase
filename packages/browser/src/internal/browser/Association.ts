@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 
+import type { PageStatus } from "../../Browser.ts";
 import type { PageInfo, Target } from "../../BrowserData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
 import type { CaptureSource } from "./Driver.ts";
@@ -18,6 +19,8 @@ export interface CaptureResolution {
   readonly key: string;
   readonly target: Target;
   readonly source: CaptureSource;
+  /** Retains one bounded authority record after it leaves the owner's live inventory. */
+  readonly status?: () => Pick<PageStatus, "phase" | "containment">;
 }
 
 export interface CaptureParent {

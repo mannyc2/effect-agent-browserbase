@@ -253,6 +253,7 @@ export const makeKeyboard = (
       ticket.dispatch();
       await keys(page);
       ticket.acknowledge?.();
+      ticket.followUp?.();
     } else
       await actions.withAdmittedElement(
         into,
@@ -322,5 +323,5 @@ export const makeKeyboard = (
       });
     });
 
-  return { press, type, retire };
+  return { press, type, retire, drained: () => typing === undefined || typing.idle !== undefined };
 };

@@ -6,11 +6,16 @@ import {
   CaptureSize,
   CaptureSnapshot,
   CaptureSummary,
+  type CaptureQualification,
   type CaptureOptions,
   type CapturedFrame,
 } from "../../CaptureData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
-import { type CaptureLease, type CaptureParent } from "../browser/Association.ts";
+import {
+  type CaptureLease,
+  type CaptureParent,
+  type CaptureResolution,
+} from "../browser/Association.ts";
 import type { CaptureSource, NativeFrame } from "../browser/Driver.ts";
 import { jpegGeometry } from "../browser/Images.ts";
 import { FrameBuffer } from "./FrameBuffer.ts";
@@ -98,6 +103,8 @@ export const startCapture = Effect.fnUntraced(function* (
   let startSettled = true;
   let target: Target | undefined;
   let leaseKey: string | undefined;
+  let targetStatus: CaptureResolution["status"];
+  let terminalAuthority: "closing" | "closed" | undefined;
 
   let ended = false,
     subscribed = false,
@@ -210,9 +217,33 @@ export const startCapture = Effect.fnUntraced(function* (
 
   const snapshot = (): CaptureSummary => {
     if (target === undefined) throw new Error("Capture target was not admitted");
+    const status = targetStatus?.();
+    const ownerPhase = parent.owner.state.phase;
+    const ownerGeneration = parent.owner.state.generation;
+    const sessionFenced = ["uncertain", "faulted", "closing", "closed"].includes(ownerPhase);
+
+    const containment =
+      status !== undefined && status.containment._tag !== "NotRequired"
+        ? { ...status.containment }
+        : sessionFenced
+          ? { _tag: "SessionFenced" as const, generation: ownerGeneration }
+          : { _tag: "NotRequired" as const };
+
+    const qualification: CaptureQualification = {
+      authority:
+        status?.phase === "closed" || terminalAuthority === "closed"
+          ? "closed"
+          : target.generation !== ownerGeneration
+            ? "stale"
+            : (status?.phase ?? terminalAuthority ?? "open"),
+      containment,
+      ownerPhase,
+      ownerGeneration,
+    };
 
     return CaptureSummary.make({
       target,
+      qualification,
       reason,
       received,
       delivered,
@@ -239,6 +270,11 @@ export const startCapture = Effect.fnUntraced(function* (
               operation: error.operation,
               reason: { ...error.reason },
               outcome: error.outcome,
+              ...(error.containment !== undefined
+                ? { containment: { ...error.containment } }
+                : containment._tag === "NotRequired"
+                  ? {}
+                  : { containment }),
             }),
           }),
     });
@@ -503,6 +539,7 @@ export const startCapture = Effect.fnUntraced(function* (
           // Frames and summaries share this identity with the generation guard. It must not
           // become writable through consumer-owned frame data.
           target = Object.freeze(resolved.target);
+          targetStatus = resolved.status;
           const resolvedSource = resolved.source;
 
           source = resolvedSource;
@@ -540,6 +577,8 @@ export const startCapture = Effect.fnUntraced(function* (
             reservedBytes: maxBytes,
             stop: stopNative.pipe(Effect.asVoid),
             invalidate: (why) => {
+              if (why === "target-closed") terminalAuthority = "closed";
+              else if (why === "closed") terminalAuthority ??= "closing";
               if (why === "target-closed") releaseReservation();
               finish(
                 why === "resized" ? "resized" : "target-changed",

@@ -7,7 +7,7 @@ import * as BrowserRuntime from "effect-browser/browser-runtime";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import { BrowserError, Reasons } from "effect-browser/errors";
-import type { Browser as PlaywrightBrowser } from "playwright-core";
+import type { Browser as PlaywrightBrowser, Dialog as PlaywrightDialog } from "playwright-core";
 
 import { externalChromium, localSite } from "../fixtures/StandaloneBrowser.ts";
 
@@ -21,13 +21,16 @@ const launch = {
   startupTimeoutMillis: 25000,
 };
 
-const keyboardFixture = Effect.fnUntraced(function* () {
+const keyboardFixture = Effect.fnUntraced(function* (
+  automation: { readonly dialogPolicy?: "dismiss" | "pause" } = {},
+) {
   const site = yield* localSite;
   const host = yield* externalChromium;
   let native: PlaywrightBrowser | undefined;
 
   const runtime = yield* BrowserRuntime.make({
     implementation: "native-keyboard-workflow",
+    automation,
     binding: BrowserRuntime.playwright({
       onConnected: (connection) => {
         native = connection.native as PlaywrightBrowser;
@@ -61,7 +64,7 @@ const keyboardFixture = Effect.fnUntraced(function* () {
     }),
   );
 
-  const { session } = yield* acquired.connect;
+  const { session, operations } = yield* acquired.connect;
 
   if (native === undefined)
     throw new Error("The public runtime did not connect its native browser");
@@ -69,8 +72,118 @@ const keyboardFixture = Effect.fnUntraced(function* () {
 
   if (page === undefined) throw new Error("The native keyboard workflow has no page");
 
-  return { session, page, host, url: new URL("keyboard", site.url).href };
+  return { session, operations, page, host, url: new URL("keyboard", site.url).href };
 });
+
+it.live.each(["inventory", "second-dismissal"] as const)(
+  "resume retains each dialog's native acknowledgement before a %s failure",
+  (failureAt) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session, operations, page, host, url } = yield* keyboardFixture({
+          dialogPolicy: "pause",
+        });
+
+        const initial = session.initialPage;
+
+        yield* initial.navigate({ url });
+        yield* session.createPage;
+
+        const other = page
+          .context()
+          .pages()
+          .find((candidate) => candidate !== page);
+
+        if (other === undefined) throw new Error("The native dialog workflow has no second page");
+        const dialogs = yield* Deferred.make<void>();
+        const pendingDialogs: PlaywrightDialog[] = [];
+        const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+        let submitted = 0;
+        let acknowledged = 0;
+
+        for (const native of [page, other])
+          native.once("dialog", (dialog) => {
+            const index = pendingDialogs.length;
+            const dismiss = dialog.dismiss.bind(dialog);
+
+            pendingDialogs.push(dialog);
+            dialog.dismiss = () => {
+              submitted++;
+
+              const work =
+                failureAt === "second-dismissal" && index === 1
+                  ? cdp
+                      .send("Runtime.addBinding", {
+                        name: "resumeDismissalFailure",
+                        executionContextId: -1,
+                      })
+                      .then(() => dismiss())
+                  : dismiss();
+
+              return work.then(() => {
+                acknowledged++;
+              });
+            };
+            if (pendingDialogs.length === 2) Deferred.doneUnsafe(dialogs, Effect.void);
+          });
+
+        const evaluations = [page, other].map((native) =>
+          native.evaluate("alert('resume acknowledgement')").catch(() => {}),
+        );
+
+        yield* Deferred.await(dialogs);
+        expect(yield* initial.status).toMatchObject({ phase: "paused" });
+        const handoff = yield* operations.beginHandoff(Effect.succeed({ granted: true }));
+        const title = page.title.bind(page);
+
+        if (failureAt === "inventory")
+          // Fail the following real native metadata read after both dialog dismissals settle.
+          page.title = () =>
+            cdp
+              .send("Runtime.addBinding", {
+                name: "resumeInventoryFailure",
+                executionContextId: -1,
+              })
+              .then(() => title());
+        const result = yield* operations.resume(handoff.token, true).pipe(Effect.flip);
+
+        expect(submitted).toBe(2);
+        expect(acknowledged).toBe(failureAt === "inventory" ? 2 : 1);
+        expect(result).toMatchObject({
+          operation: "resume",
+          reason: { _tag: failureAt === "inventory" ? "Provider" : "Stale" },
+          outcome: failureAt === "inventory" ? "performed" : "unknown",
+          containment: { _tag: failureAt === "inventory" ? "NotRequired" : "SessionFenced" },
+        });
+        expect(yield* session.status).toMatchObject({
+          phase: failureAt === "inventory" ? "paused" : "uncertain",
+          unresolvedDispatch: failureAt !== "inventory",
+        });
+
+        if (failureAt === "inventory") {
+          page.title = title;
+          const inventory = yield* operations.resume(handoff.token, true);
+
+          expect(inventory.pages).toHaveLength(2);
+          expect(submitted).toBe(2);
+          expect(yield* session.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+          expect(yield* initial.status).toMatchObject({ phase: "stale" });
+
+          const info = inventory.pages.find(
+            (candidate) => candidate.pageId === initial.identity.pageId,
+          );
+
+          if (info === undefined) throw new Error("The resumed inventory lost the original page");
+          const fresh = yield* session.page(info);
+
+          yield* fresh.click({ selector: "#first" });
+        }
+        yield* session.closeChecked;
+        yield* Effect.promise(() => Promise.all(evaluations));
+        expect(host.running()).toBe(false);
+      }),
+    ),
+);
 
 // The owner requested this native seam before implementation for #94's bounded plain typing.
 it.live(

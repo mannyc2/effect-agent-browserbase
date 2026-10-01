@@ -81,7 +81,7 @@ export const checks = {
   handoff: {
     question: null,
     claim:
-      "An operator can take over a session through Live View and release it, and resume then returns a fresh observation of the same session.",
+      "An operator can take over a session through Live View and release it; a fresh Page reading after resume reflects the operator's navigation.",
     evidence: "docs/STATUS.md#owner-authorized-hosted-checks-21-september-2026",
     budget: { sessions: 1, browserSeconds: 300, actions: 10, captureSeconds: 0, transferBytes: 0 },
     env: [],
@@ -148,10 +148,10 @@ export const checks = {
   "page-authority": {
     question: null,
     claim:
-      "Issued Page and Frame operations and capture remain on page A while page B is selected; closing A retires its authority while B's observed reference and browser connection remain usable.",
+      "Issued Page and Frame operations, pictures and trusted bounded typing preserve a peer's references; unresolved background input positively closes only its exact Page, and confirmed last-Page closure remains distinct from provider termination.",
     evidence: null,
     budget: { sessions: 1, browserSeconds: 180, actions: 30, captureSeconds: 10, transferBytes: 0 },
-    env: [],
+    env: ["BROWSERBASE_PAGE_AUTHORITY_URL"],
     optionalEnv: [],
     operator: false,
     media: false,

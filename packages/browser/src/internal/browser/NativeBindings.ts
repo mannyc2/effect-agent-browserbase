@@ -198,7 +198,17 @@ export const makeNativeBindings = (
   const byName = new Map(bindings.map((binding) => [binding.name, binding]));
   const targets = new Map<string, TargetRegistration>();
   const currentDocuments = new Map<string, DocumentIdentity>();
-  const attaching = new WeakSet<Page | Frame>();
+  const attaching = new Set<Page | Frame>();
+  const retiredRegistrations = new WeakSet<InitializationError>();
+
+  const retirementError = (reason: "closed" | "stale") => {
+    const cause = InitializationError.make({ operation: "register", step: "bindings", reason });
+
+    retiredRegistrations.add(cause);
+
+    return cause;
+  };
+
   // Native replies are bounded too, including rejected calls and late native completions.
   const maximumReplies = 16 + bindings.reduce((sum, binding) => sum + binding.maxConcurrent, 0);
   let replies = 0;
@@ -210,10 +220,27 @@ export const makeNativeBindings = (
   };
 
   const attach = async (subject: Page | Frame, page: Page): Promise<void> => {
-    if (closing || page.isClosed() || attaching.has(subject)) return;
+    const registrationError = (reason: InitializationError["reason"]) =>
+      InitializationError.make({ operation: "register", step: "bindings", reason });
+
+    const check = () => {
+      if (closing || page.isClosed() || pageIdOf(page) === undefined)
+        throw retirementError("closed");
+      if (subject !== page && "isDetached" in subject && subject.isDetached())
+        throw retirementError("stale");
+    };
+
+    check();
+    if (attaching.has(subject)) return;
+    if (attaching.size >= 128) throw registrationError("busy");
     attaching.add(subject);
     let cdp: CDPSession | undefined;
     let retained = false;
+    let nativeClosed = false;
+
+    const onNativeClosed = () => {
+      nativeClosed = true;
+    };
 
     try {
       try {
@@ -225,22 +252,22 @@ export const makeNativeBindings = (
         if (
           subject !== page &&
           cause instanceof Error &&
-          cause.message.includes("This frame does not have a separate CDP session")
-        )
-          return;
-        if (
-          page.isClosed() ||
-          (subject !== page && "isDetached" in subject && subject.isDetached())
+          cause.message ===
+            "browserContext.newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session"
         )
           return;
         throw cause;
       }
       const native = cdp;
 
+      native.on("close", onNativeClosed);
+      check();
+
       const targetId = safeDecode(TargetIdentity, await native.send("Target.getTargetInfo"))
         .targetInfo.targetId;
 
-      if (closing || page.isClosed() || targets.has(targetId)) return;
+      check();
+      if (targets.has(targetId)) return;
       if (targets.size >= 128) throw error("bindings", "busy");
       const documents = new Map<number, DocumentIdentity>();
 
@@ -428,8 +455,9 @@ export const makeNativeBindings = (
       native.on("Runtime.executionContextDestroyed", destroyed);
       native.on("Runtime.executionContextsCleared", cleared);
       native.on("Runtime.bindingCalled", called);
+      check();
       await native.send("Runtime.enable");
-      if (closing) return;
+      check();
       await native.send("Runtime.addBinding", { name: nativeName });
       if (closing) {
         await native.send("Runtime.removeBinding", { name: nativeName }).catch(() => {});
@@ -438,21 +466,32 @@ export const makeNativeBindings = (
       }
       // Existing documents receive only the callable bridge, never replayed consumer init scripts.
       for (const document of documents.values()) {
-        if (closing) return;
+        check();
 
-        const installed = await native.send("Runtime.evaluate", {
-          expression: `${bundle}\nglobalThis[${JSON.stringify(controllerName)}]?.status`,
-          uniqueContextId: document.uniqueId,
-          returnByValue: true,
-          silent: true,
-          timeout: 2000,
-        });
+        const current = () =>
+          documents.get(document.id) === document &&
+          currentDocuments.get(document.auxData?.frameId ?? "") === document;
 
-        if (
-          documents.get(document.id) !== document ||
-          currentDocuments.get(document.auxData?.frameId ?? "") !== document
-        )
-          continue;
+        const installed = await native
+          .send("Runtime.evaluate", {
+            expression: `${bundle}\nglobalThis[${JSON.stringify(controllerName)}]?.status`,
+            uniqueContextId: document.uniqueId,
+            returnByValue: true,
+            silent: true,
+            timeout: 2000,
+          })
+          .catch((cause: unknown) => {
+            if (
+              !current() &&
+              cause instanceof Error &&
+              cause.message ===
+                "cdpSession.send: Protocol error (Runtime.evaluate): uniqueContextId not found"
+            )
+              throw retirementError("stale");
+            throw cause;
+          });
+
+        if (!current()) continue;
         if (installed.exceptionDetails !== undefined || installed.result.value !== "ready")
           throw InitializationError.make({
             operation: "register",
@@ -460,9 +499,26 @@ export const makeNativeBindings = (
             reason: "configuration",
           });
       }
+    } catch (cause) {
+      // These are exact errors emitted by the pinned public Playwright calls. The error text
+      // only classifies a failure after this exact native subject has positively retired;
+      // it never supplies page, frame or document authority. Other protocol failures remain
+      // failures even when a close event happened before their rejection reached this code.
+      if (
+        cause instanceof Error &&
+        (cause.message === "cdpSession.send: Target page, context or browser has been closed" ||
+          cause.message ===
+            "browserContext.newCDPSession: Target page, context or browser has been closed") &&
+        (page.isClosed() ||
+          nativeClosed ||
+          (subject !== page && "isDetached" in subject && subject.isDetached()))
+      )
+        throw retirementError(page.isClosed() || nativeClosed ? "closed" : "stale");
+      throw cause;
     } finally {
-      attaching.delete(subject);
       if (cdp !== undefined && (!retained || closing)) await cdp.detach().catch(() => {});
+      cdp?.off("close", onNativeClosed);
+      attaching.delete(subject);
     }
   };
 
@@ -535,5 +591,13 @@ export const makeNativeBindings = (
     return disposed;
   };
 
-  return { bundle, attach, close, dispose };
+  return {
+    bundle,
+    attach,
+    close,
+    dispose,
+    drained: () => attaching.size === 0 && replies === 0,
+    retiredRegistration: (cause: unknown) =>
+      Schema.is(InitializationError)(cause) && retiredRegistrations.has(cause),
+  };
 };

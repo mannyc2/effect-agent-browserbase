@@ -233,10 +233,11 @@ it("creation returns the exact new page without selecting it or rereading other 
 });
 
 it.effect(
-  "metadata failure after creating a page retains unknown dispatch evidence and prevents replay",
+  "metadata failure after confirmed page creation retains performed evidence without replay",
   () =>
     Effect.gen(function* () {
       const f = registry({ failMetadata: true });
+      const selected = f.targets.selected();
 
       const owner = yield* makeOwner({
         maxActions: 10,
@@ -255,16 +256,17 @@ it.effect(
 
       expect(yield* Effect.result(create)).toMatchObject({
         _tag: "Failure",
-        failure: { operation: "new-page", reason: { _tag: "Provider" }, outcome: "unknown" },
+        failure: { operation: "new-page", reason: { _tag: "Provider" }, outcome: "performed" },
       });
-      expect(yield* Effect.result(create)).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
-      });
+      expect(
+        yield* owner.guard("target", () => Effect.sync(() => f.targets.selected()), {
+          charge: false,
+        }),
+      ).toEqual(selected);
       expect(f.calls.created).toBe(1);
       expect(f.calls.detached).toBe(1);
       expect(f.calls.titles).toEqual([2]);
-      expect(owner.state.phase).toBe("uncertain");
+      expect(owner.state.phase).toBe("open");
     }),
 );
 

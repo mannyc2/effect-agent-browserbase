@@ -32,7 +32,7 @@ describes.
 | `keepalive-reconnect` | H4       | a keep-alive session survives detach, and an init script is ready after reconnect                                                                                                                                                            |
 | `extension-identity`  | H3       | a registered MV3 extension keeps its identity and its content script runs                                                                                                                                                                    |
 | `upload-routing`      | H6       | uploaded bytes reach the remote file chooser intact                                                                                                                                                                                          |
-| `page-authority`      | H5       | issued Page/Frame routing, independent references, exact capture ownership and healthy peer reuse after acknowledged page closure; registered with no hosted evidence yet                                                                    |
+| `page-authority`      | H5       | issued Page/Frame routing, independent references, pictures, trusted typing and focus refusal, exact background containment, and last-page closure distinct from provider termination; registered with no hosted evidence yet                |
 | `replay-delivery`     | H7       | the replay playlist validates and a segment downloads; recording delivery is reported as observed                                                                                                                                            |
 | `live-capture`        | —        | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements                                                                                       |
 | `long-session`        | —        | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
@@ -41,8 +41,9 @@ The question codes come from the design research that preceded the checks
 (retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1
 persistence visibility, H2 context overlap and deletion, H3 extension and
 profile identity, H4 reconnect and cleanup, H5 multi-page evidence, H6 files
-and network routing, H7 observability and retention. H2 and H5 have no
-registered check. Each check narrows its question rather than answering all of
+and network routing, H7 observability and retention. H2 has no registered check;
+H5's new `page-authority` check has no hosted execution evidence yet.
+Each check narrows its question rather than answering all of
 it; the registry's `claim` says exactly how far. The demo is documentation evidence and is not a
 substitute for any check. [STATUS.md](STATUS.md) records which claims have a
 run behind them.
@@ -134,3 +135,16 @@ bash tools/hosted-run.sh .work/workspace .work/hosted demo acceptance
 The `demo` check needs caller-installed FFmpeg, the same way
 `examples/record-video.ts` does; encoding is deliberately not a package
 dependency.
+
+`page-authority` additionally requires `BROWSERBASE_PAGE_AUTHORITY_URL`, an operator-owned,
+credential-free HTTPS directory URL with no query or fragment. Its landing document must be
+reachable, and its same-origin `pending` endpoint must hold a document navigation open without
+completing it. The gate refuses a missing setting before allocation, and the check validates the
+URL and makes one bounded reachability request before opening its one provider session. It does
+not deploy or provision that fixture. For the existing protected manual workflow, configure
+the same `BROWSERBASE_PAGE_AUTHORITY_URL` variable in its environment; it remains required for
+this check and has no implicit fixture. The registered ceiling is 180 browser seconds, 30 actions,
+10 capture seconds and zero provider transfers. Typing reports actual trusted DOM events,
+values, one-action cost and the host receipt interval; native outstanding reply counts are not
+observable through this public API and are explicitly reported as unobserved. Registration
+alone establishes no hosted behavior, and evidence remains null until separately authorized execution.

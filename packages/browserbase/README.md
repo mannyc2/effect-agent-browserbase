@@ -175,6 +175,14 @@ Larger files use `BrowserbaseUploads.create`, which places bytes for the exact r
 | Capture `dropped`                                              | `discarded = overflow + late + duplicates + rejected`; no change to default capacity or unknown upstream loss                                                   |
 | Non-supervising helper takes default `BrowserSession`          | Use `AnySession`; keep supervising helpers generic in callback error or concrete session                                                                        |
 
+`resume(token, operatorReleasedControl)` and `reconnect(operatorReleasedControl)` return a
+bounded `Inventory` containing the new owner generation and fresh Page metadata. They do not
+read page content or issue observed references. Acquire an issued Page from `inventory.pages`
+and call `page.observe()` explicitly. `detach` returns its pre-disconnection inventory and exact
+selected native `targetId`, preserving bounded target identities for deliberate attachment;
+its Page IDs are old authority and cannot be reused after reconnect. Page metadata is a sequence
+of native reads and is non-atomic.
+
 Binding omission defaults are one concurrent call, 64 KiB each direction, 10 seconds and
 `reject-call`; explicit values remain validated. Combined readiness uses the most conservative
 `existingDocuments` policy. Common navigation now accepts optional `timeoutMillis` with the same

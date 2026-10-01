@@ -330,7 +330,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       assert.equal((yield* scripted.provider.sessions)[0]?.releaseRequests, 1);
       assert.deepEqual(yield* browser.connections, ["closed"]);
     }).pipe(Effect.scoped, Effect.provide(layer()))),
-  test("handoff pauses automation and fresh observation commits under one permit", () =>
+  test("handoff pauses automation and fresh inventory commits under one permit", () =>
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
       const browser = yield* scriptedBrowser;
@@ -342,13 +342,17 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
         ...(yield* browser.document.current),
         text: "human changed this",
       });
-      yield* browser.next("observe", { _tag: "Hold", gate: observed, dispatched: false });
+      yield* browser.next("list-pages", { _tag: "Hold", gate: observed, dispatched: false });
       const resumed = yield* session.resume(handoff.token, true).pipe(Effect.forkChild);
 
       yield* observed.reached;
       yield* expectReason(session.click({ selector: "#button" }), "Busy");
       yield* observed.open;
-      assert.equal((yield* Fiber.join(resumed)).text, "human changed this");
+      const inventory = yield* Fiber.join(resumed);
+      const [info] = inventory.pages;
+
+      assert.ok(info !== undefined);
+      assert.equal((yield* (yield* session.page(info)).observe()).text, "human changed this");
       yield* expectReason(old.readText({}), "Stale");
       assert.deepEqual(
         (yield* browser.calls).filter((call) => call.operation === "click"),
@@ -371,7 +375,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       yield* expectReason(session.resume(Redacted.make("wrong"), true), "Authorization");
       yield* expectReason(session.click({ selector: "#button" }), "Busy");
     }).pipe(Effect.scoped, Effect.provide(layer()))),
-  test("keep-alive reconnect establishes a new generation and observes actual state", () =>
+  test("keep-alive reconnect establishes fresh inventory for explicit observation", () =>
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
       const browser = yield* scriptedBrowser;
@@ -383,8 +387,10 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
         text: "changed while detached",
       });
       const fresh = yield* session.reconnect(true);
+      const [info] = fresh.pages;
 
-      assert.equal(fresh.text, "changed while detached");
+      assert.ok(info !== undefined);
+      assert.equal((yield* (yield* session.page(info)).observe()).text, "changed while detached");
       assert.deepEqual(yield* browser.connections, ["closed", "open"]);
       yield* expectReason(old.readText({}), "Stale");
     }).pipe(Effect.scoped, Effect.provide(layer({ launch: recipe({ keepAlive: true }) })))),

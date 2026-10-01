@@ -35,7 +35,7 @@ await h.run(
       yield* h.report("detached", detached);
       // Reconnecting asserts that no operator holds the page, which is true: none was invited.
       const reconnected = yield* session.reconnect(true);
-      const selected = (yield* session.pages).find((page) => page.selected);
+      const selected = reconnected.pages.find((page) => page.selected);
 
       yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=after` }));
       const after = yield* session.ready;
@@ -51,7 +51,7 @@ await h.run(
         reference: session.reference,
         before,
         sameTarget: selected?.targetId === detached.targetId,
-        reconnectedUrl: reconnected.url,
+        reconnectedUrl: selected?.url,
         after,
         cleanup,
       };

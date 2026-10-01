@@ -145,9 +145,9 @@ it.live(
 
             // Reconnecting re-registers for the new connection; the running document did not
             // run that registration, so it is reported instead of silently reloaded.
-            const observation = yield* session.reconnect(true);
+            const inventory = yield* session.reconnect(true);
 
-            expect(observation.url).toContain("127.0.0.1");
+            expect(inventory.pages[0]?.url).toContain("127.0.0.1");
             expect(yield* session.ready).toEqual({ _tag: "RequiresNavigation" });
 
             const refused = yield* session

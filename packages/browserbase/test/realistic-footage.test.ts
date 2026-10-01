@@ -321,6 +321,12 @@ it.effect("each document gets the library's address and commit, and this layer's
     yield* telemetry.captureEnded(
       CaptureSummary.make({
         target,
+        qualification: {
+          authority: "open",
+          containment: { _tag: "NotRequired" },
+          ownerPhase: "open",
+          ownerGeneration: target.generation,
+        },
         reason: "stopped",
         received: 3,
         delivered: 3,

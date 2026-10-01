@@ -34,6 +34,10 @@ export interface ConnectionBindings {
   readonly close: () => void;
   /** Fence this page's admission before interrupting its accepted consumer callbacks. */
   readonly fencePage: (pageId: string) => void;
+  readonly resumePage: (pageId: string) => void;
+  readonly pauseAdmission: () => void;
+  readonly resumeAdmission: () => void;
+  readonly drained: () => boolean;
   /** Positive native closure removes admission history; accepted late work stays accounted for. */
   readonly retirePage: (pageId: string) => void;
   /** Native registration/transport failure supervises the owner, not a single page invocation. */
@@ -174,6 +178,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
   ): Effect.fn.Return<ConnectionBindings, never, Scope.Scope> {
     const connectionScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
     let closed = ownerClosed || faulted;
+    let admitting = true;
     const fences: Array<() => void> = [];
     const revokedPages = new Set<string>();
 
@@ -363,7 +368,11 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
         });
 
         const invoke = (call: NativeBindingCall): Promise<string> => {
-          if (!active() || (call.pageId !== undefined && revokedPages.has(call.pageId))) {
+          if (
+            !admitting ||
+            !active() ||
+            (call.pageId !== undefined && revokedPages.has(call.pageId))
+          ) {
             state.rejected = increment(state.rejected);
 
             return rejected();
@@ -451,6 +460,15 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
       bindings: Object.freeze(bindings),
       close,
       fencePage,
+      resumePage: (pageId) => revokedPages.delete(pageId),
+      pauseAdmission: () => {
+        admitting = false;
+      },
+      resumeAdmission: () => {
+        admitting = true;
+      },
+      drained: () =>
+        entries.every(({ state }) => state.inFlight === 0 && state.pendingNative === 0),
       retirePage: (pageId) => revokedPages.delete(pageId),
       reportFailure: (error) => {
         if (!current()) return;

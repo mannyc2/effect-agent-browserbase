@@ -93,6 +93,16 @@ export type SessionReason = typeof SessionReason.Type;
 
 const DiagnosticCounter = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
 
+/**
+ * Bounded fresh metadata from one owner generation. Native URL/title reads are non-atomic.
+ * PageInfo is data; callers must acquire an issued Page and observe it explicitly before input.
+ * The future lifecycle stream must hand over this registry snapshot and its cursor atomically.
+ */
+export class Inventory extends Schema.Class<Inventory>("BrowserInventory")({
+  generation: DiagnosticCounter,
+  pages: Schema.Array(PageInfo).check(Schema.isMaxLength(32)),
+}) {}
+
 /** The bound on one session's model-reachable actions, like the host-read allowance's. */
 const ActionAllowance = PositiveInt.check(Schema.isLessThanOrEqualTo(1_000_000));
 

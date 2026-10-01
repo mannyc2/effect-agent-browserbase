@@ -44,6 +44,9 @@ unconfirmed closure fences the owner without replaying the original unknown acti
 input followed by failure reports `performed`. Plain typing uses bounded ordered command windows
 and reuses its private port after acknowledged success. The session's selected, retained and
 pinned interfaces remain adapters over the same operation implementation and one global permit.
+Handoff drains admitted native work before granting operator control. Resume and reconnect return
+fresh bounded Page inventory; content observation is explicit. Capture summaries qualify target
+authority and owner containment separately from native stop and their original end reason.
 Concurrent admission, action plans, presentation scheduling and the shared timeline remain later
 work. The registered `page-authority` hosted check has no provider evidence; exact-commit PR
 acceptance supplies the local qualification record.

@@ -48,13 +48,20 @@ import {
   Reasons,
   type BrowserOperation,
   type BrowserOutcome,
+  type Containment,
   InitializationError,
 } from "../../Errors.ts";
 import { associate, associatePageAuthority, forPage } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
 import { schemaPath } from "./SchemaPath.ts";
-import type { TargetControls, SessionControls, SessionLease, PageControls } from "./Session.ts";
+import type {
+  TargetControls,
+  SessionControls,
+  SessionLease,
+  PageControls,
+  FormOutcome,
+} from "./Session.ts";
 
 export const checked = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
@@ -76,6 +83,7 @@ export const decoded =
     schema: Schema.Codec<A, unknown, never, never>,
     operation: BrowserOperation,
     outcome: BrowserOutcome,
+    containment?: Containment,
   ) =>
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(
@@ -84,23 +92,38 @@ export const decoded =
           operation,
           reason: Reasons.Malformed.make(schemaPath(error)),
           outcome,
+          ...(containment === undefined ? {} : { containment }),
         }),
       ),
     );
 
-const action = decoded(ActionResult, "action-result", "unknown");
-const pointerMoved = decoded(InputReceipt, "pointer-move", "unknown");
-const hovered = decoded(InputReceipt, "hover", "unknown");
-const wheeled = decoded(InputReceipt, "wheel", "unknown");
-const pressed = decoded(InputReceipt, "press", "unknown");
-const typed = decoded(InputReceipt, "type", "unknown");
-const formed = decoded(FillFormResult, "fill-form", "unknown");
+const action = decoded(ActionResult, "action-result", "performed");
+const pointerMoved = decoded(InputReceipt, "pointer-move", "performed");
+const hovered = decoded(InputReceipt, "hover", "performed");
+const wheeled = decoded(InputReceipt, "wheel", "performed");
+const pressed = decoded(InputReceipt, "press", "performed");
+const typed = decoded(InputReceipt, "type", "performed");
+
+const formed = (value: FormOutcome) => {
+  const stopped = value.stopped?.error;
+
+  const outcome =
+    stopped?.outcome === "unknown"
+      ? "unknown"
+      : value.submitted ||
+          value.fields.some((field) => field.status === "set") ||
+          stopped?.outcome === "performed"
+        ? "performed"
+        : "undispatched";
+
+  return decoded(FillFormResult, "fill-form", outcome, stopped?.containment)(value);
+};
 
 const makeTarget = (bound: TargetControls): TargetOperations => ({
   navigate: (request) =>
     checked(NavigateRequest, request, "navigate").pipe(
       Effect.flatMap((value) => bound.navigate(value.url, value.timeoutMillis)),
-      Effect.flatMap((url) => decoded(NavigationResult, "navigate", "unknown")({ url })),
+      Effect.flatMap((url) => decoded(NavigationResult, "navigate", "performed")({ url })),
     ),
   startNavigation: (request) =>
     checked(StartNavigationRequest, request, "navigate").pipe(
@@ -108,7 +131,7 @@ const makeTarget = (bound: TargetControls): TargetOperations => ({
       Effect.map((operation) => ({
         target: operation.target,
         completed: operation.completed.pipe(
-          Effect.flatMap((url) => decoded(NavigationResult, "navigate", "unknown")({ url })),
+          Effect.flatMap((url) => decoded(NavigationResult, "navigate", "performed")({ url })),
         ),
         stop: operation.stop,
       })),

@@ -462,7 +462,11 @@ const scripted = await Effect.runPromise(
               url: "https://shop.test/",
               text: "Changed while detached.",
             });
-            const observed = yield* session.reconnect(true);
+            const inventory = yield* session.reconnect(true);
+            const [info] = inventory.pages;
+
+            if (info === undefined) throw new Error("Consumer assertion failed: no fresh page");
+            const observed = yield* (yield* session.page(info)).observe();
 
             expect(
               observed.text === "Changed while detached.",

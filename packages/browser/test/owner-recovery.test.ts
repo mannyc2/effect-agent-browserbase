@@ -53,7 +53,13 @@ const recoveryCases: ReadonlyArray<Case> = [
 
         yield* session.observe();
         yield* session.detach;
-        yield* session.reconnect(true);
+        const inventory = yield* session.reconnect(true);
+        const [info] = inventory.pages;
+
+        assert.ok(info !== undefined);
+        const fresh = yield* session.page(info);
+
+        assert.equal((yield* fresh.controls.observe()).text, "initial");
         assert.equal(connections.length, 2);
         // The original issuance is a lifetime fact. Reading it after reconnection must not
         // replace the fresh inventory with authority made from the old connection's target.
@@ -70,15 +76,9 @@ const recoveryCases: ReadonlyArray<Case> = [
           assert.equal(stale.failure.reason._tag, "Stale");
           assert.equal(stale.failure.outcome, "undispatched");
         }
-        const [info] = yield* session.pages;
-
-        assert.ok(info !== undefined);
-        const fresh = yield* session.page(info);
-
         assert.notEqual(fresh.record, initial.record);
         assert.ok(fresh.record.identity.generation > initial.record.identity.generation);
         assert.equal((yield* fresh.status).phase, "open");
-        assert.equal((yield* fresh.controls.observe()).text, "initial");
         connections[0]!.disconnected();
         assert.equal(yield* session.operations.readText(), "initial");
         assert.equal(f.state.connects, 2);
@@ -106,7 +106,8 @@ const recoveryCases: ReadonlyArray<Case> = [
 
         yield* session.observe();
         yield* session.detach;
-        const fresh = yield* session.reconnect(true);
+        yield* session.reconnect(true);
+        const fresh = yield* session.observe();
 
         connections[0]!.invalidate("target-changed");
         assert.equal((yield* session.observe()).revision, fresh.revision);
@@ -133,6 +134,7 @@ const recoveryCases: ReadonlyArray<Case> = [
         yield* session.observe();
         yield* session.detach;
         yield* session.reconnect(true);
+        yield* session.observe();
         connections[0]!.pause();
         connections[0]!.fault({ source: "native", reason: "connection", disposition: "unknown" });
         assert.equal(yield* session.operations.readText(), "initial");

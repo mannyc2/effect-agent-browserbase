@@ -63,9 +63,11 @@ export interface ReadTicket {
 /** One admitted native operation; checks at dispatch also fence late Promise continuations. */
 export interface Ticket extends ReadTicket {
   readonly dispatched: boolean;
+  readonly phase?: "Prepared" | "Dispatched" | "Acknowledged" | "FollowUp" | "Terminal";
   dispatch(): void;
   /** Called only for positive completion of all native commands in the current mutation phase. */
   acknowledge?(): void;
+  followUp?(): void;
 }
 
 /** The driver retires native capacity only after its wait and required handle disposal settle. */
@@ -121,6 +123,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   let active: AbortController | undefined;
   let activeScope: ObservationScope | undefined;
   let holdingPermit = false;
+  let admissionBlocked = false;
 
   let waiting:
     | {
@@ -456,6 +459,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly charge?: boolean | "host-read";
       readonly mutation?: boolean;
       readonly mutationScope?: () => ObservationScope;
+      /** Exact work attribution can remain page-local while a form preserves its observations. */
+      readonly targetScope?: () => ObservationScope;
       readonly phases?: ReadonlyArray<Phase>;
       readonly verifyAfter?: boolean;
       readonly preflight?: Effect.Effect<void, BrowserError>;
@@ -493,13 +498,19 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
       const work = Effect.gen(function* () {
         holdingPermit = true;
-        if (!(options.phases ?? ["open"]).includes(state.phase) || policies.size > 0) {
+        if (
+          !(options.phases ?? ["open"]).includes(state.phase) ||
+          policies.size > 0 ||
+          admissionBlocked
+        ) {
           return yield* BrowserError.make({
             operation,
             reason:
               terminalReason === "expired"
                 ? Reasons.Expired.make({})
-                : state.phase === "paused" || (terminalReason === null && policies.size > 0)
+                : state.phase === "paused" ||
+                    admissionBlocked ||
+                    (terminalReason === null && policies.size > 0)
                   ? Reasons.Busy.make({})
                   : Reasons.Closed.make({}),
             outcome: "undispatched",
@@ -555,9 +566,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         const controller = new AbortController();
 
         active = controller;
-        activeScope = options.mutationScope?.();
+        activeScope = options.targetScope?.() ?? options.mutationScope?.();
         let dispatched = false;
         let pending = false;
+        let phase: NonNullable<Ticket["phase"]> = "Prepared";
+        let unknownDecided = false;
         let containment: Containment = { _tag: "NotRequired" };
         const generation = state.generation;
         const allowed = options.phases ?? ["open"];
@@ -572,14 +585,16 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             throw BrowserError.make({
               operation,
               reason: Reasons.Stale.make({}),
-              outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
+              outcome:
+                pending || unknownDecided ? "unknown" : dispatched ? "performed" : "undispatched",
             });
           }
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= deadline)
             throw BrowserError.make({
               operation,
               reason: Reasons.Timeout.make({}),
-              outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
+              outcome:
+                pending || unknownDecided ? "unknown" : dispatched ? "performed" : "undispatched",
             });
         };
 
@@ -592,6 +607,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           get dispatched() {
             return dispatched;
           },
+          get phase() {
+            return phase;
+          },
           check,
           dispatch() {
             check();
@@ -599,7 +617,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               invalidate("observation", options.mutationScope?.() ?? "all");
             dispatched = true;
             pending = true;
-            const scope = options.mutationScope?.();
+            phase = "Dispatched";
+            const scope = options.targetScope?.() ?? options.mutationScope?.();
 
             unresolved.set(
               controller,
@@ -608,10 +627,21 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           },
           acknowledge() {
             pending = false;
-            unresolved.delete(controller);
+            if (phase !== "Terminal") phase = "Acknowledged";
+            if (!unknownDecided) unresolved.delete(controller);
+          },
+          followUp() {
+            if (phase === "Acknowledged") phase = "FollowUp";
           },
         };
 
+        // A revocation freezes the pending attempt synchronously, before a late native
+        // acknowledgement can run and before the interrupted Effect resumes its handler.
+        const freezeUnknown = () => {
+          if (phase !== "Terminal" && pending) unknownDecided = true;
+        };
+
+        controller.signal.addEventListener("abort", freezeUnknown, { once: true });
         admitted = ticket;
 
         // Dispatched work this admission gave up on, whose outcome no fence has decided yet.
@@ -621,9 +651,14 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           // The action timer can win the same instant as the independent lifetime timer.
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
           controller.abort();
-          if (pending) {
+          if (pending || unknownDecided) {
+            unknownDecided = true;
             if (state.generation === generation && state.phase === "open") abandoned = true;
-            else containment = { _tag: "SessionFenced", generation: state.generation };
+            else {
+              if (state.phase === "paused" || state.phase === "acquiring")
+                fence("uncertain", "uncertain");
+              containment = { _tag: "SessionFenced", generation: state.generation };
+            }
           }
         };
 
@@ -658,7 +693,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           return BrowserError.make({
             operation,
             reason: Reasons.Timeout.make({}),
-            outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
+            outcome:
+              pending || unknownDecided ? "unknown" : dispatched ? "performed" : "undispatched",
           });
         }).pipe(
           Effect.tap(() =>
@@ -670,20 +706,26 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                     BrowserError.make({
                       operation,
                       reason: Reasons.Stale.make({}),
-                      outcome: pending ? "unknown" : dispatched ? "performed" : "undispatched",
+                      outcome:
+                        pending || unknownDecided
+                          ? "unknown"
+                          : dispatched
+                            ? "performed"
+                            : "undispatched",
                     }),
                 }),
           ),
           Effect.catch((error): Effect.Effect<never, E | BrowserError> => {
-            const outcome = pending
-              ? "unknown"
-              : dispatched
-                ? "performed"
-                : Schema.is(BrowserError)(error)
-                  ? error.outcome
-                  : "undispatched";
+            const outcome =
+              pending || unknownDecided
+                ? "unknown"
+                : dispatched
+                  ? "performed"
+                  : Schema.is(BrowserError)(error)
+                    ? error.outcome
+                    : "undispatched";
 
-            if (pending) abandon();
+            if (pending || unknownDecided) abandon();
 
             // The permit adds dispatch evidence only to browser-operation errors. Typed
             // initialization/consumer failures retain their identity and original family.
@@ -696,7 +738,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
                           operation,
                           reason: error.reason,
                           outcome,
-                          containment,
+                          containment:
+                            containment._tag === "NotRequired"
+                              ? (error.containment ?? containment)
+                              : containment,
                         }),
                       )
                     : Effect.fail(error),
@@ -708,6 +753,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
           Effect.ensuring(
             Effect.sync(() => {
+              phase = "Terminal";
+              controller.signal.removeEventListener("abort", freezeUnknown);
               controller.abort();
               if (active === controller) {
                 active = undefined;
@@ -755,6 +802,18 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     guard,
     reserve,
     contain,
+    pauseAdmission: () => {
+      admissionBlocked = true;
+    },
+    resumeAdmission: () => {
+      admissionBlocked = false;
+    },
+    drained: () =>
+      !nativeUncertainty &&
+      unresolved.size === 0 &&
+      reservations.size === 0 &&
+      waiting === undefined &&
+      policies.size === 0,
     reserved: (key: string): boolean => reservations.has(key),
     revokePage: (pageId: string) => {
       if (

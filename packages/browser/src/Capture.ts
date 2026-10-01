@@ -15,6 +15,7 @@ import { startCapture } from "./internal/capture/Capture.ts";
 export {
   CapturedFrame,
   CaptureOptions,
+  CaptureQualification,
   CaptureSize,
   CaptureSnapshot,
   CaptureSummary,

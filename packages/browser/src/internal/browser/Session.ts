@@ -16,6 +16,7 @@ import {
   type FillFormRequest,
   type FrameInfo,
   type InputReceipt,
+  Inventory,
   type KeyModifier,
   Observation,
   type ObservedElement,
@@ -282,7 +283,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly identity: Target;
       readonly info: PageInfo;
       readonly frames: Map<string, { detached: boolean }>;
-      phase: "open" | "closing" | "closed";
+      phase: "open" | "paused" | "closing" | "closed";
       containment: PageStatus["containment"];
       attempt?: Deferred.Deferred<boolean>;
     }
@@ -291,8 +292,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   let initialTarget: DriverTarget | undefined;
   let initialInfo: PageInfo | undefined;
   let initialAuthority: ReturnType<typeof registerPage> | undefined;
+  const pausedPages = new Set<string>();
 
   const pageClosed = (pageId: string) => {
+    pausedPages.delete(pageId);
     driver?.retireInitializationPage?.(pageId);
     activeBindings?.retirePage(pageId);
     const page = pages.get(pageId);
@@ -322,11 +325,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const revokePage = (pageId: string) => {
     const page = pages.get(pageId);
 
-    if (page !== undefined && page.phase === "open") page.phase = "closing";
+    if (page !== undefined && page.phase !== "closed") page.phase = "closing";
     owner.revokePage(pageId);
     activeBindings?.fencePage(pageId);
     driver?.fenceInitializationPage?.(pageId);
     owner.invalidate("closed", { pageId });
+  };
+
+  const restorePageAuthority = (pageId: string) => {
+    pausedPages.delete(pageId);
+    driver?.restoreInitializationPage?.(pageId);
+    activeBindings?.resumePage(pageId);
   };
 
   const fenceBindings = () => {
@@ -375,13 +384,39 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             outcome: "undispatched",
           });
         const binding = await driver.capture(requested);
+        const generation = owner.state.generation;
+
+        const target = Target.make({
+          generation,
+          pageId: binding.pageId,
+          frameId: binding.frameId,
+        });
+
+        const authority =
+          pages.get(binding.pageId) ??
+          registerPage(
+            requested ?? {
+              pageId: binding.pageId,
+              targetId: binding.targetId,
+              url: "",
+              title: "",
+              selected: true,
+            },
+            target,
+            generation,
+          ).record;
 
         return {
           key: binding.targetId,
-          target: Target.make({
-            generation: owner.state.generation,
-            pageId: binding.pageId,
-            frameId: binding.frameId,
+          target,
+          status: () => ({
+            phase:
+              authority.phase === "closed"
+                ? "closed"
+                : generation !== owner.state.generation
+                  ? "stale"
+                  : authority.phase,
+            containment: authority.containment,
           }),
           source: binding.source,
         };
@@ -397,8 +432,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         page.containment = { _tag: "SessionFenced", generation: owner.state.generation };
     if (scope === "all" && ["paused", "disconnected", "uncertain", "closed"].includes(reason))
       pages.clear();
-    if (["disconnected", "uncertain", "closed"].includes(reason) && scope === "all")
+    if (["disconnected", "uncertain", "closed"].includes(reason) && scope === "all") {
+      pausedPages.clear();
       fenceBindings();
+    }
     if (["paused", "disconnected", "uncertain", "closed"].includes(reason)) {
       if (reason !== "paused" && scope !== "all" && scope !== "none")
         activeBindings?.fencePage(scope.pageId);
@@ -523,11 +560,28 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         owner.terminate("disconnected", "unknown", generation);
       }
     },
-    pause: (reason = "dialog") => {
+    pause: (reason = "dialog", pageId) => {
       if (activeConnection !== connectionLease) return;
       const trigger = reason === "popup" ? "popup-policy" : "dialog-policy";
 
       owner.record(trigger, "confirmed", generation);
+      if (pageId !== undefined && owner.state.phase === "open") {
+        if (!pausedPages.has(pageId) && pausedPages.size >= options.driver.maxPages) {
+          owner.terminate(trigger, "unknown", generation);
+
+          return;
+        }
+        pausedPages.add(pageId);
+        const page = pages.get(pageId);
+
+        if (page !== undefined && page.phase === "open") page.phase = "paused";
+        activeBindings?.fencePage(pageId);
+        driver?.fenceInitializationPage?.(pageId);
+        owner.revokePage(pageId);
+        owner.invalidate("paused", { pageId });
+
+        return;
+      }
       if (owner.state.phase === "open") owner.fence("paused", "paused", trigger);
       // An unsolicited popup/dialog during setup cannot be silently admitted by
       // the later connect commit. No usable handle has been exposed: fail closed.
@@ -941,6 +995,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       /** Waits its turn for the permit instead of refusing `busy`. */
       readonly queue?: boolean;
       readonly mutationScope?: () => ObservationScope;
+      readonly targetScope?: () => ObservationScope;
       readonly preflight?: Effect.Effect<void, BrowserError>;
       readonly target?: DriverTarget;
       readonly generation?: number;
@@ -978,6 +1033,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             }),
           {
             ...options,
+            targetScope:
+              options.targetScope ??
+              (() =>
+                options.target !== undefined
+                  ? { pageId: options.target.pageId }
+                  : options.containPageId !== undefined
+                    ? { pageId: options.containPageId }
+                    : "none"),
             mutationScope:
               options.mutationScope ??
               (() => {
@@ -2095,6 +2158,21 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             anyPage: true,
             containPageId: page.pageId,
             ...bound,
+            // Cleanup remains available to the original quarantined Page. It never grants
+            // input authority or substitutes a newly registered record for this one.
+            validate: Effect.suspend(() =>
+              authority !== undefined &&
+              (pages.get(page.pageId) !== authority ||
+                (authority.phase !== "open" && authority.phase !== "paused"))
+                ? Effect.fail(
+                    BrowserError.make({
+                      operation: "close-page",
+                      reason: Reasons.Stale.make({}),
+                      outcome: "undispatched",
+                    }),
+                  )
+                : checkTarget(target, generation),
+            ),
             ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
           },
         ),
@@ -2167,7 +2245,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         identity: Target.make({ generation, ...target }),
         info,
         frames: new Map(),
-        phase: "open",
+        phase: pausedPages.has(info.pageId) ? "paused" : "open",
         containment: { _tag: "NotRequired" },
       };
       pages.set(info.pageId, page);
@@ -2206,17 +2284,33 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   // A generation change retires every issued capability. Rebuild from the same live connection
   // while the lifecycle permit is still held, before new operations can be admitted.
-  const refreshPages = (ticket: Ticket) =>
+  const refreshPages = (ticket: Ticket, restore = false) =>
     native("list-pages", ticket, async () => {
       const current = getDriver();
       const inventory = await current.listPages(ticket);
+      const resolved = [];
 
       for (const info of inventory) {
         const target = await current.resolvePage(info, ticket);
 
         ticket.check();
+        resolved.push({ info, target });
+      }
+      ticket.check();
+
+      const fresh = Inventory.make({
+        generation: ticket.generation,
+        pages: Object.freeze(inventory.map((info) => Object.freeze({ ...info }))),
+      });
+
+      for (const { info, target } of resolved) {
+        if (restore) {
+          restorePageAuthority(info.pageId);
+        }
         registerPage(info, target, ticket.generation);
       }
+
+      return Object.freeze(fresh);
     });
 
   const initialPage = () => {
@@ -2384,7 +2478,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     beginHandoff: <A>(issue: Effect.Effect<A, BrowserError>) =>
       owner.guard(
         "handoff",
-        () =>
+        (ticket) =>
           Effect.gen(function* () {
             if (options.driver.pageControl)
               return yield* BrowserError.make({
@@ -2395,7 +2489,71 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             // Drawn before the fence, so the pause and the token that ends it commit together.
             const token = handoffToken ?? (yield* uuid);
 
-            if (owner.state.phase === "open") owner.fence("paused", "paused", "handoff");
+            if (owner.state.phase === "open") {
+              // Stop new admission without invalidating original work that can still settle.
+              owner.pauseAdmission();
+              activeBindings?.pauseAdmission();
+
+              const deadline = Math.min(
+                ticket.deadline,
+                Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + 3000,
+              );
+
+              let drained = false;
+
+              yield* Effect.gen(function* () {
+                yield* Effect.forEach([...capture.captureLeases.values()], (lease) => lease.stop, {
+                  discard: true,
+                });
+                while (
+                  !owner.drained() ||
+                  activeBindings?.drained() === false ||
+                  getDriver().handoffDrained?.() === false ||
+                  capture.captureLeases.size !== 0 ||
+                  stopSetupPending !== undefined ||
+                  pendingPageFaults.size !== 0
+                )
+                  yield* Effect.sleep(10);
+                if (owner.state.phase !== "open")
+                  return yield* BrowserError.make({
+                    operation: "handoff",
+                    reason: Reasons.Closed.make({}),
+                    outcome: "undispatched",
+                    containment: { _tag: "SessionFenced", generation: owner.state.generation },
+                  });
+                drained = true;
+                owner.fence("paused", "paused", "handoff");
+              }).pipe(
+                (drain) =>
+                  within(drain, deadline, () =>
+                    BrowserError.make({
+                      operation: "handoff",
+                      reason: Reasons.Timeout.make({}),
+                      outcome: "undispatched",
+                    }),
+                  ),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    owner.resumeAdmission();
+                    if (!drained) {
+                      if (owner.state.phase === "open" || owner.state.phase === "paused")
+                        owner.terminate("native-failure", "unknown");
+                      activeBindings?.close();
+                    }
+                  }),
+                ),
+                Effect.mapError((error) =>
+                  BrowserError.make({
+                    operation: "handoff",
+                    reason: error.reason,
+                    outcome: error.outcome,
+                    containment: drained
+                      ? error.containment
+                      : { _tag: "SessionFenced", generation: owner.state.generation },
+                  }),
+                ),
+              );
+            }
             handoffToken ??= token;
             // A refused authorization leaves automation paused until explicit operator release.
             const view = yield* issue;
@@ -2421,15 +2579,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               });
             }
             yield* native("resume", ticket, () => getDriver().dismissDialogs(ticket));
-            const observation = yield* observeInside(ticket, undefined, undefined, false);
+            const inventory = yield* refreshPages(ticket, true);
 
-            yield* refreshPages(ticket);
-
-            // This synchronous commit remains under the same permit as the fresh observation.
+            // The fresh registry and phase commit share the lifecycle permit. Reading content
+            // remains an explicit operation on a newly acquired Page.
+            activeBindings?.resumeAdmission();
             owner.transition("open");
             handoffToken = undefined;
 
-            return observation;
+            return inventory;
           }),
         { charge: false, phases: ["paused"], verifyAfter: false },
       ),
@@ -2445,6 +2603,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 outcome: "undispatched",
               });
             reconnectTarget = yield* native("detach", ticket, () => getDriver().selectedTargetId());
+            const inventory = yield* refreshPages(ticket);
+
+            if (!inventory.pages.some((info) => info.targetId === reconnectTarget))
+              return yield* BrowserError.make({
+                operation: "detach",
+                reason: Reasons.Stale.make({}),
+                outcome: "undispatched",
+              });
             const attached = getDriver();
 
             activeConnection = undefined;
@@ -2466,7 +2632,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               return yield* Effect.failCause(initialization.cause);
             if (Exit.isFailure(disconnected)) return yield* Effect.failCause(disconnected.cause);
 
-            return { reference: ref, targetId: reconnectTarget };
+            return { reference: ref, targetId: reconnectTarget, inventory };
           }),
         { charge: false, verifyAfter: false },
       )
@@ -2500,13 +2666,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 newPage: false,
                 preserveViewport: true,
               });
-              const observation = yield* observeInside(ticket, undefined, undefined, false);
-
-              yield* refreshPages(ticket);
+              const inventory = yield* refreshPages(ticket);
 
               owner.transition("open");
 
-              return observation;
+              return inventory;
             }),
           { charge: false, phases: ["detached", "acquiring"], verifyAfter: false },
         )

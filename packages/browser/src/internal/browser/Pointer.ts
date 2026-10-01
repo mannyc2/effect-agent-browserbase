@@ -142,6 +142,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       ticket.dispatch();
       await moveTo(page, point);
       ticket.acknowledge?.();
+      ticket.followUp?.();
       ticket.check();
 
       return receipt(page);
@@ -253,6 +254,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
       // Dispatched, not awaited: Chromium scrolls afterwards, on its own schedule.
       await page.mouse.wheel(deltaX, deltaY);
       ticket.acknowledge?.();
+      ticket.followUp?.();
       ticket.check();
 
       return receipt(page);

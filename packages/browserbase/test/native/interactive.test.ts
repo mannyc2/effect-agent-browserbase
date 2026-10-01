@@ -227,56 +227,67 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
   ),
 );
 
-it.live(
-  "real CDP: human takeover, atomic fresh observation and explicit keep-alive reconnect",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* localBrowser;
+it.live("real CDP: human takeover, fresh page inventory and explicit keep-alive reconnect", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* localBrowser;
 
-        yield* withProvider(
-          f,
-          Effect.gen(function* () {
-            const session = yield* (yield* BrowserbaseBrowser).open(policy);
-            const old = yield* session.retain;
+      yield* withProvider(
+        f,
+        Effect.gen(function* () {
+          const session = yield* (yield* BrowserbaseBrowser).open(policy);
+          const old = yield* session.retain;
 
-            yield* old.navigate(NavigateRequest.make({ url: f.url }));
-            const handoff = yield* session.beginHandoff();
+          yield* old.navigate(NavigateRequest.make({ url: f.url }));
+          const handoff = yield* session.beginHandoff();
 
-            expect(JSON.stringify(handoff)).not.toContain("token=fixture");
-            expect(
-              (yield* old.click(ClickRequest.make({ selector: "#increment" })).pipe(Effect.result))
-                ._tag,
-            ).toBe("Failure");
-            // A separate native client stands in for an operator, not provider Live View.
-            yield* Effect.promise(() =>
-              f.human(session.reference.sessionId, (page) =>
-                page.locator("#name").fill("human result"),
-              ),
-            );
-            const resumed = yield* session.resume(handoff.token, true);
+          expect(JSON.stringify(handoff)).not.toContain("token=fixture");
+          expect(
+            (yield* old.click(ClickRequest.make({ selector: "#increment" })).pipe(Effect.result))
+              ._tag,
+          ).toBe("Failure");
+          // A separate native client stands in for an operator, not provider Live View.
+          yield* Effect.promise(() =>
+            f.human(session.reference.sessionId, (page) =>
+              page.locator("#name").fill("human result"),
+            ),
+          );
+          const resumed = yield* session.resume(handoff.token, true);
 
-            expect(resumed.text).toContain("human result");
-            expect((yield* old.readText(ReadTextRequest.make({})).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
-            yield* session.detach;
-            yield* Effect.promise(() =>
-              f.human(session.reference.sessionId, (page) =>
-                page.locator("#name").fill("detached result"),
-              ),
-            );
-            const reconnected = yield* session.reconnect(true);
+          expect(resumed.pages).toHaveLength(1);
+          expect(resumed.generation).toBe((yield* session.status).generation);
+          const resumedPage = yield* session.page(resumed.pages[0]!);
 
-            expect(reconnected.text).toContain("detached result");
-            expect(f.connections).toEqual(["session-1", "session-1"]);
-            yield* session.click(ClickRequest.make({ selector: "#increment" }));
-          }),
-          { launch: { ...localLaunch, keepAlive: true } },
-        );
-        expect(f.releaseIds).toEqual(["session-1"]);
-      }),
-    ),
+          expect((yield* resumedPage.observe()).text).toContain("human result");
+          expect((yield* old.readText(ReadTextRequest.make({})).pipe(Effect.result))._tag).toBe(
+            "Failure",
+          );
+          const detached = yield* session.detach;
+
+          expect(detached.inventory.pages.map((page) => page.targetId)).toEqual([
+            detached.targetId,
+          ]);
+          yield* Effect.promise(() =>
+            f.human(session.reference.sessionId, (page) =>
+              page.locator("#name").fill("detached result"),
+            ),
+          );
+          const reconnected = yield* session.reconnect(true);
+
+          expect(reconnected.pages).toHaveLength(1);
+          expect(reconnected.generation).toBe((yield* session.status).generation);
+          expect(reconnected.pages[0]?.targetId).toBe(detached.targetId);
+          const reconnectedPage = yield* session.page(reconnected.pages[0]!);
+
+          expect((yield* reconnectedPage.observe()).text).toContain("detached result");
+          expect(f.connections).toEqual(["session-1", "session-1"]);
+          yield* session.click(ClickRequest.make({ selector: "#increment" }));
+        }),
+        { launch: { ...localLaunch, keepAlive: true } },
+      );
+      expect(f.releaseIds).toEqual(["session-1"]);
+    }),
+  ),
 );
 
 it.live(

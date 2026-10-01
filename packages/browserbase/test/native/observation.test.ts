@@ -648,7 +648,12 @@ it.live("real CDP: reconnect cannot substitute a new node for an old observation
           const reference = yield* named(session, "User");
 
           yield* session.detach;
-          const fresh = yield* session.reconnect(true);
+          const inventory = yield* session.reconnect(true);
+          const [info] = inventory.pages;
+
+          assert.ok(info !== undefined);
+          const page = yield* session.page(info);
+          const fresh = yield* page.observe();
           const control = fresh.controls.find((control) => control.label === "User");
 
           assert.ok(control);

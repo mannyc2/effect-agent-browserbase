@@ -136,13 +136,14 @@ export const makePlaywrightDriver = async (
             await pageControl.execution(entry);
           });
         if (initialized) initialization.attachPage(entry.page);
-        if (initialized && !created && options.popupPolicy === "pause") events.pause("popup");
+        if (initialized && !created && options.popupPolicy === "pause")
+          events.pause("popup", entry.id);
       },
       external: (entry) => {
         if (!initialized) return;
         if (options.popupPolicy === "close")
           void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
-        else if (options.popupPolicy === "pause") events.pause("popup");
+        else if (options.popupPolicy === "pause") events.pause("popup", entry.id);
       },
       overflow: (entry) => {
         if (options.popupPolicy === "close")
@@ -195,8 +196,8 @@ export const makePlaywrightDriver = async (
           });
         else {
           dialogs.set(dialog, beforeUnload);
-          observation.invalidate();
-          events.pause("dialog");
+          observation.invalidate({ pageId: entry.id });
+          events.pause("dialog", entry.id);
         }
       },
       changed: (reason, scope) => observation.changed(reason, scope),
@@ -384,6 +385,10 @@ export const makePlaywrightDriver = async (
             settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
           });
 
+          if (disposition === "confirmed") {
+            ticket.acknowledge?.();
+            ticket.followUp?.();
+          }
           ticket.check();
           if (disposition !== "confirmed")
             throw failure(
@@ -397,6 +402,13 @@ export const makePlaywrightDriver = async (
     invalidateObservation: observation.invalidate,
     fenceInitialization: initialization.fence,
     fenceInitializationPage: initialization.fencePage,
+    restoreInitializationPage: initialization.restorePage,
+    handoffDrained: () =>
+      initialization.drained() &&
+      callbacks.drained() &&
+      policyCleanup.drained() &&
+      observation.drained() &&
+      keyboard.drained(),
     retireInitializationPage: initialization.retirePage,
     disposeInitialization: initialization.dispose,
     disconnect: () =>

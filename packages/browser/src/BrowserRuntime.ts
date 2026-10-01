@@ -8,9 +8,9 @@ import {
   BrowserPolicy,
   ClickRequest,
   Identifier,
+  type Inventory,
   InlineFiles,
   type InlineFile,
-  type Observation,
   SafeFilename,
   Selector,
   Viewport,
@@ -178,14 +178,14 @@ export interface Integration<Reference> extends TransferOperations {
   readonly resume: (
     token: Redacted.Redacted<string>,
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError>;
+  ) => Effect.Effect<Inventory, BrowserError>;
   readonly detach: Effect.Effect<
-    { readonly reference: Reference; readonly targetId: string },
+    { readonly reference: Reference; readonly targetId: string; readonly inventory: Inventory },
     BrowserError
   >;
   readonly reconnect: (
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError | InitializationError>;
+  ) => Effect.Effect<Inventory, BrowserError | InitializationError>;
 }
 
 export interface Connection<Reference, E = never> {

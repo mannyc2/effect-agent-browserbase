@@ -348,6 +348,7 @@ export const makeActions = (
       const result = await action(element, admitted);
 
       ticket.acknowledge?.();
+      ticket.followUp?.();
 
       return result;
     } finally {
@@ -388,6 +389,7 @@ export const makeActions = (
       invalidatePointer(page);
       await element.click({ timeout: timeout(ticket) });
       ticket.acknowledge?.();
+      ticket.followUp?.();
     };
 
     return capture === undefined
@@ -475,6 +477,7 @@ export const makeActions = (
       ticket.dispatch();
       await cdp.send("DOM.setFileInputFiles", { files: [...paths], nodeId });
       ticket.acknowledge?.();
+      ticket.followUp?.();
     } finally {
       await closeWithin(() => cdp.detach()).catch(() => {});
     }
@@ -607,6 +610,7 @@ export const makeActions = (
             });
 
             ticket.acknowledge?.();
+            ticket.followUp?.();
             const expected = [...admitted.values].sort();
 
             if (
@@ -644,6 +648,7 @@ export const makeActions = (
                 node.blur();
             });
             ticket.acknowledge?.();
+            ticket.followUp?.();
           };
         }
         check();
@@ -722,6 +727,7 @@ export const makeActions = (
           const values = await element.selectOption(admitted.handles, { timeout: timeout(ticket) });
 
           ticket.acknowledge?.();
+          ticket.followUp?.();
           const expected = [...admitted.values].sort();
 
           if (
@@ -748,6 +754,7 @@ export const makeActions = (
         { x: deltaX, y: deltaY },
       );
       ticket.acknowledge?.();
+      ticket.followUp?.();
       ticket.check();
 
       return postUrl(target);
@@ -979,6 +986,7 @@ export const makeActions = (
         ticket.dispatch();
         await chooser.setFiles(selection.payload, { timeout: timeout(ticket) });
         ticket.acknowledge?.();
+        ticket.followUp?.();
         ticket.check();
 
         return postUrl(browserTarget);
