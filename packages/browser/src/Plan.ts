@@ -5,6 +5,7 @@ import type { CheckpointOptions } from "./BrowserData.ts";
 import type { BrowserError } from "./Errors.ts";
 import { guardedDecode } from "./internal/browser/PlanInput.ts";
 import { checkedRunOptions } from "./internal/browser/PlanOptions.ts";
+import { namedInputs } from "./internal/browser/Recording.ts";
 import {
   type AttemptSnapshot,
   type InputBindings,
@@ -81,6 +82,22 @@ export const encode = (value: Plan) =>
   guardedDecode(Plan)(value, { onExcessProperty: "error" }).pipe(
     Effect.flatMap(Schema.encodeEffect(Plan)),
   );
+
+/** A named input a plan reads: the step and action path that read it, and how it is used. */
+export interface InputSlot {
+  readonly name: string;
+  readonly stepId: string;
+  readonly path: ReadonlyArray<string>;
+  /** `text` is typed key by key into focus; `value` replaces a field's whole contents. */
+  readonly kind: "text" | "value";
+}
+
+/**
+ * The named inputs a stored or live plan reads, in step order. A recorded plan's literal fill and
+ * type values are such slots; bind each `name` in `inputs` to replay it.
+ */
+export const inputSlots = (plan: Plan | LivePlan): ReadonlyArray<InputSlot> =>
+  namedInputs(plan.steps);
 
 /**
  * Project only acknowledged, faithfully captured intent. An explicitly chosen completed prefix

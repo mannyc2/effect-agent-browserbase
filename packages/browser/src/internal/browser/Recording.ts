@@ -111,6 +111,35 @@ const inputPaths = (action: Action): ReadonlyArray<InputPath> => {
   }
 };
 
+/** One named input use: the step and action path that read it, and how its value is used. */
+export interface NamedInput {
+  readonly name: string;
+  readonly stepId: string;
+  readonly path: ReadonlyArray<string>;
+  readonly kind: "text" | "value";
+}
+
+/** Every named input the steps read, in step and action order; literal values are not inputs. */
+export const namedInputs = (
+  steps: ReadonlyArray<{ readonly id: string; readonly action: Action }>,
+): ReadonlyArray<NamedInput> =>
+  Object.freeze(
+    steps.flatMap((step) =>
+      inputPaths(step.action).flatMap((input) =>
+        input.value._tag === "Input"
+          ? [
+              Object.freeze({
+                name: input.value.name,
+                stepId: step.id,
+                path: Object.freeze([...input.path]),
+                kind: input.typed ? ("text" as const) : ("value" as const),
+              }),
+            ]
+          : [],
+      ),
+    ),
+  );
+
 /** Length-prefixed segments cannot alias another step/path, including nested form values. */
 export const pathKey = (path: ReadonlyArray<string>): string =>
   path.map((part) => `${part.length}_${part}`).join("_");
