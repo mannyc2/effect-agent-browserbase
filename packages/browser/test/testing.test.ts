@@ -827,6 +827,47 @@ it.effect("page holds refuse input on the held page until it is resumed and reva
   ),
 );
 
+it.effect("a plan's scroll to a target refuses a held page before resolving anything on it", () =>
+  Browser.scoped(Testing.open(shop, { automation: { pageControl: true } }), (browser) =>
+    Effect.gen(function* () {
+      const page = (yield* browser.listPages()).find((candidate) => candidate.selected);
+
+      expect(page).toBeDefined();
+      if (page === undefined) return;
+      const held = yield* PageControl.suspend(yield* browser.page(page));
+      const before = (yield* browser.control.calls).length;
+
+      const failed = yield* browser.initialPage
+        .run({
+          version: 1,
+          steps: [
+            {
+              id: "show-name",
+              action: {
+                _tag: "Scroll",
+                mode: {
+                  _tag: "To",
+                  target: {
+                    _tag: "Descriptor",
+                    descriptor: { kind: "input", label: "Name", matchScope: "document" },
+                  },
+                },
+              },
+            },
+          ],
+        })
+        .pipe(Effect.flip);
+
+      // A held page is refused, never woken: nothing is resolved or scrolled on it.
+      expect(failed).toMatchObject({
+        error: { reason: { _tag: "Busy" }, outcome: "undispatched" },
+      });
+      expect((yield* browser.control.calls).slice(before)).toEqual([]);
+      yield* PageControl.resume(browser.initialPage, held);
+    }),
+  ),
+);
+
 it.effect("issued Pages can be created, selected for display and closed independently", () =>
   Browser.scoped(Testing.open(shop, { automation: { maxPages: 2 } }), (browser) =>
     Effect.gen(function* () {

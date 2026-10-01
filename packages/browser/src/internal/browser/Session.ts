@@ -1300,6 +1300,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     "run",
                     "settled",
                     "resize",
+                    "scroll",
                     "wait",
                     "click-and-wait",
                     "download-action",
