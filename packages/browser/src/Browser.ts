@@ -41,7 +41,10 @@ import type {
 } from "./BrowserData.ts";
 import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
 
-/** Host-only admission. Omission or zero fails immediately; positive finite duration queues FIFO. */
+/**
+ * Host-only ordinary admission. Omission or zero fails immediately; positive finite duration
+ * queues FIFO. Page closure uses reserved fail-fast admission and a deadline-bounded shared close.
+ */
 export interface AdmissionOptions {
   readonly queue?: Duration.Input;
 }
@@ -124,6 +127,7 @@ export interface Page extends Frame {
     viewport: Viewport,
     options?: OperationOptions,
   ) => Effect.Effect<void, BrowserError>;
+  /** Reserved fail-fast admission; timeoutMillis bounds joining a close, not admission.queue. */
   readonly close: (options?: OperationOptions) => Effect.Effect<void, BrowserError>;
 }
 
@@ -401,6 +405,7 @@ export interface BrowserSession<E = never> extends TargetOperations {
    * pass a positive finite admission.queue to wait FIFO within the operation deadline.
    */
   readonly createPage: (options?: OperationOptions) => Effect.Effect<PageInfo, BrowserError>;
+  /** Reserved fail-fast admission; timeoutMillis bounds joining a close, not admission.queue. */
   readonly closePage: (
     page: PageInfo,
     options?: OperationOptions,
