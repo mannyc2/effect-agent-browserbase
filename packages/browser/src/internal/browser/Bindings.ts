@@ -39,7 +39,12 @@ export interface ConnectionBindings {
   readonly resumePage: (pageId: string) => void;
   readonly pauseAdmission: () => void;
   readonly resumeAdmission: () => void;
-  readonly drained: () => boolean;
+  /**
+   * Whether no accepted invocation is still outstanding. Work a page originated while that page is
+   * `held` (quarantined by a dialog or popup policy) cannot hold up the handoff that releases it:
+   * its reply is already fenced from the page.
+   */
+  readonly drained: (held?: (pageId: string) => boolean) => boolean;
   /** Positive native closure removes admission history; accepted late work stays accounted for. */
   readonly retirePage: (pageId: string) => void;
   /** Native registration/transport failure supervises the owner, not a single page invocation. */
@@ -143,6 +148,8 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
   const ownerScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
   const failure = yield* Deferred.make<never, E | InitializationError>();
   const connections = new Set<ConnectionBindings>();
+  // Every accepted invocation until it releases its capacity, across connections and bindings.
+  const outstanding = new Set<{ readonly call: NativeBindingCall }>();
   const failures: Array<Bootstrap.BindingFailure<E>> = [];
   let droppedFailures = 0;
   let faulted = false;
@@ -269,6 +276,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           state.inFlight--;
           state.retired--;
           owned.delete(work);
+          outstanding.delete(work);
         };
 
         const track = <A>(work: Work, promise: Promise<A>): Promise<A> => {
@@ -411,6 +419,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           };
 
           owned.add(work);
+          outstanding.add(work);
           const admission = runner.submit(work, "reject-call");
 
           if (admission._tag === "Rejected") {
@@ -480,8 +489,8 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
       resumeAdmission: () => {
         admitting = true;
       },
-      drained: () =>
-        entries.every(({ state }) => state.inFlight === 0 && state.pendingNative === 0),
+      drained: (held = () => false) =>
+        [...outstanding].every(({ call }) => call.pageId !== undefined && held(call.pageId)),
       retirePage: (pageId) => revokedPages.delete(pageId),
       reportFailure: (error) => {
         if (!current()) return;
