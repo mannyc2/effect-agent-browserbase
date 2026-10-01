@@ -60,6 +60,23 @@ const open = Effect.fnUntraced(function* () {
   return session.initialPage;
 });
 
+it.live("real CDP: a performed fill that cannot finish within its budget sends no input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const page = yield* open();
+
+      const failure = yield* page
+        .run(fill("a".repeat(200)), { style: { seed: 7 }, within: "1 second" })
+        .pipe(Effect.flip);
+
+      expect(failure).toMatchObject({
+        error: { reason: { _tag: "TimingBudgetExceeded" }, outcome: "undispatched" },
+      });
+      expect((yield* page.readText({ selector: "#mirror" })).text).toBe("");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
 it.live("real CDP: the timeline says which performed acknowledgements were preparatory", () =>
   Effect.scoped(
     Effect.gen(function* () {
