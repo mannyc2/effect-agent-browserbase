@@ -117,7 +117,7 @@ for (const strategy of ["sequential", "parallel"] as const) {
         yield* Scope.close(parent, Exit.void);
         assert.equal(yield* Effect.promise(() => reply), "rejected");
         assert.equal(state.finalizerSucceeded, false);
-        assert.equal(state.finalizerError?.reason._tag, "Stale");
+        assert.equal(state.finalizerError?.reason._tag, "Closed");
         assert.equal(state.finalizerError?.outcome, "undispatched");
         assert.equal(scripted.state.clicks, 0);
         assert.ok(order.indexOf("fence") < order.indexOf("callback-finalizer"));

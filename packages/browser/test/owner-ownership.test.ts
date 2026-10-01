@@ -164,7 +164,7 @@ const ownershipCases: ReadonlyArray<Case> = [
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(fiber);
-      yield* expectReason(session.initialPage().controls.operations.readText(), "Stale");
+      yield* expectReason(session.initialPage().controls.operations.readText(), "Closed");
       done.resolve();
       assert.equal(dispatches, 1);
     })),
@@ -227,11 +227,11 @@ const ownershipCases: ReadonlyArray<Case> = [
       yield* original.pointerMove({ x: 1, y: 2 });
       assert.deepEqual(f.state.input, ["move page-1 1,2"]);
       yield* authority.controls.closePage(authority.record.info);
-      yield* expectReason(original.pointerMove({ x: 1, y: 2 }), "Stale");
-      yield* expectReason(original.hover("#target"), "Stale");
-      yield* expectReason(original.wheel(0, 120), "Stale");
-      yield* expectReason(original.press("Enter", []), "Stale");
-      yield* expectReason(original.type("typed"), "Stale");
+      yield* expectReason(original.pointerMove({ x: 1, y: 2 }), "Closed");
+      yield* expectReason(original.hover("#target"), "Closed");
+      yield* expectReason(original.wheel(0, 120), "Closed");
+      yield* expectReason(original.press("Enter", []), "Closed");
+      yield* expectReason(original.type("typed"), "Closed");
       assert.deepEqual(f.state.input, ["move page-1 1,2"]);
       yield* scout.controls.operations.pointerMove({ x: 1, y: 2 });
       assert.deepEqual(f.state.input, ["move page-1 1,2", "move page-2 1,2"]);
@@ -476,7 +476,7 @@ const ownershipCases: ReadonlyArray<Case> = [
 
       yield* advance(80);
       yield* session.close;
-      yield* expectReason(session.initialPage().controls.operations.readText(), "Stale");
+      yield* expectReason(session.initialPage().controls.operations.readText(), "Expired");
       assert.equal((yield* session.status).reason, "expired");
       assert.equal((yield* session.status).unresolvedDispatch, false);
       assert.equal(f.state.localCloses, 1);

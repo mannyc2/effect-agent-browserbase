@@ -317,7 +317,7 @@ it.effect(
           yield* Effect.result(session.initialPage().controls.operations.click("#act")),
         ).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
         const before = yield* session.diagnostics;
 

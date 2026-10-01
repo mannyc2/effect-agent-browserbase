@@ -296,7 +296,7 @@ it.live("real CDP: a lost recovery stop acknowledgement fences without a second 
             yield* session.initialPage.click({ selector: "#act" }).pipe(Effect.result),
           ).toMatchObject({
             _tag: "Failure",
-            failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
           expect(stops.count()).toBe(1);
           expect(f.requests.filter((request) => request === "/slow")).toHaveLength(1);
@@ -344,7 +344,7 @@ it.live("real CDP: a pinned child timeout never sends an automatic page-wide sto
           expect(stops.count()).toBe(0);
           expect(yield* session.initialPage.readText({}).pipe(Effect.result)).toMatchObject({
             _tag: "Failure",
-            failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
           expect(f.requests.filter((request) => request === "/slow")).toHaveLength(1);
         }),

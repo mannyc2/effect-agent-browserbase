@@ -99,7 +99,7 @@ it.effect("adaptation authenticates the exact Session and Page when acquired", (
         });
       }
       yield* browser.initialPage.close();
-      expect(yield* pending.pipe(Effect.flip)).toMatchObject({ reason: { _tag: "Stale" } });
+      expect(yield* pending.pipe(Effect.flip)).toMatchObject({ reason: { _tag: "Closed" } });
 
       const context = yield* Layer.build(
         interactiveLayer({

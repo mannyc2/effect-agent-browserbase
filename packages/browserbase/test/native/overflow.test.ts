@@ -200,7 +200,7 @@ for (const acknowledge of [true, false]) {
                     yield* session.initialPage.click({ selector: "#next" }).pipe(Effect.result),
                   ).toMatchObject({
                     _tag: "Failure",
-                    failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+                    failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
                   });
                 }
                 expect(calls).toBe(1);

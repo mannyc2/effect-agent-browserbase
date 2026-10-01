@@ -88,7 +88,7 @@ it.live(
 
           expect(ended).toBeDefined();
           if (ended === undefined) return yield* Effect.die("Missing owned session");
-          expect((yield* ended.initialPage.observe().pipe(Effect.flip)).reason._tag).toBe("Stale");
+          expect((yield* ended.initialPage.observe().pipe(Effect.flip)).reason._tag).toBe("Closed");
         }
         expect(values).toEqual([7, 7]);
         expect(new Set(opened.map((session) => session.reference.id)).size).toBe(2);

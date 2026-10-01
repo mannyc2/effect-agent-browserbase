@@ -671,7 +671,7 @@ it.live.each(["page", "session"] as const)(
             ),
           ).toMatchObject({
             _tag: "Failure",
-            failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
         }
         yield* Deferred.await(watch.settled).pipe(Effect.timeout("5 seconds"));

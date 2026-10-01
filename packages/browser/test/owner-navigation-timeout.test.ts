@@ -190,7 +190,7 @@ it.effect.each(["recovery", "lifetime"] as const)(
         ).toMatchObject({
           _tag: "Failure",
           failure: {
-            reason: { _tag: "Stale" },
+            reason: { _tag: bound === "lifetime" ? "Expired" : "Closed" },
             outcome: "undispatched",
           },
         });
@@ -295,7 +295,7 @@ it.effect(
           yield* Effect.result(session.initialPage().controls.operations.click("#act")),
         ).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
         expect(f.state.clicks).toBe(0);
       }),
@@ -511,7 +511,7 @@ it.effect("a recovery acknowledgement past the absolute deadline cannot reopen o
         yield* Effect.result(session.initialPage().controls.operations.click("#act")),
       ).toMatchObject({
         _tag: "Failure",
-        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+        failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
       });
       expect(f.state.clicks).toBe(0);
     }),
@@ -551,7 +551,7 @@ it.effect("a failed recovery setup fences with the loading timeout and does not 
         yield* Effect.result(session.initialPage().controls.operations.readText()),
       ).toMatchObject({
         _tag: "Failure",
-        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+        failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
       });
     }),
   ),
@@ -605,7 +605,7 @@ it.effect.each(["child-timeout", "named-timeout", "replacement"] as const)(
           yield* Effect.result(session.initialPage().controls.operations.click("#act")),
         ).toMatchObject({
           _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+          failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
       }),
     ),

@@ -73,7 +73,7 @@ it.effect.each([false, true])(
       });
       expect(yield* Effect.result(session.initialPage.click({ selector: "#act" }))).toMatchObject({
         _tag: "Failure",
-        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+        failure: { reason: { _tag: "Expired" }, outcome: "undispatched" },
       });
       expect((yield* scripted.provider.sessions)[0]).toMatchObject({ releaseRequests: 1 });
       expect((yield* browser!.calls).filter((call) => call.operation === "click")).toEqual([]);

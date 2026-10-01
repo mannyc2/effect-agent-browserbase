@@ -144,7 +144,7 @@ it.effect.each(["before", "after"] as const)(
             yield* Effect.result(session.initialPage.selectOption(reference, ["element-1"])),
           ).toMatchObject({
             _tag: "Failure",
-            failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+            failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
           expect(dispatches).toBe(1);
         }

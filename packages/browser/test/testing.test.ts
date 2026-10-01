@@ -102,7 +102,7 @@ it.effect("opens the real owner over the scripted engine and closes it with a re
     expect(receipts[0]).toMatchObject({ connection: "closed", issues: [] });
     expect(yield* kept.status).toMatchObject({ phase: "closed" });
     expect(yield* kept.initialPage.observe().pipe(Effect.flip)).toMatchObject({
-      reason: { _tag: "Stale" },
+      reason: { _tag: "Closed" },
       outcome: "undispatched",
     });
     expect(yield* kept.close).toBe(receipts[0]);
@@ -165,7 +165,7 @@ it.effect("an expired lifetime refuses undispatched under the test clock", () =>
         yield* browser.initialPage.observe();
         yield* TestClock.adjust("61 seconds");
         expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
-          reason: { _tag: "Stale" },
+          reason: { _tag: "Expired" },
           outcome: "undispatched",
         });
         expect(yield* browser.status).toMatchObject({ reason: "expired" });
@@ -202,7 +202,7 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
       ).toMatchObject([{ pageId: page.identity.pageId, dispatched: true, settled: "completed" }]);
       // The original page closed, so application retries cannot replay its input.
       expect(yield* acceptCookies(browser).pipe(Effect.flip)).toMatchObject({
-        reason: { _tag: "Stale" },
+        reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
       const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
@@ -293,7 +293,7 @@ it.effect("a lost connection is reported as disconnected and refused afterwards"
       yield* browser.control.disconnect;
       expect(yield* browser.status).toMatchObject({ phase: "uncertain", reason: "disconnected" });
       expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
-        reason: { _tag: "Stale" },
+        reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
     }),
@@ -745,7 +745,7 @@ it.effect("typed callbacks run through the real admission and fail the session a
       );
       expect((yield* browser.bindingDiagnostics).faulted).toBe(true);
       expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
-        reason: { _tag: "Stale" },
+        reason: { _tag: "Closed" },
       });
     }),
   ),
@@ -799,7 +799,7 @@ it.effect("issued Pages can be created, selected for display and closed independ
       expect((yield* pinned.observe()).url).toBe(`${origin}/?consent=1`);
       yield* browser.page(created).pipe(Effect.flatMap((page) => page.close()));
       expect(yield* pinned.observe().pipe(Effect.flip)).toMatchObject({
-        reason: { _tag: "Stale" },
+        reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
       expect((yield* browser.initialPage.observe()).url).toBe(`${origin}/`);
@@ -892,7 +892,7 @@ it.effect("one page's address and title are read without reading any other page"
       yield* issued.close();
       expect(yield* issued.describe().pipe(Effect.flip)).toMatchObject({
         operation: "target",
-        reason: { _tag: "Stale" },
+        reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
     }),
@@ -1059,7 +1059,7 @@ it.effect("a page that does not close when its outcome is unknown fences the ses
         unresolvedDispatch: true,
       });
       expect(yield* browser.initialPage.readText({}).pipe(Effect.flip)).toMatchObject({
-        reason: { _tag: "Stale" },
+        reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
       yield* gate.open;

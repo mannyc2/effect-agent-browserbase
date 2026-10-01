@@ -174,7 +174,7 @@ it.effect.each([false, true])(
           failures.failures.map((failure) => [failure.error.reason._tag, failure.error.outcome]),
         ).toEqual([
           ["Timeout", "unknown"],
-          ["Stale", "undispatched"],
+          ["Closed", "undispatched"],
         ]);
         expect(failures.failures[0]?.error.containment).toMatchObject(
           failedContainment

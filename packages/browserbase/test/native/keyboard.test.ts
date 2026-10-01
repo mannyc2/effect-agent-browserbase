@@ -447,7 +447,7 @@ it.live("real CDP: a closed issued page cannot send keys to another page", () =>
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") {
-              expect(refused.failure.reason._tag).toBe("Stale");
+              expect(refused.failure.reason._tag).toBe("Closed");
               expect(refused.failure.outcome).toBe("undispatched");
             }
           }

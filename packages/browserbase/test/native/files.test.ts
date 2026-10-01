@@ -180,7 +180,7 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
 
             expect(result._tag).toBe("Failure");
             if (result._tag === "Failure") {
-              expect(result.failure.reason._tag).toBe("Stale");
+              expect(result.failure.reason._tag).toBe("Closed");
               expect(result.failure.outcome).toBe("undispatched");
             }
           }

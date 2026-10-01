@@ -188,7 +188,7 @@ it.live(
             yield* session.closeChecked;
             expect(yield* Effect.result(session.initialPage.describe())).toMatchObject({
               _tag: "Failure",
-              failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+              failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
             });
           }),
         ).pipe(

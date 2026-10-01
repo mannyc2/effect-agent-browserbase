@@ -1270,17 +1270,35 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         : Effect.void,
     );
 
-  const checkTarget = (target?: DriverTarget, generation?: number) =>
+  /**
+   * Why a capability that can no longer act was refused, most specific first. A refused owner
+   * outranks staleness: every phase change advances the generation, so a closed, expired,
+   * disconnected or paused session must not look like a stale Page. A closed Page is closed. Only
+   * work the owner would still admit is stale: a replaced generation, a closing page or a detached
+   * frame, which a fresh Page or observation can replace.
+   */
+  const unavailable = (
+    operation: BrowserOperation,
+    page?: { readonly phase: "open" | "paused" | "closing" | "closed" },
+    admission?: { readonly recovery?: boolean },
+  ) =>
+    BrowserError.make({
+      operation,
+      reason:
+        owner.refusal(admission) ??
+        (page?.phase === "closed" ? Reasons.Closed.make({}) : Reasons.Stale.make({})),
+      outcome: "undispatched",
+    });
+
+  const checkTarget = (
+    target?: DriverTarget,
+    generation?: number,
+    admission?: { readonly recovery?: boolean },
+  ) =>
     Effect.suspend(() =>
       (generation !== undefined && generation !== owner.state.generation) ||
       (target !== undefined && pages.get(target.pageId)?.phase === "closing")
-        ? Effect.fail(
-            BrowserError.make({
-              operation: "target",
-              reason: Reasons.Stale.make({}),
-              outcome: "undispatched",
-            }),
-          )
+        ? Effect.fail(unavailable("target", undefined, admission))
         : Effect.void,
     );
 
@@ -1507,15 +1525,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         owner.state.generation !== issued.generation ||
         (authority !== undefined && authority.phase !== "open") ||
         frameAuthority?.detached === true
-      ) {
-        return Effect.fail(
-          BrowserError.make({
-            operation: "handle",
-            reason: Reasons.Stale.make({}),
-            outcome: "undispatched",
-          }),
-        );
-      }
+      )
+        return Effect.fail(unavailable("handle", authority));
 
       return Effect.void;
     };
@@ -1900,6 +1911,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 preflight: checkTarget(
                   { pageId: navigation.pageId, frameId: begun.target.frameId },
                   begun.target.generation,
+                  { recovery: true },
                 ),
                 contain: () => containment(navigation.pageId, begun.authority),
                 ...(deadline === undefined ? {} : { waitUntil: deadline }),
@@ -2181,13 +2193,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     const validate = Effect.suspend(() =>
       (authority !== undefined && authority.phase !== "open") || frameAuthority?.detached === true
-        ? Effect.fail(
-            BrowserError.make({
-              operation: "target",
-              reason: Reasons.Stale.make({}),
-              outcome: "undispatched",
-            }),
-          )
+        ? Effect.fail(unavailable("target", authority))
         : checkTarget(target, generation),
     );
 
@@ -2652,12 +2658,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             owner.lifetimeDeadline,
           );
 
-          const stale = () =>
-            BrowserError.make({
-              operation: "close-page",
-              reason: Reasons.Stale.make({}),
-              outcome: "undispatched",
-            });
+          // Closure has reserved recovery admission, which neither a policy cleanup nor a
+          // lifecycle barrier refuses.
+          const stale = () => unavailable("close-page", record, { recovery: true });
 
           const checked = Effect.suspend(() =>
             (generation !== undefined && generation !== owner.state.generation) ||

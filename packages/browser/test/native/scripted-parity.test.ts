@@ -436,7 +436,7 @@ const cases: ReadonlyArray<Case> = [
         yield* session.initialPage.navigate({ url: `${origin}/` });
         yield* session.closeChecked;
         expect(yield* failure(session.initialPage.observe())).toEqual({
-          reason: "Stale",
+          reason: "Closed",
           outcome: "undispatched",
         });
         expect((yield* session.status).phase).toBe("closed");

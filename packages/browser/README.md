@@ -222,7 +222,11 @@ observation: reading or acting on the scout preserves the stage's exact referenc
 observation of the same frame retires its predecessor. A reference passed through the wrong
 Page or Frame fails `Stale/undispatched` before input. Mutation invalidation remains conservative
 for the affected page. A detached frame, closed page or old connection generation cannot acquire
-fresh authority. `page.status` is passive host state, including terminal containment facts, and
+fresh authority. A refusal names the session's own reason first: while the session is closed,
+expired, fenced or paused, work through any issued Page fails `Closed`, `Expired` or `Busy`, not as
+a stale capability. Otherwise a closed Page fails `Closed`, and a Page from an earlier generation,
+a closing page or a detached frame fails `Stale`, all `undispatched`. `page.status` is passive
+host state, including terminal containment facts, and
 remains readable after closure. Reconnect and handoff resume return a bounded `Inventory` with
 the current generation and fresh Page metadata. Acquire a Page from that inventory and call
 `page.observe()` explicitly; old capabilities stay stale. Native title and URL reads are
@@ -1102,7 +1106,7 @@ it.effect("an unknown click is never replayed", () =>
         expect(first).toMatchObject({ reason: { _tag: "Timeout" }, outcome: "unknown" });
         const retry = yield* browser.initialPage.clickElement(accept).pipe(Effect.flip);
 
-        expect(retry).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
+        expect(retry).toMatchObject({ reason: { _tag: "Closed" }, outcome: "undispatched" });
         const clicks = (yield* browser.control.calls).filter((c) => c.operation === "click");
 
         expect(clicks).toHaveLength(1);

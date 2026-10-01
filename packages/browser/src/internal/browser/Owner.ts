@@ -1150,6 +1150,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     state,
     lifetimeDeadline,
     guard,
+    refusal,
     chargeHostRead: (ticket: Ticket, operation: BrowserOperation) => {
       ticket.check();
       if (state.hostReads >= limits.maxHostReads)

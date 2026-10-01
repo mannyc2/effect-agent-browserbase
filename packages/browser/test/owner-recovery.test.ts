@@ -151,7 +151,7 @@ const recoveryCases: ReadonlyArray<Case> = [
         const stopped = yield* issued.controls.operations.readText().pipe(Effect.result);
 
         assert.equal(stopped._tag, "Failure");
-        if (stopped._tag === "Failure") assert.equal(stopped.failure.reason._tag, "Stale");
+        if (stopped._tag === "Failure") assert.equal(stopped.failure.reason._tag, "Closed");
       }),
     ),
   },

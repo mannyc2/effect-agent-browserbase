@@ -340,7 +340,7 @@ const scripted = await Effect.runPromise(
 
         expect(
           retry._tag === "Failure" &&
-            retry.failure.reason._tag === "Stale" &&
+            retry.failure.reason._tag === "Closed" &&
             retry.failure.outcome === "undispatched",
           "the retired Page refuses the retry without sending it",
         );
