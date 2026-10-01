@@ -3021,35 +3021,44 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         return perform.pipe(
           Effect.tap((receipt) => Effect.sync(() => context.retainReceipt(receipt))),
           Effect.flatMap((receipt) => {
+            const checkpointOptions = context.checkpoint;
+
             const after =
               step.expect?.after === undefined
                 ? Effect.void
-                : nativeOperation(
-                    "run",
-                    async (driver, ticket) => {
-                      context.phase("Postcondition");
-                      await driver.expectations(
-                        step.expect?.after ?? [],
-                        ticket,
-                        target ?? driver.selected(),
-                      );
-                    },
-                    { ...bound, ...context.options, charge: "host-read" },
-                  );
+                : Effect.suspend(() => {
+                    context.phase("Postcondition");
+
+                    return nativeOperation(
+                      "run",
+                      async (driver, ticket) => {
+                        await driver.expectations(
+                          step.expect?.after ?? [],
+                          ticket,
+                          target ?? driver.selected(),
+                        );
+                      },
+                      { ...bound, ...context.options, charge: "host-read" },
+                    );
+                  });
 
             return after.pipe(
               Effect.andThen(
-                context.checkpoint === undefined
+                checkpointOptions === undefined
                   ? Effect.succeed({ receipt })
-                  : controls
-                      .checkpoint(
-                        { ...context.checkpoint, picture: context.checkpoint.picture ?? false },
-                        context.options,
-                      )
-                      .pipe(
-                        Effect.flatMap((value) => decodeReceipt(Checkpoint, value)),
-                        Effect.map((checkpoint) => ({ receipt, checkpoint })),
-                      ),
+                  : Effect.suspend(() => {
+                      context.phase("Checkpoint");
+
+                      return controls
+                        .checkpoint(
+                          { ...checkpointOptions, picture: checkpointOptions.picture ?? false },
+                          context.options,
+                        )
+                        .pipe(
+                          Effect.flatMap((value) => decodeReceipt(Checkpoint, value)),
+                          Effect.map((checkpoint) => ({ receipt, checkpoint })),
+                        );
+                    }),
               ),
             );
           }),
