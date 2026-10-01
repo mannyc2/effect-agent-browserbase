@@ -3,7 +3,6 @@ import {
   Clock,
   Crypto,
   Deferred,
-  Duration,
   Effect,
   Exit,
   Option,
@@ -2389,28 +2388,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         bindings?: FormBindings,
       ) =>
         Effect.suspend(() => {
-          const requested = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
-
-          const formOptions = {
-            ...operationOptions,
-            operationDeadline: Math.min(
-              requested +
-                Math.min(
-                  operationOptions?.timeoutMillis ?? limits.actionTimeoutMillis,
-                  limits.actionTimeoutMillis,
-                ),
-              owner.lifetimeDeadline,
-              operationOptions?.operationDeadline ?? Number.POSITIVE_INFINITY,
-            ),
-            ...(operationOptions?.admission?.queue === undefined
-              ? {}
-              : {
-                  queueDeadline: Math.min(
-                    requested + Duration.toMillis(operationOptions.admission.queue),
-                    operationOptions.queueDeadline ?? Number.POSITIVE_INFINITY,
-                  ),
-                }),
-          };
+          // Each field, the verification read and the submit is its own admitted action, so each
+          // captures its own action and queue deadlines when requested. A bound the caller already
+          // captured, such as a plan step's, still caps every one of them.
+          const formOptions: ExecutionOptions = { ...operationOptions };
 
           // The page whose observation the steps kept usable, known once one of them dispatched.
           let pageId: string | undefined;

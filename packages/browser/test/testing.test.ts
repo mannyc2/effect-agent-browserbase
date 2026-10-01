@@ -564,6 +564,63 @@ it.effect("forms and matched readings take the real owner's steps, stops and ret
   ),
 );
 
+it.effect("each form step has its own action deadline", () =>
+  Browser.scoped(
+    Testing.open(
+      {
+        documents: [
+          {
+            url: `${origin}/`,
+            text: "Sign up",
+            controls: [
+              { id: "name", kind: "input", label: "Name", inputType: "text" },
+              { id: "email", kind: "input", label: "Email", inputType: "text" },
+            ],
+          },
+        ],
+      },
+      { automation: { actionTimeoutMillis: 5_000 } },
+    ),
+    (browser) =>
+      Effect.gen(function* () {
+        const first = yield* browser.control.gate;
+        const second = yield* browser.control.gate;
+
+        yield* browser.control.next("fill-form", { _tag: "Hold", gate: first, dispatched: false });
+        yield* browser.control.next("fill-form", { _tag: "Hold", gate: second, dispatched: false });
+        const observation = yield* browser.initialPage.observe();
+
+        const form = yield* browser.initialPage
+          .fillForm({
+            observationId: observation.observationId,
+            fields: [
+              { elementId: "name", value: "Ada" },
+              { elementId: "email", value: "ada@example.test" },
+            ],
+          })
+          .pipe(Effect.forkChild);
+
+        // Together the steps take longer than one action timeout; neither does on its own.
+        yield* first.reached;
+        yield* TestClock.adjust("3 seconds");
+        yield* first.open;
+        yield* second.reached;
+        yield* TestClock.adjust("3 seconds");
+        yield* second.open;
+
+        const result = yield* Fiber.join(form);
+
+        expect(result).toMatchObject({
+          fields: [
+            { elementId: "name", status: "set" },
+            { elementId: "email", status: "set" },
+          ],
+        });
+        expect(result.stopped).toBeUndefined();
+      }),
+  ),
+);
+
 it.effect("a disabled or textless control refuses text before it is sent", () =>
   Browser.scoped(
     Testing.open({
