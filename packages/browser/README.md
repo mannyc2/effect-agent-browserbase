@@ -320,6 +320,9 @@ watermark, including when it has no matching events. Evicting every retained eve
 reset that watermark. Requested evicted history and lapped subscribers fail `TimelineGap` with
 requested and available cursors. Foreign store/clock identities and future cursors fail
 `TimelineCursorError`; consumers choose how to recover rather than silently losing evidence.
+An event the journal refuses as malformed or oversized leaves a `MetadataOmitted` marker with
+its original target, correlation and tag, so a Page view sees its own gap. An omission whose
+attribution was itself refused is unattributed and appears in every Page view.
 
 `session.pages` is a lifecycle stream: it atomically attaches a copied Inventory baseline from
 the canonical bounded native registry and the journal watermark, then follows lifecycle events.

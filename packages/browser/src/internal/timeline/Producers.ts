@@ -1,6 +1,12 @@
-import type { Clock } from "effect";
+import { type Clock, Predicate, Schema } from "effect";
 
-import type { Correlation, EvidenceTarget, Payload, Stamp } from "../../TimelineData.ts";
+import {
+  type Correlation,
+  type EvidenceTarget,
+  type Payload,
+  PayloadTag,
+  type Stamp,
+} from "../../TimelineData.ts";
 import type { CaptureMetadata } from "../browser/Association.ts";
 import type { NativeCachedPage } from "../browser/Driver.ts";
 import type { ObserveTicket, TicketObserver } from "../browser/Owner.ts";
@@ -14,18 +20,45 @@ const geometry = (value: { readonly x: number; readonly y: number }) => ({
   y: value.y,
 });
 
-/** Refusing an external fact must never change the native operation's original outcome. */
+const isPayloadTag = Schema.is(PayloadTag);
+
+/** Reads a refused payload's own tag without running any accessor it might carry. */
+const omittedTag = (event: unknown): PayloadTag | null => {
+  try {
+    const tag: unknown = Predicate.isObject(event)
+      ? Object.getOwnPropertyDescriptor(event, "_tag")?.value
+      : undefined;
+
+    return isPayloadTag(tag) ? tag : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Refusing an external fact must never change the native operation's original outcome. The
+ * omission keeps the refused event's target, correlation and tag, so a Page view sees its own
+ * gap; only when that attribution is itself refused does the omission stand unattributed.
+ */
 export const publish = (store: Store, input: AppendInput) => {
   const result = store.append(input);
 
-  if (result._tag === "Refused" && result.reason !== "Closed")
-    return store.append({
-      target: null,
-      correlation: null,
-      event: { _tag: "MetadataOmitted", reason: result.reason, originalTag: null },
-    });
+  if (result._tag !== "Refused" || result.reason === "Closed") return result;
+  const reason = result.reason;
 
-  return result;
+  const attributed = store.append({
+    target: input.target,
+    correlation: input.correlation,
+    event: { _tag: "MetadataOmitted", reason, originalTag: omittedTag(input.event) },
+  });
+
+  return attributed._tag === "Appended"
+    ? attributed
+    : store.append({
+        target: null,
+        correlation: null,
+        event: { _tag: "MetadataOmitted", reason, originalTag: null },
+      });
 };
 
 export const stamp = (store: Store, originNanos: bigint, nanos: bigint): Stamp => ({

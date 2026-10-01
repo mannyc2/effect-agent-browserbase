@@ -315,9 +315,12 @@ export const makeStore = (configuration: {
 
   const viewTerminal = (view: View | undefined) => view?.terminal() ?? terminal;
 
+  // An omission that could not keep its attribution may have been any Page's evidence.
   const matches = (event: Event, view: View | undefined) =>
     view === undefined ||
-    (event.target?.pageId === view.pageId && event.target.generation === view.generation);
+    (event.target === null
+      ? event.event._tag === "MetadataOmitted"
+      : event.target.pageId === view.pageId && event.target.generation === view.generation);
 
   const wake = () => {
     for (const reader of readers) {

@@ -162,6 +162,38 @@ const FailureReason = Schema.Literals([
   "NotFocused",
 ]);
 
+/** Every payload tag; an omission names the one it stands for when that tag was readable. */
+export const PayloadTag = Schema.Literals([
+  "Planned",
+  "Prepared",
+  "Dispatched",
+  "Acknowledged",
+  "FollowUp",
+  "Pointer",
+  "Press",
+  "Keys",
+  "Scroll",
+  "Glide",
+  "Navigated",
+  "CaptureBoundary",
+  "Capture",
+  "FirstFrame",
+  "Picture",
+  "Settled",
+  "Contained",
+  "Failed",
+  "Cancelled",
+  "Lifecycle",
+  "PageOpened",
+  "PageClosed",
+  "DisplayChanged",
+  "MetadataChanged",
+  "Terminal",
+  "MetadataOmitted",
+]);
+
+export type PayloadTag = typeof PayloadTag.Type;
+
 const makeInterval = <S extends typeof Stamp | typeof StampJson>(stamp: S) =>
   Schema.Struct({
     start: stamp,
@@ -330,36 +362,7 @@ const makePayload = <S extends typeof Stamp | typeof StampJson, A extends Schema
     Schema.TaggedStruct("Terminal", { scope: TerminalScope, reason: TerminalReason }),
     Schema.TaggedStruct("MetadataOmitted", {
       reason: Schema.Literals(["Malformed", "Oversized"]),
-      originalTag: Schema.NullOr(
-        Schema.Literals([
-          "Planned",
-          "Prepared",
-          "Dispatched",
-          "Acknowledged",
-          "FollowUp",
-          "Pointer",
-          "Press",
-          "Keys",
-          "Scroll",
-          "Glide",
-          "Navigated",
-          "CaptureBoundary",
-          "Capture",
-          "FirstFrame",
-          "Picture",
-          "Settled",
-          "Contained",
-          "Failed",
-          "Cancelled",
-          "Lifecycle",
-          "PageOpened",
-          "PageClosed",
-          "DisplayChanged",
-          "MetadataChanged",
-          "Terminal",
-          "MetadataOmitted",
-        ]),
-      ),
+      originalTag: Schema.NullOr(PayloadTag),
     }),
   ]);
 };
