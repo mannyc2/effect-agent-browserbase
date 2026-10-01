@@ -271,7 +271,14 @@ export interface PageOperations {
   ) => Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
 }
 
-/** Issued live authority for one native frame; navigation keeps the frame and retires its references. */
+/**
+ * Issued live authority for one native frame; navigation keeps the frame and retires its references.
+ *
+ * Pass the issued object itself. Capture, page control, provider transfers, agent tools and
+ * `checkPage` authenticate it by identity, so a spread copy, wrapper or Proxy is refused
+ * `UnregisteredSession` even though its copied methods still run. Observe work through the
+ * timeline and run receipts rather than by wrapping methods.
+ */
 export interface Frame extends PageOperations, PlanOperations {
   readonly identity: Target;
   readonly status: Effect.Effect<PageStatus>;
@@ -295,7 +302,7 @@ export interface Frame extends PageOperations, PlanOperations {
   ) => Effect.Effect<SettledEvidence, BrowserError>;
 }
 
-/** Issued live authority for one native page on its original connection. */
+/** Issued live authority for one native page on its original connection; pass it as issued, see `Frame`. */
 export interface Page extends Frame {
   /** Evidence for this issued Page's original domain; navigation does not change its journal. */
   readonly timeline: Timeline;

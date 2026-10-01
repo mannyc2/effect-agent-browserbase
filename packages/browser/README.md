@@ -207,6 +207,12 @@ frame's, which is also its base URL. That address is resolved before dispatch, s
 fails over it after input landed: a target with no http(s) address anywhere in its frame tree is
 refused `Unsupported` and `undispatched`.
 
+Pass an issued Page or Frame as the object you were given. Capture, page control, provider
+transfers, agent tools and `Browser.checkPage` authenticate it by identity, so a spread copy
+(`{ ...page }`), a wrapper or a Proxy is refused `UnregisteredSession`, even though methods copied
+onto it still run. To instrument work, read `session.timeline` and `page.timeline`, which record
+every operation's phases, and plan run receipts, instead of wrapping Page methods.
+
 ```ts
 const stage = session.initialPage;
 const scout = yield * session.createPage();
