@@ -72,19 +72,15 @@ export const direct: Hooks = { run: (effect) => effect };
 
 /**
  * Whether a refusal came from a bound Page or Frame that is no longer open. Such a target refuses
- * every later call too; a replaced document or reference on an open target stays `stale`, which a
- * fresh inspection answers.
+ * every later call too: a closed or stale one for good, and a page a dialog or popup quarantined
+ * until an operator's handoff, which issues fresh Pages, so this binding never works again. A
+ * replaced document or reference on an open target stays `stale`, which a fresh inspection answers.
  */
 export const retiredBy =
   (target: Page | Frame) =>
   (error: BrowserError): Effect.Effect<boolean> =>
     error.reason._tag === "Stale"
-      ? target.status.pipe(
-          Effect.map(
-            (status) =>
-              status.phase === "closed" || status.phase === "closing" || status.phase === "stale",
-          ),
-        )
+      ? target.status.pipe(Effect.map((status) => status.phase !== "open"))
       : Effect.succeed(false);
 
 /** Records the original error on the host, then gives the model its compact projection. */

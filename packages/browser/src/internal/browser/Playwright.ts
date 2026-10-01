@@ -427,7 +427,7 @@ export const makePlaywrightDriver = async (
     fenceInitializationPage: initialization.fencePage,
     restoreInitializationPage: initialization.restorePage,
     handoffDrained: (quarantined) =>
-      initialization.drained() &&
+      initialization.drained(quarantined) &&
       callbacks.drained() &&
       policyCleanup.drained() &&
       observation.drained(quarantined) &&

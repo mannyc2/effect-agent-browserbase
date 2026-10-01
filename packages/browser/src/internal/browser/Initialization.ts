@@ -96,7 +96,13 @@ export const makeInitialization = (
           (page) => (livePage(page) ? targets.pageIdOf(page) : undefined),
         );
 
-  const drained = () => pendingReadiness.size === 0 && (bindings?.drained() ?? true);
+  /**
+   * Pending readiness evaluations can outlive their callers. One on a page a dialog or popup has
+   * quarantined (`held`) cannot hold up the handoff that releases that page.
+   */
+  const drained = (held: (pageId: string) => boolean = () => false) =>
+    [...pendingReadiness.values()].every((pending) => held(pending.pageId)) &&
+    (bindings?.drained() ?? true);
 
   const attach = async (page: Page) => {
     if (bindings === undefined) return;

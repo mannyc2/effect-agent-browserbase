@@ -1,6 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schedule, Stream } from "effect";
+import * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as BrowserRuntime from "effect-browser/browser-runtime";
@@ -23,6 +24,7 @@ const launch = {
 
 const keyboardFixture = Effect.fnUntraced(function* (
   automation: { readonly dialogPolicy?: "dismiss" | "pause" } = {},
+  bootstrap?: (origin: string) => Bootstrap.Plan<never, never>,
 ) {
   const site = yield* localSite;
   const host = yield* externalChromium;
@@ -38,30 +40,33 @@ const keyboardFixture = Effect.fnUntraced(function* (
     }),
   }).pipe(Effect.provide(NodeCrypto.layer));
 
-  const acquired = yield* runtime.acquire(policy, (cleanup) =>
-    Effect.gen(function* () {
-      const release = yield* Effect.cached(
-        cleanup.fence.pipe(
-          Effect.andThen(cleanup.capture),
-          Effect.andThen(cleanup.initialization),
-          Effect.andThen(cleanup.disconnect),
-          Effect.orDie,
-          Effect.ensuring(Effect.promise(host.close)),
-          Effect.asVoid,
-        ),
-      );
+  const acquired = yield* runtime.acquire(
+    policy,
+    (cleanup) =>
+      Effect.gen(function* () {
+        const release = yield* Effect.cached(
+          cleanup.fence.pipe(
+            Effect.andThen(cleanup.capture),
+            Effect.andThen(cleanup.initialization),
+            Effect.andThen(cleanup.disconnect),
+            Effect.orDie,
+            Effect.ensuring(Effect.promise(host.close)),
+            Effect.asVoid,
+          ),
+        );
 
-      yield* Effect.addFinalizer(() => release);
+        yield* Effect.addFinalizer(() => release);
 
-      return {
-        reference: "native-keyboard-workflow",
-        connection: () => Effect.succeed(host.endpoint),
-        release,
-        cleanupResult: Effect.succeedNone,
-        closeChecked: release,
-        controlRetired: Effect.sync(() => !host.running()),
-      };
-    }),
+        return {
+          reference: "native-keyboard-workflow",
+          connection: () => Effect.succeed(host.endpoint),
+          release,
+          cleanupResult: Effect.succeedNone,
+          closeChecked: release,
+          controlRetired: Effect.sync(() => !host.running()),
+        };
+      }),
+    bootstrap === undefined ? undefined : { bootstrap: bootstrap(new URL(site.url).origin) },
   );
 
   const { session, operations } = yield* acquired.connect;
@@ -233,6 +238,58 @@ it.live(
         expect((yield* fresh.readText({ selector: "#count" })).text).toBe("1");
         yield* session.closeChecked;
         expect(host.running()).toBe(false);
+      }),
+    ),
+);
+
+it.live(
+  "a quarantined page's pending bootstrap readiness does not hold up the handoff that releases it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session, operations, page, url } = yield* keyboardFixture(
+          { dialogPolicy: "pause" },
+          (origin) =>
+            Bootstrap.init({
+              id: "never-ready",
+              origins: [origin],
+              content: "globalThis.__neverReady = true;",
+              readiness: {
+                expression: "new Promise(() => {})",
+                timeoutMillis: 30000,
+                existingDocuments: "RequireFreshNavigation",
+              },
+            }),
+        );
+
+        const initial = session.initialPage;
+        const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+
+        yield* Effect.promise(() => cdp.send("Page.enable"));
+        yield* initial.navigate({ url: new URL("confirm-later", url).href });
+        // A read waits on readiness that never comes; its caller gives up and the native
+        // evaluation stays pending.
+        yield* initial.readText({ selector: "title" }, { timeoutMillis: 200 }).pipe(Effect.flip);
+        // The page's own dialog quarantines it for an operator.
+        yield* initial.status.pipe(
+          Effect.repeat({
+            until: (status) => status.phase === "paused",
+            schedule: Schedule.spaced(50),
+          }),
+          Effect.timeout("10 seconds"),
+        );
+
+        // The operator answers the dialog afterwards, whatever the handoff did.
+        const answered = Effect.promise(() =>
+          cdp.send("Page.handleJavaScriptDialog", { accept: false }),
+        ).pipe(Effect.ignore);
+
+        const handoff = yield* operations
+          .beginHandoff(Effect.succeed({ granted: true }))
+          .pipe(Effect.ensuring(answered));
+
+        expect(handoff.view).toEqual({ granted: true });
+        yield* session.closeChecked;
       }),
     ),
 );
