@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import type { PageStatus } from "../../Browser.ts";
 import type { PageInfo, Target } from "../../BrowserData.ts";
 import type { CaptureQualification } from "../../CaptureData.ts";
-import { BrowserError, Reasons } from "../../Errors.ts";
+import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import type { CaptureReason } from "../../TimelineData.ts";
 import type { CaptureSource } from "./Driver.ts";
 import type { Owner, Ticket } from "./Owner.ts";
@@ -81,7 +81,8 @@ export type CaptureMetadata =
     };
 
 export interface CaptureParent {
-  readonly validate?: Effect.Effect<void, BrowserError>;
+  /** A page-bound parent's own authority check, reported under the caller's operation. */
+  readonly validate?: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>;
   readonly owner: Owner;
   /** Prebound to the original owner's Crypto; starting capture adds no caller service. */
   readonly newCaptureId: Effect.Effect<string>;
@@ -112,7 +113,7 @@ export const forPage = (
   parent: CaptureParent,
   info: PageInfo,
   identity: Target,
-  validate: Effect.Effect<void, BrowserError>,
+  validate: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>,
 ): CaptureParent => ({
   validate,
   owner: parent.owner,
@@ -127,7 +128,7 @@ export const forPage = (
   target: () => identity,
   selectedPage: () => info,
   resolve: (ticket, requested) =>
-    validate.pipe(
+    validate("capture").pipe(
       Effect.andThen(
         Effect.suspend(() => {
           if (ticket.generation !== identity.generation)
@@ -168,6 +169,7 @@ export const associatePageAuthority = (page: object, controls: PageControls): vo
 export const resolvePageControlsForSession = (
   session: object,
   page: object,
+  operation: BrowserOperation = "target",
 ): Effect.Effect<PageControls, BrowserError> =>
   Effect.suspend(() => {
     const owner = parents.get(session)?.owner;
@@ -176,13 +178,13 @@ export const resolvePageControlsForSession = (
     if (owner === undefined || parents.get(page)?.owner !== owner || controls === undefined)
       return Effect.fail(
         BrowserError.make({
-          operation: "target",
+          operation,
           reason: Reasons.UnregisteredSession.make({}),
           outcome: "undispatched",
         }),
       );
 
-    return controls.validate.pipe(Effect.as(controls));
+    return controls.validate(operation).pipe(Effect.as(controls));
   });
 
 const frameAuthorities = new WeakMap<

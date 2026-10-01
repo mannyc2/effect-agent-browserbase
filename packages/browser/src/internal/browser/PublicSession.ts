@@ -590,7 +590,7 @@ export const makeSession = <E>(
         ),
       frame: (info, options) =>
         checked(FrameInfo, info, "target").pipe(
-          Effect.tap(() => value.controls.validate),
+          Effect.tap(() => value.controls.validate("target")),
           Effect.flatMap((info) =>
             withOperationOptions(options, "target", (options) =>
               controls.frame(value.record.info, info, value.record.identity.generation, options),

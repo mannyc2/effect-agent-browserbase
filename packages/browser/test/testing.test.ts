@@ -890,11 +890,18 @@ it.effect("one page's address and title are read without reading any other page"
         { operation: "describe-page", pageId: created.pageId, dispatched: false },
       ]);
       yield* issued.close();
-      expect(yield* issued.describe().pipe(Effect.flip)).toMatchObject({
-        operation: "target",
-        reason: { _tag: "Closed" },
-        outcome: "undispatched",
-      });
+      // A refusal names the operation the caller asked for, whichever surface it came through.
+      for (const [refused, operation] of [
+        [issued.describe().pipe(Effect.asVoid), "describe-page"],
+        [issued.readText({}).pipe(Effect.asVoid), "read-text"],
+        [Effect.scoped(Capture.start(issued, { maxDurationMillis: 1000 })), "capture-start"],
+        [PageControl.state(issued).pipe(Effect.asVoid), "page-state"],
+      ] as const)
+        expect(yield* Effect.flip(refused)).toMatchObject({
+          operation,
+          reason: { _tag: "Closed" },
+          outcome: "undispatched",
+        });
     }),
   ),
 );

@@ -171,7 +171,7 @@ const makeFixture = Effect.fnUntraced(function* (
           pageId: info.pageId,
           frameId: "frame-1",
         }),
-        Effect.void,
+        () => Effect.void,
       ),
     page,
     emit,

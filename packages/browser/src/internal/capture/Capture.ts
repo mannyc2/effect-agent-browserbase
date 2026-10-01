@@ -616,7 +616,7 @@ export const startCapture = Effect.fnUntraced(function* (
     }
   };
 
-  yield* parent.validate ?? Effect.void;
+  yield* parent.validate?.("capture-start") ?? Effect.void;
 
   const requested = yield* Effect.try({
     try: () => parent.selectedPage(),
@@ -753,7 +753,7 @@ export const startCapture = Effect.fnUntraced(function* (
         charge: false,
         admission: options.admission,
         targetScope: () => ({ pageId: requested.pageId }),
-        preflight: (parent.validate ?? Effect.void).pipe(
+        preflight: (parent.validate?.("capture-start") ?? Effect.void).pipe(
           Effect.andThen(
             Effect.suspend(() =>
               generation === parent.owner.state.generation

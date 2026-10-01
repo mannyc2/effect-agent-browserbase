@@ -1291,6 +1291,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     });
 
   const checkTarget = (
+    operation: BrowserOperation,
     target?: DriverTarget,
     generation?: number,
     admission?: { readonly recovery?: boolean },
@@ -1298,7 +1299,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     Effect.suspend(() =>
       (generation !== undefined && generation !== owner.state.generation) ||
       (target !== undefined && pages.get(target.pageId)?.phase === "closing")
-        ? Effect.fail(unavailable("target", undefined, admission))
+        ? Effect.fail(unavailable(operation, undefined, admission))
         : Effect.void,
     );
 
@@ -1323,11 +1324,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly evidence?: ExecutionEvidence;
       readonly performance?: Ticket["performance"];
       readonly beforeNative?: (driver: Driver, ticket: Ticket) => Promise<void>;
-      readonly validate?: Effect.Effect<void, BrowserError>;
+      readonly validate?: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>;
       readonly containPageId?: string;
     } = {},
   ) =>
-    (options.validate ?? checkTarget(options.target, options.generation)).pipe(
+    (
+      options.validate?.(operation) ?? checkTarget(operation, options.target, options.generation)
+    ).pipe(
       Effect.andThen(
         owner.guard(
           operation,
@@ -1400,7 +1403,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               : Effect.void
             ).pipe(
               Effect.andThen(options.preflight ?? Effect.void),
-              Effect.andThen(checkTarget(options.target, options.generation)),
+              Effect.andThen(checkTarget(operation, options.target, options.generation)),
             ),
           },
         ),
@@ -1472,7 +1475,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             targetScope: () => ({ pageId: target.pageId }),
             preflight: Effect.suspend(() =>
               owner.waitAvailable(target.pageId)
-                ? checkTarget(target, generation).pipe(
+                ? checkTarget(operation, target, generation).pipe(
                     Effect.andThen(unreserved(operation, target)),
                   )
                 : Effect.fail(
@@ -1520,13 +1523,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     const authority = pages.get(browserTarget.pageId);
     const frameAuthority = authority?.frames.get(browserTarget.frameId);
 
-    const check = () => {
+    const check = (operation: BrowserOperation) => {
       if (
         owner.state.generation !== issued.generation ||
         (authority !== undefined && authority.phase !== "open") ||
         frameAuthority?.detached === true
       )
-        return Effect.fail(unavailable("handle", authority));
+        return Effect.fail(unavailable(operation, authority));
 
       return Effect.void;
     };
@@ -1538,7 +1541,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       operationOptions?: ExecutionOptions,
     ) =>
       Effect.suspend(() => {
-        return Effect.suspend(check).pipe(
+        return Effect.suspend(() => check(operation)).pipe(
           Effect.andThen(
             Effect.try({
               try: () => browserTarget,
@@ -1568,10 +1571,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 targetScope: () => ({ pageId: admittedTarget.pageId }),
                 mutationScope: () => ({ pageId: admittedTarget.pageId }),
                 preflight: mutation
-                  ? Effect.suspend(check).pipe(
+                  ? Effect.suspend(() => check(operation)).pipe(
                       Effect.andThen(unreserved(operation, admittedTarget)),
                     )
-                  : Effect.suspend(check),
+                  : Effect.suspend(() => check(operation)),
                 contain: () =>
                   containment(admittedTarget.pageId, authority ?? pages.get(admittedTarget.pageId)),
               },
@@ -1909,6 +1912,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 mutationScope: () => ({ pageId: navigation.pageId }),
                 charge: false,
                 preflight: checkTarget(
+                  "navigate-stop",
                   { pageId: navigation.pageId, frameId: begun.target.frameId },
                   begun.target.generation,
                   { recovery: true },
@@ -2191,11 +2195,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     const authority = pages.get(target.pageId);
     const frameAuthority = authority?.frames.get(target.frameId);
 
-    const validate = Effect.suspend(() =>
-      (authority !== undefined && authority.phase !== "open") || frameAuthority?.detached === true
-        ? Effect.fail(unavailable("target", authority))
-        : checkTarget(target, generation),
-    );
+    // Validation failures keep the operation the caller asked for.
+    const validate = (operation: BrowserOperation) =>
+      Effect.suspend(() =>
+        (authority !== undefined && authority.phase !== "open") || frameAuthority?.detached === true
+          ? Effect.fail(unavailable(operation, authority))
+          : checkTarget(operation, target, generation),
+      );
 
     const bound = {
       validate,
@@ -2276,7 +2282,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       observe: (reading: Reading = { scope: "document" }, operationOptions?: ExecutionOptions) =>
         textBudget("observe", reading.maxTextBytes).pipe(
           Effect.flatMap((bytes) =>
-            validate.pipe(
+            validate("observe").pipe(
               Effect.andThen(
                 owner.guard(
                   "observe",
@@ -2293,7 +2299,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   {
                     ...operationOptions,
                     targetScope: bound.targetScope,
-                    preflight: checkTarget(target, generation).pipe(
+                    preflight: checkTarget("observe", target, generation).pipe(
                       Effect.andThen(waitFree("observe", target.pageId)),
                     ),
                   },
@@ -2595,7 +2601,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         ),
       // Inspecting readiness is not an action: it charges nothing and mutates nothing.
       readiness: (operationOptions?: ExecutionOptions) =>
-        validate.pipe(
+        validate("ready").pipe(
           Effect.andThen(
             owner.guard(
               "ready",
@@ -2605,7 +2611,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 ...operationOptions,
                 charge: false,
                 targetScope: bound.targetScope,
-                preflight: checkTarget(target, generation),
+                preflight: checkTarget("ready", target, generation),
               },
             ),
           ),
@@ -2767,7 +2773,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         state: "visible" | "hidden" | "attached" | "detached",
         operationOptions?: ExecutionOptions,
       ) =>
-        validate.pipe(
+        validate("wait").pipe(
           Effect.andThen(
             wait(
               (driver, ticket, resolved) => driver.waitFor(selector, state, ticket, resolved),
@@ -2779,7 +2785,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           ),
         ),
       waitForElement: (request: WaitForElementRequest, operationOptions?: ExecutionOptions) =>
-        validate.pipe(
+        validate("wait").pipe(
           Effect.andThen(
             wait(
               (driver, ticket, target) =>
@@ -3226,7 +3232,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     const plans = makePlanExecution({
       clock,
-      validate,
+      validate: validate("run"),
       lifetimeDeadline: owner.lifetimeDeadline,
       actionTimeoutMillis: limits.actionTimeoutMillis,
       newId: uuid,
@@ -3569,7 +3575,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           ...operationOptions,
           charge: false,
           targetScope: () => ({ pageId: info.pageId }),
-          preflight: checkTarget(undefined, generation),
+          preflight: checkTarget("target", undefined, generation),
         },
       ),
     implementation: options.implementation,
