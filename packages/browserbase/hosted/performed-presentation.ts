@@ -1,5 +1,5 @@
 // Registered preparation only. The harness owns every allocation and requires explicit opt-in.
-import { Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
 import { ObservedElement } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
@@ -159,6 +159,7 @@ await h.run(
 
       const readerState = () => ({
         count: 0,
+        sequences: [] as Array<bigint>,
         tags: new Map<string, number>(),
         firstFrames: new Map<string, number>(),
         intendedPress: false,
@@ -173,6 +174,7 @@ await h.run(
         Effect.gen(function* () {
           if (state.count >= 2048) return yield* h.established({ boundedJournalFacts: false });
           state.count++;
+          state.sequences.push(envelope.sequence);
           const event = envelope.event;
 
           state.tags.set(event._tag, (state.tags.get(event._tag) ?? 0) + 1);
@@ -243,6 +245,9 @@ await h.run(
 
       yield* Deferred.await(first).pipe(Effect.timeout(8000));
       const before = (yield* session.status).actions.used;
+      const requestedAt = yield* session.monotonicTimeNanos;
+      // An absolute start on the original owner's monotonic clock, not the moment of the call.
+      const startAt = requestedAt + 400_000_000n;
 
       const ran = yield* stage.run(
         {
@@ -272,9 +277,10 @@ await h.run(
             },
           ],
         },
-        { style, within: "8 seconds" },
+        { style, startAt, within: "8 seconds" },
       );
 
+      const finishedAt = yield* session.monotonicTimeNanos;
       const after = (yield* session.status).actions.used;
 
       const keys = yield* Schema.decodeEffect(Schema.fromJsonString(KeyEvidence))(
@@ -291,7 +297,7 @@ await h.run(
         return yield* h.established({ readerAStayedLive: false });
       }
       yield* Fiber.interrupt(readerA);
-      const canceledAt = a.count;
+      const aCanceled = yield* Effect.sync(() => readerA.pollUnsafe());
       const continuingAt = b.count;
 
       canceled = true;
@@ -336,12 +342,24 @@ await h.run(
       yield* Fiber.interrupt(readerB);
       const cleanup = yield* session.closeChecked;
 
+      const started = ran.timing.startedMonotonicNanos;
+      const deadlineFromStart = ran.timing.deadlineMonotonicNanos - (startAt + 8_000_000_000n);
+
       yield* h.established({
         sameLogicalBudget: after - before === 3 && ran.steps.length === 3,
-        originalOwnerTiming:
+        // The run keeps the requested instant, measures lateness from it and bounds `within` from
+        // it, all on the clock that `requestedAt` and `finishedAt` read.
+        scheduledOnOriginalOwnerClock:
           ran.timing.seed === style.seed &&
-          ran.timing.startedMonotonicNanos !== null &&
-          ran.timing.startedMonotonicNanos < ran.timing.deadlineMonotonicNanos,
+          ran.timing.intendedMonotonicNanos === startAt &&
+          ran.timing.requestedMonotonicNanos >= requestedAt &&
+          ran.timing.requestedMonotonicNanos < startAt &&
+          started !== null &&
+          started <= finishedAt &&
+          ran.timing.latenessNanos === (started > startAt ? started - startAt : 0n) &&
+          deadlineFromStart >= -1_000_000n &&
+          deadlineFromStart <= 1_000_000n,
+        startedNoEarlierThanStartAt: started !== null && started >= startAt,
         trustedFocusedShiftedInput:
           keys.value === "Ab!" &&
           keys.events.every((event) => event[4] && event[5]) &&
@@ -351,8 +369,16 @@ await h.run(
           peerCount.text === "1" &&
           peerKeys.value === "" &&
           peerKeys.events.length === 0,
+        // Both readers saw the same ordered events until one was canceled; the other went on.
         twoActualIndependentReaders:
-          canceledAt > 0 && a.count === canceledAt && b.count > continuingAt,
+          a.sequences.length > 0 &&
+          b.sequences.length > a.sequences.length &&
+          a.sequences.every((sequence, index) => b.sequences[index] === sequence) &&
+          b.count > continuingAt,
+        readerACanceledOnly:
+          aCanceled !== undefined &&
+          Exit.isFailure(aCanceled) &&
+          Cause.hasInterruptsOnly(aCanceled.cause),
         intendedPressQualified: b.intendedPress,
         firstFrameReferencesAcceptedBytes:
           b.firstFrames.get(interval.id) !== undefined &&
@@ -381,6 +407,7 @@ await h.run(
       return {
         logicalActions: after - before,
         visibility,
+        startAt,
         timing: ran.timing,
         keyEvents: keys.events.length,
         observedDomHoldMillis: holds,

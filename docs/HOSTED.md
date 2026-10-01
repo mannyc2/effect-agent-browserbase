@@ -166,8 +166,11 @@ through the harness.
 
 The same environment variable is forwarded by the protected manual workflow. The budget is
 one provider session, 180 browser seconds, 30 actions, 10 capture seconds and zero transfers.
-The result reports original-owner schedule timing, observed trusted DOM key hold intervals,
-logical action costs and capture accounting. Document `activeElement` observations qualify
+The first performed plan starts at `startAt`, 400 ms ahead on the original owner's monotonic
+clock: the run must keep that instant, start no earlier, report lateness from it and bound
+`within` from it. Both readers must see the same ordered events until one is canceled, and the
+canceled reader must end by interruption alone. The result reports original-owner schedule
+timing, observed trusted DOM key hold intervals, logical action costs and capture accounting. Document `activeElement` observations qualify
 focus; they do not prove OS focus or guarantee future input delivery. A successful run would
 qualify this controlled animated scene and actual provider round trips, with no claim of exact
 remote pacing, upstream frame loss, or still-page/background painting on other sites. This
