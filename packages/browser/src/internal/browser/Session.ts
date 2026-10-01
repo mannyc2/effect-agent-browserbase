@@ -1868,11 +1868,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                           const setup = Deferred.makeUnsafe<void>();
 
                           admission.native.stopSetupPending = setup;
+                          admission.native.stopSetupConnection = activeConnection;
                           const retired = retainSetup();
 
                           return () => {
-                            if (admission.native.stopSetupPending === setup)
+                            if (admission.native.stopSetupPending === setup) {
                               admission.native.stopSetupPending = undefined;
+                              admission.native.stopSetupConnection = undefined;
+                            }
                             Deferred.doneUnsafe(setup, Effect.void);
                             retired();
                           };

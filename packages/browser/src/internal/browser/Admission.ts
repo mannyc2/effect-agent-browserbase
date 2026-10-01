@@ -26,9 +26,10 @@ export interface PendingAdmission {
 /** Native ownership survives generation changes and caller cancellation. */
 export interface NativePageCapacity {
   readonly work: Set<object>;
-  connection?: object;
   wait?: NativeWait;
   stopSetupPending?: Deferred.Deferred<void>;
+  /** The connection whose positive retirement may release `stopSetupPending`. */
+  stopSetupConnection?: object;
 }
 
 /** One page's caller ownership and retained native capacity share this record. */
@@ -331,7 +332,6 @@ export const makeAdmission = (
         );
       const token = {};
 
-      if (connection !== undefined) lane.native.connection = connection;
       lane.native.work.add(token);
       native.set(token, { lane, occupies, ...(connection === undefined ? {} : { connection }) });
 
@@ -352,6 +352,7 @@ export const makeAdmission = (
         const setup = lane.native.stopSetupPending;
 
         lane.native.stopSetupPending = undefined;
+        lane.native.stopSetupConnection = undefined;
         if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
         lane.revoked = true;
         lane.retired = true;
@@ -368,6 +369,7 @@ export const makeAdmission = (
         const setup = lane.native.stopSetupPending;
 
         lane.native.stopSetupPending = undefined;
+        lane.native.stopSetupConnection = undefined;
         if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
         forget(lane);
       }
@@ -375,10 +377,13 @@ export const makeAdmission = (
     },
     retireConnection: (connection: object) => {
       for (const lane of [registry, ...retained]) {
-        if (lane.native.connection !== connection) continue;
+        // Only the setup's own connection may release it, even when that retirement arrives
+        // after a successor connection has used the same page.
+        if (lane.native.stopSetupConnection !== connection) continue;
         const setup = lane.native.stopSetupPending;
 
         lane.native.stopSetupPending = undefined;
+        lane.native.stopSetupConnection = undefined;
         if (setup !== undefined) Deferred.doneUnsafe(setup, Effect.void);
         forget(lane);
       }
