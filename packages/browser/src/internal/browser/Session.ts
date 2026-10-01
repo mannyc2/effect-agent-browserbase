@@ -63,7 +63,6 @@ import {
 import { makeRetirement } from "../timeline/Retirement.ts";
 import { makeJournal } from "../timeline/SessionJournal.ts";
 import { makeStore } from "../timeline/Store.ts";
-import type { AdmissionLane } from "./Admission.ts";
 import { type CaptureMetadata, type CaptureParent } from "./Association.ts";
 import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
@@ -96,6 +95,7 @@ import {
   type Ticket,
   type WaitTicket,
 } from "./Owner.ts";
+import { makePageRegistry, type PageRecord } from "./PageRegistry.ts";
 import { actionTargets, makePlanExecution, type StepExecution } from "./PlanExecution.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 import { randomUuid } from "./Random.ts";
@@ -128,20 +128,6 @@ export interface ExecutionOptions extends OperationOptions {
 }
 
 type DeferredElementTarget = ElementTarget | (() => ElementTarget);
-
-/** The session's record of one registered page at one connection generation. */
-export interface PageRecord {
-  readonly identity: Target;
-  readonly admission: AdmissionLane;
-  readonly info: PageInfo;
-  readonly frames: Map<string, { detached: boolean }>;
-  phase: "open" | "paused" | "closing" | "closed";
-  containment: PageStatus["containment"];
-  readonly store: ReturnType<typeof makeStore>;
-  readonly terminal: Terminal | null;
-  readonly retirement: ReturnType<typeof makeRetirement>;
-  attempt?: Deferred.Deferred<boolean>;
-}
 
 /**
  * What one admission of page or registry work supplies beyond its operation's policy, which
@@ -416,7 +402,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   let reconnectTarget: string | undefined;
   let activeBindings: ConnectionBindings | undefined;
 
-  const pages = new Map<string, PageRecord>();
+  const pages = makePageRegistry();
 
   const journal = makeJournal({
     store: () => domain.store,
@@ -473,15 +459,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     }),
   );
 
-  const retirePageTimeline = (
-    record: typeof pages extends Map<string, infer P> ? P : never,
-    reason: TerminalReason,
-  ) => {
+  const retirePageTimeline = (record: PageRecord, reason: TerminalReason) => {
     record.retirement.request(reason);
   };
 
   const endTimeline = (reason: TerminalReason) => {
-    for (const record of pages.values()) retirePageTimeline(record, reason);
+    for (const record of pages.records()) retirePageTimeline(record, reason);
     domain.retirement.request(reason);
   };
 
@@ -513,28 +496,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     if (page !== undefined && page.phase !== "closing") owner.revokePage(pageId);
     owner.retirePage(pageId);
-    if (page !== undefined) {
-      page.phase = "closed";
-      if (page.attempt !== undefined) Deferred.doneUnsafe(page.attempt, Effect.succeed(true));
-      pages.delete(pageId);
-    }
+    pages.closed(pageId);
   };
 
   const pendingPageFaults = new Map<
     string,
-    {
-      readonly generation: number;
-      readonly authority: typeof pages extends Map<string, infer A> ? A | undefined : never;
-    }
+    { readonly generation: number; readonly authority: PageRecord | undefined }
   >();
 
   // Pages whose faults await containment, in arrival order. The pending map bounds it.
   const pageFaults = yield* Queue.unbounded<string>();
 
   const revokePage = (pageId: string, except?: AbortSignal) => {
-    const page = pages.get(pageId);
-
-    if (page !== undefined && page.phase !== "closed") page.phase = "closing";
+    pages.closing(pageId);
     owner.revokePage(pageId, except);
     activeBindings?.fencePage(pageId);
     driver?.fenceInitializationPage?.(pageId);
@@ -652,10 +626,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         });
     }
     if (reason === "uncertain" && scope === "all")
-      for (const page of pages.values())
-        page.containment = { _tag: "SessionFenced", generation: owner.state.generation };
+      for (const page of pages.records())
+        pages.contain(page, { _tag: "SessionFenced", generation: owner.state.generation });
     if (scope === "all" && ["paused", "disconnected", "uncertain", "closed"].includes(reason)) {
-      if (reason === "paused") for (const page of pages.values()) retirePageTimeline(page, "stale");
+      if (reason === "paused")
+        for (const page of pages.records()) retirePageTimeline(page, "stale");
       else
         endTimeline(
           owner.reason === "expired"
@@ -822,11 +797,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       },
       frameClosed: (pageId, frameId) => {
         if (activeConnection !== connectionLease) return;
-        const page = pages.get(pageId);
-        const frame = page?.frames.get(frameId);
-
-        if (frame !== undefined) frame.detached = true;
-        page?.frames.delete(frameId);
+        pages.detachFrame(pageId, frameId);
       },
       pageClosed: (pageId, cached) => {
         if (activeConnection === connectionLease)
@@ -858,9 +829,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
             return;
           }
-          const page = pages.get(pageId);
-
-          if (page !== undefined && page.phase === "open") page.phase = "paused";
+          pages.pause(pageId);
           activeBindings?.fencePage(pageId);
           driver?.fenceInitializationPage?.(pageId);
           owner.pausePage(pageId);
@@ -1170,7 +1139,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
         const confirmed = () => {
           if (page !== undefined && page.containment._tag === "NotRequired")
-            page.containment = { _tag: "PageClosed", pageId, generation };
+            pages.contain(page, { _tag: "PageClosed", pageId, generation });
 
           return true;
         };
@@ -1182,13 +1151,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             Effect.tap((closed) =>
               Effect.sync(() => {
                 if (closed) confirmed();
-                else page.containment = { _tag: "SessionFenced", generation };
+                else pages.contain(page, { _tag: "SessionFenced", generation });
               }),
             ),
           );
         const attempt = Deferred.makeUnsafe<boolean>();
 
-        if (page !== undefined) page.attempt = attempt;
+        if (page !== undefined) pages.attempting(page, attempt);
         revokePage(pageId);
 
         return Effect.promise(async () => {
@@ -1206,7 +1175,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           Effect.tap((closed) =>
             Effect.sync(() => {
               if (!closed && page !== undefined)
-                page.containment = { _tag: "SessionFenced", generation };
+                pages.contain(page, { _tag: "SessionFenced", generation });
             }),
           ),
           Effect.tap((closed) => Deferred.succeed(attempt, closed)),
@@ -2484,7 +2453,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 return yield* native("close-page", ticket, async () => {
                   try {
                     await getDriver().closePage(page, ticket, () => {
-                      authority.attempt = attempt;
+                      pages.attempting(authority, attempt);
                       revokePage(page.pageId, ticket.signal);
                     });
                     pageClosed(page.pageId);
@@ -3052,20 +3021,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         });
       });
 
-      page = {
+      page = pages.add({
         identity,
         admission: owner.pageAdmission(info.pageId, generation),
         info,
-        frames: new Map(),
-        phase: owner.paused(info.pageId) ? "paused" : "open",
-        containment: { _tag: "NotRequired" },
+        paused: owner.paused(info.pageId),
         store,
         retirement,
-        get terminal() {
-          return terminal;
-        },
-      };
-      pages.set(info.pageId, page);
+        terminal: () => terminal,
+      });
     }
     const record = page;
 
@@ -3293,22 +3257,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               reason: Reasons.Stale.make({}),
               outcome: "undispatched",
             });
-          let record = page.frames.get(target.frameId);
-
-          if (record === undefined) {
-            if (page.frames.size >= 128)
-              throw BrowserError.make({
-                operation: "target",
-                reason: Reasons.Limit.make({
-                  dimension: "frames",
-                  maximum: 128,
-                  observed: page.frames.size + 1,
-                }),
-                outcome: "undispatched",
-              });
-            record = { detached: false };
-            page.frames.set(target.frameId, record);
-          }
+          if (!page.frames.has(target.frameId) && page.frames.size >= 128)
+            throw BrowserError.make({
+              operation: "target",
+              reason: Reasons.Limit.make({
+                dimension: "frames",
+                maximum: 128,
+                observed: page.frames.size + 1,
+              }),
+              outcome: "undispatched",
+            });
+          const record = pages.frame(page, target.frameId);
 
           return {
             identity: Target.make({ generation, ...target }),
