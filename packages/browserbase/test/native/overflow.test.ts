@@ -226,8 +226,17 @@ it.live(
 
             for (let i = 0; i < 8; i++) yield* session.createPage;
             const pages = f.nativePages(session.reference.sessionId);
+            const initial = session.initialPage;
+
+            const authorities = yield* Effect.forEach(yield* session.listPages(), (info) =>
+              session.page(info),
+            );
+
+            const generation = (yield* session.status).generation;
 
             expect(pages).toHaveLength(9);
+            expect(authorities).toHaveLength(9);
+            expect(generation).toBe(0);
             let dismissals = 0;
 
             for (const page of pages) {
@@ -264,9 +273,21 @@ it.live(
                 .map((record) => record.disposition),
             ).toEqual(["pending", "confirmed"]);
             expect(dismissals).toBe(1);
+            const states = yield* Effect.forEach(authorities, (page) => page.status);
+
+            expect(states.filter((state) => state.phase === "paused")).toHaveLength(8);
+            expect(states.filter((state) => state.phase === "open")).toHaveLength(1);
+            expect(yield* initial.status).toMatchObject({ phase: "paused" });
+            expect(
+              yield* initial.click({ selector: "#should-not-run" }).pipe(Effect.result),
+            ).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+            });
             expect(yield* session.status).toMatchObject({
-              phase: "paused",
-              reason: "dialog-policy",
+              phase: "open",
+              reason: null,
+              generation,
               unresolvedDispatch: false,
             });
             expect(

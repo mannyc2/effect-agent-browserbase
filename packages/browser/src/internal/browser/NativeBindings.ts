@@ -247,13 +247,16 @@ export const makeNativeBindings = (
         cdp = await context.newCDPSession(subject);
       } catch (cause) {
         // Chromium routes same-process child frames through their parent's target. Only this
-        // exact pinned Playwright refusal selects that already-owned session; other failures
-        // remain faults rather than silently omitting an out-of-process frame.
+        // exact pinned Playwright refusal selects that already-owned session. Node and Bun
+        // supply different API prefixes; other failures remain faults rather than silently
+        // omitting an out-of-process frame.
         if (
           subject !== page &&
           cause instanceof Error &&
-          cause.message ===
-            "browserContext.newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session"
+          (cause.message ===
+            "browserContext.newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session" ||
+            cause.message ===
+              "newCDPSession: This frame does not have a separate CDP session, it is a part of the parent frame's session")
         )
           return;
         throw cause;
@@ -484,8 +487,10 @@ export const makeNativeBindings = (
             if (
               !current() &&
               cause instanceof Error &&
-              cause.message ===
-                "cdpSession.send: Protocol error (Runtime.evaluate): uniqueContextId not found"
+              (cause.message ===
+                "cdpSession.send: Protocol error (Runtime.evaluate): uniqueContextId not found" ||
+                cause.message ===
+                  "send: Protocol error (Runtime.evaluate): uniqueContextId not found")
             )
               throw retirementError("stale");
             throw cause;
@@ -507,6 +512,7 @@ export const makeNativeBindings = (
       if (
         cause instanceof Error &&
         (cause.message === "cdpSession.send: Target page, context or browser has been closed" ||
+          cause.message === "send: Target page, context or browser has been closed" ||
           cause.message ===
             "browserContext.newCDPSession: Target page, context or browser has been closed") &&
         (page.isClosed() ||

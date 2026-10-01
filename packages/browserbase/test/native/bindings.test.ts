@@ -6,7 +6,7 @@ import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserError, InitializationError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { CleanupResult } from "effect-browserbase/cleanup";
-import type { Frame, Page } from "playwright-core";
+import type { Dialog, Frame, Page } from "playwright-core";
 
 import {
   localBrowser,
@@ -580,8 +580,17 @@ it.live(
       Effect.gen(function* () {
         const fixture = yield* localBrowser;
         const cleanup: CleanupResult[] = [];
+        const entered = yield* Deferred.make<void>();
+        const paused = yield* Deferred.make<Dialog>();
         let failedNativeRegistration = false;
         let finalized = false;
+        let nativePage: Page | undefined;
+        let nativeFailure: unknown;
+        let release = () => {};
+
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
 
         const bootstrap = Bootstrap.binding({
           ...limits,
@@ -605,37 +614,80 @@ it.live(
                 // oxlint-disable-next-line typescript/unbound-method -- called on this context
                 const original = context.newCDPSession;
 
-                // One instance-local transport failpoint, after genuine successful initialization.
-                // No global Playwright replacement or second connection is involved in this failure.
+                // Gate an original Chromium rejection after setup starts on the owned connection.
+                // Quarantine must suppress new setup without erasing this already-started failure.
                 yield* Effect.acquireRelease(
                   Effect.sync(() => {
                     context.newCDPSession = async (subject) => {
-                      if ("context" in subject && subject !== page && !failedNativeRegistration) {
-                        failedNativeRegistration = true;
-                        throw new Error("PRIVATE-NATIVE-REGISTRATION-CAUSE");
+                      const cdp = await original.call(context, subject);
+
+                      if ("mainFrame" in subject && subject !== page) {
+                        const send = cdp.send.bind(cdp);
+
+                        cdp.send = (method, params) => {
+                          if (method !== "Runtime.enable" || nativePage !== undefined)
+                            return send(method, params);
+                          nativePage = subject;
+
+                          return send("Runtime.addBinding", {
+                            name: "PRIVATE-NATIVE-REGISTRATION-CAUSE",
+                            executionContextId: -1,
+                          })
+                            .then(() => send(method, params))
+                            .catch((cause: unknown) => {
+                              failedNativeRegistration = true;
+                              nativeFailure = cause;
+                              Deferred.doneUnsafe(entered, Effect.void);
+
+                              return held.then(() => {
+                                throw cause;
+                              });
+                            });
+                        };
                       }
 
-                      return original.call(context, subject);
+                      return cdp;
                     };
                   }),
                   () =>
                     Effect.sync(() => {
+                      release();
                       context.newCDPSession = original;
                       finalized = true;
                     }),
                 );
-                yield* native("open failing popup", () =>
-                  page.evaluate("void window.open('about:blank')"),
+                const registering = yield* session.page(yield* session.createPage);
+
+                yield* Deferred.await(entered);
+                expect(nativeFailure).toBeInstanceOf(Error);
+                if (!(nativeFailure instanceof Error))
+                  throw new Error("Native registration did not fail");
+                expect(nativeFailure.message).toBe(
+                  "cdpSession.send: Protocol error (Runtime.addBinding): Cannot find execution context with given executionContextId",
                 );
+                if (nativePage === undefined)
+                  throw new Error("The native fixture has no registering page");
+
+                nativePage.once("dialog", (dialog) =>
+                  Deferred.doneUnsafe(paused, Effect.succeed(dialog)),
+                );
+                void nativePage.evaluate("alert('registration quarantine')").catch(() => {});
+                const dialog = yield* Deferred.await(paused);
+
+                expect(yield* registering.status).toMatchObject({ phase: "paused" });
+                // Native dismissal lets cleanup settle; it does not restore the Page authority.
+                yield* native("dismiss registration quarantine dialog", () => dialog.dismiss());
+                expect(yield* registering.status).toMatchObject({ phase: "paused" });
+                expect(yield* session.status).toMatchObject({ phase: "open" });
+                yield* Effect.sync(release);
 
                 return yield* Effect.never;
               }),
             ).pipe(Effect.result, Effect.timeout(5000));
           }),
           {
-            // The popup pauses action admission synchronously, but it is still this live connection.
-            // Registration supervision must not mistake paused for retired.
             popupPolicy: "pause",
+            dialogPolicy: "pause",
             onCleanup: (report) =>
               Effect.sync(() => {
                 cleanup.push(report);
@@ -654,6 +706,9 @@ it.live(
             reason: "native",
           });
           expect(JSON.stringify(result.failure)).not.toContain("PRIVATE-NATIVE-REGISTRATION-CAUSE");
+          if (!(nativeFailure instanceof Error))
+            throw new Error("Native registration did not fail");
+          expect(JSON.stringify(result.failure)).not.toContain(nativeFailure.message);
         }
         expect(fixture.createBodies).toHaveLength(1);
         expect(fixture.connections).toEqual(["session-1"]);
