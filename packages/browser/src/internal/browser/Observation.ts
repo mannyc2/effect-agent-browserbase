@@ -590,10 +590,12 @@ export const makeObservation = (
     }
   };
 
-  const reserve = (snapshot: Snapshot) => {
-    const page = [...reservations].filter(
-      (previous) => previous.target.pageId === snapshot.target.pageId,
-    );
+  /** Refuses, before it is taken, any reservation that would exceed a page or session limit. */
+  const admitReservation = (
+    pageId: string,
+    requested: { readonly snapshots: number; readonly handles: number; readonly bytes: number },
+  ) => {
+    const page = [...reservations].filter((previous) => previous.target.pageId === pageId);
 
     const dimensions = [
       {
@@ -601,21 +603,21 @@ export const makeObservation = (
         pageMaximum: limits.maxSnapshotsPerPage,
         sessionMaximum: limits.maxSnapshotsPerSession,
         count: (_previous: Snapshot) => 1,
-        requested: 1,
+        requested: requested.snapshots,
       },
       {
         dimension: "observation-handles",
         pageMaximum: limits.maxHandlesPerPage,
         sessionMaximum: limits.maxHandlesPerSession,
         count: (previous: Snapshot) => previous.reservedHandles,
-        requested: snapshot.reservedHandles,
+        requested: requested.handles,
       },
       {
         dimension: "observation-bytes",
         pageMaximum: limits.maxBytesPerPage,
         sessionMaximum: limits.maxBytesPerSession,
         count: (previous: Snapshot) => previous.reservedBytes,
-        requested: snapshot.reservedBytes,
+        requested: requested.bytes,
       },
     ] as const;
 
@@ -635,7 +637,26 @@ export const makeObservation = (
           throw failure(Reasons.Limit.make({ dimension, maximum, observed }), "undispatched");
       }
     }
+  };
+
+  const reserve = (snapshot: Snapshot) => {
+    admitReservation(snapshot.target.pageId, {
+      snapshots: 1,
+      handles: snapshot.reservedHandles,
+      bytes: snapshot.reservedBytes,
+    });
     reservations.add(snapshot);
+  };
+
+  /** Extends a reserved reading snapshot by what one more resolved node retains. */
+  const extendReservation = (snapshot: Snapshot, handles: number, retainedBytes: number) => {
+    admitReservation(snapshot.target.pageId, {
+      snapshots: 0,
+      handles,
+      bytes: retainedBytes,
+    });
+    snapshot.reservedHandles += handles;
+    snapshot.reservedBytes += retainedBytes;
   };
 
   /** Temporary readers use the same finite native ownership as published frame snapshots. */
@@ -1149,10 +1170,6 @@ export const makeObservation = (
       const samples: Array<DescriptorSample | undefined> = [];
       const records: Retained[] = [];
 
-      const nativeRequests = requests.filter(
-        (request) => request.target._tag === "Descriptor",
-      ).length;
-
       let released: Promise<void> | undefined;
 
       const release = (): Promise<void> => {
@@ -1181,8 +1198,10 @@ export const makeObservation = (
           pending: 0,
           retired: false,
           nativeRetired: false,
-          reservedHandles: nativeRequests + 3,
-          reservedBytes: 4096 + requests.length * 512 * 1024,
+          // One descriptor read at a time: its holder, node array and worst-case reply. Each
+          // resolved node then extends this by what it actually retains.
+          reservedHandles: 3,
+          reservedBytes: 4096 + 512 * 1024,
         };
 
         reserve(snapshot);
@@ -1298,6 +1317,11 @@ export const makeObservation = (
             if (value === undefined) throw failure(Reasons.Incomplete.make({}), "undispatched");
             node = { ...node, option: { selectElementId: `element-${request.parent}`, value } };
           }
+          extendReservation(
+            snapshot,
+            request.target._tag === "Descriptor" ? 1 : 0,
+            bytes(node.identity) + bytes(node.stable) + bytes(node.option?.value ?? ""),
+          );
           snapshot.nodes.set(`element-${index}`, node);
           records.push(node);
 

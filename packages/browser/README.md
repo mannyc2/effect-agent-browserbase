@@ -240,7 +240,10 @@ one slot beyond each retained frame observation for an action's fresh read; a on
 supports passive reads alone but cannot read facts or act while an observation occupies it.
 Extraction reserves 4 KiB plus the requested text bytes and 512 KiB per requested control;
 a picture checkpoint also reserves its picture allowance. A standalone screenshot reserves
-4 KiB plus its returned-byte allowance. Released native resources reduce the retained reservation.
+4 KiB plus its returned-byte allowance. A plan step's targets reserve, per frame, one
+descriptor read at a time (4 KiB plus 512 KiB) and then what each resolved control actually
+retains, so a large form refuses only when its retained facts exceed the bound. Released native
+resources reduce the retained reservation.
 
 `page.ready({ timeoutMillis })`, `page.describe({ timeoutMillis })`,
 `page.listFrames({ timeoutMillis })`, `page.close({ timeoutMillis })` and
