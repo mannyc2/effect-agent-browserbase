@@ -240,10 +240,7 @@ export const makeKeyboard = (
    * is the browser's bookkeeping, not a guarantee, and where it failed the keys would land in
    * another frame than the one this guard was asked about.
    */
-  const requireFocus = async (
-    element: ElementHandle<Element>,
-    outcome: "undispatched" | "unknown" = "undispatched",
-  ): Promise<void> => {
+  const requireFocus = async (element: ElementHandle<Element>): Promise<void> => {
     const focused: unknown = await element.evaluate((node) => {
       if (!node.isConnected || node.ownerDocument !== document || !node.ownerDocument.hasFocus())
         return false;
@@ -259,7 +256,8 @@ export const makeKeyboard = (
       return false;
     });
 
-    if (focused !== true) throw failure(Reasons.NotFocused.make({}), outcome);
+    // Nothing more is sent; the owner keeps whatever earlier input it acknowledged.
+    if (focused !== true) throw failure(Reasons.NotFocused.make({}), "undispatched");
   };
 
   const planKeys = (text: string, ticket: Ticket): KeySchedule => {
@@ -313,7 +311,7 @@ export const makeKeyboard = (
 
     if (description === undefined) {
       await submit(() => port.send("Input.insertText", { text: stroke.key }));
-      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: true });
+      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
       if (stroke.holdMillis > 0)
         await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
 
@@ -406,7 +404,7 @@ export const makeKeyboard = (
         }),
       );
     }
-    ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: true });
+    ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
   };
 
   const pacedKeys = async (
@@ -445,7 +443,7 @@ export const makeKeyboard = (
       ticket.acknowledge?.({ subphase: "focus", logicalComplete: false });
       await readmit?.();
       check();
-      await requireFocus(element, ticket.dispatched ? "unknown" : "undispatched");
+      await requireFocus(element);
       check();
       ticket.dispatch();
       await page.keyboard.press("Backspace");
@@ -567,7 +565,7 @@ export const makeKeyboard = (
               ticket.check();
               if (start > 0 && element !== undefined) {
                 // Keep the exact admitted node; resolving a selector again could redirect input.
-                await requireFocus(element, "unknown");
+                await requireFocus(element);
                 ticket.check();
               }
               await typeWindow(port, characters.slice(start, start + 16), ticket);

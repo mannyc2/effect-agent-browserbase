@@ -41,7 +41,7 @@ import type {
 } from "../../PlanData.ts";
 import type { Correlation, Payload } from "../../TimelineData.ts";
 import type { DescriptorSample, ResolvedElement } from "./Descriptor.ts";
-import type { Ticket } from "./Owner.ts";
+import { strongestOutcome, type Ticket } from "./Owner.ts";
 import { prepare, type PerformancePlan } from "./Performance.ts";
 import { capture, inputSlots, pathKey, type TargetSample, validateInputs } from "./Recording.ts";
 import type { ExecutionOptions } from "./Session.ts";
@@ -126,9 +126,8 @@ interface AttemptState {
   fieldIndex?: number;
   overflow: boolean;
   completed: boolean;
-  pending: number;
-  acknowledged: boolean;
-  partialAcknowledged: boolean;
+  /** The strongest outcome the owner classified for any operation this attempt admitted. */
+  reached: BrowserOutcome;
   capture?: DescriptorCapture;
   receipt?: RunReceipt;
   outcome?: BrowserOutcome;
@@ -158,13 +157,9 @@ const attemptSnapshot = (state: AttemptState): StepAttempt =>
     ...(state.performance === undefined ? {} : { performance: state.performance }),
   });
 
-const outcome = (state: AttemptState, error?: BrowserError): BrowserOutcome => {
-  if (error?.outcome === "unknown" || state.pending > 0) return "unknown";
-  if (state.acknowledged) return "performed";
-  if (state.partialAcknowledged) return "rejected";
-
-  return error?.outcome ?? "undispatched";
-};
+/** One classifier: the owner's, per admitted operation, never weakened by a later failure. */
+const outcome = (state: AttemptState, error?: BrowserError): BrowserOutcome =>
+  strongestOutcome(state.reached, error?.outcome ?? "undispatched");
 
 const result = (value: BrowserOutcome, failed: boolean): AttemptResult => {
   switch (value) {
@@ -393,9 +388,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
               samples: new Map(),
               overflow: false,
               completed: false,
-              pending: 0,
-              acknowledged: false,
-              partialAcknowledged: false,
+              reached: "undispatched",
               containment: { _tag: "NotRequired" },
             };
 
@@ -421,7 +414,6 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 profile: performance.profile,
               });
             const finishedTickets = new WeakSet<Ticket>();
-            const pendingTickets = new WeakMap<Ticket, boolean>();
 
             const targetBindings = new Map<
               ObservedElement | ResolvedElement | string,
@@ -683,23 +675,6 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                       ticket.signal.aborted ||
                       now() >= ticket.deadline;
 
-                    if (phase === "Dispatched" && pendingTickets.get(ticket) !== true) {
-                      state.pending++;
-                      pendingTickets.set(ticket, true);
-                    } else if (phase === "Acknowledged") {
-                      const pending = pendingTickets.get(ticket) === true;
-
-                      if (pending) state.pending--;
-                      pendingTickets.set(ticket, false);
-                      if (!late) {
-                        if (
-                          (acknowledgement === undefined || acknowledgement.logicalComplete) &&
-                          ticket.dispatched
-                        )
-                          state.acknowledged = true;
-                        else if (pending) state.partialAcknowledged = true;
-                      }
-                    }
                     appendPhase(
                       {
                         phase,
@@ -715,6 +690,11 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                     );
                     if (phase === "Terminal") {
                       finishedTickets.add(ticket);
+                      if (!state.completed)
+                        state.reached = strongestOutcome(
+                          state.reached,
+                          ticket.outcome ?? "undispatched",
+                        );
                       if (
                         ticket.containment !== undefined &&
                         ticket.containment._tag !== "NotRequired"

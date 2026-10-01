@@ -81,6 +81,20 @@ export type ObserveTicket = (facts: {
   readonly correlation: () => Correlation | null;
 }) => TicketObserver;
 
+const outcomeRank: Record<BrowserOutcome, number> = {
+  undispatched: 0,
+  rejected: 1,
+  performed: 2,
+  unknown: 3,
+};
+
+/**
+ * What is known about input never weakens: an unknown outcome stays unknown, acknowledged input
+ * stays performed, and refused preparation stays rejected, whichever evidence says so.
+ */
+export const strongestOutcome = (left: BrowserOutcome, right: BrowserOutcome): BrowserOutcome =>
+  outcomeRank[right] > outcomeRank[left] ? right : left;
+
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -776,22 +790,27 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         lane.active = { controller, operation };
         let dispatched = false;
         let pending = false;
-        let logicalAcknowledged = false;
-        let partialAcknowledged = false;
+        // Acknowledged input that landed, and acknowledged preparation that changed no input.
+        let inputAcknowledged = false;
+        let preparationAcknowledged = false;
         let phase: NonNullable<Ticket["phase"]> = "Prepared";
         let unknownDecided = false;
         let containment: Containment = { _tag: "NotRequired" };
         const generation = state.generation;
         const allowed = options.phases ?? ["open"];
 
-        const currentOutcome = (fallback: BrowserOutcome = "undispatched"): BrowserOutcome =>
-          pending || unknownDecided
-            ? "unknown"
-            : logicalAcknowledged
-              ? "performed"
-              : partialAcknowledged
-                ? "rejected"
-                : fallback;
+        // A driver's own outcome describes its last command; these flags, everything acknowledged.
+        const currentOutcome = (driver: BrowserOutcome = "undispatched"): BrowserOutcome =>
+          strongestOutcome(
+            pending || unknownDecided
+              ? "unknown"
+              : inputAcknowledged
+                ? "performed"
+                : preparationAcknowledged
+                  ? "rejected"
+                  : "undispatched",
+            driver,
+          );
 
         const check = () => {
           if (Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline) expire();
@@ -896,8 +915,15 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               !controller.signal.aborted &&
               phase !== "Terminal"
             ) {
-              if (fact === undefined || fact.logicalComplete) logicalAcknowledged = true;
-              else if (mutation) partialAcknowledged = true;
+              // A burst of keys or scroll samples is input that landed, even before the action
+              // completes; only focus or scroll-into-view preparation leaves the input unchanged.
+              if (
+                fact === undefined ||
+                fact.logicalComplete ||
+                (fact.subphase !== "focus" && fact.subphase !== "scroll-into-view")
+              )
+                inputAcknowledged = true;
+              else if (mutation) preparationAcknowledged = true;
             }
             if (phase !== "Terminal") phase = "Acknowledged";
             if (!unknownDecided) unresolved.delete(controller);

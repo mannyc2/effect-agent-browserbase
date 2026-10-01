@@ -849,10 +849,14 @@ A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabular
 
 With `into`, the original node and document must still have focus before each subsequent window. Focus is never repaired. Commands already submitted in a window can land after focus moves. Once that window has successfully drained, a later `not-focused` refusal reports `performed`: earlier input was acknowledged, and the refused window sends nothing.
 
-Performed typing checks focus before each stroke. A fully acknowledged stroke, including its
-key and modifier releases, retains `performed` evidence if a later stroke is refused. An
-acknowledged text insertion does the same. Focus and selection preparation remain partial;
-unresolved key input still reports `unknown` and receives the original containment policy.
+Performed typing checks focus once before each stroke, never between a key and its release: a
+key whose own default action moves focus (Tab, an Enter that submits, an auto-advancing field)
+still completes its stroke. A fully acknowledged stroke, including its key and modifier releases,
+retains `performed` evidence if a later stroke is refused. An acknowledged text insertion, the
+Backspace that erases a performed Fill's old value, a filled form field and an acknowledged
+scroll sample do the same. Only focus, selection and scroll-into-view preparation remain partial
+and report `rejected` when nothing else landed; unresolved key input still reports `unknown` and
+receives the original containment policy. A later failure never weakens what was acknowledged.
 
 A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. Plain `type` sends a shifted character as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Performed plans hold Shift for uppercase and shifted punctuation and pace complete balanced strokes under one logical action. A stroke remains unresolved until its key and modifiers are released; quiet intervals do not renew the absolute deadline or retain unresolved native replies.
 

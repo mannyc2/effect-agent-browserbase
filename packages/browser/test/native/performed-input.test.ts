@@ -2,9 +2,10 @@ import { createServer } from "node:http";
 
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
+import type { StepFailed } from "effect-browser/plan";
 
 import { externalChromium } from "../fixtures/StandaloneBrowser.ts";
 
@@ -27,6 +28,19 @@ document.addEventListener("input", () => {
   document.getElementById("values").textContent =
     first.value + "|" + second.value;
 });
+</script>`,
+  // A one-time-code field that hands focus to the next box once two characters are in.
+  "/otp": `<input aria-label="Code" id="a"><input aria-label="Next" id="b"><p id="mirror"></p>
+<script>
+a.addEventListener("input", () => { mirror.textContent = a.value; });
+a.addEventListener("keyup", () => { if (a.value.length >= 2) b.focus(); });
+</script>`,
+  // Erasing the old value moves focus away before the first replacement character.
+  "/erase": `<input aria-label="Name" id="field" value="old"><input aria-label="Other" id="other">
+<p id="mirror">old</p>
+<script>
+field.addEventListener("input", () => { mirror.textContent = field.value; });
+field.addEventListener("keyup", (event) => { if (event.key === "Backspace") other.focus(); });
 </script>`,
 };
 
@@ -75,6 +89,18 @@ const input = (label: string) =>
     descriptor: { kind: "input", label, matchScope: "document" },
   }) as const;
 
+const stepFailure = <A>(exit: Exit.Exit<A, StepFailed>) => {
+  expect(Exit.isFailure(exit)).toBe(true);
+
+  const failed = Exit.isFailure(exit)
+    ? exit.cause.reasons.flatMap((reason) => (reason._tag === "Fail" ? [reason.error] : []))
+    : [];
+
+  expect(failed).toHaveLength(1);
+
+  return failed[0];
+};
+
 it.live("real CDP: a performed key that moves focus keeps its stroke balanced and its page", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -108,6 +134,88 @@ it.live("real CDP: a performed key that moves focus keeps its stroke balanced an
       // Nothing is left held: the next plain key lands unshifted where focus is now.
       yield* page.type({ text: "x" });
       expect((yield* page.readText({ selector: "#values" })).text).toBe("x|");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live(
+  "real CDP: acknowledged performed keys stay performed when a later stroke loses focus",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const session = yield* open("/otp");
+        const page = session.initialPage;
+
+        yield* page.click({ selector: "#a" });
+
+        const failed = stepFailure(
+          yield* page
+            .run(
+              {
+                version: 1,
+                steps: [
+                  {
+                    id: "code",
+                    action: {
+                      _tag: "Type",
+                      target: input("Code"),
+                      text: { _tag: "Literal", value: "123456" },
+                    },
+                  },
+                ],
+              },
+              { style: { seed: 7 } },
+            )
+            .pipe(Effect.exit),
+        );
+
+        expect(failed).toMatchObject({
+          stage: "AttemptFailed",
+          error: { reason: { _tag: "NotFocused" }, outcome: "performed" },
+          attempt: {
+            outcome: "performed",
+            result: { _tag: "AcknowledgedWithPostconditionFailure" },
+            containment: { _tag: "NotRequired" },
+          },
+        });
+        expect((yield* page.readText({ selector: "#mirror" })).text).toBe("12");
+      }).pipe(Effect.provide(layer)),
+    ),
+);
+
+it.live("real CDP: a performed Fill that already erased the value stays performed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/erase");
+      const page = session.initialPage;
+
+      const failed = stepFailure(
+        yield* page
+          .run(
+            {
+              version: 1,
+              steps: [
+                {
+                  id: "name",
+                  action: {
+                    _tag: "Fill",
+                    target: input("Name"),
+                    value: { _tag: "Literal", value: "new" },
+                  },
+                },
+              ],
+            },
+            { style: { seed: 7 } },
+          )
+          .pipe(Effect.exit),
+      );
+
+      expect(failed).toMatchObject({
+        stage: "AttemptFailed",
+        error: { reason: { _tag: "NotFocused" }, outcome: "performed" },
+        attempt: { outcome: "performed", containment: { _tag: "NotRequired" } },
+      });
+      expect((yield* page.readText({ selector: "#mirror" })).text).toBe("");
     }).pipe(Effect.provide(layer)),
   ),
 );
