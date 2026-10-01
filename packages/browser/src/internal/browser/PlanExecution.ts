@@ -1,6 +1,6 @@
 import {
   Cause,
-  type Clock,
+  Clock,
   Deferred,
   Duration,
   Effect,
@@ -35,6 +35,7 @@ import type {
   Step,
   StepAttempt,
 } from "../../PlanData.ts";
+import type { Correlation, Payload } from "../../TimelineData.ts";
 import type { DescriptorSample, ResolvedElement } from "./Descriptor.ts";
 import type { Ticket } from "./Owner.ts";
 import { capture, inputSlots, pathKey, type TargetSample, validateInputs } from "./Recording.ts";
@@ -74,6 +75,11 @@ export interface PlanExecutionOptions {
   readonly lifetimeDeadline: number;
   readonly actionTimeoutMillis: number;
   readonly newId: Effect.Effect<string>;
+  /** Captured at run execution and retained with its original domain, never an evidence owner. */
+  readonly publish?: () => {
+    readonly append: (correlation: Correlation, event: Payload) => void;
+    readonly release: () => void;
+  };
   /** This bounds registrations, never takes a Page mutation permit for the whole walk. */
   readonly reserve: Effect.Effect<() => void, BrowserError>;
   readonly executeStep: (
@@ -204,12 +210,15 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
         const runId = yield* restore(configuration.newId);
         const ids = yield* restore(Effect.forEach(plan.steps, () => configuration.newId));
         const release = yield* configuration.reserve.pipe(Effect.mapError(preparationFailure));
+        const publication = configuration.publish?.();
+        const publish = publication?.append;
         let released = false;
 
         const releaseOnce = Effect.sync(() => {
           if (released) return;
           released = true;
           release();
+          publication?.release();
         });
 
         yield* Effect.addFinalizer(() => releaseOnce);
@@ -274,6 +283,15 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
             };
 
             attempts.push(state);
+
+            const correlation = (): Correlation => ({
+              runId,
+              stepId: step.id,
+              attemptId,
+              ...(state.fieldIndex === undefined ? {} : { fieldIndex: state.fieldIndex }),
+            });
+
+            publish?.(correlation(), { _tag: "Planned", action: step.action._tag });
             const finishedTickets = new WeakSet<Ticket>();
             const pendingTickets = new WeakMap<Ticket, boolean>();
 
@@ -384,6 +402,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 operationDeadline: stepDeadline,
                 ...(queueDeadline === undefined ? {} : { queueDeadline }),
                 evidence: {
+                  correlation,
                   phase: (phase, ticket) => {
                     const late =
                       state.completed ||
@@ -488,6 +507,18 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                     state.outcome = outcome(state, state.error);
                     state.result = result(state.outcome, Exit.isFailure(exit));
                     state.completed = true;
+                    if (Exit.isFailure(exit))
+                      publish?.(
+                        correlation(),
+                        Cause.hasInterrupts(exit.cause)
+                          ? { _tag: "Cancelled", outcome: state.outcome }
+                          : {
+                              _tag: "Failed",
+                              operation: "run",
+                              reason: state.error?.reason._tag ?? "Failed",
+                              outcome: state.outcome,
+                            },
+                      );
                   }),
                 ),
               ),
@@ -577,7 +608,7 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
           cancel: Fiber.interrupt(fiber),
         });
       }),
-    );
+    ).pipe(Effect.provideService(Clock.Clock, configuration.clock));
 
   return {
     start,

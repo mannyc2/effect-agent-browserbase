@@ -194,7 +194,7 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page, site } = yield* fixture();
-        const stage = (yield* session.pages()).find((candidate) => candidate.selected)!;
+        const stage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
         const stageTarget = yield* session.pinPage(stage);
         const scout = yield* session.createPage();
         const scoutTarget = yield* session.pinPage(scout);
@@ -215,7 +215,7 @@ it.live(
         expect(
           (yield* session.checkpoint({ picture: true })).picture?.bytes.length,
         ).toBeGreaterThan(0);
-        expect(yield* session.pages()).toHaveLength(2);
+        expect(yield* session.listPages()).toHaveLength(2);
         expect(yield* session.status).toMatchObject({
           phase: "open",
           busy: true,
@@ -402,7 +402,7 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
       Effect.gen(function* () {
         const { session, page, site } = yield* fixture();
         let frame = page.mainFrame();
-        const stage = (yield* session.pages()).find((candidate) => candidate.selected)!;
+        const stage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
 
         if (change !== "page-navigation") {
           yield* Effect.promise(() =>
@@ -433,7 +433,7 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
         // Native entry precedes return from the short owner guard. Prove that admission has
         // retired before changing selection or the waited document.
-        yield* session.pages().pipe(
+        yield* session.listPages().pipe(
           Effect.retry({
             times: 100,
             schedule: Schedule.spaced("5 millis"),
@@ -452,7 +452,7 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
         expect(yield* Effect.result(Fiber.join(pending.fiber))).toMatchObject(stale);
         expect(pending.successes()).toBe(0);
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
-        expect(yield* session.pages()).toHaveLength(1);
+        expect(yield* session.listPages()).toHaveLength(1);
       }),
     ).pipe(Effect.provide(layer)),
 );
@@ -588,7 +588,7 @@ it.live.each(["page", "session"] as const)(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page, site, host } = yield* fixture();
-        const original = (yield* session.pages()).find((candidate) => candidate.selected)!;
+        const original = (yield* session.listPages()).find((candidate) => candidate.selected)!;
         const survivor = closing === "page" ? yield* session.createPage() : undefined;
 
         if (survivor !== undefined) {

@@ -179,7 +179,7 @@ const program = Effect.scoped(
               );
 
               // A second owner borrows the same session and closes without releasing it.
-              const pages = yield* session.pages();
+              const pages = yield* session.listPages();
               const selected = pages.find((page) => page.selected);
 
               if (selected === undefined) throw new Error("The owned session has no selected page");

@@ -1,4 +1,15 @@
-import { Cause, Clock, Deferred, Effect, Exit, Option, Queue, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
 
 import type { Target } from "../../BrowserData.ts";
 import type { CaptureInterval } from "../../Capture.ts";
@@ -11,10 +22,12 @@ import {
   type CapturedFrame,
 } from "../../CaptureData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
+import type { CaptureReason } from "../../TimelineData.ts";
 import {
   type CaptureLease,
   type CaptureParent,
   type CaptureResolution,
+  type CaptureMetadata,
 } from "../browser/Association.ts";
 import type { CaptureSource, NativeFrame } from "../browser/Driver.ts";
 import { jpegGeometry } from "../browser/Images.ts";
@@ -89,7 +102,8 @@ export const startCapture = Effect.fnUntraced(function* (
       }),
     ),
   );
-  const clock = yield* Clock.Clock;
+  const clock = parent.owner.clock;
+  const captureId = yield* parent.newCaptureId;
   const wake = yield* Queue.dropping<void>(1);
   const finished = yield* Queue.dropping<void>(1);
   const completed = yield* Deferred.make<void>();
@@ -104,13 +118,14 @@ export const startCapture = Effect.fnUntraced(function* (
   let target: Target | undefined;
   let leaseKey: string | undefined;
   let targetStatus: CaptureResolution["status"];
+  let metadata: CaptureResolution["metadata"];
   let terminalAuthority: "closing" | "closed" | undefined;
 
   let ended = false,
     subscribed = false,
     cleanupFinished = false;
 
-  let reason = "stopped";
+  let reason: CaptureReason = "stopped";
   let error: BrowserError | undefined;
 
   let received = 0,
@@ -122,26 +137,46 @@ export const startCapture = Effect.fnUntraced(function* (
 
   let first: number | undefined, last: number | undefined;
   let document = 0;
+  let captureBoundary = 0;
+  let acceptedBoundary = -1;
   let initialUrl: string | null = null;
+  let initialUrlQualification: "NativeCached" | "Unread" | "Omitted" = "Unread";
   let documentBoundariesTruncated = false;
   const documentBoundaries: Array<CaptureSummary["documentBoundaries"][number]> = [];
 
   /** A URL change is recorded; only a new document advances the frame attribution. */
   const nextDocument = (url: string, sameDocument = false): void => {
     if (ended) return;
+    captureBoundary++;
     if (!sameDocument) document++;
     // The latest boundaries are kept: a live consumer needs the address of what it is showing now.
     if (documentBoundaries.length >= MaxDocumentBoundaries) {
       documentBoundaries.shift();
       documentBoundariesTruncated = true;
     }
-    documentBoundaries.push({
+
+    const boundary = {
       document,
       sameDocument,
       observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
       afterSequence: received === 0 ? null : received - 1,
       url: documentUrl(url),
-    });
+    };
+
+    documentBoundaries.push(boundary);
+    if (target !== undefined)
+      metadata?.({
+        _tag: "CaptureBoundary",
+        captureId,
+        target,
+        captureBoundary,
+        captureDocument: document,
+        sameDocument: boundary.sameDocument,
+        observedMonotonicNanos: boundary.observedMonotonicNanos,
+        afterSequence: boundary.afterSequence,
+        url: boundary.url,
+        urlQualification: boundary.url === null ? "Omitted" : "NativeCached",
+      });
   };
 
   let geometry:
@@ -176,6 +211,7 @@ export const startCapture = Effect.fnUntraced(function* (
         if (afterStart) {
           nativeStop = "confirmed";
           releaseReservation();
+          if (cleanupFinished) publishCapture("Stopped");
         } else {
           preStartStopConfirmed = true;
           confirmPostStartStop();
@@ -206,11 +242,12 @@ export const startCapture = Effect.fnUntraced(function* (
     );
   };
 
-  const finish = (why: string, failure?: BrowserError) => {
+  const finish = (why: CaptureReason, failure?: BrowserError) => {
     if (ended) return;
     ended = true;
     reason = why;
     error = failure;
+    publishCapture("Ended");
     Queue.offerUnsafe(wake, undefined);
     Queue.offerUnsafe(finished, undefined);
   };
@@ -280,6 +317,37 @@ export const startCapture = Effect.fnUntraced(function* (
     });
   };
 
+  const publishCapture = (
+    phase: Extract<CaptureMetadata, { readonly _tag: "Capture" }>["phase"],
+  ) => {
+    if (metadata === undefined || target === undefined) return;
+    const facts = snapshot();
+
+    metadata({
+      _tag: "Capture",
+      captureId,
+      target,
+      phase,
+      latePhase: ended && (phase === "Watching" || phase === "Started"),
+      observedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+      captureBoundary,
+      captureDocument: document,
+      qualification: facts.qualification,
+      initialUrl,
+      initialUrlQualification,
+      reason: ended ? reason : null,
+      nativeStop: phase === "Stopped" ? nativeStop : null,
+      received,
+      delivered,
+      discarded: facts.discarded,
+      overflow: facts.overflow,
+      late,
+      duplicates,
+      rejected,
+      upstreamDrops: "unknown",
+    });
+  };
+
   const performStop = yield* Effect.cached(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -326,10 +394,11 @@ export const startCapture = Effect.fnUntraced(function* (
         } else nativeStop = "confirmed";
         if (nativeStop === "confirmed") releaseReservation();
         cleanupFinished = true;
+        publishCapture("Stopped");
 
         return snapshot();
       }),
-    ),
+    ).pipe(Effect.provideService(Clock.Clock, clock)),
   );
 
   // Publish completion only after the cached cleanup Exit has settled. Publishing
@@ -501,6 +570,8 @@ export const startCapture = Effect.fnUntraced(function* (
       first ??= meta.timestamp;
       last = meta.timestamp;
       lateRun = 0;
+      const receivedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+
       buffer.offer({
         bytes: new Uint8Array(frame.data),
         mediaType: "image/jpeg",
@@ -509,11 +580,28 @@ export const startCapture = Effect.fnUntraced(function* (
         document,
         sourceTimeMillis: meta.timestamp,
         sourceClock: "presentation-unix-millis",
-        receivedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+        receivedMonotonicNanos,
         ...dimensions,
         viewportWidth: meta.viewportWidth,
         viewportHeight: meta.viewportHeight,
       });
+      if (captureBoundary !== acceptedBoundary) {
+        acceptedBoundary = captureBoundary;
+        metadata?.({
+          _tag: "FirstFrame",
+          captureId,
+          target,
+          captureBoundary,
+          captureDocument: document,
+          frameSequence: sequence,
+          sourceTimeMillis: meta.timestamp,
+          sourceClock: "presentation-unix-millis",
+          receivedMonotonicNanos,
+          ...dimensions,
+          viewportWidth: meta.viewportWidth,
+          viewportHeight: meta.viewportHeight,
+        });
+      }
       Queue.offerUnsafe(wake, undefined);
     } catch {
       rejected++;
@@ -553,6 +641,7 @@ export const startCapture = Effect.fnUntraced(function* (
           // become writable through consumer-owned frame data.
           target = Object.freeze(resolved.target);
           targetStatus = resolved.status;
+          metadata = resolved.metadata;
           const resolvedSource = resolved.source;
 
           source = resolvedSource;
@@ -617,6 +706,7 @@ export const startCapture = Effect.fnUntraced(function* (
               ),
             ),
           );
+          publishCapture("Reserved");
           startSettled = false;
           yield* Effect.tryPromise({
             try: () => {
@@ -627,6 +717,8 @@ export const startCapture = Effect.fnUntraced(function* (
                   invalidate: (why) => lease?.invalidate(why),
                   opened: (url) => {
                     initialUrl = documentUrl(url);
+                    initialUrlQualification = initialUrl === null ? "Omitted" : "NativeCached";
+                    publishCapture("Watching");
                   },
                   ...(size === undefined ? {} : { size }),
                   ...(options.lifetime === "page" ? { document: nextDocument } : {}),
@@ -654,6 +746,7 @@ export const startCapture = Effect.fnUntraced(function* (
                 outcome: "unknown",
               }),
           });
+          publishCapture("Started");
           ticket.check();
         }),
       {
@@ -678,6 +771,7 @@ export const startCapture = Effect.fnUntraced(function* (
       },
     )
     .pipe(
+      Effect.provideService(Clock.Clock, clock),
       Effect.onError(() => (lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid))),
       Effect.onInterrupt(() =>
         lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid),
@@ -689,7 +783,7 @@ export const startCapture = Effect.fnUntraced(function* (
   // @effect-diagnostics-next-line raceFirstWithSleepToTimeout:off
   yield* Effect.raceFirst(
     Queue.take(finished).pipe(Effect.as(false)),
-    Effect.sleep(duration).pipe(Effect.as(true)),
+    clock.sleep(Duration.millis(duration)).pipe(Effect.as(true)),
   ).pipe(
     Effect.tap((expired) => (expired ? Effect.sync(() => finish("duration-limit")) : Effect.void)),
     Effect.andThen(stopNative),
@@ -728,6 +822,7 @@ export const startCapture = Effect.fnUntraced(function* (
   );
 
   return {
+    id: captureId,
     frames,
     snapshot: Effect.sync(() => {
       const { reason, nativeStop, ...metadata } = snapshot();

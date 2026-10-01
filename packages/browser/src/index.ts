@@ -8,3 +8,5 @@ export * as Errors from "./Errors.ts";
 export * as PageControl from "./PageControl.ts";
 export * as Plan from "./Plan.ts";
 export * as PlanData from "./PlanData.ts";
+export * as Timeline from "./Timeline.ts";
+export * as TimelineData from "./TimelineData.ts";

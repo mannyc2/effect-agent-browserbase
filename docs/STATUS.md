@@ -61,7 +61,11 @@ options; implicit page-creation waiting becomes explicit. The action-plan milest
 version-1 live and durable schemas, explicit checked descriptor resolution, plain per-step execution,
 scoped run handles and native phase evidence, input-slot recording and one owned settled observer.
 The footage example consumes public action intent while retaining its application presentation cues.
-Presentation scheduling and the shared timeline remain later work. The registered `page-authority` hosted check has no
+The timeline milestone adds one bounded session-domain metadata journal, filtered Page views,
+independent retained/live consumers, explicit cursor gaps and clock-qualified bigint JSON codecs.
+The lifecycle `session.pages` stream atomically attaches a cached Inventory; native metadata reads
+use `listPages()`. Capture intervals retain their own bytes, stop ownership and qualified accounting;
+the journal publishes metadata references only. Presentation scheduling remains later work. The registered `page-authority` hosted check has no
 provider evidence; exact-commit PR
 acceptance supplies the local qualification record.
 

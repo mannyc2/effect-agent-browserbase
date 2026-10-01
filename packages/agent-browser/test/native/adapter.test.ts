@@ -106,7 +106,7 @@ it.live(
         yield* Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
           Effect.gen(function* () {
             yield* browser.navigate({ url: site.url });
-            const [first] = yield* browser.pages();
+            const [first] = yield* browser.listPages();
 
             if (first === undefined) return yield* Effect.die("Missing original page");
             const current = yield* fromSession(browser, { selection: "current" });
@@ -131,7 +131,7 @@ it.live(
             );
 
             yield* pinned.navigate({ url: `${site.url}?pinned=1` });
-            const pages = yield* browser.pages();
+            const pages = yield* browser.listPages();
 
             expect(pages.find((page) => page.pageId === first.pageId)?.url).toBe(
               `${site.url}?pinned=1`,

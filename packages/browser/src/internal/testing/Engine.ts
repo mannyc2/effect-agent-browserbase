@@ -51,9 +51,11 @@ import type {
   NativeCheckpoint,
   NativeFileSelection,
   NativeNavigation,
+  NativeCachedPage,
   NativeObservation,
   ReadinessState,
 } from "../browser/Driver.ts";
+import { pngGeometry } from "../browser/Images.ts";
 import type { AdmissionPolicy } from "../browser/Observation.ts";
 import type { ObservationScope, ReadTicket, Ticket, WaitTicket } from "../browser/Owner.ts";
 import { identityOf, stableIdentityOf } from "../browser/PageRead.ts";
@@ -93,6 +95,9 @@ export interface ScriptedBrowser {
 
 /** What the browser needs from each connection open to it. */
 interface Live {
+  readonly opened: (pageId: string) => void;
+  readonly navigated: (pageId: string, sameDocument: boolean) => void;
+  readonly metadata: (pageId: string) => void;
   readonly retire: (pageId: string) => void;
   readonly closed: (pageId: string) => void;
   readonly announce: (pageId: string) => void;
@@ -130,6 +135,7 @@ interface Page {
   readonly targetId: string;
   readonly frameId: string;
   document: DocumentState;
+  cachedTitle?: string | null;
   epoch: number;
   /** The document epoch that predates registration; `-1` when every document ran the bundle. */
   readonly registeredEpoch: number;
@@ -361,6 +367,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     pages.set(page.pageId, page);
+    for (const connection of live) connection.opened(page.pageId);
 
     return page;
   };
@@ -376,6 +383,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
   /** The page shows a new document: nodes go stale, values reset, captures learn of it. */
   const commit = (page: Page, document: DocumentState) => {
     page.document = document;
+    page.cachedTitle = undefined;
     page.epoch++;
     page.values.clear();
     page.files.clear();
@@ -385,6 +393,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     page.mutations++;
     page.navigation = undefined;
     for (const connection of live) connection.retire(page.pageId);
+    for (const connection of live) connection.navigated(page.pageId, false);
     if (page.capture !== undefined) {
       const { start } = page.capture;
 
@@ -397,6 +406,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
   /** In-document change: identity survives by control id, so retained nodes and waits carry on. */
   const update = (page: Page, document: DocumentScript) => {
+    const previousUrl = page.document.url;
     const before = JSON.stringify(page.document);
     const previous = new Map(page.document.controls.map((control) => [control.script.id, control]));
 
@@ -419,6 +429,10 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
     if (JSON.stringify(page.document) !== before) page.mutations++;
     if (page.focused !== undefined && !previous.has(page.focused)) page.focused = undefined;
+    if (previousUrl !== document.url) {
+      for (const connection of live) connection.navigated(page.pageId, true);
+      page.capture?.start.document?.(document.url, true);
+    }
     notify(page);
   };
 
@@ -478,8 +492,16 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     const receipt = (pageId: string): NativeInput => ({ position: positions.get(pageId) ?? null });
 
     const select = (pageId: string | undefined) => {
+      const previous = selectedId;
+
       selectedId = pageId;
       lastSelected = pageId;
+      for (const id of previous === pageId ? [pageId] : [previous, pageId]) {
+        const page = id === undefined ? undefined : pages.get(id);
+
+        if (page !== undefined && !page.closed)
+          events.pageLifecycle?.({ _tag: "Display", page: cachedPage(page) });
+      }
     };
 
     const selectedPage = (operation: BrowserOperation = "target"): Page => {
@@ -512,14 +534,63 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       return page;
     };
 
-    const info = (page: Page): PageInfo =>
-      PageInfo.make({
+    const cachedPage = (page: Page): NativeCachedPage =>
+      Object.freeze({
+        pageId: page.pageId,
+        frameId: page.frameId,
+        targetId: page.targetId,
+        documentEpoch: page.epoch,
+        url: page.document.url.length <= 8192 ? page.document.url : null,
+        urlQualification: page.document.url.length <= 8192 ? "NativeCached" : "Omitted",
+        title: page.cachedTitle ?? null,
+        titleQualification:
+          page.cachedTitle === undefined
+            ? "Unread"
+            : page.cachedTitle === null
+              ? "Omitted"
+              : "ObservedCached",
+        selected: page.pageId === selectedId,
+        displayState:
+          options.pageControl === true
+            ? page.held === undefined
+              ? "running"
+              : "suspended"
+            : "unknown",
+      });
+
+    const info = (page: Page): PageInfo => {
+      page.cachedTitle = page.document.title.length <= 512 ? page.document.title : null;
+
+      const value = PageInfo.make({
         pageId: page.pageId,
         targetId: page.targetId,
         url: page.document.url,
         title: page.document.title,
         selected: page.pageId === selectedId,
       });
+
+      events.pageLifecycle?.({ _tag: "Metadata", page: cachedPage(page) });
+
+      return value;
+    };
+
+    const picture = (page: Page, ticket: Ticket): Uint8Array => {
+      const target = { pageId: page.pageId, frameId: page.frameId };
+      const geometry = pngGeometry(PNG);
+
+      ticket.picture?.({ phase: "Requested", target, documentEpoch: page.epoch, geometry });
+      const bytes = new Uint8Array(PNG);
+
+      ticket.picture?.({
+        phase: "Returned",
+        target,
+        documentEpoch: page.epoch,
+        geometry,
+        byteLength: bytes.length,
+      });
+
+      return bytes;
+    };
 
     const frameInfo = (page: Page): FrameInfo =>
       FrameInfo.make({
@@ -552,7 +623,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       notify(target);
       if (selectedId === target.pageId) select(undefined);
       snapshots.delete(target.frameId);
-      events.pageClosed?.(target.pageId);
+      events.pageClosed?.(target.pageId, cachedPage(target));
       events.invalidate("target-changed", { pageId: target.pageId });
       for (const other of live) {
         if (other === connection) continue;
@@ -1734,6 +1805,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           target.held = { suspensionId: `suspension-${++suspensionSerial}`, by: connection };
           heldObservation(target.pageId);
           ticket.acknowledge?.();
+          events.pageLifecycle?.({ _tag: "Display", page: cachedPage(target) });
 
           return PageSuspension.make({
             pageId: target.pageId,
@@ -1757,6 +1829,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           target.held = undefined;
           heldObservation(target.pageId);
           ticket.acknowledge?.();
+          events.pageLifecycle?.({ _tag: "Display", page: cachedPage(target) });
         }),
       checkTarget: async (target, ticket) => {
         ticket.check();
@@ -1765,6 +1838,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const driver: Driver = {
+      cachedPages: () => Object.freeze(openPages().map(cachedPage)),
       ...(options.pageControl === true ? { pageControl } : {}),
       selected: () => {
         const page = selectedPage();
@@ -2074,7 +2148,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
                 exhausted: false,
               }),
               documentChanged: false,
-              ...(pictureBytes === undefined ? {} : { picture: new Uint8Array(PNG) }),
+              ...(pictureBytes === undefined ? {} : { picture: picture(page, ticket) }),
             };
           },
         ),
@@ -2414,9 +2488,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         ),
       screenshot: (_fullPage, _maximumBytes, ticket, target) =>
         attempt("screenshot", ticket, { pageId: target?.pageId }, async () => {
-          current(target, "screenshot");
+          const page = current(target, "screenshot");
 
-          return new Uint8Array(PNG);
+          return picture(page, ticket);
         }),
       resize: (next, ticket, target) =>
         attempt("resize", ticket, { pageId: target?.pageId }, async (record) => {
@@ -2674,12 +2748,37 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const connection: Live = {
+      opened: (pageId) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined) events.pageLifecycle?.({ _tag: "Opened", page: cachedPage(page) });
+      },
+      navigated: (pageId, sameDocument) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined)
+          events.pageLifecycle?.({
+            _tag: "Navigated",
+            page: cachedPage(page),
+            frameId: page.frameId,
+            documentEpoch: page.epoch,
+            sameDocument,
+            url: page.document.url.length <= 8192 ? page.document.url : null,
+            urlQualification: page.document.url.length <= 8192 ? "NativeCached" : "Omitted",
+          });
+      },
+      metadata: (pageId) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined)
+          events.pageLifecycle?.({ _tag: "Metadata", page: cachedPage(page) });
+      },
       retire: (pageId) => invalidateSnapshot({ pageId }),
       closed: (pageId) => {
         const page = pages.get(pageId);
 
         if (page !== undefined) snapshots.delete(page.frameId);
-        events.pageClosed?.(pageId);
+        events.pageClosed?.(pageId, page === undefined ? undefined : cachedPage(page));
       },
       announce: (pageId) => events.invalidate("target-changed", { pageId }),
       drop: () => dropConnection(true),

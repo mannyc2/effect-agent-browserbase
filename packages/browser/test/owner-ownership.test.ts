@@ -332,7 +332,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       const flight = inFlight();
       const f = yield* fixture({ onNavigate: flight.script });
       const session = yield* (yield* f.acquisition).connect;
-      const first = (yield* session.pages()).find((page) => page.selected);
+      const first = (yield* session.listPages()).find((page) => page.selected);
       // Another tab showing the same controls, set up before anything is in flight.
       const second = yield* session.createPage();
 

@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import type { BrowserSession, Page, TargetOperations } from "effect-browser/browser";
 import { BrowserDiagnostics, SessionStatus, Target } from "effect-browser/browser-data";
 
@@ -21,9 +21,16 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
     screenshot: () => unexpected,
   };
 
+  const timeline = {
+    snapshot: () => unexpected,
+    events: () => Stream.fromEffect(unexpected),
+    now: unexpected,
+  };
+
   // An unused typed operation stub, deliberately absent from the runtime's authority registries.
   const initialPage: Page = {
     ...operations,
+    timeline,
     start: () => unexpected,
     run: () => unexpected,
     resolve: () => unexpected,
@@ -54,6 +61,8 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
 
   return {
     ...operations,
+    timeline,
+    pages: Stream.fromEffect(unexpected),
     initialPage,
     page: () => unexpected,
     listPages: () => unexpected,
@@ -115,7 +124,6 @@ export const scriptedSession = (overrides: Partial<BrowserSession> = {}): Browse
     hoverElement: () => unexpected,
     pressElement: () => unexpected,
     typeElement: () => unexpected,
-    pages: () => unexpected,
     describePage: () => unexpected,
     frames: () => unexpected,
     framesOf: () => unexpected,

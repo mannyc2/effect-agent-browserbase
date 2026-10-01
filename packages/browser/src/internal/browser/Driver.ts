@@ -104,14 +104,44 @@ export type DriverFault =
       readonly disposition: "pending" | "dispatched" | "confirmed" | "not-dispatched" | "unknown";
     };
 
+/** Copied host metadata, never an issued Page or an atomic native title/URL reading. */
+export interface NativeCachedPage {
+  readonly pageId: string;
+  readonly frameId: string;
+  readonly targetId: string | null;
+  readonly documentEpoch: number;
+  readonly url: string | null;
+  readonly urlQualification: "NativeCached" | "Omitted";
+  readonly title: string | null;
+  readonly titleQualification: "ObservedCached" | "Unread" | "Omitted";
+  readonly selected: boolean;
+  readonly displayState: "running" | "suspended" | "unknown";
+}
+
+export type NativePageLifecycle =
+  | {
+      readonly _tag: "Opened" | "Metadata" | "Display";
+      readonly page: NativeCachedPage;
+    }
+  | {
+      readonly _tag: "Navigated";
+      readonly page: NativeCachedPage;
+      readonly frameId: string;
+      readonly documentEpoch: number;
+      readonly sameDocument: boolean;
+      readonly url: string | null;
+      readonly urlQualification: "NativeCached" | "Omitted";
+    };
+
 export interface DriverEvents {
+  readonly pageLifecycle?: (event: NativePageLifecycle) => void;
   readonly frameClosed?: (pageId: string, frameId: string) => void;
   readonly invalidate: (reason: Invalidation, scope?: ObservationScope) => void;
   readonly disconnected: () => void;
   /** Positive native connection retirement, also delivered during or after explicit cleanup. */
   readonly retired?: () => void;
   /** Positive exact native page closure, never merely logical revocation. */
-  readonly pageClosed?: (pageId: string) => void;
+  readonly pageClosed?: (pageId: string, page?: NativeCachedPage) => void;
   /** Native uncertainty confined to one known page; the owner contains that page. */
   readonly pageFault?: (pageId: string) => void;
   readonly pause: (reason?: "popup" | "dialog", pageId?: string) => void;
@@ -235,6 +265,8 @@ export type NativeFileSelection =
   | { readonly _tag: "Remote"; readonly path: string };
 
 export interface Driver {
+  /** Reads only the canonical bounded native registry, with no native call or authority issue. */
+  readonly cachedPages: () => ReadonlyArray<NativeCachedPage>;
   readonly resolveDescriptor: (
     descriptor: Descriptor,
     ticket: Ticket,

@@ -33,6 +33,11 @@ Browser Layers take Effect's `Crypto` from the host platform: `NodeServices.laye
 
 Issued Pages and Frames also execute bounded action plans through `page.run` and scoped `page.start`. `effect-browser/plan` validates and records durable descriptor intent with named inputs; the same owner preserves native acknowledgements, deadlines and containment. See [actions, plans and recording](packages/browser/README.md#actions-plans-and-recording).
 
+`session.timeline` and issued `page.timeline` expose one bounded metadata journal with independent
+subscribers, explicit cursor gaps and portable clock offsets. `session.pages` attaches a cached
+lifecycle Inventory atomically; `listPages()` remains the fresh native read. See
+[replayable session evidence](packages/browser/README.md#replayable-session-evidence).
+
 ## Use the same tools with either source
 
 ```ts
@@ -88,11 +93,16 @@ for independent observations, bounded retention and separate action/containment 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 
 The unreleased Page admission API adds trailing host `OperationOptions` to admitted operations.
-Use `session.ready()`, `retain()`, `target()`, `pages()`, `frames()` and `createPage()` in place of
+Use `session.ready()`, `retain()`, `target()`, `listPages()`, `frames()` and `createPage()` in place of
 their former Effect properties. Ordinary operations share a permit only with their Page and its
 Frames; positive finite `admission.queue` opts into bounded FIFO waiting. Queue omission and zero
 remain fail-fast, including page creation. See the [browser admission guide](packages/browser/README.md#admission-and-deadlines)
 for deadline accounting, configured bounds, typed refusals and passive host diagnostics.
+
+The timeline API replaces the native inventory alias `session.pages()` with `session.listPages()`.
+`session.pages` is now the cached Inventory/lifecycle stream, and `session.timeline`/`page.timeline`
+provide bounded evidence snapshots and resumable streams. Host encoding preserves qualified
+addresses; client projections remove them explicitly.
 
 These are the coordinated shape changes of `0.2.0-beta.0` through `0.2.0-beta.2`. `0.2.0-beta.2` raised the action allowance and added `status.actions`; `0.2.0-beta.1` added the latest-64 boundaries, the capture limits, `Capture.multipart`, `fillForm`, build-time tool options with `resultMaxBytes`, the required `Crypto` and two more tool reasons. Remove old retained and adapter members rather than mixing both APIs. Old page/frame IDs, metadata and handles become stale after reconnect; within the same known browser lifetime, re-list pages and match exactly one saved native `targetId`, then use fresh metadata. Never substitute title, URL, order or the old local ID for that match. Explicit generic applications of curried `Browser.scoped` use four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`); ordinary inferred calls retain their syntax.
 

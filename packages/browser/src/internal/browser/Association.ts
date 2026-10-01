@@ -2,7 +2,9 @@ import { Effect } from "effect";
 
 import type { PageStatus } from "../../Browser.ts";
 import type { PageInfo, Target } from "../../BrowserData.ts";
+import type { CaptureQualification } from "../../CaptureData.ts";
 import { BrowserError, Reasons } from "../../Errors.ts";
+import type { CaptureReason } from "../../TimelineData.ts";
 import type { CaptureSource } from "./Driver.ts";
 import type { Owner, Ticket } from "./Owner.ts";
 import type { PageControls } from "./Session.ts";
@@ -21,11 +23,68 @@ export interface CaptureResolution {
   readonly source: CaptureSource;
   /** Retains one bounded authority record after it leaves the owner's live inventory. */
   readonly status?: () => Pick<PageStatus, "phase" | "containment">;
+  /** Captured when this exact interval is resolved, never redirected by reconnect. */
+  readonly metadata?: (event: CaptureMetadata) => void;
 }
+
+/** Original interval evidence only; no frame bytes or new capture ownership. */
+export type CaptureMetadata =
+  | {
+      readonly _tag: "FirstFrame";
+      readonly captureId: string;
+      readonly target: Target;
+      readonly captureBoundary: number;
+      readonly captureDocument: number;
+      readonly frameSequence: number;
+      readonly sourceTimeMillis: number;
+      readonly sourceClock: "presentation-unix-millis";
+      readonly receivedMonotonicNanos: bigint;
+      readonly width: number;
+      readonly height: number;
+      readonly viewportWidth: number;
+      readonly viewportHeight: number;
+    }
+  | {
+      readonly _tag: "CaptureBoundary";
+      readonly captureId: string;
+      readonly target: Target;
+      readonly captureBoundary: number;
+      readonly captureDocument: number;
+      readonly sameDocument: boolean;
+      readonly url: string | null;
+      readonly urlQualification: "NativeCached" | "Omitted";
+      readonly afterSequence: number | null;
+      readonly observedMonotonicNanos: bigint;
+    }
+  | {
+      readonly _tag: "Capture";
+      readonly captureId: string;
+      readonly target: Target;
+      readonly phase: "Reserved" | "Watching" | "Started" | "Ended" | "Stopped";
+      readonly latePhase: boolean;
+      readonly observedMonotonicNanos: bigint;
+      readonly captureBoundary: number;
+      readonly captureDocument: number;
+      readonly qualification: CaptureQualification;
+      readonly initialUrl: string | null;
+      readonly initialUrlQualification: "NativeCached" | "Unread" | "Omitted";
+      readonly reason: CaptureReason | null;
+      readonly nativeStop: "confirmed" | "unconfirmed" | null;
+      readonly received: number;
+      readonly delivered: number;
+      readonly discarded: number;
+      readonly overflow: number;
+      readonly late: number;
+      readonly duplicates: number;
+      readonly rejected: number;
+      readonly upstreamDrops: "unknown";
+    };
 
 export interface CaptureParent {
   readonly validate?: Effect.Effect<void, BrowserError>;
   readonly owner: Owner;
+  /** Prebound to the original owner's Crypto; starting capture adds no caller service. */
+  readonly newCaptureId: Effect.Effect<string>;
   readonly resolve: (
     ticket: Ticket,
     target?: PageInfo,
@@ -57,6 +116,7 @@ export const forPage = (
 ): CaptureParent => ({
   validate,
   owner: parent.owner,
+  newCaptureId: parent.newCaptureId,
   captureLeases: parent.captureLeases,
   get captureReservedBytes() {
     return parent.captureReservedBytes;

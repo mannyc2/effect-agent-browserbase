@@ -59,6 +59,7 @@ const makeFixture = Effect.fnUntraced(function* (
   const documents = new Map<string, (url: string, sameDocument: boolean) => void>();
   let starts = 0;
   let stops = 0;
+  let captureSerial = 0;
 
   const page = (pageId = "page-1") =>
     PageInfo.make({
@@ -71,6 +72,7 @@ const makeFixture = Effect.fnUntraced(function* (
 
   const parent: CaptureParent = {
     owner,
+    newCaptureId: Effect.sync(() => `capture-fixture-${++captureSerial}`),
     selectedPage: () => page(),
     target: () =>
       Target.make({ generation: owner.state.generation, pageId: "page-1", frameId: "frame-1" }),

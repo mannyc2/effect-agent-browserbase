@@ -125,6 +125,7 @@ export const makePlaywrightDriver = async (
     identity.namespace,
     () => closing,
     {
+      lifecycle: (event) => events.pageLifecycle?.(event),
       opened: (entry, created) => {
         if (initialized && !created && options.popupPolicy === "close") {
           void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
@@ -169,7 +170,7 @@ export const makePlaywrightDriver = async (
         observation.retirePage(entry.id);
         pageControl.closed(entry);
         captures.forget(entry);
-        events.pageClosed?.(entry.id);
+        events.pageClosed?.(entry.id, targets.cachedPage(entry));
       },
       navigating: (entry, frame) => pageControl.navigating(entry, frame),
       navigated: (entry, frame) => {
@@ -325,10 +326,31 @@ export const makePlaywrightDriver = async (
   const driver: Driver = {
     ...(options.pageControl
       ? {
-          pageControl: pageControl.operations,
+          pageControl: {
+            ...pageControl.operations,
+            suspend: async (page, ticket) => {
+              try {
+                return await pageControl.operations.suspend(page, ticket);
+              } finally {
+                const entry = entries.get(page.pageId);
+
+                if (entry !== undefined) targets.notifyDisplay(entry);
+              }
+            },
+            resume: async (receipt, ticket) => {
+              try {
+                await pageControl.operations.resume(receipt, ticket);
+              } finally {
+                const entry = entries.get(receipt.pageId);
+
+                if (entry !== undefined) targets.notifyDisplay(entry);
+              }
+            },
+          },
         }
       : {}),
     selected: targets.selected,
+    cachedPages: targets.cachedPages,
     selectedTargetId: targets.selectedTargetId,
     listPages: targets.listPages,
     describePage: targets.describePage,
@@ -477,6 +499,7 @@ export const makePlaywrightDriver = async (
     if (options.pageControl)
       for (const entry of entries.values()) await pageControl.execution(entry);
     initialized = true;
+    for (const entry of entries.values()) targets.notifyDisplay(entry);
 
     return driver;
   } catch (error) {

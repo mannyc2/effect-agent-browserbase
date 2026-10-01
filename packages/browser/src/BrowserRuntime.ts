@@ -39,6 +39,7 @@ import {
   makeSession,
 } from "./internal/browser/PublicSession.ts";
 import { acquireSession, type PageControls } from "./internal/browser/Session.ts";
+import { TimelineDefaults } from "./TimelineData.ts";
 
 export {
   cleanupStep,
@@ -340,6 +341,18 @@ export const make = Effect.fnUntraced(function* (
   );
 
   const keepAlive = yield* checked(Schema.Boolean, options.keepAlive ?? false, "configure");
+
+  const timelineLimits = Object.freeze({
+    ...TimelineDefaults,
+    ...automation.timelineLimits,
+    maxEventBytes:
+      automation.timelineLimits?.maxEventBytes ??
+      Math.min(
+        TimelineDefaults.maxEventBytes,
+        automation.timelineLimits?.maxBytes ?? TimelineDefaults.maxBytes,
+      ),
+  });
+
   const engine = bindingImplementation(options.binding ?? defaultBinding);
 
   if (engine === undefined)
@@ -425,6 +438,7 @@ export const make = Effect.fnUntraced(function* (
         maxElapsedMillis: fixed.maxElapsedMillis,
         actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
         maxHostReads: automation.maxHostReads ?? 10_000,
+        timelineLimits,
         ...(automation.admissionLimits === undefined
           ? {}
           : { admissionLimits: automation.admissionLimits }),

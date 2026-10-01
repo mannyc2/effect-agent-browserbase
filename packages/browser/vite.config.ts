@@ -31,6 +31,8 @@ export default defineConfig({
       "src/Plan.ts",
       "src/PlanData.ts",
       "src/Testing.ts",
+      "src/Timeline.ts",
+      "src/TimelineData.ts",
     ],
     // Keep root namespaces on the public entry modules; the pinned bundler otherwise
     // exposes synthetic namespace exports on those entries, even with strict signatures.

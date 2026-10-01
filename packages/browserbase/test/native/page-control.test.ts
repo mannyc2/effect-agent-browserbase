@@ -47,7 +47,7 @@ for (const capture of [false, true])
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
             yield* session.navigate(NavigateRequest.make({ url: `${f.url}clocks` }));
-            const stage = (yield* session.pages())[0];
+            const stage = (yield* session.listPages())[0];
 
             assert.ok(stage);
             const scoutPage = yield* session.createPage();
@@ -199,7 +199,7 @@ for (const capture of [false, true])
               (yield* Effect.promise(() => cdp.send("Animation.getPlaybackRate"))).playbackRate,
             ).toBe(0.5);
             expect((yield* PageControl.state(session, stage)).state).toBe("running");
-            expect((yield* session.pages()).find((page) => page.selected)?.pageId).toBe(
+            expect((yield* session.listPages()).find((page) => page.selected)?.pageId).toBe(
               scoutPage.pageId,
             );
             expect((yield* PageControl.resume(session, receipt).pipe(Effect.result))._tag).toBe(
@@ -228,7 +228,7 @@ for (const capture of [false, true])
               "Failure",
             );
 
-            const remaining = (yield* session.pages()).find(
+            const remaining = (yield* session.listPages()).find(
               (page) => page.pageId === scoutPage.pageId,
             );
 
@@ -262,7 +262,7 @@ it.live("real CDP: control is opt-in and rejects keep-alive before allocation", 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy),
-            page = (yield* session.pages())[0];
+            page = (yield* session.listPages())[0];
 
           assert.ok(page);
           const unsupported = yield* PageControl.suspend(session, page).pipe(Effect.result);

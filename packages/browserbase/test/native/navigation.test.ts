@@ -308,7 +308,7 @@ it.live("real CDP: a pinned child timeout never sends an automatic page-wide sto
 
           yield* session.navigate({ url: f.url });
           const [page] = f.nativePages(session.reference.sessionId);
-          const selected = (yield* session.pages()).find((candidate) => candidate.selected);
+          const selected = (yield* session.listPages()).find((candidate) => candidate.selected);
 
           assert.ok(page);
           assert.ok(selected);
@@ -353,7 +353,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
             const handle = session;
-            const [stage] = yield* session.pages();
+            const [stage] = yield* session.listPages();
 
             assert.ok(stage);
 
@@ -535,7 +535,7 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
             `${f.url}clocks`,
           ]);
 
-          const [page] = yield* session.pages();
+          const [page] = yield* session.listPages();
 
           assert.ok(page);
           const held = yield* PageControl.suspend(session, page);

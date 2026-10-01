@@ -311,7 +311,7 @@ it.live("real CDP: after a hold, the exact node is checked again before it can b
 
           yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
           const [native] = f.nativePages(session.reference.sessionId);
-          const [page] = yield* session.pages();
+          const [page] = yield* session.listPages();
 
           assert.ok(native);
           assert.ok(page);
@@ -374,7 +374,7 @@ it.live("real CDP: holding one page leaves another page's observation alone", ()
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
           yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
-          const [stage] = yield* session.pages();
+          const [stage] = yield* session.listPages();
 
           assert.ok(stage);
           yield* session.selectPage(yield* session.createPage());
@@ -414,7 +414,7 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate({ url: `${f.url}viewport` });
-            const [stage] = yield* session.pages();
+            const [stage] = yield* session.listPages();
             const [nativeStage] = f.nativePages(session.reference.sessionId);
 
             assert.ok(stage);
@@ -480,7 +480,7 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
           const session = yield* BrowserbaseBrowser.open(policy);
 
           yield* session.navigate({ url: `${f.url}viewport` });
-          const [stage] = yield* session.pages();
+          const [stage] = yield* session.listPages();
           const [nativeStage] = f.nativePages(session.reference.sessionId);
 
           assert.ok(stage);
@@ -527,7 +527,7 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate({ url: f.url });
-            const [page] = yield* session.pages();
+            const [page] = yield* session.listPages();
 
             assert.ok(page);
 

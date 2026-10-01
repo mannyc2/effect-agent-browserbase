@@ -46,13 +46,30 @@ import type {
   InputBindings,
   Step,
 } from "../../PlanData.ts";
+import {
+  TimelineDefaults,
+  type Retention,
+  type Terminal,
+  type TerminalReason,
+} from "../../TimelineData.ts";
+import {
+  cachedTarget,
+  captureMetadata,
+  observeTickets,
+  planPublisher,
+  publish,
+} from "../timeline/Producers.ts";
+import { makeRetirement } from "../timeline/Retirement.ts";
+import { makeJournal } from "../timeline/SessionJournal.ts";
+import { makeStore } from "../timeline/Store.ts";
 import type { AdmissionLane } from "./Admission.ts";
-import { type CaptureParent } from "./Association.ts";
+import { type CaptureMetadata, type CaptureParent } from "./Association.ts";
 import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import { cleanupStep, type ConnectionCleanup, type ConnectionState } from "./ConnectionCleanup.ts";
 import type {
   Driver,
+  NativeCachedPage,
   DriverEvents,
   DriverFault,
   DriverOptions,
@@ -108,6 +125,14 @@ export interface ExecutionOptions extends OperationOptions {
 }
 
 type DeferredElementTarget = ElementTarget | (() => ElementTarget);
+
+const codePointCount = (text: string): number => {
+  let count = 0;
+
+  for (const _point of text) count++;
+
+  return count;
+};
 
 const elementTarget = (value: DeferredElementTarget): ElementTarget =>
   typeof value === "function" ? value() : value;
@@ -294,7 +319,7 @@ export interface SessionOptions<L extends SessionLease, E, R = never> {
  * decides whether release also terminates a browser and how that termination is observed.
  */
 export const acquireSession = Effect.fnUntraced(function* <L extends SessionLease, E, R>(
-  limits: Limits,
+  limits: Limits & { readonly timelineLimits?: Retention },
   options: SessionOptions<L, E, R>,
 ) {
   // The engine is resolved before anything is allocated, so an unissued binding costs nothing.
@@ -312,10 +337,31 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const bindingLifetime = yield* Scope.fork(parentScope, "sequential");
   const ended = yield* Deferred.make<void>();
   const owner = yield* makeOwner(limits);
-  const clock = yield* Clock.Clock;
+  const clock = owner.clock;
   let activeRuns = 0;
   const pageRuns = new Map<string, number>();
   const uuid = randomUuid(yield* Crypto.Crypto);
+  const clockId = yield* uuid;
+  const originNanos = clock.monotonicTimeNanosUnsafe();
+
+  const makeDomain = (storeId: string) => {
+    const store = makeStore({
+      clock,
+      originNanos,
+      identity: { storeId, clockId },
+      limits: limits.timelineLimits ?? TimelineDefaults,
+    });
+
+    return {
+      store,
+      retirement: makeRetirement((reason) => {
+        store.finish(reason);
+      }),
+    };
+  };
+
+  let domain = makeDomain(yield* uuid);
+  let hasConnectedStore = false;
 
   let driver: Driver | undefined;
   let connectPending = false;
@@ -335,20 +381,107 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       readonly frames: Map<string, { detached: boolean }>;
       phase: "open" | "paused" | "closing" | "closed";
       containment: PageStatus["containment"];
+      readonly store: ReturnType<typeof makeStore>;
+      readonly terminal: Terminal | null;
+      readonly retirement: ReturnType<typeof makeRetirement>;
       attempt?: Deferred.Deferred<boolean>;
     }
   >();
+
+  const journal = makeJournal({
+    store: () => domain.store,
+    cachedPages: () => driver?.cachedPages() ?? [],
+    pageStatus: (pageId) => {
+      const record = pages.get(pageId);
+
+      return record === undefined
+        ? owner.state.phase === "open" || owner.state.phase === "acquiring"
+          ? undefined
+          : {
+              phase:
+                owner.state.phase === "closing"
+                  ? "closing"
+                  : owner.state.phase === "closed"
+                    ? "closed"
+                    : owner.state.phase === "paused"
+                      ? "paused"
+                      : "stale",
+              containment:
+                owner.state.phase === "uncertain"
+                  ? { _tag: "SessionFenced", generation: owner.state.generation }
+                  : { _tag: "NotRequired" },
+            }
+        : {
+            phase: record.identity.generation === owner.state.generation ? record.phase : "stale",
+            containment: record.containment,
+          };
+    },
+    generation: () => owner.state.generation,
+  });
+
+  owner.observePhase((phase) => {
+    publish(domain.store, { target: null, correlation: null, event: { _tag: "Lifecycle", phase } });
+  });
+
+  owner.observeTickets(
+    observeTickets({
+      store: () => domain.store,
+      clock,
+      originNanos,
+      cachedPages: () => driver?.cachedPages() ?? [],
+      retain: (pageId) => {
+        const releaseDomain = domain.retirement.retain();
+
+        const releasePage =
+          pageId === undefined ? undefined : pages.get(pageId)?.retirement.retain();
+
+        return () => {
+          releasePage?.();
+          releaseDomain();
+        };
+      },
+    }),
+  );
+
+  const retirePageTimeline = (
+    record: typeof pages extends Map<string, infer P> ? P : never,
+    reason: TerminalReason,
+  ) => {
+    record.retirement.request(reason);
+  };
+
+  const endTimeline = (reason: TerminalReason) => {
+    for (const record of pages.values()) retirePageTimeline(record, reason);
+    domain.retirement.request(reason);
+  };
 
   let initialTarget: DriverTarget | undefined;
   let initialInfo: PageInfo | undefined;
   let initialAuthority: ReturnType<typeof registerPage> | undefined;
   const pausedPages = new Set<string>();
 
-  const pageClosed = (pageId: string) => {
+  const pageClosed = (pageId: string, cached?: NativeCachedPage, store = domain.store) => {
     pausedPages.delete(pageId);
     driver?.retireInitializationPage?.(pageId);
     activeBindings?.retirePage(pageId);
     const page = pages.get(pageId);
+
+    // A native callback supplies the cached fact; its later owner confirmation is idempotent.
+    if (page !== undefined || cached !== undefined)
+      publish(store, {
+        target:
+          cached === undefined
+            ? {
+                generation: page?.identity.generation ?? owner.state.generation,
+                pageId,
+                frameId: null,
+                document: null,
+              }
+            : cachedTarget(cached, owner.state.generation),
+        correlation: null,
+        event: { _tag: "PageClosed" },
+      });
+    if (page !== undefined) retirePageTimeline(page, "closed");
 
     if (page !== undefined && page.phase !== "closing") owner.revokePage(pageId);
     owner.retirePage(pageId);
@@ -413,6 +546,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const capture: CaptureParent = {
     owner,
+    newCaptureId: uuid,
     selectedPage: () => {
       const page = pages.get(getDriver().selected().pageId);
 
@@ -435,8 +569,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
       return Target.make({ generation: owner.state.generation, ...driver.selected() });
     },
-    resolve: (ticket, requested) =>
-      native("capture-start", ticket, async () => {
+    resolve: (ticket, requested) => {
+      const admittedDomain = domain;
+
+      return native("capture-start", ticket, async () => {
         if (driver === undefined)
           throw BrowserError.make({
             operation: "capture",
@@ -444,7 +580,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             outcome: "undispatched",
           });
         const binding = await driver.capture(requested);
-        const generation = owner.state.generation;
+
+        ticket.check();
+        const generation = ticket.generation;
 
         const target = Target.make({
           generation,
@@ -466,9 +604,29 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             generation,
           ).record;
 
+        const publishMetadata = captureMetadata(admittedDomain.store, originNanos);
+        let releaseCapture: (() => void) | undefined;
+
         return {
           key: binding.targetId,
           target,
+          metadata: (event: CaptureMetadata) => {
+            if (
+              releaseCapture === undefined &&
+              event._tag === "Capture" &&
+              event.phase === "Reserved"
+            ) {
+              const releaseDomain = admittedDomain.retirement.retain();
+              const releasePage = authority.retirement.retain();
+
+              releaseCapture = () => {
+                releasePage();
+                releaseDomain();
+              };
+            }
+            publishMetadata(event);
+            if (event._tag === "Capture" && event.phase === "Stopped") releaseCapture?.();
+          },
           status: () => ({
             phase:
               authority.phase === "closed"
@@ -480,18 +638,45 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           }),
           source: binding.source,
         };
-      }),
+      });
+    },
     captureLeases: new Map(),
     captureReservedBytes: 0,
   };
 
   owner.onInvalidate((reason, scope, origin) => {
     driver?.invalidateObservation(scope, reason === "observation" ? origin : undefined);
+    if (scope !== "all" && scope !== "none" && (reason === "paused" || reason === "closed")) {
+      const record = pages.get(scope.pageId);
+
+      if (record !== undefined && record.phase !== "open")
+        publish(record.store, {
+          target: { ...record.identity, document: null },
+          correlation: null,
+          event: { _tag: "Lifecycle", phase: record.phase },
+        });
+    }
     if (reason === "uncertain" && scope === "all")
       for (const page of pages.values())
         page.containment = { _tag: "SessionFenced", generation: owner.state.generation };
-    if (scope === "all" && ["paused", "disconnected", "uncertain", "closed"].includes(reason))
+    if (scope === "all" && ["paused", "disconnected", "uncertain", "closed"].includes(reason)) {
+      if (reason === "paused") for (const page of pages.values()) retirePageTimeline(page, "stale");
+      else
+        endTimeline(
+          owner.reason === "expired"
+            ? "expired"
+            : owner.reason === "detached"
+              ? "detached"
+              : owner.state.phase === "faulted"
+                ? "faulted"
+                : reason === "uncertain"
+                  ? "uncertain"
+                  : reason === "disconnected"
+                    ? "disconnected"
+                    : "closed",
+        );
       pages.clear();
+    }
     if (["disconnected", "uncertain", "closed"].includes(reason) && scope === "all") {
       pausedPages.clear();
       fenceBindings();
@@ -509,8 +694,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
    * The local half of cleanup. Each step is an independent fact for the canonical
    * coordinator, which owns the release request and the terminal status observation.
    */
+  let releaseTimelineCleanup: (() => void) | undefined;
+
   const local: ConnectionCleanup = {
     fence: Effect.sync(() => {
+      releaseTimelineCleanup ??= domain.retirement.retain();
       owner.fence("closing", "closed");
       handoffToken = undefined;
       activeConnection = undefined;
@@ -542,6 +730,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       Effect.ensuring(
         Effect.sync(() => {
           owner.transition("closed");
+          releaseTimelineCleanup?.();
         }),
       ),
     ),
@@ -563,6 +752,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     ),
     Effect.asVoid,
     Effect.ignoreCause,
+    Effect.provideService(Clock.Clock, clock),
   );
 
   const ref: L["reference"] = acquired.reference;
@@ -576,106 +766,162 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     Effect.tap(() => retireControl),
     Effect.ensuring(Deferred.succeed(ended, undefined)),
     Effect.asVoid,
+    Effect.provideService(Clock.Clock, clock),
   );
 
-  const connectionEvents = (connectionLease: object, generation: number): DriverEvents => ({
-    pageFault: (pageId) => {
-      if (activeConnection !== connectionLease) return;
-      if (pendingPageFaults.has(pageId)) return;
-      if (owner.state.phase !== "open" || pendingPageFaults.size >= options.driver.maxPages) {
-        owner.terminate("native-failure", "unknown", owner.state.generation);
+  const connectionEvents = (connectionLease: object, generation: number): DriverEvents => {
+    const connectionDomain = domain;
 
-        return;
-      }
-      pendingPageFaults.set(pageId, {
-        generation: owner.state.generation,
-        authority: pages.get(pageId),
-      });
-      revokePage(pageId);
-      Deferred.doneUnsafe(pageFaultWake, Effect.void);
-    },
-    frameClosed: (pageId, frameId) => {
-      if (activeConnection !== connectionLease) return;
-      const page = pages.get(pageId);
-      const frame = page?.frames.get(frameId);
+    return {
+      pageLifecycle: (event) => {
+        if (activeConnection !== connectionLease) return;
 
-      if (frame !== undefined) frame.detached = true;
-      page?.frames.delete(frameId);
-    },
-    pageClosed: (pageId) => {
-      if (activeConnection === connectionLease) pageClosed(pageId);
-    },
-    retired: () => owner.retireWait(connectionLease),
-    invalidate: (reason, scope) => {
-      if (activeConnection === connectionLease) owner.invalidate(reason, scope);
-    },
-    disconnected: () => {
-      owner.retireWait(connectionLease);
-      if (activeConnection !== connectionLease) return;
-      if (
-        owner.state.phase !== "closing" &&
-        owner.state.phase !== "closed" &&
-        owner.state.phase !== "detached"
-      ) {
-        owner.terminate("disconnected", "unknown", generation);
-      }
-    },
-    pause: (reason = "dialog", pageId) => {
-      if (activeConnection !== connectionLease) return;
-      const trigger = reason === "popup" ? "popup-policy" : "dialog-policy";
+        const target =
+          event._tag === "Navigated"
+            ? {
+                generation: owner.state.generation,
+                pageId: event.page.pageId,
+                frameId: event.frameId,
+                document: event.documentEpoch,
+              }
+            : cachedTarget(event.page, owner.state.generation);
 
-      owner.record(trigger, "confirmed", generation);
-      if (pageId !== undefined && owner.state.phase === "open") {
-        if (!pausedPages.has(pageId) && pausedPages.size >= options.driver.maxPages) {
-          owner.terminate(trigger, "unknown", generation);
+        publish(connectionDomain.store, {
+          target,
+          correlation: null,
+          event:
+            event._tag === "Opened"
+              ? { _tag: "PageOpened" }
+              : event._tag === "Navigated"
+                ? {
+                    _tag: "Navigated",
+                    sameDocument: event.sameDocument,
+                    url: event.url !== null && event.url.length <= 8192 ? event.url : null,
+                    urlQualification:
+                      event.url !== null && event.url.length > 8192
+                        ? "Omitted"
+                        : event.urlQualification,
+                  }
+                : event._tag === "Display"
+                  ? {
+                      _tag: "DisplayChanged",
+                      selected: event.page.selected,
+                      displayState:
+                        event.page.displayState === "suspended" ? "held" : event.page.displayState,
+                    }
+                  : { _tag: "MetadataChanged" },
+        });
+      },
+      pageFault: (pageId) => {
+        if (activeConnection !== connectionLease) return;
+        if (pendingPageFaults.has(pageId)) return;
+        if (owner.state.phase !== "open" || pendingPageFaults.size >= options.driver.maxPages) {
+          owner.terminate("native-failure", "unknown", owner.state.generation);
 
           return;
         }
-        pausedPages.add(pageId);
+        pendingPageFaults.set(pageId, {
+          generation: owner.state.generation,
+          authority: pages.get(pageId),
+        });
+        revokePage(pageId);
+        Deferred.doneUnsafe(pageFaultWake, Effect.void);
+      },
+      frameClosed: (pageId, frameId) => {
+        if (activeConnection !== connectionLease) return;
         const page = pages.get(pageId);
+        const frame = page?.frames.get(frameId);
 
-        if (page !== undefined && page.phase === "open") page.phase = "paused";
-        activeBindings?.fencePage(pageId);
-        driver?.fenceInitializationPage?.(pageId);
-        owner.revokePage(pageId);
-        owner.invalidate("paused", { pageId });
+        if (frame !== undefined) frame.detached = true;
+        page?.frames.delete(frameId);
+      },
+      pageClosed: (pageId, cached) => {
+        if (activeConnection === connectionLease)
+          pageClosed(pageId, cached, connectionDomain.store);
+      },
+      retired: () => owner.retireWait(connectionLease),
+      invalidate: (reason, scope) => {
+        if (activeConnection === connectionLease) owner.invalidate(reason, scope);
+      },
+      disconnected: () => {
+        owner.retireWait(connectionLease);
+        if (activeConnection !== connectionLease) return;
+        if (
+          owner.state.phase !== "closing" &&
+          owner.state.phase !== "closed" &&
+          owner.state.phase !== "detached"
+        ) {
+          owner.terminate("disconnected", "unknown", generation);
+        }
+      },
+      pause: (reason = "dialog", pageId) => {
+        if (activeConnection !== connectionLease) return;
+        const trigger = reason === "popup" ? "popup-policy" : "dialog-policy";
 
-        return;
-      }
-      if (owner.state.phase === "open") owner.fence("paused", "paused", trigger);
-      // An unsolicited popup/dialog during setup cannot be silently admitted by
-      // the later connect commit. No usable handle has been exposed: fail closed.
-      else if (owner.state.phase === "acquiring") owner.terminate(trigger, "known", generation);
-    },
-    fault: (event) => {
-      if (activeConnection !== connectionLease) return;
-      if (event.source === "policy") {
-        owner.policy(event, generation);
+        owner.record(trigger, "confirmed", generation);
+        if (pageId !== undefined && owner.state.phase === "open") {
+          if (!pausedPages.has(pageId) && pausedPages.size >= options.driver.maxPages) {
+            owner.terminate(trigger, "unknown", generation);
 
-        return;
-      }
-      if (owner.state.phase === "closing" || owner.state.phase === "closed") return;
-      owner.terminate(
-        event.source === "binding"
-          ? "callback-failure"
-          : event.disposition === "not-dispatched"
-            ? "cleanup-capacity"
-            : event.reason === "registration"
-              ? "registration-failure"
-              : event.reason === "connection"
-                ? "disconnected"
-                : "native-failure",
-        event.disposition,
-        generation,
-      );
-    },
-  });
+            return;
+          }
+          pausedPages.add(pageId);
+          const page = pages.get(pageId);
+
+          if (page !== undefined && page.phase === "open") page.phase = "paused";
+          activeBindings?.fencePage(pageId);
+          driver?.fenceInitializationPage?.(pageId);
+          owner.revokePage(pageId);
+          owner.invalidate("paused", { pageId });
+
+          return;
+        }
+        if (owner.state.phase === "open") owner.fence("paused", "paused", trigger);
+        // An unsolicited popup/dialog during setup cannot be silently admitted by
+        // the later connect commit. No usable handle has been exposed: fail closed.
+        else if (owner.state.phase === "acquiring") owner.terminate(trigger, "known", generation);
+      },
+      fault: (event) => {
+        if (activeConnection !== connectionLease) return;
+        if (event.source === "policy") {
+          owner.policy(event, generation);
+
+          return;
+        }
+        if (owner.state.phase === "closing" || owner.state.phase === "closed") return;
+        owner.terminate(
+          event.source === "binding"
+            ? "callback-failure"
+            : event.disposition === "not-dispatched"
+              ? "cleanup-capacity"
+              : event.reason === "registration"
+                ? "registration-failure"
+                : event.reason === "connection"
+                  ? "disconnected"
+                  : "native-failure",
+          event.disposition,
+          generation,
+        );
+      },
+    };
+  };
 
   const connectNative = (url: Redacted.Redacted<unknown>, nativeOptions: DriverOptions) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         // Drawn before this attempt claims the connection, so a failed draw leaves nothing to undo.
         const identity: ConnectionIdentity = { namespace: yield* uuid, bindings: yield* uuid };
+
+        if (hasConnectedStore) {
+          endTimeline("detached");
+          domain = makeDomain(yield* uuid);
+        }
+        hasConnectedStore = true;
+        publish(domain.store, {
+          target: null,
+          correlation: null,
+          event: { _tag: "Lifecycle", phase: "acquiring" },
+        });
         const connectionLease = {};
 
         activeConnection = connectionLease;
@@ -1188,7 +1434,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     );
 
   const wait = (
-    start: (driver: Driver, ticket: WaitTicket, target: DriverTarget) => Promise<void>,
+    start: (
+      driver: Driver,
+      ticket: WaitTicket,
+      target: DriverTarget,
+      operationTicket: Ticket,
+    ) => Promise<void>,
     timeoutMillis?: number,
     browserTarget?: DriverTarget,
     generation?: number,
@@ -1225,7 +1476,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 ticket.check();
                 await operationOptions?.beforeNative?.(driver, ticket);
                 ticket.check();
-                admitted.start(() => start(driver, admitted.ticket, target));
+                admitted.start(() => start(driver, admitted.ticket, target, ticket));
                 started = true;
 
                 return admitted;
@@ -1271,19 +1522,23 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
    * capture selection and generation; pinned operations capture their explicit page/frame.
    */
   const captureClickAt =
-    (target: Target): InputCapture =>
+    (target: Target, ticket: Ticket): InputCapture =>
     async (dispatch, dispatched) => {
       const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
 
       await dispatch();
 
-      return {
+      const receipt = {
         ...dispatched,
         target,
-        kind: "click",
+        kind: "click" as const,
         startedMonotonicNanos,
         completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
       };
+
+      ticket.recordInput?.(receipt);
+
+      return receipt;
     };
 
   const makeOperations = (retained?: {
@@ -1376,10 +1631,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
      * the native command alone: admission and readiness are over before the clock is read.
      */
     const input = (
-      operation: BrowserOperation,
+      operation: "pointer-move" | "hover" | "wheel" | "press" | "type",
       action: (driver: Driver, ticket: Ticket, target: DriverTarget) => Promise<NativeInput>,
       operationOptions?: ExecutionOptions,
       inputTarget?: (target: DriverTarget) => DriverTarget,
+      keys?: {
+        readonly count: number;
+        readonly countUnit: "unicode-codepoints" | "logical-strokes";
+      },
     ) =>
       run(
         operation,
@@ -1389,12 +1648,17 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
           const dispatched = await action(driver, ticket, browserTarget);
 
-          return {
+          const receipt = {
             ...dispatched,
+            kind: operation,
             target,
             startedMonotonicNanos,
             completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
           };
+
+          ticket.recordInput?.(receipt, keys);
+
+          return receipt;
         },
         true,
         operationOptions,
@@ -1407,325 +1671,331 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
      * navigation that fails after dispatch, fences the owner exactly as an interrupted mutation
      * always has. Interrupting a waiter on `completed` stops nothing; `stop` is the one way to.
      */
-    const startNavigation = Effect.fnUntraced(function* (
-      url: string,
-      timeoutMillis: number = limits.actionTimeoutMillis,
-      operationOptions?: ExecutionOptions,
-    ) {
-      const requestedTimeout = Math.min(
-        timeoutMillis,
-        operationOptions?.timeoutMillis ?? timeoutMillis,
-      );
+    const startNavigation = Effect.fnUntraced(
+      function* (
+        url: string,
+        timeoutMillis: number = limits.actionTimeoutMillis,
+        operationOptions?: ExecutionOptions,
+      ) {
+        const requestedTimeout = Math.min(
+          timeoutMillis,
+          operationOptions?.timeoutMillis ?? timeoutMillis,
+        );
 
-      const loadingDeadline = Math.min(
-        Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + requestedTimeout,
-        owner.lifetimeDeadline,
-        operationOptions?.operationDeadline ?? Number.POSITIVE_INFINITY,
-      );
+        const loadingDeadline = Math.min(
+          Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + requestedTimeout,
+          owner.lifetimeDeadline,
+          operationOptions?.operationDeadline ?? Number.POSITIVE_INFINITY,
+        );
 
-      let active = true;
-      let dismissals = 0;
-      let beforeUnload = false;
-      let dismissalUnknown = false;
-      let rejected: BrowserError | undefined;
-      let reconsider = () => {};
+        let active = true;
+        let dismissals = 0;
+        let beforeUnload = false;
+        let dismissalUnknown = false;
+        let rejected: BrowserError | undefined;
+        let reconsider = () => {};
 
-      const control: NavigationControl = {
-        identity: {},
-        beforeUnload: () => {
-          if (!active) return { dismissed: () => {} };
-          beforeUnload = true;
-          dismissals++;
-          let settled = false;
+        const control: NavigationControl = {
+          identity: {},
+          beforeUnload: () => {
+            if (!active) return { dismissed: () => {} };
+            beforeUnload = true;
+            dismissals++;
+            let settled = false;
 
-          return {
-            dismissed: (confirmed) => {
-              if (settled || !active) return;
-              settled = true;
-              dismissals--;
-              if (!confirmed) dismissalUnknown = true;
-              reconsider();
-            },
-          };
-        },
-      };
+            return {
+              dismissed: (confirmed) => {
+                if (settled || !active) return;
+                settled = true;
+                dismissals--;
+                if (!confirmed) dismissalUnknown = true;
+                reconsider();
+              },
+            };
+          },
+        };
 
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          active = false;
-        }),
-      );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            active = false;
+          }),
+        );
 
-      const begun = yield* run(
-        "navigate",
-        async (driver, ticket, browserTarget) => {
-          const target = operationTarget(browserTarget);
+        const begun = yield* run(
+          "navigate",
+          async (driver, ticket, browserTarget) => {
+            const target = operationTarget(browserTarget);
 
-          const loadingStarted = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
-          const remainingLifetime = owner.lifetimeDeadline - loadingStarted;
+            const loadingStarted = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+            const remainingLifetime = owner.lifetimeDeadline - loadingStarted;
 
-          if (remainingLifetime <= 0)
-            throw BrowserError.make({
-              operation: "navigate",
-              reason: Reasons.Expired.make({}),
-              outcome: "undispatched",
-            });
+            if (remainingLifetime <= 0)
+              throw BrowserError.make({
+                operation: "navigate",
+                reason: Reasons.Expired.make({}),
+                outcome: "undispatched",
+              });
 
-          const loadingTimeout = loadingDeadline - loadingStarted;
+            const loadingTimeout = loadingDeadline - loadingStarted;
 
-          if (loadingTimeout <= 0)
-            throw BrowserError.make({
-              operation: "navigate",
-              reason: Reasons.Timeout.make({}),
-              outcome: "undispatched",
-            });
+            if (loadingTimeout <= 0)
+              throw BrowserError.make({
+                operation: "navigate",
+                reason: Reasons.Timeout.make({}),
+                outcome: "undispatched",
+              });
 
-          const navigation = await driver.beginNavigation(
-            url,
-            loadingTimeout,
-            ticket,
-            browserTarget,
-            control,
-          );
-
-          // A continuation that outlived its permit takes no reservation: whatever gave that
-          // permit up has already decided this dispatch's outcome.
-          ticket.check();
-
-          const reservation = owner.reserve(navigation.pageId);
-
-          ticket.acknowledge?.();
-
-          return {
-            target,
-            navigation,
-            reservation,
-            authority: pages.get(navigation.pageId),
-            recoveryDeadline: Math.min(
-              loadingStarted + loadingTimeout + 3000,
-              owner.lifetimeDeadline,
-            ),
-          };
-        },
-        true,
-        { ...operationOptions, timeoutMillis: requestedTimeout },
-      );
-
-      const { navigation, reservation } = begun;
-
-      const admission =
-        begun.authority?.admission ??
-        owner.pageAdmission(navigation.pageId, begun.target.generation);
-
-      const outcome = yield* Deferred.make<string, BrowserError>();
-      const timeoutRecovery = yield* Deferred.make<boolean>();
-      const unknown = yield* Deferred.make<void>();
-      let pendingDecision: Effect.Effect<string, BrowserError> | undefined;
-      let stopDispatched = false;
-      let timedOut = false;
-      let deciding = false;
-
-      const failed = (reason: BrowserError["reason"]) =>
-        Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
-
-      const settleUnknown = yield* Effect.cached(
-        Effect.suspend(() => {
-          const decision = pendingDecision;
-
-          if (decision === undefined || Deferred.isDoneUnsafe(outcome)) return Effect.void;
-
-          return owner
-            .contain(containment(navigation.pageId, begun.authority), begun.target.generation)
-            .pipe(
-              Effect.tap((contained) =>
-                Effect.sync(() => {
-                  reservation.settle(contained._tag === "PageClosed" ? "known" : "unknown");
-                  Deferred.doneUnsafe(
-                    outcome,
-                    decision.pipe(
-                      Effect.mapError((error) =>
-                        BrowserError.make({
-                          ...error,
-                          outcome: "unknown",
-                          containment: contained,
-                        }),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              Effect.asVoid,
+            const navigation = await driver.beginNavigation(
+              url,
+              loadingTimeout,
+              ticket,
+              browserTarget,
+              control,
             );
-        }),
-      ).pipe(Effect.map(Effect.uninterruptible));
 
-      /**
-       * A navigation has exactly one outcome, and whoever decides it first settles the
-       * reservation. It is released before anyone waiting is told, so the operation a waiter
-       * runs next is admitted rather than finding its own page still reserved.
-       */
-      const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
-        if (deciding || Deferred.isDoneUnsafe(outcome)) return;
-        deciding = true;
-        active = false;
-        if (known) {
-          reservation.settle("known");
-          Deferred.doneUnsafe(outcome, result);
-          deciding = false;
-        } else {
-          pendingDecision = result;
-          Deferred.doneUnsafe(unknown, Effect.void);
-        }
-        Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
-      };
+            // A continuation that outlived its permit takes no reservation: whatever gave that
+            // permit up has already decided this dispatch's outcome.
+            ticket.check();
 
-      reconsider = () => {
-        if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
-        if (beforeUnload) {
-          // Both facts are required: this goto rejected and its exact dialog was dismissed.
-          decide(
-            dismissalUnknown ? Effect.fail(rejected) : failed(Reasons.Interrupted.make({})),
-            !dismissalUnknown,
-          );
-        } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
-          timedOut = true;
-          Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
-        } else {
-          decide(Effect.fail(rejected), false);
-        }
-      };
+            const reservation = owner.reserve(navigation.pageId);
 
-      navigation.settled.then(
-        (url) => {
-          if (!stopDispatched) decide(Effect.succeed(url), true);
-        },
-        (error: unknown) => {
-          if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
+            ticket.acknowledge?.();
 
-          rejected = publicError(error, "navigate", {
-            reason: Reasons.Provider.make({}),
-            outcome: "unknown",
-          });
-          reconsider();
-        },
-      );
-
-      // A fence already cleared the reservation; this only releases anyone still waiting.
-      const aborted = () =>
-        decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), true);
-
-      reservation.signal.addEventListener("abort", aborted, {
-        once: true,
-      });
-      // Left unsettled, nothing knows what the browser did with it.
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), false);
-          reservation.signal.removeEventListener("abort", aborted);
-        }).pipe(Effect.andThen(settleUnknown)),
-      );
-      yield* Deferred.await(unknown).pipe(Effect.andThen(settleUnknown), Effect.forkScoped);
-
-      const stop = yield* makeNavigationStopCoordinator(
-        () => Deferred.isDoneUnsafe(outcome),
-        (onDispatch, retainSetup, deadline) =>
-          owner.guard(
-            "navigate-stop",
-            (ticket) =>
-              Effect.suspend(() =>
-                deadline !== undefined && admission.native.stopSetupPending !== undefined
-                  ? Deferred.await(admission.native.stopSetupPending)
-                  : Effect.void,
-              ).pipe(
-                Effect.andThen(
-                  native("navigate-stop", ticket, () =>
-                    navigation.stop(
-                      ticket,
-                      () => !Deferred.isDoneUnsafe(outcome),
-                      () => {
-                        onDispatch();
-                        stopDispatched = true;
-                      },
-                      () => {
-                        if (admission.native.stopSetupPending !== undefined)
-                          throw BrowserError.make({
-                            operation: "navigate-stop",
-                            reason: Reasons.Busy.make({}),
-                            outcome: "undispatched",
-                          });
-                        const setup = Deferred.makeUnsafe<void>();
-
-                        admission.native.stopSetupPending = setup;
-                        const retired = retainSetup();
-
-                        return () => {
-                          if (admission.native.stopSetupPending === setup)
-                            admission.native.stopSetupPending = undefined;
-                          Deferred.doneUnsafe(setup, Effect.void);
-                          retired();
-                        };
-                      },
-                    ),
-                  ),
-                ),
-                Effect.timeoutOrElse({
-                  duration: Math.min(3000, ticket.remainingMillis()),
-                  orElse: () =>
-                    Effect.fail(
-                      BrowserError.make({
-                        operation: "navigate-stop",
-                        reason: Reasons.Timeout.make({}),
-                        outcome: ticket.dispatched ? "unknown" : "undispatched",
-                      }),
-                    ),
-                }),
+            return {
+              target,
+              navigation,
+              reservation,
+              authority: pages.get(navigation.pageId),
+              recoveryDeadline: Math.min(
+                loadingStarted + loadingTimeout + 3000,
+                owner.lifetimeDeadline,
               ),
-            {
-              mutation: true,
-              recovery: true,
-              targetScope: () => ({ pageId: navigation.pageId }),
-              mutationScope: () => ({ pageId: navigation.pageId }),
-              charge: false,
-              preflight: checkTarget(
-                { pageId: navigation.pageId, frameId: begun.target.frameId },
-                begun.target.generation,
-              ),
-              contain: () => containment(navigation.pageId, begun.authority),
-              ...(deadline === undefined ? {} : { waitUntil: deadline }),
-            },
-          ),
-        () =>
-          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Interrupted.make({})), true),
-      );
+            };
+          },
+          true,
+          { ...operationOptions, timeoutMillis: requestedTimeout },
+        );
 
-      // One operation-scoped supervisor, signalled only by the exact native timeout classifier.
-      // Its absolute deadline bounds joined public stops, permit wait and late setup retirement too.
-      yield* Deferred.await(timeoutRecovery).pipe(
-        Effect.flatMap((recover) =>
-          recover
-            ? stop.recover(begun.recoveryDeadline).pipe(
-                Effect.onExit((exit) =>
+        const { navigation, reservation } = begun;
+
+        const admission =
+          begun.authority?.admission ??
+          owner.pageAdmission(navigation.pageId, begun.target.generation);
+
+        const outcome = yield* Deferred.make<string, BrowserError>();
+        const timeoutRecovery = yield* Deferred.make<boolean>();
+        const unknown = yield* Deferred.make<void>();
+        let pendingDecision: Effect.Effect<string, BrowserError> | undefined;
+        let stopDispatched = false;
+        let timedOut = false;
+        let deciding = false;
+
+        const failed = (reason: BrowserError["reason"]) =>
+          Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
+
+        const settleUnknown = yield* Effect.cached(
+          Effect.suspend(() => {
+            const decision = pendingDecision;
+
+            if (decision === undefined || Deferred.isDoneUnsafe(outcome)) return Effect.void;
+
+            return owner
+              .contain(containment(navigation.pageId, begun.authority), begun.target.generation)
+              .pipe(
+                Effect.tap((contained) =>
                   Effect.sync(() => {
-                    if (Exit.isFailure(exit)) decide(failed(Reasons.Timeout.make({})), false);
+                    reservation.settle(contained._tag === "PageClosed" ? "known" : "unknown");
+                    Deferred.doneUnsafe(
+                      outcome,
+                      decision.pipe(
+                        Effect.mapError((error) =>
+                          BrowserError.make({
+                            ...error,
+                            outcome: "unknown",
+                            containment: contained,
+                          }),
+                        ),
+                      ),
+                    );
                   }),
                 ),
-              )
-            : Effect.void,
-        ),
-        Effect.ignoreCause,
-        Effect.forkScoped,
-      );
+                Effect.asVoid,
+              );
+          }),
+        ).pipe(Effect.map(Effect.uninterruptible));
 
-      return {
-        target: begun.target,
-        completed: Deferred.await(outcome),
         /**
-         * The browser's acknowledgement is the known outcome. Playwright's own promise is not
-         * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
+         * A navigation has exactly one outcome, and whoever decides it first settles the
+         * reservation. It is released before anyone waiting is told, so the operation a waiter
+         * runs next is admitted rather than finding its own page still reserved.
          */
-        stop: stop.stop,
-      };
-    });
+        const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
+          if (deciding || Deferred.isDoneUnsafe(outcome)) return;
+          deciding = true;
+          active = false;
+          if (known) {
+            reservation.settle("known");
+            Deferred.doneUnsafe(outcome, result);
+            deciding = false;
+          } else {
+            pendingDecision = result;
+            Deferred.doneUnsafe(unknown, Effect.void);
+          }
+          Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
+        };
+
+        reconsider = () => {
+          if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
+          if (beforeUnload) {
+            // Both facts are required: this goto rejected and its exact dialog was dismissed.
+            decide(
+              dismissalUnknown ? Effect.fail(rejected) : failed(Reasons.Interrupted.make({})),
+              !dismissalUnknown,
+            );
+          } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
+            timedOut = true;
+            Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
+          } else {
+            decide(Effect.fail(rejected), false);
+          }
+        };
+
+        navigation.settled.then(
+          (url) => {
+            if (!stopDispatched) decide(Effect.succeed(url), true);
+          },
+          (error: unknown) => {
+            if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
+
+            rejected = publicError(error, "navigate", {
+              reason: Reasons.Provider.make({}),
+              outcome: "unknown",
+            });
+            reconsider();
+          },
+        );
+
+        // A fence already cleared the reservation; this only releases anyone still waiting.
+        const aborted = () =>
+          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), true);
+
+        reservation.signal.addEventListener("abort", aborted, {
+          once: true,
+        });
+        // Left unsettled, nothing knows what the browser did with it.
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), false);
+            reservation.signal.removeEventListener("abort", aborted);
+          }).pipe(Effect.andThen(settleUnknown)),
+        );
+        yield* Deferred.await(unknown).pipe(Effect.andThen(settleUnknown), Effect.forkScoped);
+
+        const stop = yield* makeNavigationStopCoordinator(
+          () => Deferred.isDoneUnsafe(outcome),
+          (onDispatch, retainSetup, deadline) =>
+            owner.guard(
+              "navigate-stop",
+              (ticket) =>
+                Effect.suspend(() =>
+                  deadline !== undefined && admission.native.stopSetupPending !== undefined
+                    ? Deferred.await(admission.native.stopSetupPending)
+                    : Effect.void,
+                ).pipe(
+                  Effect.andThen(
+                    native("navigate-stop", ticket, () =>
+                      navigation.stop(
+                        ticket,
+                        () => !Deferred.isDoneUnsafe(outcome),
+                        () => {
+                          onDispatch();
+                          stopDispatched = true;
+                        },
+                        () => {
+                          if (admission.native.stopSetupPending !== undefined)
+                            throw BrowserError.make({
+                              operation: "navigate-stop",
+                              reason: Reasons.Busy.make({}),
+                              outcome: "undispatched",
+                            });
+                          const setup = Deferred.makeUnsafe<void>();
+
+                          admission.native.stopSetupPending = setup;
+                          const retired = retainSetup();
+
+                          return () => {
+                            if (admission.native.stopSetupPending === setup)
+                              admission.native.stopSetupPending = undefined;
+                            Deferred.doneUnsafe(setup, Effect.void);
+                            retired();
+                          };
+                        },
+                      ),
+                    ),
+                  ),
+                  Effect.timeoutOrElse({
+                    duration: Math.min(3000, ticket.remainingMillis()),
+                    orElse: () =>
+                      Effect.fail(
+                        BrowserError.make({
+                          operation: "navigate-stop",
+                          reason: Reasons.Timeout.make({}),
+                          outcome: ticket.dispatched ? "unknown" : "undispatched",
+                        }),
+                      ),
+                  }),
+                ),
+              {
+                mutation: true,
+                recovery: true,
+                targetScope: () => ({ pageId: navigation.pageId }),
+                mutationScope: () => ({ pageId: navigation.pageId }),
+                charge: false,
+                preflight: checkTarget(
+                  { pageId: navigation.pageId, frameId: begun.target.frameId },
+                  begun.target.generation,
+                ),
+                contain: () => containment(navigation.pageId, begun.authority),
+                ...(deadline === undefined ? {} : { waitUntil: deadline }),
+              },
+            ),
+          () =>
+            decide(
+              failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Interrupted.make({})),
+              true,
+            ),
+        );
+
+        // One operation-scoped supervisor, signalled only by the exact native timeout classifier.
+        // Its absolute deadline bounds joined public stops, permit wait and late setup retirement too.
+        yield* Deferred.await(timeoutRecovery).pipe(
+          Effect.flatMap((recover) =>
+            recover
+              ? stop.recover(begun.recoveryDeadline).pipe(
+                  Effect.onExit((exit) =>
+                    Effect.sync(() => {
+                      if (Exit.isFailure(exit)) decide(failed(Reasons.Timeout.make({})), false);
+                    }),
+                  ),
+                )
+              : Effect.void,
+          ),
+          Effect.ignoreCause,
+          Effect.forkScoped,
+        );
+
+        return {
+          target: begun.target,
+          completed: Deferred.await(outcome),
+          /**
+           * The browser's acknowledgement is the known outcome. Playwright's own promise is not
+           * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
+           */
+          stop: stop.stop,
+        };
+      },
+      Effect.provideService(Clock.Clock, clock),
+    );
 
     return {
       startNavigation,
@@ -1757,6 +2027,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               ticket,
               captureClickAt(
                 operationTarget(effectiveTarget(elementTarget(target), browserTarget)),
+                ticket,
               ),
               policy,
               effectiveTarget(elementTarget(target), browserTarget),
@@ -1786,7 +2057,20 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       scroll: (x: number, y: number, operationOptions?: ExecutionOptions) =>
         run(
           "scroll",
-          (driver, ticket, browserTarget) => driver.scroll(x, y, ticket, browserTarget),
+          async (driver, ticket, browserTarget) => {
+            const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+            const result = await driver.scroll(x, y, ticket, browserTarget);
+
+            ticket.recordScroll?.({
+              target: browserTarget,
+              x,
+              y,
+              startedMonotonicNanos,
+              completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+            });
+
+            return result;
+          },
           true,
           operationOptions,
         ),
@@ -1846,6 +2130,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           operationOptions,
           (browserTarget) =>
             effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+          { count: 1, countUnit: "logical-strokes" },
         ),
       type: (
         text: string,
@@ -1866,6 +2151,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           operationOptions,
           (browserTarget) =>
             effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+          { count: codePointCount(text), countUnit: "unicode-codepoints" },
         ),
       screenshot: (full: boolean, operationOptions?: ExecutionOptions) =>
         run(
@@ -2028,8 +2314,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           let evidence: SettledEvidence | undefined;
 
           return wait(
-            async (driver, ticket, resolved) => {
+            async (driver, ticket, resolved, operationTicket) => {
               evidence = await driver.settled(settle, ticket, resolved);
+              operationTicket.recordSettled?.(evidence, resolved);
             },
             settle.withinMillis,
             target,
@@ -2267,6 +2554,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                               target ?? driver.selected(),
                             ),
                           ),
+                          ticket,
                         ),
                         effectiveTarget(reference(field.elementId), target ?? driver.selected()),
                       );
@@ -2368,6 +2656,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     ticket,
                     captureClickAt(
                       targetData(effectiveTarget(reference(submit), target ?? driver.selected())),
+                      ticket,
                     ),
                     policy,
                     effectiveTarget(reference(submit), target ?? driver.selected()),
@@ -2630,7 +2919,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               ),
             ),
           );
-        }),
+        }).pipe(Effect.provideService(Clock.Clock, clock)),
       resize: (viewport: Viewport, operationOptions?: ExecutionOptions) =>
         nativeOperation("resize", (driver, ticket) => driver.resize(viewport, ticket, target), {
           ...bound,
@@ -2671,7 +2960,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         nativeOperation(
           "click-and-wait",
           (driver, ticket) =>
-            driver.clickAndWait(element, ticket, captureClickAt(targetData()), target),
+            driver.clickAndWait(element, ticket, captureClickAt(targetData(), ticket), target),
           { ...bound, ...operationOptions, mutation: true },
         ),
       clickForDownload: (element: string | ObservedElement, operationOptions?: ExecutionOptions) =>
@@ -3072,6 +3361,23 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       lifetimeDeadline: owner.lifetimeDeadline,
       actionTimeoutMillis: limits.actionTimeoutMillis,
       newId: uuid,
+      publish: () => {
+        const releaseDomain = domain.retirement.retain();
+        const releasePage = authority?.retirement.retain();
+
+        return {
+          append: planPublisher(
+            domain.store,
+            target === undefined
+              ? null
+              : { generation: generation ?? owner.state.generation, ...target, document: null },
+          ),
+          release: () => {
+            releasePage?.();
+            releaseDomain();
+          },
+        };
+      },
       reserve: Effect.suspend(() => {
         const pageId = target?.pageId ?? getDriver().selected().pageId;
         const count = pageRuns.get(pageId) ?? 0;
@@ -3112,13 +3418,44 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     let page = pages.get(info.pageId);
 
     if (page === undefined || page.identity.generation !== generation) {
+      const identity = Target.make({ generation, ...target });
+      const store = domain.store;
+      let terminal: Terminal | null = null;
+
+      const retirement = makeRetirement((reason) => {
+        const result = publish(store, {
+          target: { ...identity, document: null },
+          correlation: null,
+          event: { _tag: "Terminal", scope: "page", reason },
+        });
+
+        terminal = Object.freeze({
+          cursor:
+            result._tag === "Appended"
+              ? Object.freeze({
+                  storeId: result.event.storeId,
+                  clockId: result.event.clockId,
+                  sequence: result.event.sequence,
+                })
+              : store.cursor(),
+          at: result._tag === "Appended" ? result.event.at : store.now(),
+          scope: "page",
+          reason,
+        });
+      });
+
       page = {
-        identity: Target.make({ generation, ...target }),
+        identity,
         admission: owner.pageAdmission(info.pageId, generation),
         info,
         frames: new Map(),
         phase: pausedPages.has(info.pageId) ? "paused" : "open",
         containment: { _tag: "NotRequired" },
+        store,
+        retirement,
+        get terminal() {
+          return terminal;
+        },
       };
       pages.set(info.pageId, page);
     }
@@ -3126,6 +3463,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
     return {
       record,
+      timeline: journal.forPage(
+        record.store,
+        info.pageId,
+        record.identity.generation,
+        () => record.terminal,
+      ),
       controls: makePageControls(target, generation),
       status: Effect.sync((): PageStatus =>
         Object.freeze({
@@ -3298,6 +3641,8 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const controls = {
     ...selectedControls,
+    timeline: journal.timeline,
+    pageEvents: journal.pageEvents,
     operations: {
       startNavigation: (
         ...args: Parameters<ReturnType<typeof makePageControls>["operations"]["startNavigation"]>
@@ -3423,8 +3768,14 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     retain,
     target: readSelected,
     cleanupResult,
-    close: release.pipe(Effect.tap(() => retireControl)),
-    closeChecked: acquired.closeChecked.pipe(Effect.onExit(() => retireControl)),
+    close: release.pipe(
+      Effect.tap(() => retireControl),
+      Effect.provideService(Clock.Clock, clock),
+    ),
+    closeChecked: acquired.closeChecked.pipe(
+      Effect.onExit(() => retireControl),
+      Effect.provideService(Clock.Clock, clock),
+    ),
     liveView: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: ExecutionOptions) =>
       owner.guard("live-view", () => issue, {
         ...operationOptions,

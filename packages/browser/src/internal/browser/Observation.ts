@@ -2229,11 +2229,29 @@ export const makeObservation = (
       checkScreenshotGeometry(geometry);
       ticket.check();
 
+      const picturedFrame = page.mainFrame();
+      const picturedTarget = { pageId: exact.pageId, frameId: targets.frameId(picturedFrame) };
+
+      ticket.picture?.({
+        phase: "Requested",
+        target: picturedTarget,
+        documentEpoch: targets.epochOf(picturedFrame),
+        geometry,
+      });
+
       const bytes: unknown = await page.screenshot({
         type: "png",
         fullPage,
         scale: "css",
         timeout: timeout(ticket),
+      });
+
+      ticket.picture?.({
+        phase: "Returned",
+        target: picturedTarget,
+        documentEpoch: targets.epochOf(picturedFrame),
+        geometry,
+        ...(bytes instanceof Uint8Array ? { byteLength: bytes.length } : {}),
       });
 
       if (!(bytes instanceof Uint8Array)) throw failure(Reasons.Malformed.make({}));

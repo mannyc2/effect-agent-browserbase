@@ -167,6 +167,7 @@ it.effect("rejects invalid admission before resolving a native target or reservi
 
       const parent: CaptureParent = {
         owner,
+        newCaptureId: Effect.die("invalid limits must not allocate a capture id"),
         target: () => frame.target,
         selectedPage: () => {
           throw new Error("invalid limits must not read target metadata");
@@ -224,6 +225,7 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
 
       const parent: CaptureParent = {
         owner,
+        newCaptureId: Effect.succeed("capture-fixture-identity"),
         target: () => target,
         selectedPage: () => selectedPage,
         resolve: () =>
@@ -297,6 +299,7 @@ it.effect(
 
         const parent: CaptureParent = {
           owner,
+          newCaptureId: Effect.succeed("capture-fixture-accounting"),
           target: () => target,
           selectedPage: () => selectedPage,
           resolve: () =>

@@ -3,7 +3,12 @@ import type { Browser, BrowserContext, Dialog, Frame, Page } from "playwright-co
 
 import { FrameInfo, PageInfo, Identifier } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
-import type { DriverOptions, DriverTarget } from "./Driver.ts";
+import type {
+  DriverOptions,
+  DriverTarget,
+  NativeCachedPage,
+  NativePageLifecycle,
+} from "./Driver.ts";
 import { closeWithin, failure, safeDecode, sanitize } from "./NativeCalls.ts";
 import type { ObservationScope, Ticket } from "./Owner.ts";
 import type { PageExecution } from "./PageExecution.ts";
@@ -18,6 +23,8 @@ export interface Entry {
   readonly id: string;
   readonly page: Page;
   targetId?: string;
+  /** Undefined until read; null records an omitted oversized native title. */
+  cachedTitle?: string | null;
   readonly off: Array<() => void>;
   execution?: Promise<PageExecution>;
   executionValue?: PageExecution;
@@ -34,6 +41,7 @@ export interface Selection {
  * fixed point of its own event handling, so their order relative to its state never moves.
  */
 export interface TargetHooks {
+  readonly lifecycle?: (event: NativePageLifecycle) => void;
   /** A tracked page was registered; `created` while this driver is opening the page itself. */
   readonly opened: (entry: Entry, created: boolean) => void;
   /**
@@ -152,6 +160,54 @@ export const makeTargets = (
     return id;
   };
 
+  const cachedPage = (entry: Entry): NativeCachedPage => {
+    const frame = entry.page.mainFrame();
+    const url = frame.url();
+    let displayState: NativeCachedPage["displayState"] = "unknown";
+
+    try {
+      displayState = entry.executionValue?.state().state ?? "unknown";
+    } catch {
+      // Native retirement can precede the registry close listener; no native read repairs it.
+    }
+
+    return Object.freeze({
+      pageId: entry.id,
+      frameId: frameId(frame),
+      targetId: entry.targetId ?? null,
+      documentEpoch: epochOf(frame),
+      url: url.length <= 8192 ? url : null,
+      urlQualification: url.length <= 8192 ? "NativeCached" : "Omitted",
+      title: entry.cachedTitle ?? null,
+      titleQualification:
+        entry.cachedTitle === undefined
+          ? "Unread"
+          : entry.cachedTitle === null
+            ? "Omitted"
+            : "ObservedCached",
+      selected: selection.entry === entry,
+      displayState,
+    });
+  };
+
+  const notify = (entry: Entry, kind: "Opened" | "Metadata" | "Display") => {
+    if (entries.get(entry.id) === entry) hooks.lifecycle?.({ _tag: kind, page: cachedPage(entry) });
+  };
+
+  const navigated = (entry: Entry, frame: Frame, sameDocument: boolean) => {
+    const url = frame.url();
+
+    hooks.lifecycle?.({
+      _tag: "Navigated",
+      page: cachedPage(entry),
+      frameId: frameId(frame),
+      documentEpoch: epochOf(frame),
+      sameDocument,
+      url: url.length <= 8192 ? url : null,
+      urlQualification: url.length <= 8192 ? "NativeCached" : "Omitted",
+    });
+  };
+
   const retire = (entry: Entry): void => {
     if (entries.get(entry.id) !== entry) return;
     hooks.closed(entry);
@@ -175,6 +231,7 @@ export const makeTargets = (
       break;
     }
     hooks.changed("target-changed", { pageId: entry.id });
+    if (selection.entry !== undefined) notify(selection.entry, "Display");
   };
 
   const register = (page: Page): Entry => {
@@ -201,6 +258,7 @@ export const makeTargets = (
       const onNavigated = (event: ClientFrameNavigation) => {
         if (event.error !== undefined || event.newDocument !== undefined) return;
         sameDocumentNavigations.add(frame);
+        navigated(entry, frame, true);
         hooks.sameDocumentNavigated(entry, frame);
       };
 
@@ -225,7 +283,9 @@ export const makeTargets = (
       if (sameDocumentNavigations.delete(frame)) return;
       hooks.navigating(entry, frame);
       documentEpochs.set(frame, epochOf(frame) + 1);
+      if (frame === page.mainFrame()) entry.cachedTitle = undefined;
       hooks.navigated(entry, frame);
+      navigated(entry, frame, false);
       frameId(frame);
       hooks.frameChanged(entry, frame);
       if (selection.entry === entry && (selection.frame === frame || frame === page.mainFrame()))
@@ -269,6 +329,7 @@ export const makeTargets = (
       () => page.off("dialog", onDialog),
     );
     hooks.opened(entry, creatingPage);
+    notify(entry, "Opened");
 
     return entry;
   };
@@ -324,6 +385,7 @@ export const makeTargets = (
 
       ticket?.check();
       entry.targetId = safeDecode(TargetInfo, info).targetInfo.targetId;
+      notify(entry, "Metadata");
 
       return entry.targetId;
     } finally {
@@ -461,6 +523,8 @@ export const makeTargets = (
     if (entries.get(entry.id) !== entry || entry.page.isClosed())
       throw failure(Reasons.Stale.make({}), ticket.dispatched ? "unknown" : "undispatched");
     if (typeof title !== "string") throw failure(Reasons.Malformed.make({ path: "page.title" }));
+    entry.cachedTitle = title.length <= 512 ? title : null;
+    notify(entry, "Metadata");
 
     return safeDecode(PageInfo, {
       pageId: entry.id,
@@ -507,6 +571,7 @@ export const makeTargets = (
   const selectPage = (page: PageInfo, ticket: Ticket) =>
     sanitize(async () => {
       const entry = await explicitPage(page, ticket);
+      const previous = selection.entry;
 
       ticket.check();
       if (entries.get(entry.id) !== entry || entry.page.isClosed())
@@ -514,6 +579,8 @@ export const makeTargets = (
       selection.entry = entry;
       selection.frame = entry.page.mainFrame();
       hooks.changed("target-changed", "none");
+      if (previous !== undefined && previous !== entry) notify(previous, "Display");
+      notify(entry, "Display");
     });
 
   const newPage = (ticket: Ticket) =>
@@ -627,6 +694,9 @@ export const makeTargets = (
 
   return {
     entries: entries as ReadonlyMap<string, Entry>,
+    cachedPages: () => Object.freeze([...entries.values()].map(cachedPage)),
+    cachedPage,
+    notifyDisplay: (entry: Entry) => notify(entry, "Display"),
     selection,
     epochOf,
     frameId,

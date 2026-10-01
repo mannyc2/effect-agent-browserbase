@@ -24,7 +24,7 @@ it.live(
             // session only once Chromium reports it and the owner registers it.
             // Reading the list immediately failed once in 30 loaded rounds with the
             // popup still missing. A popup never registered fails on the same finds.
-            const initial = yield* settle(session.pages(), (open) => open.length === 2);
+            const initial = yield* settle(session.listPages(), (open) => open.length === 2);
             const original = initial.find((page) => page.selected)!;
             const popup = initial.find((page) => !page.selected)!;
 
@@ -32,7 +32,7 @@ it.live(
 
             yield* session.navigate(NavigateRequest.make({ url: f.url }));
             yield* session.resizeViewport(Viewport.make({ width: 640, height: 480 }));
-            const pages = yield* session.pages();
+            const pages = yield* session.listPages();
             const stagePage = pages.find((page) => page.pageId === original.pageId)!;
             const scoutPage = pages.find((page) => page.pageId === popup.pageId)!;
 
@@ -83,7 +83,7 @@ it.live(
             expect(a.viewportWidth).toBeGreaterThan(a.width);
             expect((yield* stage.completed).nativeStop).toBe("confirmed");
             expect((yield* researching.completed).nativeStop).toBe("confirmed");
-            expect((yield* session.pages()).find((page) => page.selected)?.pageId).toBe(
+            expect((yield* session.listPages()).find((page) => page.selected)?.pageId).toBe(
               popup.pageId,
             );
             yield* session.close;

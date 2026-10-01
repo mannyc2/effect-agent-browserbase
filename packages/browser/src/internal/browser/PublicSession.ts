@@ -568,6 +568,7 @@ export const makeSession = <E>(
     const page: Page = {
       ...makePageOperations(value.controls),
       ...makePlanOperations(value.controls),
+      timeline: value.timeline,
       identity: Object.freeze(value.record.identity),
       status: value.status,
       describe: (options = {}) =>
@@ -629,6 +630,8 @@ export const makeSession = <E>(
 
   const session: BrowserSession<E> = {
     ...makePageOperations(controls),
+    timeline: controls.timeline,
+    pages: controls.pageEvents,
     initialPage: issuedPage(controls.initialPage()),
     page: (info, options) =>
       checked(PageInfo, info, "target").pipe(
@@ -654,8 +657,6 @@ export const makeSession = <E>(
       ),
     target: (options) =>
       withOperationOptions(options, "target", (options) => controls.target(options)),
-    pages: (options) =>
-      withOperationOptions(options, "list-pages", (options) => controls.pages(options)),
     describePage: (page, options) =>
       checked(PageInfo, page, "describe-page").pipe(
         Effect.flatMap((page) =>

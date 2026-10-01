@@ -78,7 +78,7 @@ it.live(
             const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
             yield* owner.navigate(NavigateRequest.make({ url: fixture.url }));
-            const selected = (yield* owner.pages()).find((page) => page.selected);
+            const selected = (yield* owner.listPages()).find((page) => page.selected);
             const endpoint = fixture.sessions.get(owner.reference.sessionId)?.endpoint;
 
             expect(selected).toBeDefined();

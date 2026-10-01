@@ -110,7 +110,7 @@ it.effect("a document that predates the registrations cannot admit dependent wor
 
       // Navigation is what produces an initialized document: it is never gated.
       yield* handle.navigate("https://example.test/next");
-      yield* session.pages();
+      yield* session.listPages();
 
       const dependents: ReadonlyArray<Effect.Effect<unknown, BrowserError>> = [
         handle.readText(),

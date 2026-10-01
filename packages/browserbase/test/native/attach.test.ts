@@ -17,7 +17,7 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
           const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
           yield* owner.navigate(NavigateRequest.make({ url: f.url }));
-          const pages = yield* owner.pages();
+          const pages = yield* owner.listPages();
           const selected = pages.find((page) => page.selected);
 
           expect(selected).toBeDefined();

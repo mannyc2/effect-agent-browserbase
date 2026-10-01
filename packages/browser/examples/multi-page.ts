@@ -14,7 +14,7 @@ export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
     Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 40, maxElapsedMillis: 60000 })),
     (browser) =>
       Effect.gen(function* () {
-        const stageInfo = (yield* browser.pages()).find((page) => page.selected);
+        const stageInfo = (yield* browser.listPages()).find((page) => page.selected);
 
         if (stageInfo === undefined)
           return yield* BrowserError.make({

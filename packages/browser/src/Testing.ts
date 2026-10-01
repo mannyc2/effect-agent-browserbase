@@ -116,7 +116,8 @@ const makeEngine = Effect.fnUntraced(function* (script: Script) {
  * Open one scripted browser in the caller's Scope. The session is the real owner over a
  * scripted native engine: admission, budgets, staleness, dispatch evidence, capture, page holds
  * and typed callbacks are the production code paths. Only the page and its outcomes are scripted,
- * and the owner's ids and handoff tokens come from `sequentialCrypto`.
+ * and the owner's ids and handoff tokens use deterministic Crypto namespaced by this
+ * scripted reference, so independently opened sessions have distinct evidence domains.
  */
 export const open = Effect.fnUntraced(function* <E = never, R = never>(
   script: Script,
@@ -135,17 +136,18 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
   );
 
   const engine = yield* makeEngine(fixed);
+  const namespace = ++references;
+
+  const reference = Object.freeze(
+    ScriptedReference.make({ provider: "scripted", id: `scripted-${namespace}` }),
+  );
 
   const runtime = yield* makeRuntime({
     implementation: "scripted",
     binding: engine.binding,
     ...(options.automation === undefined ? {} : { automation: options.automation }),
     ...(options.viewport === undefined ? {} : { viewport: options.viewport }),
-  }).pipe(Effect.provide(sequentialCrypto));
-
-  const reference = Object.freeze(
-    ScriptedReference.make({ provider: "scripted", id: `scripted-${++references}` }),
-  );
+  }).pipe(Effect.provide(Layer.sync(Crypto.Crypto, () => makeSequentialCrypto(namespace))));
 
   const acquired = yield* runtime.acquire(
     policy,
@@ -177,7 +179,8 @@ export const open = Effect.fnUntraced(function* <E = never, R = never>(
 /**
  * The `Crypto` scripted browsers draw their ids and handoff tokens from. Its bytes count up from
  * one on each build, so every value is predictable; it is not random and computes no digest.
- * `open` uses it already. A provider Layer built over `binding` still requires a `Crypto`, and
+ * `open` uses the same counter with its original scripted-reference namespace. A provider
+ * Layer built over `binding` still requires a `Crypto`, and
  * this one keeps such a test free of a platform package.
  */
 export const sequentialCrypto: Layer.Layer<Crypto.Crypto> = Layer.sync(

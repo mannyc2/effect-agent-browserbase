@@ -23,6 +23,8 @@ export {
 
 /** Live stream/Effect capabilities intentionally have no data schema or serialization contract. */
 export interface CaptureInterval {
+  /** Opaque original interval identity; metadata refers to this id and actual frame sequences. */
+  readonly id: string;
   /** Single subscription. Ending or interrupting it stops this interval, not its browser. */
   readonly frames: Stream.Stream<CapturedFrame, BrowserError>;
   /**

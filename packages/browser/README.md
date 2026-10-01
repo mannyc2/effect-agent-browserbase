@@ -226,8 +226,8 @@ fresh authority. `page.status` is passive host state, including terminal contain
 remains readable after closure. Reconnect and handoff resume return a bounded `Inventory` with
 the current generation and fresh Page metadata. Acquire a Page from that inventory and call
 `page.observe()` explicitly; old capabilities stay stale. Native title and URL reads are
-non-atomic. The future lifecycle stream must commit its registry snapshot and cursor together;
-this milestone adds no event journal.
+non-atomic. The separate `session.pages` lifecycle stream attaches its cached registry snapshot
+and journal cursor together.
 
 Observation storage is finite, including snapshots awaiting native disposal. Optional
 `automation.observationLimits` sets all six bounds together: defaults are 16 snapshots,
@@ -296,6 +296,84 @@ Descriptors compare the full exact kind and label, optional destination and stab
 
 `yield* page.settled({ quiet: "100 millis", within: "2 seconds" })` uses one owned wait in the pinned document. It reports quiet DOM mutation, scroll, root geometry and viewport signals. It does not establish network, descendant animation or business completion. Native timers work on hidden pages, but browser throttling can still cause an honest timeout. Cancellation retains wait capacity until native observer disposal is confirmed. Plain plans use the same browser inputs as ordinary operations; presentation and recording composition stay with the host.
 
+### Replayable session evidence
+
+`session.timeline` publishes one bounded metadata journal for the active connection. An issued
+`page.timeline` filters that same journal for its original Page. Snapshot reads and independent
+subscribers acquire no browser permit, send no input and cannot stop native capture.
+
+```ts
+import * as Timeline from "effect-browser/timeline";
+
+const history = yield * session.timeline.snapshot();
+const tail = session.timeline.events(history.resumeAfter);
+const appendTime = yield * session.timeline.now;
+const fromTime = session.timeline.events({ at: appendTime });
+const portable = yield * Timeline.encodeSnapshot(history);
+```
+
+`events(cursor)` resumes exclusively after that sequence; `events({ at })` includes events
+appended at or after the domain-qualified time. `events()` follows from the current tail when
+the stream executes. Snapshots carry immutable events, global available bounds, eviction facts,
+terminal state and `resumeAfter`. A quiet Page's filtered snapshot still uses the global
+watermark, including when it has no matching events. Evicting every retained event does not
+reset that watermark. Requested evicted history and lapped subscribers fail `TimelineGap` with
+requested and available cursors. Foreign store/clock identities and future cursors fail
+`TimelineCursorError`; consumers choose how to recover rather than silently losing evidence.
+
+`session.pages` is a lifecycle stream: it atomically attaches a copied Inventory baseline from
+the canonical bounded native registry and the journal watermark, then follows lifecycle events.
+Inventory metadata is explicitly cached: unread or omitted title/address fields are `null`.
+It grants no live Page authority. `session.listPages()` remains the admitted fresh native
+metadata read; its URL/title round trips are non-atomic. Restarting `session.pages` obtains a
+fresh baseline after a gap. `Timeline.projectPages` and `Timeline.encodePages` remove cached
+addresses, titles and native target IDs from the client projection. Native navigation and capture
+boundaries retain bounded host addresses observed at their original callbacks; `Timeline.project`
+and `Timeline.encodeClient` strip those nested fields too. `Timeline.encode` and `encodeSnapshot`
+encode host evidence and preserve those addresses.
+
+The session facade chooses the current journal when an Effect or Stream executes. Each active
+subscription stays on that journal. Reconnect creates a new store identity; old subscribers
+drain their available tail and terminate, or report a gap if lapped. Issued Page timelines stay
+on their original domain. Page/session terminal delivery does not bypass retention, and
+`page.status` retains original containment facts after the corresponding events have evicted.
+
+Events include plan correlation, original native phases, genuine input intervals, navigation,
+settled/containment outcomes and capture references. A dispatch means handoff to checked native
+implementation; acknowledgement means native completion. Later follow-up failure remains
+separate. Key events contain counts and their units, never text. Individual pointer commands
+are `Pointer` events; `Glide` is reserved for an actual bounded intended schedule. Capture IDs,
+interval-local frame sequences and boundary attribution refer to the original capture; no
+frame bytes enter the journal. `FirstFrame` means first accepted received frame after a
+boundary, without proving new-document pixels. Picture native-call intervals remain separate
+from DOM/text intervals and screencast receipt times.
+
+Phase `nativeOrdinal` counts original dispatch phases within its `operationId`, rather than
+individual CDP commands. `DisplayChanged` carries the selection and qualified running, held or
+unknown display state from the same native callback.
+
+Terminal retirement waits for original logical ticket/run outcomes and bounded capture stop
+cleanup to publish their evidence. An unconfirmed native stop remains unconfirmed; retirement
+does not wait indefinitely for raw native promises. Later native callbacks stay pinned to the
+old journal and can be refused once it has retired. Capture `latePhase` qualifies a Watching or
+Started callback after the logical interval ended. Original capture snapshots and quarantine
+retain their independent native stop and loss facts.
+
+Append timestamps come from the owner's captured host Clock and order with global sequences.
+Receipt/source times are payload facts and never backdate append order. `Stamp.offsetNanos`
+is relative to that clock domain's origin; its `clockId` is required. Explicit `*Json` schemas
+and Timeline encoding helpers represent bigint offsets/sequences as decimal strings. Native
+presentation Unix milliseconds remain a separately qualified source clock.
+
+`timelineLimits` on Chromium/Browserbase options, or `automation.timelineLimits` on the runtime,
+bounds retained metadata and subscriptions. Defaults are 60 seconds, 4,096 events, 4 MiB,
+32 subscribers and 64 KiB per event. Configurable maxima are six hours, 65,536 events, 64 MiB,
+256 subscribers and 1 MiB per event. Metadata-byte and per-event limits have a 2 KiB minimum so
+canonical terminal and omission evidence fits. Count/time/byte eviction runs on append and read. Subscribers
+retain bounded cursor/wakeup state rather than event queues; a slow consumer cannot backpressure
+an admitted native action. Returned values are ordinary immutable snapshots, without an archive
+registry retaining old journals.
+
 ### Admission and deadlines
 
 Ordinary operations on one Page share its permit, including operations on its Frames. Work on
@@ -342,7 +420,7 @@ preempts work. Handoff, resume and reconnect refuse
 an existing ordinary permit holder before installing their exclusive lifecycle barrier; handoff
 then drains retained native work within its bound before granting operator control.
 
-`ready`, `retain`, `target`, `pages`, `frames` and `createPage` are now methods, including calls
+`ready`, `retain`, `target`, `listPages`, `frames` and `createPage` are methods, including calls
 without options: use `yield* session.ready()` rather than yielding the former Effect property.
 
 ### Selected, retained and pinned targets
@@ -402,13 +480,13 @@ If the browser selects an unadopted Page after another closes, selected actions 
 `Stale/undispatched`; `listPages()` or checked `retain()` establishes fresh authority before input.
 
 `describePage(pageInfo)` reads one exact page's current address and title, and whether it is
-selected, without reading every other page. `pages` reads every page's title at once rather than
+selected, without reading every other page. `listPages` reads every page's title at once rather than
 one after another, but each title is still a round trip to the browser.
 
 For work that must stay on a page while selection moves elsewhere, pin it explicitly:
 
 ```ts
-const stageInfo = (yield * session.pages()).find((page) => page.title === "Stage")!;
+const stageInfo = (yield * session.listPages()).find((page) => page.title === "Stage")!;
 const stage = yield * session.pinPage(stageInfo);
 const childInfo = (yield * session.framesOf(stageInfo)).find(
   (frame) => frame.parentFrameId !== null,
@@ -428,7 +506,7 @@ reservation or page hold is checked on the pinned page rather than whichever pag
 selected.
 
 Page and frame IDs are opaque and namespaced per connection. Old `PageInfo`, IDs and live handles
-are invalid after reconnect. In the same known browser lifetime, read fresh `pages`, match exactly
+are invalid after reconnect. In the same known browser lifetime, read fresh `listPages`, match exactly
 one saved `targetId`, and use that fresh page record; zero matches means gone and multiple matches
 mean ambiguous. Never fall back to order, local serial, URL or title. Then reacquire frames with
 `framesOf(freshPage)`. A surviving native target can identify the same page, but cannot make old
@@ -656,7 +734,7 @@ the configured action timeout and remaining lifetime still cap it, including set
 can move elsewhere without retargeting the wait. Its condition is a sample, not a reservation
 that the page will remain unchanged.
 
-While a wait is pending, `checkpoint`, `pages` and ordinary bounded reads can use the normal
+While a wait is pending, `checkpoint`, `listPages` and ordinary bounded reads can use the normal
 permit. Mutations, another navigation and page holds on the waited page are refused before
 dispatch. Input and observation on another page may proceed; replacing the waited frame's observation is refused until the logical wait ends. Closing a page or session remains available and cancels affected waits.
 No general read-under-write bypass has been added.
@@ -926,13 +1004,13 @@ Footage from `capture` is the page surface. It has no pointer, no tab strip and 
 - an `InputReceipt` for each exposed native pointer, click and key operation, with a known position when the owner has one and an interval on that same clock. Internal download and file-chooser clicks clear the remembered pointer position but do not expose a receipt;
 - an address for every document a frame can name: `initialUrl` for document 0, read in the same turn the watch is installed, and a `url` on each cross-document boundary, read inside the navigation event that committed it. Page-lifetime captures separately mark same-document URL changes without advancing the document number. An application that samples `observe()` between actions can learn an address, but never when it became the address. One longer than 8192 characters is `null`, never cut into an address the page did not show.
 
-A cross-document boundary is the commit, and it is the only moment of a navigation an application cannot see for itself. A same-document boundary records a URL change without claiming that a new document committed. When a cross-document navigation started and when its document finished loading are yours to stamp around the operation that caused it, because you made the call: `startNavigation` returns at dispatch and its `completed` resolves at DOMContentLoaded. The clock is Effect's `Clock`, read where the session was opened and the capture was started, so `Clock.clockWith((clock) => clock.monotonicTimeNanos)` in the same runtime is on the same timeline as every frame and receipt. A title is page state that changes whenever the page likes, not part of a transition: read it with `session.describePage(page)` when you need one, and stamp that read yourself.
+A cross-document boundary is the commit, and it is the only moment of a navigation an application cannot see for itself. A same-document boundary records a URL change without claiming that a new document committed. When a cross-document navigation started and when its document finished loading are yours to stamp around the operation that caused it, because you made the call: `startNavigation` returns at dispatch and its `completed` resolves at DOMContentLoaded. Frames and receipts use the session's captured Effect `Clock`; a later caller Clock override does not change their domain. Capture `yield* Clock.Clock` when opening the session if you need raw host stamps on that same clock. `session.timeline.now` supplies the qualified offsets used by journal intervals. A title is page state that changes whenever the page likes, not part of a transition: read it with `session.describePage(page)` when you need one, and stamp that read yourself.
 
 The two clocks are never related for you. `sourceTimeMillis` is the browser's wall clock; everything above is the host's monotonic clock; on a hosted session they differ by an offset this package cannot observe. Every frame it receives is already late by the very capture latency it would be trying to measure, and nothing else it is handed carries the browser's time. Relating them takes a round trip into the page, which costs either a charged action or a registered binding, on a schedule only the application can choose, and it fails on a held page. So place input on frames by receipt time, which is always available and late by the capture latency, or measure the offset yourself with a four-timestamp exchange over a typed binding, as NTP does: the page stamps when it called and when the reply arrived, the host stamps when it received and when it replied, and half the best round trip is the error bound to report beside the offset.
 
 ## Explicit stage-page holds (opt-in)
 
-Set `pageControl: true` on `Chromium.layer` or `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.pages()`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `session.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
+Set `pageControl: true` on `Chromium.layer` or `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.listPages()`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `session.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
 
 This opt-in uses maintained CDP attachment with `noDefaults: true` and owner-controlled per-page focus emulation. It intentionally does not support `keepAlive`, reattachment, human handoff, or popup/dialog `pause` policies. These combinations fail before acquisition; use the existing `retain`/`close` popup policies and `dismiss` dialog policy. Resume explicitly activates the native page without changing SDK selection. Do not enable it where another native client owns focus. Modeled input, DOM reads, waits and viewport changes on held/unknown pages fail before dispatch; the scout remains operable. Page close and session close remain available. Capture does not thaw a held page; frame consumption and acknowledgements never suspend/resume it implicitly.
 
@@ -1028,6 +1106,8 @@ The native driver, action permits, mutable capture leases and registry lookup ar
 | `browser-data`, `errors` | Credential-free schemas and expected browser/initialization errors                    |
 | `plan`                   | Live plan construction, durable encoding, recording and typed run failures            |
 | `plan-data`              | Bounded actions, descriptors, conditions and durable plan schemas                     |
+| `timeline`               | Live evidence capability, explicit JSON codecs and sanitized lifecycle projections    |
+| `timeline-data`          | Bounded evidence, cursors, clock offsets, snapshots and typed gap/resource errors     |
 | `bootstrap`              | Typed bindings, init/permission plans, readiness and host diagnostics                 |
 | `capture`                | Bounded live frame intervals, snapshots and final accounting; reexports frame schemas |
 | `capture-data`           | Capture options, binary frame and result schemas without session operations           |

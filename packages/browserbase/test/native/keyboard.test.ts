@@ -382,7 +382,7 @@ it.live("real CDP: keys meant for a held page are refused, never queued for when
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           yield* handle.click(ClickRequest.make({ selector: "#first" }));
           const [native] = f.nativePages(session.reference.sessionId);
-          const [page] = yield* session.pages();
+          const [page] = yield* session.listPages();
 
           assert.ok(native);
           assert.ok(page);

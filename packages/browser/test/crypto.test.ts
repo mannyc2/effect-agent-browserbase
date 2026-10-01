@@ -81,14 +81,14 @@ it.effect("the owner draws connection identity and handoff tokens from the runti
       const { session, operations } = yield* acquired.connect;
       const original = session.initialPage;
 
-      expect(identities).toEqual([{ namespace: uuid(1), bindings: uuid(2) }]);
+      expect(identities).toEqual([{ namespace: uuid(3), bindings: uuid(4) }]);
 
       const first = yield* operations.beginHandoff(Effect.succeed("view"));
       const repeated = yield* operations.beginHandoff(Effect.succeed("view"));
 
       // One pause has one token, however often it is asked for.
-      expect(Redacted.value(first.token)).toBe(uuid(3));
-      expect(Redacted.value(repeated.token)).toBe(uuid(3));
+      expect(Redacted.value(first.token)).toBe(uuid(5));
+      expect(Redacted.value(repeated.token)).toBe(uuid(5));
       yield* operations.resume(first.token, true);
       expect(session.initialPage).toBe(original);
       expect(yield* original.status).toMatchObject({ phase: "stale" });
@@ -108,7 +108,7 @@ it.effect("the owner draws connection identity and handoff tokens from the runti
 
       const next = yield* operations.beginHandoff(Effect.succeed("view"));
 
-      expect(Redacted.value(next.token)).toBe(uuid(4));
+      expect(Redacted.value(next.token)).toBe(uuid(6));
     }),
   ),
 );

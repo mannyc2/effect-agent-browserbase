@@ -409,6 +409,7 @@ export class BrowserbaseBrowser extends Context.Service<
 
 /** Only the automation fields cross the schema boundary; launch and callbacks are separate. */
 const projected = (options: BrowserOptions) => ({
+  ...(options.timelineLimits === undefined ? {} : { timelineLimits: options.timelineLimits }),
   ...(options.admissionLimits === undefined ? {} : { admissionLimits: options.admissionLimits }),
   ...(options.observationLimits === undefined
     ? {}

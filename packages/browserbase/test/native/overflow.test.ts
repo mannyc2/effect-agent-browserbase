@@ -68,7 +68,7 @@ for (const maxPages of [1, 2]) {
                   unresolvedDispatch: false,
                 });
                 expect((yield* session.readText({ selector: "#count" })).text).toBe("1");
-                expect(yield* session.pages()).toHaveLength(1);
+                expect(yield* session.listPages()).toHaveLength(1);
                 const diagnostics = yield* session.diagnostics;
 
                 const records = diagnostics.records.filter(

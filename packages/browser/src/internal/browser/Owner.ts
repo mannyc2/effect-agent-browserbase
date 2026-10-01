@@ -1,20 +1,73 @@
-import { Clock, Deferred, Duration, Effect, Schema } from "effect";
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Option, Schema } from "effect";
 
 import type { OperationOptions } from "../../Browser.ts";
 import {
   BrowserDiagnostic,
   BrowserDiagnostics,
   type ObservedElement,
+  type InputReceipt,
   type AdmissionLimits,
   SessionStatus,
   type SessionReason,
   type SessionPhase,
 } from "../../BrowserData.ts";
-import { BrowserError, Reasons, type BrowserOperation, type Containment } from "../../Errors.ts";
+import {
+  BrowserError,
+  Reasons,
+  type BrowserOperation,
+  type BrowserOutcome,
+  type Containment,
+} from "../../Errors.ts";
+import type { SettledEvidence } from "../../PlanData.ts";
+import type { Correlation } from "../../TimelineData.ts";
 import { makeAdmission } from "./Admission.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
 import { providerReason, publicError } from "./NativeCalls.ts";
 import type { DescriptorSample, ResolvedElement } from "./Observation.ts";
+
+export interface NativePictureBoundary {
+  readonly phase: "Requested" | "Returned";
+  readonly target: DriverTarget;
+  readonly documentEpoch: number;
+  readonly geometry: { readonly width: number; readonly height: number };
+  readonly byteLength?: number;
+}
+
+/** Bounded metadata observed from the original admission; these callbacks grant no authority. */
+export interface TicketObserver {
+  readonly phase: (
+    phase: Exclude<NonNullable<Ticket["phase"]>, "Terminal">,
+    mutation: boolean,
+  ) => void;
+  readonly picture: (boundary: NativePictureBoundary) => void;
+  readonly input: (
+    receipt: InputReceipt,
+    keys?: { readonly count: number; readonly countUnit: "unicode-codepoints" | "logical-strokes" },
+  ) => void;
+  readonly scroll: (facts: {
+    readonly target: DriverTarget;
+    readonly x: number;
+    readonly y: number;
+    readonly startedMonotonicNanos: bigint;
+    readonly completedMonotonicNanos: bigint;
+  }) => void;
+  readonly settled: (evidence: SettledEvidence, target: DriverTarget) => void;
+  readonly finished: (summary: {
+    readonly kind: "Completed" | "Failed" | "Cancelled";
+    readonly outcome: BrowserOutcome;
+    readonly error?: BrowserError;
+    readonly containment: Containment;
+  }) => void;
+}
+
+export type ObserveTicket = (facts: {
+  readonly operation: BrowserOperation;
+  readonly operationId: string;
+  readonly ticket: () => Ticket | undefined;
+  readonly generation: number;
+  readonly scope: ObservationScope | undefined;
+  readonly correlation: () => Correlation | null;
+}) => TicketObserver;
 
 /** The browser domain's bounded step: one deadline, one declared BrowserError timeout. */
 export const within = <A, E, R>(
@@ -67,6 +120,11 @@ export interface ReadTicket {
 
 /** One admitted native operation; checks at dispatch also fence late Promise continuations. */
 export interface Ticket extends ReadTicket {
+  readonly operationId?: string;
+  readonly picture?: TicketObserver["picture"];
+  readonly recordInput?: TicketObserver["input"];
+  readonly recordScroll?: TicketObserver["scroll"];
+  readonly recordSettled?: TicketObserver["settled"];
   /** Native work keeps capacity until settlement, independently of the request fiber. */
   readonly retainNative?: () => () => void;
   readonly dispatched: boolean;
@@ -86,6 +144,7 @@ export interface Ticket extends ReadTicket {
 
 /** Synchronous host evidence from the original ticket, never dispatch authority. */
 export interface ExecutionEvidence {
+  readonly correlation?: () => Correlation | null;
   readonly phase?: (phase: NonNullable<Ticket["phase"]>, ticket: Ticket) => void;
   readonly target?: NonNullable<Ticket["captureTarget"]>;
 }
@@ -125,6 +184,9 @@ export interface Limits {
 
 export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   const clock = yield* Clock.Clock;
+  let observeTicket: ObserveTicket | undefined;
+  let observePhase: ((phase: Phase) => void) | undefined;
+  let operationSequence = 0n;
 
   const lifetimeDeadline =
     Number(yield* Clock.monotonicTimeNanos) / 1_000_000 + limits.maxElapsedMillis;
@@ -198,8 +260,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       phase !== "closed"
     )
       return;
+    const changed = state.phase !== phase;
+
     state.phase = phase;
     if (phase === "open") pauseReason = null;
+    if (changed) observePhase?.(state.phase);
   };
 
   const invalidate = (
@@ -226,8 +291,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       terminalReason ??= trigger ?? (phase === "uncertain" ? "native-failure" : "closed");
     else if (trigger !== undefined) pauseReason = trigger;
     // A known trigger is retained even when the abort below interrupts dispatched work.
+    const previous = state.phase;
+
     if (!(state.phase === "faulted" && phase === "uncertain")) state.phase = phase;
     state.generation++;
+    if (state.phase !== previous) observePhase?.(state.phase);
     const pending: Array<AbortController> = [];
 
     for (const lane of admission.lanes()) {
@@ -445,6 +513,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
         return canceled ?? error(Reasons.Timeout.make({}));
       }).pipe(
+        Effect.provideService(Clock.Clock, clock),
         Effect.tap(() =>
           Effect.try({
             try: check,
@@ -547,6 +616,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   ): Effect.Effect<A, E | BrowserError, R> =>
     Effect.suspend(() => {
       const requested = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+      const operationId = (++operationSequence).toString();
+      let observedTicket: Ticket | undefined;
 
       const deadline = Math.min(
         requested +
@@ -565,6 +636,15 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
       const queueDeadline = options.queueDeadline ?? requested + queueMillis;
       const scope = options.targetScope?.() ?? options.mutationScope?.();
+
+      const observer = observeTicket?.({
+        operation,
+        operationId,
+        generation: state.generation,
+        ticket: () => observedTicket,
+        scope,
+        correlation: options.evidence?.correlation ?? (() => null),
+      });
 
       const pageLane =
         scope !== undefined && scope !== "all" && scope !== "none"
@@ -687,6 +767,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         };
 
         const ticket: Ticket = {
+          operationId,
+          picture: (boundary) => observer?.picture(boundary),
+          recordInput: (receipt, keys) => observer?.input(receipt, keys),
+          recordScroll: (facts) => observer?.scroll(facts),
+          recordSettled: (evidence, target) => observer?.settled(evidence, target),
           ...(options.evidence?.target === undefined
             ? {}
             : { captureTarget: options.evidence.target }),
@@ -720,22 +805,29 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               scope !== undefined && scope !== "all" && scope !== "none" ? scope.pageId : undefined,
             );
             options.evidence?.phase?.("Dispatched", ticket);
+            observer?.phase("Dispatched", true);
           },
           acknowledge() {
+            const mutation = pending;
+
             pending = false;
             if (phase !== "Terminal") phase = "Acknowledged";
             if (!unknownDecided) unresolved.delete(controller);
             options.evidence?.phase?.("Acknowledged", ticket);
+            observer?.phase("Acknowledged", mutation);
           },
           followUp() {
             if (phase === "Acknowledged") {
               phase = "FollowUp";
               options.evidence?.phase?.("FollowUp", ticket);
+              observer?.phase("FollowUp", false);
             }
           },
         };
 
+        observedTicket = ticket;
         options.evidence?.phase?.("Prepared", ticket);
+        observer?.phase("Prepared", false);
 
         // A revocation freezes the pending attempt synchronously, before a late native
         // acknowledgement can run and before the interrupted Effect resumes its handler.
@@ -852,6 +944,37 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
           }),
           Effect.onInterrupt(() => Effect.sync(abandon).pipe(Effect.andThen(settle))),
           Effect.tap(() => Effect.sync(() => unresolved.delete(controller))),
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              const failure = Exit.isFailure(exit)
+                ? Cause.findErrorOption(exit.cause)
+                : Option.none();
+
+              const error =
+                Option.isSome(failure) && Schema.is(BrowserError)(failure.value)
+                  ? failure.value
+                  : undefined;
+
+              observer?.finished({
+                kind: Exit.isSuccess(exit)
+                  ? "Completed"
+                  : Cause.hasInterrupts(exit.cause)
+                    ? "Cancelled"
+                    : "Failed",
+                outcome:
+                  pending || unknownDecided
+                    ? "unknown"
+                    : dispatched
+                      ? "performed"
+                      : (error?.outcome ?? "undispatched"),
+                ...(error === undefined ? {} : { error }),
+                containment:
+                  containment._tag === "NotRequired"
+                    ? (error?.containment ?? containment)
+                    : containment,
+              });
+            }),
+          ),
           Effect.ensuring(
             Effect.sync(() => {
               phase = "Terminal";
@@ -927,11 +1050,43 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             ),
           ),
         ),
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (observedTicket !== undefined) return;
+
+            const failure = Exit.isFailure(exit)
+              ? Cause.findErrorOption(exit.cause)
+              : Option.none();
+
+            const error =
+              Option.isSome(failure) && Schema.is(BrowserError)(failure.value)
+                ? failure.value
+                : undefined;
+
+            observer?.finished({
+              kind: Exit.isSuccess(exit)
+                ? "Completed"
+                : Cause.hasInterrupts(exit.cause)
+                  ? "Cancelled"
+                  : "Failed",
+              outcome: error?.outcome ?? "undispatched",
+              ...(error === undefined ? {} : { error }),
+              containment: error?.containment ?? { _tag: "NotRequired" },
+            });
+          }),
+        ),
       );
-    });
+    }).pipe(Effect.provideService(Clock.Clock, clock));
 
   /** Lifecycle transitions are performed while holding guard's permit; close alone preempts it. */
   return {
+    clock,
+    observeTickets: (observer: ObserveTicket) => {
+      observeTicket = observer;
+    },
+    observePhase: (observer: (phase: Phase) => void) => {
+      observePhase = observer;
+    },
     state,
     lifetimeDeadline,
     guard,
@@ -1031,6 +1186,9 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     },
     invalidate,
     fence,
+    get reason() {
+      return terminalReason ?? pauseReason;
+    },
     transition,
     expire,
     terminate,

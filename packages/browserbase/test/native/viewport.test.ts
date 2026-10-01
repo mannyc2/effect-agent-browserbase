@@ -124,7 +124,7 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
           yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
-          const stage = (yield* session.pages()).find((page) => page.selected);
+          const stage = (yield* session.listPages()).find((page) => page.selected);
           const stageNative = fixture.nativePages(session.reference.sessionId)[0];
 
           assert.ok(stage);
@@ -201,7 +201,7 @@ it.live(
             const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
             yield* owner.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
-            const target = (yield* owner.pages()).find((page) => page.selected);
+            const target = (yield* owner.listPages()).find((page) => page.selected);
             const ownerNative = fixture.nativePages(owner.reference.sessionId)[0];
 
             assert.ok(target);

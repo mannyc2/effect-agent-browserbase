@@ -54,7 +54,7 @@ it.live(
             const frames = yield* capture.frames.pipe(Stream.take(1), Stream.runCollect);
 
             expect(frames.length).toBe(1);
-            const page = (yield* session.pages()).find((page) => page.selected)!;
+            const page = (yield* session.listPages()).find((page) => page.selected)!;
             const held = yield* PageControl.suspend(session, page);
 
             expect((yield* PageControl.state(session, page)).state).toBe("suspended");
@@ -111,7 +111,7 @@ it.live("same-document navigation preserves observations and capture document id
       yield* Effect.promise(() => firstVisit.fragment.arrived);
       firstVisit.fragment.release();
       yield* session.waitFor({ selector: "#fragmented", state: "visible" });
-      yield* session.pages();
+      yield* session.listPages();
 
       const retainedFacts = yield* session.controlFacts(
         ObservedElement.make({
@@ -142,7 +142,7 @@ it.live("same-document navigation preserves observations and capture document id
       yield* Effect.promise(() => secondVisit.fragment.arrived);
       secondVisit.fragment.release();
       yield* session.waitFor({ selector: "#fragmented", state: "visible" });
-      yield* session.pages();
+      yield* session.listPages();
 
       const sameDocument = yield* pageCapture.snapshot;
 
@@ -153,7 +153,7 @@ it.live("same-document navigation preserves observations and capture document id
       ]);
 
       yield* session.navigate({ url: site.url });
-      yield* session.pages();
+      yield* session.listPages();
       const crossDocument = yield* pageCapture.snapshot;
 
       expect(crossDocument.currentDocument).toBe(1);
@@ -251,7 +251,7 @@ it.live(
             const scoutUrl = new URL("/pinned?name=scout", site.url).href;
 
             yield* session.navigate(NavigateRequest.make({ url: stageUrl }));
-            const stageInfo = (yield* session.pages()).find((page) => page.selected)!;
+            const stageInfo = (yield* session.listPages()).find((page) => page.selected)!;
             const selectedStage = yield* session.retain();
             const stage = yield* session.pinPage(stageInfo);
 

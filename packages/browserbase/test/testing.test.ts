@@ -193,7 +193,7 @@ it.effect("a borrowed attachment disconnects without releasing the owner's sessi
 
     yield* Browser.scoped(BrowserbaseBrowser.open(policy), (owner) =>
       Effect.gen(function* () {
-        const page = (yield* owner.pages()).find((candidate) => candidate.selected);
+        const page = (yield* owner.listPages()).find((candidate) => candidate.selected);
 
         expect(page).toBeDefined();
         if (page === undefined) return;

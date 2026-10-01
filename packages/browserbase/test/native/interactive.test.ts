@@ -201,7 +201,7 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           yield* h.click(ClickRequest.make({ selector: "#popup" }));
           // A dispatched click is not a registered target: the popup reaches the
           // session only once Chromium reports it and the owner registers it.
-          const pages = yield* settle(session.pages(), (open) => open.length === 2);
+          const pages = yield* settle(session.listPages(), (open) => open.length === 2);
 
           expect(pages).toHaveLength(2);
           expect((yield* session.target()).pageId).toBe(target.pageId);
@@ -303,7 +303,7 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate(NavigateRequest.make({ url: f.url }));
-            const firstPage = (yield* session.pages()).find((candidate) => candidate.selected)!;
+            const firstPage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
             const page = yield* session.createPage();
 
             yield* session.selectPage(page);
@@ -382,7 +382,7 @@ it.live(
             );
             yield* session.reconnect(true);
 
-            const reconnected = yield* session.pages();
+            const reconnected = yield* session.listPages();
 
             expect(reconnected).toHaveLength(1);
             expect(reconnected.some((fresh) => fresh.targetId === firstPage.targetId)).toBe(false);
@@ -419,7 +419,7 @@ it.live(
             });
             yield* session.selectPage(freshPage);
             expect((yield* session.target()).pageId).toBe(freshPage.pageId);
-            expect((yield* session.pages()).map((entry) => entry.targetId)).toEqual([
+            expect((yield* session.listPages()).map((entry) => entry.targetId)).toEqual([
               page.targetId,
             ]);
 

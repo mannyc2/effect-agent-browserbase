@@ -1,4 +1,4 @@
-import { type Duration, Effect, type Scope } from "effect";
+import { type Duration, Effect, type Scope, type Stream } from "effect";
 import { dual } from "effect/Function";
 
 import type * as Bootstrap from "./Bootstrap.ts";
@@ -42,6 +42,8 @@ import type {
 import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
 import type { PlanOperations } from "./Plan.ts";
 import type { DescriptorEncoded, ResolveGuard, SettledEvidence } from "./PlanData.ts";
+import type { Timeline } from "./Timeline.ts";
+import type { PageEvent, TimelineError } from "./TimelineData.ts";
 
 /**
  * Host-only ordinary admission. Omission or zero fails immediately; positive finite duration
@@ -141,6 +143,8 @@ export interface Frame extends PageOperations, PlanOperations {
 
 /** Issued live authority for one native page on its original connection. */
 export interface Page extends Frame {
+  /** Evidence for this issued Page's original domain; navigation does not change its journal. */
+  readonly timeline: Timeline;
   readonly describe: (options?: OperationOptions) => Effect.Effect<PageInfo, BrowserError>;
   readonly listFrames: (
     options?: OperationOptions,
@@ -278,6 +282,10 @@ export interface RetainedTarget extends TargetOperations {}
  * `pinFrame` remain adapters over the same owner.
  */
 export interface BrowserSession<E = never> extends TargetOperations {
+  /** Stable facade: each snapshot/stream captures the current journal when it executes. */
+  readonly timeline: Timeline;
+  /** Atomic cached Inventory baseline followed by lifecycle evidence on its pinned journal. */
+  readonly pages: Stream.Stream<PageEvent, TimelineError>;
   /** The page acquired on the initial connection, independent of later display selection. */
   readonly initialPage: Page;
   readonly page: (info: PageInfo, options?: OperationOptions) => Effect.Effect<Page, BrowserError>;
@@ -385,12 +393,9 @@ export interface BrowserSession<E = never> extends TargetOperations {
     options?: FillFormOptions,
     operationOptions?: OperationOptions,
   ) => Effect.Effect<FillFormResult, BrowserError>;
-  readonly pages: (
-    options?: OperationOptions,
-  ) => Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   /**
    * One exact page's address and title as they are now, and whether it is selected, without
-   * reading every other page as `pages` does. An identity that no longer names an open page
+   * reading every other page as `listPages` does. An identity that no longer names an open page
    * fails undispatched.
    */
   readonly describePage: (

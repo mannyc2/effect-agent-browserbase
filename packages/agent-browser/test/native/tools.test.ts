@@ -248,7 +248,7 @@ it.live(
             const browser = yield* BrowserbaseBrowser.open(genericAgentPolicy);
 
             yield* browser.navigate({ url: site.url });
-            const first = (yield* browser.pages()).find((page) => page.selected)!;
+            const first = (yield* browser.listPages()).find((page) => page.selected)!;
             const second = yield* browser.createPage();
 
             yield* browser.selectPage(second);
@@ -412,7 +412,7 @@ it.live(
 
             const reference = named(yield* inspect(tools), "Increment");
             const checkpoint = yield* generic.checkpoint({ picture: true });
-            const [page] = yield* generic.pages();
+            const [page] = yield* generic.listPages();
 
             assert.ok(page);
             expect(checkpoint.picture?.bytes.length).toBeGreaterThan(0);

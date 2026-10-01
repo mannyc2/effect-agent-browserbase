@@ -80,7 +80,7 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const first = (yield* session.pages())[0];
+      const first = (yield* session.listPages())[0];
 
       expect(first).toBeDefined();
       if (first === undefined) return;
@@ -93,7 +93,7 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       yield* Effect.promise(() => admissionReleased.promise);
       expect(waitTicket?.signal.aborted).toBe(false);
       yield* session.checkpoint({ picture: false });
-      expect(yield* session.pages()).toHaveLength(2);
+      expect(yield* session.listPages()).toHaveLength(2);
       expect(yield* session.status).toMatchObject({
         phase: "open",
         busy: true,
@@ -286,7 +286,7 @@ it.effect("canceled readiness retains capacity until settlement and cannot start
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(waiting);
-      yield* session.pages();
+      yield* session.listPages();
       expect(yield* Effect.result(session.waitFor("#next", "visible"))).toMatchObject(busy);
       finish.resolve();
       yield* Effect.promise(() => readyRetired.promise);

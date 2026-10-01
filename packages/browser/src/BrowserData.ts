@@ -96,7 +96,7 @@ const DiagnosticCounter = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number
 /**
  * Bounded fresh metadata from one owner generation. Native URL/title reads are non-atomic.
  * PageInfo is data; callers must acquire an issued Page and observe it explicitly before input.
- * The future lifecycle stream must hand over this registry snapshot and its cursor atomically.
+ * The separate pages lifecycle stream attaches its cached registry snapshot and cursor atomically.
  */
 export class Inventory extends Schema.Class<Inventory>("BrowserInventory")({
   generation: DiagnosticCounter,
@@ -722,7 +722,35 @@ export const AdmissionLimits = Schema.Struct({
 
 export type AdmissionLimits = typeof AdmissionLimits.Type;
 
+/** Finite metadata retention and subscriber resources; native capture bytes have separate limits. */
+export const TimelineLimits = Schema.Struct({
+  maxDurationMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 21600000 })),
+  ),
+  maxEvents: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65536 }))),
+  maxBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 2048, maximum: 64 * 1024 * 1024 })),
+  ),
+  maxSubscribers: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 256 })),
+  ),
+  maxEventBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 2048, maximum: 1024 * 1024 })),
+  ),
+}).check(
+  Schema.makeFilter(
+    (limits) =>
+      limits.maxEventBytes === undefined ||
+      limits.maxBytes === undefined ||
+      limits.maxEventBytes <= limits.maxBytes,
+    { title: "event metadata fits the retained metadata budget" },
+  ),
+);
+
+export type TimelineLimits = typeof TimelineLimits.Type;
+
 export const AutomationOptions = Schema.Struct({
+  timelineLimits: Schema.optionalKey(TimelineLimits),
   admissionLimits: Schema.optionalKey(AdmissionLimits),
   observationLimits: Schema.optionalKey(
     Schema.Struct({

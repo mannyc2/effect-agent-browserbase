@@ -468,7 +468,7 @@ for (const revalidates of [true, false])
               // What a recorder does on the same owner while the agent is between tools: passive
               // evidence, an explicit hold and resume, then a check of the exact inspected node.
               const recorder = Effect.gen(function* () {
-                const [page] = yield* generic.pages();
+                const [page] = yield* generic.listPages();
 
                 if (page === undefined) return "no page";
                 const before = yield* generic.checkpoint({ picture: true });
