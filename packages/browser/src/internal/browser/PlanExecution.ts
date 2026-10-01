@@ -45,8 +45,6 @@ import { prepare, type PerformancePlan } from "./Performance.ts";
 import { capture, inputSlots, pathKey, type TargetSample, validateInputs } from "./Recording.ts";
 import type { ExecutionOptions } from "./Session.ts";
 
-export { actionTargets } from "./Recording.ts";
-
 export interface TargetBinding {
   readonly value: ObservedElement | ResolvedElement | string;
   readonly path: ReadonlyArray<string>;

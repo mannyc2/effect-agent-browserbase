@@ -17,11 +17,7 @@ import type { OperationOptions, PageStatus } from "../../Browser.ts";
 import {
   type FillFormRequest,
   type FrameInfo,
-  InputReceipt,
-  ActionResult,
-  NavigationResult,
-  FillFormResult,
-  Checkpoint,
+  type InputReceipt,
   Inventory,
   type KeyModifier,
   Observation,
@@ -35,16 +31,11 @@ import {
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import type {
-  ActionTarget,
-  ValueSource,
   Descriptor,
   ResolveGuard,
   SettledOptions,
   SettledEvidence,
   RunPhase,
-  RunReceipt,
-  InputBindings,
-  Step,
 } from "../../PlanData.ts";
 import {
   TimelineDefaults,
@@ -81,7 +72,7 @@ import type {
   NavigationControl,
 } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
-import type { AdmissionPolicy, ResolvedElement, ResolvedGroup } from "./Observation.ts";
+import type { AdmissionPolicy, ResolvedElement } from "./Observation.ts";
 import { type ExecutedOperation, policyOf } from "./OperationPolicy.ts";
 import {
   makeOwner,
@@ -95,7 +86,8 @@ import {
   type WaitTicket,
 } from "./Owner.ts";
 import { makePageRegistry, type PageRecord } from "./PageRegistry.ts";
-import { actionTargets, makePlanExecution, type StepExecution } from "./PlanExecution.ts";
+import { makePlanExecution } from "./PlanExecution.ts";
+import { makePlanSteps } from "./PlanSteps.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 import { randomUuid } from "./Random.ts";
 
@@ -2559,352 +2551,59 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       validate,
     };
 
-    const decodeReceipt = <S extends Schema.Constraint>(schema: S, value: unknown) =>
-      Schema.decodeUnknownEffect(schema)(value).pipe(
-        Effect.mapError(() =>
-          BrowserError.make({
-            operation: "run",
-            reason: Reasons.Malformed.make({}),
-            outcome: "performed",
-          }),
-        ),
-      );
+    // A plan step's own needs on this page, each admitted under its operation's policy.
+    const executeStep = makePlanSteps({
+      target,
+      chargeHostRead: owner.chargeHostRead,
+      controls: {
+        operations: controls.operations,
+        selectOption: controls.selectOption,
+        settled: controls.settled,
+        fillForm: controls.fillForm,
+        checkpoint: controls.checkpoint,
+        scrollTo: (element, operationOptions) =>
+          execute(
+            "scroll",
+            (driver, ticket) => {
+              const ref = element();
 
-    const executeStep = (
-      step: Step,
-      inputs: InputBindings,
-      context: StepExecution,
-    ): Effect.Effect<{ receipt: RunReceipt; checkpoint?: Checkpoint }, BrowserError> =>
-      Effect.suspend(() => {
-        const requests = actionTargets(step.action);
-        let group: ResolvedGroup | undefined;
-        let prepared = false;
-
-        let currentPhase: RunPhase =
-          step.action._tag === "FillForm"
-            ? "Field"
-            : step.action._tag === "Wait" && step.action.mode._tag === "Settled"
-              ? "Settled"
-              : "Input";
-
-        let currentField: number | undefined;
-
-        const planOptions: ExecutionOptions = {
-          ...context.options,
-          ...(context.performance === undefined
-            ? {}
-            : {
-                performance: {
-                  plan: context.performance,
-                  get fieldIndex() {
-                    return currentField;
-                  },
-                },
-              }),
-          phase: (phase, fieldIndex) => {
-            currentPhase = phase;
-            currentField = fieldIndex;
-            context.phase(phase, fieldIndex);
-          },
-          beforeNative: async (driver, ticket) => {
-            if (!prepared) {
-              if (step.expect?.before !== undefined) {
-                context.phase("Precondition");
-                owner.chargeHostRead(ticket, "run");
-                await driver.expectations(step.expect.before, ticket, target);
-              }
-              if (requests.length > 0) {
-                context.phase("Resolution");
-                owner.chargeHostRead(ticket, "resolve");
-                group = await driver.resolveGroup(requests, ticket, target, step.resolution);
-                context.targets(
-                  requests.map((request, index) => ({
-                    value: groupElement(index),
-                    path: request.path,
-                    ...(group?.samples?.[index] === undefined
-                      ? {}
-                      : { sample: group.samples[index] }),
-                  })),
-                );
-              }
-              prepared = true;
-            }
-            group?.activate(ticket);
-            ticket.check();
-            context.phase(currentPhase, currentField);
-          },
-        };
-
-        const groupElement = (index: number): ResolvedElement => {
-          const value = group?.elements[index];
-
-          if (value === undefined)
-            throw BrowserError.make({
-              operation: "run",
-              reason: Reasons.Incomplete.make({}),
-              outcome: "undispatched",
-            });
-
-          return value;
-        };
-
-        const indexed = (value: ActionTarget): (() => ResolvedElement) => {
-          const index = requests.findIndex((request) => request.target === value);
-
-          return () => groupElement(index);
-        };
-
-        const inputValue = (value: ValueSource): Effect.Effect<string, BrowserError> =>
-          value._tag === "Literal"
-            ? Effect.succeed(value.value)
-            : inputs[value.name] === undefined
-              ? Effect.fail(
-                  BrowserError.make({
-                    operation: "run",
-                    reason: Reasons.Configuration.make({ path: `inputs.${value.name}` }),
-                    outcome: "undispatched",
-                  }),
-                )
-              : Effect.succeed(inputs[value.name] ?? "");
-
-        const policy: AdmissionPolicy | undefined = context.policy?.admit;
-        const action = step.action;
-
-        const perform: Effect.Effect<RunReceipt, BrowserError> = Effect.suspend(() => {
-          switch (action._tag) {
-            case "Navigate":
-              return controls.operations
-                .navigate(action.url, action.timeoutMillis, planOptions)
-                .pipe(Effect.flatMap((url) => decodeReceipt(NavigationResult, { url })));
-            case "Click":
-              return controls.operations
-                .click(indexed(action.target), policy, planOptions)
-                .pipe(Effect.flatMap((value) => decodeReceipt(ActionResult, value)));
-            case "Hover":
-              return controls.operations
-                .hover(indexed(action.target), policy, planOptions)
-                .pipe(
-                  Effect.flatMap((value) =>
-                    decodeReceipt(InputReceipt, { ...value, kind: "hover" }),
-                  ),
-                );
-            case "Fill":
-              return inputValue(action.value).pipe(
-                Effect.flatMap((value) =>
-                  controls.operations.fill(indexed(action.target), value, policy, planOptions),
-                ),
-                Effect.flatMap((url) => decodeReceipt(ActionResult, { url })),
-              );
-            case "Type":
-              return inputValue(action.text).pipe(
-                Effect.flatMap((value) =>
-                  controls.operations.type(
-                    value,
-                    action.target === undefined ? undefined : indexed(action.target),
-                    policy,
-                    planOptions,
-                  ),
-                ),
-                Effect.flatMap((value) => decodeReceipt(InputReceipt, { ...value, kind: "type" })),
-              );
-            case "Press":
-              return controls.operations
-                .press(
-                  action.key,
-                  action.modifiers ?? [],
-                  action.target === undefined ? undefined : indexed(action.target),
-                  policy,
-                  planOptions,
-                )
-                .pipe(
-                  Effect.flatMap((value) =>
-                    decodeReceipt(InputReceipt, { ...value, kind: "press" }),
-                  ),
-                );
-            case "Select":
-              return controls
-                .selectOption(
-                  indexed(action.target),
-                  () => action.options.map((option) => indexed(option)()),
-                  policy,
-                  planOptions,
-                )
-                .pipe(Effect.flatMap((url) => decodeReceipt(ActionResult, { url })));
-            case "Scroll": {
-              const mode = action.mode;
-
-              return (
-                mode._tag === "By"
-                  ? controls.operations.scroll(mode.deltaX, mode.deltaY, planOptions)
-                  : execute(
-                      "scroll",
-                      (driver, ticket) => {
-                        const ref = indexed(mode.target)();
-
-                        return driver.scrollTo(ref, ticket, ref.target);
-                      },
-                      { ...bound, ...planOptions },
-                    )
-              ).pipe(Effect.flatMap((url) => decodeReceipt(ActionResult, { url })));
-            }
-            case "PointerMove":
-              return controls.operations
-                .pointerMove(action.to, planOptions)
-                .pipe(
-                  Effect.flatMap((value) =>
-                    decodeReceipt(InputReceipt, { ...value, kind: "pointer-move" }),
-                  ),
-                );
-            case "Wheel":
-              return controls.operations
-                .wheel(action.deltaX, action.deltaY, action.at, planOptions)
-                .pipe(
-                  Effect.flatMap((value) =>
-                    decodeReceipt(InputReceipt, {
-                      ...value,
-                      kind: "wheel",
-                      delta: { x: action.deltaX, y: action.deltaY },
-                    }),
-                  ),
-                );
-            case "Wait": {
-              const mode = action.mode;
-
-              if (mode._tag === "Settled") return controls.settled(mode, planOptions);
-              if (mode._tag === "Duration")
-                return admit(
-                  "wait",
-                  (ticket) =>
-                    native("wait", ticket, async () => {
-                      await prepare("wait", ticket, target);
-                      await planOptions.beforeNative?.(getDriver(), ticket);
-                    }).pipe(
-                      Effect.andThen(Effect.sleep(mode.milliseconds)),
-                      Effect.andThen(Effect.sync(() => ticket.check())),
-                    ),
-                  { ...bound, ...planOptions },
-                );
-
-              return wait(
-                (driver, ticket) => {
-                  const ref = indexed(mode.target)();
-
-                  return driver.waitForElement(ref, mode.state, ticket, ref.target);
-                },
-                mode.timeoutMillis,
-                { ...bound, ...planOptions },
-              );
-            }
-            case "FillForm":
-              return Effect.gen(function* () {
-                // Each control reports the ID its plan target named; a descriptor its position.
-                const reported = (target: ActionTarget, fallback: string) =>
-                  target._tag === "Ref" ? target.reference.elementId : fallback;
-
-                const fields = yield* Effect.forEach(
-                  action.fields,
-                  (field, index): Effect.Effect<FormSteps["fields"][number], BrowserError> => {
-                    const reportedId = reported(field.target, `field_${index}`);
-                    const reference = indexed(field.target);
-
-                    return field._tag === "Value"
-                      ? inputValue(field.value).pipe(
-                          Effect.map((value) => ({
-                            reportedId,
-                            reference,
-                            field: () => ({ elementId: reportedId, value }),
-                          })),
-                        )
-                      : Effect.succeed({
-                          reportedId,
-                          reference,
-                          field:
-                            field._tag === "Checked"
-                              ? () => ({ elementId: reportedId, checked: field.checked })
-                              : () => ({
-                                  elementId: reportedId,
-                                  options: field.options.map((option) => indexed(option)()),
-                                }),
-                        });
-                  },
-                );
-
-                const submit = action.submit;
-
-                const result = yield* controls.fillForm(
-                  {
-                    fields,
-                    ...(submit === undefined
-                      ? {}
-                      : {
-                          submit: {
-                            reportedId: reported(submit, "submit"),
-                            reference: indexed(submit),
-                          },
-                        }),
-                    retainObservation: false,
-                  },
-                  policy,
-                  {
-                    verify: action.options?.verify ?? true,
-                    settleMillis: action.options?.settleMillis ?? 50,
-                  },
-                  planOptions,
-                );
-
-                const receipt = yield* decodeReceipt(FillFormResult, result);
-
-                context.retainReceipt(receipt);
-                if (result.stopped !== undefined) return yield* result.stopped.error;
-
-                return receipt;
-              });
-          }
-        });
-
-        return perform.pipe(
-          Effect.tap((receipt) => Effect.sync(() => context.retainReceipt(receipt))),
-          Effect.flatMap((receipt) => {
-            const checkpointOptions = context.checkpoint;
-
-            const after =
-              step.expect?.after === undefined
-                ? Effect.void
-                : Effect.suspend(() => {
-                    context.phase("Postcondition");
-
-                    return execute(
-                      "run",
-                      async (driver, ticket) => {
-                        await driver.expectations(step.expect?.after ?? [], ticket, target);
-                      },
-                      { ...bound, ...context.options },
-                    );
-                  });
-
-            return after.pipe(
-              Effect.andThen(
-                checkpointOptions === undefined
-                  ? Effect.succeed({ receipt })
-                  : Effect.suspend(() => {
-                      context.phase("Checkpoint");
-
-                      return controls
-                        .checkpoint(
-                          { ...checkpointOptions, picture: checkpointOptions.picture ?? false },
-                          context.options,
-                        )
-                        .pipe(
-                          Effect.flatMap((value) => decodeReceipt(Checkpoint, value)),
-                          Effect.map((checkpoint) => ({ receipt, checkpoint })),
-                        );
-                    }),
+              return driver.scrollTo(ref, ticket, ref.target);
+            },
+            { ...bound, ...operationOptions },
+          ),
+        pause: (milliseconds, operationOptions) =>
+          admit(
+            "wait",
+            (ticket) =>
+              native("wait", ticket, async () => {
+                await prepare("wait", ticket, target);
+                await operationOptions.beforeNative?.(getDriver(), ticket);
+              }).pipe(
+                Effect.andThen(Effect.sleep(milliseconds)),
+                Effect.andThen(Effect.sync(() => ticket.check())),
               ),
-            );
-          }),
-          Effect.ensuring(Effect.promise(() => group?.release() ?? Promise.resolve())),
-        );
-      });
+            { ...bound, ...operationOptions },
+          ),
+        waitFor: (element, state, timeoutMillis, operationOptions) =>
+          wait(
+            (driver, ticket) => {
+              const ref = element();
+
+              return driver.waitForElement(ref, state, ticket, ref.target);
+            },
+            timeoutMillis,
+            { ...bound, ...operationOptions },
+          ),
+        expectations: (conditions, operationOptions) =>
+          execute(
+            "run",
+            async (driver, ticket) => {
+              await driver.expectations(conditions, ticket, target);
+            },
+            { ...bound, ...operationOptions },
+          ),
+      },
+    });
 
     const plans = makePlanExecution({
       clock,
