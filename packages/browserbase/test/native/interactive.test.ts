@@ -206,8 +206,9 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           const original = pages.find((page) => page.pageId === target.pageId)!;
           const popup = pages.find((page) => !page.selected)!;
 
-          yield* session.selectPage(popup);
           const selected = yield* session.page(popup);
+
+          yield* session.selectPage(selected);
 
           expect((yield* h.readText(ReadTextRequest.make({}))).text).toContain(
             "Local browser fixture",
@@ -218,9 +219,9 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           expect((yield* session.listPages()).find((page) => page.selected)?.pageId).toBe(
             popup.pageId,
           );
-          yield* (yield* session.page(added)).close();
-          yield* (yield* session.page(popup)).close();
-          yield* session.selectPage(original);
+          yield* added.close();
+          yield* selected.close();
+          yield* session.selectPage(yield* session.page(original));
         }),
       );
     }),
@@ -305,14 +306,13 @@ it.live(
             yield* session.initialPage.navigate(NavigateRequest.make({ url: f.url }));
             const firstPage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
             const page = yield* session.createPage();
+            const pageInfo = yield* page.describe();
 
             yield* session.selectPage(page);
             // Both pages have the same URL, so only their native identities can distinguish them.
-            const pageAuthority = yield* session.page(page);
+            yield* page.navigate(NavigateRequest.make({ url: f.url }));
 
-            yield* pageAuthority.navigate(NavigateRequest.make({ url: f.url }));
-
-            const frames = yield* settle((yield* session.page(page)).listFrames(), (listed) =>
+            const frames = yield* settle(page.listFrames(), (listed) =>
               listed.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
             );
 
@@ -321,14 +321,14 @@ it.live(
             )!;
 
             expect(
-              (yield* (yield* (yield* session.page(page)).frame(oldFrame)).readText(
+              (yield* (yield* page.frame(oldFrame)).readText(
                 ReadTextRequest.make({ selector: "#inner" }),
               )).text,
             ).toBe("Frame action");
 
             const detached = yield* session.detach;
 
-            expect(detached.targetId).toBe(page.targetId);
+            expect(detached.targetId).toBe(pageInfo.targetId);
             yield* Effect.promise(() =>
               f.human(session.reference.sessionId, async (nativePage) => {
                 // The fixture's temporary operator connects only after the owner detached.
@@ -355,7 +355,9 @@ it.live(
                   (entry) => entry.targetId === firstPage.targetId,
                 );
 
-                const surviving = identified.filter((entry) => entry.targetId === page.targetId);
+                const surviving = identified.filter(
+                  (entry) => entry.targetId === pageInfo.targetId,
+                );
 
                 expect(disappearing).toHaveLength(1);
                 expect(surviving).toHaveLength(1);
@@ -388,46 +390,58 @@ it.live(
 
             expect(reconnected).toHaveLength(1);
             expect(reconnected.some((fresh) => fresh.targetId === firstPage.targetId)).toBe(false);
-            const matching = reconnected.filter((fresh) => fresh.targetId === page.targetId);
+            const matching = reconnected.filter((fresh) => fresh.targetId === pageInfo.targetId);
 
             expect(matching).toHaveLength(1);
             const freshPage = matching[0]!;
 
             expect(freshPage.selected).toBe(true);
             expect(freshPage.pageId).not.toBe(firstPage.pageId);
-            expect(freshPage.pageId).not.toBe(page.pageId);
-            for (const oldPage of [firstPage, page]) {
-              for (const refused of [
-                session.selectPage(oldPage),
-                session.page(oldPage).pipe(Effect.flatMap((page) => page.close())),
-              ]) {
-                expect(yield* refused.pipe(Effect.result)).toMatchObject({
-                  _tag: "Failure",
-                  failure: { reason: { _tag: "NotFound" }, outcome: "undispatched" },
-                });
-              }
-            }
-            for (const unchecked of [
-              // @ts-expect-error A saved string ID is not checked PageInfo.
-              session.selectPage(firstPage.pageId),
-              // @ts-expect-error The old first page's ID must never close the surviving page.
-              session.page(firstPage.pageId).pipe(Effect.flatMap((page) => page.close())),
-            ]) {
-              expect(yield* unchecked.pipe(Effect.result)).toMatchObject({
+            expect(freshPage.pageId).not.toBe(pageInfo.pageId);
+            for (const oldInfo of [firstPage, pageInfo])
+              expect(
+                yield* session.page(oldInfo).pipe(
+                  Effect.flatMap((page) => page.close()),
+                  Effect.result,
+                ),
+              ).toMatchObject({
                 _tag: "Failure",
-                failure: { reason: { _tag: "Configuration" }, outcome: "undispatched" },
+                failure: { reason: { _tag: "NotFound" }, outcome: "undispatched" },
               });
-            }
-            expect(yield* session.page(page).pipe(Effect.result)).toMatchObject({
+            // Pages issued before the reconnect stay stale: neither can choose the display.
+            for (const oldPage of [session.initialPage, page])
+              expect(yield* session.selectPage(oldPage).pipe(Effect.result)).toMatchObject({
+                _tag: "Failure",
+                failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+              });
+            // @ts-expect-error A saved string ID is not an issued Page.
+            expect(yield* session.selectPage(firstPage.pageId).pipe(Effect.result)).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: { _tag: "UnregisteredSession" }, outcome: "undispatched" },
+            });
+            expect(
+              yield* session
+                // @ts-expect-error The old first page's ID must never close the surviving page.
+                .page(firstPage.pageId)
+                .pipe(
+                  Effect.flatMap((page) => page.close()),
+                  Effect.result,
+                ),
+            ).toMatchObject({
+              _tag: "Failure",
+              failure: { reason: { _tag: "Configuration" }, outcome: "undispatched" },
+            });
+            expect(yield* session.page(pageInfo).pipe(Effect.result)).toMatchObject({
               _tag: "Failure",
               failure: { reason: { _tag: "NotFound" }, outcome: "undispatched" },
             });
-            yield* session.selectPage(freshPage);
             const freshAuthority = yield* session.page(freshPage);
+
+            yield* session.selectPage(freshAuthority);
 
             expect(freshAuthority.identity.pageId).toBe(freshPage.pageId);
             expect((yield* session.listPages()).map((entry) => entry.targetId)).toEqual([
-              page.targetId,
+              pageInfo.targetId,
             ]);
 
             const stale = yield* (yield* session.page(freshPage))

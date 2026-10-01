@@ -131,7 +131,7 @@ await h.run(
       const peer = session.initialPage;
 
       yield* peer.navigate({ url: fixtureUrl.href });
-      const stage = yield* session.page(yield* session.createPage());
+      const stage = yield* session.createPage();
 
       yield* stage.navigate({ url: fixtureUrl.href });
 
@@ -141,7 +141,7 @@ await h.run(
 
       if (peerInfo === undefined) return yield* h.established({ peerListed: false });
       // Display selection names the peer; it never retargets the stage's actions.
-      yield* session.selectPage(peerInfo);
+      yield* session.selectPage(peer);
       const peerObserved = yield* peer.observe({ maxControls: 8, maxTextBytes: 4096 });
 
       const peerButton = peerObserved.controls.find(

@@ -385,19 +385,20 @@ export interface BrowserSession<E = never> {
   readonly bindingDiagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
   /**
    * Choose the displayed page, which is also the page `detach` records and `reconnect` resumes on.
-   * It never retargets a Page or Frame operation; those keep their own exact authority.
+   * Nothing else: it never retargets a Page or Frame operation, which keep their own exact
+   * authority. Pass a Page this session issued; a closed or stale one is refused unsent.
    */
   readonly selectPage: (
-    page: PageInfo,
+    page: Page,
     options?: OperationOptions,
   ) => Effect.Effect<void, BrowserError>;
   /**
-   * Open a page in its own window, sized like the others, without selecting it, and return that
-   * exact page's checked identity. Chromium paints every window, so any page can be pictured
-   * and read at speed, not only the one in front. Registry admission fails immediately by default;
-   * pass a positive finite admission.queue to wait FIFO within the operation deadline.
+   * Open a page in its own window, sized like the others, without selecting it, and return the
+   * Page issued for it. Chromium paints every window, so any page can be pictured and read at
+   * speed, not only the one in front. Registry admission fails immediately by default; pass a
+   * positive finite admission.queue to wait FIFO within the operation deadline.
    */
-  readonly createPage: (options?: OperationOptions) => Effect.Effect<PageInfo, BrowserError>;
+  readonly createPage: (options?: OperationOptions) => Effect.Effect<Page, BrowserError>;
 }
 
 /** Helpers that do not supervise callback failures accept any live browser session. */

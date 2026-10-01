@@ -249,13 +249,12 @@ it.live(
 
             yield* browser.initialPage.navigate({ url: site.url });
             const first = (yield* browser.listPages()).find((page) => page.selected)!;
-            const second = yield* browser.createPage();
             const firstPage = browser.initialPage;
-            const secondPage = yield* browser.page(second);
+            const secondPage = yield* browser.createPage();
 
-            yield* browser.selectPage(second);
+            yield* browser.selectPage(secondPage);
             yield* secondPage.navigate({ url: `${site.url}#second` });
-            yield* browser.selectPage(first);
+            yield* browser.selectPage(firstPage);
 
             const entered = yield* Deferred.make<void>();
             const release = yield* Deferred.make<void>();
@@ -292,9 +291,9 @@ it.live(
             );
             expect((yield* read(browser)).page).toBe(0);
 
-            yield* browser.selectPage(second);
+            yield* browser.selectPage(secondPage);
             expect((yield* browser.listPages()).find((page) => page.selected)?.pageId).toBe(
-              second.pageId,
+              secondPage.identity.pageId,
             );
             expect((yield* read(browser, secondPage)).page).toBe(0);
             yield* Deferred.succeed(release, undefined);
@@ -303,7 +302,7 @@ it.live(
 
             expect(results).toMatchObject([{ isFailure: false, encodedResult: { url: site.url } }]);
             expect((yield* settle(read(browser), (log) => log.page === 180)).page).toBe(180);
-            yield* browser.selectPage(first);
+            yield* browser.selectPage(firstPage);
             expect((yield* read(browser, secondPage)).page).toBe(0);
             expect(invocations).toBe(1);
             expect((yield* host.toolFailures).failures).toEqual([]);

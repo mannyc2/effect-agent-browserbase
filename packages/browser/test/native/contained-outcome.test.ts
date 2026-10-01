@@ -195,7 +195,7 @@ it.live("retired native page initialization cannot publish readiness or fault a 
       const healthy = session.initialPage;
 
       yield* healthy.navigate({ url: new URL("/pinned?name=healthy", site.url).href });
-      const retired = yield* session.page(yield* session.createPage());
+      const retired = yield* session.createPage();
 
       yield* retired.navigate({ url: new URL("/pinned?name=retired", site.url).href });
       const firstGate = readinessGates[0];
@@ -212,7 +212,7 @@ it.live("retired native page initialization cannot publish readiness or fault a 
       yield* Effect.promise(() => firstNative.close({ runBeforeUnload: false }));
       yield* Effect.sync(firstGate.release);
       const retiredResult = yield* Fiber.join(waiting);
-      const pending = yield* session.page(yield* session.createPage());
+      const pending = yield* session.createPage();
 
       yield* pending.navigate({ url: new URL("/pinned?name=pending", site.url).href });
       const timedOut = yield* pending.ready({ timeoutMillis: 100 }).pipe(Effect.result);
@@ -272,11 +272,10 @@ it.live(
         if (child === undefined) throw new Error("The native fixture has no child frame");
         const nestedFrame = yield* stage.frame(child);
         const nested = reference(yield* nestedFrame.observe(), "Increment frame");
-        const scoutInfo = yield* session.createPage();
-        const scout = yield* session.page(scoutInfo);
+        const scout = yield* session.createPage();
 
         yield* scout.navigate({ url: new URL("/pinned?name=scout", site.url).href });
-        yield* session.selectPage(scoutInfo);
+        yield* session.selectPage(scout);
         expect(yield* scout.clickElement(main).pipe(Effect.flip)).toMatchObject({
           outcome: "undispatched",
         });
@@ -313,7 +312,7 @@ it.live(
         const selected = session.initialPage;
 
         yield* selected.navigate({ url: site.url });
-        const healthy = yield* session.page(yield* session.createPage());
+        const healthy = yield* session.createPage();
 
         yield* healthy.navigate({ url: new URL("/pinned?name=healthy", site.url).href });
         expect((yield* selected.describe()).selected).toBe(true);
@@ -388,7 +387,7 @@ it.live(
         const abandoned = session.initialPage;
 
         yield* abandoned.navigate({ url: new URL("/pinned?name=abandoned", site.url).href });
-        const healthy = yield* session.page(yield* session.createPage());
+        const healthy = yield* session.createPage();
 
         yield* healthy.navigate({ url: new URL("/pinned?name=healthy", site.url).href });
 
@@ -490,7 +489,7 @@ it.live("a click that never lands on a background page closes only that page", (
       yield* stage.navigate(
         NavigateRequest.make({ url: new URL("/pinned?name=stage", site.url).href }),
       );
-      const planner = yield* session.page(yield* session.createPage());
+      const planner = yield* session.createPage();
 
       plannerAuthority = planner;
       yield* planner.navigate({ url: site.url });
@@ -521,7 +520,7 @@ it.live("a click that never lands on a background page closes only that page", (
       yield* stage.waitFor({ selector: "#binding-result", state: "attached" });
       expect((yield* stage.readText({ selector: "#binding-result" })).text).toBe("healthy");
       expect((yield* session.bindingDiagnostics).faulted).toBe(false);
-      expect(yield* session.createPage()).toMatchObject({ selected: false });
+      expect(yield* (yield* session.createPage()).describe()).toMatchObject({ selected: false });
     }),
   ).pipe(
     Effect.provide(
@@ -636,7 +635,7 @@ it.live("a delayed genuine native registration failure still faults after its pa
       const healthy = session.initialPage;
 
       yield* healthy.navigate({ url: new URL("/pinned?name=healthy", site.url).href });
-      const retired = yield* session.page(yield* session.createPage());
+      const retired = yield* session.createPage();
 
       yield* Deferred.await(entered);
       expect(nativeFailure).toBeInstanceOf(Error);

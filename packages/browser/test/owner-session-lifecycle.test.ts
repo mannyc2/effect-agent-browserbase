@@ -382,7 +382,7 @@ const closeBehindDetach = Effect.fnUntraced(function* (actionMillis?: number) {
   });
 
   const session = yield* (yield* f.acquisition).connect;
-  const second = yield* session.createPage();
+  const second = (yield* session.createPage()).record.info;
   const issued = yield* session.page(second);
 
   holdList = true;

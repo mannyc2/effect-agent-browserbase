@@ -48,10 +48,8 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
       const session = yield* (yield* Chromium).launch(policy);
 
       yield* session.initialPage.navigate(NavigateRequest.make({ url: site.url }));
-      const earlier = yield* session.createPage();
-      const later = yield* session.createPage();
-      const behind = yield* session.page(earlier);
-      const front = yield* session.page(later);
+      const behind = yield* session.createPage();
+      const front = yield* session.createPage();
 
       yield* behind.navigate({ url: new URL("/pinned?name=behind", site.url).href });
       yield* front.navigate({ url: new URL("/pinned?name=front", site.url).href });
@@ -87,11 +85,8 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
       yield* onAir.stop;
 
       // One page's current address and title, without listing the others.
-      expect(
-        yield* session.page(earlier).pipe(Effect.flatMap((page) => page.describe())),
-      ).toMatchObject({
-        pageId: earlier.pageId,
-        targetId: earlier.targetId,
+      expect(yield* behind.describe()).toMatchObject({
+        pageId: behind.identity.pageId,
         title: "Pinned behind",
         url: new URL("/pinned?name=behind", site.url).href,
         selected: false,

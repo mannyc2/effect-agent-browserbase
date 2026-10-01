@@ -85,7 +85,7 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       expect(first).toBeDefined();
       if (first === undefined) return;
       // The scout's page is a real second page, opened before the wait begins.
-      const second = yield* session.createPage();
+      const second = (yield* session.createPage()).record.info;
 
       const waiting = yield* Effect.forkChild(
         session.initialPage().controls.waitFor("#ready", "visible"),

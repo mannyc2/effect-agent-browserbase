@@ -114,14 +114,13 @@ it.live(
             const adaptedFirst = yield* fromSession(browser, firstPage);
             const laterAdaptation = fromSession(browser, firstPage);
             const nextNavigation = adaptedFirst.handle.navigate({ url: `${site.url}?first=1` });
-            const second = yield* browser.createPage();
-            const secondPage = yield* browser.page(second);
+            const secondPage = yield* browser.createPage();
             const adaptedSecond = yield* fromSession(browser, secondPage);
 
             expect(adaptedFirst.browser).toBe(browser);
             expect(adaptedSecond.browser).toBe(browser);
-            expect(second.selected).toBe(false);
-            expect(yield* browser.selectPage(second)).toBeUndefined();
+            expect((yield* secondPage.describe()).selected).toBe(false);
+            expect(yield* browser.selectPage(secondPage)).toBeUndefined();
             yield* nextNavigation;
             const recheckedFirst = yield* laterAdaptation;
 
@@ -134,13 +133,13 @@ it.live(
             expect(pages.find((page) => page.pageId === first.pageId)?.url).toBe(
               `${site.url}?first=1`,
             );
-            expect(pages.find((page) => page.pageId === second.pageId)?.url).toBe(
+            expect(pages.find((page) => page.pageId === secondPage.identity.pageId)?.url).toBe(
               `${site.url}?second=1`,
             );
-            expect(pages.find((page) => page.selected)?.pageId).toBe(second.pageId);
+            expect(pages.find((page) => page.selected)?.pageId).toBe(secondPage.identity.pageId);
 
-            yield* browser.selectPage(first);
-            yield* browser.selectPage(second);
+            yield* browser.selectPage(firstPage);
+            yield* browser.selectPage(secondPage);
             expect((yield* adaptedFirst.handle.readText({ selector: "#visible" })).text).toBe(
               "VISIBLE WORDS",
             );

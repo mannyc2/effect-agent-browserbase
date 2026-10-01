@@ -339,10 +339,9 @@ it.live("real CDP: a closed issued page cannot send input to another page", () =
           const first = session.initialPage;
 
           yield* first.navigate(NavigateRequest.make({ url: `${f.url}pointer` }));
-          const secondInfo = yield* session.createPage();
+          const second = yield* session.createPage();
 
-          yield* session.selectPage(secondInfo);
-          const second = yield* session.page(secondInfo);
+          yield* session.selectPage(second);
 
           yield* second.navigate(NavigateRequest.make({ url: `${f.url}pointer#second` }));
           yield* first.close();

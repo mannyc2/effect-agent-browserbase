@@ -89,10 +89,9 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
           const destination = session.initialPage;
 
           yield* destination.navigate(NavigateRequest.make({ url: f.url }));
-          const selectedInfo = yield* session.createPage();
-          const selected = yield* session.page(selectedInfo);
+          const selected = yield* session.createPage();
 
-          yield* session.selectPage(selectedInfo);
+          yield* session.selectPage(selected);
           yield* selected.navigate(NavigateRequest.make({ url: f.url }));
           yield* session.selectFiles(
             {

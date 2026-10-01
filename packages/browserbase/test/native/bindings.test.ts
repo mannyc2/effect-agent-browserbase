@@ -666,7 +666,7 @@ it.live(
                       finalized = true;
                     }),
                 );
-                const registering = yield* session.page(yield* session.createPage());
+                const registering = yield* session.createPage();
 
                 yield* Deferred.await(entered);
                 expect(nativeFailure).toBeInstanceOf(Error);

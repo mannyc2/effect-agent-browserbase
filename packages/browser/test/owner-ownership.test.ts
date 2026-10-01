@@ -199,7 +199,7 @@ const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* fixture({ maxActions: 2 });
       const session = yield* (yield* f.acquisition).connect;
-      const second = yield* session.createPage();
+      const second = (yield* session.createPage()).record.info;
       const original = session.initialPage().controls.operations;
       const scout = yield* session.page(second);
 
@@ -213,7 +213,7 @@ const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* fixture();
       const session = yield* (yield* f.acquisition).connect;
-      const second = yield* session.createPage();
+      const second = (yield* session.createPage()).record.info;
       const authority = session.initialPage();
       const original = authority.controls.operations;
       const scout = yield* session.page(second);
@@ -351,7 +351,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       const session = yield* (yield* f.acquisition).connect;
       const first = (yield* session.listPages()).find((page) => page.selected);
       // Another tab showing the same controls, set up before anything is in flight.
-      const second = yield* session.createPage();
+      const second = (yield* session.createPage()).record.info;
 
       const [initial] = ownerScript.documents;
 

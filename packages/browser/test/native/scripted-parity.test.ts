@@ -379,9 +379,10 @@ const cases: ReadonlyArray<Case> = [
         ).pipe(Effect.forkChild);
 
         // The wait's short admission guard retires once the native wait has started.
-        yield* session
-          .selectPage(home)
-          .pipe(Effect.retry({ times: 100, schedule: Schedule.spaced("5 millis") }));
+        yield* session.page(home).pipe(
+          Effect.flatMap((page) => session.selectPage(page)),
+          Effect.retry({ times: 100, schedule: Schedule.spaced("5 millis") }),
+        );
         expect(yield* Fiber.join(pending)).toEqual({ reason: "Timeout", outcome: "undispatched" });
       }),
   },
@@ -419,10 +420,8 @@ const cases: ReadonlyArray<Case> = [
 
         yield* session.selectPage(other);
         // Chromium keeps a pointer position per page: nothing was placed on this one yet.
-        expect(
-          (yield* (yield* session.page(other)).wheel({ deltaX: 0, deltaY: 40 })).position,
-        ).toBeNull();
-        yield* session.selectPage(home);
+        expect((yield* other.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
+        yield* session.selectPage(yield* session.page(home));
         expect((yield* session.initialPage.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({
           x: 12,
           y: 34,

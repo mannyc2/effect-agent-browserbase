@@ -50,10 +50,10 @@ for (const capture of [false, true])
             const stage = (yield* session.listPages())[0];
 
             assert.ok(stage);
-            const scoutPage = yield* session.createPage();
-            const scoutAuthority = yield* session.page(scoutPage);
+            const scoutAuthority = yield* session.createPage();
+            const scoutPage = scoutAuthority.identity;
 
-            yield* session.selectPage(scoutPage);
+            yield* session.selectPage(scoutAuthority);
 
             // The fragment never reaches the fixture server, so both pages load the
             // same document while staying individually identifiable. Selecting the
@@ -96,7 +96,7 @@ for (const capture of [false, true])
                   ).pipe(Effect.forkScoped);
 
             const scoutInterval = capture
-              ? yield* Capture.start(yield* session.page(scoutPage), { maxDurationMillis: 5000 })
+              ? yield* Capture.start(scoutAuthority, { maxDurationMillis: 5000 })
               : undefined;
 
             const scoutConsumer =
@@ -133,14 +133,14 @@ for (const capture of [false, true])
             const receipt = yield* PageControl.suspend(yield* session.page(stage));
 
             expect((yield* PageControl.state(session.initialPage)).state).toBe("suspended");
-            yield* session.selectPage(stage);
+            yield* session.selectPage(session.initialPage);
 
             expect(
               (yield* session.initialPage
                 .click(ClickRequest.make({ selector: "#click" }))
                 .pipe(Effect.result))._tag,
             ).toBe("Failure");
-            yield* session.selectPage(scoutPage);
+            yield* session.selectPage(scoutAuthority);
 
             yield* Effect.sleep(350);
             yield* scoutAuthority.click(ClickRequest.make({ selector: "#click" }));

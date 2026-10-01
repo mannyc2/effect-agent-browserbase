@@ -34,8 +34,9 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           assert.ok(original, "the fixture page must still be selected");
           assert.ok(popup, "the popup must be registered as a second page");
-          yield* session.selectPage(popup);
           const popupHandle = yield* session.page(popup);
+
+          yield* session.selectPage(popupHandle);
 
           yield* popupHandle.navigate(NavigateRequest.make({ url: f.url }));
           const pages = yield* session.listPages();
@@ -94,7 +95,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
             const replacementPage = yield* session.createPage();
 
             replacements.push(
-              yield* Capture.start(yield* session.page(replacementPage), {
+              yield* Capture.start(replacementPage, {
                 maxDurationMillis: 5000,
               }),
             );

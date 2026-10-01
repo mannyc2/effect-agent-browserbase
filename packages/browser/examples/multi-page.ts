@@ -26,9 +26,9 @@ export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
         const stage = yield* browser.page(stageInfo);
 
         yield* stage.navigate({ url: stageUrl });
-        const scoutPage = yield* browser.page(yield* browser.createPage());
+        const scoutPage = yield* browser.createPage();
 
-        yield* browser.selectPage(yield* scoutPage.describe());
+        yield* browser.selectPage(scoutPage);
         yield* scoutPage.navigate({ url: scoutUrl });
 
         // The selected scout supplies the observation and its exact-node references.

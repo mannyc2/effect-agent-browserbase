@@ -260,7 +260,7 @@ it.live(
               expect((yield* browser.initialPage.observe()).text).toContain("VISIBLE WORDS");
               const created = yield* browser.createPage();
 
-              yield* (yield* browser.page(created)).close();
+              yield* created.close();
             }),
         ).pipe(
           Effect.provide(

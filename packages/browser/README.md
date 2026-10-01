@@ -209,8 +209,7 @@ refused `Unsupported` and `undispatched`.
 
 ```ts
 const stage = session.initialPage;
-const scoutInfo = yield * session.createPage();
-const scout = yield * session.page(scoutInfo);
+const scout = yield * session.createPage();
 yield * scout.navigate({ url: scoutUrl });
 const stageObservation = yield * stage.observe();
 
@@ -452,30 +451,33 @@ never follows display selection:
 
 ```ts
 const stage = session.initialPage;
-const scout = yield * session.page(yield * session.createPage());
+const scout = yield * session.createPage();
 const navigateStage = stage.navigate({ url: stageUrl });
 
-yield * session.selectPage(yield * scout.describe());
+yield * session.selectPage(scout);
 yield * navigateStage; // still navigates the original stage
 const seen = yield * scout.observe({ scope: "viewport" });
 ```
 
 `session.page(pageInfo)` checks both local and native identity under owner admission.
-`createPage()` returns checked metadata without selecting the page. `selectPage(pageInfo)` chooses
-the displayed page, which is also the page `detach` records and `reconnect` resumes on; it never
-retargets a Page or Frame operation. A child frame is reached through `page.frame(frameInfo)`,
+`createPage()` returns the Page issued for the new page without selecting it. `selectPage(page)`
+takes a Page this session issued and chooses the displayed page, which is also the page `detach`
+records and `reconnect` resumes on; it never retargets a Page or Frame operation, and a closed or
+stale Page is refused unsent. A child frame is reached through `page.frame(frameInfo)`,
 never by selection. Use `page.describe()`, `page.listFrames()`,
 `page.frame(frameInfo)`, `page.resizeViewport(viewport)` and `page.close()` for exact page work.
 The selected-session actions, `retain`, `pinPage`, `pinFrame` and their target-view types are
 removed. The shared operation contract is `PageOperations`.
 
-| Previous API                                                      | Current API                                                             |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Session actions, `observe`, `checkpoint`, `ready`, `target`       | Issued `Page`/`Frame` methods and immutable `identity`                  |
-| `retain`, `pinPage`, `pinFrame`, `selectFrame`                    | `initialPage`, checked `session.page(info)` and `page.frame(info)`      |
-| Session `describePage`, `framesOf`, `closePage`, `resizeViewport` | `page.describe`, `page.listFrames`, `page.close`, `page.resizeViewport` |
-| Session capture and PageInfo capture target                       | `Capture.start(page)` / `Capture.stream(page)`                          |
-| Session PageControl adapters                                      | `PageControl.state(page)`, `suspend(page)`, `resume(page, receipt)`     |
+| Previous API                                                      | Current API                                                                    |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Session actions, `observe`, `checkpoint`, `ready`, `target`       | Issued `Page`/`Frame` methods and immutable `identity`                         |
+| `retain`, `pinPage`, `pinFrame`, `selectFrame`                    | `initialPage`, checked `session.page(info)` and `page.frame(info)`             |
+| Session `describePage`, `framesOf`, `closePage`, `resizeViewport` | `page.describe`, `page.listFrames`, `page.close`, `page.resizeViewport`        |
+| Session capture and PageInfo capture target                       | `Capture.start(page)` / `Capture.stream(page)`                                 |
+| Session PageControl adapters                                      | `PageControl.state(page)`, `suspend(page)`, `resume(page, receipt)`            |
+| `createPage()` returning `PageInfo`                               | `createPage()` returns the issued `Page`; `page.describe()` reads its metadata |
+| `selectPage(pageInfo)`                                            | `selectPage(page)` with an issued `Page`                                       |
 
 Failed metadata acquisition after creation keeps its original dispatch evidence and never
 creates a second page. Page operations preserve typed failures and scoped ownership; a terminal
@@ -505,7 +507,7 @@ const stage = yield * session.page(stageInfo);
 const childInfo = (yield * stage.listFrames()).find((info) => info.parentFrameId !== null)!;
 const child = yield * stage.frame(childInfo);
 
-yield * session.selectPage(scoutInfo);
+yield * session.selectPage(scout);
 yield * stage.click({ selector: "#advance" });
 const childText = yield * child.readText({ selector: "#status" });
 ```

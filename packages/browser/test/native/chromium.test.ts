@@ -274,14 +274,14 @@ it.live(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frame-name" }))).text,
             ).toBe("stage-child");
 
-            const scoutInfo = yield* session.createPage();
-            const scout = yield* session.page(scoutInfo);
+            const scout = yield* session.createPage();
+            const scoutInfo = yield* scout.describe();
 
             expect(scoutInfo.selected).toBe(false);
             // This issued Page stays exact even when display selection changes before execution.
             const navigateScout = scout.navigate(NavigateRequest.make({ url: scoutUrl }));
 
-            expect(yield* session.selectPage(scoutInfo)).toBeUndefined();
+            expect(yield* session.selectPage(scout)).toBeUndefined();
 
             const scoutTarget = yield* session
               .listPages()
@@ -296,8 +296,9 @@ it.live(
 
             const issuedScout = yield* session.page(scoutInfo);
 
-            yield* session.selectPage(stageInfo);
-            yield* session.selectPage(scoutInfo);
+            expect(issuedScout).toBe(scout);
+            yield* session.selectPage(stage);
+            yield* session.selectPage(issuedScout);
             expect((yield* issuedScout.readText({ selector: "#page-name" })).text).toBe("scout");
 
             expect(
@@ -395,9 +396,10 @@ it.live(
               expect(detachedPin.failure.outcome).toBe("undispatched");
             }
 
-            const closedInfo = yield* session.createPage();
+            const closing = yield* session.createPage();
+            const closedInfo = yield* closing.describe();
 
-            yield* session.page(closedInfo).pipe(Effect.flatMap((page) => page.close()));
+            yield* closing.close();
             const closedPin = yield* session.page(closedInfo).pipe(Effect.result);
 
             expect(closedPin._tag).toBe("Failure");

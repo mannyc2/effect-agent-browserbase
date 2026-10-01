@@ -23,11 +23,13 @@ const framesOf = (page: Page) => page.listFrames();
 const directRead = (session: BrowserSession) => session.initialPage.readText({});
 const asOperations = (page: Page): PageOperations => page;
 const create = (session: BrowserSession) => session.createPage();
-const select = (session: BrowserSession, page: PageInfo) => session.selectPage(page);
+const select = (session: BrowserSession, page: Page) => session.selectPage(page);
 
 const removedInputs = (session: BrowserSession) => {
-  // @ts-expect-error Page metadata is required; bare connection serials grant no target identity.
+  // @ts-expect-error An issued Page is required; bare connection serials grant no target identity.
   void session.selectPage("page-1");
+  // @ts-expect-error Copied page metadata is not an issued Page.
+  void session.selectPage({ pageId: "page-1", targetId: "t", url: "", title: "", selected: false });
   // @ts-expect-error Closure checks the same PageInfo and native target identity as selection.
   void session.closePage("page-1");
   // @ts-expect-error Removed selected factories cannot manufacture Page authority.
@@ -43,7 +45,7 @@ const readResult: Same<Effect.Success<ReturnType<typeof directRead>>, TextResult
 const readError: Same<Effect.Error<ReturnType<typeof directRead>>, BrowserError> = true;
 const readServices: Same<Effect.Services<ReturnType<typeof directRead>>, never> = true;
 const targetIdentity: Same<Page["identity"], Target> = true;
-const createdResult: Same<Effect.Success<ReturnType<typeof create>>, PageInfo> = true;
+const createdResult: Same<Effect.Success<ReturnType<typeof create>>, Page> = true;
 const selectedResult: Same<Effect.Success<ReturnType<typeof select>>, void> = true;
 
 const issuedPage = (session: BrowserSession, info: PageInfo) => session.page(info);

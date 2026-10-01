@@ -3415,7 +3415,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         },
         { ...operationOptions, charge: false },
       ),
-    /** Creation and adoption use the registry lane, independently of Page work. */
+    /**
+     * Creation and adoption use the registry lane, independently of Page work. The registration
+     * it returns is what a Page is issued from, so creating and issuing are one admission.
+     */
     createPage: (operationOptions?: ExecutionOptions) =>
       nativeOperation(
         "new-page",
@@ -3425,9 +3428,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           ticket.check();
           const target = await driver.resolvePage(info, ticket);
 
-          registerPage(info, target, ticket.generation);
-
-          return info;
+          return registerPage(info, target, ticket.generation);
         },
         {
           ...operationOptions,

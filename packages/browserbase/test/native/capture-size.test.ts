@@ -28,8 +28,9 @@ it.live(
             const original = initial.find((page) => page.selected)!;
             const popup = initial.find((page) => !page.selected)!;
 
-            yield* session.selectPage(popup);
             const scoutAuthority = yield* session.page(popup);
+
+            yield* session.selectPage(scoutAuthority);
 
             yield* scoutAuthority.navigate(NavigateRequest.make({ url: f.url }));
             yield* scoutAuthority.resizeViewport(Viewport.make({ width: 640, height: 480 }));

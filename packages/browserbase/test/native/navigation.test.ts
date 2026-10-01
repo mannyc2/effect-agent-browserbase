@@ -412,14 +412,13 @@ it.live(
             }
 
             // Another page is independent: it navigates and reads while the first still loads.
-            const otherInfo = yield* session.createPage();
+            const other = yield* session.createPage();
 
-            yield* session.selectPage(otherInfo);
-            const other = yield* session.page(otherInfo);
+            yield* session.selectPage(other);
 
             yield* other.navigate(NavigateRequest.make({ url: `${f.url}next` }));
             expect((yield* other.readText(ReadTextRequest.make({}))).text).toContain("next page");
-            yield* session.selectPage(stage);
+            yield* session.selectPage(session.initialPage);
 
             const native = f
               .nativePages(session.reference.sessionId)

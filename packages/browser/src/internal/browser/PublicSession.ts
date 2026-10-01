@@ -568,6 +568,8 @@ export const makeSession = <E>(
   bindings: Bindings<E>,
 ): BrowserSession<E> => {
   const issued = new WeakMap<object, Page>();
+  // Display selection names an issued Page by identity, never by copied metadata.
+  const registrations = new WeakMap<Page, ReturnType<SessionControls["initialPage"]>>();
 
   const issuedPage = (value: ReturnType<SessionControls["initialPage"]>): Page => {
     const existing = issued.get(value.record);
@@ -633,6 +635,7 @@ export const makeSession = <E>(
     };
 
     issued.set(value.record, page);
+    registrations.set(page, value);
     associatePage(
       page,
       forPage(controls.capture, value.record.info, value.record.identity, value.controls.validate),
@@ -667,15 +670,31 @@ export const makeSession = <E>(
     failure: bindings.failure,
     bindingDiagnostics: bindings.diagnostics,
     selectPage: (page, options) =>
-      checked(PageInfo, page, "select-page").pipe(
-        Effect.flatMap((page) =>
-          withOperationOptions(options, "select-page", (options) =>
-            controls.selectPage(page, options),
-          ),
-        ),
-      ),
+      Effect.suspend(() => {
+        const registration = registrations.get(page);
+
+        return registration === undefined
+          ? Effect.fail(
+              BrowserError.make({
+                operation: "select-page",
+                reason: Reasons.UnregisteredSession.make({}),
+                outcome: "undispatched",
+              }),
+            )
+          : registration.controls
+              .validate("select-page")
+              .pipe(
+                Effect.andThen(
+                  withOperationOptions(options, "select-page", (options) =>
+                    controls.selectPage(registration.record.info, options),
+                  ),
+                ),
+              );
+      }),
     createPage: (options) =>
-      withOperationOptions(options, "new-page", (options) => controls.createPage(options)),
+      withOperationOptions(options, "new-page", (options) => controls.createPage(options)).pipe(
+        Effect.map(issuedPage),
+      ),
   };
 
   associate(session, controls.capture);

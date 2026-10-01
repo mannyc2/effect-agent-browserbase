@@ -196,8 +196,8 @@ it.live(
         const { session, page, site } = yield* fixture();
         const stage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
         const stageTarget = yield* session.page(stage);
-        const scout = yield* session.createPage();
-        const scoutTarget = yield* session.page(scout);
+        const scoutTarget = yield* session.createPage();
+        const scout = yield* scoutTarget.describe();
 
         yield* scoutTarget.navigate({ url: `${site.url}?scout` });
         const seen = yield* session.initialPage.observe();
@@ -237,13 +237,13 @@ it.live(
 
         yield* scoutTarget.click({ selector: "#increment" });
         expect((yield* scoutTarget.readText({ selector: "#count" })).text).toBe("1");
-        yield* session.selectPage(scout);
+        yield* session.selectPage(scoutTarget);
         expect((yield* scoutTarget.checkpoint()).target.pageId).toBe(scout.pageId);
         expect(yield* Effect.result(stageTarget.click({ selector: "#act" }))).toMatchObject(busy);
         // B's observation is independent of the exact wait protecting A and its retained nodes.
         expect((yield* scoutTarget.observe()).target.pageId).toBe(scout.pageId);
-        yield* session.selectPage(stage);
-        yield* session.selectPage(scout);
+        yield* session.selectPage(stageTarget);
+        yield* session.selectPage(scoutTarget);
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
         yield* Effect.promise(() =>
           page.evaluate(() => {
@@ -262,7 +262,7 @@ it.live(
             .listPages()
             .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
         ).toBe(scout.pageId);
-        yield* session.selectPage(stage);
+        yield* session.selectPage(stageTarget);
         expect((yield* session.initialPage.controlFacts(act)).label).toBe("Act");
         yield* session.initialPage.waitFor({ selector: "#arrived", state: "attached" });
         expect(watch.calls()).toBe(2);
@@ -330,7 +330,7 @@ it.live.each(["enabled", "disabled", "visible", "hidden"] as const)(
             (yield* session
               .listPages()
               .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
-          ).toBe(scout.pageId);
+          ).toBe(scout.identity.pageId);
         expect(yield* Effect.promise(() => page.locator("#count").textContent())).toBe("0");
         expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
       }),
@@ -425,7 +425,6 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
         const { session, page, site } = yield* fixture();
         let frame = page.mainFrame();
         let exact: IssuedPage | IssuedFrame = session.initialPage;
-        const stage = (yield* session.listPages()).find((candidate) => candidate.selected)!;
 
         if (change !== "page-navigation") {
           yield* Effect.promise(() =>
@@ -465,7 +464,7 @@ it.live.each(["page-navigation", "frame-navigation", "frame-removal"] as const)(
           Effect.timeout("5 seconds"),
         );
         if (change !== "page-navigation") {
-          yield* session.selectPage(stage);
+          yield* session.selectPage(session.initialPage);
         }
         yield* Effect.promise(() => page.evaluate(() => true));
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
@@ -624,8 +623,7 @@ it.live.each(["page", "session"] as const)(
       Effect.gen(function* () {
         const { session, page, site, host } = yield* fixture();
         const original = (yield* session.listPages()).find((candidate) => candidate.selected)!;
-        const survivor = closing === "page" ? yield* session.createPage() : undefined;
-        const survivorPage = survivor === undefined ? undefined : yield* session.page(survivor);
+        const survivorPage = closing === "page" ? yield* session.createPage() : undefined;
 
         if (survivorPage !== undefined)
           yield* survivorPage.navigate({ url: `${site.url}?survivor` });
@@ -643,12 +641,11 @@ it.live.each(["page", "session"] as const)(
         yield* Deferred.await(watch.entered).pipe(Effect.timeout("5 seconds"));
         yield* Effect.promise(() => page.evaluate(() => true));
         expect(yield* Deferred.isDone(pending.done)).toBe(false);
-        if (survivor !== undefined) {
-          yield* session.selectPage(survivor);
+        if (survivorPage !== undefined) {
+          yield* session.selectPage(survivorPage);
           yield* session.page(original).pipe(Effect.flatMap((page) => page.close()));
           expect(yield* Effect.result(Fiber.join(pending.fiber))).toMatchObject(stale);
           expect(yield* idle(session)).toMatchObject({ phase: "open", unresolvedDispatch: false });
-          assert.ok(survivorPage);
           yield* survivorPage.click({ selector: "#increment" });
           expect((yield* survivorPage.readText({ selector: "#count" })).text).toBe("1");
         } else {

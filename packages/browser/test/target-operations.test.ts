@@ -154,10 +154,10 @@ it.effect("issued Pages keep their exact target across display selection changes
       const direct = initial.readText({});
       const scout = yield* f.session.page(f.pages[1]!);
 
-      yield* f.session.selectPage(f.pages[1]!);
+      yield* f.session.selectPage(scout);
       expect((yield* direct).text).toBe("page-a");
       expect((yield* scout.readText({})).text).toBe("page-b");
-      yield* f.session.selectPage(f.pages[0]!);
+      yield* f.session.selectPage(initial);
       expect((yield* initial.readText({})).text).toBe("page-a");
       expect(f.reads).toEqual(["page-a", "page-b", "page-a"]);
     }),

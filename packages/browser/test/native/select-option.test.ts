@@ -410,7 +410,11 @@ it.live(
         const observed = yield* session.initialPage.observe({ maxControls: 64 });
         const target = reference(observed, named(observed, "Single choice"));
         const option = named(observed, "Grouped");
-        const stage = (yield* session.listPages()).find((page) => page.selected)!;
+
+        const stage = yield* session.page(
+          (yield* session.listPages()).find((page) => page.selected)!,
+        );
+
         const other = yield* session.createPage();
 
         yield* session.selectPage(other);
@@ -423,7 +427,7 @@ it.live(
         const currentOption = named(current, "Grouped");
 
         yield* session.selectPage(stage);
-        const held = yield* PageControl.suspend(yield* session.page(stage));
+        const held = yield* PageControl.suspend(stage);
 
         yield* PageControl.resume(session.initialPage, held);
         expect(

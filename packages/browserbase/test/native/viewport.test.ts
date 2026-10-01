@@ -142,10 +142,9 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
 
           expect(body.browserSettings.viewport).toEqual(dimensions);
 
-          const scout = yield* session.createPage();
+          const scoutAuthority = yield* session.createPage();
 
-          yield* session.selectPage(scout);
-          const scoutAuthority = yield* session.page(scout);
+          yield* session.selectPage(scoutAuthority);
 
           yield* scoutAuthority.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
 

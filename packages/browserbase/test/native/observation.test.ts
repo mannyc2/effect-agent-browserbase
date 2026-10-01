@@ -407,10 +407,9 @@ it.live("real CDP: holding one page leaves another page's observation alone", ()
           const [stage] = yield* session.listPages();
 
           assert.ok(stage);
-          const scoutInfo = yield* session.createPage();
+          const scout = yield* session.createPage();
 
-          yield* session.selectPage(scoutInfo);
-          const scout = yield* session.page(scoutInfo);
+          yield* session.selectPage(scout);
 
           yield* scout.navigate(NavigateRequest.make({ url: `${f.url}viewport#scout` }));
 
@@ -452,8 +451,7 @@ it.live(
 
             assert.ok(stage);
             assert.ok(nativeStage);
-            const scout = yield* session.createPage();
-            const pinnedScout = yield* session.page(scout);
+            const pinnedScout = yield* session.createPage();
 
             yield* pinnedScout.navigate({ url: `${f.url}viewport#scout` });
 
@@ -465,12 +463,12 @@ it.live(
             const reference = yield* named(session.initialPage, "User");
             const retained = session.initialPage;
 
-            yield* session.selectPage(scout);
+            yield* session.selectPage(pinnedScout);
             expect((yield* session.initialPage.readText({})).text).toContain("visible paragraph");
             yield* refused(pinnedScout.clickElement(reference), "Stale");
             expect((yield* read(nativeStage)).clicks).toBe(0);
             expect((yield* read(nativeScout)).clicks).toBe(0);
-            yield* session.selectPage(stage);
+            yield* session.selectPage(session.initialPage);
             expect((yield* retained.readText({})).text).toContain("visible paragraph");
 
             // No new observe occurs between naming this node and acting on it.
@@ -479,7 +477,7 @@ it.live(
             yield* pinnedScout.click({ selector: "#user" });
             const unrelated = yield* session.createPage();
 
-            yield* (yield* session.page(unrelated)).close();
+            yield* unrelated.close();
             expect((yield* session.initialPage.controlFacts(reference)).label).toBe("User");
             yield* session.initialPage.clickElement(reference);
             expect((yield* read(nativeStage)).clicks).toBe(1);
@@ -489,9 +487,9 @@ it.live(
             const beforeNavigation = yield* named(session.initialPage, "User");
             const pinnedStage = yield* session.page(stage);
 
-            yield* session.selectPage(scout);
+            yield* session.selectPage(pinnedScout);
             yield* pinnedStage.navigate({ url: `${f.url}viewport?stage=replaced` });
-            yield* session.selectPage(stage);
+            yield* session.selectPage(session.initialPage);
             yield* refused(session.initialPage.clickElement(beforeNavigation), "Stale");
             expect((yield* read(nativeStage)).clicks).toBe(0);
             yield* session.initialPage.clickElement(yield* named(session.initialPage, "User"));
@@ -527,7 +525,7 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
               node.replaceWith(node.cloneNode(true));
             }),
           );
-          yield* session.selectPage(stage);
+          yield* session.selectPage(session.initialPage);
           yield* refused(session.initialPage.clickElement(replaced), "Stale");
 
           const changed = yield* named(session.initialPage, "User");
@@ -538,7 +536,7 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
               (node as HTMLInputElement).required = true;
             }),
           );
-          yield* session.selectPage(stage);
+          yield* session.selectPage(session.initialPage);
           yield* refused(session.initialPage.fillElement(changed, "must not arrive"), "Stale");
           expect(yield* read(nativeStage)).toEqual({ clicks: 0, fills: 0, focused: "" });
         }),

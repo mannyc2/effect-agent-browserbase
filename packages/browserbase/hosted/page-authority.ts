@@ -148,10 +148,9 @@ await h.run(
       const a = session.initialPage;
 
       yield* a.navigate(NavigateRequest.make({ url: fixtureUrl.href }));
-      const bInfo = yield* session.createPage();
-      const b = yield* session.page(bInfo);
+      const b = yield* session.createPage();
 
-      yield* session.selectPage(bInfo);
+      yield* session.selectPage(b);
       yield* b.navigate(NavigateRequest.make({ url: fixtureUrl.href }));
       const observedB = yield* b.observe({ maxControls: 8, maxTextBytes: 4096 });
       const buttonB = observedB.controls.find((control) => control.label === "Page increment");
