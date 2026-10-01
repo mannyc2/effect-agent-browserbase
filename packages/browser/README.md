@@ -447,7 +447,7 @@ terminal escape codes and at most 512 characters, with every address cut to its 
 (`https://shop.test/…`) and Playwright's call log dropped, since a path, query or DevTools endpoint
 can carry a credential. It is a host diagnostic, and the agent tools never project it.
 `InitializationError` and the provider's separate resource-error families retain their own
-contracts. The Agent tools project host errors to their compact eleven-reason vocabulary and
+contracts. The Agent tools project host errors to their compact model-facing vocabulary and
 retain the originals in the bounded, host-only `ToolHost.toolFailures` snapshot.
 
 ### A navigation you can watch while it loads
@@ -480,7 +480,7 @@ The owner's permit is released as soon as the navigation is dispatched. While it
 - A failed or unacknowledged recovery, replacement navigation, detached frame or other unknown native outcome closes that exact Page, with a session fence if closure is unconfirmed. Pinned child-frame timeout also uses Page containment: `Page.stopLoading` acts on the whole page, so automatic frame-local cancellation is not claimed. Explicit stop retains its page-wide meaning.
 - Leaving the operation's scope unsettled retains an unknown outcome and closes its Page; healthy Pages survive confirmed closure. Neither navigation nor a dispatched stop is replayed, and no timeout or acknowledgement promises rollback, an unchanged DOM, or termination of every page timer or worker.
 
-A read is ordered against the document being replaced by failing: if the document it was reading was replaced underneath it, or a navigation is still in flight on its page, the error is `target-changed` and `undispatched`, which means read again. A read is never a mutation, so that is always safe. A held page is not read at all; take the checkpoint before the hold and keep it.
+A read can inspect a loading Page. If a native read fails because its document was replaced or navigation is in flight, the error is `target-changed` and `undispatched`, which permits another read. A read is never a mutation. A held page is not read at all; take the checkpoint before the hold and keep it.
 
 Locally, a hold during an incremental response stops parsing as well as timers: a chunk the server sends meanwhile is not parsed until resume. That is an observation of the pinned Chromium, not a guarantee about hosted sessions.
 
@@ -504,7 +504,7 @@ found.match; // "create account"
 
 It filters what is read and never searches for, re-finds or substitutes a node: references still come from the reading itself, with every exact-node check. What a matched reading leaves out is not evidence of absence, which is why it names its `match`.
 
-An `Observation` is safe to show a model, and the adapter's `browser_inspect` Tool returns it as is. It therefore carries no destination, form target or field value, in either scope. What a host needs to decide whether a control may be acted on is a separate, host-only read from the exact node:
+An `Observation` is safe to show a model, and the adapter's `browser_inspect` Tool fits it to its model-result bounds. It carries no destination, form target or field value, in either scope. What a host needs to decide whether a control may be acted on is a separate, host-only read from the exact node:
 
 Controls also carry optional `checked`, `selected`, `inputType` and `required`. Native checkbox
 and radio state comes from the element; applicable ARIA state accepts only explicit true/false.
@@ -535,7 +535,7 @@ yield *
 
 Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the Page's permit is held, where waiting on a model or a network call would stall other ordinary operations on that Page. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
 
-`fillElement` also refuses, undispatched, what the maintained engine would otherwise refuse only after dispatch, where the unknown outcome would fence the owner: a hidden control (`not-visible`), a disabled one (`disabled`), one that is not an editable input, textarea or content-editable element, and text that a `number`, `date`, `time`, `range` or other value-typed input would not keep (`unsupported`). The value is checked on a detached copy with the same constraints; the page's own control is not touched until the fill is sent.
+`fillElement` also refuses, undispatched, what the maintained engine would otherwise refuse only after dispatch, where an unknown outcome would close that Page or fence the session if closure is unconfirmed: a hidden control (`not-visible`), a disabled one (`disabled`), one that is not an editable input, textarea or content-editable element, and text that a `number`, `date`, `time`, `range` or other value-typed input would not keep (`unsupported`). The value is checked on a detached copy with the same constraints; the page's own control is not touched until the fill is sent.
 
 ### Exact native option selection
 
@@ -636,7 +636,7 @@ It issues no references, is not a mutation, and leaves the action observation an
 `Chromium.layer({ maxHostReads })` or the corresponding provider Layer. The default is 10,000,
 with an explicit integer bound of 1–1,000,000; invalid values are refused rather than clamped.
 Exhaustion reports `Limit { dimension: "host-reads", maximum, observed } / undispatched` while the
-owner stays open. These operations still obey the same lifetime, bytes, deadline and fail-fast
+owner stays open. These operations still obey the same lifetime, bytes, deadline and admission
 concurrency bounds: a checkpoint can execute page script and is not unlimited free work.
 `observe`, `readText`, `screenshot` and `waitFor` continue consuming the model-reachable action
 allowance, which `status.actions` reports. Neither budget is a tool parameter, and `maxActions`
@@ -769,7 +769,7 @@ Each binding accepts exactly one JSON-compatible argument and returns the output
 
 Plans admit at most 16 uniquely named bindings. Omitted binding options default to `maxConcurrent: 1`, `maxInputBytes: 65536`, `maxOutputBytes: 65536`, `timeoutMillis: 10000` and `failureMode: "reject-call"`. Name, exact origins, codecs and handler remain required. Explicit bounds/mode pass the same validated registration path; zero, null or excessive values are rejected, never clamped. `combine` selects the most conservative `existingDocuments` policy across its scripts, even when their origin sets differ. Admission reserves capacity before native validation, codec work or a callback fiber starts; a timed-out native operation retains that reservation until it actually settles, including across reconnect. The page wrapper additionally rejects cyclic, sparse, accessor-bearing, non-plain, non-finite and non-JSON input rather than silently changing it through `JSON.stringify`. Its traversal admits at most 64 levels and 65,536 nodes; the configured byte limit still applies. Native target and default-document registries are finite, and closed native targets retire their authority immediately.
 
-`reject-call` rejects only the affected invocation and permits subsequent healthy calls. `fail-session` completes `session.failure` with the original typed consumer cause and fences the owner. Pages receive only `BrowserBindingError: Browser binding call rejected`, with no host stack, consumer error payload, credentials or SDK cause. `session.bindingDiagnostics` is a bounded **host-only** snapshot containing per-binding accounting and the latest 32 typed causes; do not serialize it into a Tool response. Callback service reads run independently of a browser mutation, but reentrant browser work never waits behind that mutation's permit: it fails `busy` with `undispatched` instead.
+`reject-call` rejects only the affected invocation and permits subsequent healthy calls. `fail-session` completes `session.failure` with the original typed consumer cause and fences the owner. Pages receive only `BrowserBindingError: Browser binding call rejected`, with no host stack, consumer error payload, credentials or SDK cause. `session.bindingDiagnostics` is a bounded **host-only** snapshot containing per-binding accounting and the latest 32 typed causes; do not serialize it into a Tool response. Callback service reads run independently of a browser mutation. Reentrant browser work on that same Page follows ordinary admission: it fails `busy` and `undispatched` by default, or waits under an explicit finite queue. Other healthy Pages can proceed independently.
 
 `Browser.scoped` supervises fail-session errors and requires the owner's checked cleanup. Explicit `acquire`/`launch` retain the typed failure signal and detailed cleanup receipt for callers that need to manage that decision themselves. Teardown synchronously closes callback admission, interrupts managed callback fibers, removes this connection's registrations, disconnects locally, and still invokes the supplying lifetime’s release when a prior cleanup step fails. Reconnect installs fresh callable registrations, never replays an old invocation or a consumer init script into an already-running document, and cannot reuse quarantined callback capacity.
 
@@ -891,7 +891,7 @@ This opt-in uses maintained CDP attachment with `noDefaults: true` and owner-con
 
 The native tests cover page timers, RAF and CSS animation, scout progress with both pages captured, an already-paused animation, and restoration of a non-default rate. Resume waits for one bounded real RAF in an isolated world at rate zero before restoring that rate, avoiding Blink's stale pre-hold animation clock. In-flight callbacks are not undone. Date/wall time, network, media/audio, workers/service workers, and external/provider actions are not promised frozen. This is presentation control, not a security boundary or browser virtual time.
 
-Partial native failures fence the session as uncertain; there is no success receipt, automatic rollback or retry. Scope cleanup never sends a hidden resume: it closes the owned session/connection. Chromium may reset animation state on CDP detachment, so a previous hold acknowledgement does not guarantee remote clocks remain held after connection loss. Hosted-provider equivalence has not been tested.
+Unknown partial native failures close the exact Page, preserving healthy peers after confirmed closure; unconfirmed closure fences the session. There is no success receipt, automatic rollback or retry. Scope cleanup never sends a hidden resume: it closes the owned session/connection. Chromium may reset animation state on CDP detachment, so a previous hold acknowledgement does not guarantee remote clocks remain held after connection loss. Hosted-provider equivalence has not been tested.
 
 ## Network policy
 
