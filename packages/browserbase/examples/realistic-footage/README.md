@@ -44,7 +44,9 @@ failure/reset. Cancelling a reader owns only that subscription. The camera owns 
 checked cleanup remains on the original browser owner. No capture byte stream is consumed twice.
 
 `ClockProbe.ts` retains the typed, origin-bounded application bootstrap needed for font readiness
-and six finite clock exchanges. It reads clock/font state only. Pointer, caption and press artwork
+and six clock calls. Each call carries the page's stamps for the call before it, so the sixth call
+completes the fifth exchange and five four-timestamp samples reach the host. It reads clock/font
+state only. Pointer, caption and press artwork
 live in the viewer's SVG/HTML or the host's bounded ASS artifact; no presentation nodes are added
 to the website. Captions use textContent in the viewer and literal glyph escaping in ASS. The
 compositor passes filenames as process arguments and uses a fixed filter filename in its private

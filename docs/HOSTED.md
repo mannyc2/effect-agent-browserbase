@@ -152,9 +152,9 @@ alone establishes no hosted behavior, and evidence remains null until separately
 
 `performed-presentation` requires `BROWSERBASE_PERFORMED_PRESENTATION_URL`, an operator-owned,
 credential-free HTTPS directory URL without a query or fragment. Before allocation it validates
-that URL and makes one bounded reachability request. Its approved bootstrap installs two plain
-input/button scenes and a finite fixture animation; it adds no pointer, pulse or caption artwork
-to the website. It issues two original Pages, selects the peer for display, and runs performed
+that URL and makes one bounded reachability request. Its approved bootstrap installs a plain
+input/button scene in each Page with a fixture animation that alternates without end, so the
+captured scene keeps painting; it adds no pointer, pulse or caption artwork to the website. It issues two original Pages, selects the peer for display, and runs performed
 plans on the first Page while two independent public Timeline readers observe its one original
 Capture interval. It cancels one reader, requires the other and captured frames to continue,
 then explicitly stops the capture and requests checked provider cleanup through the harness.
