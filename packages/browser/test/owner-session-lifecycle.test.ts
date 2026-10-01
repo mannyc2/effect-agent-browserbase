@@ -436,6 +436,43 @@ it.effect("a detach refused before it disconnects leaves the session open", () =
   ),
 );
 
+it.effect("detach waits for a started navigation instead of cutting it off", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const loaded = gate<string>();
+
+      const f = yield* fixture({
+        keepAlive: true,
+        lifetimeMillis: 20000,
+        onNavigate: (_url, pageId) => ({
+          pageId,
+          settled: loaded.promise,
+          stop: async () => "settled",
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+
+      const navigation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow");
+
+      // The navigation released its permit, but the browser is still loading its document.
+      const detaching = yield* Effect.forkChild(session.detach);
+
+      yield* TestClock.adjust(3000);
+      expect(yield* Fiber.join(detaching).pipe(Effect.flip)).toMatchObject({
+        operation: "detach",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+      });
+      expect(yield* session.status).toMatchObject({ phase: "open", reason: null });
+      loaded.resolve("https://example.test/slow");
+      expect(yield* navigation.completed).toBe("https://example.test/slow");
+    }),
+  ),
+);
+
 it.effect("an old connection cannot change replacement status or diagnostics", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -277,7 +277,8 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
 
   /**
    * Plans and paces the glide to one exact node. A press may first scroll its node into view; a
-   * hover never scrolls (`scrollIntoView: false`) and refuses an unseen node `NotVisible`.
+   * hover never scrolls (`scrollIntoView: false`): it aims inside the node's visible part and
+   * refuses a node with none `NotVisible`.
    */
   const preparePress = async (
     page: Page,
@@ -299,36 +300,63 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
       throw failure(Reasons.Stale.make({}), "undispatched");
     const target = { pageId, frameId: targets.frameId(frame) };
 
-    const needsScroll: unknown = await element.evaluate((node) => {
-      if (!node.isConnected) return null;
-      const rect = node.getBoundingClientRect();
+    // In the node's own frame: whether its viewport or an overflow ancestor clips it, and the part
+    // of it that stays visible, both in that frame's viewport coordinates.
+    const layout = safeDecode(
+      Schema.NullOr(
+        Schema.Struct({
+          clipped: Schema.Boolean,
+          left: Schema.Finite,
+          top: Schema.Finite,
+          visible: Schema.Struct({
+            left: Schema.Finite,
+            top: Schema.Finite,
+            right: Schema.Finite,
+            bottom: Schema.Finite,
+          }),
+        }),
+      ),
+      await element.evaluate((node) => {
+        if (!node.isConnected) return null;
+        const rect = node.getBoundingClientRect();
 
-      if (rect.width <= 0 || rect.height <= 0) return null;
-      if (rect.left < 0 || rect.top < 0 || rect.right > innerWidth || rect.bottom > innerHeight)
-        return true;
-      let ancestor: Element | null = node.parentElement;
+        if (rect.width <= 0 || rect.height <= 0) return null;
 
-      for (let depth = 0; ancestor !== null; depth++) {
-        if (depth >= 128) return null;
-        const style = getComputedStyle(ancestor);
-        const clip = ancestor.getBoundingClientRect();
+        let clipped =
+          rect.left < 0 || rect.top < 0 || rect.right > innerWidth || rect.bottom > innerHeight;
 
-        if (
-          (style.overflowX !== "visible" && (rect.left < clip.left || rect.right > clip.right)) ||
-          (style.overflowY !== "visible" && (rect.top < clip.top || rect.bottom > clip.bottom))
-        )
-          return true;
-        const root = ancestor.getRootNode();
+        let left = Math.max(rect.left, 0);
+        let top = Math.max(rect.top, 0);
+        let right = Math.min(rect.right, innerWidth);
+        let bottom = Math.min(rect.bottom, innerHeight);
+        let ancestor: Element | null = node.parentElement;
 
-        ancestor = ancestor.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
-      }
+        for (let depth = 0; ancestor !== null; depth++) {
+          if (depth >= 128) return null;
+          const style = getComputedStyle(ancestor);
+          const clip = ancestor.getBoundingClientRect();
 
-      return false;
-    });
+          if (style.overflowX !== "visible") {
+            if (rect.left < clip.left || rect.right > clip.right) clipped = true;
+            left = Math.max(left, clip.left);
+            right = Math.min(right, clip.right);
+          }
+          if (style.overflowY !== "visible") {
+            if (rect.top < clip.top || rect.bottom > clip.bottom) clipped = true;
+            top = Math.max(top, clip.top);
+            bottom = Math.min(bottom, clip.bottom);
+          }
+          const root = ancestor.getRootNode();
+
+          ancestor = ancestor.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+        }
+
+        return { clipped, left: rect.left, top: rect.top, visible: { left, top, right, bottom } };
+      }),
+    );
 
     check();
-    if (typeof needsScroll !== "boolean")
-      throw failure(Reasons.NotVisible.make({}), "undispatched");
+    if (layout === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
 
     const viewport = safeDecode(
       Schema.Struct({ width: Schema.Finite, height: Schema.Finite }),
@@ -340,15 +368,32 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
 
     check();
     if (box === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
-    if (
-      needsScroll ||
+
+    const outside =
+      layout.clipped ||
       box.x < 0 ||
       box.y < 0 ||
       box.x + box.width > viewport.width ||
-      box.y + box.height > viewport.height
-    ) {
-      if (options.scrollIntoView === false)
-        throw failure(Reasons.NotVisible.make({}), "undispatched");
+      box.y + box.height > viewport.height;
+
+    // The glide aims inside this region of the page: the whole node unless only part is visible.
+    let aimRegion = box;
+
+    if (outside && options.scrollIntoView === false) {
+      // A hover never scrolls: it aims inside the part of the node that is visible now, as a plain
+      // hover may, and refuses only a node with no visible part. The frame-local region moves into
+      // page coordinates by the node's own offset; the hit test then checks the planned point.
+      const width = layout.visible.right - layout.visible.left;
+      const height = layout.visible.bottom - layout.visible.top;
+
+      if (width <= 0 || height <= 0) throw failure(Reasons.NotVisible.make({}), "undispatched");
+      aimRegion = {
+        x: box.x - layout.left + layout.visible.left,
+        y: box.y - layout.top + layout.visible.top,
+        width,
+        height,
+      };
+    } else if (outside) {
       const startedMonotonicNanos = pacing.now();
 
       ticket.dispatch();
@@ -361,14 +406,17 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
         completedMonotonicNanos: pacing.now(),
       });
       check();
-      box = await element.boundingBox();
+      const scrolled = await element.boundingBox();
+
       check();
-      if (box === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
+      if (scrolled === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
+      box = scrolled;
+      aimRegion = scrolled;
     }
 
     const planned = pointerSchedule(performance.plan, {
       from: glideFrom(page),
-      box,
+      box: aimRegion,
       viewport,
     });
 

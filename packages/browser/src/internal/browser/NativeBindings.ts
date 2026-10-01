@@ -206,7 +206,8 @@ export const makeNativeBindings = (
   const byName = new Map(bindings.map((binding) => [binding.name, binding]));
   const targets = new Map<string, TargetRegistration>();
   const currentDocuments = new Map<string, DocumentIdentity>();
-  const attaching = new Set<Page | Frame>();
+  // Each subject still being attached, with the page it belongs to when that page is registered.
+  const attaching = new Map<Page | Frame, string | undefined>();
   const retiredRegistrations = new WeakSet<InitializationError>();
 
   const retirementError = (reason: "closed" | "stale") => {
@@ -220,6 +221,8 @@ export const makeNativeBindings = (
   // Native replies are bounded too, including rejected calls and late native completions.
   const maximumReplies = 16 + bindings.reduce((sum, binding) => sum + binding.maxConcurrent, 0);
   let replies = 0;
+  // Outstanding replies by the page whose document called; a page has an entry only while one is.
+  const replyPages = new Map<string, number>();
   let closing = false;
   let disposed: Promise<void> | undefined;
 
@@ -241,7 +244,7 @@ export const makeNativeBindings = (
     check();
     if (attaching.has(subject)) return;
     if (attaching.size >= 128) throw registrationError("busy");
-    attaching.add(subject);
+    attaching.set(subject, pageIdOf(page));
     let cdp: CDPSession | undefined;
     let retained = false;
     let nativeClosed = false;
@@ -353,6 +356,7 @@ export const makeNativeBindings = (
         if (binding === undefined || call.sequence <= document.sequence) return;
         document.sequence = call.sequence;
         replies++;
+        replyPages.set(pageId, (replyPages.get(pageId) ?? 0) + 1);
         let retired = false;
 
         const check = async (signal: AbortSignal) => {
@@ -432,6 +436,10 @@ export const makeNativeBindings = (
           .catch(() => {})
           .finally(() => {
             replies--;
+            const remaining = (replyPages.get(pageId) ?? 1) - 1;
+
+            if (remaining === 0) replyPages.delete(pageId);
+            else replyPages.set(pageId, remaining);
           });
       };
 
@@ -591,7 +599,14 @@ export const makeNativeBindings = (
     attach,
     close,
     dispose,
-    drained: () => attaching.size === 0 && replies === 0,
+    /**
+     * Whether no attachment or reply is outstanding. Work for a page that is `held` (quarantined by
+     * a dialog or popup policy) cannot hold up the handoff that releases it: a reply to that page
+     * waits behind its dialog, and the operator's release lets it through.
+     */
+    drained: (held: (pageId: string) => boolean = () => false) =>
+      [...attaching.values()].every((pageId) => pageId !== undefined && held(pageId)) &&
+      [...replyPages.keys()].every(held),
     retiredRegistration: (cause: unknown) =>
       Schema.is(InitializationError)(cause) && retiredRegistrations.has(cause),
   };

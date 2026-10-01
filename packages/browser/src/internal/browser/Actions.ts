@@ -342,12 +342,25 @@ export const makeActions = (
     }
   };
 
-  /** The frame's own http(s) address or, for one without (srcdoc, about:blank), its nearest ancestor's. */
+  const ownHttpAddress = (value: string): boolean => {
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * The frame's own http(s) address or, for a document without one (srcdoc, about:blank, data:),
+   * its nearest ancestor's. An http(s) address that cannot be reported (longer than 8,192
+   * characters, or carrying credentials) is never replaced by an ancestor's, which belongs to a
+   * different document: it yields nothing.
+   */
   const addressOf = (frame: Frame): string | undefined => {
     for (let at: Frame | null = frame; at !== null; at = at.parentFrame()) {
-      const url = reportable(at.url());
+      const value = at.url();
 
-      if (url !== undefined) return url;
+      if (ownHttpAddress(value)) return reportable(value);
     }
 
     return undefined;
@@ -357,10 +370,10 @@ export const makeActions = (
    * The address an action reports, read from the host's frame tree and never from the page. A
    * document without an http(s) URL of its own (`about:srcdoc`, `about:blank`, `data:`) reports
    * its nearest ancestor frame's, which is also its base URL. It is resolved before dispatch, so
-   * an action never fails over its URL after its input landed: a target with no such address in
-   * its whole frame tree is refused unsent, and afterwards the address read before dispatch
-   * stands in when the action left none, including when the action removed its own frame or
-   * closed its page.
+   * an action never fails over its URL after its input landed: a target with no reportable
+   * address, including one whose own http(s) address is too long or carries credentials, is
+   * refused unsent, and afterwards the address read before dispatch stands in when the action
+   * left none, including when the action removed its own frame or closed its page.
    */
   const resultUrl = (target: DriverTarget) => {
     const { frame } = current(target);

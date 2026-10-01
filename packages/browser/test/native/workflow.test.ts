@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schedule, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schedule, Schema, Stream } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
@@ -295,6 +295,99 @@ it.live(
         yield* session.closeChecked;
       }),
     ),
+);
+
+it.live(
+  "a binding reply owed to a quarantined page holds up neither its handoff nor its release",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { session, operations, page, url } = yield* keyboardFixture(
+          { dialogPolicy: "pause" },
+          (origin) =>
+            Bootstrap.binding({
+              name: "slowEcho",
+              origins: [origin],
+              input: Schema.String,
+              output: Schema.String,
+              maxConcurrent: 1,
+              maxInputBytes: 128,
+              maxOutputBytes: 128,
+              timeoutMillis: 10000,
+              failureMode: "reject-call",
+              handle: (value) => Effect.sleep("400 millis").pipe(Effect.as(value)),
+            }),
+        );
+
+        const initial = session.initialPage;
+        const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+
+        yield* Effect.promise(() => cdp.send("Page.enable"));
+        // The page's call is still being answered when its own dialog quarantines it, so the
+        // reply waits behind that dialog.
+        yield* initial.navigate({ url: new URL("binding-then-confirm", url).href });
+        yield* initial.status.pipe(
+          Effect.repeat({
+            until: (status) => status.phase === "paused",
+            schedule: Schedule.spaced(50),
+          }),
+          Effect.timeout("10 seconds"),
+        );
+        yield* Effect.sleep("600 millis");
+
+        // If the handoff fails, answer the dialog so the fixture's teardown is not left behind it.
+        const answered = Effect.promise(() =>
+          cdp.send("Page.handleJavaScriptDialog", { accept: false }),
+        ).pipe(Effect.ignore);
+
+        const handoff = yield* operations
+          .beginHandoff(Effect.succeed({ granted: true }))
+          .pipe(Effect.onError(() => answered));
+
+        expect(handoff.view).toEqual({ granted: true });
+        yield* operations.resume(handoff.token, true);
+        yield* session.closeChecked;
+      }),
+    ),
+);
+
+it.live("a run waiting for its start ends as soon as a dialog quarantines its page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, url } = yield* keyboardFixture({ dialogPolicy: "pause" });
+      const initial = session.initialPage;
+
+      yield* initial.navigate({ url: new URL("confirm-later", url).href });
+      const startAt = (yield* session.monotonicTimeNanos) + 30_000_000_000n;
+
+      const operation = yield* initial.start(
+        {
+          version: 1,
+          steps: [
+            { id: "pause", action: { _tag: "Wait", mode: { _tag: "Duration", milliseconds: 10 } } },
+          ],
+        },
+        { startAt, within: "60 seconds" },
+      );
+
+      // The page's own dialog quarantines it; that Page can never run this plan.
+      yield* initial.status.pipe(
+        Effect.repeat({
+          until: (status) => status.phase === "paused",
+          schedule: Schedule.spaced(50),
+        }),
+        Effect.timeout("10 seconds"),
+      );
+      expect(
+        yield* operation.completed.pipe(Effect.flip, Effect.timeout("5 seconds")),
+      ).toMatchObject({
+        stage: "PreparationFailed",
+        completed: [],
+        error: { outcome: "undispatched" },
+      });
+      expect((yield* operation.attempts).attempts).toEqual([]);
+    }),
+  ),
 );
 
 // The owner requested this native seam before implementation for #94's bounded plain typing.

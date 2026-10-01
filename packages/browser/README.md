@@ -186,7 +186,8 @@ overflow follows the same bounded dismissal rules. An acknowledged before-unload
 retire only the exact navigation captured when its dialog arrived and subsequently rejected.
 An attributed popup/dialog pause quarantines its exact Page and stops its capture and bindings;
 healthy peers keep working. The original Page reports `paused` and permits explicit close, while
-input remains refused. An action the pause interrupts on that page, such as the click that opened
+input remains refused. Its page timeline ends `stale`, as an all-page pause ends every page's, so a
+run waiting to start on it fails preparation at once. An action the pause interrupts on that page, such as the click that opened
 the dialog, is never closed away: its unknown outcome reports `containment: PagePaused`, and the
 quarantined page's native work does not hold up a handoff's drain. Recovery requires a drained
 session handoff and explicit operator release, then newly acquired Page/Frame authority. Unattributed policy or shared connection failures fence
@@ -204,8 +205,10 @@ issue a Frame with the same document operations for that exact frame. None chang
 selection or opens a connection. An action's result `url` is its frame's http(s) address; a
 document without one (`about:srcdoc`, `about:blank`, `data:`) reports its nearest ancestor
 frame's, which is also its base URL. That address is resolved before dispatch, so an action never
-fails over it after input landed: a target with no http(s) address anywhere in its frame tree is
-refused `Unsupported` and `undispatched`, and an action that removes its own frame or closes its
+fails over it after input landed: a target with no http(s) address anywhere in its frame tree, or
+whose own http(s) address cannot be reported (longer than 8,192 characters, or carrying
+credentials; an ancestor's address never stands in for it), is refused `Unsupported` and
+`undispatched`, and an action that removes its own frame or closes its
 page reports the address read before dispatch.
 
 Pass an issued Page or Frame as the object you were given. Capture, page control, provider
@@ -845,7 +848,7 @@ const receipt =
 
 Coordinates are CSS pixels in the main frame's viewport. Each logical input is one action on its issued Page or Frame. Performed plans add bounded pacing and output-only glide evidence; viewers draw cursor artwork from projected evidence without injecting presentation DOM into the website.
 
-`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`page.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`.
+`hover` places the pointer on one exact element where it is, by selector or by the node an observation named (`page.hoverElement`). It never scrolls to reach it, because that would hide a scripted scroll inside a native-input operation. If the pointer cannot be placed on the element (it is outside the viewport, has no area, or something covers it) the call fails `not-visible` and `undispatched`. A performed hover aims inside the part of the element its viewport and overflow ancestors leave visible, so it reaches a partly clipped element a plain hover reaches, and refuses only one with no visible part.
 
 For a child-frame element, hover checks the commanded point through each ancestor
 frame and then the exact node, including cross-origin documents. The receipt
@@ -897,7 +900,7 @@ A press waits for native input acknowledgement, without waiting for resulting na
 
 The connection endpoint is read through the exact allocated session, so a provider reply that names a different session is refused before any CDP attachment.
 
-Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`. Detach first lets admitted work finish within a bounded interval, such as a page close admitted behind its barrier, rather than disconnecting beneath it; work that cannot finish fails the detach as `Timeout/undispatched`. Reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
+Persistent Browserbase contexts require a live writer permit from `ContextCoordination.withWriter` when writes are persisted. Detach/reconnect is opt-in with `keepAlive`. Detach first lets admitted work finish within a bounded interval, such as a page close admitted behind its barrier or a started navigation that is still loading, rather than disconnecting beneath it; work that cannot finish fails the detach as `Timeout/undispatched` and leaves the session open. Reconnect creates a new handle generation, verifies the selected target, obtains fresh state, and never replays pending input or treats serialized agent state as a live browser.
 
 Human handoff blocks new admission and drains native work that can still change a page within a
 bounded interval before pausing automation and returning host-only Live View material. Pure waits
