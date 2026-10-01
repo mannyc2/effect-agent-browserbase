@@ -549,28 +549,6 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const capture: CaptureParent = {
     owner,
     newCaptureId: uuid,
-    selectedPage: () => {
-      const page = pages.get(getDriver().selected().pageId);
-
-      if (page === undefined || page.phase !== "open")
-        throw BrowserError.make({
-          operation: "capture-start",
-          reason: Reasons.Stale.make({}),
-          outcome: "undispatched",
-        });
-
-      return page.info;
-    },
-    target: () => {
-      if (driver === undefined)
-        throw BrowserError.make({
-          operation: "target",
-          reason: Reasons.Closed.make({}),
-          outcome: "undispatched",
-        });
-
-      return Target.make({ generation: owner.state.generation, ...driver.selected() });
-    },
     resolve: (ticket, requested) => {
       const admittedDomain = domain;
 
@@ -593,18 +571,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         });
 
         const authority =
-          pages.get(binding.pageId) ??
-          registerPage(
-            requested ?? {
-              pageId: binding.pageId,
-              targetId: binding.targetId,
-              url: "",
-              title: "",
-              selected: true,
-            },
-            target,
-            generation,
-          ).record;
+          pages.get(binding.pageId) ?? registerPage(requested, target, generation).record;
 
         const publishMetadata = captureMetadata(admittedDomain.store, originNanos);
         let releaseCapture: (() => void) | undefined;

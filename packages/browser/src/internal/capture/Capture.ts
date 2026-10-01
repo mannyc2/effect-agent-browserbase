@@ -25,9 +25,9 @@ import { BrowserError, Reasons } from "../../Errors.ts";
 import type { CaptureReason } from "../../TimelineData.ts";
 import {
   type CaptureLease,
-  type CaptureParent,
   type CaptureResolution,
   type CaptureMetadata,
+  type PageCaptureParent,
 } from "../browser/Association.ts";
 import type { CaptureSource, NativeFrame } from "../browser/Driver.ts";
 import { jpegGeometry } from "../browser/Images.ts";
@@ -64,7 +64,7 @@ const decodeMetadata = Schema.decodeUnknownOption(Metadata);
 
 /** Private seam for deterministic callback/lifetime tests. The public start accepts a real live session. */
 export const startCapture = Effect.fnUntraced(function* (
-  parent: CaptureParent,
+  parent: PageCaptureParent,
   options: CaptureOptions = {},
 ) {
   const maxFrames = options.maxFrames ?? CaptureDefaults.maxFrames;
@@ -616,17 +616,9 @@ export const startCapture = Effect.fnUntraced(function* (
     }
   };
 
-  yield* parent.validate?.("capture-start") ?? Effect.void;
+  yield* parent.validate("capture-start");
 
-  const requested = yield* Effect.try({
-    try: () => parent.selectedPage(),
-    catch: () =>
-      BrowserError.make({
-        operation: "capture-start",
-        reason: Reasons.Stale.make({}),
-        outcome: "undispatched",
-      }),
-  });
+  const requested = parent.page;
 
   const generation = parent.owner.state.generation;
 
@@ -753,7 +745,7 @@ export const startCapture = Effect.fnUntraced(function* (
         charge: false,
         admission: options.admission,
         targetScope: () => ({ pageId: requested.pageId }),
-        preflight: (parent.validate?.("capture-start") ?? Effect.void).pipe(
+        preflight: parent.validate("capture-start").pipe(
           Effect.andThen(
             Effect.suspend(() =>
               generation === parent.owner.state.generation

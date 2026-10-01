@@ -53,6 +53,7 @@ import type { LivePlanEncoded, PlanEncoded } from "../../PlanData.ts";
 import {
   associate,
   associateFrameAuthority,
+  associatePage,
   associatePageAuthority,
   forPage,
 } from "./Association.ts";
@@ -632,7 +633,7 @@ export const makeSession = <E>(
     };
 
     issued.set(value.record, page);
-    associate(
+    associatePage(
       page,
       forPage(controls.capture, value.record.info, value.record.identity, value.controls.validate),
     );

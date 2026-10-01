@@ -6,7 +6,7 @@ import { BrowserError, Reasons, type InitializationError } from "effect-browser/
 
 import { PageInfo, Target } from "../src/BrowserData.ts";
 import { type CaptureOptions, type CaptureSize } from "../src/Capture.ts";
-import { forPage, type CaptureParent } from "../src/internal/browser/Association.ts";
+import { forPage, type PageCaptureParent } from "../src/internal/browser/Association.ts";
 import { type CaptureInvalidation, type NativeFrame } from "../src/internal/browser/Driver.ts";
 import { makeOwner } from "../src/internal/browser/Owner.ts";
 import { startCapture } from "../src/internal/capture/Capture.ts";
@@ -70,15 +70,12 @@ const makeFixture = Effect.fnUntraced(function* (
       selected: pageId === "page-1",
     });
 
-  const parent: CaptureParent = {
+  const parent: PageCaptureParent = {
     owner,
     newCaptureId: Effect.sync(() => `capture-fixture-${++captureSerial}`),
-    selectedPage: () => page(),
-    target: () =>
-      Target.make({ generation: owner.state.generation, pageId: "page-1", frameId: "frame-1" }),
-    resolve: (_ticket, requested) => {
-      const chosen = requested ?? page();
-
+    validate: () => Effect.void,
+    page: page(),
+    resolve: (_ticket, chosen) => {
       if (chosen.targetId !== `target-${chosen.pageId}`)
         return Effect.fail(
           BrowserError.make({
@@ -1010,7 +1007,18 @@ const captureCases: ReadonlyArray<Case> = [
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const interval = yield* startCapture(session.capture, options);
+      const initial = session.initialPage();
+
+      const interval = yield* startCapture(
+        forPage(
+          session.capture,
+          initial.record.info,
+          initial.record.identity,
+          initial.controls.validate,
+        ),
+        options,
+      );
+
       const result = yield* session.close;
 
       assert.equal(result.connection, "failed");

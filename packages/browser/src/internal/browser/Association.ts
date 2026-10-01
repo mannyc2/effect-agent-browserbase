@@ -80,20 +80,25 @@ export type CaptureMetadata =
       readonly upstreamDrops: "unknown";
     };
 
+/** Capture ownership and accounting, shared by a session and every Page it issues. */
 export interface CaptureParent {
-  /** A page-bound parent's own authority check, reported under the caller's operation. */
-  readonly validate?: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>;
   readonly owner: Owner;
   /** Prebound to the original owner's Crypto; starting capture adds no caller service. */
   readonly newCaptureId: Effect.Effect<string>;
   readonly resolve: (
     ticket: Ticket,
-    target?: PageInfo,
+    page: PageInfo,
   ) => Effect.Effect<CaptureResolution, BrowserError>;
-  readonly target: () => Target;
-  readonly selectedPage: () => PageInfo;
   readonly captureLeases: Map<string, CaptureLease>;
   captureReservedBytes: number;
+}
+
+/** The capture parent of one issued Page: the only kind that can start a capture. */
+export interface PageCaptureParent extends CaptureParent {
+  /** The page's own authority check, reported under the caller's operation. */
+  readonly validate: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>;
+  /** The exact page this parent captures. */
+  readonly page: PageInfo;
 }
 
 // This is a private capability registry, not stored domain data. Exact live session identity is
@@ -101,12 +106,17 @@ export interface CaptureParent {
 // leases or reservations. A public/enumerable parent field would weaken that boundary.
 // Keep this access centralized here; schemas describe data, never this mutable ownership state.
 const parents = new WeakMap<object, CaptureParent>();
+const pageParents = new WeakMap<object, PageCaptureParent>();
 
 export const associate = (session: object, parent: CaptureParent): void => {
   parents.set(session, parent);
 };
 
-export const captureParent = (session: object): CaptureParent | undefined => parents.get(session);
+/** An issued Page shares its session's owner and accounting and adds its own exact page. */
+export const associatePage = (page: object, parent: PageCaptureParent): void => {
+  parents.set(page, parent);
+  pageParents.set(page, parent);
+};
 
 /** A page delegates to the same owner and accounting; its destination cannot be replaced. */
 export const forPage = (
@@ -114,8 +124,9 @@ export const forPage = (
   info: PageInfo,
   identity: Target,
   validate: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>,
-): CaptureParent => ({
+): PageCaptureParent => ({
   validate,
+  page: info,
   owner: parent.owner,
   newCaptureId: parent.newCaptureId,
   captureLeases: parent.captureLeases,
@@ -125,8 +136,6 @@ export const forPage = (
   set captureReservedBytes(value) {
     parent.captureReservedBytes = value;
   },
-  target: () => identity,
-  selectedPage: () => info,
   resolve: (ticket, requested) =>
     validate("capture").pipe(
       Effect.andThen(
@@ -139,10 +148,7 @@ export const forPage = (
                 outcome: "undispatched",
               }),
             );
-          if (
-            requested !== undefined &&
-            (requested.pageId !== info.pageId || requested.targetId !== info.targetId)
-          )
+          if (requested.pageId !== info.pageId || requested.targetId !== info.targetId)
             return Effect.fail(
               BrowserError.make({
                 operation: "capture",
@@ -227,5 +233,5 @@ export const resolveTargetControlsForSession = (
   });
 
 /** Capture binds only to original issued Page authority; a session association is insufficient. */
-export const capturePageParent = (page: object): CaptureParent | undefined =>
-  pageAuthorities.has(page) ? parents.get(page) : undefined;
+export const capturePageParent = (page: object): PageCaptureParent | undefined =>
+  pageParents.get(page);

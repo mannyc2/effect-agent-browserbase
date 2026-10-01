@@ -5,7 +5,7 @@ import { PageInfo, Target } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import type { BrowserError } from "effect-browser/errors";
 
-import type { CaptureParent } from "../src/internal/browser/Association.ts";
+import type { PageCaptureParent } from "../src/internal/browser/Association.ts";
 import type { NativeFrame } from "../src/internal/browser/Driver.ts";
 import { makeOwner } from "../src/internal/browser/Owner.ts";
 import { startCapture } from "../src/internal/capture/Capture.ts";
@@ -164,11 +164,11 @@ it.effect("rejects invalid admission before resolving a native target or reservi
       owner.state.phase = "open";
       let resolutions = 0;
 
-      const parent: CaptureParent = {
+      const parent: PageCaptureParent = {
         owner,
         newCaptureId: Effect.die("invalid limits must not allocate a capture id"),
-        target: () => frame.target,
-        selectedPage: () => {
+        validate: () => Effect.die("invalid limits must not check page authority"),
+        get page(): never {
           throw new Error("invalid limits must not read target metadata");
         },
         resolve: () => {
@@ -222,11 +222,11 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
       let stops = 0;
       const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
 
-      const parent: CaptureParent = {
+      const parent: PageCaptureParent = {
         owner,
         newCaptureId: Effect.succeed("capture-fixture-identity"),
-        target: () => target,
-        selectedPage: () => selectedPage,
+        validate: () => Effect.void,
+        page: selectedPage,
         resolve: () =>
           Effect.succeed({
             key: "native-page-1",
@@ -296,11 +296,11 @@ it.effect(
         let stops = 0;
         const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
 
-        const parent: CaptureParent = {
+        const parent: PageCaptureParent = {
           owner,
           newCaptureId: Effect.succeed("capture-fixture-accounting"),
-          target: () => target,
-          selectedPage: () => selectedPage,
+          validate: () => Effect.void,
+          page: selectedPage,
           resolve: () =>
             Effect.succeed({
               key: "capture-accounting",
