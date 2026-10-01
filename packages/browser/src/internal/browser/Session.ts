@@ -307,6 +307,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     owner.retirePage(pageId);
     if (page !== undefined) {
       page.phase = "closed";
+      if (page.attempt !== undefined) Deferred.doneUnsafe(page.attempt, Effect.succeed(true));
       pages.delete(pageId);
     }
   };
@@ -959,25 +960,35 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       pageId,
       close: Effect.suspend(() => {
         const page = authority;
+        const generation = page?.identity.generation ?? owner.state.generation;
 
-        if (page?.phase === "closed") return Effect.succeed(true);
-        if (page?.attempt !== undefined) return Deferred.await(page.attempt);
+        const confirmed = () => {
+          if (page !== undefined && page.containment._tag === "NotRequired")
+            page.containment = { _tag: "PageClosed", pageId, generation };
+
+          return true;
+        };
+
+        if (page?.phase === "closed") return Effect.sync(confirmed);
+        if (page?.attempt !== undefined)
+          return Deferred.await(page.attempt).pipe(
+            Effect.timeoutOrElse({ duration: 3000, orElse: () => Effect.succeed(false) }),
+            Effect.tap((closed) =>
+              Effect.sync(() => {
+                if (closed) confirmed();
+                else page.containment = { _tag: "SessionFenced", generation };
+              }),
+            ),
+          );
         const attempt = Deferred.makeUnsafe<boolean>();
 
         if (page !== undefined) page.attempt = attempt;
         revokePage(pageId);
 
-        const generation = page?.identity.generation ?? owner.state.generation;
-
         return Effect.promise(async () => {
           try {
             await current.containPage(pageId);
-            if (page !== undefined && page.containment._tag === "NotRequired")
-              page.containment = {
-                _tag: "PageClosed",
-                pageId,
-                generation,
-              };
+            confirmed();
             pageClosed(pageId);
 
             return true;
@@ -2368,17 +2379,23 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               Effect.flatMap((closed) =>
                 closed
                   ? Effect.void
-                  : Effect.fail(
-                      BrowserError.make({
-                        operation: "close-page",
-                        reason: Reasons.Provider.make({}),
-                        outcome: "unknown",
-                        containment: {
-                          _tag: "SessionFenced",
-                          generation: generation ?? owner.state.generation,
-                        },
-                      }),
-                    ),
+                  : owner
+                      .contain(
+                        containment(page.pageId, record),
+                        generation ?? owner.state.generation,
+                      )
+                      .pipe(
+                        Effect.flatMap((containment) =>
+                          Effect.fail(
+                            BrowserError.make({
+                              operation: "close-page",
+                              reason: Reasons.Provider.make({}),
+                              outcome: "unknown",
+                              containment,
+                            }),
+                          ),
+                        ),
+                      ),
               ),
             );
 
@@ -2401,15 +2418,22 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     if (canonical.attempt !== undefined) return yield* joined(canonical.attempt);
                     const attempt = Deferred.makeUnsafe<boolean>();
 
-                    canonical.attempt = attempt;
-                    revokePage(page.pageId, ticket.signal);
-
                     return yield* native("close-page", ticket, async () => {
-                      await getDriver().closePage(page, ticket);
-                      pageClosed(page.pageId);
-                    }).pipe(
-                      Effect.onExit((exit) => Deferred.succeed(attempt, Exit.isSuccess(exit))),
-                    );
+                      try {
+                        await getDriver().closePage(page, ticket, () => {
+                          canonical.attempt = attempt;
+                          revokePage(page.pageId, ticket.signal);
+                        });
+                        pageClosed(page.pageId);
+                      } catch (error) {
+                        if (canonical.attempt === attempt)
+                          Deferred.doneUnsafe(
+                            attempt,
+                            Effect.succeed(canonical.phase === "closed"),
+                          );
+                        throw error;
+                      }
+                    });
                   }),
                 {
                   ...operationOptions,

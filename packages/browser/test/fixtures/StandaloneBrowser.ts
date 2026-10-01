@@ -241,6 +241,10 @@ export const externalChromium = Effect.acquireRelease(
       const deadline = performance.now() + 25000;
       let address: string | undefined;
 
+      const nativeTargets = Schema.Array(
+        Schema.Struct({ type: Schema.String, url: Schema.String }),
+      );
+
       while (performance.now() < deadline) {
         if (child.exitCode !== null || child.signalCode !== null)
           throw new Error("External Chromium exited");
@@ -254,8 +258,22 @@ export const externalChromium = Effect.acquireRelease(
           const [port, path] = portFile.trim().split("\n");
 
           if (port !== undefined && path !== undefined) {
-            address = `ws://127.0.0.1:${port}${path}`;
-            break;
+            // This external host promises an initial about:blank Page to its observers.
+            // Debugger readiness alone precedes that target on a cold Chromium launch.
+            const targets: unknown = await fetch(`http://127.0.0.1:${port}/json/list`, {
+              redirect: "error",
+              signal: AbortSignal.timeout(Math.max(1, Math.ceil(deadline - performance.now()))),
+            })
+              .then((response) => response.json())
+              .catch(() => undefined);
+
+            if (
+              Schema.is(nativeTargets)(targets) &&
+              targets.some((target) => target.type === "page" && target.url === "about:blank")
+            ) {
+              address = `ws://127.0.0.1:${port}${path}`;
+              break;
+            }
           }
         }
         await delay(20);

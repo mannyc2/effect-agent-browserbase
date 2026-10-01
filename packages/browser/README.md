@@ -288,7 +288,9 @@ until the actual work settles or exact positive Page/connection retirement prove
 These host snapshots grant no priority and expose no native handles.
 
 Navigation stopping and Page closure have reserved, bounded cleanup admission, so a full ordinary
-queue cannot prevent recovery. Session closure preempts work. Handoff, resume and reconnect refuse
+queue cannot prevent recovery. Page closure uses fail-fast reserved admission and its operation
+deadline when joining an existing close; `admission.queue` does not control those waits. Session closure
+preempts work. Handoff, resume and reconnect refuse
 an existing ordinary permit holder before installing their exclusive lifecycle barrier; handoff
 then drains retained native work within its bound before granting operator control.
 

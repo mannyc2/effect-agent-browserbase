@@ -583,6 +583,12 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         yield* options.preflight ?? Effect.void;
         const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
+        if (lane.revoked)
+          return yield* BrowserError.make({
+            operation,
+            reason: Reasons.Stale.make({}),
+            outcome: "undispatched",
+          });
         if (now >= lifetimeDeadline) {
           expire();
 

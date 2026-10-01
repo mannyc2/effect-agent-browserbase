@@ -549,11 +549,12 @@ export const makeTargets = (
       return pageInfo(entry, ticket);
     });
 
-  const closePage = (page: PageInfo, ticket: Ticket) =>
+  const closePage = (page: PageInfo, ticket: Ticket, onDispatch?: () => void) =>
     sanitize(async () => {
       const entry = await explicitPage(page, ticket);
 
       ticket.dispatch();
+      onDispatch?.();
       await entry.page.close({ runBeforeUnload: false });
       if (!entry.page.isClosed()) throw failure(Reasons.Failed.make({}), "unknown");
       ticket.acknowledge?.();

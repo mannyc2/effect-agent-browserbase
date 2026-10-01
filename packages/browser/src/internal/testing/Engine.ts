@@ -1224,13 +1224,19 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             createPage(state({ url: "https://scripted.invalid/blank", text: "" }), false),
           );
         }),
-      closePage: (page, ticket) =>
-        attempt("close-page", ticket, { pageId: page.pageId }, async (record) => {
-          const target = pageOf(page, "close-page");
+      closePage: (page, ticket, onDispatch) =>
+        attempt(
+          "close-page",
+          ticket,
+          { pageId: page.pageId },
+          async (record) => {
+            const target = pageOf(page, "close-page");
 
-          dispatch(ticket, record);
-          close(target);
-        }),
+            dispatch(ticket, record);
+            close(target);
+          },
+          onDispatch,
+        ),
       // Recorded as a close; an armed `close-page` failure makes it fail instead, so the owner
       // fences, and the page stays open.
       containPage: (pageId) =>

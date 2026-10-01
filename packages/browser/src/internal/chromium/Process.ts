@@ -39,7 +39,9 @@ export const launchArguments = (options: ChromiumLaunch, directory: string): str
         `--proxy-bypass-list=${options.proxy.bypass ?? "<-loopback>"}`,
       ]),
   ...(options.args ?? []),
-  "about:blank",
+  // The shared driver creates its initial Page on the sole connection. Chromium's launch
+  // Page can arrive after the debugger endpoint and race that creation.
+  "--no-startup-window",
 ];
 
 const failure = (operation: "launch" | "connect" | "close", reason: BrowserError["reason"]) =>
