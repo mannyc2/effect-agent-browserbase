@@ -58,7 +58,6 @@ const operationError = (
     case "Closed":
     case "Expired":
     case "Disconnected":
-    case "Drifted":
     case "Stale":
       return InteractiveBrowserExpiredError.make({
         implementation,
@@ -100,6 +99,8 @@ const operationError = (
     case "ContextLease":
     case "Denied":
     case "Disabled":
+    // A resolved target that moved from its guarded box is refused before input; the handle lives.
+    case "Drifted":
     case "Failed":
     case "Interrupted":
     case "Incomplete":

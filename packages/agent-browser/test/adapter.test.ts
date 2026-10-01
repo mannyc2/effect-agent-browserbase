@@ -115,6 +115,25 @@ it.effect("adaptation authenticates the exact Session and Page when acquired", (
   ),
 );
 
+it.effect("a drifted target is an undispatched action failure, not an expired handle", () =>
+  Effect.gen(function* () {
+    const source = BrowserError.make({
+      operation: "read-text",
+      reason: Reasons.Drifted.make({}),
+      outcome: "undispatched",
+    });
+
+    const browser = yield* scriptedSession({ readText: () => Effect.fail(source) });
+    const adapted = yield* fromSession(browser, browser.initialPage);
+
+    expect(yield* adapted.handle.readText({}).pipe(Effect.flip)).toMatchObject({
+      _tag: "InteractiveBrowserActionError",
+      operation: "read-text",
+      message: "The browser action was not dispatched",
+    });
+  }),
+);
+
 it.effect("only factual supported limits map to the framework's stricter limit schema", () =>
   Effect.gen(function* () {
     for (const [dimension, maximum, limit] of [
