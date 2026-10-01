@@ -35,7 +35,7 @@ import {
 } from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
 import { scroll as scrollSchedule, type KeySchedule } from "./Performance.ts";
-import type { NativeInput } from "./Pointer.ts";
+import type { NativeInput, NativePoint } from "./Pointer.ts";
 import { makeSettledResource } from "./Settled.ts";
 import type { Entry, Targets } from "./Targets.ts";
 
@@ -278,7 +278,7 @@ export const makeActions = (
   isTimeoutError: (error: unknown) => boolean,
 ) => {
   const { current } = targets;
-  let invalidatePointer = (_page: Page): void => {};
+  let invalidatePointer = (_page: Page, _aim?: NativePoint): void => {};
 
   let preparePress:
     | ((
@@ -311,7 +311,7 @@ export const makeActions = (
     performedKeys = keys;
   };
 
-  const setPointerInvalidator = (invalidate: (page: Page) => void) => {
+  const setPointerInvalidator = (invalidate: (page: Page, aim?: NativePoint) => void) => {
     invalidatePointer = invalidate;
   };
 
@@ -460,7 +460,8 @@ export const makeActions = (
         const dispatch = async () => {
           check();
           ticket.dispatch();
-          invalidatePointer(page);
+          // The click moves the pointer where it aimed; the next glide starts there.
+          invalidatePointer(page, planned.intended.position);
           await element.click({
             timeout: timeout(ticket),
             scroll: "none",

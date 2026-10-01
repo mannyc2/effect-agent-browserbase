@@ -126,17 +126,25 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
   const { current } = targets;
   // Chromium keeps a pointer position per page; this is only the last one this driver set.
   const positions = new WeakMap<Page, NativePoint | null>();
+  // Where the last input on a page aimed. A click leaves the actual position unknown, but the
+  // next performed glide still starts from its aim; this is never reported as a position.
+  const aims = new WeakMap<Page, NativePoint>();
 
   const moveTo = async (page: Page, point: NativePoint): Promise<void> => {
     await page.mouse.move(point.x, point.y);
     positions.set(page, point);
+    aims.set(page, point);
   };
 
   const receipt = (page: Page): NativeInput => ({ position: positions.get(page) ?? null });
 
-  const invalidate = (page: Page): void => {
+  const invalidate = (page: Page, aim?: NativePoint): void => {
     positions.set(page, null);
+    if (aim === undefined) aims.delete(page);
+    else aims.set(page, aim);
   };
+
+  const glideFrom = (page: Page) => positions.get(page) ?? aims.get(page) ?? null;
 
   const pointerMove = (point: NativePoint, ticket: Ticket, target?: DriverTarget) =>
     sanitize(async () => {
@@ -155,7 +163,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
         ticket.check();
 
         const planned = moveSchedule(ticket.performance.plan, {
-          from: positions.get(page) ?? null,
+          from: glideFrom(page),
           to: point,
           viewport,
         });
@@ -353,7 +361,7 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
     }
 
     const planned = pointerSchedule(performance.plan, {
-      from: positions.get(page) ?? null,
+      from: glideFrom(page),
       box,
       viewport,
     });
