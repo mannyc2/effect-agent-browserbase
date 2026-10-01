@@ -97,12 +97,12 @@ export const makeInitialization = (
         );
 
   /**
-   * Pending readiness evaluations can outlive their callers. One on a page a dialog or popup has
-   * quarantined (`held`) cannot hold up the handoff that releases that page.
+   * Pending readiness evaluations and native binding work can outlive their callers. Work for a
+   * page a dialog or popup has quarantined (`held`) cannot hold up the handoff that releases it.
    */
   const drained = (held: (pageId: string) => boolean = () => false) =>
     [...pendingReadiness.values()].every((pending) => held(pending.pageId)) &&
-    (bindings?.drained() ?? true);
+    (bindings?.drained(held) ?? true);
 
   const attach = async (page: Page) => {
     if (bindings === undefined) return;

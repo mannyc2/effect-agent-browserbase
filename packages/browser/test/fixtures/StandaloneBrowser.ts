@@ -113,6 +113,16 @@ export const localSite = Effect.acquireRelease(
 
         return;
       }
+      if (url.pathname === "/binding-then-confirm") {
+        // The page calls a host binding, then opens its own dialog before the reply arrives.
+        response.end(`<!doctype html><title>Binding then confirm</title>
+        <script>
+        globalThis.slowEcho?.("call");
+        setTimeout(() => confirm("Proceed?"), 150);
+        </script>`);
+
+        return;
+      }
       if (url.pathname === "/confirm-later") {
         // The page opens its own dialog shortly after loading, without any input.
         response.end(`<!doctype html><title>Confirm later</title>
