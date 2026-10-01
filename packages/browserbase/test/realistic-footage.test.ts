@@ -4,6 +4,7 @@ import { InputReceipt, Target } from "effect-browser/browser-data";
 import { type CapturedFrame, CaptureSummary } from "effect-browser/capture";
 import { TestClock } from "effect/testing";
 
+import * as ClockProbe from "../examples/realistic-footage/ClockProbe.ts";
 import * as Reel from "../examples/realistic-footage/Reel.ts";
 import { Storyboard } from "../examples/realistic-footage/Storyboard.ts";
 import { clockOffset, distribution, Telemetry } from "../examples/realistic-footage/Telemetry.ts";
@@ -103,6 +104,61 @@ it("two clocks are compared from the tightest exchange, and its round trip bound
   expect(Math.abs(-250 - measured!.offsetMillis)).toBeLessThanOrEqual(measured!.uncertaintyMillis);
   expect(clockOffset([])).toBeNull();
 });
+
+it.effect("a clock sample keeps the host's own stamps, from an exchange the probe opened", () =>
+  Effect.gen(function* () {
+    const telemetry = yield* Telemetry;
+
+    const call = (payload: unknown) =>
+      Schema.decodeUnknownEffect(ClockProbe.Call)(payload).pipe(
+        Effect.flatMap(ClockProbe.answer("probe-secret")),
+      );
+
+    const forged = {
+      pageSentMillis: 0,
+      hostReceivedMillis: 9_000,
+      hostRepliedMillis: 9_000,
+      pageReceivedMillis: 0,
+    };
+
+    // Another script on the probe's origin offers host time of its choosing and no round trip.
+    yield* call({ sample: forged }).pipe(Effect.ignore);
+    yield* call({ secret: "guess", sample: forged }).pipe(Effect.ignore);
+    expect((yield* telemetry.metrics).capture.clock).toBeNull();
+    // Without this plan's secret a call opens no exchange at all.
+    expect(yield* call({ secret: "guess" }).pipe(Effect.orElseSucceed(() => null))).toEqual({
+      exchange: null,
+    });
+
+    // The probe's own call opens an exchange whose reply names it and carries no host time;
+    // its next call returns only the page's two stamps for it.
+    const first = yield* call({ secret: "probe-secret" });
+
+    expect(first).toEqual({ exchange: expect.any(String) });
+    const exchange = first.exchange ?? "";
+
+    yield* call({
+      secret: "probe-secret",
+      previous: { exchange, pageSentMillis: 5_000, pageReceivedMillis: 5_004 },
+    });
+    // A replayed or invented exchange completes nothing.
+    yield* call({
+      secret: "probe-secret",
+      previous: { exchange, pageSentMillis: 0, pageReceivedMillis: 0 },
+    });
+    yield* call({
+      secret: "probe-secret",
+      previous: { exchange: "invented", pageSentMillis: 0, pageReceivedMillis: 0 },
+    });
+
+    // The host stamped that exchange at 0 on this layer's clock: a 4 ms round trip, all in flight.
+    expect((yield* telemetry.metrics).capture.clock).toEqual({
+      offsetMillis: -5_002,
+      uncertaintyMillis: 2,
+      samples: 1,
+    });
+  }).pipe(Effect.provide(Telemetry.layer)),
+);
 
 it("quantiles are nearest-rank, and nothing measured is reported as nothing", () => {
   expect(distribution([])).toBeNull();

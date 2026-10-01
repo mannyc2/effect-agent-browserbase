@@ -43,6 +43,18 @@ export const ClockSample = Schema.Struct({
 
 export type ClockSample = typeof ClockSample.Type;
 
+/**
+ * What a page returns for one exchange the host opened: the identifier the host's reply carried
+ * and the page's own two stamps. The host's two stamps never leave the host.
+ */
+export const PageClockStamps = Schema.Struct({
+  exchange: Schema.String.check(Schema.isMaxLength(64)),
+  pageSentMillis: Schema.Finite,
+  pageReceivedMillis: Schema.Finite,
+});
+
+export type PageClockStamps = typeof PageClockStamps.Type;
+
 const OutcomeCounts = Schema.Struct({
   undispatched: Schema.Int,
   rejected: Schema.Int,
@@ -250,6 +262,9 @@ const empty: Records = {
 /** Ten minutes at sixty frames a second; past it the oldest samples are let go. */
 const MaximumSamples = 36_000;
 
+/** Only the newest exchanges can still be completed; an older identifier completes nothing. */
+const MaximumOpenExchanges = 16;
+
 const appended = <A>(values: ReadonlyArray<A>, value: A) =>
   values.length < MaximumSamples ? [...values, value] : [...values.slice(1), value];
 
@@ -391,7 +406,12 @@ export class Telemetry extends Context.Service<
     readonly captureEnded: (summary: CaptureSummary) => Effect.Effect<void>;
     readonly frame: (frame: CapturedFrame) => Effect.Effect<void>;
     readonly output: (held: boolean) => Effect.Effect<void>;
-    readonly clock: (sample: ClockSample) => Effect.Effect<void>;
+    /**
+     * Opens one exchange and completes the one a page names. The host keeps its own two stamps,
+     * keyed by an unguessable identifier that the reply carries; a page returns only its two
+     * stamps for that identifier, once. An unknown or reused identifier records nothing.
+     */
+    readonly clockExchange: (completed?: PageClockStamps) => Effect.Effect<string>;
     /** One recording binds the original owner's clock; another owner needs its own layer. */
     readonly bindOwner: (session: AnySession) => Effect.Effect<void, FootageError>;
     /** Maps a browser presentation stamp onto the same monotonic clock as its receipt. */
@@ -425,6 +445,14 @@ export class Telemetry extends Context.Service<
     Telemetry,
     Effect.gen(function* () {
       const records = yield* Ref.make(empty);
+
+      const exchanges = yield* Ref.make<
+        ReadonlyMap<
+          string,
+          { readonly hostReceivedMillis: number; readonly hostRepliedMillis: number }
+        >
+      >(new Map());
+
       const clock = yield* Clock.Clock;
       const epochMillis = clock.currentTimeMillisUnsafe();
       const epochNanos = clock.monotonicTimeNanosUnsafe();
@@ -467,8 +495,49 @@ export class Telemetry extends Context.Service<
             outputFrames: all.outputFrames + 1,
             heldFrames: all.heldFrames + (held ? 1 : 0),
           })),
-        clock: (sample) =>
-          Ref.update(records, (all) => ({ ...all, clock: appended(all.clock, sample) })),
+        clockExchange: (completed) =>
+          Effect.gen(function* () {
+            const hostReceivedMillis = yield* now;
+
+            if (completed !== undefined) {
+              const host = yield* Ref.modify(exchanges, (open) => {
+                const stamps = open.get(completed.exchange);
+
+                if (stamps === undefined) return [undefined, open] as const;
+                const remaining = new Map(open);
+
+                remaining.delete(completed.exchange);
+
+                return [stamps, remaining] as const;
+              });
+
+              if (host !== undefined)
+                yield* Ref.update(records, (all) => ({
+                  ...all,
+                  clock: appended(all.clock, {
+                    pageSentMillis: completed.pageSentMillis,
+                    hostReceivedMillis: host.hostReceivedMillis,
+                    hostRepliedMillis: host.hostRepliedMillis,
+                    pageReceivedMillis: completed.pageReceivedMillis,
+                  }),
+                }));
+            }
+            const exchange = yield* Effect.sync(() => crypto.randomUUID());
+            const hostRepliedMillis = yield* now;
+
+            yield* Ref.update(exchanges, (open) => {
+              const next = new Map(open);
+              const oldest = next.keys().next();
+
+              if (next.size >= MaximumOpenExchanges && oldest.done !== true)
+                next.delete(oldest.value);
+              next.set(exchange, { hostReceivedMillis, hostRepliedMillis });
+
+              return next;
+            });
+
+            return exchange;
+          }),
         bindOwner: (session) =>
           Effect.gen(function* () {
             const before = yield* session.monotonicTimeNanos;
