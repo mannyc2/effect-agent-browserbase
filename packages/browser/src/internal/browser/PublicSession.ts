@@ -50,16 +50,10 @@ import {
 } from "../../Errors.ts";
 import { StepFailed, type RunOptions } from "../../Plan.ts";
 import type { LivePlanEncoded, PlanEncoded } from "../../PlanData.ts";
-import {
-  associate,
-  associateFrameAuthority,
-  associatePage,
-  associatePageAuthority,
-  forPage,
-} from "./Association.ts";
+import { forPage } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
 import { OperationOptionsSchema } from "./OperationOptions.ts";
-import { associatePageControl } from "./PageControlAssociation.ts";
+import { issueFrame, issuedPageOf, issuePage, issueSession } from "./PageRegistry.ts";
 import {
   checkedDescriptor,
   checkedLivePlan,
@@ -567,86 +561,79 @@ export const makeSession = <E>(
   controls: SessionControls<SessionLease>,
   bindings: Bindings<E>,
 ): BrowserSession<E> => {
-  const issued = new WeakMap<object, Page>();
-  // Display selection names an issued Page by identity, never by copied metadata.
-  const registrations = new WeakMap<Page, ReturnType<SessionControls["initialPage"]>>();
-
-  const issuedPage = (value: ReturnType<SessionControls["initialPage"]>): Page => {
-    const existing = issued.get(value.record);
-
-    if (existing !== undefined) return existing;
-
-    const page: Page = {
-      ...makePageOperations(value.controls),
-      ...makePlanOperations(value.controls),
-      timeline: value.timeline,
-      identity: Object.freeze(value.record.identity),
-      status: value.status,
-      monotonicTimeNanos: controls.monotonicTimeNanos,
-      describe: (options = {}) =>
-        checkedOperationOptions(options, "describe-page").pipe(
-          Effect.flatMap((options) => value.controls.describe(options)),
-        ),
-      listFrames: (options = {}) =>
-        checkedOperationOptions(options, "list-frames").pipe(
-          Effect.flatMap((options) => value.controls.listFrames(options)),
-        ),
-      frame: (info, options) =>
-        checked(FrameInfo, info, "target").pipe(
-          Effect.tap(() => value.controls.validate("target")),
-          Effect.flatMap((info) =>
-            withOperationOptions(options, "target", (options) =>
-              controls.frame(value.record.info, info, value.record.identity.generation, options),
-            ),
+  const issuedPage = (value: ReturnType<SessionControls["initialPage"]>): Page =>
+    issuePage(
+      value.record,
+      (): Page => ({
+        ...makePageOperations(value.controls),
+        ...makePlanOperations(value.controls),
+        timeline: value.timeline,
+        identity: Object.freeze(value.record.identity),
+        status: value.status,
+        monotonicTimeNanos: controls.monotonicTimeNanos,
+        describe: (options = {}) =>
+          checkedOperationOptions(options, "describe-page").pipe(
+            Effect.flatMap((options) => value.controls.describe(options)),
           ),
-          Effect.map((frame): Frame => {
-            const issuedFrame: Frame = {
-              ...makePageOperations(frame.controls),
-              ...makePlanOperations(frame.controls),
-              identity: Object.freeze(frame.identity),
-              monotonicTimeNanos: controls.monotonicTimeNanos,
-              status: value.status.pipe(
-                Effect.map((status) =>
-                  Object.freeze({
-                    ...status,
-                    identity: frame.identity,
-                    phase:
-                      status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
-                  }),
-                ),
+        listFrames: (options = {}) =>
+          checkedOperationOptions(options, "list-frames").pipe(
+            Effect.flatMap((options) => value.controls.listFrames(options)),
+          ),
+        frame: (info, options) =>
+          checked(FrameInfo, info, "target").pipe(
+            Effect.tap(() => value.controls.validate("target")),
+            Effect.flatMap((info) =>
+              withOperationOptions(options, "target", (options) =>
+                controls.frame(value.record.info, info, value.record.identity.generation, options),
               ),
-            };
+            ),
+            Effect.map((frame): Frame => {
+              const issuedFrame: Frame = {
+                ...makePageOperations(frame.controls),
+                ...makePlanOperations(frame.controls),
+                identity: Object.freeze(frame.identity),
+                monotonicTimeNanos: controls.monotonicTimeNanos,
+                status: value.status.pipe(
+                  Effect.map((status) =>
+                    Object.freeze({
+                      ...status,
+                      identity: frame.identity,
+                      phase:
+                        status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
+                    }),
+                  ),
+                ),
+              };
 
-            associateFrameAuthority(issuedFrame, controls.capture.owner, frame.controls);
+              issueFrame(issuedFrame, controls.capture.owner, frame.controls);
 
-            return issuedFrame;
-          }),
-        ),
-      resizeViewport: (viewport, options) =>
-        checked(Viewport, viewport, "resize").pipe(
-          Effect.flatMap((viewport) =>
-            withOperationOptions(options, "resize", (options) =>
-              value.controls.resize(viewport, options),
+              return issuedFrame;
+            }),
+          ),
+        resizeViewport: (viewport, options) =>
+          checked(Viewport, viewport, "resize").pipe(
+            Effect.flatMap((viewport) =>
+              withOperationOptions(options, "resize", (options) =>
+                value.controls.resize(viewport, options),
+              ),
             ),
           ),
+        close: (options = {}) =>
+          checkedOperationOptions(options, "close-page").pipe(
+            Effect.flatMap((options) => value.controls.close(options)),
+          ),
+      }),
+      () => ({
+        controls: value.controls,
+        capture: forPage(
+          controls.capture,
+          value.record.info,
+          value.record.identity,
+          value.controls.validate,
         ),
-      close: (options = {}) =>
-        checkedOperationOptions(options, "close-page").pipe(
-          Effect.flatMap((options) => value.controls.close(options)),
-        ),
-    };
-
-    issued.set(value.record, page);
-    registrations.set(page, value);
-    associatePage(
-      page,
-      forPage(controls.capture, value.record.info, value.record.identity, value.controls.validate),
+        pageControl: { port: value.controls.pageControl, page: value.record.info },
+      }),
     );
-    associatePageAuthority(page, value.controls);
-    associatePageControl(page, value.controls.pageControl, value.record.info);
-
-    return page;
-  };
 
   const session: BrowserSession<E> = {
     monotonicTimeNanos: controls.monotonicTimeNanos,
@@ -673,7 +660,8 @@ export const makeSession = <E>(
     bindingDiagnostics: bindings.diagnostics,
     selectPage: (page, options) =>
       Effect.suspend(() => {
-        const registration = registrations.get(page);
+        // Display selection names an issued Page by identity, never by copied metadata.
+        const registration = issuedPageOf(page, controls.capture.owner);
 
         return registration === undefined
           ? Effect.fail(
@@ -699,7 +687,7 @@ export const makeSession = <E>(
       ),
   };
 
-  associate(session, controls.capture);
+  issueSession(session, controls.capture);
 
   return session;
 };

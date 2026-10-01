@@ -1,11 +1,15 @@
 import { Deferred, Effect } from "effect";
 
-import type { PageStatus } from "../../Browser.ts";
-import type { PageInfo, Target } from "../../BrowserData.ts";
+import type { OperationOptions, Page, PageStatus } from "../../Browser.ts";
+import type { PageExecutionState, PageInfo, PageSuspension, Target } from "../../BrowserData.ts";
+import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
 import type { Terminal } from "../../TimelineData.ts";
 import type { makeRetirement } from "../timeline/Retirement.ts";
 import type { makeStore } from "../timeline/Store.ts";
 import type { AdmissionLane } from "./Admission.ts";
+import type { CaptureParent, PageCaptureParent } from "./Association.ts";
+import type { Owner } from "./Owner.ts";
+import type { PageControls } from "./Session.ts";
 
 /** One frame of a registered page. Frames issued for a detached one are refused. */
 export interface FrameRecord {
@@ -149,3 +153,147 @@ export const makePageRegistry = () => {
 };
 
 export type PageRegistry = ReturnType<typeof makePageRegistry>;
+
+export interface PageControlPort {
+  readonly state: (
+    page: PageInfo,
+    options?: OperationOptions,
+  ) => Effect.Effect<PageExecutionState, BrowserError>;
+  readonly suspend: (
+    page: PageInfo,
+    options?: OperationOptions,
+  ) => Effect.Effect<PageSuspension, BrowserError>;
+  readonly resume: (
+    receipt: PageSuspension,
+    options?: OperationOptions,
+  ) => Effect.Effect<void, BrowserError>;
+}
+
+export interface PageControlAssociation {
+  readonly port: PageControlPort;
+  readonly page: PageInfo;
+}
+
+/** What one issued Page carries: its record, controls, capture parent and page control. */
+export interface IssuedPage {
+  readonly record: PageRecord;
+  readonly controls: PageControls;
+  readonly capture: PageCaptureParent;
+  readonly pageControl: PageControlAssociation;
+}
+
+type Issued =
+  | { readonly _tag: "Session"; readonly capture: CaptureParent }
+  | ({ readonly _tag: "Page" } & IssuedPage)
+  | { readonly _tag: "Frame"; readonly owner: Owner; readonly controls: PageControls };
+
+// This is a private capability registry, not stored domain data. Exact live identity is required:
+// spreading or cloning a session, Page or Frame must not copy authority over its owner, capture
+// leases, reservations or page control. A public or enumerable field would weaken that boundary.
+// Schemas describe data, never this mutable ownership state.
+const issued = new WeakMap<object, Issued>();
+// One canonical Page per page record: issuing the same record again returns the same object.
+const canonical = new WeakMap<PageRecord, Page>();
+
+/** Registers a session's own capture parent under the session object itself. */
+export const issueSession = (session: object, capture: CaptureParent): void => {
+  issued.set(session, { _tag: "Session", capture });
+};
+
+/** The canonical Page for `record`: built by `make` and registered the first time only. */
+export const issuePage = (
+  record: PageRecord,
+  make: () => Page,
+  authority: () => Omit<IssuedPage, "record">,
+): Page => {
+  const existing = canonical.get(record);
+
+  if (existing !== undefined) return existing;
+  const page = make();
+  const { controls, capture, pageControl } = authority();
+
+  canonical.set(record, page);
+  issued.set(page, {
+    _tag: "Page",
+    record,
+    controls,
+    capture,
+    pageControl: { port: pageControl.port, page: Object.freeze({ ...pageControl.page }) },
+  });
+
+  return page;
+};
+
+/** An issued Frame keeps its own exact controls and the owner of the session that issued it. */
+export const issueFrame = (frame: object, owner: Owner, controls: PageControls): void => {
+  issued.set(frame, { _tag: "Frame", owner, controls });
+};
+
+const sessionOwner = (session: object): Owner | undefined => {
+  const entry = issued.get(session);
+
+  return entry?._tag === "Session" ? entry.capture.owner : undefined;
+};
+
+/** The issued Page `page` is, if this exact object was issued by the session owning `owner`. */
+export const issuedPageOf = (page: object, owner: Owner): IssuedPage | undefined => {
+  const entry = issued.get(page);
+
+  return entry?._tag === "Page" && entry.capture.owner === owner ? entry : undefined;
+};
+
+/** Capture binds only to original issued Page authority; a session association is insufficient. */
+export const capturePageParent = (page: object): PageCaptureParent | undefined => {
+  const entry = issued.get(page);
+
+  return entry?._tag === "Page" ? entry.capture : undefined;
+};
+
+/** The page control an issued Page carries. */
+export const pageControl = (page: object): PageControlAssociation | undefined => {
+  const entry = issued.get(page);
+
+  return entry?._tag === "Page" ? entry.pageControl : undefined;
+};
+
+const unregistered = (operation: BrowserOperation) =>
+  Effect.fail(
+    BrowserError.make({
+      operation,
+      reason: Reasons.UnregisteredSession.make({}),
+      outcome: "undispatched",
+    }),
+  );
+
+/** Provider bridges borrow the exact issued page on this session's original owner. */
+export const resolvePageControlsForSession = (
+  session: object,
+  page: object,
+  operation: BrowserOperation = "target",
+): Effect.Effect<PageControls, BrowserError> =>
+  Effect.suspend(() => {
+    const owner = sessionOwner(session);
+    const entry = owner === undefined ? undefined : issuedPageOf(page, owner);
+
+    return entry === undefined
+      ? unregistered(operation)
+      : entry.controls.validate(operation).pipe(Effect.as(entry.controls));
+  });
+
+/**
+ * Tools borrow an exact issued Page, or an exact Frame one of its Pages issued, on this session's
+ * original owner. Capture, page control and provider transfers stay Page-only.
+ */
+export const resolveTargetControlsForSession = (
+  session: object,
+  target: object,
+  operation: BrowserOperation = "target",
+): Effect.Effect<PageControls, BrowserError> =>
+  Effect.suspend(() => {
+    const entry = issued.get(target);
+
+    if (entry?._tag !== "Frame") return resolvePageControlsForSession(session, target, operation);
+    if (sessionOwner(session) !== entry.owner) return unregistered(operation);
+
+    return entry.controls.validate(operation).pipe(Effect.as(entry.controls));
+  });

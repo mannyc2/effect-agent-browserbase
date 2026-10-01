@@ -8,7 +8,7 @@ import {
   type CaptureSummary,
 } from "./CaptureData.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
-import { capturePageParent } from "./internal/browser/Association.ts";
+import { capturePageParent } from "./internal/browser/PageRegistry.ts";
 import { checked, checkedOperationOptions } from "./internal/browser/PublicSession.ts";
 import { startCapture } from "./internal/capture/Capture.ts";
 

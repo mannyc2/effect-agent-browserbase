@@ -40,7 +40,7 @@ import type {
   Viewport,
 } from "./BrowserData.ts";
 import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
-import { resolveTargetControlsForSession } from "./internal/browser/Association.ts";
+import { resolveTargetControlsForSession } from "./internal/browser/PageRegistry.ts";
 import type { PlanOperations } from "./Plan.ts";
 import type { DescriptorEncoded, ResolveGuard, SettledEvidence } from "./PlanData.ts";
 import type { Timeline } from "./Timeline.ts";

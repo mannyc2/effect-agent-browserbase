@@ -21,7 +21,6 @@ import {
   type BrowserOperation,
   type InitializationError,
 } from "./Errors.ts";
-import { resolvePageControlsForSession } from "./internal/browser/Association.ts";
 import {
   bindingImplementation,
   fromNativeAttempt,
@@ -31,6 +30,7 @@ import { makeBindings, preparePlan } from "./internal/browser/Bindings.ts";
 import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
 import type { ConnectionCleanup } from "./internal/browser/ConnectionCleanup.ts";
 import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driver.ts";
+import { resolvePageControlsForSession } from "./internal/browser/PageRegistry.ts";
 import { connectPlaywrightEndpoint } from "./internal/browser/Playwright.ts";
 import {
   checked,

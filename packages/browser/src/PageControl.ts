@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import type { OperationOptions, Page } from "./Browser.ts";
 import { type PageExecutionState, PageSuspension } from "./BrowserData.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
-import { pageControl } from "./internal/browser/PageControlAssociation.ts";
+import { pageControl } from "./internal/browser/PageRegistry.ts";
 import { checkedOperationOptions } from "./internal/browser/PublicSession.ts";
 export { PageExecutionState, PageSuspension } from "./BrowserData.ts";
 
