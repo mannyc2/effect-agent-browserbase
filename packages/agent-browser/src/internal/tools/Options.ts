@@ -91,12 +91,50 @@ export const option = <A>(
         Effect.mapError(() => configuration(path)),
       );
 
+/**
+ * Refuses a key nothing reads, naming it, so a renamed or misspelt option such as the old
+ * `admission` for `policy` fails when a Layer is built instead of being silently ignored.
+ */
+export const knownKeys = (
+  path: string,
+  value: unknown,
+  keys: Readonly<Record<string, true>>,
+): Effect.Effect<void, BrowserError> => {
+  if (value === undefined) return Effect.void;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return Effect.fail(configuration(path));
+  const unknown = Object.keys(value).find((key) => !Object.hasOwn(keys, key));
+
+  return unknown === undefined
+    ? Effect.void
+    : Effect.fail(configuration(path === "" ? unknown : `${path}.${unknown}`));
+};
+
+const handlerKeys = {
+  maxTextBytes: true,
+  maxControls: true,
+  observationScope: true,
+  resultMaxBytes: true,
+  continuationBytes: true,
+  policy: true,
+  execution: true,
+  form: true,
+  observe: true,
+} as const satisfies Record<keyof HandlerOptions, true>;
+
 const TextBytes = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 131072 }));
 
 const defaultObserve: Observe = (request, browser) => browser.observe(request);
 
-/** Checked when a host or handler Layer is built, so an invalid bound never reaches the model. */
-export const resolveOptions = Effect.fnUntraced(function* (options: HandlerOptions) {
+/**
+ * Checked when a host or handler Layer is built, so an invalid bound never reaches the model.
+ * `hostKeys` names the options a host reads beside these; any other key is refused.
+ */
+export const resolveOptions = Effect.fnUntraced(function* (
+  options: HandlerOptions,
+  hostKeys: Readonly<Record<string, true>> = {},
+) {
+  yield* knownKeys("", options, { ...handlerKeys, ...hostKeys });
   const maxTextBytes = yield* option("maxTextBytes", TextBytes, options.maxTextBytes, 8192);
 
   const maxControls = yield* option(

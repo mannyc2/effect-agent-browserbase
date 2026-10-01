@@ -31,6 +31,9 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
       ["lane.maxOutstanding", { lane: { maxOutstanding: 0 } }],
       ["lane.maxQueueMillis", { lane: { maxQueueMillis: 600001 } }],
       ["scheduling", { scheduling: "parallel" }],
+      // An unknown key, such as the old name of `policy`, is refused rather than ignored.
+      ["admission", { admission: { admit: () => true } }],
+      ["lane.maxQueue", { lane: { maxQueue: 5 } }],
     ] as const)
       expect(
         // @ts-expect-error Each case is an invalid, untyped host input.
@@ -49,6 +52,17 @@ it.effect("every option is checked once, when the host or a handler Layer is bui
         Effect.flip,
       ),
     ).toMatchObject({ reason: { _tag: "Configuration", path: "maxControls" } });
+
+    // Host-only options mean nothing to caller-managed handler Layers.
+    expect(
+      yield* BrowserTools.toolkit.pipe(
+        Effect.provide(
+          // @ts-expect-error A handler Layer takes no host lane.
+          BrowserTools.handlers(browser, browser.initialPage, { lane: { maxOutstanding: 1 } }),
+        ),
+        Effect.flip,
+      ),
+    ).toMatchObject({ reason: { _tag: "Configuration", path: "lane" } });
   }),
 );
 

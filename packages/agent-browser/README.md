@@ -95,7 +95,7 @@ yield * adapted.handle.navigate({ url: "https://example.com" });
 
 ## Host observation and exact-control policy
 
-Every handler function, `makeHost` and `run` take the same `HandlerOptions`. Each is checked once, when the host or handler Layer is built: an invalid value fails there with a `Configuration` reason that names it, and never reaches a model as a failed call.
+Every handler function, `makeHost` and `run` take the same `HandlerOptions`. Each is checked once, when the host or handler Layer is built: an invalid value fails there with a `Configuration` reason that names it, and never reaches a model as a failed call. So does a key nothing reads, such as `admission` (now `policy`) or a misspelt `lane` field; handler Layers also refuse the host-only `lane`, `scheduling`, `onNavigation` and `onInput`.
 
 `execution` configures each single-step run's `style`, `within`, `timeoutMillis`, `checkpoint`
 and bounded `admission.queue`. Omitted style is plain; `style: { seed: 7 }` selects the bounded
@@ -514,6 +514,7 @@ Native framework tests prove that the adapter Layer captures configured services
 | Document scope by default                                                                   | Viewport is the default. Pass `observationScope: "document"`, or let the model pass `scope: "document"` to `browser_inspect` for one reading.                      |
 | `observedResultMaxBytes`, `ObservedResultMaxBytes`, `Unavailable/limit` for a large reading | `resultMaxBytes` and the `ResultMaxBytes` schema (16 KiB–1 MiB, 48 KiB default) bound every result, and readings are fitted to them instead.                       |
 | An invalid option failing each Tool call `failed/undispatched`                              | `makeHost`, `run` and handler Layers fail when built, with a `Configuration` reason naming the option.                                                             |
+| `admission: { admit }` handler option                                                       | `policy: { admit }`. An unknown or renamed key now fails when the Layer is built instead of being ignored.                                                         |
 | `unsupported` and `disabled` projected to `failed`                                          | They keep their own names in `BrowserToolFailure`; match them where a switch was exhaustive.                                                                       |
 | Browser calls run concurrently, ordered only by the lane                                    | `host.run` schedules them sequentially in declared order; `scheduling: "lane"` restores the previous behaviour.                                                    |
 | Session actions, `ready`, `retain`, `target`, `frames`, or `closePage`                      | Use the issued Page's operations, `ready()`, `describe()`, `listFrames()`, `frame(info)`, or `close()`. Session inventory uses `listPages()`; `pages` is a stream. |

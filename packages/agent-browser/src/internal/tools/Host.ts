@@ -39,7 +39,7 @@ import type {
 import { sequentialScheduling } from "./Guidance.ts";
 import { type Call, failureWith, type Hooks, makeLayers, navigationResult } from "./Handlers.ts";
 import { BrowserToolFailure } from "./Model.ts";
-import { type HandlerOptions, option, resolveOptions } from "./Options.ts";
+import { type HandlerOptions, knownKeys, option, resolveOptions } from "./Options.ts";
 import { continuationFor } from "./Results.ts";
 
 export type ToolRunRequirements<R> = Exclude<Exclude<R, ToolHostServices>, Scope.Scope>;
@@ -166,6 +166,19 @@ const HostSettings = {
   scheduling: Schema.Literals(["sequential", "lane"]),
 };
 
+/** What a host reads beside the handler options; every other key is refused by name. */
+const hostKeys = {
+  onNavigation: true,
+  onInput: true,
+  lane: true,
+  scheduling: true,
+} as const satisfies Record<Exclude<keyof HostOptions, keyof HandlerOptions>, true>;
+
+const laneKeys = {
+  maxOutstanding: true,
+  maxQueueMillis: true,
+} as const satisfies Record<keyof LaneOptions, true>;
+
 /**
  * Scoped host composition over the same maintained handlers. Options are checked here, once;
  * an invalid one fails acquisition with a `Configuration` reason naming it. Dependencies are
@@ -180,7 +193,9 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   options: HostOptions<E, R> = {},
 ): Effect.fn.Return<ToolHost<OwnerError, E>, BrowserError, Exclude<R, Scope.Scope> | Scope.Scope> {
   yield* checkPage(browser, page);
-  const resolved = yield* resolveOptions(options);
+  const resolved = yield* resolveOptions(options, hostKeys);
+
+  yield* knownKeys("lane", options.lane, laneKeys);
 
   const maximumInvocations = yield* option(
     "lane.maxOutstanding",
