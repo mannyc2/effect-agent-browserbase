@@ -3409,46 +3409,49 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     supported: () => boolean,
     work: () => Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E | BrowserError, R> =>
-    Effect.suspend((): Effect.Effect<A, E | BrowserError, R> => {
-      if (!supported())
-        return Effect.fail(
-          BrowserError.make({
-            operation,
-            reason: Reasons.Unsupported.make({}),
-            outcome: "undispatched",
-          }),
-        );
-      // An ordinary active caller owns its deadline. A lifecycle request refuses before
-      // installing its barrier rather than converting that caller's latency into uncertainty.
-      if (owner.hasActive())
-        return Effect.fail(
-          BrowserError.make({
-            operation,
-            reason: Reasons.Busy.make({}),
-            outcome: "undispatched",
-          }),
-        );
-      const barrier = owner.pauseAdmission();
+    // The barrier is installed and its release registered in one uninterruptible step, so an
+    // interruption cannot leave every later operation refused as busy.
+    Effect.acquireUseRelease(
+      Effect.suspend(() => {
+        if (!supported())
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Unsupported.make({}),
+              outcome: "undispatched",
+            }),
+          );
+        // An ordinary active caller owns its deadline. A lifecycle request refuses before
+        // installing its barrier rather than converting that caller's latency into uncertainty.
+        if (owner.hasActive())
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
+          );
+        const barrier = owner.pauseAdmission();
 
-      if (barrier === undefined)
-        return Effect.fail(
-          BrowserError.make({
-            operation,
-            reason: Reasons.Busy.make({}),
-            outcome: "undispatched",
-          }),
-        );
-      activeBindings?.pauseAdmission();
+        if (barrier === undefined)
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
+          );
+        activeBindings?.pauseAdmission();
 
-      return Effect.suspend(work).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (owner.resumeAdmission(barrier) && owner.state.phase === "open")
-              activeBindings?.resumeAdmission();
-          }),
-        ),
-      );
-    });
+        return Effect.succeed(barrier);
+      }),
+      () => Effect.suspend(work),
+      (barrier) =>
+        Effect.sync(() => {
+          if (owner.resumeAdmission(barrier) && owner.state.phase === "open")
+            activeBindings?.resumeAdmission();
+        }),
+    );
 
   const controls = {
     listPages,
