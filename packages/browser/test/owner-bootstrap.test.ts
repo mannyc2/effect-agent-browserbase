@@ -106,11 +106,11 @@ it.effect("a document that predates the registrations cannot admit dependent wor
     Effect.gen(function* () {
       const f = yield* fixture({ readiness: () => ({ _tag: "RequiresNavigation" }) });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = yield* session.retain;
+      const handle = yield* session.retain();
 
       // Navigation is what produces an initialized document: it is never gated.
       yield* handle.navigate("https://example.test/next");
-      yield* session.pages;
+      yield* session.pages();
 
       const dependents: ReadonlyArray<Effect.Effect<unknown, BrowserError>> = [
         handle.readText(),

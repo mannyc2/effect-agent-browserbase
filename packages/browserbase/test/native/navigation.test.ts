@@ -138,7 +138,7 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
               }),
           );
           const stops = yield* countStops(page);
-          const original = yield* session.target;
+          const original = yield* session.target();
 
           const cancelled = yield* session.startNavigation({
             url: `${f.url}next`,
@@ -166,7 +166,7 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
           expect((yield* previous.completed).url).toBe(f.url);
           expect(page.isClosed()).toBe(false);
           expect(stops.count()).toBe(0);
-          expect((yield* session.target).pageId).toBe(original.pageId);
+          expect((yield* session.target()).pageId).toBe(original.pageId);
           yield* session.click({ selector: "#increment" });
           expect((yield* session.readText({ selector: "#count" })).text).toBe("2");
           expect(yield* session.status).toMatchObject({
@@ -308,7 +308,7 @@ it.live("real CDP: a pinned child timeout never sends an automatic page-wide sto
 
           yield* session.navigate({ url: f.url });
           const [page] = f.nativePages(session.reference.sessionId);
-          const selected = (yield* session.pages).find((candidate) => candidate.selected);
+          const selected = (yield* session.pages()).find((candidate) => candidate.selected);
 
           assert.ok(page);
           assert.ok(selected);
@@ -353,7 +353,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
             const handle = session;
-            const [stage] = yield* session.pages;
+            const [stage] = yield* session.pages();
 
             assert.ok(stage);
 
@@ -400,7 +400,7 @@ it.live(
             }
 
             // Another page is independent: it navigates and reads while the first still loads.
-            yield* session.selectPage(yield* session.createPage);
+            yield* session.selectPage(yield* session.createPage());
 
             yield* session.navigate(NavigateRequest.make({ url: `${f.url}next` }));
             expect((yield* session.readText(ReadTextRequest.make({}))).text).toContain("next page");
@@ -535,7 +535,7 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
             `${f.url}clocks`,
           ]);
 
-          const [page] = yield* session.pages;
+          const [page] = yield* session.pages();
 
           assert.ok(page);
           const held = yield* PageControl.suspend(session, page);

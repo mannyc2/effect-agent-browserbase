@@ -143,7 +143,7 @@ export const follow = Effect.fn("Actor.follow")(function* (session: AnySession, 
     timed("clickAndWait", session.clickAndWait(ClickRequest.make({ selector }))),
   );
 
-  yield* session.ready;
+  yield* session.ready();
 
   return result;
 });

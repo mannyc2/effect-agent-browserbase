@@ -265,7 +265,7 @@ it.live("real CDP: a checkpoint is passive, so inspect, checkpoint, then act all
 
           assert.ok(native);
           const user = yield* named(session, "User");
-          const target = yield* session.target;
+          const target = yield* session.target();
           const checkpoint = yield* session.checkpoint({ picture: true });
 
           expect(checkpoint.target).toEqual(target);
@@ -289,7 +289,7 @@ it.live("real CDP: a checkpoint is passive, so inspect, checkpoint, then act all
           // Several checkpoints later, the inspected node is still actionable and the selection
           // has not moved. `observe()` here would have retired the reference.
           yield* session.checkpoint();
-          expect(yield* session.target).toEqual(target);
+          expect(yield* session.target()).toEqual(target);
           yield* session.fillElement(user, "ada");
           expect((yield* read(native)).fills).toBe(1);
           yield* session.close;
@@ -311,7 +311,7 @@ it.live("real CDP: after a hold, the exact node is checked again before it can b
 
           yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
           const [native] = f.nativePages(session.reference.sessionId);
-          const [page] = yield* session.pages;
+          const [page] = yield* session.pages();
 
           assert.ok(native);
           assert.ok(page);
@@ -374,10 +374,10 @@ it.live("real CDP: holding one page leaves another page's observation alone", ()
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
           yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
-          const [stage] = yield* session.pages;
+          const [stage] = yield* session.pages();
 
           assert.ok(stage);
-          yield* session.selectPage(yield* session.createPage);
+          yield* session.selectPage(yield* session.createPage());
 
           yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport#scout` }));
 
@@ -414,12 +414,12 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate({ url: `${f.url}viewport` });
-            const [stage] = yield* session.pages;
+            const [stage] = yield* session.pages();
             const [nativeStage] = f.nativePages(session.reference.sessionId);
 
             assert.ok(stage);
             assert.ok(nativeStage);
-            const scout = yield* session.createPage;
+            const scout = yield* session.createPage();
             const pinnedScout = yield* session.pinPage(scout);
 
             yield* pinnedScout.navigate({ url: `${f.url}viewport#scout` });
@@ -430,7 +430,7 @@ it.live(
 
             assert.ok(nativeScout);
             const reference = yield* named(session, "User");
-            const retained = yield* session.retain;
+            const retained = yield* session.retain();
 
             yield* session.selectPage(scout);
             expect((yield* session.readText({})).text).toContain("visible paragraph");
@@ -444,14 +444,14 @@ it.live(
             expect((yield* pinnedScout.readText({})).text).toContain("visible paragraph");
             yield* pinnedScout.navigate({ url: `${f.url}viewport?scout=updated` });
             yield* pinnedScout.click({ selector: "#user" });
-            const unrelated = yield* session.createPage;
+            const unrelated = yield* session.createPage();
 
             yield* session.closePage(unrelated);
             expect((yield* session.controlFacts(reference)).label).toBe("User");
             yield* session.clickElement(reference);
             expect((yield* read(nativeStage)).clicks).toBe(1);
             expect((yield* read(nativeScout)).clicks).toBe(1);
-            expect((yield* session.target).pageId).toBe(stage.pageId);
+            expect((yield* session.target()).pageId).toBe(stage.pageId);
 
             const beforeNavigation = yield* named(session, "User");
             const pinnedStage = yield* session.pinPage(stage);
@@ -480,12 +480,12 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
           const session = yield* BrowserbaseBrowser.open(policy);
 
           yield* session.navigate({ url: `${f.url}viewport` });
-          const [stage] = yield* session.pages;
+          const [stage] = yield* session.pages();
           const [nativeStage] = f.nativePages(session.reference.sessionId);
 
           assert.ok(stage);
           assert.ok(nativeStage);
-          const scout = yield* session.createPage;
+          const scout = yield* session.createPage();
           const replaced = yield* named(session, "User");
 
           yield* session.selectPage(scout);
@@ -527,11 +527,11 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate({ url: f.url });
-            const [page] = yield* session.pages;
+            const [page] = yield* session.pages();
 
             assert.ok(page);
 
-            const frames = yield* settle(session.frames, (frames) =>
+            const frames = yield* settle(session.frames(), (frames) =>
               frames.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
             );
 
@@ -761,9 +761,20 @@ it.live(
 
             yield* Deferred.await(entered);
             yield* Fiber.interrupt(pending);
-            const fresh = yield* named(session, "User");
+            yield* refused(session.observe(), "Busy");
+            expect(releases).toBe(0);
 
             resume();
+            const observation = yield* session.observe({}, { admission: { queue: "1 second" } });
+            const control = observation.controls.find((candidate) => candidate.label === "User");
+
+            assert.ok(control, "no control labelled User");
+
+            const fresh = ObservedElement.make({
+              observationId: observation.observationId,
+              elementId: control.elementId,
+            });
+
             yield* Deferred.await(disposed);
             expect(releases).toBe(1);
             expect((yield* session.controlFacts(fresh)).label).toBe("User");

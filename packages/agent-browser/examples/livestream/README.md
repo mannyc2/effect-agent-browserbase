@@ -31,7 +31,7 @@ runs it on a local Chromium with scripted models for both the agent and the narr
   over a sliding fan-out. A slow viewer skips pictures and slows nobody else.
 - **The window.** The screencast shows the page and nothing else, so `Viewer.ts` draws a
   browser window around it. The address comes from the capture's document boundaries and airs
-  with the first picture of each document. The tab title is read with `session.pages` while the
+  with the first picture of each document. The tab title is read with `session.pages()` while the
   model is thinking, when no browser call is running, and airs `delayMillis` later.
 - **Captions.** `Narrator.ts` is a separate Effect Agent with its own conversation store. It
   keeps one conversation for the whole stream and takes one Run per browser step, in order, so it

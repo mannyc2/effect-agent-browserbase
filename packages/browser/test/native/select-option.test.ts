@@ -395,8 +395,8 @@ it.live(
         const observed = yield* session.observe({ maxControls: 64 });
         const target = reference(observed, named(observed, "Single choice"));
         const option = named(observed, "Grouped");
-        const stage = (yield* session.pages).find((page) => page.selected)!;
-        const other = yield* session.createPage;
+        const stage = (yield* session.pages()).find((page) => page.selected)!;
+        const other = yield* session.createPage();
 
         yield* session.selectPage(other);
         expect(

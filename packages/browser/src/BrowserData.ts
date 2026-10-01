@@ -711,7 +711,19 @@ export const InlineFiles = Schema.Array(InlineFile).check(
   ),
 );
 
+export const AdmissionLimits = Schema.Struct({
+  pendingPerPage: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1024 })),
+  ),
+  pendingPerSession: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1024 })),
+  ),
+});
+
+export type AdmissionLimits = typeof AdmissionLimits.Type;
+
 export const AutomationOptions = Schema.Struct({
+  admissionLimits: Schema.optionalKey(AdmissionLimits),
   observationLimits: Schema.optionalKey(
     Schema.Struct({
       maxSnapshotsPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 128 })),

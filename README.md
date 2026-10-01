@@ -57,8 +57,8 @@ for independent observations, bounded retention and separate action/containment 
 | Previous composition                                                   | Current API                                                                                                                                                             |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Provider-specific `withBrowser(policy, options, use)`                  | `Browser.scoped(Chromium.launch(policy, options), use)` or the same combinator with `BrowserbaseBrowser.open`                                                           |
-| `session.bind().navigate(request)` for ordinary selected-page work     | `session.navigate(request)` resolves selection when the Effect runs; `yield* session.retain` explicitly acquires a checked retained handle                              |
-| `bind()` / `currentTarget` and `BoundTarget`                           | `retain: Effect<RetainedTarget, BrowserError>` and the shared `TargetOperations` interface; `target` remains metadata                                                   |
+| `session.bind().navigate(request)` for ordinary selected-page work     | `session.navigate(request)` captures selection when the Effect runs; `yield* session.retain()` explicitly acquires a checked retained handle                            |
+| `bind()` / `currentTarget` and `BoundTarget`                           | `retain(options?)` and the shared `TargetOperations` interface; `target(options?)` remains metadata                                                                     |
 | `selectPage(id)` / `closePage(id)`                                     | Pass the exact `PageInfo`; selection returns `void`. `createPage` returns the created page's metadata without selecting it                                              |
 | Synchronous `Adapter.fromSession(browser)` / `currentHandle`           | `yield* Adapter.fromSession(browser, { selection: "current" })` or explicit `"retained"`; one handle beside the original browser                                        |
 | Select a page, perform work, then restore selection                    | `session.pinPage(page)` or `session.pinFrame(page, frame)` addresses that target without changing selection                                                             |
@@ -84,6 +84,13 @@ for independent observations, bounded retention and separate action/containment 
 | `maxActions` at most 1000, with no reading of what a session has used  | `BrowserPolicy.maxActions` accepts up to 1,000,000 (default 100), and `status.actions` reports `{ used, maximum }`; code that builds a `SessionStatus` supplies it      |
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
+
+The unreleased Page admission API adds trailing host `OperationOptions` to admitted operations.
+Use `session.ready()`, `retain()`, `target()`, `pages()`, `frames()` and `createPage()` in place of
+their former Effect properties. Ordinary operations share a permit only with their Page and its
+Frames; positive finite `admission.queue` opts into bounded FIFO waiting. Queue omission and zero
+remain fail-fast, including page creation. See the [browser admission guide](packages/browser/README.md#admission-and-deadlines)
+for deadline accounting, configured bounds, typed refusals and passive host diagnostics.
 
 These are the coordinated shape changes of `0.2.0-beta.0` through `0.2.0-beta.2`. `0.2.0-beta.2` raised the action allowance and added `status.actions`; `0.2.0-beta.1` added the latest-64 boundaries, the capture limits, `Capture.multipart`, `fillForm`, build-time tool options with `resultMaxBytes`, the required `Crypto` and two more tool reasons. Remove old retained and adapter members rather than mixing both APIs. Old page/frame IDs, metadata and handles become stale after reconnect; within the same known browser lifetime, re-list pages and match exactly one saved native `targetId`, then use fresh metadata. Never substitute title, URL, order or the old local ID for that match. Explicit generic applications of curried `Browser.scoped` use four outer parameters (`S, A, E2, R2`) and three returned parameters (`E, AE, AR`); ordinary inferred calls retain their syntax.
 

@@ -68,7 +68,7 @@ for (const maxPages of [1, 2]) {
                   unresolvedDispatch: false,
                 });
                 expect((yield* session.readText({ selector: "#count" })).text).toBe("1");
-                expect(yield* session.pages).toHaveLength(1);
+                expect(yield* session.pages()).toHaveLength(1);
                 const diagnostics = yield* session.diagnostics;
 
                 const records = diagnostics.records.filter(
@@ -224,7 +224,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* BrowserbaseBrowser.open(policy);
 
-            for (let i = 0; i < 8; i++) yield* session.createPage;
+            for (let i = 0; i < 8; i++) yield* session.createPage();
             const pages = f.nativePages(session.reference.sessionId);
             const initial = session.initialPage;
 

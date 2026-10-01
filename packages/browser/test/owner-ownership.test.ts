@@ -93,7 +93,7 @@ const test = (
 ): Case => ({ name, run: timed(Effect.scoped(Effect.suspend(body))) });
 
 const ownershipCases: ReadonlyArray<Case> = [
-  test("pre-dispatch interruption fences a late continuation without poisoning the owner", () =>
+  test("pre-dispatch interruption keeps native capacity and fences a late continuation", () =>
     Effect.gen(function* () {
       const entered = gate<void>(),
         queried = gate<void>(),
@@ -121,10 +121,15 @@ const ownershipCases: ReadonlyArray<Case> = [
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(fiber);
+      yield* expectReason(session.operations.readText(), "Busy");
+      assert.equal((yield* session.status).actions.used, 1);
       queried.resolve();
       yield* Effect.promise(() => settled.promise);
       assert.equal(dispatches, 0);
-      assert.equal(yield* session.operations.readText(), "initial");
+      assert.equal(
+        yield* session.operations.readText(undefined, { admission: { queue: "1 second" } }),
+        "initial",
+      );
     })),
   test("interruption after dispatch expires automation without replay", () =>
     Effect.gen(function* () {
@@ -191,11 +196,11 @@ const ownershipCases: ReadonlyArray<Case> = [
       const session = yield* (yield* f.acquisition).connect;
       // Opening a tab is no action either.
       const second = yield* session.createPage();
-      const old = yield* session.retain;
+      const old = yield* session.retain();
 
       yield* session.selectPage(second);
       yield* expectReason(old.readText(), "Stale");
-      assert.equal((yield* session.target).pageId, "page-2");
+      assert.equal((yield* session.target()).pageId, "page-2");
       // The one action reads the tab now selected, whose blank document has no text.
       assert.equal(yield* session.operations.readText(), "");
     })),
@@ -204,7 +209,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       const f = yield* fixture();
       const session = yield* (yield* f.acquisition).connect;
       const second = yield* session.createPage();
-      const old = yield* session.retain;
+      const old = yield* session.retain();
 
       yield* session.selectPage(second);
       yield* expectReason(old.pointerMove({ x: 1, y: 2 }), "Stale");
@@ -221,7 +226,7 @@ const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* fixture({ maxActions: 2 });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = yield* session.retain;
+      const handle = yield* session.retain();
       const moved = yield* handle.pointerMove({ x: 12.5, y: 40 });
 
       assert.deepEqual(moved.position, { x: 12.5, y: 40 });
@@ -248,7 +253,7 @@ const ownershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* fixture({ maxActions: 2 });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = yield* session.retain;
+      const handle = yield* session.retain();
       const typed = yield* handle.type("six ch");
 
       assert.equal(typed.target.pageId, "page-1");
@@ -327,7 +332,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       const flight = inFlight();
       const f = yield* fixture({ onNavigate: flight.script });
       const session = yield* (yield* f.acquisition).connect;
-      const first = (yield* session.pages).find((page) => page.selected);
+      const first = (yield* session.pages()).find((page) => page.selected);
       // Another tab showing the same controls, set up before anything is in flight.
       const second = yield* session.createPage();
 
@@ -338,7 +343,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       yield* session.selectPage(second);
       yield* f.control.document.replace(initial);
       yield* session.selectPage(first);
-      const handle = yield* session.retain;
+      const handle = yield* session.retain();
       const operation = yield* handle.startNavigation("https://example.test/slow");
 
       // Dispatched exactly once, and the permit is free again while the browser loads.
@@ -378,7 +383,7 @@ const ownershipCases: ReadonlyArray<Case> = [
       const flight = inFlight();
       const f = yield* fixture({ onNavigate: flight.script });
       const session = yield* (yield* f.acquisition).connect;
-      const handle = yield* session.retain;
+      const handle = yield* session.retain();
       const operation = yield* handle.startNavigation("https://example.test/slow");
 
       yield* operation.stop;
@@ -400,7 +405,7 @@ const ownershipCases: ReadonlyArray<Case> = [
         const session = yield* (yield* f.acquisition).connect;
 
         const page = session.initialPage();
-        const handle = yield* session.retain;
+        const handle = yield* session.retain();
 
         if (abandon) {
           // Its scope closes while the browser is still loading.

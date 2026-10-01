@@ -81,7 +81,7 @@ it.live("real CDP: exact-node interaction, frames, full-page PNG and navigation 
           expect(view.getUint32(16)).toBeGreaterThan(0);
           expect(view.getUint32(20)).toBeGreaterThan(1600);
           yield* h.scroll(ScrollRequest.make({ deltaX: 0, deltaY: 120 }));
-          const frames = yield* session.frames;
+          const frames = yield* session.frames();
           const child = frames.find((frame) => frame.name === "child")!;
 
           yield* session.selectFrame(child.frameId);
@@ -126,7 +126,7 @@ it.live(
             // This test needs a stable original document, not a read racing the child's commit.
             const childUrl = new URL("/frame", f.url).href;
 
-            const frames = yield* settle(session.frames, (listed) =>
+            const frames = yield* settle(session.frames(), (listed) =>
               listed.some((frame) => frame.name === "child" && frame.url === childUrl),
             );
 
@@ -175,10 +175,10 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const h = yield* session.retain;
+          const h = yield* session.retain();
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
-          const target = yield* session.target;
+          const target = yield* session.target();
 
           const download = yield* session.clickForDownload(
             ClickRequest.make({ selector: "#download" }),
@@ -201,23 +201,23 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           yield* h.click(ClickRequest.make({ selector: "#popup" }));
           // A dispatched click is not a registered target: the popup reaches the
           // session only once Chromium reports it and the owner registers it.
-          const pages = yield* settle(session.pages, (open) => open.length === 2);
+          const pages = yield* settle(session.pages(), (open) => open.length === 2);
 
           expect(pages).toHaveLength(2);
-          expect((yield* session.target).pageId).toBe(target.pageId);
+          expect((yield* session.target()).pageId).toBe(target.pageId);
           const original = pages.find((page) => page.pageId === target.pageId)!;
           const popup = pages.find((page) => !page.selected)!;
 
           yield* session.selectPage(popup);
-          const selected = yield* session.retain;
+          const selected = yield* session.retain();
 
           expect((yield* h.readText(ReadTextRequest.make({})).pipe(Effect.result))._tag).toBe(
             "Failure",
           );
           expect((yield* selected.readText(ReadTextRequest.make({}))).text).toContain("next page");
-          const added = yield* session.createPage;
+          const added = yield* session.createPage();
 
-          expect((yield* session.target).pageId).toBe(popup.pageId);
+          expect((yield* session.target()).pageId).toBe(popup.pageId);
           yield* session.closePage(added);
           yield* session.closePage(popup);
           yield* session.selectPage(original);
@@ -236,7 +236,7 @@ it.live("real CDP: human takeover, fresh page inventory and explicit keep-alive 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const old = yield* session.retain;
+          const old = yield* session.retain();
 
           yield* old.navigate(NavigateRequest.make({ url: f.url }));
           const handoff = yield* session.beginHandoff();
@@ -303,8 +303,8 @@ it.live(
             const session = yield* BrowserbaseBrowser.open(policy);
 
             yield* session.navigate(NavigateRequest.make({ url: f.url }));
-            const firstPage = (yield* session.pages).find((candidate) => candidate.selected)!;
-            const page = yield* session.createPage;
+            const firstPage = (yield* session.pages()).find((candidate) => candidate.selected)!;
+            const page = yield* session.createPage();
 
             yield* session.selectPage(page);
             // Both pages have the same URL, so only their native identities can distinguish them.
@@ -382,7 +382,7 @@ it.live(
             );
             yield* session.reconnect(true);
 
-            const reconnected = yield* session.pages;
+            const reconnected = yield* session.pages();
 
             expect(reconnected).toHaveLength(1);
             expect(reconnected.some((fresh) => fresh.targetId === firstPage.targetId)).toBe(false);
@@ -418,8 +418,10 @@ it.live(
               failure: { reason: { _tag: "NotFound" }, outcome: "undispatched" },
             });
             yield* session.selectPage(freshPage);
-            expect((yield* session.target).pageId).toBe(freshPage.pageId);
-            expect((yield* session.pages).map((entry) => entry.targetId)).toEqual([page.targetId]);
+            expect((yield* session.target()).pageId).toBe(freshPage.pageId);
+            expect((yield* session.pages()).map((entry) => entry.targetId)).toEqual([
+              page.targetId,
+            ]);
 
             const stale = yield* session.pinFrame(freshPage, oldFrame).pipe(Effect.result);
 
@@ -492,7 +494,7 @@ it.live(
 
             yield* session.close;
             expect((yield* last.completed).error?.reason._tag).toBe("TargetChanged");
-            expect((yield* session.retain.pipe(Effect.result))._tag).toBe("Failure");
+            expect((yield* session.retain().pipe(Effect.result))._tag).toBe("Failure");
           }),
         );
       }),
@@ -516,7 +518,7 @@ it.live("real CDP: finite native action timeout is unknown, fenced and never rep
             .pipe(Effect.result);
 
           expect(failed._tag).toBe("Failure");
-          expect((yield* session.retain.pipe(Effect.result))._tag).toBe("Failure");
+          expect((yield* session.retain().pipe(Effect.result))._tag).toBe("Failure");
           expect((yield* session.close).remote).toBe("confirmed");
         }),
         { actionTimeoutMillis: 2000 },

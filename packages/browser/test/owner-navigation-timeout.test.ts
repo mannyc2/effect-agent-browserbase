@@ -101,7 +101,7 @@ it.effect.each(["recovery-first", "public-first"] as const)(
 );
 
 it.effect.each(["recovery", "lifetime"] as const)(
-  "%s deadline is shared by permit wait and setup, and rejects a late native continuation",
+  "%s deadline bounds reserved setup during ordinary Page work and rejects a late continuation",
   (bound) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -165,14 +165,16 @@ it.effect.each(["recovery", "lifetime"] as const)(
         yield* TestClock.adjust(150);
         navigation.completed.reject(loadingTimeout());
         yield* Effect.promise(() => navigation.completed.promise.catch(() => undefined));
+        yield* Effect.promise(() => opened.promise);
         const maximum = bound === "lifetime" ? 500 : 3100;
 
         yield* TestClock.adjust(maximum - 250);
         expect(ended).toBe(false);
-        expect(opens).toBe(0);
+        expect(opens).toBe(1);
+        expect(sends).toBe(0);
+        expect(holder.pollUnsafe()).toBeUndefined();
         observed.resolve();
         yield* Fiber.join(holder);
-        yield* Effect.promise(() => opened.promise);
         expect(Number(yield* Clock.monotonicTimeNanos) / 1_000_000 - started).toBe(maximum - 100);
         yield* TestClock.adjust(100);
 
@@ -296,17 +298,23 @@ it.effect(
 );
 
 it.effect(
-  "automatic recovery queues after a public Busy refusal without caching that refusal",
+  "automatic recovery waits for retained setup after a public Busy refusal without caching it",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const observing = gate<void>();
         const observed = gate<void>();
+        const opened = gate<void>();
+        const setup = gate<void>();
         let opens = 0;
         let sends = 0;
 
         const navigation = flight(async () => {
           opens++;
+          if (opens === 1) {
+            opened.resolve();
+            await setup.promise;
+          }
 
           return {
             stop: async () => {
@@ -334,6 +342,11 @@ it.effect(
         const holder = yield* Effect.forkChild(session.observe());
 
         yield* Effect.promise(() => observing.promise);
+        const canceled = yield* Effect.forkChild(operation.stop);
+
+        yield* Effect.promise(() => opened.promise);
+        yield* Fiber.interrupt(canceled);
+        expect(Exit.hasInterrupts(yield* Fiber.await(canceled))).toBe(true);
         expect(yield* Effect.result(operation.stop)).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
@@ -341,16 +354,22 @@ it.effect(
         yield* TestClock.adjust(100);
         navigation.completed.reject(loadingTimeout());
         yield* Effect.promise(() => navigation.completed.promise.catch(() => undefined));
-        expect({ opens, sends }).toEqual({ opens: 0, sends: 0 });
-        observed.resolve();
-        yield* Fiber.join(holder);
+        expect({ opens, sends }).toEqual({ opens: 1, sends: 0 });
+        setup.resolve();
 
         expect(yield* Effect.result(operation.completed)).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Timeout" }, outcome: "unknown" },
         });
         yield* operation.stop;
-        expect({ opens, sends }).toEqual({ opens: 1, sends: 1 });
+        expect({ opens, sends }).toEqual({ opens: 2, sends: 1 });
+        expect(holder.pollUnsafe()).toBeUndefined();
+        observed.resolve();
+        expect(yield* Fiber.join(holder).pipe(Effect.flip)).toMatchObject({
+          operation: "observe",
+          reason: { _tag: "Stale" },
+          outcome: "undispatched",
+        });
         yield* session.operations.click("#act");
         expect(f.state.clicks).toBe(1);
       }),

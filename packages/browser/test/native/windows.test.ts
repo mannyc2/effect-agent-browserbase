@@ -48,8 +48,8 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
       const session = yield* (yield* Chromium).launch(policy);
 
       yield* session.navigate(NavigateRequest.make({ url: site.url }));
-      const earlier = yield* session.createPage;
-      const later = yield* session.createPage;
+      const earlier = yield* session.createPage();
+      const later = yield* session.createPage();
       const behind = yield* session.pinPage(earlier);
       const front = yield* session.pinPage(later);
 
@@ -91,7 +91,7 @@ it.live("a page behind a later one is pictured at speed, in a window of the sess
         url: new URL("/pinned?name=behind", site.url).href,
         selected: false,
       });
-      expect(yield* session.pages).toHaveLength(3);
+      expect(yield* session.pages()).toHaveLength(3);
     }),
   ).pipe(
     Effect.provide(

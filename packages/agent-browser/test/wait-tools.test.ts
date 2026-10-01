@@ -83,11 +83,12 @@ it.effect(
         const browser = scriptedSession({
           waitForElement: () =>
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
-          pages: Effect.sync(() => {
-            reads++;
+          pages: () =>
+            Effect.sync(() => {
+              reads++;
 
-            return [];
-          }),
+              return [];
+            }),
           scroll: () =>
             Effect.sync(() => {
               inputs++;
@@ -113,7 +114,7 @@ it.effect(
           .pipe(Effect.flatMap(Stream.runCollect), Effect.forkScoped);
 
         yield* TestClock.adjust(1);
-        expect(yield* browser.pages).toEqual([]);
+        expect(yield* browser.pages()).toEqual([]);
         expect(reads).toBe(1);
         expect(inputs).toBe(0);
         yield* Deferred.succeed(release, undefined);

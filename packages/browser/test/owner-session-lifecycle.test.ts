@@ -117,6 +117,7 @@ it.effect.each([
       );
 
       owner.transition("open");
+      owner.pageAdmission("page-1", owner.state.generation);
       const navigation = owner.reserve("page-1");
 
       // Navigation recovery is bounded by the lifetime, so it can give up at that very instant,

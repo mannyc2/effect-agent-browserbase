@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Duration, Effect, Schema } from "effect";
 
 import type * as Bootstrap from "../../Bootstrap.ts";
 import type {
@@ -8,6 +8,7 @@ import type {
   Page,
   Frame,
   PageOperations,
+  OperationOptions,
 } from "../../Browser.ts";
 import {
   ActionResult,
@@ -53,6 +54,7 @@ import {
 } from "../../Errors.ts";
 import { associate, associatePageAuthority, forPage } from "./Association.ts";
 import type { Bindings } from "./Bindings.ts";
+import { OperationOptionsSchema } from "./OperationOptions.ts";
 import { associatePageControl } from "./PageControlAssociation.ts";
 import { schemaPath } from "./SchemaPath.ts";
 import type {
@@ -77,6 +79,37 @@ export const checked = <A>(
       }),
     ),
   );
+
+/** Decode when the Effect executes and retain no caller-owned mutable admission data. */
+export const checkedOperationOptions = (
+  value: unknown,
+  operation: BrowserOperation,
+): Effect.Effect<OperationOptions, BrowserError> =>
+  checked(OperationOptionsSchema, value === undefined ? {} : value, operation).pipe(
+    Effect.map((options) =>
+      Object.freeze({
+        ...(options.timeoutMillis === undefined ? {} : { timeoutMillis: options.timeoutMillis }),
+        ...(options.admission === undefined
+          ? {}
+          : {
+              admission: Object.freeze(
+                options.admission.queue === undefined
+                  ? {}
+                  : {
+                      queue: Duration.toMillis(Duration.fromInputUnsafe(options.admission.queue)),
+                    },
+              ),
+            }),
+      }),
+    ),
+  );
+
+const withOperationOptions = <A, E, R>(
+  options: OperationOptions | undefined,
+  operation: BrowserOperation,
+  use: (options: OperationOptions) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | BrowserError, R> =>
+  checkedOperationOptions(options, operation).pipe(Effect.flatMap(use));
 
 export const decoded =
   <A>(
@@ -120,14 +153,22 @@ const formed = (value: FormOutcome) => {
 };
 
 const makeTarget = (bound: TargetControls): TargetOperations => ({
-  navigate: (request) =>
+  navigate: (request, options) =>
     checked(NavigateRequest, request, "navigate").pipe(
-      Effect.flatMap((value) => bound.navigate(value.url, value.timeoutMillis)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "navigate", (options) =>
+          bound.navigate(value.url, value.timeoutMillis, options),
+        ),
+      ),
       Effect.flatMap((url) => decoded(NavigationResult, "navigate", "performed")({ url })),
     ),
-  startNavigation: (request) =>
+  startNavigation: (request, options) =>
     checked(StartNavigationRequest, request, "navigate").pipe(
-      Effect.flatMap((value) => bound.startNavigation(value.url, value.timeoutMillis)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "navigate", (options) =>
+          bound.startNavigation(value.url, value.timeoutMillis, options),
+        ),
+      ),
       Effect.map((operation) => ({
         target: operation.target,
         completed: operation.completed.pipe(
@@ -136,61 +177,99 @@ const makeTarget = (bound: TargetControls): TargetOperations => ({
         stop: operation.stop,
       })),
     ),
-  readText: (request) =>
+  readText: (request, options) =>
     checked(ReadTextRequest, request, "read-text").pipe(
-      Effect.flatMap((value) => bound.readText(value.selector)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "read-text", (options) =>
+          bound.readText(value.selector, options),
+        ),
+      ),
       Effect.flatMap((text) => decoded(TextResult, "read-text", "undispatched")({ text })),
     ),
-  click: (request) =>
+  click: (request, options) =>
     checked(ClickRequest, request, "click").pipe(
-      Effect.flatMap((value) => bound.click(value.selector)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "click", (options) =>
+          bound.click(value.selector, undefined, options),
+        ),
+      ),
       Effect.flatMap(({ url, input }) => action({ url, input })),
     ),
-  fill: (request) =>
+  fill: (request, options) =>
     checked(FillRequest, request, "fill").pipe(
-      Effect.flatMap((value) => bound.fill(value.selector, value.value)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "fill", (options) =>
+          bound.fill(value.selector, value.value, undefined, options),
+        ),
+      ),
       Effect.flatMap((url) => action({ url })),
     ),
-  scroll: (request) =>
+  scroll: (request, options) =>
     checked(ScrollRequest, request, "scroll").pipe(
-      Effect.flatMap((value) => bound.scroll(value.deltaX, value.deltaY)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "scroll", (options) =>
+          bound.scroll(value.deltaX, value.deltaY, options),
+        ),
+      ),
       Effect.flatMap((url) => action({ url })),
     ),
-  pointerMove: (request) =>
+  pointerMove: (request, options) =>
     checked(PointerMoveRequest, request, "pointer-move").pipe(
-      Effect.flatMap((value) => bound.pointerMove(value.to)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "pointer-move", (options) =>
+          bound.pointerMove(value.to, options),
+        ),
+      ),
       Effect.flatMap((input) => pointerMoved({ ...input, kind: "pointer-move" })),
     ),
-  hover: (request) =>
+  hover: (request, options) =>
     checked(HoverRequest, request, "hover").pipe(
-      Effect.flatMap((value) => bound.hover(value.selector)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "hover", (options) =>
+          bound.hover(value.selector, undefined, options),
+        ),
+      ),
       Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
     ),
-  wheel: (request) =>
+  wheel: (request, options) =>
     checked(WheelRequest, request, "wheel").pipe(
       Effect.flatMap((value) =>
-        bound
-          .wheel(value.deltaX, value.deltaY, value.at)
-          .pipe(
-            Effect.flatMap((input) =>
-              wheeled({ ...input, kind: "wheel", delta: { x: value.deltaX, y: value.deltaY } }),
+        withOperationOptions(options, "wheel", (options) =>
+          bound
+            .wheel(value.deltaX, value.deltaY, value.at, options)
+            .pipe(
+              Effect.flatMap((input) =>
+                wheeled({ ...input, kind: "wheel", delta: { x: value.deltaX, y: value.deltaY } }),
+              ),
             ),
-          ),
+        ),
       ),
     ),
-  press: (request) =>
+  press: (request, options) =>
     checked(PressRequest, request, "press").pipe(
-      Effect.flatMap((value) => bound.press(value.key, value.modifiers ?? [], value.into)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "press", (options) =>
+          bound.press(value.key, value.modifiers ?? [], value.into, undefined, options),
+        ),
+      ),
       Effect.flatMap((input) => pressed({ ...input, kind: "press" })),
     ),
-  type: (request) =>
+  type: (request, options) =>
     checked(TypeRequest, request, "type").pipe(
-      Effect.flatMap((value) => bound.type(value.text, value.into)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "type", (options) =>
+          bound.type(value.text, value.into, undefined, options),
+        ),
+      ),
       Effect.flatMap((input) => typed({ ...input, kind: "type" })),
     ),
-  screenshot: (request) =>
+  screenshot: (request, options) =>
     checked(ScreenshotRequest, request, "screenshot").pipe(
-      Effect.flatMap((value) => bound.screenshot(value.fullPage)),
+      Effect.flatMap((value) =>
+        withOperationOptions(options, "screenshot", (options) =>
+          bound.screenshot(value.fullPage, options),
+        ),
+      ),
       Effect.flatMap((bytes) =>
         decoded(
           ScreenshotResult,
@@ -212,11 +291,11 @@ const makePinnedTarget = (value: {
 
 /** A browser-operation failure keeps its meaning when it is reported as an initialization one. */
 const initialization = (reason: BrowserError["reason"]): InitializationError["reason"] =>
-  reason._tag === "Busy"
+  reason._tag === "Busy" || reason._tag === "QueueFull"
     ? "busy"
     : reason._tag === "Closed" || reason._tag === "Disconnected"
       ? "closed"
-      : reason._tag === "Timeout"
+      : reason._tag === "Timeout" || reason._tag === "QueueExpired"
         ? "timeout"
         : reason._tag === "Stale"
           ? "stale"
@@ -225,12 +304,6 @@ const initialization = (reason: BrowserError["reason"]): InitializationError["re
             : reason._tag === "Configuration"
               ? "configuration"
               : "native";
-
-const OperationOptionsSchema = Schema.Struct({
-  timeoutMillis: Schema.optionalKey(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 })),
-  ),
-});
 
 const makePageOperations = (controls: PageControls): PageOperations => {
   const Wait = Schema.Struct({
@@ -242,14 +315,20 @@ const makePageOperations = (controls: PageControls): PageOperations => {
 
   return {
     ...makeTarget(controls.operations),
-    observe: (options = {}) =>
+    observe: (options = {}, operationOptions) =>
       checked(ObservationOptions, options, "observe").pipe(
-        Effect.flatMap((value) => controls.observe({ ...value, scope: value.scope ?? "document" })),
+        Effect.flatMap((value) =>
+          withOperationOptions(operationOptions, "observe", (options) =>
+            controls.observe({ ...value, scope: value.scope ?? "document" }, options),
+          ),
+        ),
       ),
-    checkpoint: (options = {}) =>
+    checkpoint: (options = {}, operationOptions) =>
       checked(CheckpointOptions, options, "checkpoint").pipe(
         Effect.flatMap((value) =>
-          controls.checkpoint({ ...value, picture: value.picture ?? false }),
+          withOperationOptions(operationOptions, "checkpoint", (options) =>
+            controls.checkpoint({ ...value, picture: value.picture ?? false }, options),
+          ),
         ),
         Effect.flatMap(({ picture, ...sampled }) =>
           decoded(
@@ -264,95 +343,147 @@ const makePageOperations = (controls: PageControls): PageOperations => {
           }),
         ),
       ),
-    controlFacts: (reference) =>
+    controlFacts: (reference, options) =>
       checked(ObservedElement, reference, "control-facts").pipe(
-        Effect.flatMap(controls.controlFacts),
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "control-facts", (options) =>
+            controls.controlFacts(value, options),
+          ),
+        ),
       ),
-    revalidateElement: (reference) =>
+    revalidateElement: (reference, options) =>
       checked(ObservedElement, reference, "revalidate").pipe(
-        Effect.flatMap((value) => controls.revalidate(value).pipe(Effect.as(value))),
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "revalidate", (options) =>
+            controls.revalidate(value, options).pipe(Effect.as(value)),
+          ),
+        ),
       ),
-    clickElement: (reference, admission) =>
+    clickElement: (reference, admission, options) =>
       checked(ObservedElement, reference, "click").pipe(
-        Effect.flatMap((value) => controls.operations.click(value, admission?.admit)),
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "click", (options) =>
+            controls.operations.click(value, admission?.admit, options),
+          ),
+        ),
         Effect.flatMap(({ url, input }) => action({ url, input })),
       ),
-    fillElement: (reference, value, admission) =>
+    fillElement: (reference, value, admission, options) =>
       checked(ObservedElement, reference, "fill").pipe(
         Effect.flatMap((element) =>
           checked(FillRequest.fields.value, value, "fill").pipe(
-            Effect.flatMap((text) => controls.operations.fill(element, text, admission?.admit)),
+            Effect.flatMap((text) =>
+              withOperationOptions(options, "fill", (options) =>
+                controls.operations.fill(element, text, admission?.admit, options),
+              ),
+            ),
           ),
         ),
         Effect.flatMap(navigate),
       ),
-    selectOption: (reference, options, admission) =>
+    selectOption: (reference, options, admission, operationOptions) =>
       checked(ObservedElement, reference, "select-option").pipe(
         Effect.flatMap((element) =>
           checked(SelectOptions, options, "select-option").pipe(
-            Effect.flatMap((ids) => controls.selectOption(element, ids, admission?.admit)),
+            Effect.flatMap((ids) =>
+              withOperationOptions(operationOptions, "select-option", (options) =>
+                controls.selectOption(element, ids, admission?.admit, options),
+              ),
+            ),
           ),
         ),
         Effect.flatMap(navigate),
       ),
-    fillForm: (request, admission, options = {}) =>
+    fillForm: (request, admission, options = {}, operationOptions) =>
       checked(FillFormRequest, request, "fill-form").pipe(
         Effect.flatMap((form) =>
           checked(FillFormOptions, options, "fill-form").pipe(
             Effect.flatMap((settings) =>
-              controls.fillForm(form, admission?.admit, {
-                verify: settings.verify ?? true,
-                settleMillis: settings.settleMillis ?? 50,
-              }),
+              withOperationOptions(operationOptions, "fill-form", (options) =>
+                controls.fillForm(
+                  form,
+                  admission?.admit,
+                  {
+                    verify: settings.verify ?? true,
+                    settleMillis: settings.settleMillis ?? 50,
+                  },
+                  options,
+                ),
+              ),
             ),
           ),
         ),
         Effect.flatMap(formed),
       ),
-    hoverElement: (reference, admission) =>
+    hoverElement: (reference, admission, options) =>
       checked(ObservedElement, reference, "hover").pipe(
-        Effect.flatMap((value) => controls.operations.hover(value, admission?.admit)),
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "hover", (options) =>
+            controls.operations.hover(value, admission?.admit, options),
+          ),
+        ),
         Effect.flatMap((input) => hovered({ ...input, kind: "hover" })),
       ),
-    pressElement: (reference, stroke, admission) =>
+    pressElement: (reference, stroke, admission, options) =>
       checked(ObservedElement, reference, "press").pipe(
         Effect.flatMap((element) =>
           checked(KeyStroke, stroke, "press").pipe(
             Effect.flatMap((value) =>
-              controls.operations.press(
-                value.key,
-                value.modifiers ?? [],
-                element,
-                admission?.admit,
+              withOperationOptions(options, "press", (options) =>
+                controls.operations.press(
+                  value.key,
+                  value.modifiers ?? [],
+                  element,
+                  admission?.admit,
+                  options,
+                ),
               ),
             ),
           ),
         ),
         Effect.flatMap((input) => pressed({ ...input, kind: "press" })),
       ),
-    typeElement: (reference, text, admission) =>
+    typeElement: (reference, text, admission, options) =>
       checked(ObservedElement, reference, "type").pipe(
         Effect.flatMap((element) =>
           checked(TypeRequest.fields.text, text, "type").pipe(
-            Effect.flatMap((value) => controls.operations.type(value, element, admission?.admit)),
+            Effect.flatMap((value) =>
+              withOperationOptions(options, "type", (options) =>
+                controls.operations.type(value, element, admission?.admit, options),
+              ),
+            ),
           ),
         ),
         Effect.flatMap((input) => typed({ ...input, kind: "type" })),
       ),
-    waitFor: (request) =>
+    waitFor: (request, options) =>
       checked(Wait, request, "wait").pipe(
-        Effect.flatMap((value) => controls.waitFor(value.selector, value.state)),
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "wait", (options) =>
+            controls.waitFor(value.selector, value.state, options),
+          ),
+        ),
       ),
-    waitForElement: (request) =>
-      checked(WaitForElementRequest, request, "wait").pipe(Effect.flatMap(controls.waitForElement)),
-    clickAndWait: (request) =>
+    waitForElement: (request, options) =>
+      checked(WaitForElementRequest, request, "wait").pipe(
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "wait", (options) =>
+            controls.waitForElement(value, options),
+          ),
+        ),
+      ),
+    clickAndWait: (request, options) =>
       checked(ClickRequest, request, "click-and-wait").pipe(
-        Effect.flatMap((value) => controls.clickAndWait(value.selector)),
+        Effect.flatMap((value) =>
+          withOperationOptions(options, "click-and-wait", (options) =>
+            controls.clickAndWait(value.selector, options),
+          ),
+        ),
         Effect.flatMap(({ url, input }) => action({ url, input })),
       ),
     ready: (options = {}) =>
-      checked(OperationOptionsSchema, options, "ready").pipe(
-        Effect.flatMap((options) => controls.readiness(options.timeoutMillis)),
+      checkedOperationOptions(options, "ready").pipe(
+        Effect.flatMap((options) => controls.readiness(options)),
         Effect.mapError((error) =>
           InitializationError.make({
             operation: "ready",
@@ -391,42 +522,47 @@ export const makeSession = <E>(
       identity: Object.freeze(value.record.identity),
       status: value.status,
       describe: (options = {}) =>
-        checked(OperationOptionsSchema, options, "describe-page").pipe(
-          Effect.flatMap((options) =>
-            value.controls.describePage(value.record.info, options.timeoutMillis),
-          ),
+        checkedOperationOptions(options, "describe-page").pipe(
+          Effect.flatMap((options) => value.controls.describePage(value.record.info, options)),
         ),
       listFrames: (options = {}) =>
-        checked(OperationOptionsSchema, options, "list-frames").pipe(
-          Effect.flatMap((options) =>
-            value.controls.framesOf(value.record.info, options.timeoutMillis),
-          ),
+        checkedOperationOptions(options, "list-frames").pipe(
+          Effect.flatMap((options) => value.controls.framesOf(value.record.info, options)),
         ),
-      frame: (info) =>
+      frame: (info, options) =>
         checked(FrameInfo, info, "target").pipe(
           Effect.tap(() => value.controls.validate),
           Effect.flatMap((info) =>
-            controls.frame(value.record.info, info, value.record.identity.generation),
+            withOperationOptions(options, "target", (options) =>
+              controls.frame(value.record.info, info, value.record.identity.generation, options),
+            ),
           ),
           Effect.map((frame): Frame => ({
             ...makePageOperations(frame.controls),
             identity: Object.freeze(frame.identity),
             status: value.status.pipe(
-              Effect.map((status) => ({
-                ...status,
-                identity: frame.identity,
-                phase: status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
-              })),
+              Effect.map((status) =>
+                Object.freeze({
+                  ...status,
+                  identity: frame.identity,
+                  phase:
+                    status.phase !== "closed" && frame.record.detached ? "stale" : status.phase,
+                }),
+              ),
             ),
           })),
         ),
-      resizeViewport: (viewport) =>
-        checked(Viewport, viewport, "resize").pipe(Effect.flatMap(value.controls.resize)),
-      close: (options = {}) =>
-        checked(OperationOptionsSchema, options, "close-page").pipe(
-          Effect.flatMap((options) =>
-            value.controls.closePage(value.record.info, options.timeoutMillis),
+      resizeViewport: (viewport, options) =>
+        checked(Viewport, viewport, "resize").pipe(
+          Effect.flatMap((viewport) =>
+            withOperationOptions(options, "resize", (options) =>
+              value.controls.resize(viewport, options),
+            ),
           ),
+        ),
+      close: (options = {}) =>
+        checkedOperationOptions(options, "close-page").pipe(
+          Effect.flatMap((options) => value.controls.closePage(value.record.info, options)),
         ),
     };
 
@@ -443,51 +579,103 @@ export const makeSession = <E>(
 
   const session: BrowserSession<E> = {
     ...makePageOperations(controls),
-    ready: makePageOperations(controls).ready(),
     initialPage: issuedPage(controls.initialPage()),
-    page: (info) =>
-      checked(PageInfo, info, "target").pipe(Effect.flatMap(controls.page), Effect.map(issuedPage)),
+    page: (info, options) =>
+      checked(PageInfo, info, "target").pipe(
+        Effect.flatMap((info) =>
+          withOperationOptions(options, "target", (options) => controls.page(info, options)),
+        ),
+        Effect.map(issuedPage),
+      ),
     listPages: (options = {}) =>
-      checked(OperationOptionsSchema, options, "list-pages").pipe(
-        Effect.flatMap((options) => controls.listPages(options.timeoutMillis)),
+      checkedOperationOptions(options, "list-pages").pipe(
+        Effect.flatMap((options) => controls.listPages(options)),
       ),
     implementation: controls.implementation,
     status: controls.status,
     diagnostics: controls.diagnostics,
+    admission: controls.admissionStatus,
     closeChecked: controls.closeChecked,
     failure: bindings.failure,
     bindingDiagnostics: bindings.diagnostics,
-    retain: controls.retain.pipe(Effect.map(makeTarget)),
-    target: controls.target,
-    pages: controls.pages,
-    describePage: (page) =>
-      checked(PageInfo, page, "describe-page").pipe(Effect.flatMap(controls.describePage)),
-    frames: controls.frames,
-    framesOf: (page) =>
-      checked(PageInfo, page, "list-frames").pipe(Effect.flatMap(controls.framesOf)),
-    pinPage: (page) =>
+    retain: (options) =>
+      withOperationOptions(options, "target", (options) =>
+        controls.retain(options).pipe(Effect.map(makeTarget)),
+      ),
+    target: (options) =>
+      withOperationOptions(options, "target", (options) => controls.target(options)),
+    pages: (options) =>
+      withOperationOptions(options, "list-pages", (options) => controls.pages(options)),
+    describePage: (page, options) =>
+      checked(PageInfo, page, "describe-page").pipe(
+        Effect.flatMap((page) =>
+          withOperationOptions(options, "describe-page", (options) =>
+            controls.describePage(page, options),
+          ),
+        ),
+      ),
+    frames: (options) =>
+      withOperationOptions(options, "list-frames", (options) => controls.frames(options)),
+    framesOf: (page, options) =>
+      checked(PageInfo, page, "list-frames").pipe(
+        Effect.flatMap((page) =>
+          withOperationOptions(options, "list-frames", (options) =>
+            controls.framesOf(page, options),
+          ),
+        ),
+      ),
+    pinPage: (page, options) =>
       checked(PageInfo, page, "target").pipe(
-        Effect.flatMap(controls.pinPage),
+        Effect.flatMap((page) =>
+          withOperationOptions(options, "target", (options) => controls.pinPage(page, options)),
+        ),
         Effect.map(makePinnedTarget),
       ),
-    pinFrame: (page, frame) =>
+    pinFrame: (page, frame, options) =>
       checked(PageInfo, page, "target").pipe(
         Effect.flatMap((checkedPage) =>
           checked(FrameInfo, frame, "target").pipe(
-            Effect.flatMap((checkedFrame) => controls.pinFrame(checkedPage, checkedFrame)),
+            Effect.flatMap((checkedFrame) =>
+              withOperationOptions(options, "target", (options) =>
+                controls.pinFrame(checkedPage, checkedFrame, options),
+              ),
+            ),
           ),
         ),
         Effect.map(makePinnedTarget),
       ),
-    selectPage: (page) =>
-      checked(PageInfo, page, "select-page").pipe(Effect.flatMap(controls.selectPage)),
-    selectFrame: (id) =>
-      checked(Identifier, id, "select-frame").pipe(Effect.flatMap(controls.selectFrame)),
-    createPage: controls.createPage(),
-    closePage: (page) =>
-      checked(PageInfo, page, "close-page").pipe(Effect.flatMap(controls.closePage)),
-    resizeViewport: (viewport) =>
-      checked(Viewport, viewport, "resize").pipe(Effect.flatMap(controls.resize)),
+    selectPage: (page, options) =>
+      checked(PageInfo, page, "select-page").pipe(
+        Effect.flatMap((page) =>
+          withOperationOptions(options, "select-page", (options) =>
+            controls.selectPage(page, options),
+          ),
+        ),
+      ),
+    selectFrame: (id, options) =>
+      checked(Identifier, id, "select-frame").pipe(
+        Effect.flatMap((id) =>
+          withOperationOptions(options, "select-frame", (options) =>
+            controls.selectFrame(id, options),
+          ),
+        ),
+      ),
+    createPage: (options) =>
+      withOperationOptions(options, "new-page", (options) => controls.createPage(options)),
+    closePage: (page, options) =>
+      checked(PageInfo, page, "close-page").pipe(
+        Effect.flatMap((page) =>
+          withOperationOptions(options, "close-page", (options) =>
+            controls.closePage(page, options),
+          ),
+        ),
+      ),
+    resizeViewport: (viewport, options) =>
+      checked(Viewport, viewport, "resize").pipe(
+        Effect.flatMap((viewport) =>
+          withOperationOptions(options, "resize", (options) => controls.resize(viewport, options)),
+        ),
+      ),
   };
 
   associate(session, controls.capture);

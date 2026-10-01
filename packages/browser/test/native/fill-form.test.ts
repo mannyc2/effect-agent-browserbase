@@ -498,7 +498,7 @@ it.live(
       Effect.gen(function* () {
         const { session, page } = yield* fixture();
         const observed = yield* session.observe({ maxControls: 64 });
-        const stage = (yield* session.pages).find((candidate) => candidate.selected);
+        const stage = (yield* session.pages()).find((candidate) => candidate.selected);
 
         assert.ok(stage);
         yield* PageControl.resume(session, yield* PageControl.suspend(session, stage));

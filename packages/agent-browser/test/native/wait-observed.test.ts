@@ -91,7 +91,7 @@ it.live(
 
                 assert.ok(read);
                 expect(read.text).toContain("Recorder remains active");
-                expect(yield* browser.pages).toHaveLength(1);
+                expect(yield* browser.pages()).toHaveLength(1);
                 expect((yield* browser.status).busy).toBe(true);
                 sampled = true;
                 site.change("enable");

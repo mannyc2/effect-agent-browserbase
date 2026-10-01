@@ -29,7 +29,7 @@ await h.run(
       const session = yield* h.open({ bootstrap: plan });
 
       yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=before` }));
-      const before = yield* session.ready;
+      const before = yield* session.ready();
       const detached = yield* session.detach;
 
       yield* h.report("detached", detached);
@@ -38,7 +38,7 @@ await h.run(
       const selected = reconnected.pages.find((page) => page.selected);
 
       yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=after` }));
-      const after = yield* session.ready;
+      const after = yield* session.ready();
       const cleanup = yield* session.close;
 
       yield* h.established({

@@ -97,6 +97,7 @@ export const LimitDimension = Schema.Literals([
   "observation-snapshots",
   "observation-handles",
   "observation-bytes",
+  "native-operations",
 ]);
 
 const SchemaPath = Schema.String.check(Schema.isMaxLength(512));
@@ -113,6 +114,12 @@ export const Reasons = {
   UnregisteredSession: Schema.TaggedStruct("UnregisteredSession", {}),
   Unsupported: Schema.TaggedStruct("Unsupported", {}),
   Busy: Schema.TaggedStruct("Busy", {}),
+  QueueFull: Schema.TaggedStruct("QueueFull", {
+    scope: Schema.Literals(["page", "session", "registry"]),
+    maximum: Schema.Natural,
+    observed: Schema.Natural,
+  }),
+  QueueExpired: Schema.TaggedStruct("QueueExpired", {}),
   Closed: Schema.TaggedStruct("Closed", {}),
   Stale: Schema.TaggedStruct("Stale", {}),
   NotFound: Schema.TaggedStruct("NotFound", {}),

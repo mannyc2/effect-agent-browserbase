@@ -148,7 +148,7 @@ await h.run(
       const a = session.initialPage;
 
       yield* a.navigate(NavigateRequest.make({ url: fixtureUrl.href }));
-      const bInfo = yield* session.createPage;
+      const bInfo = yield* session.createPage();
       const b = yield* session.page(bInfo);
 
       yield* session.selectPage(bInfo);

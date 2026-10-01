@@ -8,7 +8,7 @@ import {
   Schema,
   type Scope,
 } from "effect";
-import type { BrowserSession, OpenOptions, Page } from "effect-browser/browser";
+import type { BrowserSession, OpenOptions, OperationOptions, Page } from "effect-browser/browser";
 import type {
   ActionResult,
   AutomationOptions,
@@ -62,22 +62,32 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly clickForDownload: (
     request: ClickRequest,
     page?: Page,
+    options?: OperationOptions,
   ) => Effect.Effect<DownloadObservation, BrowserError>;
   /** Attaches to an existing file input; an uploaded branch needs a receipt for this session. */
   readonly selectFiles: (
     request: SelectFilesRequest,
     page?: Page,
+    options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
   /** Registers the chooser observation before the single click that opens it. */
   readonly clickForFileSelection: (
     request: SelectFilesRequest,
     page?: Page,
+    options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly liveView: (expiresInSeconds?: number) => Effect.Effect<LiveView, BrowserError>;
-  readonly beginHandoff: (expiresInSeconds?: number) => Effect.Effect<Handoff, BrowserError>;
+  readonly liveView: (
+    expiresInSeconds?: number,
+    options?: OperationOptions,
+  ) => Effect.Effect<LiveView, BrowserError>;
+  readonly beginHandoff: (
+    expiresInSeconds?: number,
+    options?: OperationOptions,
+  ) => Effect.Effect<Handoff, BrowserError>;
   readonly resume: (
     token: Redacted.Redacted<string>,
     operatorReleasedControl: boolean,
+    options?: OperationOptions,
   ) => Effect.Effect<Inventory, BrowserError>;
   readonly detach: Effect.Effect<
     {
@@ -89,6 +99,7 @@ export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   >;
   readonly reconnect: (
     operatorReleasedControl: boolean,
+    options?: OperationOptions,
   ) => Effect.Effect<Inventory, BrowserError | InitializationError>;
   readonly close: Effect.Effect<CleanupResult>;
   readonly cleanupResult: Effect.Effect<Option.Option<CleanupResult>>;
@@ -171,9 +182,9 @@ const makeSession = <E>(
   return Object.assign(session, {
     reference: lifetime.reference,
     closeChecked: session.closeChecked.pipe(Effect.andThen(lifetime.closeChecked)),
-    clickForDownload: (request, page) =>
+    clickForDownload: (request, page, options) =>
       transfers(page).pipe(
-        Effect.flatMap((operations) => operations.clickForDownload(request)),
+        Effect.flatMap((operations) => operations.clickForDownload(request, options)),
         Effect.flatMap((event) =>
           Schema.decodeEffect(DownloadObservation)({
             ...event,
@@ -189,28 +200,31 @@ const makeSession = <E>(
           ),
         ),
       ),
-    selectFiles: (request, page) =>
+    selectFiles: (request, page, options) =>
       transfers(page).pipe(
         Effect.flatMap((operations) =>
           selection(request, lifetime.reference, "select-files").pipe(
             Effect.flatMap((files) =>
-              operations.selectFiles({ selector: request.selector, selection: files }),
+              operations.selectFiles({ selector: request.selector, selection: files }, options),
             ),
           ),
         ),
       ),
-    clickForFileSelection: (request, page) =>
+    clickForFileSelection: (request, page, options) =>
       transfers(page).pipe(
         Effect.flatMap((operations) =>
           selection(request, lifetime.reference, "file-chooser").pipe(
             Effect.flatMap((files) =>
-              operations.clickForFileSelection({ selector: request.selector, selection: files }),
+              operations.clickForFileSelection(
+                { selector: request.selector, selection: files },
+                options,
+              ),
             ),
           ),
         ),
       ),
-    liveView: (ttl = 60) => operations.liveView(lifetime.liveView(ttl)),
-    beginHandoff: (ttl = 60) => operations.beginHandoff(lifetime.liveView(ttl)),
+    liveView: (ttl = 60, options) => operations.liveView(lifetime.liveView(ttl), options),
+    beginHandoff: (ttl = 60, options) => operations.beginHandoff(lifetime.liveView(ttl), options),
     resume: operations.resume,
     detach: operations.detach,
     reconnect: operations.reconnect,

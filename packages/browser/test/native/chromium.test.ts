@@ -54,7 +54,7 @@ it.live(
             const frames = yield* capture.frames.pipe(Stream.take(1), Stream.runCollect);
 
             expect(frames.length).toBe(1);
-            const page = (yield* session.pages).find((page) => page.selected)!;
+            const page = (yield* session.pages()).find((page) => page.selected)!;
             const held = yield* PageControl.suspend(session, page);
 
             expect((yield* PageControl.state(session, page)).state).toBe("suspended");
@@ -111,7 +111,7 @@ it.live("same-document navigation preserves observations and capture document id
       yield* Effect.promise(() => firstVisit.fragment.arrived);
       firstVisit.fragment.release();
       yield* session.waitFor({ selector: "#fragmented", state: "visible" });
-      yield* session.pages;
+      yield* session.pages();
 
       const retainedFacts = yield* session.controlFacts(
         ObservedElement.make({
@@ -142,7 +142,7 @@ it.live("same-document navigation preserves observations and capture document id
       yield* Effect.promise(() => secondVisit.fragment.arrived);
       secondVisit.fragment.release();
       yield* session.waitFor({ selector: "#fragmented", state: "visible" });
-      yield* session.pages;
+      yield* session.pages();
 
       const sameDocument = yield* pageCapture.snapshot;
 
@@ -153,7 +153,7 @@ it.live("same-document navigation preserves observations and capture document id
       ]);
 
       yield* session.navigate({ url: site.url });
-      yield* session.pages;
+      yield* session.pages();
       const crossDocument = yield* pageCapture.snapshot;
 
       expect(crossDocument.currentDocument).toBe(1);
@@ -183,7 +183,7 @@ it.live(
             yield* session.navigate(NavigateRequest.make({ url: site.url }));
             yield* session.click(ClickRequest.make({ selector: "#increment" }));
             yield* session.closeChecked;
-            expect(yield* Effect.result(session.retain)).toMatchObject({
+            expect(yield* Effect.result(session.retain())).toMatchObject({
               _tag: "Failure",
               failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
             });
@@ -251,8 +251,8 @@ it.live(
             const scoutUrl = new URL("/pinned?name=scout", site.url).href;
 
             yield* session.navigate(NavigateRequest.make({ url: stageUrl }));
-            const stageInfo = (yield* session.pages).find((page) => page.selected)!;
-            const selectedStage = yield* session.retain;
+            const stageInfo = (yield* session.pages()).find((page) => page.selected)!;
+            const selectedStage = yield* session.retain();
             const stage = yield* session.pinPage(stageInfo);
 
             const childInfo = (yield* session.framesOf(stageInfo)).find(
@@ -271,14 +271,14 @@ it.live(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frame-name" }))).text,
             ).toBe("stage-child");
 
-            const scoutInfo = yield* session.createPage;
+            const scoutInfo = yield* session.createPage();
 
             expect(scoutInfo.selected).toBe(false);
             // Resolve selection when this Effect runs, not when it is constructed.
             const navigateScout = session.navigate(NavigateRequest.make({ url: scoutUrl }));
 
             expect(yield* session.selectPage(scoutInfo)).toBeUndefined();
-            const scoutTarget = yield* session.target;
+            const scoutTarget = yield* session.target();
 
             yield* navigateScout;
             expect(
@@ -293,7 +293,7 @@ it.live(
             if (staleSelected._tag === "Failure")
               expect(staleSelected.failure.reason._tag).toBe("Stale");
 
-            const retainedScout = yield* session.retain;
+            const retainedScout = yield* session.retain();
 
             yield* session.selectPage(stageInfo);
             yield* session.selectPage(scoutInfo);
@@ -308,12 +308,12 @@ it.live(
             expect(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frame-name" }))).text,
             ).toBe("stage-child");
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect((yield* session.target()).pageId).toBe(scoutTarget.pageId);
 
             const hovered = yield* child.hover(HoverRequest.make({ selector: "#frame-increment" }));
 
             expect(hovered.target).toEqual(child.target);
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect((yield* session.target()).pageId).toBe(scoutTarget.pageId);
 
             const observation = yield* session.observe();
 
@@ -337,7 +337,7 @@ it.live(
             expect((yield* stage.readText(ReadTextRequest.make({ selector: "#count" }))).text).toBe(
               "1",
             );
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect((yield* session.target()).pageId).toBe(scoutTarget.pageId);
 
             const held = yield* PageControl.suspend(session, stageInfo);
 
@@ -356,7 +356,7 @@ it.live(
             expect(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frameCount" }))).text,
             ).toBe("1");
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect((yield* session.target()).pageId).toBe(scoutTarget.pageId);
 
             yield* stage.click(ClickRequest.make({ selector: "#remove-frame" }));
 
@@ -377,7 +377,7 @@ it.live(
               expect(detachedPin.failure.outcome).toBe("undispatched");
             }
 
-            const closedInfo = yield* session.createPage;
+            const closedInfo = yield* session.createPage();
 
             yield* session.closePage(closedInfo);
             const closedPin = yield* session.pinPage(closedInfo).pipe(Effect.result);
@@ -439,7 +439,7 @@ it.live(
             expect(completion._tag).toBe("Failure");
             if (completion._tag === "Failure")
               expect(completion.failure.reason._tag).toBe("Interrupted");
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect((yield* session.target()).pageId).toBe(scoutTarget.pageId);
           }),
         ).pipe(
           Effect.provide(

@@ -762,9 +762,7 @@ export const makeActions = (
 
   let waitConnectionRetired = false;
 
-  let pendingWait:
-    | { readonly entry: Entry; readonly frame: Frame; readonly ticket: WaitTicket }
-    | undefined;
+  const pendingWaits = new Map<Entry, { readonly frame: Frame; readonly ticket: WaitTicket }>();
 
   /** Capture native identity before releasing admission; no later read follows live selection. */
   const waitOn = (
@@ -778,11 +776,17 @@ export const makeActions = (
   ): Promise<void> => {
     ticket.check();
     const { entry, frame } = current(target);
+
+    if (waitConnectionRetired) throw failure(Reasons.Closed.make({}), "undispatched");
+    // One native wait per exact Page, including canceled waits whose disposal has not been
+    // confirmed. The aggregate remains finite even when closed caller fibers leave work behind.
+    if (pendingWaits.has(entry) || pendingWaits.size >= 32)
+      throw failure(Reasons.Busy.make({}), "undispatched");
     const epoch = targets.epochOf(frame);
     const resource = acquire();
-    const pending = { entry, frame, ticket };
+    const pending = { frame, ticket };
 
-    pendingWait = pending;
+    pendingWaits.set(entry, pending);
 
     const check = () => {
       ticket.check();
@@ -811,13 +815,12 @@ export const makeActions = (
           throw error;
         }
       } finally {
-        try {
-          // This raw release is observed after caller cancellation, without renewing its deadline.
-          await resource.dispose();
-          ticket.retire();
-        } finally {
-          if (pendingWait === pending) pendingWait = undefined;
-        }
+        // This raw release is observed after caller cancellation, without renewing its deadline.
+        // A rejected disposal proves no retirement, so keep that Page's native capacity until
+        // positive Page or connection closure. Old completion never frees a successor's slot.
+        await resource.dispose();
+        ticket.retire();
+        if (pendingWaits.get(entry) === pending) pendingWaits.delete(entry);
       }
       check();
     });
@@ -1014,19 +1017,29 @@ export const makeActions = (
     waitFor,
     waitForElement,
     waitChanged: (entry: Entry, frame?: Frame) => {
-      const pending = pendingWait;
+      const pending = pendingWaits.get(entry);
 
       if (
-        pending?.entry === entry &&
+        pending !== undefined &&
         (frame === undefined || frame === pending.frame || frame === entry.page.mainFrame())
       )
         pending.ticket.invalidate();
     },
+    retireWaitPage: (entry: Entry) => {
+      const pending = pendingWaits.get(entry);
+
+      if (pending === undefined) return;
+      pending.ticket.invalidate();
+      pending.ticket.retire();
+      if (pendingWaits.get(entry) === pending) pendingWaits.delete(entry);
+    },
     retireWait: () => {
       waitConnectionRetired = true;
-      pendingWait?.ticket.invalidate();
-      pendingWait?.ticket.retire();
-      pendingWait = undefined;
+      for (const pending of pendingWaits.values()) {
+        pending.ticket.invalidate();
+        pending.ticket.retire();
+      }
+      pendingWaits.clear();
     },
     clickAndWait,
     clickForDownload,

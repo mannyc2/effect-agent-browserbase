@@ -248,8 +248,8 @@ it.live(
             const browser = yield* BrowserbaseBrowser.open(genericAgentPolicy);
 
             yield* browser.navigate({ url: site.url });
-            const first = (yield* browser.pages).find((page) => page.selected)!;
-            const second = yield* browser.createPage;
+            const first = (yield* browser.pages()).find((page) => page.selected)!;
+            const second = yield* browser.createPage();
 
             yield* browser.selectPage(second);
             yield* browser.navigate({ url: `${site.url}#second` });
@@ -286,11 +286,11 @@ it.live(
 
             yield* Deferred.await(entered).pipe(Effect.timeout(5000));
             expect(invocations).toBe(1);
-            expect((yield* browser.target).pageId).toBe(first.pageId);
+            expect((yield* browser.target()).pageId).toBe(first.pageId);
             expect((yield* read(browser)).page).toBe(0);
 
             yield* browser.selectPage(second);
-            expect((yield* browser.target).pageId).toBe(second.pageId);
+            expect((yield* browser.target()).pageId).toBe(second.pageId);
             expect((yield* read(browser)).page).toBe(0);
             yield* Deferred.succeed(release, undefined);
 
@@ -412,7 +412,7 @@ it.live(
 
             const reference = named(yield* inspect(tools), "Increment");
             const checkpoint = yield* generic.checkpoint({ picture: true });
-            const [page] = yield* generic.pages;
+            const [page] = yield* generic.pages();
 
             assert.ok(page);
             expect(checkpoint.picture?.bytes.length).toBeGreaterThan(0);
@@ -503,7 +503,7 @@ it.live(
               "wheel",
             ]);
             for (const { receipt } of receipts) {
-              expect(receipt.target).toEqual(yield* generic.target);
+              expect(receipt.target).toEqual(yield* generic.target());
               expect(receipt.completedMonotonicNanos).toBeGreaterThanOrEqual(
                 receipt.startedMonotonicNanos,
               );
@@ -524,7 +524,7 @@ it.live(
             expect(receipts).toHaveLength(3);
 
             // A reference from the first page cannot move the pointer on a newly selected page.
-            const other = yield* generic.createPage;
+            const other = yield* generic.createPage();
 
             yield* generic.selectPage(other);
             yield* generic.navigate({ url: site.url });

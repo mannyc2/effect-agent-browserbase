@@ -31,6 +31,7 @@ export interface CaptureParent {
     target?: PageInfo,
   ) => Effect.Effect<CaptureResolution, BrowserError>;
   readonly target: () => Target;
+  readonly selectedPage: () => PageInfo;
   readonly captureLeases: Map<string, CaptureLease>;
   captureReservedBytes: number;
 }
@@ -64,6 +65,7 @@ export const forPage = (
     parent.captureReservedBytes = value;
   },
   target: () => identity,
+  selectedPage: () => info,
   resolve: (ticket, requested) =>
     validate.pipe(
       Effect.andThen(

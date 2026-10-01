@@ -55,7 +55,7 @@ const checkedClose: Same<
 > = true;
 
 const retainedTarget: Same<
-  BrowserbaseSession["retain"],
+  ReturnType<BrowserbaseSession["retain"]>,
   Effect.Effect<RetainedTarget, BrowserError>
 > = true;
 

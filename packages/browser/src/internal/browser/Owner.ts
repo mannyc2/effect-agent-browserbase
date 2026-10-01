@@ -1,13 +1,16 @@
-import { Clock, Deferred, Duration, Effect, Schema, Semaphore } from "effect";
+import { Clock, Deferred, Duration, Effect, Schema } from "effect";
 
+import type { OperationOptions } from "../../Browser.ts";
 import {
   BrowserDiagnostic,
   BrowserDiagnostics,
+  type AdmissionLimits,
   SessionStatus,
   type SessionReason,
   type SessionPhase,
 } from "../../BrowserData.ts";
 import { BrowserError, Reasons, type BrowserOperation, type Containment } from "../../Errors.ts";
+import { makeAdmission } from "./Admission.ts";
 import type { DriverFault, DriverTarget } from "./Driver.ts";
 import { providerReason, publicError } from "./NativeCalls.ts";
 
@@ -62,6 +65,8 @@ export interface ReadTicket {
 
 /** One admitted native operation; checks at dispatch also fence late Promise continuations. */
 export interface Ticket extends ReadTicket {
+  /** Native work keeps capacity until settlement, independently of the request fiber. */
+  readonly retainNative?: () => () => void;
   readonly dispatched: boolean;
   readonly phase?: "Prepared" | "Dispatched" | "Acknowledged" | "FollowUp" | "Terminal";
   dispatch(): void;
@@ -96,6 +101,7 @@ export interface Reservation {
 }
 
 export interface Limits {
+  readonly admissionLimits?: AdmissionLimits;
   readonly maxActions: number;
   readonly maxHostReads: number;
   readonly maxElapsedMillis: number;
@@ -103,7 +109,6 @@ export interface Limits {
 }
 
 export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
-  const semaphore = yield* Semaphore.make(1);
   const clock = yield* Clock.Clock;
 
   const lifetimeDeadline =
@@ -120,22 +125,23 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     hostReads: 0,
   };
 
-  let active: AbortController | undefined;
-  let activeScope: ObservationScope | undefined;
-  let holdingPermit = false;
-  let admissionBlocked = false;
+  let admissionBarrier: object | undefined;
+  let nativeConnection: object | undefined;
 
-  let waiting:
-    | {
-        readonly connection: object;
-        readonly target: DriverTarget;
-        readonly cancel: OwnedWait["cancel"];
-        readonly retire: () => void;
-        pending: boolean;
-      }
-    | undefined;
+  const admission = makeAdmission(
+    () => Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
+    () => terminalReason === "expired",
+    limits.admissionLimits,
+  );
 
-  const reservations = new Map<string, AbortController>();
+  const waits = () =>
+    new Set(
+      admission
+        .lanes()
+        .flatMap((lane) => (lane.native.wait === undefined ? [] : [lane.native.wait])),
+    );
+
+  const waitOn = (pageId: string) => admission.pages.get(pageId)?.native.wait;
   // These facts outlive the tickets which produced them. Aborting admission is not retirement.
   const unresolved = new Map<object, string | undefined>();
   let nativeUncertainty = false;
@@ -180,8 +186,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
   };
 
   const invalidate = (reason: Invalidation, scope: ObservationScope = "all") => {
-    if (scope === "all" || (scope !== "none" && scope.pageId === waiting?.target.pageId))
-      waiting?.cancel(Reasons.Stale.make({}));
+    for (const waiting of waits())
+      if (scope === "all" || (scope !== "none" && scope.pageId === waiting.target.pageId))
+        waiting.cancel(Reasons.Stale.make({}));
+    for (const lane of admission.pages.values())
+      if (scope === "all" || (scope !== "none" && scope.pageId === lane.pageId)) lane.revision++;
     state.revision++;
     for (const hook of hooks) hook(reason, scope);
   };
@@ -198,13 +207,19 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     // A known trigger is retained even when the abort below interrupts dispatched work.
     if (!(state.phase === "faulted" && phase === "uncertain")) state.phase = phase;
     state.generation++;
-    const pending = [...reservations.values()];
+    const pending: Array<AbortController> = [];
 
-    reservations.clear();
-    active?.abort();
-    waiting?.cancel(
-      terminalReason === "expired" ? Reasons.Expired.make({}) : Reasons.Stale.make({}),
-    );
+    for (const lane of admission.lanes()) {
+      if (lane.reservation === undefined) continue;
+      pending.push(lane.reservation);
+      lane.reservation = undefined;
+    }
+
+    const refusal =
+      terminalReason === "expired" ? Reasons.Expired.make({}) : Reasons.Stale.make({});
+
+    admission.fence(refusal);
+    for (const waiting of waits()) waiting.cancel(refusal);
     for (const reservation of pending) reservation.abort();
     invalidate(reason);
   };
@@ -265,7 +280,15 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     // Outlives the fiber that dispatched it, and must be abortable by a fence from outside it.
     const controller = new AbortController();
 
-    reservations.set(key, controller);
+    const lane = admission.pages.get(key);
+
+    if (lane === undefined)
+      throw BrowserError.make({
+        operation: "navigate",
+        reason: Reasons.Stale.make({}),
+        outcome: "unknown",
+      });
+    lane.reservation = controller;
     unresolved.set(controller, key);
 
     return {
@@ -275,15 +298,16 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         // as the independent lifetime timer. As for an action's timer, that instant is expiry.
         if (
           outcome === "unknown" &&
-          reservations.get(key) === controller &&
+          lane.reservation === controller &&
           Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline
         )
           expire();
         // A fence already cleared it, and decided the outcome for everything it aborted.
-        if (reservations.get(key) !== controller) return;
-        reservations.delete(key);
+        if (lane.reservation !== controller) return;
+        lane.reservation = undefined;
         if (outcome === "known") unresolved.delete(controller);
         else fence("uncertain", "uncertain");
+        admission.forget(lane);
       },
     };
   };
@@ -292,9 +316,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
    * Admission transfers a pure wait to an independent deadline and cancellation record. Its
    * logical barrier may end before uncancellable native work; neither is a mutation reservation.
    */
-  const beginWait = (admission: Ticket, target: DriverTarget, connection: object): OwnedWait => {
-    admission.check();
-    if (waiting !== undefined)
+  const beginWait = (admitted: Ticket, target: DriverTarget, connection: object): OwnedWait => {
+    admitted.check();
+    const lane = admission.pages.get(target.pageId);
+
+    if (lane === undefined || lane.native.wait !== undefined)
       throw BrowserError.make({
         operation: "wait",
         reason: Reasons.Busy.make({}),
@@ -302,8 +328,8 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       });
     const controller = new AbortController();
     const result = Deferred.makeUnsafe<void, BrowserError>();
-    const generation = admission.generation;
-    const deadline = admission.deadline;
+    const generation = admitted.generation;
+    const deadline = admitted.deadline;
     let retired = false;
     let started = false;
     let canceled: BrowserError | undefined;
@@ -312,7 +338,13 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       BrowserError.make({ operation: "wait", reason, outcome: "undispatched" });
 
     const release = () => {
-      if (retired && !record.pending && waiting === record) waiting = undefined;
+      if (retired && !record.pending) {
+        for (const lane of admission.lanes()) {
+          if (lane.native.wait !== record) continue;
+          lane.native.wait = undefined;
+          admission.forget(lane);
+        }
+      }
     };
 
     const complete = (exit: Effect.Effect<void, BrowserError>) => {
@@ -341,7 +373,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       },
     };
 
-    waiting = record;
+    lane.native.wait = record;
 
     const check = () => {
       const now = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
@@ -439,10 +471,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
 
           return { _tag: "SessionFenced", generation: state.generation };
         }
-        const reservation = reservations.get(page.pageId);
+        const lane = admission.pages.get(page.pageId);
+        const reservation = lane?.reservation;
 
         if (reservation !== undefined) {
-          reservations.delete(page.pageId);
+          if (lane !== undefined) lane.reservation = undefined;
           unresolved.delete(reservation);
           reservation.abort();
         }
@@ -466,13 +499,15 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       readonly preflight?: Effect.Effect<void, BrowserError>;
       /** A request can shorten this operation's policy deadline, never extend it. */
       readonly timeoutMillis?: number;
+      readonly admission?: OperationOptions["admission"];
+      /** Composite operations retain the deadlines captured by their original caller. */
+      readonly operationDeadline?: number;
+      readonly queueDeadline?: number;
       /** Private recovery admission: one absolute deadline also bounds waiting for this permit. */
       readonly waitUntil?: number;
-      /**
-       * Wait for the permit rather than refuse `busy`, within the one deadline the operation
-       * would have had from the moment it was asked for.
-       */
-      readonly queue?: boolean;
+      /** Recovery and lifecycle cleanup own independent, bounded capacity. */
+      readonly recovery?: boolean;
+      readonly bypassBlocked?: boolean;
       /**
        * Where this operation's own page can absorb an unknown outcome: the page, and a request
        * that the browser close it, made once the outcome is unknown, which says whether it did.
@@ -484,24 +519,53 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     } = {},
   ): Effect.Effect<A, E | BrowserError, R> =>
     Effect.suspend(() => {
-      let admitted: Ticket | undefined;
+      const requested = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
 
-      const waitUntil =
-        options.waitUntil ??
-        (options.queue === true
-          ? Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 +
-            Math.min(
-              options.timeoutMillis ?? limits.actionTimeoutMillis,
-              limits.actionTimeoutMillis,
-            )
-          : undefined);
+      const deadline = Math.min(
+        requested +
+          Math.min(options.timeoutMillis ?? limits.actionTimeoutMillis, limits.actionTimeoutMillis),
+        options.operationDeadline ?? Number.POSITIVE_INFINITY,
+        options.waitUntil ?? Number.POSITIVE_INFINITY,
+        lifetimeDeadline,
+      );
+
+      const queueMillis =
+        options.waitUntil !== undefined
+          ? Math.max(0, options.waitUntil - requested)
+          : options.admission?.queue === undefined
+            ? 0
+            : Duration.toMillis(options.admission.queue);
+
+      const queueDeadline = options.queueDeadline ?? requested + queueMillis;
+      const scope = options.targetScope?.() ?? options.mutationScope?.();
+
+      const pageLane =
+        scope !== undefined && scope !== "all" && scope !== "none"
+          ? admission.pages.get(scope.pageId)
+          : undefined;
+
+      const lane =
+        options.recovery === true && pageLane !== undefined
+          ? admission.recovery(pageLane, operation)
+          : (pageLane ?? admission.registry);
+
+      const pending = {
+        token: {},
+        operation,
+        requestedAt: requested,
+        deadline,
+        queueDeadline,
+        result: Deferred.makeUnsafe<void, BrowserError>(),
+        reserved: options.recovery === true,
+      };
 
       const work = Effect.gen(function* () {
-        holdingPermit = true;
         if (
           !(options.phases ?? ["open"]).includes(state.phase) ||
-          policies.size > 0 ||
-          admissionBlocked
+          (policies.size > 0 && options.recovery !== true) ||
+          (admissionBarrier !== undefined &&
+            options.bypassBlocked !== true &&
+            options.recovery !== true)
         ) {
           return yield* BrowserError.make({
             operation,
@@ -509,7 +573,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               terminalReason === "expired"
                 ? Reasons.Expired.make({})
                 : state.phase === "paused" ||
-                    admissionBlocked ||
+                    (admissionBarrier !== undefined && options.bypassBlocked !== true) ||
                     (terminalReason === null && policies.size > 0)
                   ? Reasons.Busy.make({})
                   : Reasons.Closed.make({}),
@@ -528,14 +592,6 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
             outcome: "undispatched",
           });
         }
-
-        const deadline = Math.min(
-          waitUntil ?? now + limits.actionTimeoutMillis,
-          options.timeoutMillis === undefined
-            ? Number.POSITIVE_INFINITY
-            : now + options.timeoutMillis,
-          lifetimeDeadline,
-        );
 
         if (now >= deadline)
           return yield* BrowserError.make({
@@ -565,8 +621,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         // @effect-diagnostics-next-line abortControllerInEffect:off
         const controller = new AbortController();
 
-        active = controller;
-        activeScope = options.targetScope?.() ?? options.mutationScope?.();
+        lane.active = { controller, operation };
         let dispatched = false;
         let pending = false;
         let phase: NonNullable<Ticket["phase"]> = "Prepared";
@@ -599,6 +654,7 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         };
 
         const ticket: Ticket = {
+          retainNative: () => admission.retainNative(lane, operation, nativeConnection),
           signal: controller.signal,
           deadline,
           generation,
@@ -642,7 +698,6 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         };
 
         controller.signal.addEventListener("abort", freezeUnknown, { once: true });
-        admitted = ticket;
 
         // Dispatched work this admission gave up on, whose outcome no fence has decided yet.
         let abandoned = false;
@@ -756,43 +811,76 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
               phase = "Terminal";
               controller.signal.removeEventListener("abort", freezeUnknown);
               controller.abort();
-              if (active === controller) {
-                active = undefined;
-                activeScope = undefined;
-              }
+              if (lane.active?.controller === controller) lane.active = undefined;
             }),
           ),
         );
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            holdingPermit = false;
-          }),
-        ),
-      );
+      });
 
-      if (waitUntil !== undefined)
-        return within(semaphore.withPermits(1)(work), Math.min(waitUntil, lifetimeDeadline), () =>
-          BrowserError.make({
-            operation,
-            reason: Reasons.Timeout.make({}),
-            outcome: admitted?.dispatched === true ? "unknown" : "undispatched",
-          }),
-        );
+      const checkAdmission = Effect.suspend(() => {
+        if (
+          !(options.phases ?? ["open"]).includes(state.phase) ||
+          (policies.size > 0 && options.recovery !== true) ||
+          (admissionBarrier !== undefined &&
+            options.bypassBlocked !== true &&
+            options.recovery !== true)
+        )
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason:
+                terminalReason === "expired"
+                  ? Reasons.Expired.make({})
+                  : state.phase === "paused" ||
+                      (admissionBarrier !== undefined && options.bypassBlocked !== true) ||
+                      policies.size > 0
+                    ? Reasons.Busy.make({})
+                    : Reasons.Closed.make({}),
+              outcome: "undispatched",
+            }),
+          );
 
-      return semaphore
-        .withPermitsIfAvailable(1)(work)
-        .pipe(
-          Effect.flatMap(
-            Effect.fromOption(() =>
-              BrowserError.make({
-                operation,
-                reason: Reasons.Busy.make({}),
-                outcome: "undispatched",
-              }),
+        return options.preflight ?? Effect.void;
+      });
+
+      return checkAdmission.pipe(
+        Effect.andThen(
+          Effect.uninterruptibleMask((restore) =>
+            Effect.suspend(() =>
+              restore(
+                within(
+                  admission.acquire(
+                    lane,
+                    pending,
+                    options.recovery === true &&
+                      (operation !== "navigate-stop" || options.waitUntil === undefined)
+                      ? 0
+                      : queueMillis,
+                  ),
+                  lane.holder === pending.token || queueMillis <= 0
+                    ? deadline
+                    : Math.min(queueDeadline, deadline),
+                  () =>
+                    BrowserError.make({
+                      operation,
+                      reason:
+                        Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 >= lifetimeDeadline
+                          ? Reasons.Expired.make({})
+                          : deadline <= queueDeadline
+                            ? Reasons.Timeout.make({})
+                            : Reasons.QueueExpired.make({}),
+                      outcome: "undispatched",
+                    }),
+                ),
+              ).pipe(
+                Effect.onError(() => Effect.sync(() => admission.cancel(lane, pending))),
+                Effect.andThen(restore(work)),
+                Effect.ensuring(Effect.sync(() => admission.release(lane, pending.token))),
+              ),
             ),
           ),
-        );
+        ),
+      );
     });
 
   /** Lifecycle transitions are performed while holding guard's permit; close alone preempts it. */
@@ -800,45 +888,85 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     state,
     lifetimeDeadline,
     guard,
+    pageAdmission: admission.page,
+    admissionSnapshot: admission.snapshot,
+    admissionStatus: Effect.sync(admission.status),
+    setConnection: (connection: object) => {
+      nativeConnection = connection;
+    },
+    hasActive: (except?: AbortSignal) =>
+      admission
+        .lanes()
+        .some(
+          (lane) =>
+            lane.holder !== undefined &&
+            (except === undefined || lane.active?.controller.signal !== except),
+        ),
+    restorePageAdmission: (pageId: string) => {
+      const lane = admission.pages.get(pageId);
+
+      if (lane !== undefined) lane.revoked = false;
+    },
+    revision: (pageId: string) => admission.pages.get(pageId)?.revision ?? state.revision,
     reserve,
     contain,
     pauseAdmission: () => {
-      admissionBlocked = true;
+      if (admissionBarrier !== undefined) return undefined;
+      const token = {};
+
+      admissionBarrier = token;
+      admission.blockPending(Reasons.Busy.make({}));
+
+      return token;
     },
-    resumeAdmission: () => {
-      admissionBlocked = false;
+    resumeAdmission: (token: object) => {
+      if (admissionBarrier !== token) return false;
+      admissionBarrier = undefined;
+
+      return true;
     },
-    drained: () =>
+    drained: (except?: AbortSignal) =>
+      admission.drained(except) &&
       !nativeUncertainty &&
       unresolved.size === 0 &&
-      reservations.size === 0 &&
-      waiting === undefined &&
+      admission.lanes().every((lane) => lane.reservation === undefined) &&
+      waits().size === 0 &&
       policies.size === 0,
-    reserved: (key: string): boolean => reservations.has(key),
-    revokePage: (pageId: string) => {
-      if (
-        activeScope !== undefined &&
-        activeScope !== "all" &&
-        activeScope !== "none" &&
-        activeScope.pageId === pageId
-      )
-        active?.abort();
-      if (waiting?.target.pageId === pageId) waiting.cancel(Reasons.Stale.make({}));
+    reserved: (key: string): boolean => admission.pages.get(key)?.reservation !== undefined,
+    revokePage: (pageId: string, except?: AbortSignal) => {
+      for (const lane of admission.lanes()) {
+        if (lane.pageId !== pageId) continue;
+        if (except === undefined || lane.active?.controller.signal !== except)
+          admission.revoke(lane, Reasons.Stale.make({}));
+        const reservation = lane.reservation;
+
+        lane.reservation = undefined;
+        reservation?.abort();
+      }
+      waitOn(pageId)?.cancel(Reasons.Stale.make({}));
     },
     retirePage: (pageId: string) => {
+      const waiting = waitOn(pageId);
+
+      waiting?.cancel(Reasons.Stale.make({}));
+      waiting?.retire();
+      admission.retirePage(pageId);
       for (const [token, page] of unresolved) if (page === pageId) unresolved.delete(token);
     },
     beginWait,
-    waitAvailable: () => waiting === undefined,
+    waitAvailable: (pageId: string) => waitOn(pageId) === undefined,
     waitPending: (pageId?: string) =>
-      waiting?.pending === true && (pageId === undefined || waiting.target.pageId === pageId),
+      pageId === undefined
+        ? [...waits()].some((waiting) => waiting.pending)
+        : waitOn(pageId)?.pending === true,
     /** Positive retirement is specific to a connection, including a late retired predecessor. */
     retireWait: (connection: object) => {
-      const previous = waiting;
-
-      if (previous?.connection !== connection) return;
-      previous.cancel(Reasons.Stale.make({}));
-      previous.retire();
+      admission.retireConnection(connection);
+      for (const waiting of waits()) {
+        if (waiting.connection !== connection) continue;
+        waiting.cancel(Reasons.Stale.make({}));
+        waiting.retire();
+      }
     },
     invalidate,
     fence,
@@ -849,10 +977,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
     record,
     /** Only positive lifetime-source evidence may retire control lost to a connection fence. */
     retireControl: () => {
-      const previous = waiting;
-
-      previous?.cancel(Reasons.Stale.make({}));
-      previous?.retire();
+      for (const waiting of waits()) {
+        waiting.cancel(Reasons.Stale.make({}));
+        waiting.retire();
+      }
+      admission.retire();
       unresolved.clear();
       nativeUncertainty = false;
       policies.clear();
@@ -862,7 +991,12 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         phase: state.phase,
         reason: terminalReason ?? pauseReason ?? policies.values().next().value?.reason ?? null,
         generation: state.generation,
-        busy: holdingPermit || policies.size > 0 || waiting !== undefined,
+        busy:
+          admission
+            .lanes()
+            .some((lane) => lane.holder !== undefined || lane.native.work.size > 0) ||
+          policies.size > 0 ||
+          waits().size > 0,
         unresolvedDispatch: nativeUncertainty || unresolved.size > 0,
         actions: { used: state.actions, maximum: limits.maxActions },
       });
@@ -911,6 +1045,7 @@ const unsettled = (ticket: Ticket, error: unknown): Pick<BrowserError, "reason" 
 export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () => Promise<A>) =>
   Effect.callback<A, BrowserError>((resume) => {
     let done = false;
+    let retire: (() => void) | undefined;
 
     const cleanup = () => {
       done = true;
@@ -934,15 +1069,18 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
     ticket.signal.addEventListener("abort", abort, { once: true });
     try {
       ticket.check();
+      retire = ticket.retainNative?.();
       // Observe both branches even after the waiter exits. Cancellation does not undo native work.
       void body().then(
         (value) => {
+          retire?.();
           if (!done) {
             cleanup();
             resume(Effect.succeed(value));
           }
         },
         (error: unknown) => {
+          retire?.();
           if (!done) {
             cleanup();
             resume(Effect.fail(publicError(error, operation, unsettled(ticket, error))));
@@ -950,6 +1088,7 @@ export const native = <A>(operation: BrowserOperation, ticket: Ticket, body: () 
         },
       );
     } catch (error) {
+      retire?.();
       cleanup();
       resume(Effect.fail(publicError(error, operation, unsettled(ticket, error))));
     }

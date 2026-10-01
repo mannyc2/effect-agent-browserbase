@@ -140,7 +140,11 @@ it.effect("host reads retain permit and deadline bounds without claiming uncerta
       });
       continueRead.resolve();
       yield* Effect.promise(() => retired.promise);
-      expect(yield* Effect.result(session.checkpoint({ picture: false }))).toMatchObject({
+      expect(
+        yield* Effect.result(
+          session.checkpoint({ picture: false }, { admission: { queue: "1 second" } }),
+        ),
+      ).toMatchObject({
         _tag: "Failure",
         failure: {
           reason: { _tag: "Limit", dimension: "host-reads", observed: 1 },

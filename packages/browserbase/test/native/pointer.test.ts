@@ -57,7 +57,7 @@ it.live("real CDP: hover reaches a nested cross-origin frame in main-viewport co
           assert.ok(page);
           yield* Effect.promise(() => page.setContent(site.page));
 
-          const frames = yield* settle(session.frames, (listed) =>
+          const frames = yield* settle(session.frames(), (listed) =>
             listed.some((frame) => frame.name === "leaf"),
           );
 
@@ -104,7 +104,7 @@ it.live("real CDP: a nested hover refuses clipping and occlusion in every ancest
           assert.ok(page);
           yield* Effect.promise(() => page.setContent(site.page));
 
-          const frames = yield* settle(session.frames, (listed) =>
+          const frames = yield* settle(session.frames(), (listed) =>
             listed.some((frame) => frame.name === "leaf"),
           );
 
@@ -211,7 +211,7 @@ it.live(
 
             expect(moved.kind).toBe("pointer-move");
             expect(moved.position).toEqual({ x: 140, y: 100 });
-            expect(moved.target).toEqual(yield* session.target);
+            expect(moved.target).toEqual(yield* session.target());
             expect(moved.completedMonotonicNanos).toBeGreaterThanOrEqual(
               moved.startedMonotonicNanos,
             );
@@ -338,11 +338,11 @@ it.live("real CDP: input through a handle bound to another page reaches neither 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const first = yield* session.retain;
+          const first = yield* session.retain();
 
           yield* first.navigate(NavigateRequest.make({ url: `${f.url}pointer` }));
-          yield* session.selectPage(yield* session.createPage);
-          const second = yield* session.retain;
+          yield* session.selectPage(yield* session.createPage());
+          const second = yield* session.retain();
 
           yield* second.navigate(NavigateRequest.make({ url: `${f.url}pointer#second` }));
           const natives = f.nativePages(session.reference.sessionId);

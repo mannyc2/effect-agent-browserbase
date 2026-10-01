@@ -1,15 +1,15 @@
-import { Crypto, Effect, type PlatformError, Schema, type Scope, Stream } from "effect";
+import { Crypto, Effect, type PlatformError, type Scope, Stream } from "effect";
 
 import type { BrowserSession, Page } from "./Browser.ts";
-import { PageInfo } from "./BrowserData.ts";
-import type {
-  CapturedFrame,
+import {
+  type CapturedFrame,
   CaptureOptions,
-  CaptureSnapshot,
-  CaptureSummary,
+  type CaptureSnapshot,
+  type CaptureSummary,
 } from "./CaptureData.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
 import { captureParent } from "./internal/browser/Association.ts";
+import { checked, checkedOperationOptions } from "./internal/browser/PublicSession.ts";
 import { startCapture } from "./internal/capture/Capture.ts";
 
 export {
@@ -59,17 +59,20 @@ export const start = <E>(
           outcome: "undispatched",
         }),
       );
-    if (options.target === undefined) return startCapture(parent, options);
 
-    return Schema.decodeEffect(PageInfo)(options.target, { onExcessProperty: "error" }).pipe(
-      Effect.mapError(() =>
-        BrowserError.make({
-          operation: "capture",
-          reason: Reasons.Configuration.make({}),
-          outcome: "undispatched",
-        }),
+    return checked(CaptureOptions, options, "capture").pipe(
+      Effect.flatMap(({ admission, ...capture }) =>
+        checkedOperationOptions(admission === undefined ? {} : { admission }, "capture").pipe(
+          Effect.flatMap((operationOptions) =>
+            startCapture(parent, {
+              ...capture,
+              ...(operationOptions.admission === undefined
+                ? {}
+                : { admission: operationOptions.admission }),
+            }),
+          ),
+        ),
       ),
-      Effect.flatMap((target) => startCapture(parent, { ...options, target })),
     );
   });
 

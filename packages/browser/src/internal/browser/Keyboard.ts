@@ -129,13 +129,21 @@ export const makeKeyboard = (
 
   // A port whose run drained every reply stays attached, idle, for the next run on its page:
   // attaching and detaching cost three serial round trips, more than a one-character run.
-  type Slot = { release?: () => void; idle?: { readonly page: Page; readonly port: CDPSession } };
+  type Slot = { release?: () => void; idle?: CDPSession };
 
-  let typing: Slot | undefined;
+  // The native Page object is the authority for its port. Retiring the caller's permit does
+  // not retire setup, input replies or failed detach, so those slots remain independently.
+  const typing = new Map<Page, Slot>();
+
+  const retirePage = (page: Page) => {
+    const slot = typing.get(page);
+
+    slot?.release?.();
+    if (typing.get(page) === slot) typing.delete(page);
+  };
 
   const retire = () => {
-    typing?.release?.();
-    typing = undefined;
+    for (const page of typing.keys()) retirePage(page);
   };
 
   // Only the acknowledgement, a close event, or positive connection retirement returns
@@ -151,26 +159,18 @@ export const makeKeyboard = (
     action: (port: CDPSession) => Promise<A>,
   ) => {
     ticket.check();
-    const moved = typing;
-
-    if (moved?.idle !== undefined && moved.idle.page !== page) {
-      // Typing moved to another page: retire that idle port before attaching another.
-      const { port } = moved.idle;
-
-      moved.idle = undefined;
-      await detach(moved, port).catch(() => {});
-      ticket.check();
-    }
-    const previous = typing;
+    const previous = typing.get(page);
 
     if (previous !== undefined && previous.idle === undefined)
       throw failure(Reasons.Busy.make({}), "undispatched");
+    if (previous === undefined && typing.size >= 32)
+      throw failure(Reasons.Busy.make({}), "undispatched");
     // Reserve before attachment: a canceled waiter cannot admit more native setup or input.
     const slot: Slot = previous ?? {};
-    let port = slot.idle?.port;
+    let port = slot.idle;
 
     slot.idle = undefined;
-    typing = slot;
+    typing.set(page, slot);
 
     let result:
       | { readonly _tag: "Success"; readonly value: A }
@@ -183,25 +183,25 @@ export const makeKeyboard = (
 
         const release = () => {
           attached.off("close", release);
-          if (typing === slot) typing = undefined;
+          if (typing.get(page) === slot) typing.delete(page);
         };
 
         slot.release = release;
-        if (typing === slot) attached.on("close", release);
+        if (typing.get(page) === slot) attached.on("close", release);
       }
       ticket.check();
-      if (typing !== slot) throw failure(Reasons.Closed.make({}), "undispatched");
+      if (typing.get(page) !== slot) throw failure(Reasons.Closed.make({}), "undispatched");
 
       result = { _tag: "Success", value: await action(port) };
     } catch (error) {
       result = { _tag: "Failure", error };
       // A terminal constructor rejection returned no owned port and has no pending setup.
       // Cancellation alone never reaches here while that constructor is still unresolved.
-      if (port === undefined && typing === slot) typing = undefined;
+      if (port === undefined && typing.get(page) === slot) typing.delete(page);
     }
-    if (port !== undefined && typing === slot) {
+    if (port !== undefined && typing.get(page) === slot) {
       // Drained input replies precede detach; a failed run never leaves its port for reuse.
-      if (result._tag === "Success") slot.idle = { page, port };
+      if (result._tag === "Success") slot.idle = port;
       else await detach(slot, port).catch(() => {});
     }
     if (result._tag === "Failure") throw result.error;
@@ -323,5 +323,11 @@ export const makeKeyboard = (
       });
     });
 
-  return { press, type, retire, drained: () => typing === undefined || typing.idle !== undefined };
+  return {
+    press,
+    type,
+    retire,
+    retirePage,
+    drained: () => [...typing.values()].every((slot) => slot.idle !== undefined),
+  };
 };

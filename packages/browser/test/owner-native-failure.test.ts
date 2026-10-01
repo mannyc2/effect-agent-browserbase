@@ -229,6 +229,7 @@ it.effect("a connection fault during dispatched input reports the existing sessi
     let closes = 0;
 
     owner.transition("open");
+    owner.pageAdmission("page-a", owner.state.generation);
 
     const error = yield* owner
       .guard(
@@ -274,6 +275,7 @@ it.effect("a late acknowledgement cannot revise an already revoked unknown attem
     let closes = 0;
 
     owner.transition("open");
+    owner.pageAdmission("page-a", owner.state.generation);
 
     const error = yield* owner
       .guard(
@@ -347,6 +349,8 @@ it.effect("a contained page takes the navigation its own operation reserved with
     const owner = yield* makeOwner(limits);
 
     owner.state.phase = "open";
+    owner.pageAdmission("page-b", owner.state.generation);
+    owner.pageAdmission("page-c", owner.state.generation);
 
     // The navigation was dispatched and reserved, and then the operation gave up on it.
     const abandoned = yield* owner
@@ -360,6 +364,7 @@ it.effect("a contained page takes the navigation its own operation reserved with
           }),
         {
           mutation: true,
+          targetScope: () => ({ pageId: "page-b" }),
           contain: () => ({ pageId: "page-b", close: Effect.succeed(true) }),
         },
       )
@@ -378,7 +383,11 @@ it.effect("a contained page takes the navigation its own operation reserved with
             ticket.dispatch();
             throw new Error("elementHandle.click: Target crashed");
           }),
-        { mutation: true, contain: () => ({ pageId: "page-c", close: Effect.succeed(false) }) },
+        {
+          mutation: true,
+          targetScope: () => ({ pageId: "page-c" }),
+          contain: () => ({ pageId: "page-c", close: Effect.succeed(false) }),
+        },
       )
       .pipe(Effect.flip);
     expect(yield* owner.status).toMatchObject({ phase: "uncertain", unresolvedDispatch: true });

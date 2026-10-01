@@ -1,7 +1,7 @@
 import { Crypto, Effect, type Option, Redacted, Schema, Scope } from "effect";
 
 import * as Bootstrap from "./Bootstrap.ts";
-import type { BrowserSession, OpenOptions, Page } from "./Browser.ts";
+import type { BrowserSession, OpenOptions, OperationOptions, Page } from "./Browser.ts";
 import {
   ActionResult,
   AutomationOptions,
@@ -32,7 +32,12 @@ import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
 import type { ConnectionCleanup } from "./internal/browser/ConnectionCleanup.ts";
 import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driver.ts";
 import { connectPlaywrightEndpoint } from "./internal/browser/Playwright.ts";
-import { checked, decoded, makeSession } from "./internal/browser/PublicSession.ts";
+import {
+  checked,
+  checkedOperationOptions,
+  decoded,
+  makeSession,
+} from "./internal/browser/PublicSession.ts";
 import { acquireSession, type PageControls } from "./internal/browser/Session.ts";
 
 export {
@@ -161,23 +166,35 @@ export class DownloadEvent extends Schema.Class<DownloadEvent>("BrowserDownloadE
  * inside the owner; the integration adds only the capabilities its public session supports.
  */
 export interface TransferOperations {
-  readonly clickForDownload: (request: ClickRequest) => Effect.Effect<DownloadEvent, BrowserError>;
-  readonly selectFiles: (request: FileRequest) => Effect.Effect<ActionResult, BrowserError>;
+  readonly clickForDownload: (
+    request: ClickRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<DownloadEvent, BrowserError>;
+  readonly selectFiles: (
+    request: FileRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
   readonly clickForFileSelection: (
     request: FileRequest,
+    options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
 }
 
 /** The transfer bridge accepts only a Page issued by this exact session on its original owner. */
 export interface Integration<Reference> extends TransferOperations {
   readonly forPage: (page: Page) => Effect.Effect<TransferOperations, BrowserError>;
-  readonly liveView: <A>(issue: Effect.Effect<A, BrowserError>) => Effect.Effect<A, BrowserError>;
+  readonly liveView: <A>(
+    issue: Effect.Effect<A, BrowserError>,
+    options?: OperationOptions,
+  ) => Effect.Effect<A, BrowserError>;
   readonly beginHandoff: <A>(
     issue: Effect.Effect<A, BrowserError>,
+    options?: OperationOptions,
   ) => Effect.Effect<{ readonly token: Redacted.Redacted<string>; readonly view: A }, BrowserError>;
   readonly resume: (
     token: Redacted.Redacted<string>,
     operatorReleasedControl: boolean,
+    options?: OperationOptions,
   ) => Effect.Effect<Inventory, BrowserError>;
   readonly detach: Effect.Effect<
     { readonly reference: Reference; readonly targetId: string; readonly inventory: Inventory },
@@ -185,6 +202,7 @@ export interface Integration<Reference> extends TransferOperations {
   >;
   readonly reconnect: (
     operatorReleasedControl: boolean,
+    options?: OperationOptions,
   ) => Effect.Effect<Inventory, BrowserError | InitializationError>;
 }
 
@@ -256,14 +274,22 @@ const resolveFiles = (
 const makeTransferOperations = (
   controls: Pick<PageControls, "clickForDownload" | "selectFiles" | "clickForFileSelection">,
 ): TransferOperations => {
-  const fileOperation = (operation: "select-files" | "file-chooser", request: FileRequest) =>
-    checked(Selector, request.selector, operation).pipe(
-      Effect.flatMap((selector) =>
-        resolveFiles(request.selection, operation).pipe(
-          Effect.flatMap((files) =>
-            operation === "select-files"
-              ? controls.selectFiles(selector, files)
-              : controls.clickForFileSelection(selector, files),
+  const fileOperation = (
+    operation: "select-files" | "file-chooser",
+    request: FileRequest,
+    options?: OperationOptions,
+  ) =>
+    checkedOperationOptions(options, operation).pipe(
+      Effect.flatMap((options) =>
+        checked(Selector, request.selector, operation).pipe(
+          Effect.flatMap((selector) =>
+            resolveFiles(request.selection, operation).pipe(
+              Effect.flatMap((files) =>
+                operation === "select-files"
+                  ? controls.selectFiles(selector, files, options)
+                  : controls.clickForFileSelection(selector, files, options),
+              ),
+            ),
           ),
         ),
       ),
@@ -271,13 +297,17 @@ const makeTransferOperations = (
     );
 
   return {
-    clickForDownload: (request) =>
+    clickForDownload: (request, options) =>
       checked(ClickRequest, request, "download-action").pipe(
-        Effect.flatMap((value) => controls.clickForDownload(value.selector)),
+        Effect.flatMap((value) =>
+          checkedOperationOptions(options, "download-action").pipe(
+            Effect.flatMap((options) => controls.clickForDownload(value.selector, options)),
+          ),
+        ),
         Effect.flatMap(decoded(DownloadEvent, "download-action", "performed")),
       ),
-    selectFiles: (request) => fileOperation("select-files", request),
-    clickForFileSelection: (request) => fileOperation("file-chooser", request),
+    selectFiles: (request, options) => fileOperation("select-files", request, options),
+    clickForFileSelection: (request, options) => fileOperation("file-chooser", request, options),
   };
 };
 
@@ -395,6 +425,9 @@ export const make = Effect.fnUntraced(function* (
         maxElapsedMillis: fixed.maxElapsedMillis,
         actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
         maxHostReads: automation.maxHostReads ?? 10_000,
+        ...(automation.admissionLimits === undefined
+          ? {}
+          : { admissionLimits: automation.admissionLimits }),
       },
       {
         implementation,
@@ -420,11 +453,23 @@ export const make = Effect.fnUntraced(function* (
                 resolvePageControlsForSession(session, page).pipe(
                   Effect.map(makeTransferOperations),
                 ),
-              liveView: controls.liveView,
-              beginHandoff: controls.beginHandoff,
-              resume: controls.resume,
+              liveView: (issue, options) =>
+                checkedOperationOptions(options, "live-view").pipe(
+                  Effect.flatMap((options) => controls.liveView(issue, options)),
+                ),
+              beginHandoff: (issue, options) =>
+                checkedOperationOptions(options, "handoff").pipe(
+                  Effect.flatMap((options) => controls.beginHandoff(issue, options)),
+                ),
+              resume: (token, released, options) =>
+                checkedOperationOptions(options, "resume").pipe(
+                  Effect.flatMap((options) => controls.resume(token, released, options)),
+                ),
               detach: controls.detach,
-              reconnect: controls.reconnect,
+              reconnect: (released, options) =>
+                checkedOperationOptions(options, "reconnect").pipe(
+                  Effect.flatMap((options) => controls.reconnect(released, options)),
+                ),
             },
           };
         }),

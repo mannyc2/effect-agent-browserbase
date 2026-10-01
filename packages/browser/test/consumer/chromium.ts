@@ -46,7 +46,7 @@ const result = await Effect.runPromise(
             assert.equal(frames.length, 1);
             assert.ok(frames[0] !== undefined && frames[0].bytes.length > 0);
             const snapshot = yield* interval.snapshot;
-            const page = (yield* session.pages).find((candidate) => candidate.selected);
+            const page = (yield* session.pages()).find((candidate) => candidate.selected);
 
             assert.ok(page);
             const held = yield* PageControl.suspend(session, page);

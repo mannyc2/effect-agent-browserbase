@@ -26,7 +26,7 @@ export const record = Effect.fn("Footage.record")(function* (
   request: FootageRequest,
 ) {
   yield* session.navigate(NavigateRequest.make({ url: request.url }));
-  yield* session.ready;
+  yield* session.ready();
 
   return yield* Camera.film(
     session,

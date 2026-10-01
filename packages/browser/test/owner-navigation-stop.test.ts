@@ -6,6 +6,17 @@ import { dispatchNavigationStop } from "../src/internal/browser/Actions.ts";
 import type { NativeNavigation } from "../src/internal/browser/Driver.ts";
 import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
 
+const awaitNativeRetirement = (session: {
+  readonly admissionStatus: Effect.Effect<{ readonly nativePending: number }>;
+}) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < 64; turn++) {
+      if ((yield* session.admissionStatus).nativePending === 0) return;
+      yield* Effect.yieldNow;
+    }
+    expect((yield* session.admissionStatus).nativePending).toBe(0);
+  });
+
 /** Script only the native setup/acknowledgement; the real session, permit and dispatch path run. */
 const flight = (open: Parameters<typeof dispatchNavigationStop>[3]) => {
   const completed = gate<string>();
@@ -25,75 +36,77 @@ const flight = (open: Parameters<typeof dispatchNavigationStop>[3]) => {
   };
 };
 
-it.effect("a busy first stop retries and concurrent callers share one native dispatch", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const observing = gate<void>();
-      const observed = gate<void>();
-      const dispatched = gate<void>();
-      const acknowledged = gate<void>();
-      let opens = 0;
-      let sends = 0;
-      let closes = 0;
+it.effect(
+  "reserved stop proceeds during a held observation and callers share one native dispatch",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const observing = gate<void>();
+        const observed = gate<void>();
+        const dispatched = gate<void>();
+        const acknowledged = gate<void>();
+        let opens = 0;
+        let sends = 0;
+        let closes = 0;
 
-      const navigation = flight(async () => {
-        opens++;
+        const navigation = flight(async () => {
+          opens++;
 
-        return {
-          stop: async () => {
-            sends++;
-            dispatched.resolve();
-            await acknowledged.promise;
+          return {
+            stop: async () => {
+              sends++;
+              dispatched.resolve();
+              await acknowledged.promise;
+            },
+            close: async () => {
+              closes++;
+            },
+          };
+        });
+
+        const f = yield* fixture({
+          onNavigate: navigation.script,
+          onObserve: async () => {
+            observing.resolve();
+            await observed.promise;
           },
-          close: async () => {
-            closes++;
-          },
-        };
-      });
+        });
 
-      const f = yield* fixture({
-        onNavigate: navigation.script,
-        onObserve: async () => {
-          observing.resolve();
-          await observed.promise;
-        },
-      });
+        const session = yield* (yield* f.acquisition).connect;
+        const operation = yield* session.operations.startNavigation("https://example.test/slow");
+        const holder = yield* Effect.forkChild(session.observe());
 
-      const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/slow");
-      const holder = yield* Effect.forkChild(session.observe());
+        yield* Effect.promise(() => observing.promise);
+        const first = yield* Effect.forkChild(operation.stop);
 
-      yield* Effect.promise(() => observing.promise);
-      expect(yield* Effect.result(operation.stop)).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
-      });
-      expect(opens).toBe(0);
-      observed.resolve();
-      yield* Fiber.join(holder);
+        yield* Effect.promise(() => dispatched.promise);
+        expect({ opens, sends }).toEqual({ opens: 1, sends: 1 });
+        expect(holder.pollUnsafe()).toBeUndefined();
+        const canceledWaiter = yield* Effect.forkChild(operation.stop, { startImmediately: true });
+        const joined = yield* Effect.forkChild(operation.stop, { startImmediately: true });
 
-      const first = yield* Effect.forkChild(operation.stop);
+        yield* Fiber.interrupt(canceledWaiter);
+        expect(Exit.hasInterrupts(yield* Fiber.await(canceledWaiter))).toBe(true);
+        acknowledged.resolve();
+        yield* Fiber.join(first);
+        yield* Fiber.join(joined);
+        yield* operation.stop;
+        observed.resolve();
+        expect(yield* Fiber.join(holder).pipe(Effect.flip)).toMatchObject({
+          operation: "observe",
+          reason: { _tag: "Stale" },
+          outcome: "undispatched",
+        });
 
-      yield* Effect.promise(() => dispatched.promise);
-      const canceledWaiter = yield* Effect.forkChild(operation.stop, { startImmediately: true });
-      const joined = yield* Effect.forkChild(operation.stop, { startImmediately: true });
-
-      yield* Fiber.interrupt(canceledWaiter);
-      expect(Exit.hasInterrupts(yield* Fiber.await(canceledWaiter))).toBe(true);
-      acknowledged.resolve();
-      yield* Fiber.join(first);
-      yield* Fiber.join(joined);
-      yield* operation.stop;
-
-      expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 1, closes: 1 });
-      expect(yield* Effect.result(operation.completed)).toMatchObject({
-        _tag: "Failure",
-        failure: { operation: "navigate", reason: { _tag: "Interrupted" }, outcome: "unknown" },
-      });
-      yield* session.operations.click("#act");
-      expect(f.state.clicks).toBe(1);
-    }),
-  ),
+        expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 1, closes: 1 });
+        expect(yield* Effect.result(operation.completed)).toMatchObject({
+          _tag: "Failure",
+          failure: { operation: "navigate", reason: { _tag: "Interrupted" }, outcome: "unknown" },
+        });
+        yield* session.operations.click("#act");
+        expect(f.state.clicks).toBe(1);
+      }),
+    ),
 );
 
 it.effect.each(["cancel", "timeout"] as const)(
@@ -168,6 +181,11 @@ it.effect.each(["cancel", "timeout"] as const)(
         });
         close.resolve();
         yield* Effect.promise(() => navigation.nativeFinished.promise);
+        expect(yield* Effect.result(operation.stop)).toMatchObject({
+          _tag: "Failure",
+          failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
+        });
+        yield* awaitNativeRetirement(session);
         yield* operation.stop;
         yield* operation.stop;
         expect({ opens, sends, closes }).toEqual({ opens: 2, sends: 1, closes: 2 });
@@ -239,6 +257,7 @@ it.effect(
         expect(successorOpens).toBe(0);
         setup.resolve();
         yield* Effect.promise(() => predecessor.nativeFinished.promise);
+        yield* awaitNativeRetirement(session);
         yield* first.stop;
         expect(predecessorSends).toBe(0);
         expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
@@ -256,55 +275,56 @@ it.effect(
     ),
 );
 
-it.effect("natural completion during stop setup keeps the permit and sends no stop", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const opened = gate<void>();
-      const setup = gate<void>();
-      let sends = 0;
+it.effect(
+  "natural completion during retained stop setup permits a successor and sends no old stop",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const opened = gate<void>();
+        const setup = gate<void>();
+        let sends = 0;
 
-      const navigation = flight(async () => {
-        opened.resolve();
-        await setup.promise;
+        const navigation = flight(async () => {
+          opened.resolve();
+          await setup.promise;
 
-        return {
-          stop: async () => {
-            sends++;
-          },
-          close: async () => {},
-        };
-      });
+          return {
+            stop: async () => {
+              sends++;
+            },
+            close: async () => {},
+          };
+        });
 
-      const f = yield* fixture({
-        onNavigate: (url, pageId) =>
-          url.endsWith("first")
-            ? navigation.script(url, pageId)
-            : { pageId, settled: Promise.resolve(url), stop: async () => "settled" },
-      });
+        const f = yield* fixture({
+          onNavigate: (url, pageId) =>
+            url.endsWith("first")
+              ? navigation.script(url, pageId)
+              : { pageId, settled: Promise.resolve(url), stop: async () => "settled" },
+        });
 
-      const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/first");
-      const stopping = yield* Effect.forkChild(operation.stop);
+        const session = yield* (yield* f.acquisition).connect;
+        const operation = yield* session.operations.startNavigation("https://example.test/first");
+        const stopping = yield* Effect.forkChild(operation.stop);
 
-      yield* Effect.promise(() => opened.promise);
-      navigation.completed.resolve("https://example.test/first");
-      yield* operation.completed;
-      expect(
-        yield* Effect.result(session.operations.navigate("https://example.test/next")),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
-      });
-      setup.resolve();
-      yield* Fiber.join(stopping);
-      expect(sends).toBe(0);
-      const next = yield* session.operations.startNavigation("https://example.test/next");
+        yield* Effect.promise(() => opened.promise);
+        navigation.completed.resolve("https://example.test/first");
+        yield* operation.completed;
+        expect(yield* session.operations.navigate("https://example.test/next")).toBe(
+          "https://example.test/next",
+        );
+        expect(stopping.pollUnsafe()).toBeUndefined();
+        expect(sends).toBe(0);
+        setup.resolve();
+        yield* Fiber.join(stopping);
+        expect(sends).toBe(0);
+        const next = yield* session.operations.startNavigation("https://example.test/next");
 
-      yield* operation.stop;
-      expect(yield* next.completed).toBe("https://example.test/next");
-      expect(sends).toBe(0);
-    }),
-  ),
+        yield* operation.stop;
+        expect(yield* next.completed).toBe("https://example.test/next");
+        expect(sends).toBe(0);
+      }),
+    ),
 );
 
 it.effect.each(["failure", "cancel"] as const)(

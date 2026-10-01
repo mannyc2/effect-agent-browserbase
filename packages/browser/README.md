@@ -203,7 +203,7 @@ selection or opens a connection.
 
 ```ts
 const stage = session.initialPage;
-const scoutInfo = yield * session.createPage;
+const scoutInfo = yield * session.createPage();
 const scout = yield * session.page(scoutInfo);
 yield * scout.navigate({ url: scoutUrl });
 const stageObservation = yield * stage.observe();
@@ -249,6 +249,52 @@ and `Capture.stream(page, options)` use the same owner and capture budget. With 
 enabled, `PageControl.state(page)`, `PageControl.suspend(page)` and
 `PageControl.resume(page, receipt)` authenticate that exact Page and suspension receipt.
 
+### Admission and deadlines
+
+Ordinary operations on one Page share its permit, including operations on its Frames. Work on
+other Pages can proceed independently: a held scout read or typing response does not block
+stage input, a stage checkpoint or another Page's capture. Creation, inventory and global
+lifecycle operations use the registry permit. Inventory is bounded and non-atomic.
+
+Every admitted operation accepts trailing host-only `OperationOptions`:
+
+```ts
+yield * scout.click({ selector: "#advance" }, { admission: { queue: "1 second" } });
+yield * stage.checkpoint({}, { timeoutMillis: 2000, admission: { queue: "500 millis" } });
+```
+
+Omitting `admission.queue`, or setting it to zero, refuses conflicting work immediately with
+`Busy/undispatched`. A positive finite Effect duration allows FIFO waiting for that permit.
+The queue defaults to 32 pending callers per Page or registry and 128 across the session.
+`automation.admissionLimits.pendingPerPage` and `pendingPerSession` can set either bound to an
+integer from 1 through 1,024. `QueueFull` reports the refusing scope, maximum and observed count;
+`QueueExpired` means the admission wait expired. Cancellation and either refusal dispatch
+nothing and consume no action allowance. A granted waiter owns the permit before waking, so a
+new arrival cannot overtake it.
+
+The operation deadline and queue deadline start when the Effect executes. Waiting counts toward
+`timeoutMillis`, the policy deadline and the browser lifetime; admission never renews them.
+The queue deadline bounds only waiting, so admitted work can finish after that deadline. An
+operation deadline that ends first reports `Timeout`. These options do not queue away a stale
+target, a Page hold, a navigation reservation or a native-wait conflict. The selected-session
+adapter freezes its target before waiting; selection changes cannot redirect queued input.
+`Capture.start` and `Capture.stream` accept admission through their capture options. Exact-node
+methods keep the host's `ElementAdmission` callback separate from trailing operation options.
+
+`page.status` includes passive `admission` state: the active operation, pending count and bound,
+oldest wait age, retained native operations, native wait and stop setup. `session.admission` adds
+aggregate counts and registry state. Native capacity remains occupied after caller cancellation
+until the actual work settles or exact positive Page/connection retirement proves it unusable.
+These host snapshots grant no priority and expose no native handles.
+
+Navigation stopping and Page closure have reserved, bounded cleanup admission, so a full ordinary
+queue cannot prevent recovery. Session closure preempts work. Handoff, resume and reconnect refuse
+an existing ordinary permit holder before installing their exclusive lifecycle barrier; handoff
+then drains retained native work within its bound before granting operator control.
+
+`ready`, `retain`, `target`, `pages`, `frames` and `createPage` are now methods, including calls
+without options: use `yield* session.ready()` rather than yielding the former Effect property.
+
 ### Selected, retained and pinned targets
 
 The session itself is the convenient selected-target API. Its `navigate`, `readText`, `click`,
@@ -261,12 +307,12 @@ yield * session.selectPage(scoutInfo);
 yield * navigateScout; // navigates the scout selected above
 ```
 
-`yield* session.retain` is the deliberate retained-selection form. Acquisition resolves and
+`yield* session.retain()` is the deliberate retained-selection form. Acquisition resolves and
 validates selection under the owner's permit, then remembers its generation and selection revision.
 Selecting another page or frame, including moving away and back, makes that handle fail
 `Stale/undispatched`. The shared operation interface is `TargetOperations`; the session, retained
 view and pinned view choose their target at different times. The old `bind()` and `currentTarget`
-members have been removed; `session.target` remains a checked metadata read.
+members have been removed; `session.target()` remains a checked metadata read.
 
 | Previous API                                                        | Current API                                                                                       |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -295,9 +341,15 @@ and the selected page keeps its capture. With a fixed viewport, each new window'
 set to it, as the first page's are; a provider-managed or preserved viewport is left to the
 browser, which sizes a new window like the last one it showed. A browser that answers the
 request for a window with a protocol error, which means it created nothing, gets tabs from then
-on. `createPage` has no page to conflict with, so it waits its turn behind another operation,
-within its action timeout, rather than failing `busy`; a turn that never comes fails `timeout`
-and `undispatched`, and opens nothing.
+on. `createPage()` serializes creation and adoption under the registry permit and fails immediately
+when it is occupied. Pass `{ admission: { queue: "1 second" } }` to wait FIFO within the same
+operation deadline. It does not wait behind another Page's ordinary operation. A refused or
+expired caller opens nothing.
+
+Inventory authenticates each native Page before adopting it into the owner's registry, including
+popups. Selection authenticates and adopts its exact Page before subsequent operations can use it.
+If the browser selects an unadopted Page after another closes, selected actions refuse
+`Stale/undispatched`; `listPages()` or checked `retain()` establishes fresh authority before input.
 
 `describePage(pageInfo)` reads one exact page's current address and title, and whether it is
 selected, without reading every other page. `pages` reads every page's title at once rather than
@@ -306,7 +358,7 @@ one after another, but each title is still a round trip to the browser.
 For work that must stay on a page while selection moves elsewhere, pin it explicitly:
 
 ```ts
-const stageInfo = (yield * session.pages).find((page) => page.title === "Stage")!;
+const stageInfo = (yield * session.pages()).find((page) => page.title === "Stage")!;
 const stage = yield * session.pinPage(stageInfo);
 const childInfo = (yield * session.framesOf(stageInfo)).find(
   (frame) => frame.parentFrameId !== null,
@@ -348,27 +400,23 @@ even while another page is selected. IDs are opaque and connection-specific; con
 inspection result rather than predicting serials. Attachment, identity and fresh-state checks at
 dispatch remain necessary even when the last input targeted a different page.
 
-### An unknown outcome on a page that is not selected
+### An unknown outcome on an exact Page
 
 A mutation whose outcome becomes unknown after dispatch, because it timed out, failed or was
-interrupted, normally fences the whole session: nothing knows what it did or whether more of it
-will still land. When it was sent through a pinned handle to a page that is not the selected
-one, the owner instead keeps its permit and asks the browser to close that page, within two
-seconds. Once the browser confirms the page closed, nothing still bound for it can land, and the
-session stays open: the selected page, every other page, their observations and captures carry
-on. The operation still fails with its own reason and `unknown` outcome, and it is never re-sent.
-Its page is gone, so its `PageInfo` and pinned handles fail `undispatched` from then on, and
-`session.diagnostics` records `page-contained`. A host that gets `unknown` from a pinned page and
-then finds `status.phase` still `open` knows the page was closed.
+interrupted, never runs again automatically. When the owner can attribute it to an exact Page,
+it revokes that Page's admission and asks the browser to close it within two seconds. This
+includes selected-page operations, issued Page/Frame and pinned operations, forms, file transfers,
+navigation, initialization and callback retirement. Concurrent close requests join the same
+owned closure attempt. Once the browser confirms closure, healthy Pages, their observations and
+captures can continue. The original operation still fails with its own reason and `unknown`
+outcome, carrying `PageClosed` containment; its Page and Frame authority remains terminal.
+`session.diagnostics` records `page-contained`.
 
 Closing the page does not undo what the operation already did. A request it made, a cookie or
 storage it changed, a download or a popup it started can all outlast the page, exactly as they
-can after a known outcome. The owner fences as before when the page does not close in time, when
-the unknown outcome is on the selected page (direct operations follow it, and nothing could be
-selected in its place), when the owner cannot read its selection, when the session is paused, and
-for every operation that is not a pinned page's own: downloads, file choosers, forms, waits, page
-holds, page creation and closure, and a navigation after its dispatch returned, which settles
-through its own stop.
+can after a known outcome. Unconfirmed closure or a failure without trustworthy Page attribution
+fences the session conservatively and reports `SessionFenced`. A late response never reopens
+fenced control. Containment reports owner safety independently of the original action outcome.
 
 The complete [multi-page example](examples/multi-page.ts) keeps a presentation page pinned while
 the selected scout supplies observations. It reads and captures the presentation page without
@@ -482,7 +530,7 @@ yield *
   });
 ```
 
-Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the owner's permit is held, where waiting on a model or a network call would stall every other operation. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
+Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the Page's permit is held, where waiting on a model or a network call would stall other ordinary operations on that Page. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
 
 `fillElement` also refuses, undispatched, what the maintained engine would otherwise refuse only after dispatch, where the unknown outcome would fence the owner: a hidden control (`not-visible`), a disabled one (`disabled`), one that is not an editable input, textarea or content-editable element, and text that a `number`, `date`, `time`, `range` or other value-typed input would not keep (`unsupported`). The value is checked on a detached copy with the same constraints; the page's own control is not touched until the fill is sent.
 
@@ -563,7 +611,7 @@ permit. Mutations, another navigation and page holds on the waited page are refu
 dispatch. Input and observation on another page may proceed; replacing the waited frame's observation is refused until the logical wait ends. Closing a page or session remains available and cancels affected waits.
 No general read-under-write bypass has been added.
 
-One native wait may be outstanding per browser session. Cancellation and timeout release the
+One native wait may be outstanding per exact Page, with a finite session bound of 32. Cancellation and timeout release the
 logical barrier without inventing an uncertain mutation, but retain native capacity until the
 actual native promise and any required handle disposal settle, or that exact connection retires.
 Consequently another wait can still receive `Busy/undispatched` after its predecessor's caller
@@ -640,7 +688,7 @@ Keys go to whatever has focus in the selected page, in whichever frame that is, 
 
 A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabulary is closed: `Enter`, `Tab`, `Backspace`, `Delete`, `Escape`, the four arrows, `Home`, `End`, `PageUp`, `PageDown`, or one printable ASCII character (a space is `" "`), with `Shift`, `Control`, `Alt` and `Meta` as modifiers. The native engine parses a key string, chords included, and begins holding the modifiers before it has validated the key, so nothing reaches it that was not reviewed here. A modifier other than Shift makes a chord rather than a character, and nothing is typed.
 
-`type` sends up to 256 characters as one charged action under a single action timeout. It submits ordered native input in windows of at most 16 code points and 32 commands, without waiting for every individual reply. Each normal stroke ends at key-up, and the window drains before another begins. The owner is checked before every command, including key-up: a fence stops unsent input, and no interrupted run is replayed or repaired. Failure while dispatched input is still unacknowledged leaves an `unknown` outcome; the owner closes that exact page, or fences the session when closure is unconfirmed. Failure after all earlier input was acknowledged reports `performed`. Neither result replays the run. A canceled caller does not release native typing capacity; unresolved attachment, replies or failed port cleanup retain it until confirmed retirement. A run whose replies all succeeded leaves its private port attached for the next run on the same page, so consecutive runs there attach once; the port is detached before typing moves to another page, and released when its page closes or the connection retires.
+`type` sends up to 256 characters as one charged action under a single action timeout. It submits ordered native input in windows of at most 16 code points and 32 commands, without waiting for every individual reply. Each normal stroke ends at key-up, and the window drains before another begins. The owner is checked before every command, including key-up: a fence stops unsent input, and no interrupted run is replayed or repaired. Failure while dispatched input is still unacknowledged leaves an `unknown` outcome; the owner closes that exact page, or fences the session when closure is unconfirmed. Failure after all earlier input was acknowledged reports `performed`. Neither result replays the run. A canceled caller does not release native typing capacity; unresolved attachment, replies or failed port cleanup retain it until confirmed retirement. A run whose replies all succeeded leaves its private port attached for the next run on the same Page. Each Page owns its port, with at most 32 retained ports across the connection; switching Pages does not detach another Page's idle port. Positive Page closure or connection retirement releases its capacity.
 
 With `into`, the original node and document must still have focus before each subsequent window. Focus is never repaired. Commands already submitted in a window can land after focus moves. Once that window has successfully drained, a later `not-focused` refusal reports `performed`: earlier input was acknowledged, and the refused window sends nothing.
 
@@ -704,7 +752,7 @@ const run = Browser.scoped(
   (session) =>
     Effect.gen(function* () {
       yield* session.navigate({ url: "https://portal.example.com" });
-      yield* session.ready;
+      yield* session.ready();
       return yield* session.observe();
     }),
 );
@@ -722,7 +770,7 @@ Plans admit at most 16 uniquely named bindings. Omitted binding options default 
 
 `Browser.scoped` supervises fail-session errors and requires the owner's checked cleanup. Explicit `acquire`/`launch` retain the typed failure signal and detailed cleanup receipt for callers that need to manage that decision themselves. Teardown synchronously closes callback admission, interrupts managed callback fibers, removes this connection's registrations, disconnects locally, and still invokes the supplying lifetime’s release when a prior cleanup step fails. Reconnect installs fresh callable registrations, never replays an old invocation or a consumer init script into an already-running document, and cannot reuse quarantined callback capacity.
 
-Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.ready` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
+Operations that depend on an initialized document wait for the current one. Navigation, selection and page management do not, so initialization cannot deadlock the navigation that produces the document it is waiting for. A document that was already running when the bundle was registered — the page you attach to, or the one a reconnect finds — never ran it: `RequireFreshNavigation` reports `RequiresNavigation` and refuses dependent work, while `AcceptAlreadyRunning` verifies the requirement against that document instead of assuming it. Neither reloads a page whose work may be uncertain; that stays your decision. `session.ready()` reports the current document without charging an action, and an origin outside the plan is reported as `NotApplicable` rather than waited on.
 
 The reviewed permission subset is exercised against real Chromium. Provider extensions, persistent contexts and provider reconnect evidence belong to the supplying integration; see the [Browserbase guide](../browserbase/README.md).
 
@@ -834,7 +882,7 @@ The two clocks are never related for you. `sourceTimeMillis` is the browser's wa
 
 ## Explicit stage-page holds (opt-in)
 
-Set `pageControl: true` on `Chromium.layer` or `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.pages`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `session.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
+Set `pageControl: true` on `Chromium.layer` or `BrowserbaseBrowser.layer` to use the host-only `page-control` module. The default remains off. `PageControl.suspend(session, page)` returns a live `PageSuspension`; `PageControl.resume(session, receipt)` consumes that exact receipt. Use a `PageInfo` from `session.pages()`. Selection can move to the scout without invalidating the receipt, but connection loss, external target invalidation, completed resume, or another session does invalidate it. Holding or resuming a page may run its `freeze` and `resume` handlers, so nothing observed on _that_ page may be acted on unchecked afterwards: a reference fails `stale` until `session.revalidateElement(reference)` confirms it is still attached and still the control that was inspected. That check sends nothing, never searches for a substitute, and refuses a replaced, detached or changed node. An observation of another page is untouched, so an agent keeps driving the scout while the stage is held. `PageControl.state` reports the last acknowledged local state, not proof about a lost remote connection.
 
 This opt-in uses maintained CDP attachment with `noDefaults: true` and owner-controlled per-page focus emulation. It intentionally does not support `keepAlive`, reattachment, human handoff, or popup/dialog `pause` policies. These combinations fail before acquisition; use the existing `retain`/`close` popup policies and `dismiss` dialog policy. Resume explicitly activates the native page without changing SDK selection. Do not enable it where another native client owns focus. Modeled input, DOM reads, waits and viewport changes on held/unknown pages fail before dispatch; the scout remains operable. Page close and session close remain available. Capture does not thaw a held page; frame consumption and acknowledgements never suspend/resume it implicitly.
 

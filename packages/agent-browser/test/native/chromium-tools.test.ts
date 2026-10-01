@@ -245,11 +245,11 @@ it.live(
 
               expect(result.output.done).toBe(true);
               expect((yield* browser.readText({ selector: "#act" })).text).toBe("clicked");
-              expect((yield* browser.pages).length).toBe(1);
-              expect((yield* browser.target).pageId).toBe((yield* browser.pages)[0]!.pageId);
+              expect((yield* browser.pages()).length).toBe(1);
+              expect((yield* browser.target()).pageId).toBe((yield* browser.pages())[0]!.pageId);
               yield* browser.navigate({ url: site.url });
               expect((yield* browser.observe()).text).toContain("VISIBLE WORDS");
-              const created = yield* browser.createPage;
+              const created = yield* browser.createPage();
 
               yield* browser.closePage(created);
             }),

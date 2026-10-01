@@ -28,7 +28,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           // cause. Reproduced once in 25 rounds of the full native suite on two
           // loaded cores. The budget still bounds the wait, so a popup that is
           // never registered fails below with the same count as before.
-          const initialPages = yield* settle(session.pages, (open) => open.length === 2);
+          const initialPages = yield* settle(session.pages(), (open) => open.length === 2);
           const original = initialPages.find((page) => page.selected);
           const popup = initialPages.find((page) => !page.selected);
 
@@ -38,7 +38,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           const popupHandle = session;
 
           yield* popupHandle.navigate(NavigateRequest.make({ url: f.url }));
-          const pages = yield* session.pages;
+          const pages = yield* session.pages();
           const pinnedOriginal = pages.find((page) => page.pageId === original.pageId)!;
           const pinnedPopup = pages.find((page) => page.pageId === popup.pageId)!;
 
@@ -95,7 +95,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
           const replacements: Array<Capture.CaptureInterval> = [];
 
           for (let index = 0; index < 3; index++) {
-            const replacementPage = yield* session.createPage;
+            const replacementPage = yield* session.createPage();
 
             replacements.push(
               yield* Capture.start(session, { target: replacementPage, maxDurationMillis: 5000 }),
@@ -110,7 +110,7 @@ it.live("real CDP: pinned captures survive tab selection and isolate page close"
 
           expect(survivor.target.pageId).toBe(popup.pageId);
           expect(survivor.received).toBeGreaterThan(0);
-          expect((yield* session.retain.pipe(Effect.result))._tag).toBe("Success");
+          expect((yield* session.retain().pipe(Effect.result))._tag).toBe("Success");
           yield* session.close;
         }),
       );

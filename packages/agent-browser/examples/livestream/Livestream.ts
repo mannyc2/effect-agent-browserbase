@@ -348,7 +348,7 @@ export const livestream = Effect.fn("Livestream.run")(function* <E>(
 
       if (event._tag === "ModelStarted") {
         // No browser call runs while the model thinks, so the page's title can be read.
-        const pages = yield* Effect.orElseSucceed(session.pages, () => []);
+        const pages = yield* Effect.orElseSucceed(session.pages(), () => []);
         const page = pages.find((known) => known.selected);
         const title = page?.title;
 

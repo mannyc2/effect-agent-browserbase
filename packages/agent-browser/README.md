@@ -81,7 +81,7 @@ import * as Adapter from "effect-agent-browser/adapter";
 
 const current = yield * Adapter.fromSession(browser, { selection: "current" });
 const retained = yield * Adapter.fromSession(browser, { selection: "retained" });
-const next = yield * browser.createPage;
+const next = yield * browser.createPage();
 yield * browser.selectPage(next);
 yield * current.handle.navigate({ url: "https://example.com" });
 // retained.handle now refuses stale selection, including after moving away and back.
@@ -326,9 +326,12 @@ A callback or its finalizer invoking another tool through the same host receives
 from an independent caller, which queues normally; nesting another host does not erase the
 enclosing marker. Captured callback services and per-call services keep their existing meanings.
 
-Direct browser reads, capture and page control are outside the tool lane and retain the browser
-owner's fail-fast native permit. They can still report `Busy` while a native operation holds that
-permit. Module-level `handlers`, `nativeHandlers`, `keyboardHandlers` and `selectionHandlers` are the unsupervised,
+Direct browser reads, capture and page control are outside the tool lane. Operations on one Page
+and its frames share admission, while independent Pages can proceed concurrently. Host calls
+accept explicit trailing `OperationOptions`: queue omission or zero fails immediately with `Busy`,
+and a positive finite `admission.queue` allows bounded FIFO waiting. Queue waiting counts toward
+the operation deadline. These host options stay outside Tool schemas and are distinct from the
+exact-control `HandlerOptions.admission` callback. Module-level `handlers`, `nativeHandlers`, `keyboardHandlers` and `selectionHandlers` are the unsupervised,
 caller-managed path: they do not add this lane. Use `makeHost` or `Tools.run` for the maintained
 sequencing and supervision lifecycle.
 
@@ -440,7 +443,7 @@ phase, reason, generation, busy and unresolved-dispatch facts without becoming m
 The browser's separate `diagnostics` keeps bounded policy/native records; typed callback causes
 remain separate. All these snapshots remain readable after host closure.
 
-The generic package's `BrowserError` carries a tagged `reason` and required `outcome`. The Tools return only `stale`, `busy`, `denied`, `not-found`, `ambiguous`, `not-visible`, `not-focused`, `disabled`, `unsupported`, `limit`, `timeout`, `closed`, or `failed`, alongside the unchanged `undispatched`, `rejected`, `performed`, or `unknown` outcome. `disabled` asks for a control that is not enabled now; `unsupported` for input a control cannot take, such as text in a checkbox or a date it would not keep. `performed` means native input was acknowledged before a later step failed; `unknown` means a command outcome remains unresolved. Neither authorizes blind replay. Host diagnostics retain exact `PageClosed` or `SessionFenced` containment separately. An `Interrupted` navigation projects to `stale/unknown`; that does not authorize replay. Rate limiting projects to `busy`, with retry timing retained for the host. Provider status, diagnostic paths, limit measurements and native exceptions never enter this failure projection.
+The generic package's `BrowserError` carries a tagged `reason` and required `outcome`. The Tools return only `stale`, `busy`, `denied`, `not-found`, `ambiguous`, `not-visible`, `not-focused`, `disabled`, `unsupported`, `limit`, `timeout`, `closed`, or `failed`, alongside the unchanged `undispatched`, `rejected`, `performed`, or `unknown` outcome. `disabled` asks for a control that is not enabled now; `unsupported` for input a control cannot take, such as text in a checkbox or a date it would not keep. `performed` means native input was acknowledged before a later step failed; `unknown` means a command outcome remains unresolved. Neither authorizes blind replay. Host diagnostics retain exact `PageClosed` or `SessionFenced` containment separately. An `Interrupted` navigation projects to `stale/unknown`; that does not authorize replay. Rate limiting and `QueueFull` project to `busy`; `QueueExpired` projects to `timeout`. Original retry timing and admission reasons remain available to the host. Provider status, diagnostic paths, limit measurements and native exceptions never enter this failure projection.
 
 Read `host.toolFailures` for the original `_tag`, `operation`, tagged `reason` fields and `outcome`, plus the Tool's name and the supplied tool-call ID. Each `ToolFailureDiagnostic` is recorded before projection; navigation start/completion, exact-node refusals and malformed typed results use the same channel. The `ToolFailureSnapshot` keeps the latest 32 entries in oldest-first order, with a `dropped` count for evictions. IDs longer than 256 UTF-16 code units are omitted with `toolCallIdOmitted: true`; an absent ID leaves that flag false. Snapshots and their recorded fields are copied and frozen. Reading them performs no browser work, takes no action permit, adds no callback services and remains possible after host closure.
 
@@ -471,7 +474,7 @@ Native framework tests prove that the adapter Layer captures configured services
 | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Adapter.fromSession(browser)`                                                              | `yield* Adapter.fromSession(browser, { selection: "retained" })` preserves retained behavior; choose `"current"` deliberately for follow-selection.             |
 | `AgentSession<E>` and `adapted.currentHandle`                                               | `AdaptedSession<S>` retains exact `S`; run `fromSession` again to acquire a new handle.                                                                         |
-| `BoundTarget`, `browser.bind()` and `browser.currentTarget`                                 | Use `TargetOperations` for common operations and `yield* browser.retain` for a checked `RetainedTarget`. Ordinary calls use the session directly.               |
+| `BoundTarget`, `browser.bind()` and `browser.currentTarget`                                 | Use `TargetOperations` for common operations and `yield* browser.retain()` for a checked `RetainedTarget`. Ordinary calls use the session directly.             |
 | A string from `createPage`, passed to select/close                                          | `createPage` returns `PageInfo`; `selectPage(page)` and `closePage(page)` check it. `selectPage` and `selectFrame` return `void`.                               |
 | `error.reason === "limit"`, top-level `status` or `retryAfterMillis`                        | Match `error.reason._tag` or use Effect reason handlers. Producer facts live inside the reason; `outcome` is required.                                          |
 | Full host reason names in model failures                                                    | Use the compact vocabulary above; read `host.toolFailures` for the original fields.                                                                             |
@@ -482,6 +485,7 @@ Native framework tests prove that the adapter Layer captures configured services
 | An invalid option failing each Tool call `failed/undispatched`                              | `makeHost`, `run` and handler Layers fail when built, with a `Configuration` reason naming the option.                                                          |
 | `unsupported` and `disabled` projected to `failed`                                          | They keep their own names in `BrowserToolFailure`; match them where a switch was exhaustive.                                                                    |
 | Browser calls run concurrently, ordered only by the lane                                    | `host.run` schedules them sequentially in declared order; `scheduling: "lane"` restores the previous behaviour.                                                 |
+| `yield* browser.ready`, `retain`, `target`, `pages`, `frames` or `createPage`               | Call the corresponding method, such as `yield* browser.retain()`; optional `OperationOptions` belong to explicit host calls                                     |
 
 Common-operation helpers may accept `AnySession`; helpers such as the example's `turns<E>` that supervise browser failure stay generic in `E`. Binding bounds now have validated defaults, while explicit bounds retain their meaning. `NavigateRequest.timeoutMillis` is a host option and does not add a model-selected timeout to the existing URL-only navigation Tool. Added observation state is bounded and does not include field values or destinations. The earlier `Browser.scoped` inference fix changes explicit curried generic argument lists from five to four outer parameters and two to three inner parameters; ordinary call syntax remains.
 

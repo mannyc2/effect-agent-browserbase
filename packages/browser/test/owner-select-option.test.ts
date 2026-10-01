@@ -127,7 +127,10 @@ it.effect.each(["before", "after"] as const)(
         yield* Effect.promise(() => retired.promise);
         expect(dispatches).toBe(position === "before" ? 0 : 1);
         expect(yield* session.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
-        if (position === "before") expect((yield* session.readText({})).text).toBe("initial");
+        if (position === "before")
+          expect((yield* session.readText({}, { admission: { queue: "1 second" } })).text).toBe(
+            "initial",
+          );
         else {
           expect(yield* session.initialPage.status).toMatchObject({ phase: "closed" });
           expect(

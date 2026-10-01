@@ -132,7 +132,7 @@ const program = Effect.scoped(
               expect(captured.duplicates === 0, "no frame is delivered twice");
 
               // The registered bundle ran on the document this consumer navigated to.
-              const ready = yield* session.ready;
+              const ready = yield* session.ready();
 
               expect(ready._tag === "Ready", "the current document satisfied its readiness");
               expect(
@@ -179,7 +179,7 @@ const program = Effect.scoped(
               );
 
               // A second owner borrows the same session and closes without releasing it.
-              const pages = yield* session.pages;
+              const pages = yield* session.pages();
               const selected = pages.find((page) => page.selected);
 
               if (selected === undefined) throw new Error("The owned session has no selected page");

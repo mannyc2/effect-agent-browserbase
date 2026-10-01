@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, type Scope, Stream } from "effect";
-import { type PageInfo, Target } from "effect-browser/browser-data";
+import type { AdmissionOptions } from "effect-browser/browser";
+import { PageInfo, Target } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import type { BrowserError } from "effect-browser/errors";
 
@@ -30,6 +31,7 @@ interface PreviousFrame {
 }
 
 interface PreviousOptions {
+  readonly admission?: AdmissionOptions;
   readonly target?: PageInfo;
   readonly maxFrames?: number;
   readonly maxBufferedBytes?: number;
@@ -41,7 +43,12 @@ interface PreviousOptions {
 }
 
 const frameShape: Same<Capture.CapturedFrame, PreviousFrame> = true;
-const optionsShape: Same<Capture.CaptureOptions, PreviousOptions> = true;
+
+const optionsShape: Same<
+  { [K in keyof Capture.CaptureOptions]: Capture.CaptureOptions[K] },
+  PreviousOptions
+> = true;
+
 const error: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserError> = true;
 const scope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const decoderEnvironment: Same<typeof Capture.CapturedFrame.DecodingServices, never> = true;
@@ -60,6 +67,14 @@ const frame: Capture.CapturedFrame = {
   viewportWidth: 800,
   viewportHeight: 600,
 };
+
+const selectedPage = PageInfo.make({
+  pageId: frame.target.pageId,
+  targetId: "native-page-1",
+  url: "",
+  title: "",
+  selected: true,
+});
 
 it("adds data schemas without changing structural public shapes or capture E/R", () => {
   expect(frameShape && optionsShape && error && scope && decoderEnvironment).toBe(true);
@@ -153,6 +168,9 @@ it.effect("rejects invalid admission before resolving a native target or reservi
       const parent: CaptureParent = {
         owner,
         target: () => frame.target,
+        selectedPage: () => {
+          throw new Error("invalid limits must not read target metadata");
+        },
         resolve: () => {
           resolutions++;
 
@@ -207,6 +225,7 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
       const parent: CaptureParent = {
         owner,
         target: () => target,
+        selectedPage: () => selectedPage,
         resolve: () =>
           Effect.succeed({
             key: "native-page-1",
@@ -279,6 +298,7 @@ it.effect(
         const parent: CaptureParent = {
           owner,
           target: () => target,
+          selectedPage: () => selectedPage,
           resolve: () =>
             Effect.succeed({
               key: "capture-accounting",

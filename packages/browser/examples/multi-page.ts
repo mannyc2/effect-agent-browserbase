@@ -14,7 +14,7 @@ export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
     Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 40, maxElapsedMillis: 60000 })),
     (browser) =>
       Effect.gen(function* () {
-        const stageInfo = (yield* browser.pages).find((page) => page.selected);
+        const stageInfo = (yield* browser.pages()).find((page) => page.selected);
 
         if (stageInfo === undefined)
           return yield* BrowserError.make({
@@ -26,7 +26,7 @@ export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
         const stage = yield* browser.pinPage(stageInfo);
 
         yield* stage.navigate({ url: stageUrl });
-        yield* browser.selectPage(yield* browser.createPage);
+        yield* browser.selectPage(yield* browser.createPage());
         yield* browser.navigate({ url: scoutUrl });
 
         // The selected scout supplies the observation and its exact-node references.

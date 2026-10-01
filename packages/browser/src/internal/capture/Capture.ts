@@ -529,12 +529,25 @@ export const startCapture = Effect.fnUntraced(function* (
   };
 
   yield* parent.validate ?? Effect.void;
+
+  const requested = yield* Effect.try({
+    try: () => options.target ?? parent.selectedPage(),
+    catch: () =>
+      BrowserError.make({
+        operation: "capture-start",
+        reason: Reasons.Stale.make({}),
+        outcome: "undispatched",
+      }),
+  });
+
+  const generation = parent.owner.state.generation;
+
   yield* parent.owner
     .guard(
       "capture-start",
       (ticket) =>
         Effect.gen(function* () {
-          const resolved = yield* parent.resolve(ticket, options.target);
+          const resolved = yield* parent.resolve(ticket, requested);
 
           // Frames and summaries share this identity with the generation guard. It must not
           // become writable through consumer-owned frame data.
@@ -643,7 +656,26 @@ export const startCapture = Effect.fnUntraced(function* (
           });
           ticket.check();
         }),
-      { charge: false },
+      {
+        charge: false,
+        admission: options.admission,
+        targetScope: () => ({ pageId: requested.pageId }),
+        preflight: (parent.validate ?? Effect.void).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              generation === parent.owner.state.generation
+                ? Effect.void
+                : Effect.fail(
+                    BrowserError.make({
+                      operation: "capture-start",
+                      reason: Reasons.Stale.make({}),
+                      outcome: "undispatched",
+                    }),
+                  ),
+            ),
+          ),
+        ),
+      },
     )
     .pipe(
       Effect.onError(() => (lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid))),

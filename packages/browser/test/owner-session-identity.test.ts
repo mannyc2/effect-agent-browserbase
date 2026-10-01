@@ -34,7 +34,7 @@ it.effect(
         const controls = yield* acquisition.rawConnect;
         const bindings = yield* makeBindings(Bootstrap.empty);
         const session = makeSession(controls, bindings);
-        const [first] = yield* session.pages;
+        const [first] = yield* session.pages();
 
         if (first === undefined) return assert.fail("the scripted provider opens one page");
         // Declared, not narrowed: the loop below would otherwise make this inference circular.

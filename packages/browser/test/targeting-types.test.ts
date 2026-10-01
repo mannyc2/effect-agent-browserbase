@@ -30,8 +30,8 @@ const pinFrame = (session: BrowserSession, page: PageInfo, frame: FrameInfo) =>
 const framesOf = (session: BrowserSession, page: PageInfo) => session.framesOf(page);
 const directRead = (session: BrowserSession) => session.readText({});
 const asOperations = (session: BrowserSession): TargetOperations => session;
-const retain = (session: BrowserSession) => session.retain;
-const create = (session: BrowserSession) => session.createPage;
+const retain = (session: BrowserSession) => session.retain();
+const create = (session: BrowserSession) => session.createPage();
 const select = (session: BrowserSession, page: PageInfo) => session.selectPage(page);
 
 const removedInputs = (session: BrowserSession) => {

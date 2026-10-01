@@ -106,7 +106,7 @@ it.live(
         yield* Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
           Effect.gen(function* () {
             yield* browser.navigate({ url: site.url });
-            const [first] = yield* browser.pages;
+            const [first] = yield* browser.pages();
 
             if (first === undefined) return yield* Effect.die("Missing original page");
             const current = yield* fromSession(browser, { selection: "current" });
@@ -114,7 +114,7 @@ it.live(
             const laterRetention = fromSession(browser, { selection: "retained" });
             const nextNavigation = current.handle.navigate({ url: `${site.url}?current=1` });
             const pinned = yield* browser.pinPage(first);
-            const second = yield* browser.createPage;
+            const second = yield* browser.createPage();
 
             expect(current.browser).toBe(browser);
             expect(retained.browser).toBe(browser);
@@ -131,7 +131,7 @@ it.live(
             );
 
             yield* pinned.navigate({ url: `${site.url}?pinned=1` });
-            const pages = yield* browser.pages;
+            const pages = yield* browser.pages();
 
             expect(pages.find((page) => page.pageId === first.pageId)?.url).toBe(
               `${site.url}?pinned=1`,
@@ -139,7 +139,7 @@ it.live(
             expect(pages.find((page) => page.pageId === second.pageId)?.url).toBe(
               `${site.url}?current=1`,
             );
-            expect((yield* browser.target).pageId).toBe(second.pageId);
+            expect((yield* browser.target()).pageId).toBe(second.pageId);
 
             yield* browser.selectPage(first);
             yield* browser.selectPage(second);

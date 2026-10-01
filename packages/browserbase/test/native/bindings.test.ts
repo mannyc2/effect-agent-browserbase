@@ -157,7 +157,7 @@ it.live(
             yield* Deferred.await(entered).pipe(Effect.timeout(3000));
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(reading)).text).toBe("host settings:7");
-            expect(yield* session.ready).toEqual({ _tag: "Ready" });
+            expect(yield* session.ready()).toEqual({ _tag: "Ready" });
             expect(versions.length).toBeGreaterThan(0);
             expect(versions.every((version) => version === 7)).toBe(true);
 
@@ -656,7 +656,7 @@ it.live(
                       finalized = true;
                     }),
                 );
-                const registering = yield* session.page(yield* session.createPage);
+                const registering = yield* session.page(yield* session.createPage());
 
                 yield* Deferred.await(entered);
                 expect(nativeFailure).toBeInstanceOf(Error);
@@ -1220,7 +1220,7 @@ it.live(
               }),
             );
             yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
-            expect(yield* session.ready).toEqual({ _tag: "Ready" });
+            expect(yield* session.ready()).toEqual({ _tag: "Ready" });
             expect((yield* session.observe()).url).toBe(fixture.url);
             expect((yield* session.bindingDiagnostics).faulted).toBe(false);
           }),

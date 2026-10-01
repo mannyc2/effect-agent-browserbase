@@ -159,7 +159,8 @@ export const makePlaywrightDriver = async (
           });
       },
       closed: (entry) => {
-        actions.waitChanged(entry);
+        actions.retireWaitPage(entry);
+        keyboard.retirePage(entry.page);
         for (const [dialog, beforeUnload] of dialogs)
           if (dialog.page() === entry.page) {
             beforeUnload?.dismissed(false);

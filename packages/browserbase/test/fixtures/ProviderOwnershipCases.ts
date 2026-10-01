@@ -139,7 +139,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const scripted = yield* Testing.ScriptedBrowserbase;
       const acquired = yield* BrowserbaseBrowser.acquire(policy);
       const session = yield* acquired.connect;
-      const handle = yield* session.retain;
+      const handle = yield* session.retain();
 
       yield* handle.navigate({ url: "https://example.test/next" });
       assert.equal((yield* handle.readText({})).text, "initial");
@@ -335,7 +335,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
       const browser = yield* scriptedBrowser;
       const observed = yield* browser.gate;
-      const old = yield* session.retain;
+      const old = yield* session.retain();
       const handoff = yield* session.beginHandoff(60);
 
       yield* browser.document.update({
@@ -379,7 +379,7 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
       const browser = yield* scriptedBrowser;
-      const old = yield* session.retain;
+      const old = yield* session.retain();
 
       yield* session.detach;
       yield* browser.document.update({

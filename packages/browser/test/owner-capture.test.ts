@@ -71,6 +71,7 @@ const makeFixture = Effect.fnUntraced(function* (
 
   const parent: CaptureParent = {
     owner,
+    selectedPage: () => page(),
     target: () =>
       Target.make({ generation: owner.state.generation, pageId: "page-1", frameId: "frame-1" }),
     resolve: (_ticket, requested) => {

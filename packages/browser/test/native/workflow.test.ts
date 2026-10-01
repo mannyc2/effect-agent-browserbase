@@ -87,7 +87,7 @@ it.live.each(["inventory", "second-dismissal"] as const)(
         const initial = session.initialPage;
 
         yield* initial.navigate({ url });
-        yield* session.createPage;
+        yield* session.createPage();
 
         const other = page
           .context()

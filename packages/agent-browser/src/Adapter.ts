@@ -43,6 +43,7 @@ const operationError = (
 ): InteractiveBrowserError => {
   switch (error.reason._tag) {
     case "Busy":
+    case "QueueFull":
       return InteractiveBrowserBusyError.make({
         implementation,
         message: "Browser control is busy or handed to an operator",
@@ -97,6 +98,7 @@ const operationError = (
     case "NotFound":
     case "NotVisible":
     case "Provider":
+    case "QueueExpired":
     case "RateLimited":
     case "Resized":
     case "TargetChanged":
@@ -210,7 +212,7 @@ export const fromSession = Effect.fnUntraced(function* <S extends AnySession>(
     identity: browser.implementation,
   });
 
-  const target = fixed.selection === "retained" ? yield* browser.retain : browser;
+  const target = fixed.selection === "retained" ? yield* browser.retain() : browser;
 
   return {
     browser,

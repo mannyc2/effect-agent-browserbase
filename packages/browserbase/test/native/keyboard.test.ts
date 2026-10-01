@@ -60,7 +60,7 @@ it.live("real CDP: keys are real input, delivered to whatever the browser says h
           const typed = yield* handle.type(TypeRequest.make({ text: "Hi!" }));
 
           expect(typed.kind).toBe("type");
-          expect(typed.target).toEqual(yield* session.target);
+          expect(typed.target).toEqual(yield* session.target());
           expect(typed.completedMonotonicNanos).toBeGreaterThanOrEqual(typed.startedMonotonicNanos);
           const afterText = yield* read(native);
 
@@ -221,7 +221,7 @@ it.live("real CDP: real typing keeps the exactness and admission an observed nod
           assert.ok(native);
           const childUrl = new URL("/keyframe", f.url).href;
 
-          const frames = yield* settle(session.frames, (listed) =>
+          const frames = yield* settle(session.frames(), (listed) =>
             listed.some((frame) => frame.name === "child" && frame.url === childUrl),
           );
 
@@ -316,7 +316,7 @@ it.live("real CDP: keys follow focus across frames, and a frame that lost it adm
 
           assert.ok(native);
 
-          const frames = yield* settle(session.frames, (listed) =>
+          const frames = yield* settle(session.frames(), (listed) =>
             listed.some((frame) => frame.name === "child" && frame.url.endsWith("/keyframe")),
           );
 
@@ -382,7 +382,7 @@ it.live("real CDP: keys meant for a held page are refused, never queued for when
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           yield* handle.click(ClickRequest.make({ selector: "#first" }));
           const [native] = f.nativePages(session.reference.sessionId);
-          const [page] = yield* session.pages;
+          const [page] = yield* session.pages();
 
           assert.ok(native);
           assert.ok(page);
@@ -426,12 +426,12 @@ it.live("real CDP: keys through a handle bound to another page reach neither pag
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const first = yield* session.retain;
+          const first = yield* session.retain();
 
           yield* first.navigate(NavigateRequest.make({ url: `${f.url}keyboard` }));
           yield* first.click(ClickRequest.make({ selector: "#first" }));
-          yield* session.selectPage(yield* session.createPage);
-          const second = yield* session.retain;
+          yield* session.selectPage(yield* session.createPage());
+          const second = yield* session.retain();
 
           yield* second.navigate(NavigateRequest.make({ url: `${f.url}keyboard#second` }));
 

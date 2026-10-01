@@ -94,11 +94,12 @@ it.effect("adaptation retains lazily and the framework layer translates failed r
       });
 
       const browser = scriptedSession({
-        retain: Effect.suspend(() => {
-          retained++;
+        retain: () =>
+          Effect.suspend(() => {
+            retained++;
 
-          return Effect.fail(expected);
-        }),
+            return Effect.fail(expected);
+          }),
       });
 
       const pending = fromSession(browser, { selection: "retained" });

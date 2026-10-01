@@ -153,7 +153,7 @@ it.effect(
       Effect.gen(function* () {
         const f = yield* fixture();
         const direct = f.session.readText({});
-        const retained = yield* f.session.retain;
+        const retained = yield* f.session.retain();
         const pinned = yield* f.session.pinPage(f.pages[0]!);
 
         yield* f.session.selectPage(f.pages[1]!);
@@ -169,12 +169,12 @@ it.effect(
           failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
         expect(f.reads).toEqual(["page-b", "page-a"]);
-        expect((yield* (yield* f.session.retain).readText({})).text).toBe("page-a");
+        expect((yield* (yield* f.session.retain()).readText({})).text).toBe("page-a");
       }),
     ),
 );
 
-it.effect("retain refuses busy and closed owners before reading native selection", () =>
+it.effect("retain captures Page selection before Busy refusal and never reads a closed owner", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
@@ -194,18 +194,18 @@ it.effect("retain refuses busy and closed owners before reading native selection
       yield* Deferred.await(entered);
       const before = f.selectedReads();
 
-      expect(yield* Effect.result(f.session.retain)).toMatchObject({
+      expect(yield* Effect.result(f.session.retain())).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
       });
-      expect(f.selectedReads()).toBe(before);
+      expect(f.selectedReads()).toBe(before + 1);
       release();
       yield* Fiber.join(reading);
-      yield* f.session.retain;
+      yield* f.session.retain();
       yield* f.session.closeChecked;
       const closed = f.selectedReads();
 
-      expect(yield* Effect.result(f.session.retain)).toMatchObject({
+      expect(yield* Effect.result(f.session.retain())).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
       });
@@ -221,7 +221,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const f = yield* fixture();
-        const views = [f.session, yield* f.session.retain, yield* f.session.pinPage(f.pages[0]!)];
+        const views = [f.session, yield* f.session.retain(), yield* f.session.pinPage(f.pages[0]!)];
 
         for (const view of views) yield* view.navigate({ url: "https://example.test/default" });
         for (const view of views)
