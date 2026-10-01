@@ -16,6 +16,7 @@ import {
   Reasons,
   type BrowserOperation,
   type BrowserOutcome,
+  type BrowserReason,
   type Containment,
 } from "../../Errors.ts";
 import type { AcknowledgementFact, SettledEvidence } from "../../PlanData.ts";
@@ -276,6 +277,34 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
         }),
       ),
     );
+  };
+
+  /**
+   * Why admission refuses work in the owner's present state, or undefined when it would admit it.
+   * Both of the guard's admission checks and stale-capability reporting share this one answer,
+   * so a pending policy cleanup reports busy only while the session can still recover.
+   */
+  const refusal = (
+    options: {
+      readonly phases?: ReadonlyArray<Phase>;
+      readonly recovery?: boolean;
+      readonly bypassBlocked?: boolean;
+    } = {},
+  ): BrowserReason | undefined => {
+    const blocked = admissionBarrier !== undefined && options.bypassBlocked !== true;
+
+    if (
+      (options.phases ?? ["open"]).includes(state.phase) &&
+      (policies.size === 0 || options.recovery === true) &&
+      (!blocked || options.recovery === true)
+    )
+      return undefined;
+
+    return terminalReason === "expired"
+      ? Reasons.Expired.make({})
+      : state.phase === "paused" || blocked || (terminalReason === null && policies.size > 0)
+        ? Reasons.Busy.make({})
+        : Reasons.Closed.make({});
   };
 
   const transition = (phase: Phase) => {
@@ -693,26 +722,10 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       };
 
       const work = Effect.gen(function* () {
-        if (
-          !(options.phases ?? ["open"]).includes(state.phase) ||
-          (policies.size > 0 && options.recovery !== true) ||
-          (admissionBarrier !== undefined &&
-            options.bypassBlocked !== true &&
-            options.recovery !== true)
-        ) {
-          return yield* BrowserError.make({
-            operation,
-            reason:
-              terminalReason === "expired"
-                ? Reasons.Expired.make({})
-                : state.phase === "paused" ||
-                    (admissionBarrier !== undefined && options.bypassBlocked !== true) ||
-                    (terminalReason === null && policies.size > 0)
-                  ? Reasons.Busy.make({})
-                  : Reasons.Closed.make({}),
-            outcome: "undispatched",
-          });
-        }
+        const refused = refusal(options);
+
+        if (refused !== undefined)
+          return yield* BrowserError.make({ operation, reason: refused, outcome: "undispatched" });
         yield* options.preflight ?? Effect.void;
         const now = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
 
@@ -1053,29 +1066,11 @@ export const makeOwner = Effect.fnUntraced(function* (limits: Limits) {
       });
 
       const checkAdmission = Effect.suspend(() => {
-        if (
-          !(options.phases ?? ["open"]).includes(state.phase) ||
-          (policies.size > 0 && options.recovery !== true) ||
-          (admissionBarrier !== undefined &&
-            options.bypassBlocked !== true &&
-            options.recovery !== true)
-        )
-          return Effect.fail(
-            BrowserError.make({
-              operation,
-              reason:
-                terminalReason === "expired"
-                  ? Reasons.Expired.make({})
-                  : state.phase === "paused" ||
-                      (admissionBarrier !== undefined && options.bypassBlocked !== true) ||
-                      policies.size > 0
-                    ? Reasons.Busy.make({})
-                    : Reasons.Closed.make({}),
-              outcome: "undispatched",
-            }),
-          );
+        const refused = refusal(options);
 
-        return options.preflight ?? Effect.void;
+        return refused === undefined
+          ? (options.preflight ?? Effect.void)
+          : Effect.fail(BrowserError.make({ operation, reason: refused, outcome: "undispatched" }));
       });
 
       return checkAdmission.pipe(

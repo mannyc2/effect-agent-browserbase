@@ -131,6 +131,33 @@ it.effect.each([
     }),
 );
 
+it.effect("a session that ends while policy cleanup is pending refuses work Closed, not Busy", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner({
+      maxActions: 2,
+      maxHostReads: 2,
+      maxElapsedMillis: 60_000,
+      actionTimeoutMillis: 1000,
+    });
+
+    owner.transition("open");
+    owner.policy(
+      { source: "policy", reason: "dialog-overflow", token: {}, disposition: "pending" },
+      owner.state.generation,
+    );
+    // Pending cleanup defers work only while the session could still admit it.
+    expect(yield* owner.guard("read-text", () => Effect.void).pipe(Effect.flip)).toMatchObject({
+      reason: { _tag: "Busy" },
+      outcome: "undispatched",
+    });
+    owner.terminate("native-failure", "known");
+    expect(yield* owner.guard("read-text", () => Effect.void).pipe(Effect.flip)).toMatchObject({
+      reason: { _tag: "Closed" },
+      outcome: "undispatched",
+    });
+  }),
+);
+
 it.effect(
   "policy quarantine preserves the admitted click and exposes bounded copied evidence",
   () =>
