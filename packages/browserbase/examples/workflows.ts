@@ -137,8 +137,8 @@ export const downloadFile = (credentials: Credentials, url: string) => {
       const before = yield* downloads.list(session.reference);
 
       yield* session.clickForDownload(
-        ClickRequest.make({ selector: "#download" }),
         session.initialPage,
+        ClickRequest.make({ selector: "#download" }),
       );
 
       const fresh = yield* downloads.waitForNew(

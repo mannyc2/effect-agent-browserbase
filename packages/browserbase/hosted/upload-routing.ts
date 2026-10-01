@@ -81,13 +81,10 @@ await h.run(
         yield* Effect.sleep(Math.max(0, delay - elapsed));
         const afterMillis = (yield* Clock.currentTimeMillis) - uploadedAt;
 
-        yield* session.selectFiles(
-          {
-            selector: `#effect-agent-file-${index}`,
-            selection: { _tag: "Uploaded", uploads: [receipt] },
-          },
-          session.initialPage,
-        );
+        yield* session.selectFiles(session.initialPage, {
+          selector: `#effect-agent-file-${index}`,
+          selection: { _tag: "Uploaded", uploads: [receipt] },
+        });
         yield* Effect.sleep(1_000);
 
         const { text } = yield* session.initialPage.readText(

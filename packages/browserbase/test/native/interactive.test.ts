@@ -178,8 +178,8 @@ it.live("real CDP: popup identity, explicit tab selection, downloads and dialog 
           const target = session.initialPage.identity;
 
           const download = yield* session.clickForDownload(
-            ClickRequest.make({ selector: "#download" }),
             session.initialPage,
+            ClickRequest.make({ selector: "#download" }),
           );
 
           expect(download.state).toBe("completed");

@@ -59,21 +59,22 @@ export interface Handoff {
 export interface BrowserbaseSession<E = never> extends BrowserSession<E> {
   readonly reference: SessionReference;
   readonly closeChecked: Effect.Effect<CleanupResult, BrowserError>;
+  /** Transfers take the issued Page first, like `Capture.start(page)` and `PageControl`. */
   readonly clickForDownload: (
-    request: ClickRequest,
     page: Page,
+    request: ClickRequest,
     options?: OperationOptions,
   ) => Effect.Effect<DownloadObservation, BrowserError>;
   /** Attaches to an existing file input; an uploaded branch needs a receipt for this session. */
   readonly selectFiles: (
-    request: SelectFilesRequest,
     page: Page,
+    request: SelectFilesRequest,
     options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
   /** Registers the chooser observation before the single click that opens it. */
   readonly clickForFileSelection: (
-    request: SelectFilesRequest,
     page: Page,
+    request: SelectFilesRequest,
     options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
   readonly liveView: (
@@ -180,7 +181,7 @@ const makeSession = <E>(
   return Object.assign(session, {
     reference: lifetime.reference,
     closeChecked: session.closeChecked.pipe(Effect.andThen(lifetime.closeChecked)),
-    clickForDownload: (request, page, options) =>
+    clickForDownload: (page, request, options) =>
       transfers(page).pipe(
         Effect.flatMap((operations) => operations.clickForDownload(request, options)),
         Effect.flatMap((event) =>
@@ -198,7 +199,7 @@ const makeSession = <E>(
           ),
         ),
       ),
-    selectFiles: (request, page, options) =>
+    selectFiles: (page, request, options) =>
       transfers(page).pipe(
         Effect.flatMap((operations) =>
           selection(request, lifetime.reference, "select-files").pipe(
@@ -208,7 +209,7 @@ const makeSession = <E>(
           ),
         ),
       ),
-    clickForFileSelection: (request, page, options) =>
+    clickForFileSelection: (page, request, options) =>
       transfers(page).pipe(
         Effect.flatMap((operations) =>
           selection(request, lifetime.reference, "file-chooser").pipe(

@@ -162,22 +162,19 @@ const program = Effect.scoped(
               );
 
               // Small file selection needs no provisioning of any kind.
-              yield* session.selectFiles(
-                {
-                  selector: "#file",
-                  selection: {
-                    _tag: "Inline",
-                    files: [
-                      InlineFile.make({
-                        name: "notes.txt",
-                        mediaType: "text/plain",
-                        bytes: new TextEncoder().encode("consumer bytes"),
-                      }),
-                    ],
-                  },
+              yield* session.selectFiles(session.initialPage, {
+                selector: "#file",
+                selection: {
+                  _tag: "Inline",
+                  files: [
+                    InlineFile.make({
+                      name: "notes.txt",
+                      mediaType: "text/plain",
+                      bytes: new TextEncoder().encode("consumer bytes"),
+                    }),
+                  ],
                 },
-                session.initialPage,
-              );
+              });
 
               expect(
                 (yield* session.initialPage.readText(ReadTextRequest.make({ selector: "#chosen" })))

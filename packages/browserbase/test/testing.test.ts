@@ -241,13 +241,10 @@ it.effect("an upload receipt authorizes file selection for the exact session", (
 
         expect(receipt.remotePath).toBe("/tmp/.uploads/notes.txt");
         expect((yield* scripted.provider.sessions)[0]?.uploads).toEqual(["notes.txt"]);
-        yield* session.selectFiles(
-          {
-            selector: "#upload",
-            selection: { _tag: "Uploaded", uploads: [receipt] },
-          },
-          session.initialPage,
-        );
+        yield* session.selectFiles(session.initialPage, {
+          selector: "#upload",
+          selection: { _tag: "Uploaded", uploads: [receipt] },
+        });
         const [browser] = yield* scripted.browsers;
 
         expect(browser).toBeDefined();

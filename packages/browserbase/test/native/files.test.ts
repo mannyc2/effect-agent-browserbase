@@ -34,16 +34,13 @@ it.live("real CDP: in-memory selection reaches the page without any provisioning
 
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
 
-          yield* session.selectFiles(
-            {
-              selector: "#file",
-              selection: {
-                _tag: "Inline",
-                files: [inline("notes.txt", "in-memory bytes"), inline("second.txt", "two")],
-              },
+          yield* session.selectFiles(session.initialPage, {
+            selector: "#file",
+            selection: {
+              _tag: "Inline",
+              files: [inline("notes.txt", "in-memory bytes"), inline("second.txt", "two")],
             },
-            session.initialPage,
-          );
+          });
 
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#chosen" }))).text).toBe(
             "notes.txt:15,second.txt:3",
@@ -58,13 +55,10 @@ it.live("real CDP: in-memory selection reaches the page without any provisioning
           );
 
           // A chooser opened by a click is satisfied by exactly one attachment.
-          yield* session.clickForFileSelection(
-            {
-              selector: "#choose",
-              selection: { _tag: "Inline", files: [inline("chosen.txt", "picked")] },
-            },
-            session.initialPage,
-          );
+          yield* session.clickForFileSelection(session.initialPage, {
+            selector: "#choose",
+            selection: { _tag: "Inline", files: [inline("chosen.txt", "picked")] },
+          });
 
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#chosen" }))).text).toBe(
             "chosen.txt:6",
@@ -93,13 +87,10 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
 
           yield* session.selectPage(selected);
           yield* selected.navigate(NavigateRequest.make({ url: f.url }));
-          yield* session.selectFiles(
-            {
-              selector: "#file",
-              selection: { _tag: "Inline", files: [inline("page.txt", "exact")] },
-            },
-            destination,
-          );
+          yield* session.selectFiles(destination, {
+            selector: "#file",
+            selection: { _tag: "Inline", files: [inline("page.txt", "exact")] },
+          });
           expect(
             (yield* destination.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
           ).toBe("page.txt:5");
@@ -107,13 +98,10 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
             (yield* selected.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
           ).toBe("");
 
-          yield* session.clickForFileSelection(
-            {
-              selector: "#choose",
-              selection: { _tag: "Inline", files: [inline("chooser.txt", "chosen")] },
-            },
-            destination,
-          );
+          yield* session.clickForFileSelection(destination, {
+            selector: "#choose",
+            selection: { _tag: "Inline", files: [inline("chooser.txt", "chosen")] },
+          });
           expect(
             (yield* destination.readText(ReadTextRequest.make({ selector: "#chosen" }))).text,
           ).toBe("chooser.txt:6");
@@ -125,8 +113,8 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
           yield* selected.navigate(NavigateRequest.make({ url: new URL("next", f.url).href }));
 
           const download = yield* session.clickForDownload(
-            ClickRequest.make({ selector: "#download" }),
             destination,
+            ClickRequest.make({ selector: "#download" }),
           );
 
           expect(download.filename).toBe("fixture.txt");
@@ -144,12 +132,12 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
 
           for (const page of invalidPages) {
             for (const transfer of [
-              session.selectFiles(request, page).pipe(Effect.asVoid),
+              session.selectFiles(page, request).pipe(Effect.asVoid),
               session
-                .clickForFileSelection({ ...request, selector: "#choose" }, page)
+                .clickForFileSelection(page, { ...request, selector: "#choose" })
                 .pipe(Effect.asVoid),
               session
-                .clickForDownload(ClickRequest.make({ selector: "#download" }), page)
+                .clickForDownload(page, ClickRequest.make({ selector: "#download" }))
                 .pipe(Effect.asVoid),
             ]) {
               const result = yield* transfer.pipe(Effect.result);
@@ -167,12 +155,12 @@ it.live("real CDP: provider transfers follow issued pages and reject invalid pag
           yield* destination.close();
 
           for (const transfer of [
-            session.selectFiles(request, destination).pipe(Effect.asVoid),
+            session.selectFiles(destination, request).pipe(Effect.asVoid),
             session
-              .clickForFileSelection({ ...request, selector: "#choose" }, destination)
+              .clickForFileSelection(destination, { ...request, selector: "#choose" })
               .pipe(Effect.asVoid),
             session
-              .clickForDownload(ClickRequest.make({ selector: "#download" }), destination)
+              .clickForDownload(destination, ClickRequest.make({ selector: "#download" }))
               .pipe(Effect.asVoid),
           ]) {
             const result = yield* transfer.pipe(Effect.result);
@@ -224,13 +212,10 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
 
           expect(receipt.remotePath).toBe(f.uploadedPaths[0]);
 
-          yield* session.selectFiles(
-            {
-              selector: "#file",
-              selection: { _tag: "Uploaded", uploads: [receipt] },
-            },
-            session.initialPage,
-          );
+          yield* session.selectFiles(session.initialPage, {
+            selector: "#file",
+            selection: { _tag: "Uploaded", uploads: [receipt] },
+          });
 
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#chosen" }))).text).toBe(
             "stored.txt:21",
@@ -246,23 +231,20 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
 
           // A receipt this package never issued carries no attachment authority.
           const forged = yield* session
-            .selectFiles(
-              {
-                selector: "#file",
-                selection: {
-                  _tag: "Uploaded",
-                  uploads: [
-                    UploadReceipt.make({
-                      reference: session.reference,
-                      filename: "stored.txt",
-                      bytes: 21,
-                      remotePath: "/etc/hostname",
-                    }),
-                  ],
-                },
+            .selectFiles(session.initialPage, {
+              selector: "#file",
+              selection: {
+                _tag: "Uploaded",
+                uploads: [
+                  UploadReceipt.make({
+                    reference: session.reference,
+                    filename: "stored.txt",
+                    bytes: 21,
+                    remotePath: "/etc/hostname",
+                  }),
+                ],
               },
-              session.initialPage,
-            )
+            })
             .pipe(Effect.result);
 
           expect(forged._tag).toBe("Failure");
@@ -277,13 +259,10 @@ it.live("real CDP: an uploaded file is opened by the browser, not streamed from 
 
           // A chooser cannot open a provider-stored path from this client.
           const chooser = yield* session
-            .clickForFileSelection(
-              {
-                selector: "#choose",
-                selection: { _tag: "Uploaded", uploads: [receipt] },
-              },
-              session.initialPage,
-            )
+            .clickForFileSelection(session.initialPage, {
+              selector: "#choose",
+              selection: { _tag: "Uploaded", uploads: [receipt] },
+            })
             .pipe(Effect.result);
 
           expect(chooser._tag).toBe("Failure");
