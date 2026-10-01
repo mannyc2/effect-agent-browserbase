@@ -302,11 +302,18 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
           });
 
         const worker = Effect.gen(function* () {
-          const remaining = began - now();
+          let waited = false;
 
-          if (remaining > 0) {
+          // Timers have millisecond resolution and can wake before a fractional instant, so the
+          // wait repeats until the owner's own monotonic clock has reached the intended start.
+          while (configuration.clock.monotonicTimeNanosUnsafe() < intendedMonotonicNanos) {
+            waited = true;
+
+            const remainingNanos =
+              intendedMonotonicNanos - configuration.clock.monotonicTimeNanosUnsafe();
+
             const retired = yield* (configuration.retired ?? Effect.never).pipe(
-              Effect.timeoutOption(Duration.millis(remaining)),
+              Effect.timeoutOption(Duration.millis(Math.ceil(Number(remainingNanos) / 1_000_000))),
             );
 
             // The issuing Page or owner ended before the start: refuse with its current reason.
@@ -323,8 +330,8 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
                 ),
                 Effect.mapError(preparationFailure),
               );
-            yield* configuration.validate.pipe(Effect.mapError(preparationFailure));
           }
+          if (waited) yield* configuration.validate.pipe(Effect.mapError(preparationFailure));
           if (!released) {
             publication = configuration.publish?.();
             publish = publication?.append;

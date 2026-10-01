@@ -113,3 +113,24 @@ it.effect("a start already past its budget is missed before any attempt or input
     }),
   ),
 );
+
+it.live("a scheduled start never begins before its instant on the owner's real clock", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(script);
+      const page = browser.initialPage;
+
+      yield* page.navigate({ url: `${origin}/` });
+      // Fractional-millisecond offsets are where a millisecond timer can wake early.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const startAt = (yield* browser.monotonicTimeNanos) + 3_000_000n + BigInt(attempt * 37_123);
+        const ran = yield* page.run(visit, { startAt, within: "10 seconds" });
+
+        expect(ran.timing.startedMonotonicNanos).not.toBeNull();
+        if (ran.timing.startedMonotonicNanos === null) return;
+        expect(ran.timing.startedMonotonicNanos).toBeGreaterThanOrEqual(startAt);
+        expect(ran.timing.latenessNanos).toBe(ran.timing.startedMonotonicNanos - startAt);
+      }
+    }),
+  ),
+);
