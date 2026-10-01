@@ -133,7 +133,7 @@ const host =
   });
 ```
 
-`policy` runs for every exact-node Tool (`browser_click`, `browser_fill`, `browser_hover`, `browser_press`, `browser_type`, `browser_select_option`, each step of `browser_fill_form` and their `_and_inspect` variants) on fresh facts from the exact observed node. The owner first rejects replaced or changed controls, independently of that policy. `admit` is synchronous under the owner's permit; it returns a boolean. False, a thrown exception or a non-boolean result fails `denied/undispatched`, without projecting the exception to the model. Policy and destination/type/autocomplete/form facts are host-only and are never Tool parameters. Asynchronous application checks belong before dispatch and retain their own Effect errors, services and cancellation; they do not replace this final synchronous policy. Native input is still not atomic with DOM validation: page script can run after validation and before input arrives.
+`policy` runs for every exact-node Tool (`browser_click`, `browser_fill`, `browser_hover`, `browser_press`, `browser_type`, `browser_select_option`, each step of `browser_fill_form` and their `_and_inspect` variants) on fresh facts from the exact observed node. The owner first rejects replaced or changed controls, independently of that policy. Performed pointer delays and fill preparation recheck those facts and the policy before further input. `admit` is synchronous under the owner's permit; it returns a boolean. False, a thrown exception or a non-boolean result fails `denied/undispatched` before input, or `denied/rejected` after acknowledged preparation, without projecting the exception to the model. Policy and destination/type/autocomplete/form facts are host-only and are never Tool parameters. Asynchronous application checks belong before dispatch and retain their own Effect errors, services and cancellation; they do not replace this final synchronous policy. Native input is still not atomic with DOM validation: page script can run after validation and before input arrives.
 
 Passive `checkpoint` does not replace the observation used by Tools. After a page hold/resume, call `revalidateElement` on the retained exact reference before dispatch; unchanged, admissible controls remain usable, while replacements and changed control facts fail without substitution. The native AgentRuntime regression exercises this composition on the same owner.
 
@@ -142,6 +142,11 @@ Passive `checkpoint` does not replace the observation used by Tools. After a pag
 Merge `readingToolkit` to give a model `browser_read_more`. Each reading reads `continuationBytes` of text (32 KiB by default, at least `maxTextBytes`, at most 128 KiB) while the model is shown `maxTextBytes`; `browser_read_more({ observationId })` returns the next part of the latest reading's text, with `remaining` and the page's own `textTruncated`. It reads nothing new from the page, spends no browser action and changes no reference; an older reading's ID fails `stale`. A browser policy whose `maxReturnedBytes` is too small for the continuation reads `maxTextBytes` instead. The latest reading is kept per issued Page, so hosts for sibling Pages have independent continuations.
 
 ## Forms in one call
+
+`browser_fill` and replacement values in form calls accept at most 65,536 UTF-8 bytes per input,
+matching the public Plan input bound. The Tool validates this before a run is prepared, including
+for `_and_inspect` variants. A form's complete encoded input bindings also share the Plan's 1 MiB
+total bound; the Tool validates the same named inputs the executor sends.
 
 Every action on a page retires the observation its references came from, so a model that sends three fills and a click in one response gets one fill and three `stale` refusals, and each refusal counts toward Effect Agent's `repeatedFailureLimit`. `formToolkit` adds `browser_fill_form`, and `observedFormToolkit` its `_and_inspect` variant:
 
@@ -270,7 +275,7 @@ old readings that later actions have already made stale.
 
 `ObservedActionResult`, `ObservedNavigationResult`, `ObservedInputResult`, `ObservedFormResult`
 and `FollowUpObservation` are exported schemas. `host.observedHandlers` shares the host's lane; `observedHandlers(browser,
-options)` provides the caller-managed variant handlers. The default toolkit and existing result
+page, options)` provides the caller-managed variant handlers. The default toolkit and existing result
 formats remain unchanged.
 
 ## Scoped navigation and receipt callbacks
@@ -434,6 +439,7 @@ it.effect("the agent clicks the observed control exactly once", () =>
       expect((yield* browser.control.calls).map((c) => c.operation)).toEqual([
         "navigate",
         "observe",
+        "resolve",
         "click",
       ]);
     }),

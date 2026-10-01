@@ -1518,6 +1518,7 @@ export const makeObservation = (
     readonly reference: ObservedElement | ResolvedElement | undefined;
     readonly kept: boolean;
     readonly check: () => void;
+    readonly readmit: () => Promise<void>;
     readonly facts: ControlFacts | undefined;
     readonly capture: DescriptorSample | undefined;
     readonly release: () => Promise<void>;
@@ -1615,92 +1616,102 @@ export const makeObservation = (
           ? undefined
           : retainedNode?.snapshot.nodes.get(node.option.selectElementId)?.handle;
 
-      const attached: unknown = await element.evaluate(
-        (candidate, { selector, selection }) => {
-          if (!candidate.isConnected || candidate.ownerDocument !== document) return false;
-          if (
-            selection !== undefined &&
-            (!(candidate instanceof HTMLOptionElement) ||
-              !(selection.select instanceof HTMLSelectElement) ||
-              !selection.select.isConnected ||
-              candidate.closest("select") !== selection.select ||
-              selection.select.options.item(candidate.index) !== candidate ||
-              candidate.value !== selection.value)
-          )
-            return false;
-          if (selector === undefined) return true;
-          const matches = candidate.ownerDocument.querySelectorAll(selector);
+      // Reuse this original lease after owned preparation; never resolve its selector again.
+      const readmit = async (refresh = false) => {
+        check();
+        if (refresh && node === undefined && policy === undefined) return;
 
-          return matches.length === 1 && matches[0] === candidate;
-        },
-        {
-          selector: typeof target === "string" ? target : undefined,
-          selection:
-            select === undefined || node?.option === undefined
-              ? undefined
-              : { select, value: node.option.value },
-        },
-      );
+        const attached: unknown = await element.evaluate(
+          (candidate, { selector, selection }) => {
+            if (!candidate.isConnected || candidate.ownerDocument !== document) return false;
+            if (
+              selection !== undefined &&
+              (!(candidate instanceof HTMLOptionElement) ||
+                !(selection.select instanceof HTMLSelectElement) ||
+                !selection.select.isConnected ||
+                candidate.closest("select") !== selection.select ||
+                selection.select.options.item(candidate.index) !== candidate ||
+                candidate.value !== selection.value)
+            )
+              return false;
+            if (selector === undefined) return true;
+            const matches = candidate.ownerDocument.querySelectorAll(selector);
 
-      check();
-      if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
-      if (
-        node !== undefined ||
-        policy !== undefined ||
-        ticket.captureTarget !== undefined ||
-        ownPhase
-      ) {
-        const sampled = safeDecode(
-          Facts,
-          await sampleFacts(element, ticket, check, resolvedTarget),
-        ).facts;
-
-        facts = ControlFacts.make(sampled);
-
-        if (ticket.captureTarget !== undefined) {
-          const privateTarget =
-            typeof target !== "string" && "_tag" in target
-              ? resolvedElements.get(target)
-              : undefined;
-
-          capture = {
-            facts: ControlFacts.make({ ...sampled, box: { ...sampled.box } }),
-            scope: privateTarget?.scope ?? retainedNode?.snapshot.scope ?? "document",
-            ...frameSample(resolvedTarget),
-            ...(sampled.completeness === undefined ? {} : { completeness: sampled.completeness }),
-            ...(privateTarget?.descriptor?.ordinal === undefined
-              ? {}
-              : { ordinal: privateTarget.descriptor.ordinal }),
-          };
-        }
+            return matches.length === 1 && matches[0] === candidate;
+          },
+          {
+            selector: typeof target === "string" ? target : undefined,
+            selection:
+              select === undefined || node?.option === undefined
+                ? undefined
+                : { select, value: node.option.value },
+          },
+        );
 
         check();
+        if (attached !== true) throw failure(Reasons.Stale.make({}), "undispatched");
         if (
-          node !== undefined &&
-          (enablement
-            ? stableIdentityOf(facts) !== node.stable
-            : identityOf(facts) !== node.identity)
-        )
-          throw failure(Reasons.Stale.make({}), "undispatched");
-        if (enablement && facts.disabled) throw failure(Reasons.Disabled.make({}), "undispatched");
-        if (policy !== undefined) {
-          let admitted = false;
+          node !== undefined ||
+          policy !== undefined ||
+          ticket.captureTarget !== undefined ||
+          ownPhase
+        ) {
+          const sampled = safeDecode(
+            Facts,
+            await sampleFacts(element, ticket, check, resolvedTarget),
+          ).facts;
 
-          try {
-            admitted = policy(facts) === true;
-          } catch {
-            admitted = false;
+          facts = ControlFacts.make(sampled);
+
+          if (ticket.captureTarget !== undefined) {
+            const privateTarget =
+              typeof target !== "string" && "_tag" in target
+                ? resolvedElements.get(target)
+                : undefined;
+
+            capture = {
+              facts: ControlFacts.make({ ...sampled, box: { ...sampled.box } }),
+              scope: privateTarget?.scope ?? retainedNode?.snapshot.scope ?? "document",
+              ...frameSample(resolvedTarget),
+              ...(sampled.completeness === undefined ? {} : { completeness: sampled.completeness }),
+              ...(privateTarget?.descriptor?.ordinal === undefined
+                ? {}
+                : { ordinal: privateTarget.descriptor.ordinal }),
+            };
           }
-          if (!admitted) throw failure(Reasons.Denied.make({}), "undispatched");
+
+          check();
+          if (
+            node !== undefined &&
+            (enablement
+              ? stableIdentityOf(facts) !== node.stable
+              : identityOf(facts) !== node.identity)
+          )
+            throw failure(Reasons.Stale.make({}), "undispatched");
+          if (enablement && facts.disabled)
+            throw failure(Reasons.Disabled.make({}), "undispatched");
+          if (policy !== undefined) {
+            let admitted = false;
+
+            try {
+              admitted = policy(facts) === true;
+            } catch {
+              admitted = false;
+            }
+            if (!admitted) throw failure(Reasons.Denied.make({}), "undispatched");
+          }
         }
-      }
-      check();
+        check();
+      };
+
+      await readmit();
 
       return {
         element,
         reference: typeof target === "string" ? undefined : target,
         kept,
         check,
+        readmit: () => readmit(true),
         facts,
         capture,
         release,

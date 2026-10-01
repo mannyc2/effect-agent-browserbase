@@ -1,7 +1,6 @@
 import { Option, Predicate, Schema, SchemaGetter } from "effect";
 import { BrowserActionResult, BrowserNavigationResult } from "effect-agent/interactive-browser";
 import {
-  FillRequest,
   Identifier,
   KeyModifier,
   KeyStroke,
@@ -10,6 +9,7 @@ import {
   WheelRequest,
 } from "effect-browser/browser-data";
 import type { BrowserError } from "effect-browser/errors";
+import { InputBindings, InputValue } from "effect-browser/plan-data";
 
 /** A declared Tool failure, not a successful payload with an embedded error. */
 export class BrowserToolFailure extends Schema.TaggedError<BrowserToolFailure>()(
@@ -168,8 +168,11 @@ export type InspectRequest = typeof InspectRequest.Type;
 
 export const FillParameters = Schema.Struct({
   reference: ElementReference,
-  value: FillRequest.fields.value.annotate({
-    description: "The complete text for this input or textarea; it replaces what is there",
+  value: InputValue.annotate({
+    description:
+      "The complete text for this input or textarea, at most 65,536 UTF-8 bytes; it replaces what is there",
+    // UTF-8 byte bounds have no JSON Schema keyword; retain the filter's description.
+    toJsonSchema: () => ({}),
   }),
 });
 
@@ -260,8 +263,8 @@ export type ReadMoreResult = typeof ReadMoreResult.Type;
 const FormFieldParameter = Schema.Struct({
   elementId: ElementIdParameter,
   value: optionalParameter(
-    FillRequest.fields.value,
-    "Text that replaces the contents of an input or textarea. null when this field sets checked or options",
+    InputValue,
+    "Text that replaces the contents of an input or textarea, at most 65,536 UTF-8 bytes. null when this field sets checked or options",
   ),
   checked: optionalParameter(
     Schema.Boolean,
@@ -294,6 +297,14 @@ const FormFieldParameter = Schema.Struct({
     }),
   );
 
+/** The same private input names are validated at the Tool boundary and sent to the Plan. */
+export const formInputs = (fields: ReadonlyArray<typeof FormFieldParameter.Type>) =>
+  Object.fromEntries(
+    fields.flatMap((field, index) =>
+      field.value === undefined ? [] : [[`field-${index}`, field.value] as const],
+    ),
+  );
+
 /** Several controls of one observation, set in order, then at most one submit click. */
 export const FillFormParameters = Schema.Struct({
   observationId: ObservationIdParameter,
@@ -320,6 +331,9 @@ export const FillFormParameters = Schema.Struct({
       !request.fields.some((field) => field.elementId === request.submit) ||
       `submit ${request.submit} is also a field; a control is either set or clicked to send the form, so drop that field or make submit null`,
   ),
+  Schema.makeFilter((request) => Schema.is(InputBindings)(formInputs(request.fields)), {
+    title: "at most 1 MiB of encoded form input bindings",
+  }),
 );
 
 export type FillFormParameters = typeof FillFormParameters.Type;

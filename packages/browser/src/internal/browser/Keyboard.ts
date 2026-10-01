@@ -314,7 +314,7 @@ export const makeKeyboard = (
 
     if (description === undefined) {
       await submit(() => port.send("Input.insertText", { text: stroke.key }));
-      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: true });
       if (stroke.holdMillis > 0)
         await pacing.pauseUntil(pacing.now() + BigInt(Math.round(stroke.holdMillis * 1e6)));
 
@@ -407,7 +407,7 @@ export const makeKeyboard = (
         }),
       );
     }
-    ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+    ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: true });
   };
 
   const pacedKeys = async (
@@ -436,6 +436,7 @@ export const makeKeyboard = (
     schedule: KeySchedule,
     ticket: Ticket,
     check: () => void,
+    readmit?: () => Promise<void>,
   ) =>
     withTypingPort(page, ticket, async (port) => {
       check();
@@ -443,12 +444,14 @@ export const makeKeyboard = (
       ticket.dispatch();
       await element.selectText({ timeout: ticket.remainingMillis() });
       ticket.acknowledge?.({ subphase: "focus", logicalComplete: false });
+      await readmit?.();
       check();
       await requireFocus(element, ticket.dispatched ? "unknown" : "undispatched");
       check();
       ticket.dispatch();
       await page.keyboard.press("Backspace");
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+      if (schedule.strokes.length > 0) await readmit?.();
       check();
       await pacedKeys(port, schedule, ticket, check, element);
     });

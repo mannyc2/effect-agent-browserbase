@@ -298,6 +298,7 @@ export const makeActions = (
           schedule: KeySchedule,
           ticket: Ticket,
           check: () => void,
+          readmit?: () => Promise<void>,
         ) => Promise<void>;
       }
     | undefined;
@@ -360,13 +361,18 @@ export const makeActions = (
     target: ElementTarget,
     ticket: Ticket,
     admit: (element: ElementHandle<Element>, facts: ControlFacts | undefined) => Promise<Admitted>,
-    action: (element: ElementHandle<Element>, admitted: Admitted, check: () => void) => Promise<A>,
+    action: (
+      element: ElementHandle<Element>,
+      admitted: Admitted,
+      check: () => void,
+      readmit: () => Promise<void>,
+    ) => Promise<A>,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
     enablement = false,
     automaticDispatch = true,
   ): Promise<A> => {
-    const { element, check, facts, capture, release } = await observation.resolve(
+    const { element, check, readmit, facts, capture, release } = await observation.resolve(
       target,
       ticket,
       policy,
@@ -386,7 +392,7 @@ export const makeActions = (
       // ElementHandle actions do not re-resolve the selector onto a replacement node.
       if (automaticDispatch) ticket.dispatch();
 
-      const result = await action(element, admitted, check);
+      const result = await action(element, admitted, check, readmit);
 
       ticket.acknowledge?.();
       ticket.followUp?.();
@@ -400,7 +406,12 @@ export const makeActions = (
   const withElement = <A>(
     target: ElementTarget,
     ticket: Ticket,
-    action: (element: ElementHandle<Element>, admitted: void, check: () => void) => Promise<A>,
+    action: (
+      element: ElementHandle<Element>,
+      admitted: void,
+      check: () => void,
+      readmit: () => Promise<void>,
+    ) => Promise<A>,
     policy?: AdmissionPolicy,
     browserTarget?: DriverTarget,
     automaticDispatch = true,
@@ -436,12 +447,16 @@ export const makeActions = (
     ticket: Ticket,
     capture?: InputCapture,
     check: () => void = () => ticket.check(),
+    readmit?: () => Promise<void>,
   ): Promise<InputReceipt | undefined> => {
     if (ticket.performance !== undefined) {
       if (preparePress === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
       ownerPacing(ticket);
 
       return preparePress(page, element, ticket, check).then(async (planned) => {
+        await readmit?.();
+        check();
+
         const dispatch = async () => {
           check();
           ticket.dispatch();
@@ -482,7 +497,8 @@ export const makeActions = (
         target,
         ticket,
         (element) => (ticket.performance === undefined ? Promise.resolve() : refuseInput(element)),
-        (element, _admitted, check) => clickElement(page, element, ticket, capture, check),
+        (element, _admitted, check, readmit) =>
+          clickElement(page, element, ticket, capture, check, readmit),
         policy,
         browserTarget,
         false,
@@ -507,7 +523,8 @@ export const makeActions = (
     await withElement(
       target,
       ticket,
-      (element, _admitted, check) => clickElement(page, element, ticket, undefined, check),
+      (element, _admitted, check, readmit) =>
+        clickElement(page, element, ticket, undefined, check, readmit),
       undefined,
       browserTarget,
       ticket.performance === undefined,
@@ -649,7 +666,7 @@ export const makeActions = (
 
           return performedKeys.prepare(value, ticket);
         },
-        (element, schedule, check) =>
+        (element, schedule, check, readmit) =>
           schedule === undefined
             ? element.fill(value, { timeout: timeout(ticket) })
             : (performedKeys?.fill(
@@ -658,6 +675,7 @@ export const makeActions = (
                 schedule,
                 ticket,
                 check,
+                readmit,
               ) ?? Promise.reject(failure(Reasons.Unsupported.make({}), "undispatched"))),
         policy,
         browserTarget,
@@ -692,6 +710,7 @@ export const makeActions = (
         element,
         reference: leasedReference,
         check,
+        readmit,
         facts,
         capture: sampled,
         release,
@@ -750,6 +769,7 @@ export const makeActions = (
                 ticket,
                 capture,
                 check,
+                readmit,
               );
             };
           }
@@ -780,6 +800,7 @@ export const makeActions = (
                 schedule,
                 ticket,
                 check,
+                readmit,
               );
             ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
             check();
@@ -850,7 +871,8 @@ export const makeActions = (
         target,
         ticket,
         (element) => refuseInput(element),
-        (element, _admitted, check) => clickElement(page, element, ticket, capture, check),
+        (element, _admitted, check, readmit) =>
+          clickElement(page, element, ticket, capture, check, readmit),
         policy,
         browserTarget,
         true,

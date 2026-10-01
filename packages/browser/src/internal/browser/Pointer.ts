@@ -435,11 +435,12 @@ export const makePointer = (targets: Targets, actions: ReturnType<typeof makeAct
           ticket.performance === undefined
             ? reachablePoint(page, element)
             : Promise.resolve(undefined),
-        async (element, point, check) => {
+        async (element, point, check, readmit) => {
           if (ticket.performance === undefined && point !== undefined) await moveTo(page, point);
           else {
             const planned = await preparePress(page, element, ticket, check);
 
+            await readmit();
             check();
             ticket.dispatch();
             await moveTo(page, planned.intended.position);

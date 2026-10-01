@@ -568,7 +568,7 @@ switching selection and returns only data after the shared browser scope closes.
 `unknown`), while `reason` is a tagged union. Recover by reason without parsing strings:
 
 ```ts
-const read = session
+const read = session.initialPage
   .readText({})
   .pipe(Effect.catchReason("BrowserError", "Busy", () => Effect.succeed({ text: "" })));
 ```
@@ -652,25 +652,25 @@ input decision participates in the exact-node fresh-facts check; field values an
 remain excluded from the model projection.
 
 ```ts
-const facts = yield * session.controlFacts(reference);
+const facts = yield * page.controlFacts(reference);
 // kind, label, disabled, editable, inputType, autocomplete, formMethod, box, placement, hitTest
 // destination: the resolved link target, or where this control submits its form
 ```
 
 `destination` is resolved by the browser against the document's base URL, and honours a `formaction` override. It can carry a token, which is why it is not in an `Observation`. An over-long destination is left out, never cut. No value and no markup is ever included.
 
-A reference is to the control that was inspected, not merely to a node. If the same attached node now has a different destination, input type, autocomplete category, form method, label or disabled state, acting on it fails `stale` and `undispatched`, exactly as it does for a replaced or detached node. Nothing is ever re-found by selector or label.
+A reference is to the control that was inspected, not merely to a node. If the same attached node now has a different destination, input type, autocomplete category, form method, label or disabled state, acting on it fails `stale` and `undispatched` before input, exactly as it does for a replaced or detached node. A performed action also rechecks after delayed preparation; an acknowledged preparatory scroll or focus retains its `rejected` outcome if that later check fails. An existing reference is never substituted by a selector or label lookup.
 
 When a decision has to be current at dispatch, pass a policy. It is evaluated on facts read from that exact node immediately before the input:
 
 ```ts
 yield *
-  session.fillElement(reference, value, {
+  page.fillElement(reference, value, {
     admit: (facts) => facts.inputType !== "password" && facts.autocomplete !== "cc-number",
   });
 ```
 
-Anything but `true`, or a policy that throws, sends nothing and fails `denied`. The policy is a plain synchronous function on purpose: it runs while the Page's permit is held, where waiting on a model or a network call would stall other ordinary operations on that Page. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
+Anything but `true`, or a policy that throws, sends no further input and fails `denied`. Performed pointer delays and fill preparation re-sample the original exact node and invoke the same policy again before further input. The policy is a plain synchronous function on purpose: it runs while the Page's permit is held, where waiting on a model or a network call would stall other ordinary operations on that Page. It is not an atomic check-and-input transaction, because page script can still run before the native input lands.
 
 `fillElement` also refuses, undispatched, what the maintained engine would otherwise refuse only after dispatch, where an unknown outcome would close that Page or fence the session if closure is unconfirmed: a hidden control (`not-visible`), a disabled one (`disabled`), one that is not an editable input, textarea or content-editable element, and text that a `number`, `date`, `time`, `range` or other value-typed input would not keep (`unsupported`). The value is checked on a detached copy with the same constraints; the page's own control is not touched until the fill is sent.
 
@@ -708,7 +708,7 @@ used for exact-node input applies to the selected control.
 ```ts
 const result =
   yield *
-  session.fillForm({
+  page.fillForm({
     observationId: seen.observationId,
     fields: [
       { elementId: email, value: "ada@example.test" },
@@ -832,6 +832,11 @@ A key is spelled as the `KeyboardEvent.key` the page will see, and the vocabular
 
 With `into`, the original node and document must still have focus before each subsequent window. Focus is never repaired. Commands already submitted in a window can land after focus moves. Once that window has successfully drained, a later `not-focused` refusal reports `performed`: earlier input was acknowledged, and the refused window sends nothing.
 
+Performed typing checks focus before each stroke. A fully acknowledged stroke, including its
+key and modifier releases, retains `performed` evidence if a later stroke is refused. An
+acknowledged text insertion does the same. Focus and selection preparation remain partial;
+unresolved key input still reports `unknown` and receives the original containment policy.
+
 A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. Plain `type` sends a shifted character as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Performed plans hold Shift for uppercase and shifted punctuation and pace complete balanced strokes under one logical action. A stroke remains unresolved until its key and modifiers are released; quiet intervals do not renew the absolute deadline or retain unresolved native replies.
 
 A press waits for native input acknowledgement, without waiting for resulting navigation. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Both operations are available in the model-facing toolkit in `effect-agent-browser`.
@@ -893,7 +898,7 @@ const run = Browser.scoped(
     Effect.gen(function* () {
       yield* session.initialPage.navigate({ url: "https://portal.example.com" });
       yield* session.initialPage.ready();
-      return yield* page.observe();
+      return yield* session.initialPage.observe();
     }),
 );
 // run requires Chromium and ShowSettings. Browser.scoped discharges both the
@@ -1079,12 +1084,12 @@ it.effect("an unknown click is never replayed", () =>
         const observation = yield* browser.initialPage.observe();
         const accept = { observationId: observation.observationId, elementId: "accept" };
 
-        const first = yield* browser.clickElement(accept).pipe(Effect.flip);
+        const first = yield* browser.initialPage.clickElement(accept).pipe(Effect.flip);
 
         expect(first).toMatchObject({ reason: { _tag: "Timeout" }, outcome: "unknown" });
-        const retry = yield* browser.clickElement(accept).pipe(Effect.flip);
+        const retry = yield* browser.initialPage.clickElement(accept).pipe(Effect.flip);
 
-        expect(retry).toMatchObject({ reason: { _tag: "Closed" }, outcome: "undispatched" });
+        expect(retry).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
         const clicks = (yield* browser.control.calls).filter((c) => c.operation === "click");
 
         expect(clicks).toHaveLength(1);

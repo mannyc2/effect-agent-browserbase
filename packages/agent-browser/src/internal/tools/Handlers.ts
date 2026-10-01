@@ -31,6 +31,7 @@ import {
   BrowserFormFailure,
   type BrowserToolFailure,
   type FillFormParameters,
+  formInputs,
   type FollowUpObservation,
   FormFillResult,
   type InspectRequest,
@@ -293,11 +294,7 @@ export const makeOperations = (
         options: options.form,
       },
       call,
-      Object.fromEntries(
-        request.fields.flatMap((field, index) =>
-          field.value === undefined ? [] : [[`field-${index}`, field.value]],
-        ),
-      ),
+      formInputs(request.fields),
     ).pipe(
       Effect.flatMap(decoded(FillFormResult, "fill-form")),
       Effect.mapError((error) => stopped(failureWith(hooks, call)(error), [])),
