@@ -3404,6 +3404,32 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return initialAuthority;
   };
 
+  /**
+   * Waits until `drained` holds, or fails `Timeout/undispatched` at the bound. The owner signals
+   * settled work; driver and binding cleanup is rechecked meanwhile.
+   */
+  const drainAdmitted = (operation: BrowserOperation, ticket: Ticket, drained: () => boolean) =>
+    Effect.gen(function* () {
+      while (!drained()) {
+        yield* owner.nextChange.pipe(
+          Effect.timeoutOrElse({ duration: Duration.millis(25), orElse: () => Effect.void }),
+        );
+        // A settlement can complete the signal synchronously; decide on a later turn.
+        yield* Effect.yieldNow;
+      }
+    }).pipe((drain) =>
+      within(
+        drain,
+        Math.min(ticket.deadline, Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + 3000),
+        () =>
+          BrowserError.make({
+            operation,
+            reason: Reasons.Timeout.make({}),
+            outcome: "undispatched",
+          }),
+      ),
+    );
+
   const lifecycle = <A, E, R>(
     operation: BrowserOperation,
     supported: () => boolean,
@@ -3590,56 +3616,33 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                 const token = handoffToken ?? (yield* uuid);
 
                 if (owner.state.phase === "open") {
-                  const deadline = Math.min(
-                    ticket.deadline,
-                    Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + 3000,
+                  yield* Effect.forEach(
+                    [...capture.captureLeases.values()],
+                    (lease) => lease.stop,
+                    {
+                      discard: true,
+                    },
                   );
-
-                  const drained = () =>
-                    owner.drained(ticket.signal) &&
-                    activeBindings?.drained() !== false &&
-                    getDriver().handoffDrained?.(owner.paused) !== false &&
-                    capture.captureLeases.size === 0 &&
-                    pendingPageFaults.size === 0;
-
                   // Work that cannot settle in time fails only this request: the barrier lifts and
                   // automation continues, as nothing was handed over or left undecided.
-                  yield* Effect.gen(function* () {
-                    yield* Effect.forEach(
-                      [...capture.captureLeases.values()],
-                      (lease) => lease.stop,
-                      {
-                        discard: true,
-                      },
-                    );
-                    while (!drained()) {
-                      // The owner signals settled work; driver and binding cleanup is rechecked.
-                      yield* owner.nextChange.pipe(
-                        Effect.timeoutOrElse({
-                          duration: Duration.millis(25),
-                          orElse: () => Effect.void,
-                        }),
-                      );
-                      // A settlement can complete the signal synchronously; decide on a later turn.
-                      yield* Effect.yieldNow;
-                    }
-                    if (owner.state.phase !== "open")
-                      return yield* BrowserError.make({
-                        operation: "handoff",
-                        reason: Reasons.Closed.make({}),
-                        outcome: "undispatched",
-                        containment: { _tag: "SessionFenced", generation: owner.state.generation },
-                      });
-                    owner.fence("paused", "paused", "handoff");
-                  }).pipe((drain) =>
-                    within(drain, deadline, () =>
-                      BrowserError.make({
-                        operation: "handoff",
-                        reason: Reasons.Timeout.make({}),
-                        outcome: "undispatched",
-                      }),
-                    ),
+                  yield* drainAdmitted(
+                    "handoff",
+                    ticket,
+                    () =>
+                      owner.drained(ticket.signal) &&
+                      activeBindings?.drained() !== false &&
+                      getDriver().handoffDrained?.(owner.paused) !== false &&
+                      pendingPageFaults.size === 0 &&
+                      capture.captureLeases.size === 0,
                   );
+                  if (owner.state.phase !== "open")
+                    return yield* BrowserError.make({
+                      operation: "handoff",
+                      reason: Reasons.Closed.make({}),
+                      outcome: "undispatched",
+                      containment: { _tag: "SessionFenced", generation: owner.state.generation },
+                    });
+                  owner.fence("paused", "paused", "handoff");
                 }
                 handoffToken ??= token;
                 // A refused authorization leaves automation paused until explicit operator release.
@@ -3726,6 +3729,9 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                     reason: Reasons.Stale.make({}),
                     outcome: "undispatched",
                   });
+                // Bounded cleanup such as a page close is admitted behind the barrier; let it
+                // finish rather than disconnect beneath it. Detach itself disposes bindings.
+                yield* drainAdmitted("detach", ticket, () => owner.idle(ticket.signal));
                 const attached = getDriver();
 
                 activeConnection = undefined;

@@ -348,6 +348,63 @@ it.effect(
     ),
 );
 
+it.effect("detach waits for a page close admitted behind its barrier before disconnecting", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const listing = gate<void>();
+      const listed = gate<void>();
+      const closing = gate<void>();
+      const closed = gate<void>();
+      let holdList = false;
+
+      const f = yield* fixture({
+        keepAlive: true,
+        onConnect: async (driver) => ({
+          ...driver,
+          listPages: async (ticket) => {
+            if (holdList) {
+              holdList = false;
+              listing.resolve();
+              await listed.promise;
+            }
+
+            return driver.listPages(ticket);
+          },
+          // The browser has closed the page; the owner has not yet heard back.
+          closePage: async (page, ticket, onDispatch) => {
+            await driver.closePage(page, ticket, onDispatch);
+            closing.resolve();
+            await closed.promise;
+          },
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+      const second = yield* session.createPage();
+      const issued = yield* session.page(second);
+
+      holdList = true;
+      const detaching = yield* Effect.forkChild(session.detach);
+
+      yield* Effect.promise(() => listing.promise);
+      // Page closure is bounded cleanup, admitted even while the lifecycle barrier is up.
+      const closure = yield* Effect.forkChild(issued.controls.closePage(second));
+
+      yield* Effect.promise(() => closing.promise);
+      listed.resolve();
+      yield* Effect.yieldNow;
+      closed.resolve();
+      yield* Fiber.join(closure);
+      yield* Fiber.join(detaching);
+      expect(yield* session.status).toMatchObject({
+        phase: "detached",
+        reason: "detached",
+        unresolvedDispatch: false,
+      });
+    }),
+  ),
+);
+
 it.effect("an old connection cannot change replacement status or diagnostics", () =>
   Effect.scoped(
     Effect.gen(function* () {
