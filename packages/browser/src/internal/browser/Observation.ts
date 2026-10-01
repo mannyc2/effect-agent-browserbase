@@ -288,6 +288,27 @@ export const readFieldState = async (
   }
 };
 
+/**
+ * Selects only the first `count` entries of a page-built node array, which the caller has already
+ * validated. A null-prototype record makes indexed assignment independent of page-modified
+ * Array/Object prototypes, so enumerable properties the page adds to that array never cross the
+ * handle boundary and `getProperties()` materializes at most `count` host handles.
+ */
+const validatedNodes = (
+  holder: JSHandle<{ readonly nodes: ReadonlyArray<Element> }>,
+  count: number,
+) =>
+  holder.evaluateHandle((read, count) => {
+    const picked: {
+      readonly __proto__: null;
+      [index: number]: Element | undefined;
+    } = { __proto__: null };
+
+    for (let i = 0; i < count; i++) picked[i] = read.nodes[i];
+
+    return picked;
+  }, count);
+
 /** Whether a private state says a toggle ended checked, or unchecked, as it was asked to. */
 export const holdsChecked = (state: string | undefined, checked: boolean): boolean =>
   state === JSON.stringify(["checked", checked]);
@@ -1070,7 +1091,7 @@ export const makeObservation = (
         );
       if (result.status !== "matched" || result.facts === undefined)
         throw failure(Reasons.Incomplete.make({}), "undispatched");
-      nodes = await holder.evaluateHandle((read) => read.nodes);
+      nodes = await validatedNodes(holder, 1);
       const ownedNodes = nodes;
 
       retention.own(ownedNodes, () => ownedNodes.dispose());
@@ -2031,19 +2052,7 @@ export const makeObservation = (
             }),
           );
         if (keepNodes) {
-          nodesHandle = await holder.evaluateHandle((read, count) => {
-            // A null-prototype record makes indexed assignment independent of page-modified
-            // Array/Object prototypes. Only the already validated controls cross the handle
-            // boundary; enumerable properties added to the page-created nodes array do not.
-            const picked: {
-              readonly __proto__: null;
-              [index: number]: Element | undefined;
-            } = { __proto__: null };
-
-            for (let i = 0; i < count; i++) picked[i] = read.nodes[i];
-
-            return picked;
-          }, data.controls.length);
+          nodesHandle = await validatedNodes(holder, data.controls.length);
           const ownedNodes = nodesHandle;
 
           retention?.own(ownedNodes, () => ownedNodes.dispose());
