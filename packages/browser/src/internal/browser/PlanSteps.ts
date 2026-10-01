@@ -21,14 +21,14 @@ import type {
   Step,
   ValueSource,
 } from "../../PlanData.ts";
-import type { ResolvedElement, ResolvedGroup } from "./Descriptor.ts";
+import type { ResolvedElement } from "./Descriptor.ts";
 import type { DriverTarget } from "./Driver.ts";
 import type { AdmissionPolicy } from "./Observation.ts";
 import type { Ticket } from "./Owner.ts";
 import type { StepExecution, StepSuccess } from "./PlanExecution.ts";
 import type { NativePoint } from "./Pointer.ts";
-import { actionTargets } from "./Recording.ts";
 import type { ExecutionOptions, FormOutcome, FormSettings, FormSteps, Reading } from "./Session.ts";
+import { makeStepPreparation } from "./StepPreparation.ts";
 
 type Resolved = () => ResolvedElement;
 
@@ -163,10 +163,6 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
     context: StepExecution,
   ): Effect.Effect<StepSuccess, BrowserError> =>
     Effect.suspend(() => {
-      const requests = actionTargets(step.action);
-      let group: ResolvedGroup | undefined;
-      let prepared = false;
-
       let currentPhase: RunPhase =
         step.action._tag === "FillForm"
           ? "Field"
@@ -175,6 +171,16 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
             : "Input";
 
       let currentField: number | undefined;
+
+      const preparation = makeStepPreparation({
+        step,
+        target,
+        context,
+        chargeHostRead,
+        current: () => [currentPhase, currentField],
+      });
+
+      const { requests, element: groupElement } = preparation;
 
       const planOptions: ExecutionOptions = {
         ...context.options,
@@ -193,46 +199,7 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
           currentField = fieldIndex;
           context.phase(phase, fieldIndex);
         },
-        beforeNative: async (driver, ticket) => {
-          if (!prepared) {
-            if (step.expect?.before !== undefined) {
-              context.phase("Precondition");
-              chargeHostRead(ticket, "run");
-              await driver.expectations(step.expect.before, ticket, target);
-            }
-            if (requests.length > 0) {
-              context.phase("Resolution");
-              chargeHostRead(ticket, "resolve");
-              group = await driver.resolveGroup(requests, ticket, target, step.resolution);
-              context.targets(
-                requests.map((request, index) => ({
-                  value: groupElement(index),
-                  path: request.path,
-                  ...(group?.samples?.[index] === undefined
-                    ? {}
-                    : { sample: group.samples[index] }),
-                })),
-              );
-            }
-            prepared = true;
-          }
-          group?.activate(ticket);
-          ticket.check();
-          context.phase(currentPhase, currentField);
-        },
-      };
-
-      const groupElement = (index: number): ResolvedElement => {
-        const value = group?.elements[index];
-
-        if (value === undefined)
-          throw BrowserError.make({
-            operation: "run",
-            reason: Reasons.Incomplete.make({}),
-            outcome: "undispatched",
-          });
-
-        return value;
+        beforeNative: preparation.beforeNative,
       };
 
       const indexed = (value: ActionTarget): (() => ResolvedElement) => {
@@ -456,7 +423,7 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
             ),
           );
         }),
-        Effect.ensuring(Effect.promise(() => group?.release() ?? Promise.resolve())),
+        Effect.ensuring(Effect.promise(preparation.release)),
       );
     });
 };
