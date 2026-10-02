@@ -88,52 +88,50 @@ const nanos = (milliseconds: number) => BigInt(Math.round(milliseconds * 1e6));
 
 /**
  * The measured pace of one performed key run. Strokes start at their absolute schedule offsets,
- * and each key is held from its key-down. Before a stroke's first command, the rest of the
- * schedule must still fit the original deadline at the round trips the browser has actually
- * taken, so a stroke that could not finish is refused whole, never cut between a key and its
- * release.
+ * and each key is held from its key-down's submission. Before a stroke's first command, the rest
+ * of the schedule must still fit the original deadline at the round trips the browser has
+ * actually taken, so a stroke that could not finish is refused whole, never cut between a key and
+ * its release.
  */
 const makePace = (
   pacing: ReturnType<typeof ownerPacing>,
   strokes: ReadonlyArray<Stroke>,
   started: bigint,
   focus: boolean,
-  modifiers: ReadonlyArray<KeyModifier>,
-  typed: boolean,
 ) => {
   const measured = {
     focus: { nanos: 0n, count: 0 },
-    command: { nanos: 0n, count: 0 },
+    // From a stroke's last submission until every one of its replies has arrived.
+    drain: { nanos: 0n, count: 0 },
   };
 
   const mean = ({ nanos: total, count }: { readonly nanos: bigint; readonly count: number }) =>
     count === 0 ? 0 : Number(total / BigInt(count)) / 1e6;
 
   return {
-    observe: (kind: "focus" | "command", elapsed: bigint) => {
+    observe: (kind: "focus" | "drain", elapsed: bigint) => {
       measured[kind].nanos += elapsed;
       measured[kind].count++;
     },
     /** Called after stroke `from`'s focus check, before its first command. */
     require: (from: number) => {
       const check = focus ? mean(measured.focus) : 0;
-      // Before any key has answered, a focus check's round trip is the best estimate there is.
-      const command = measured.command.count > 0 ? mean(measured.command) : check;
+      // Before any stroke has drained, a focus check's round trip is the best estimate there is.
+      const drain = measured.drain.count > 0 ? mean(measured.drain) : check;
       let at = Number(pacing.now() - started) / 1e6;
 
       for (let index = from; index < strokes.length; index++) {
         const stroke = strokes[index];
 
         if (stroke === undefined) break;
-        const keyed = keyDescription(stroke.key) !== undefined;
-        const held = keyed ? heldModifiers(stroke.key, modifiers, typed).length : 0;
-
         // This stroke has already paid for its focus check.
-        const down =
-          Math.max(at, stroke.offsetMillis) + (index === from ? 0 : check) + held * command;
+        const down = Math.max(at, stroke.offsetMillis) + (index === from ? 0 : check);
 
+        // A key's releases are submitted once it has been held; inserted text holds after it lands.
         at =
-          Math.max(down + command, down + stroke.holdMillis) + (keyed ? (1 + held) * command : 0);
+          keyDescription(stroke.key) === undefined
+            ? down + Math.max(drain, stroke.holdMillis)
+            : down + stroke.holdMillis + drain;
       }
       pacing.requireBy(started + nanos(at));
     },
@@ -347,7 +345,11 @@ export const makeKeyboard = (
    * One paired native stroke remains unresolved until its key and modifiers are all released.
    * Playwright's own keyboard builds each event, so a performed stroke carries exactly what a
    * plain `press` sends, including the editing commands Chromium on macOS needs for Backspace,
-   * Delete, the arrows, Home and End.
+   * Delete, the arrows, Home and End. Like plain typing's windows, a stroke submits its commands
+   * in order without waiting for each reply, so a key is held for its planned time rather than for
+   * its key-down's round trip, and a held modifier adds no round trip of its own. A stroke has at
+   * most ten replies outstanding, its key and up to four modifiers each down and up, and drains
+   * them all before it resolves.
    */
   const pacedStroke = async (
     keyboard: Keyboard,
@@ -376,36 +378,60 @@ export const makeKeyboard = (
     check();
     pace.require(index);
 
-    const submit = async (command: () => Promise<unknown>) => {
+    const pending: Array<Promise<void>> = [];
+    let failed = false;
+    let firstFailure: unknown;
+    let submitted = pacing.now();
+
+    const reject = (error: unknown) => {
+      if (!failed) {
+        failed = true;
+        firstFailure = error;
+      }
+    };
+
+    const submit = (command: () => Promise<unknown>) => {
+      // A refused reply ends the stroke: nothing after it is sent, and nothing is repaired.
+      if (failed) throw firstFailure;
       check();
       ticket.dispatch();
-      const before = pacing.now();
+      submitted = pacing.now();
+      // Observe every reply immediately, including a rejection arriving after a refusal.
+      pending.push(command().then(() => {}, reject));
+    };
 
-      // The one current reply is observed before another command can be submitted.
-      await command();
-      pace.observe("command", pacing.now() - before);
+    const drain = async () => {
+      await Promise.all(pending);
+      if (failed) throw firstFailure;
+      pace.observe("drain", pacing.now() - submitted);
+      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
     };
 
     // A character the US layout cannot produce is committed as text, as plain typing does.
     if (keyDescription(stroke.key) === undefined) {
       const down = pacing.now();
 
-      await submit(() => keyboard.insertText(stroke.key));
-      ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+      submit(() => keyboard.insertText(stroke.key));
+      await drain();
       await pacing.pauseUntil(down + nanos(stroke.holdMillis));
 
       return;
     }
     const held = heldModifiers(stroke.key, modifiers, typed);
 
-    for (const modifier of held) await submit(() => keyboard.down(modifier));
-    const down = pacing.now();
+    try {
+      for (const modifier of held) submit(() => keyboard.down(modifier));
+      const down = pacing.now();
 
-    await submit(() => keyboard.down(stroke.key));
-    await pacing.pauseUntil(down + nanos(stroke.holdMillis));
-    await submit(() => keyboard.up(stroke.key));
-    for (const modifier of held.toReversed()) await submit(() => keyboard.up(modifier));
-    ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+      submit(() => keyboard.down(stroke.key));
+      // The hold runs from the key-down's submission, whether or not its reply has arrived.
+      await pacing.pauseUntil(down + nanos(stroke.holdMillis));
+      submit(() => keyboard.up(stroke.key));
+      for (const modifier of held.toReversed()) submit(() => keyboard.up(modifier));
+    } catch (error) {
+      reject(error);
+    }
+    await drain();
   };
 
   const pacedKeys = async (
@@ -419,7 +445,7 @@ export const makeKeyboard = (
 
     pacing.requireDuration(schedule.durationMillis);
     const started = pacing.now();
-    const pace = makePace(pacing, schedule.strokes, started, element !== undefined, [], true);
+    const pace = makePace(pacing, schedule.strokes, started, element !== undefined);
 
     for (const [index, stroke] of schedule.strokes.entries()) {
       check();
@@ -454,14 +480,7 @@ export const makeKeyboard = (
       const roundTrip = pacing.now() - before;
 
       // The erase (a key-down and key-up) and every stroke must fit before the old value goes.
-      const pace = makePace(
-        pacing,
-        schedule.strokes,
-        pacing.now() + 2n * roundTrip,
-        true,
-        [],
-        true,
-      );
+      const pace = makePace(pacing, schedule.strokes, pacing.now() + 2n * roundTrip, true);
 
       pace.observe("focus", roundTrip);
       pace.require(0);
@@ -539,7 +558,7 @@ export const makeKeyboard = (
                 stroke,
                 performed,
                 check ?? (() => performed.check()),
-                makePace(pacing, [stroke], pacing.now(), element !== undefined, modifiers, false),
+                makePace(pacing, [stroke], pacing.now(), element !== undefined),
                 0,
                 element,
                 modifiers,

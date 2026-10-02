@@ -898,6 +898,15 @@ receives the original containment policy. A later failure never weakens what was
 
 A character the US layout cannot produce is committed as text, the way an input method commits it: the field changes and no key event says so. Plain `type` sends a shifted character as its own key with `shiftKey` false. When a page reads the modifier, send that stroke through `press` with `Shift` held, spelling the key as the page will see it: `{ key: "A", modifiers: ["Shift"] }`. Spelled `"a"`, the engine sends `a` with Shift down, which is what Shift produces with Caps Lock on. Control characters are refused in text because the engine presses Enter for a line break; a named key is always its own `press`. Performed plans hold Shift for uppercase and shifted punctuation and pace complete balanced strokes under one logical action. A stroke remains unresolved until its key and modifiers are released; quiet intervals do not renew the absolute deadline or retain unresolved native replies.
 
+Like a plain window, a performed stroke submits its modifiers, its key and their releases in order
+without waiting for each reply, so its key-up is submitted its planned hold after its key-down
+rather than a round trip later, and a held Shift adds no round trip of its own. Delivery jitter
+on the way to a remote browser is not controlled. The owner is still checked before every
+command, nothing more is sent once a reply has failed, and the stroke drains all of its at most ten
+replies before it resolves. Each stroke therefore still costs its releases' round trip, and its
+focus check's when it names an element: against a remote browser, a stroke whose planned interval
+is shorter than those starts late.
+
 A press waits for native input acknowledgement, without waiting for resulting navigation. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Both operations are available in the model-facing toolkit in `effect-agent-browser`.
 
 The connection endpoint is read through the exact allocated session, so a provider reply that names a different session is refused before any CDP attachment.
