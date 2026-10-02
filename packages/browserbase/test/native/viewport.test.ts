@@ -96,12 +96,14 @@ it.live("real CDP: ProviderManaged keeps the native viewport through passive obs
           const body = yield* Schema.decodeUnknownEffect(CreateBody)(fixture.createBodies[0]);
 
           expect(body.browserSettings).not.toHaveProperty("viewport");
-          yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
+          yield* session.initialPage.navigate(
+            NavigateRequest.make({ url: `${fixture.url}clocks` }),
+          );
           const before = yield* geometry(page);
 
           expect(before.js.innerWidth).toBeGreaterThan(0);
           expect(before.js.innerHeight).toBeGreaterThan(0);
-          expect((yield* session.observe()).url).toBe(`${fixture.url}clocks`);
+          expect((yield* session.initialPage.observe()).url).toBe(`${fixture.url}clocks`);
           expect(yield* geometry(page)).toEqual(before);
           expect(page.viewportSize()).toBeNull();
         }),
@@ -123,8 +125,10 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
-          const stage = (yield* session.pages).find((page) => page.selected);
+          yield* session.initialPage.navigate(
+            NavigateRequest.make({ url: `${fixture.url}clocks` }),
+          );
+          const stage = (yield* session.listPages()).find((page) => page.selected);
           const stageNative = fixture.nativePages(session.reference.sessionId)[0];
 
           assert.ok(stage);
@@ -138,10 +142,11 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
 
           expect(body.browserSettings.viewport).toEqual(dimensions);
 
-          const scout = yield* session.createPage;
+          const scoutAuthority = yield* session.createPage();
 
-          yield* session.selectPage(scout);
-          yield* session.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
+          yield* session.selectPage(scoutAuthority);
+
+          yield* scoutAuthority.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
 
           const scoutNative = fixture
             .nativePages(session.reference.sessionId)
@@ -166,8 +171,7 @@ it.live("real CDP: owned Fixed acquisition aligns emulated and native window con
           // applies the override, with native bounds unchanged throughout, so they are excluded.
           expect(controlled(yield* geometry(stageNative))).toEqual(controlled(before));
 
-          const interval = yield* Capture.start(session, {
-            target: stage,
+          const interval = yield* Capture.start(yield* session.page(stage), {
             maxDurationMillis: 5000,
           });
 
@@ -200,8 +204,10 @@ it.live(
           Effect.gen(function* () {
             const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* owner.navigate(NavigateRequest.make({ url: `${fixture.url}clocks` }));
-            const target = (yield* owner.pages).find((page) => page.selected);
+            yield* owner.initialPage.navigate(
+              NavigateRequest.make({ url: `${fixture.url}clocks` }),
+            );
+            const target = (yield* owner.listPages()).find((page) => page.selected);
             const ownerNative = fixture.nativePages(owner.reference.sessionId)[0];
 
             assert.ok(target);
@@ -221,7 +227,7 @@ it.live(
 
                 assert.ok(borrowedNative);
                 expect(borrowedNative.viewportSize()).toBeNull();
-                expect((yield* borrowed.observe()).url).toBe(`${fixture.url}clocks`);
+                expect((yield* borrowed.initialPage.observe()).url).toBe(`${fixture.url}clocks`);
                 const after = yield* geometry(ownerNative);
 
                 expect(after).toEqual(before);

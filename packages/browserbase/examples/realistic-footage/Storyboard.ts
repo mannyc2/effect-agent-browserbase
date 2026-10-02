@@ -1,13 +1,15 @@
 import { Effect, Schema } from "effect";
-import type { AnySession } from "effect-browser/browser";
-import { Selector, TypeRequest } from "effect-browser/browser-data";
+import type { Page } from "effect-browser/browser";
+import { InputReceipt } from "effect-browser/browser-data";
+import { Step } from "effect-browser/plan-data";
 
-import * as Actor from "./Actor.ts";
+import { Presentation } from "./Presentation.ts";
+import { Telemetry } from "./Telemetry.ts";
 
 /**
  * A performance as data. A storyboard can be written by hand, kept in a file
  * or proposed by a model; decoding it is what makes it safe to perform. Its
- * selectors and typed text are held to the library's own bounds, so a line
+ * browser steps and typed text use the library's own bounds, so a line
  * break that would press Enter is refused here, before anything is filmed.
  */
 export const Scene = Schema.TaggedUnion({
@@ -16,12 +18,8 @@ export const Scene = Schema.TaggedUnion({
   Pause: { millis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 30_000 })) },
   /** Rest as long as it takes to skim this many freshly revealed words. */
   Read: { words: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2_000 })) },
-  ScrollTo: { selector: Selector },
-  MoveTo: { selector: Selector },
-  Click: { selector: Selector },
-  /** A click that loads another document. */
-  Follow: { selector: Selector },
-  Type: { selector: Selector, text: TypeRequest.fields.text.check(Schema.isMaxLength(200)) },
+  /** Original bounded browser intent; presentation cues remain application choreography. */
+  Browser: { step: Step },
 });
 
 export type Scene = typeof Scene.Type;
@@ -30,18 +28,50 @@ export const Storyboard = Schema.Array(Scene).check(Schema.isMinLength(1), Schem
 
 export type Storyboard = typeof Storyboard.Type;
 
-export const perform = (session: AnySession, storyboard: Storyboard) =>
-  Effect.forEach(
-    storyboard,
-    Scene.match({
-      Caption: ({ text }) => Actor.caption(text),
-      Pause: ({ millis }) => Effect.sleep(millis),
-      Read: ({ words }) => Actor.read(words),
-      ScrollTo: ({ selector }) => Actor.scrollTo(selector),
-      MoveTo: ({ selector }) => Actor.moveTo(session, selector),
-      Click: ({ selector }) => Effect.asVoid(Actor.click(session, selector)),
-      Follow: ({ selector }) => Effect.asVoid(Actor.follow(session, selector)),
-      Type: ({ selector, text }) => Actor.type(session, selector, text),
-    }),
-    { discard: true },
-  );
+export const perform = Effect.fn("Storyboard.perform")(function* (
+  page: Page,
+  storyboard: Storyboard,
+  seed: number,
+) {
+  const presentation = yield* Presentation;
+  const telemetry = yield* Telemetry;
+
+  for (const scene of storyboard) {
+    switch (scene._tag) {
+      case "Caption":
+        yield* presentation.caption(scene.text);
+        break;
+      case "Pause":
+        yield* Effect.sleep(scene.millis);
+        break;
+      case "Read":
+        yield* Effect.sleep(Math.max(900, (scene.words * 60_000) / 240));
+        break;
+      case "Browser": {
+        const kind =
+          scene.step.action._tag.charAt(0).toLowerCase() + scene.step.action._tag.slice(1);
+
+        const ran = yield* telemetry.action(
+          kind,
+          page.run({ version: 1, steps: [scene.step] }, { style: { seed }, within: "15 seconds" }),
+        );
+
+        for (const performed of ran.steps) {
+          const receipt = performed.receipt;
+
+          const input = Schema.is(InputReceipt)(receipt)
+            ? receipt
+            : receipt !== undefined && "input" in receipt
+              ? receipt.input
+              : undefined;
+
+          if (Schema.is(InputReceipt)(input))
+            yield* telemetry.input(input.kind, Effect.succeed(input));
+        }
+        if (scene.step.action._tag === "Click" || scene.step.action._tag === "Navigate")
+          yield* page.ready();
+        break;
+      }
+    }
+  }
+});

@@ -66,7 +66,7 @@ const call = (
   ready.handle(name, params, name).pipe(Effect.flatMap(Stream.runCollect));
 
 const host = (browser: BrowserSession, options: BrowserTools.HostOptions = {}) =>
-  BrowserTools.makeHost(browser, options).pipe(
+  BrowserTools.makeHost(browser, browser.initialPage, options).pipe(
     Effect.flatMap((made) =>
       tools.pipe(
         Effect.provide(made.layer),
@@ -82,7 +82,7 @@ it.effect(
       Effect.gen(function* () {
         const requests: Array<unknown> = [];
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           observe: (request) =>
             Effect.sync(() => {
               requests.push(request);
@@ -118,7 +118,7 @@ it.effect("a reading is fitted to the result bound: text first, then trailing co
     Effect.gen(function* () {
       const maximum = 16 * 1024;
       let next = reading({ text: "x".repeat(60_000) });
-      const browser = scriptedSession({ observe: () => Effect.sync(() => next) });
+      const browser = yield* scriptedSession({ observe: () => Effect.sync(() => next) });
 
       const { ready } = yield* host(browser, {
         maxTextBytes: 65536,
@@ -184,7 +184,7 @@ it.effect(
         const text = "a".repeat(8192) + "b".repeat(8192) + "c".repeat(1000);
         let id = "observation-1";
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           observe: () => Effect.sync(() => reading({ id, text, textTruncated: true })),
         });
 
@@ -225,8 +225,14 @@ it.effect("an action's reading is fitted beside its result and continues through
     Effect.gen(function* () {
       const text = "d".repeat(40_000);
 
-      const browser = scriptedSession({
-        clickElement: () => Effect.succeed({ url }),
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Click") {
+            return Effect.succeed({ url });
+          }
+
+          return Effect.void;
+        },
         observe: () => Effect.sync(() => reading({ id: "after", text })),
       });
 
@@ -237,7 +243,7 @@ it.effect("an action's reading is fitted beside its result and continues through
       });
 
       const [clicked] = yield* call(ready, "browser_click_and_inspect", {
-        observationId: "before",
+        observationId: "observation-1",
         elementId: "element-1",
       });
 
@@ -275,7 +281,7 @@ it.effect("a browser policy that returns less text falls back to what the model 
     Effect.gen(function* () {
       const asked: Array<number> = [];
 
-      const browser = scriptedSession({
+      const browser = yield* scriptedSession({
         observe: (request) =>
           Effect.suspend(() => {
             asked.push(request?.maxTextBytes ?? 0);
@@ -309,8 +315,14 @@ it.effect("a host's observe replaces how every reading is taken", () =>
       const seen: Array<unknown> = [];
       let ordinary = 0;
 
-      const browser = scriptedSession({
-        clickElement: () => Effect.succeed({ url }),
+      const browser = yield* scriptedSession({
+        beforeStart: (action) => {
+          if (action._tag === "Click") {
+            return Effect.succeed({ url });
+          }
+
+          return Effect.void;
+        },
         observe: () =>
           Effect.sync(() => {
             ordinary++;
@@ -323,7 +335,7 @@ it.effect("a host's observe replaces how every reading is taken", () =>
         observe: (request, session) =>
           Effect.sync(() => {
             seen.push(request);
-            expect(session).toBe(browser);
+            expect(session).toBe(browser.initialPage);
 
             return reading({ id: "custom", text: "from the host" });
           }),
@@ -334,7 +346,7 @@ it.effect("a host's observe replaces how every reading is taken", () =>
       ]);
       expect(
         yield* call(ready, "browser_click_and_inspect", {
-          observationId: "custom",
+          observationId: "observation-1",
           elementId: "element-1",
         }),
       ).toMatchObject([

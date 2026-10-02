@@ -1,16 +1,17 @@
 import { Effect, Schema } from "effect";
 
-import type { BrowserSession } from "./Browser.ts";
-import { type PageExecutionState, PageInfo, PageSuspension } from "./BrowserData.ts";
+import type { OperationOptions, Page } from "./Browser.ts";
+import { type PageExecutionState, PageSuspension } from "./BrowserData.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
-import { pageControl } from "./internal/browser/PageControlAssociation.ts";
+import { pageControl } from "./internal/browser/PageRegistry.ts";
+import { checkedOperationOptions } from "./internal/browser/PublicSession.ts";
 export { PageExecutionState, PageSuspension } from "./BrowserData.ts";
 
-const owner = <E>(session: BrowserSession<E>) =>
+const owner = (page: Page) =>
   Effect.suspend(() => {
-    const port = pageControl(session);
+    const association = pageControl(page);
 
-    return port === undefined
+    return association === undefined
       ? Effect.fail(
           BrowserError.make({
             operation: "page-control",
@@ -18,7 +19,7 @@ const owner = <E>(session: BrowserSession<E>) =>
             outcome: "undispatched",
           }),
         )
-      : Effect.succeed(port);
+      : Effect.succeed(association);
   });
 
 const invalid = () =>
@@ -28,35 +29,51 @@ const invalid = () =>
     outcome: "undispatched",
   });
 
-/** Last acknowledged state; no remote guarantee survives connection loss or external control. */
-export const state = <E>(
-  session: BrowserSession<E>,
-  page: PageInfo,
-): Effect.Effect<PageExecutionState, BrowserError> =>
-  Schema.decodeEffect(PageInfo)(page).pipe(
-    Effect.mapError(invalid),
-    Effect.map((value) => Object.freeze(PageInfo.make({ ...value }))),
-    Effect.flatMap((value) => owner(session).pipe(Effect.flatMap((port) => port.state(value)))),
+const requested = (page: Page, options?: OperationOptions) =>
+  owner(page).pipe(
+    Effect.flatMap((association) =>
+      checkedOperationOptions(options, "page-control").pipe(
+        Effect.map((options) => ({ port: association.port, page: association.page, options })),
+      ),
+    ),
   );
 
-/** Explicit host-only hold requiring InteractiveOptions.pageControl; capture ACKs never invoke it. */
-export const suspend = <E>(
-  session: BrowserSession<E>,
-  page: PageInfo,
+/** Last acknowledged state; no remote guarantee survives connection loss or external control. */
+export const state = (
+  page: Page,
+  options?: OperationOptions,
+): Effect.Effect<PageExecutionState, BrowserError> =>
+  requested(page, options).pipe(
+    Effect.flatMap(({ port, page, options }) => port.state(page, options)),
+  );
+
+/** Explicit host-only hold requiring pageControl support; capture ACKs never invoke it. */
+export const suspend = (
+  page: Page,
+  options?: OperationOptions,
 ): Effect.Effect<PageSuspension, BrowserError> =>
-  Schema.decodeEffect(PageInfo)(page).pipe(
-    Effect.mapError(invalid),
-    Effect.map((value) => Object.freeze(PageInfo.make({ ...value }))),
-    Effect.flatMap((value) => owner(session).pipe(Effect.flatMap((port) => port.suspend(value)))),
+  requested(page, options).pipe(
+    Effect.flatMap(({ port, page, options }) => port.suspend(page, options)),
   );
 
 /** Consumes the exact live receipt. Activation is intentional; stale receipts never replay commands. */
-export const resume = <E>(
-  session: BrowserSession<E>,
+export const resume = (
+  page: Page,
   receipt: PageSuspension,
+  options?: OperationOptions,
 ): Effect.Effect<void, BrowserError> =>
   Schema.decodeEffect(PageSuspension)(receipt).pipe(
     Effect.mapError(invalid),
     Effect.map((value) => Object.freeze(PageSuspension.make({ ...value }))),
-    Effect.flatMap((value) => owner(session).pipe(Effect.flatMap((port) => port.resume(value)))),
+    Effect.flatMap((value) =>
+      owner(page).pipe(
+        Effect.flatMap(({ port, page }) =>
+          page.pageId !== value.pageId || page.targetId !== value.targetId
+            ? Effect.fail(invalid())
+            : checkedOperationOptions(options, "page-control").pipe(
+                Effect.flatMap((options) => port.resume(value, options)),
+              ),
+        ),
+      ),
+    ),
   );

@@ -8,6 +8,9 @@ import { duplicateStep } from "./Bootstrap.ts";
 import type { DriverFault } from "./Driver.ts";
 
 export interface NativeBindingCall {
+  /** Exact registered connection-local identities, when supplied by the native adapter. */
+  readonly pageId?: string;
+  readonly frameId?: string;
   /** The calling document's origin, fixed by its native execution context. */
   readonly origin: string;
   /** Validate native membership, allowed origin and the captured document before returning JSON. */
@@ -31,6 +34,19 @@ export interface NativeBinding {
 export interface ConnectionBindings {
   readonly bindings: ReadonlyArray<NativeBinding>;
   readonly close: () => void;
+  /** Fence this page's admission before interrupting its accepted consumer callbacks. */
+  readonly fencePage: (pageId: string) => void;
+  readonly resumePage: (pageId: string) => void;
+  readonly pauseAdmission: () => void;
+  readonly resumeAdmission: () => void;
+  /**
+   * Whether no accepted invocation is still outstanding. Work a page originated while that page is
+   * `held` (quarantined by a dialog or popup policy) cannot hold up the handoff that releases it:
+   * its reply is already fenced from the page.
+   */
+  readonly drained: (held?: (pageId: string) => boolean) => boolean;
+  /** Positive native closure removes admission history; accepted late work stays accounted for. */
+  readonly retirePage: (pageId: string) => void;
   /** Native registration/transport failure supervises the owner, not a single page invocation. */
   readonly reportFailure: (error: InitializationError) => void;
   /** Drain scoped Effect fibers. Late native promises remain observed and occupy capacity. */
@@ -132,6 +148,8 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
   const ownerScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
   const failure = yield* Deferred.make<never, E | InitializationError>();
   const connections = new Set<ConnectionBindings>();
+  // Every accepted invocation until it releases its capacity, across connections and bindings.
+  const outstanding = new Set<{ readonly call: NativeBindingCall }>();
   const failures: Array<Bootstrap.BindingFailure<E>> = [];
   let droppedFailures = 0;
   let faulted = false;
@@ -169,13 +187,28 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
   ): Effect.fn.Return<ConnectionBindings, never, Scope.Scope> {
     const connectionScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
     let closed = ownerClosed || faulted;
+    let admitting = true;
     const fences: Array<() => void> = [];
+    const revokedPages = new Set<string>();
+
+    const pageFences: Array<{
+      readonly mark: (pageId: string) => void;
+      readonly interrupt: (pageId: string) => void;
+    }> = [];
+
     const current = () => !closed && !ownerClosed && !faulted && isCurrent();
     const active = () => current() && isActive();
 
     const close = () => {
       closed = true;
       for (const fence of fences) fence();
+    };
+
+    const fencePage = (pageId: string) => {
+      revokedPages.add(pageId);
+      // Every registration observes revocation before any interrupted finalizer can reenter.
+      for (const fence of pageFences) fence.mark(pageId);
+      for (const fence of pageFences) fence.interrupt(pageId);
     };
 
     const record = (
@@ -212,14 +245,38 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           pending: number;
           finished: boolean;
           released: boolean;
+          revoked: boolean;
+          readonly retirementFailures: Set<unknown>;
           nativeFault?: Extract<DriverFault, { readonly source: "native" }>;
         }
+
+        const owned = new Set<Work>();
+        const workActive = (work: Work) => !work.revoked && active();
+
+        const revokedError = (work: Work) => {
+          const failure = error("closed");
+
+          if (work.revoked) work.retirementFailures.add(failure);
+
+          return failure;
+        };
+
+        const intentionalRetirement = (work: Work, cause: Cause.Cause<E | InitializationError>) =>
+          work.revoked &&
+          cause.reasons.length > 0 &&
+          cause.reasons.every(
+            (reason) =>
+              Cause.isInterruptReason(reason) ||
+              (Cause.isFailReason(reason) && work.retirementFailures.has(reason.error)),
+          );
 
         const release = (work: Work) => {
           if (!work.finished || work.pending !== 0 || work.released) return;
           work.released = true;
           state.inFlight--;
           state.retired--;
+          owned.delete(work);
+          outstanding.delete(work);
         };
 
         const track = <A>(work: Work, promise: Promise<A>): Promise<A> => {
@@ -245,7 +302,13 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           // Disposal may complete before an abort-ignoring read. Both remain accounted for.
           const disposing = Promise.resolve()
             .then(() => work.call.dispose())
-            .catch(() => {
+            .catch((cause: unknown) => {
+              if (
+                work.revoked &&
+                Schema.is(InitializationError)(cause) &&
+                (cause.reason === "closed" || cause.reason === "stale")
+              )
+                return;
               record(registration, Cause.fail(error("native", "dispose")), {
                 source: "native",
                 reason: "callback",
@@ -262,16 +325,27 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
             catch: (cause) => {
               work.nativeFault = { source: "native", reason: "callback", disposition: "unknown" };
 
-              return Schema.is(InitializationError)(cause) ? error(cause.reason) : error("native");
+              const failure = Schema.is(InitializationError)(cause)
+                ? error(cause.reason)
+                : error("native");
+
+              if (
+                work.revoked &&
+                Schema.is(InitializationError)(cause) &&
+                (cause.reason === "closed" || cause.reason === "stale")
+              )
+                work.retirementFailures.add(failure);
+
+              return failure;
             },
           });
 
         const execute = Effect.fnUntraced(function* (work: Work) {
           const check = Effect.suspend(() =>
-            active() ? native(work, work.call.check) : Effect.fail(error("closed")),
+            workActive(work) ? native(work, work.call.check) : Effect.fail(revokedError(work)),
           );
 
-          if (!active()) return yield* error("closed");
+          if (!workActive(work)) return yield* revokedError(work);
           const text = yield* native(work, work.call.read);
           const result = yield* Registration.invoke(registration, text, check);
 
@@ -294,9 +368,21 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
         ).pipe(Scope.provide(connectionScope));
 
         fences.push(runner.interrupt);
+        pageFences.push({
+          mark: (pageId) => {
+            for (const work of owned) {
+              if (work.call.pageId === pageId) work.revoked = true;
+            }
+          },
+          interrupt: (pageId) => runner.interruptWhere((work) => work.call.pageId === pageId),
+        });
 
         const invoke = (call: NativeBindingCall): Promise<string> => {
-          if (!active()) {
+          if (
+            !admitting ||
+            !active() ||
+            (call.pageId !== undefined && revokedPages.has(call.pageId))
+          ) {
             state.rejected = increment(state.rejected);
 
             return rejected();
@@ -322,7 +408,18 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
           // It is shared across connections, so reconnect cannot reset quarantined capacity.
           state.inFlight++;
           state.accepted = increment(state.accepted);
-          const work: Work = { call, pending: 0, finished: false, released: false };
+
+          const work: Work = {
+            call,
+            pending: 0,
+            finished: false,
+            released: false,
+            revoked: false,
+            retirementFailures: new Set(),
+          };
+
+          owned.add(work);
+          outstanding.add(work);
           const admission = runner.submit(work, "reject-call");
 
           if (admission._tag === "Rejected") {
@@ -337,11 +434,12 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
               (exit) => {
                 if (Exit.isFailure(exit)) {
                   state.rejected = increment(state.rejected);
-                  record(registration, exit.cause, work.nativeFault);
+                  if (!intentionalRetirement(work, exit.cause))
+                    record(registration, exit.cause, work.nativeFault);
 
                   return rejected();
                 }
-                if (!active()) {
+                if (!workActive(work)) {
                   state.rejected = increment(state.rejected);
 
                   return rejected();
@@ -383,6 +481,17 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
     const connection: ConnectionBindings = {
       bindings: Object.freeze(bindings),
       close,
+      fencePage,
+      resumePage: (pageId) => revokedPages.delete(pageId),
+      pauseAdmission: () => {
+        admitting = false;
+      },
+      resumeAdmission: () => {
+        admitting = true;
+      },
+      drained: (held = () => false) =>
+        [...outstanding].every(({ call }) => call.pageId !== undefined && held(call.pageId)),
+      retirePage: (pageId) => revokedPages.delete(pageId),
       reportFailure: (error) => {
         if (!current()) return;
         record({ name: error.step, failureMode: "fail-session" }, Cause.fail(error), {

@@ -1,7 +1,8 @@
 import { Schema } from "effect";
 
-import { PageInfo, Target } from "./BrowserData.ts";
-import { BrowserError } from "./Errors.ts";
+import { SessionPhase, Target } from "./BrowserData.ts";
+import { BrowserError, Containment } from "./Errors.ts";
+import { AdmissionOptionsSchema } from "./internal/browser/OperationOptions.ts";
 import { Dimension, FrameBudget, LimitFields } from "./internal/capture/Options.ts";
 
 /**
@@ -43,8 +44,8 @@ export type CaptureSize = typeof CaptureSize.Type;
 
 /** Optional capture data. Defaults are applied at admission, not during schema decoding. */
 export const CaptureOptions = Schema.Struct({
-  /** Pin to a page from `session.pages`; omission preserves selected-page behavior. */
-  target: Schema.optionalKey(PageInfo),
+  /** Host-only bounded waiting for capture-start admission; stop/finalization retains cleanup ownership. */
+  admission: Schema.optionalKey(AdmissionOptionsSchema),
   /**
    * Frames held until the consumer takes them (4 by default, at most 1024), oldest dropped first
    * and counted as `overflow`. A consumer that delays its output leaves frames here, so this and
@@ -71,8 +72,23 @@ export type CaptureOptions = typeof CaptureOptions.Type;
 /** An address as the browser reported it. One longer than this is recorded as null, not cut. */
 const DocumentUrl = Schema.NullOr(Schema.String.check(Schema.isMaxLength(8192)));
 
+/**
+ * Facts about this capture's exact target and owner, independent of its end reason and native
+ * screencast stop. Revocation is not positive page closure. Later snapshots may add confirmed
+ * closure evidence while the original action outcome and capture end reason stay unchanged.
+ */
+export const CaptureQualification = Schema.Struct({
+  authority: Schema.Literals(["open", "paused", "closing", "closed", "stale"]),
+  containment: Containment,
+  ownerPhase: SessionPhase,
+  ownerGeneration: Schema.Natural,
+});
+
+export type CaptureQualification = typeof CaptureQualification.Type;
+
 export class CaptureSummary extends Schema.Class<CaptureSummary>("BrowserCaptureSummary")({
   target: Target,
+  qualification: CaptureQualification,
   reason: Schema.String.check(Schema.isMaxLength(64)),
   received: Schema.Natural,
   delivered: Schema.Natural,

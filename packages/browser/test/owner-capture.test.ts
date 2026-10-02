@@ -6,7 +6,7 @@ import { BrowserError, Reasons, type InitializationError } from "effect-browser/
 
 import { PageInfo, Target } from "../src/BrowserData.ts";
 import { type CaptureOptions, type CaptureSize } from "../src/Capture.ts";
-import { type CaptureParent } from "../src/internal/browser/Association.ts";
+import { forPage, type PageCaptureParent } from "../src/internal/browser/Association.ts";
 import { type CaptureInvalidation, type NativeFrame } from "../src/internal/browser/Driver.ts";
 import { makeOwner } from "../src/internal/browser/Owner.ts";
 import { startCapture } from "../src/internal/capture/Capture.ts";
@@ -59,6 +59,7 @@ const makeFixture = Effect.fnUntraced(function* (
   const documents = new Map<string, (url: string, sameDocument: boolean) => void>();
   let starts = 0;
   let stops = 0;
+  let captureSerial = 0;
 
   const page = (pageId = "page-1") =>
     PageInfo.make({
@@ -69,13 +70,12 @@ const makeFixture = Effect.fnUntraced(function* (
       selected: pageId === "page-1",
     });
 
-  const parent: CaptureParent = {
+  const parent: PageCaptureParent = {
     owner,
-    target: () =>
-      Target.make({ generation: owner.state.generation, pageId: "page-1", frameId: "frame-1" }),
-    resolve: (_ticket, requested) => {
-      const chosen = requested ?? page();
-
+    newCaptureId: Effect.sync(() => `capture-fixture-${++captureSerial}`),
+    validate: () => Effect.void,
+    page: page(),
+    resolve: (_ticket, chosen) => {
       if (chosen.targetId !== `target-${chosen.pageId}`)
         return Effect.fail(
           BrowserError.make({
@@ -159,6 +159,17 @@ const makeFixture = Effect.fnUntraced(function* (
 
   return {
     parent,
+    forPage: (info: PageInfo) =>
+      forPage(
+        parent,
+        info,
+        Target.make({
+          generation: owner.state.generation,
+          pageId: info.pageId,
+          frameId: "frame-1",
+        }),
+        () => Effect.void,
+      ),
     page,
     emit,
     emitPage,
@@ -638,8 +649,8 @@ const captureCases: ReadonlyArray<Case> = [
   test("distinct page targets capture concurrently and stopping one leaves the other active", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture();
-      const first = yield* startCapture(f.parent, { ...options, target: f.page("page-1") });
-      const second = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+      const first = yield* startCapture(f.forPage(f.page("page-1")), { ...options });
+      const second = yield* startCapture(f.forPage(f.page("page-2")), { ...options });
 
       assert.equal(f.parent.captureLeases.size, 2);
       f.emitPage("page-1", 1000);
@@ -657,10 +668,10 @@ const captureCases: ReadonlyArray<Case> = [
     Effect.gen(function* () {
       const f = yield* makeFixture();
       const target = f.page("page-1");
-      const first = yield* startCapture(f.parent, { ...options, target });
+      const first = yield* startCapture(f.forPage(target), { ...options });
 
-      yield* expectReason(startCapture(f.parent, { ...options, target }), "Busy");
-      const second = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+      yield* expectReason(startCapture(f.forPage(target), { ...options }), "Busy");
+      const second = yield* startCapture(f.forPage(f.page("page-2")), { ...options });
 
       yield* first.stop;
       yield* second.stop;
@@ -671,35 +682,24 @@ const captureCases: ReadonlyArray<Case> = [
       const intervals = [];
 
       for (let i = 1; i <= 4; i++)
-        intervals.push(
-          yield* startCapture(f.parent, {
-            ...options,
-            target: f.page(`page-${i}`),
-          }),
-        );
-      yield* expectReason(
-        startCapture(f.parent, { ...options, target: f.page("page-5") }),
-        "Limit",
-      );
+        intervals.push(yield* startCapture(f.forPage(f.page(`page-${i}`)), { ...options }));
+      yield* expectReason(startCapture(f.forPage(f.page("page-5")), { ...options }), "Limit");
       for (const interval of intervals) yield* interval.stop;
 
-      const largeA = yield* startCapture(f.parent, {
-        target: f.page("page-a"),
+      const largeA = yield* startCapture(f.forPage(f.page("page-a")), {
         maxFrames: 1,
         maxBufferedBytes: 32 * 1024 * 1024,
         maxFrameBytes: 1,
       });
 
-      const largeB = yield* startCapture(f.parent, {
-        target: f.page("page-b"),
+      const largeB = yield* startCapture(f.forPage(f.page("page-b")), {
         maxFrames: 1,
         maxBufferedBytes: 32 * 1024 * 1024,
         maxFrameBytes: 1,
       });
 
       yield* expectReason(
-        startCapture(f.parent, {
-          target: f.page("page-c"),
+        startCapture(f.forPage(f.page("page-c")), {
           maxFrames: 1,
           maxBufferedBytes: 1,
           maxFrameBytes: 1,
@@ -769,7 +769,7 @@ const captureCases: ReadonlyArray<Case> = [
 
       yield* Effect.promise(() => entered.promise);
       yield* expectReason(startCapture(f.parent, options), "Busy");
-      const other = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+      const other = yield* startCapture(f.forPage(f.page("page-2")), { ...options });
 
       release.resolve();
       yield* Fiber.join(stopping);
@@ -918,7 +918,7 @@ const captureCases: ReadonlyArray<Case> = [
 
       assert.equal((yield* interval.stop).nativeStop, "unconfirmed");
       yield* expectReason(startCapture(f.parent, options), "Busy");
-      const other = yield* startCapture(f.parent, { ...options, target: f.page("page-2") });
+      const other = yield* startCapture(f.forPage(f.page("page-2")), { ...options });
 
       assert.equal((yield* other.stop).nativeStop, "unconfirmed");
       assert.equal(f.parent.owner.state.phase, "open");
@@ -1007,7 +1007,18 @@ const captureCases: ReadonlyArray<Case> = [
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const interval = yield* startCapture(session.capture, options);
+      const initial = session.initialPage();
+
+      const interval = yield* startCapture(
+        forPage(
+          session.capture,
+          initial.record.info,
+          initial.record.identity,
+          initial.controls.validate,
+        ),
+        options,
+      );
+
       const result = yield* session.close;
 
       assert.equal(result.connection, "failed");
@@ -1122,9 +1133,8 @@ const captureCases: ReadonlyArray<Case> = [
         size: { width: 64, height: 48 },
       });
 
-      const sibling = yield* startCapture(f.parent, {
+      const sibling = yield* startCapture(f.forPage(f.page("page-2")), {
         ...options,
-        target: f.page("page-2"),
         size: { width: 80, height: 48 },
       });
 

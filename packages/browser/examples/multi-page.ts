@@ -8,13 +8,13 @@ import { BrowserError, Reasons } from "effect-browser/errors";
 // Each browser Layer here takes Effect's `Crypto` from the caller's platform Layer, such as
 // `NodeServices.layer`, so these compositions still require it.
 
-/** Inspect a scout tab while reading and capturing the pinned presentation page. */
+/** Inspect a scout tab while reading and capturing the issued presentation page. */
 export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
   Browser.scoped(
     Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 40, maxElapsedMillis: 60000 })),
     (browser) =>
       Effect.gen(function* () {
-        const stageInfo = (yield* browser.pages).find((page) => page.selected);
+        const stageInfo = (yield* browser.listPages()).find((page) => page.selected);
 
         if (stageInfo === undefined)
           return yield* BrowserError.make({
@@ -23,19 +23,20 @@ export const inspectWithStage = (stageUrl: string, scoutUrl: string) =>
             outcome: "undispatched",
           });
 
-        const stage = yield* browser.pinPage(stageInfo);
+        const stage = yield* browser.page(stageInfo);
 
         yield* stage.navigate({ url: stageUrl });
-        yield* browser.selectPage(yield* browser.createPage);
-        yield* browser.navigate({ url: scoutUrl });
+        const scoutPage = yield* browser.createPage();
+
+        yield* browser.selectPage(scoutPage);
+        yield* scoutPage.navigate({ url: scoutUrl });
 
         // The selected scout supplies the observation and its exact-node references.
-        const scout = yield* browser.observe({ scope: "viewport" });
+        const scout = yield* scoutPage.observe({ scope: "viewport" });
         // These operations keep the scout selected and do not replace its observation.
         const stageText = yield* stage.readText({});
 
-        const frames = yield* Capture.stream(browser, {
-          target: stageInfo,
+        const frames = yield* Capture.stream(stage, {
           lifetime: "page",
           maxDurationMillis: 5000,
         }).pipe(Stream.take(1), Stream.runCollect);

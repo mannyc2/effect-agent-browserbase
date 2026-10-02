@@ -84,9 +84,9 @@ const soak = Effect.scoped(
         return undefined;
       });
 
-    yield* step("navigate", session.navigate(NavigateRequest.make({ url: pages[0] })));
+    yield* step("navigate", session.initialPage.navigate(NavigateRequest.make({ url: pages[0] })));
 
-    const interval = yield* Capture.start(session, {
+    const interval = yield* Capture.start(session.initialPage, {
       lifetime: "page",
       size: { width: 1280, height: 720 },
       maxFrames: 64,
@@ -106,7 +106,7 @@ const soak = Effect.scoped(
 
     yield* step(
       "pointer-move",
-      session.pointerMove(PointerMoveRequest.make({ to: { x: 640, y: 400 } })),
+      session.initialPage.pointerMove(PointerMoveRequest.make({ to: { x: 640, y: 400 } })),
     );
 
     let refused: BrowserError | undefined;
@@ -116,7 +116,7 @@ const soak = Effect.scoped(
         document++;
         refused = yield* step(
           "navigate",
-          session.navigate(
+          session.initialPage.navigate(
             NavigateRequest.make({ url: pages[document % pages.length] ?? pages[0] }),
           ),
         );
@@ -125,17 +125,29 @@ const soak = Effect.scoped(
 
         refused =
           phase < 4
-            ? yield* step("wheel", session.wheel(WheelRequest.make({ deltaX: 0, deltaY: 400 })))
+            ? yield* step(
+                "wheel",
+                session.initialPage.wheel(WheelRequest.make({ deltaX: 0, deltaY: 400 })),
+              )
             : phase < 8
-              ? yield* step("wheel", session.wheel(WheelRequest.make({ deltaX: 0, deltaY: -400 })))
+              ? yield* step(
+                  "wheel",
+                  session.initialPage.wheel(WheelRequest.make({ deltaX: 0, deltaY: -400 })),
+                )
               : phase === 8
                 ? yield* step(
                     "observe",
-                    session.observe({ scope: "viewport", maxControls: 16, maxTextBytes: 2000 }),
+                    session.initialPage.observe({
+                      scope: "viewport",
+                      maxControls: 16,
+                      maxTextBytes: 2000,
+                    }),
                   )
                 : yield* step(
                     "read-text",
-                    session.readText(ReadTextRequest.make({ selector: "#firstHeading" })),
+                    session.initialPage.readText(
+                      ReadTextRequest.make({ selector: "#firstHeading" }),
+                    ),
                   );
       }
       if (attempts % sampleEvery === 0 && refused === undefined) {
@@ -150,8 +162,12 @@ const soak = Effect.scoped(
     }
     const spent = yield* Clock.monotonicTimeNanos;
     const status = yield* session.status;
+
     // Host reads have their own allowance, so a checkpoint still runs once actions are spent.
-    const checkpoint = yield* session.checkpoint({ picture: false }).pipe(Effect.result);
+    const checkpoint = yield* session.initialPage
+      .checkpoint({ picture: false })
+      .pipe(Effect.result);
+
     const summary = yield* interval.stop;
 
     yield* Fiber.join(viewer);

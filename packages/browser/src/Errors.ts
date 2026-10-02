@@ -24,7 +24,6 @@ export const BrowserOperation = Schema.Literals([
   "describe-page",
   "list-frames",
   "select-page",
-  "select-frame",
   "new-page",
   "close-page",
   "resize",
@@ -37,6 +36,9 @@ export const BrowserOperation = Schema.Literals([
   "read-text",
   "screenshot",
   "wait",
+  "resolve",
+  "run",
+  "settled",
   // input
   "navigate",
   "navigate-stop",
@@ -72,12 +74,13 @@ export const BrowserOperation = Schema.Literals([
 export type BrowserOperation = typeof BrowserOperation.Type;
 
 /** Dispatch evidence belongs to the operation, independently of its failure reason. */
-export const BrowserOutcome = Schema.Literals(["undispatched", "rejected", "unknown"]);
+export const BrowserOutcome = Schema.Literals(["undispatched", "rejected", "performed", "unknown"]);
 
 export type BrowserOutcome = typeof BrowserOutcome.Type;
 
 /** Limits report measured producer facts; an unavailable measurement is never invented. */
 export const LimitDimension = Schema.Literals([
+  "runs",
   "actions",
   "elapsed",
   "returned-bytes",
@@ -89,11 +92,16 @@ export const LimitDimension = Schema.Literals([
   "host-reads",
   "controls",
   "text",
+  "code-points",
   "captures",
   "frame-bytes",
   "width",
   "height",
   "pixels",
+  "observation-snapshots",
+  "observation-handles",
+  "observation-bytes",
+  "native-operations",
 ]);
 
 const SchemaPath = Schema.String.check(Schema.isMaxLength(512));
@@ -110,10 +118,19 @@ export const Reasons = {
   UnregisteredSession: Schema.TaggedStruct("UnregisteredSession", {}),
   Unsupported: Schema.TaggedStruct("Unsupported", {}),
   Busy: Schema.TaggedStruct("Busy", {}),
+  QueueFull: Schema.TaggedStruct("QueueFull", {
+    scope: Schema.Literals(["page", "session", "registry"]),
+    maximum: Schema.Natural,
+    observed: Schema.Natural,
+  }),
+  QueueExpired: Schema.TaggedStruct("QueueExpired", {}),
   Closed: Schema.TaggedStruct("Closed", {}),
   Stale: Schema.TaggedStruct("Stale", {}),
   NotFound: Schema.TaggedStruct("NotFound", {}),
-  Ambiguous: Schema.TaggedStruct("Ambiguous", {}),
+  Missing: Schema.TaggedStruct("Missing", {}),
+  Ambiguous: Schema.TaggedStruct("Ambiguous", { count: Schema.optionalKey(Schema.Natural) }),
+  Incomplete: Schema.TaggedStruct("Incomplete", {}),
+  Drifted: Schema.TaggedStruct("Drifted", {}),
   Malformed: Schema.TaggedStruct("Malformed", { path: Schema.optionalKey(SchemaPath) }),
   Limit: Schema.TaggedStruct("Limit", {
     dimension: LimitDimension,
@@ -121,6 +138,8 @@ export const Reasons = {
     observed: Schema.Natural,
   }),
   Timeout: Schema.TaggedStruct("Timeout", {}),
+  ScheduleMissed: Schema.TaggedStruct("ScheduleMissed", {}),
+  TimingBudgetExceeded: Schema.TaggedStruct("TimingBudgetExceeded", {}),
   Transport: Schema.TaggedStruct("Transport", { status: Schema.optionalKey(Schema.Int) }),
   Provider: Schema.TaggedStruct("Provider", {
     status: Schema.optionalKey(Schema.Int),
@@ -151,10 +170,25 @@ export const BrowserReason = Schema.Union(Object.values(Reasons));
 
 export type BrowserReason = typeof BrowserReason.Type;
 
+/**
+ * Containment never changes an uncertain mutation into a known action outcome. `PagePaused` is
+ * a page's own popup/dialog-policy quarantine: the page stays open for an operator and refuses
+ * automation until a drained handoff and explicit release.
+ */
+export const Containment = Schema.Union([
+  Schema.TaggedStruct("NotRequired", {}),
+  Schema.TaggedStruct("PageClosed", { pageId: Schema.String, generation: Schema.Natural }),
+  Schema.TaggedStruct("PagePaused", { pageId: Schema.String, generation: Schema.Natural }),
+  Schema.TaggedStruct("SessionFenced", { generation: Schema.Natural }),
+]);
+
+export type Containment = typeof Containment.Type;
+
 export class BrowserError extends Schema.TaggedError<BrowserError>()("BrowserError", {
   operation: BrowserOperation,
   reason: BrowserReason,
   outcome: BrowserOutcome,
+  containment: Schema.optionalKey(Containment),
 }) {}
 
 export class InitializationError extends Schema.TaggedError<InitializationError>()(

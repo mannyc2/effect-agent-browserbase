@@ -16,8 +16,8 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
         Effect.gen(function* () {
           const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* owner.navigate(NavigateRequest.make({ url: f.url }));
-          const pages = yield* owner.pages;
+          yield* owner.initialPage.navigate(NavigateRequest.make({ url: f.url }));
+          const pages = yield* owner.listPages();
           const selected = pages.find((page) => page.selected);
 
           expect(selected).toBeDefined();
@@ -34,9 +34,10 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
               });
 
               expect(
-                (yield* borrowed.readText(ReadTextRequest.make({ selector: "h1" }))).text,
+                (yield* borrowed.initialPage.readText(ReadTextRequest.make({ selector: "h1" })))
+                  .text,
               ).toBe("Local browser fixture");
-              yield* borrowed.click(ClickRequest.make({ selector: "#increment" }));
+              yield* borrowed.initialPage.click(ClickRequest.make({ selector: "#increment" }));
 
               // Detaching and reattaching inside a borrowed scope is deliberately absent.
               const unsupported = yield* borrowed.detach.pipe(Effect.result);
@@ -58,9 +59,9 @@ it.live("real CDP: a borrowed attachment drives a running session and never rele
           );
 
           // The allocating owner still holds the same live session, and sees the work done.
-          expect((yield* owner.readText(ReadTextRequest.make({ selector: "#count" }))).text).toBe(
-            "1",
-          );
+          expect(
+            (yield* owner.initialPage.readText(ReadTextRequest.make({ selector: "#count" }))).text,
+          ).toBe("1");
           expect(f.releaseIds).toEqual([]);
         }),
         { launch: { ...localLaunch, keepAlive: true } },
@@ -84,8 +85,8 @@ it.live("real CDP: a terminal session is not reattachable and an unknown target 
           const owner = yield* (yield* BrowserbaseBrowser).open(policy);
 
           reference = owner.reference;
-          yield* owner.navigate(NavigateRequest.make({ url: f.url }));
-          yield* owner.createPage;
+          yield* owner.initialPage.navigate(NavigateRequest.make({ url: f.url }));
+          yield* owner.createPage();
 
           yield* withProvider(
             f,

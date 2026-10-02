@@ -4,7 +4,6 @@ import {
   type AdaptedSession,
   type fromSession,
   interactiveLayer,
-  type SelectionOptions,
 } from "effect-agent-browser/adapter";
 import {
   type formHandlers,
@@ -22,7 +21,7 @@ import {
   type ToolFailureSnapshot,
 } from "effect-agent-browser/tools";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
-import type { AnySession, BrowserSession } from "effect-browser/browser";
+import type { BrowserSession, Frame, Page } from "effect-browser/browser";
 import type { BrowserPolicy } from "effect-browser/browser-data";
 import type { ChromiumSession } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
@@ -43,7 +42,7 @@ const borrowed: Same<LayerRequirements<ReturnType<typeof handlers>>, never> = tr
 
 const explicitOutcome: Same<
   BrowserToolFailure["outcome"],
-  "undispatched" | "rejected" | "unknown"
+  "undispatched" | "rejected" | "performed" | "unknown"
 > = true;
 
 type CallbackFailure = { readonly _tag: "SettingsUnavailable" };
@@ -68,7 +67,8 @@ const adaptationServices: Same<
   never
 > = true;
 
-const explicitSelection: Same<Parameters<typeof fromSession>[1], SelectionOptions> = true;
+/** An exact issued Page, or a Frame one of its Pages issued. */
+const explicitPage: Same<Parameters<typeof fromSession>[1], Page | Frame> = true;
 
 const singleHandle: Same<keyof AdaptedSession<BrowserSession>, "browser" | "handle"> = true;
 
@@ -89,8 +89,8 @@ const observedBorrowed: Same<LayerRequirements<ReturnType<typeof observedHandler
 const formBorrowed: Same<LayerRequirements<ReturnType<typeof formHandlers>>, never> = true;
 const readingBorrowed: Same<LayerRequirements<ReturnType<typeof readingHandlers>>, never> = true;
 
-/** A replacement reading sees the borrowed session and returns an ordinary typed reading. */
-const observeHook: Same<Parameters<NonNullable<HandlerOptions["observe"]>>[1], AnySession> = true;
+/** A replacement reading sees the bound Page or Frame and returns an ordinary typed reading. */
+const observeHook: Same<Parameters<NonNullable<HandlerOptions["observe"]>>[1], Page | Frame> = true;
 
 const retainedFailure: Same<
   Effect.Error<AdaptedSession<BrowserbaseSession<CallbackFailure>>["browser"]["failure"]>,
@@ -111,7 +111,8 @@ type ProgramFailure = { readonly _tag: "ProgramFailure" };
 const callbackHost = (
   session: BrowserbaseSession<OwnerFailure>,
   callback: Effect.Effect<void, CallbackFailure, RecorderService | Scope.Scope>,
-) => makeHost(session, { onNavigation: () => callback, onInput: () => callback });
+) =>
+  makeHost(session, session.initialPage, { onNavigation: () => callback, onInput: () => callback });
 
 const callbackRequirements: Same<
   Requirements<ReturnType<typeof callbackHost>>,
@@ -155,7 +156,7 @@ const scoped = (
   session: BrowserbaseSession<OwnerFailure>,
   program: Effect.Effect<number, ProgramFailure, ProgramService | ToolHostServices | Scope.Scope>,
   callback: Effect.Effect<void, CallbackFailure, RecorderService | Scope.Scope>,
-) => runTools(session, program, { onInput: () => callback });
+) => runTools(session, session.initialPage, program, { onInput: () => callback });
 
 const scopedRequirements: Same<
   Requirements<ReturnType<typeof scoped>>,
@@ -170,7 +171,7 @@ const scopedErrors: Same<
 const callbackHandlerRequirement = (
   session: BrowserbaseSession<OwnerFailure>,
   callback: Effect.Effect<void, CallbackFailure, ToolHostServices | Scope.Scope>,
-) => runTools(session, Effect.succeed(1), { onNavigation: () => callback });
+) => runTools(session, session.initialPage, Effect.succeed(1), { onNavigation: () => callback });
 
 const callbackHandlersStayRequired: Same<
   Requirements<ReturnType<typeof callbackHandlerRequirement>>,
@@ -193,7 +194,7 @@ const openerRequirements: Same<
 > = true;
 
 const synchronousAdmission: Same<
-  ReturnType<NonNullable<HandlerOptions["admission"]>["admit"]>,
+  ReturnType<NonNullable<HandlerOptions["policy"]>["admit"]>,
   boolean
 > = true;
 
@@ -206,7 +207,7 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       retainedChromium &&
       adaptationError &&
       adaptationServices &&
-      explicitSelection &&
+      explicitPage &&
       singleHandle &&
       openerRequirements &&
       typedTools &&

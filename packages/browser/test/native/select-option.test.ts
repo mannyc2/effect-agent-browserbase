@@ -54,7 +54,7 @@ const fixture = Effect.fnUntraced(function* () {
     policy: BrowserPolicy.unrestricted({ maxActions: 250, maxElapsedMillis: 60000 }),
   });
 
-  yield* session.navigate({ url: site.url });
+  yield* session.initialPage.navigate({ url: site.url });
   const page = observer.contexts()[0]?.pages()[0];
 
   assert.ok(page);
@@ -84,7 +84,7 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page } = yield* fixture();
-        const observed = yield* session.observe({ scope: "viewport", maxControls: 64 });
+        const observed = yield* session.initialPage.observe({ scope: "viewport", maxControls: 64 });
         const select = named(observed, "Single choice");
         const target = reference(observed, select);
 
@@ -98,7 +98,7 @@ it.live(
         expect(duplicates).toHaveLength(2);
         expect(duplicates.every((option) => option.selected === false)).toBe(true);
         expect(JSON.stringify(observed)).not.toContain("PRIVATE-");
-        const checkpoint = yield* session.checkpoint();
+        const checkpoint = yield* session.initialPage.checkpoint();
 
         expect(checkpoint).not.toHaveProperty("selects");
         expect(JSON.stringify(checkpoint.controls)).not.toContain("PRIVATE-FIRST");
@@ -108,7 +108,9 @@ it.live(
           "PRIVATE-SECOND",
           named(observed, "Foreign").elementId,
         ])
-          expect(yield* Effect.result(session.selectOption(target, [optionId]))).toMatchObject({
+          expect(
+            yield* Effect.result(session.initialPage.selectOption(target, [optionId])),
+          ).toMatchObject({
             _tag: "Failure",
             failure: {
               operation: "select-option",
@@ -118,7 +120,7 @@ it.live(
           });
         expect(yield* Effect.promise(() => page.locator("#events").textContent())).toBe("");
 
-        const result = yield* session.selectOption(target, [duplicates[1]!.elementId]);
+        const result = yield* session.initialPage.selectOption(target, [duplicates[1]!.elementId]);
 
         expect(Object.keys(result)).toEqual(["url"]);
         expect(JSON.stringify(result)).not.toContain("PRIVATE-");
@@ -135,17 +137,19 @@ it.live(
           "input:single;change:single;",
         );
         expect(
-          yield* Effect.result(session.selectOption(target, [duplicates[0]!.elementId])),
+          yield* Effect.result(
+            session.initialPage.selectOption(target, [duplicates[0]!.elementId]),
+          ),
         ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
 
-        const fresh = yield* session.observe({ scope: "viewport", maxControls: 64 });
+        const fresh = yield* session.initialPage.observe({ scope: "viewport", maxControls: 64 });
         const multiple = named(fresh, "Multiple choices");
 
         expect(multiple).toMatchObject({ multiple: true, optionsTruncated: false });
-        yield* session.selectOption(reference(fresh, multiple), [
+        yield* session.initialPage.selectOption(reference(fresh, multiple), [
           named(fresh, "Third").elementId,
           named(fresh, "First").elementId,
         ]);
@@ -187,7 +191,7 @@ it.live(
           "multiple",
         ] as const) {
           yield* Effect.promise(() => page.setContent(content));
-          const observed = yield* session.observe({ maxControls: 64 });
+          const observed = yield* session.initialPage.observe({ maxControls: 64 });
           const select = named(observed, "Single choice");
 
           const option =
@@ -239,7 +243,7 @@ it.live(
           );
           expect(
             yield* Effect.result(
-              session.selectOption(reference(observed, select), [option.elementId]),
+              session.initialPage.selectOption(reference(observed, select), [option.elementId]),
             ),
           ).toMatchObject({
             _tag: "Failure",
@@ -262,7 +266,7 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page } = yield* fixture();
-        const observed = yield* session.observe({ maxControls: 64 });
+        const observed = yield* session.initialPage.observe({ maxControls: 64 });
         const select = named(observed, "Single choice");
         const target = reference(observed, select);
 
@@ -272,21 +276,24 @@ it.live(
 
         expect(
           yield* Effect.result(
-            session.selectOption(target, [named(observed, "Unavailable").elementId]),
+            session.initialPage.selectOption(target, [named(observed, "Unavailable").elementId]),
           ),
         ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Disabled" }, outcome: "undispatched" },
         });
-        expect(yield* Effect.result(session.selectOption(target, options))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage.selectOption(target, options)),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Unsupported" }, outcome: "undispatched" },
         });
         expect(
           yield* Effect.result(
-            session.selectOption(reference(observed, named(observed, "Ordinary button")), [
-              options[0]!,
-            ]),
+            session.initialPage.selectOption(
+              reference(observed, named(observed, "Ordinary button")),
+              [options[0]!],
+            ),
           ),
         ).toMatchObject({
           _tag: "Failure",
@@ -295,7 +302,7 @@ it.live(
         for (const throws of [false, true])
           expect(
             yield* Effect.result(
-              session.selectOption(target, [options[0]!], {
+              session.initialPage.selectOption(target, [options[0]!], {
                 admit: (facts) => {
                   expect(facts.multiple).toBe(false);
                   expect(facts).not.toHaveProperty("value");
@@ -316,13 +323,14 @@ it.live(
             if (node instanceof HTMLSelectElement) node.disabled = true;
           }),
         );
-        const disabled = yield* session.observe({ maxControls: 64 });
+        const disabled = yield* session.initialPage.observe({ maxControls: 64 });
 
         expect(
           yield* Effect.result(
-            session.selectOption(reference(disabled, named(disabled, "Single choice")), [
-              named(disabled, "Initial").elementId,
-            ]),
+            session.initialPage.selectOption(
+              reference(disabled, named(disabled, "Single choice")),
+              [named(disabled, "Initial").elementId],
+            ),
           ),
         ).toMatchObject({
           _tag: "Failure",
@@ -334,7 +342,7 @@ it.live(
         ${Array.from({ length: 70 }, (_, i) => `<option id=r${i} value=PRIVATE-${i}>Choice ${i}</option>`).join("")}
         </select>${events}`),
         );
-        const bounded = yield* session.observe({ scope: "viewport", maxControls: 4 });
+        const bounded = yield* session.initialPage.observe({ scope: "viewport", maxControls: 4 });
         const many = named(bounded, "Many");
 
         expect(bounded.controls).toHaveLength(4);
@@ -344,18 +352,20 @@ it.live(
           bounded.controls.filter((option) => option.selectElementId === many.elementId),
         ).toHaveLength(3);
         expect(
-          yield* Effect.result(session.selectOption(reference(bounded, many), ["element-64"])),
+          yield* Effect.result(
+            session.initialPage.selectOption(reference(bounded, many), ["element-64"]),
+          ),
         ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
-        yield* session.selectOption(reference(bounded, many), [
+        yield* session.initialPage.selectOption(reference(bounded, many), [
           named(bounded, "Choice 2").elementId,
         ]);
         expect(yield* Effect.promise(() => page.locator("#events").textContent())).toBe(
           "input:many;change:many;",
         );
-        const maximum = yield* session.observe({ scope: "viewport", maxControls: 64 });
+        const maximum = yield* session.initialPage.observe({ scope: "viewport", maxControls: 64 });
 
         expect(maximum.controls).toHaveLength(64);
         expect(named(maximum, "Many").optionsTruncated).toBe(true);
@@ -365,7 +375,12 @@ it.live(
             if (node instanceof HTMLOptionElement) node.value = "x".repeat(65537);
           }),
         );
-        const limitedValue = yield* session.observe({ scope: "viewport", maxControls: 4 });
+
+        const limitedValue = yield* session.initialPage.observe({
+          scope: "viewport",
+          maxControls: 4,
+        });
+
         const unavailable = named(limitedValue, "Choice 1");
 
         expect(unavailable.selectElementId).toBeUndefined();
@@ -374,7 +389,7 @@ it.live(
         expect(JSON.stringify(limitedValue).length).toBeLessThan(4000);
         expect(
           yield* Effect.result(
-            session.selectOption(reference(limitedValue, named(limitedValue, "Many")), [
+            session.initialPage.selectOption(reference(limitedValue, named(limitedValue, "Many")), [
               unavailable.elementId,
             ]),
           ),
@@ -392,40 +407,50 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page } = yield* fixture();
-        const observed = yield* session.observe({ maxControls: 64 });
+        const observed = yield* session.initialPage.observe({ maxControls: 64 });
         const target = reference(observed, named(observed, "Single choice"));
         const option = named(observed, "Grouped");
-        const stage = (yield* session.pages).find((page) => page.selected)!;
-        const other = yield* session.createPage;
+
+        const stage = yield* session.page(
+          (yield* session.listPages()).find((page) => page.selected)!,
+        );
+
+        const other = yield* session.createPage();
 
         yield* session.selectPage(other);
-        expect(
-          yield* Effect.result(session.selectOption(target, [option.elementId])),
-        ).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-        });
-        yield* session.selectPage(stage);
-        const held = yield* PageControl.suspend(session, stage);
-
-        yield* PageControl.resume(session, held);
-        expect(
-          yield* Effect.result(session.selectOption(target, [option.elementId])),
-        ).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-        });
-        yield* session.revalidateElement(target);
-        expect(
-          yield* Effect.result(session.selectOption(target, [option.elementId])),
-        ).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-        });
-        yield* session.revalidateElement(reference(observed, option));
-        yield* session.selectOption(target, [option.elementId]);
+        yield* session.initialPage.selectOption(target, [option.elementId]);
         expect(yield* Effect.promise(() => page.locator("#events").textContent())).toBe(
           "input:single;change:single;",
+        );
+        const current = yield* session.initialPage.observe({ maxControls: 64 });
+        const currentTarget = reference(current, named(current, "Single choice"));
+        const currentOption = named(current, "Grouped");
+
+        yield* session.selectPage(stage);
+        const held = yield* PageControl.suspend(stage);
+
+        yield* PageControl.resume(session.initialPage, held);
+        expect(
+          yield* Effect.result(
+            session.initialPage.selectOption(currentTarget, [currentOption.elementId]),
+          ),
+        ).toMatchObject({
+          _tag: "Failure",
+          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+        });
+        yield* session.initialPage.revalidateElement(currentTarget);
+        expect(
+          yield* Effect.result(
+            session.initialPage.selectOption(currentTarget, [currentOption.elementId]),
+          ),
+        ).toMatchObject({
+          _tag: "Failure",
+          failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+        });
+        yield* session.initialPage.revalidateElement(reference(current, currentOption));
+        yield* session.initialPage.selectOption(currentTarget, [currentOption.elementId]);
+        expect(yield* Effect.promise(() => page.locator("#events").textContent())).toBe(
+          "input:single;change:single;input:single;change:single;",
         );
         expect((yield* session.status).phase).toBe("open");
       }),

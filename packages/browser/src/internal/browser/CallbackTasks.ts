@@ -59,6 +59,10 @@ export class CallbackTasks {
     this.stopped = true;
   }
 
+  drained(): boolean {
+    return this.pending.size === 0;
+  }
+
   async settle(): Promise<void> {
     await Promise.all(this.pending);
   }

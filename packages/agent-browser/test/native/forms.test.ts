@@ -109,7 +109,9 @@ it.live("real AgentRuntime: one browser_fill_form call sets a whole form and sub
         Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
         (browser) =>
           Effect.gen(function* () {
-            const host = yield* BrowserTools.makeHost(browser, { maxControls: 32 });
+            const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+              maxControls: 32,
+            });
 
             const run = yield* host.run(
               AgentRuntime.run(agent(), "Create an account on the Pro plan.").pipe(
@@ -137,7 +139,7 @@ it.live("real AgentRuntime: one browser_fill_form call sets a whole form and sub
             );
 
             expect(run.output.done).toBe(true);
-            expect((yield* browser.readText({ selector: "#result" })).text).toBe(
+            expect((yield* browser.initialPage.readText({ selector: "#result" })).text).toBe(
               "Created ada@example.test on pro with terms",
             );
             expect((yield* host.toolFailures).failures).toEqual([]);
@@ -190,7 +192,9 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              const host = yield* BrowserTools.makeHost(browser, { maxControls: 32 });
+              const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+                maxControls: 32,
+              });
 
               // The engine's default of three consecutive failures ends the run right there.
               const strict = yield* host
@@ -203,7 +207,9 @@ it.live(
                 .pipe(Effect.flip);
 
               expect(strict).toMatchObject({ _tag: "AgentPolicyError" });
-              expect((yield* browser.readText({ selector: "#result" })).text).toBe("Not created");
+              expect((yield* browser.initialPage.readText({ selector: "#result" })).text).toBe(
+                "Not created",
+              );
 
               const run = yield* host.run(
                 AgentRuntime.run(agent(), "Create an account on the Pro plan.").pipe(
@@ -243,7 +249,7 @@ it.live(
               );
 
               expect(run.output.done).toBe(true);
-              expect((yield* browser.readText({ selector: "#result" })).text).toBe(
+              expect((yield* browser.initialPage.readText({ selector: "#result" })).text).toBe(
                 "Created ada@example.test on pro with terms",
               );
             }),
@@ -265,7 +271,9 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              const host = yield* BrowserTools.makeHost(browser, { maxTextBytes: 4096 });
+              const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+                maxTextBytes: 4096,
+              });
 
               const run = yield* host.run(
                 AgentRuntime.run(agent(), "Create the account, then read the terms.").pipe(

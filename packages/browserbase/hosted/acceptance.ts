@@ -16,11 +16,16 @@ const interactive = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* h.open();
 
-    yield* session.navigate(NavigateRequest.make({ url: "https://example.com/" }));
-    const observation = yield* session.observe({ maxTextBytes: 16 * 1024, maxControls: 16 });
-    const screenshot = yield* session.screenshot({ fullPage: true });
+    yield* session.initialPage.navigate(NavigateRequest.make({ url: "https://example.com/" }));
 
-    const capture = yield* Capture.start(session, {
+    const observation = yield* session.initialPage.observe({
+      maxTextBytes: 16 * 1024,
+      maxControls: 16,
+    });
+
+    const screenshot = yield* session.initialPage.screenshot({ fullPage: true });
+
+    const capture = yield* Capture.start(session.initialPage, {
       maxFrames: 64,
       maxBufferedBytes: 16 * 1024 * 1024,
       maxFrameBytes: 4 * 1024 * 1024,

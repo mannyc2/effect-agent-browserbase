@@ -45,6 +45,16 @@ const fixture = (
   hooks: {
     readonly extractFirstNode?: () => Promise<void>;
     readonly readFacts?: () => Promise<void>;
+    readonly disposeNode?: () => Promise<void>;
+    readonly disposeFacts?: () => Promise<void>;
+    readonly observationLimits?: {
+      readonly maxSnapshotsPerPage: number;
+      readonly maxSnapshotsPerSession: number;
+      readonly maxHandlesPerPage: number;
+      readonly maxHandlesPerSession: number;
+      readonly maxBytesPerPage: number;
+      readonly maxBytesPerSession: number;
+    };
   } = {},
 ) => {
   const records: Array<{ disposed: number }> = [];
@@ -75,7 +85,9 @@ const fixture = (
 
             return { facts };
           },
-          dispose: async () => {},
+          dispose: async () => {
+            await hooks.disposeFacts?.();
+          },
         };
       }
 
@@ -89,6 +101,7 @@ const fixture = (
         evaluate: async () => true,
         dispose: async () => {
           record.disposed++;
+          await hooks.disposeNode?.();
         },
       };
 
@@ -140,19 +153,23 @@ const fixture = (
   } as unknown as Frame;
 
   const targets = {
-    selected: () => ({ ...target }),
     current: (requested = target) => ({ entry: { id: requested.pageId }, frame }),
     epochOf: () => documentEpoch,
     url: () => "https://example.test/stage",
     navigating: { has: () => false },
   } as unknown as Targets;
 
-  const observation = makeObservation(targets, "connection", {
-    invalidate: () => {},
-    pause: () => {},
-    fault: () => {},
-    disconnected: () => {},
-  });
+  const observation = makeObservation(
+    targets,
+    "connection",
+    {
+      invalidate: () => {},
+      pause: () => {},
+      fault: () => {},
+      disconnected: () => {},
+    },
+    hooks.observationLimits,
+  );
 
   return {
     observation,
@@ -169,7 +186,7 @@ const fixture = (
 it("extracts only validated node indices from a page-polluted array", async () => {
   const f = fixture();
 
-  await f.observation.observe("document", 1024, 1, ticket().admission);
+  await f.observation.observe("document", 1024, 1, ticket().admission, undefined, f.target);
 
   expect(f.calls.nodeProperties).toBe(1);
 });
@@ -185,7 +202,14 @@ it.each(["mutation", "hold"] as const)(
       await finish.promise;
     });
 
-    const reading = f.observation.observe("document", 1024, 1, ticket().admission);
+    const reading = f.observation.observe(
+      "document",
+      1024,
+      1,
+      ticket().admission,
+      undefined,
+      f.target,
+    );
 
     await entered.promise;
     if (event === "mutation") f.observation.invalidate({ pageId: "stage" });
@@ -203,10 +227,20 @@ it.each(["mutation", "hold"] as const)(
 );
 
 const observeFresh = async (f: ReturnType<typeof fixture>) => {
-  const fresh = await f.observation.observe("document", 1024, 1, ticket().admission);
+  const fresh = await f.observation.observe(
+    "document",
+    1024,
+    1,
+    ticket().admission,
+    undefined,
+    f.target,
+  );
+
   const reference = { observationId: fresh.observationId, elementId: fresh.controls[0]!.elementId };
 
-  expect((await f.observation.controlFacts(reference, ticket().admission)).label).toBe("Action");
+  expect((await f.observation.controlFacts(reference, ticket().admission, f.target)).label).toBe(
+    "Action",
+  );
 
   return fresh;
 };
@@ -220,7 +254,14 @@ it("an unrelated page event leaves a pending observation usable", async () => {
     await finish.promise;
   });
 
-  const reading = f.observation.observe("document", 1024, 1, ticket().admission);
+  const reading = f.observation.observe(
+    "document",
+    1024,
+    1,
+    ticket().admission,
+    undefined,
+    f.target,
+  );
 
   await entered.promise;
   f.observation.invalidate({ pageId: "scout" });
@@ -235,6 +276,7 @@ it("an unrelated page event leaves a pending observation usable", async () => {
           elementId: result.controls[0]!.elementId,
         },
         ticket().admission,
+        f.target,
       )
     ).label,
   ).toBe("Action");
@@ -258,7 +300,15 @@ it.each(["node extraction", "holder release"])(
       stage === "holder release" ? fixture(pause) : fixture(undefined, { extractFirstNode: pause });
 
     const oldTicket = ticket();
-    const reading = f.observation.observe("document", 1024, 1, oldTicket.admission);
+
+    const reading = f.observation.observe(
+      "document",
+      1024,
+      1,
+      oldTicket.admission,
+      undefined,
+      f.target,
+    );
 
     await entered.promise;
     oldTicket.abort();
@@ -278,6 +328,7 @@ it.each(["node extraction", "holder release"])(
             elementId: fresh.controls[0]!.elementId,
           },
           ticket().admission,
+          f.target,
         )
       ).label,
     ).toBe("Action");
@@ -292,7 +343,7 @@ it("a failed native holder release still disposes extracted nodes and does not p
   });
 
   await expect(
-    f.observation.observe("document", 1024, 1, ticket().admission),
+    f.observation.observe("document", 1024, 1, ticket().admission, undefined, f.target),
   ).rejects.toMatchObject({
     reason: { _tag: "Provider" },
   });
@@ -303,18 +354,6 @@ it("a failed native holder release still disposes extracted nodes and does not p
 });
 
 const changeSnapshot: ReadonlyArray<readonly [string, (f: ReturnType<typeof fixture>) => void]> = [
-  [
-    "selected page",
-    (f) => {
-      f.target.pageId = "scout";
-    },
-  ],
-  [
-    "selected frame",
-    (f) => {
-      f.target.frameId = "child";
-    },
-  ],
   [
     "document epoch",
     (f) => {
@@ -342,14 +381,21 @@ it.each(changeSnapshot)(
       },
     });
 
-    const observed = await f.observation.observe("document", 1024, 1, ticket().admission);
+    const observed = await f.observation.observe(
+      "document",
+      1024,
+      1,
+      ticket().admission,
+      undefined,
+      f.target,
+    );
 
     const reference = {
       observationId: observed.observationId,
       elementId: observed.controls[0]!.elementId,
     };
 
-    const reading = f.observation.controlFacts(reference, ticket().admission);
+    const reading = f.observation.controlFacts(reference, ticket().admission, f.target);
 
     await entered.promise;
     change(f);
@@ -366,14 +412,24 @@ it.each(changeSnapshot)(
 
 it("an observation from a different connection generation refuses before reading native facts", async () => {
   const f = fixture();
-  const observed = await f.observation.observe("document", 1024, 1, ticket().admission);
+
+  const observed = await f.observation.observe(
+    "document",
+    1024,
+    1,
+    ticket().admission,
+    undefined,
+    f.target,
+  );
 
   const reference = {
     observationId: observed.observationId,
     elementId: observed.controls[0]!.elementId,
   };
 
-  await expect(f.observation.controlFacts(reference, ticket(2).admission)).rejects.toMatchObject({
+  await expect(
+    f.observation.controlFacts(reference, ticket(2).admission, f.target),
+  ).rejects.toMatchObject({
     reason: { _tag: "Stale" },
     outcome: "undispatched",
   });
@@ -381,9 +437,108 @@ it("an observation from a different connection generation refuses before reading
   await f.observation.dispose();
 });
 
-it("an action rechecks the resolved snapshot after asynchronous admission and sends no input to a changed target", async () => {
+// https://github.com/mannyc2/effect-agent-browserbase/issues/94#issuecomment-5914182775
+// A lost native disposal reply cannot be reproduced reliably in a local browser. Capacity must
+// follow the actual native lifetime, including retired snapshots, rather than caller completion.
+it("failed node disposal retains finite snapshot capacity until positive page retirement", async () => {
+  const f = fixture(undefined, {
+    disposeNode: async () => {
+      throw new Error("native disposal unconfirmed");
+    },
+    observationLimits: {
+      maxSnapshotsPerPage: 2,
+      maxSnapshotsPerSession: 2,
+      maxHandlesPerPage: 8192,
+      maxHandlesPerSession: 32768,
+      maxBytesPerPage: 64 * 1024 * 1024,
+      maxBytesPerSession: 256 * 1024 * 1024,
+    },
+  });
+
+  try {
+    await f.observation.observe("document", 1024, 1, ticket().admission, undefined, f.target);
+    await f.observation.observe("document", 1024, 1, ticket().admission, undefined, f.target);
+    await expect(
+      f.observation.observe("document", 1024, 1, ticket().admission, undefined, f.target),
+    ).rejects.toMatchObject({
+      reason: { _tag: "Limit", dimension: "observation-snapshots" },
+      outcome: "undispatched",
+    });
+    expect(f.records).toEqual([{ disposed: 1 }, { disposed: 1 }]);
+    // Only an observed native page close frees these reservations. The next page can now
+    // acquire its own snapshot while the original browser connection remains live.
+    f.observation.retirePage("stage");
+    f.target.pageId = "scout";
+    await observeFresh(f);
+    expect(f.records).toHaveLength(3);
+  } finally {
+    f.observation.retireConnection();
+    await f.observation.dispose();
+  }
+});
+
+// The same native-retirement rule covers temporary fact reads. Chromium cannot reliably lose
+// only a wrapper-disposal reply; this gate checks that repeated failures cannot bypass the cap.
+it("failed passive wrapper disposal prevents further native facts reads when capacity is full", async () => {
+  const f = fixture(undefined, {
+    disposeFacts: async () => {
+      throw new Error("native facts wrapper unconfirmed");
+    },
+    observationLimits: {
+      maxSnapshotsPerPage: 3,
+      maxSnapshotsPerSession: 3,
+      maxHandlesPerPage: 8192,
+      maxHandlesPerSession: 32768,
+      maxBytesPerPage: 64 * 1024 * 1024,
+      maxBytesPerSession: 256 * 1024 * 1024,
+    },
+  });
+
+  try {
+    const seen = await f.observation.observe(
+      "document",
+      1024,
+      1,
+      ticket().admission,
+      undefined,
+      f.target,
+    );
+
+    const reference = {
+      observationId: seen.observationId,
+      elementId: seen.controls[0]!.elementId,
+    };
+
+    for (let read = 0; read < 2; read++)
+      await expect(
+        f.observation.controlFacts(reference, ticket().admission, f.target),
+      ).rejects.toMatchObject({
+        reason: { _tag: "Provider" },
+      });
+    await expect(
+      f.observation.controlFacts(reference, ticket().admission, f.target),
+    ).rejects.toMatchObject({
+      reason: { _tag: "Limit", dimension: "observation-snapshots" },
+      outcome: "undispatched",
+    });
+    expect(f.calls.facts).toBe(2);
+  } finally {
+    f.observation.retireConnection();
+    await f.observation.dispose();
+  }
+});
+
+it("an action rechecks the resolved snapshot after asynchronous admission and sends no input to a retired observation", async () => {
   const f = fixture();
-  const observed = await f.observation.observe("document", 1024, 1, ticket().admission);
+
+  const observed = await f.observation.observe(
+    "document",
+    1024,
+    1,
+    ticket().admission,
+    undefined,
+    f.target,
+  );
 
   const reference = {
     observationId: observed.observationId,
@@ -411,10 +566,12 @@ it("an action rechecks the resolved snapshot after asynchronous admission and se
     async () => {
       inputs++;
     },
+    undefined,
+    f.target,
   );
 
   await entered.promise;
-  f.target.frameId = "child";
+  f.observation.invalidate({ pageId: "stage" });
   finish.release();
   await expect(acting).rejects.toMatchObject({
     reason: { _tag: "Stale" },
@@ -422,7 +579,5 @@ it("an action rechecks the resolved snapshot after asynchronous admission and se
   });
   expect(dispatches).toBe(0);
   expect(inputs).toBe(0);
-  f.target.frameId = "main";
-  expect((await f.observation.controlFacts(reference, ticket().admission)).label).toBe("Action");
   await f.observation.dispose();
 });

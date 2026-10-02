@@ -16,9 +16,22 @@ import type {
 } from "../../BrowserData.ts";
 import type { CaptureSize } from "../../CaptureData.ts";
 import type { InitializationError } from "../../Errors.ts";
+import type {
+  Descriptor,
+  Precondition,
+  ResolveGuard,
+  SettledEvidence,
+  SettledOptions,
+} from "../../PlanData.ts";
 import type { NativeBinding } from "./Bindings.ts";
 import type { CompiledBootstrap } from "./Bootstrap.ts";
-import type { AdmissionPolicy } from "./Observation.ts";
+import type { ResolveRequest } from "./Descriptor.ts";
+import type {
+  AdmissionPolicy,
+  ObservationLimits,
+  ResolvedElement,
+  ResolvedGroup,
+} from "./Observation.ts";
 import type { Invalidation, ObservationScope, Ticket, WaitTicket } from "./Owner.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 
@@ -33,6 +46,13 @@ export interface ClickResult {
   readonly input: InputReceipt;
 }
 
+export type ElementTarget = string | ObservedElement | ResolvedElement;
+export type NativeSelectOptions = SelectOptions | ReadonlyArray<ResolvedElement>;
+
+export type NativeFormField = Omit<FormField, "options"> & {
+  readonly options?: NativeSelectOptions;
+};
+
 /** Private native boundary. Neither this interface nor native objects are public package exports. */
 export interface DriverOptions {
   readonly viewport: Viewport;
@@ -41,6 +61,7 @@ export interface DriverOptions {
   readonly popupPolicy: "retain" | "close" | "pause";
   readonly dialogPolicy: "dismiss" | "pause";
   readonly maxPages: number;
+  readonly observationLimits?: ObservationLimits;
   readonly preserveViewport?: boolean;
   readonly pageControl?: boolean;
   /** Installed once per connection, before any document this connection creates. */
@@ -83,12 +104,47 @@ export type DriverFault =
       readonly disposition: "pending" | "dispatched" | "confirmed" | "not-dispatched" | "unknown";
     };
 
+/** Copied host metadata, never an issued Page or an atomic native title/URL reading. */
+export interface NativeCachedPage {
+  readonly pageId: string;
+  readonly frameId: string;
+  readonly targetId: string | null;
+  readonly documentEpoch: number;
+  readonly url: string | null;
+  readonly urlQualification: "NativeCached" | "Omitted";
+  readonly title: string | null;
+  readonly titleQualification: "ObservedCached" | "Unread" | "Omitted";
+  readonly selected: boolean;
+  readonly displayState: "running" | "suspended" | "unknown";
+}
+
+export type NativePageLifecycle =
+  | {
+      readonly _tag: "Opened" | "Metadata" | "Display";
+      readonly page: NativeCachedPage;
+    }
+  | {
+      readonly _tag: "Navigated";
+      readonly page: NativeCachedPage;
+      readonly frameId: string;
+      readonly documentEpoch: number;
+      readonly sameDocument: boolean;
+      readonly url: string | null;
+      readonly urlQualification: "NativeCached" | "Omitted";
+    };
+
 export interface DriverEvents {
+  readonly pageLifecycle?: (event: NativePageLifecycle) => void;
+  readonly frameClosed?: (pageId: string, frameId: string) => void;
   readonly invalidate: (reason: Invalidation, scope?: ObservationScope) => void;
   readonly disconnected: () => void;
   /** Positive native connection retirement, also delivered during or after explicit cleanup. */
   readonly retired?: () => void;
-  readonly pause: (reason?: "popup" | "dialog") => void;
+  /** Positive exact native page closure, never merely logical revocation. */
+  readonly pageClosed?: (pageId: string, page?: NativeCachedPage) => void;
+  /** Native uncertainty confined to one known page; the owner contains that page. */
+  readonly pageFault?: (pageId: string) => void;
+  readonly pause: (reason?: "popup" | "dialog", pageId?: string) => void;
   readonly fault: (event: DriverFault) => void;
 }
 
@@ -209,11 +265,40 @@ export type NativeFileSelection =
   | { readonly _tag: "Remote"; readonly path: string };
 
 export interface Driver {
+  /** Reads only the canonical bounded native registry, with no native call or authority issue. */
+  readonly cachedPages: () => ReadonlyArray<NativeCachedPage>;
+  readonly resolveDescriptor: (
+    descriptor: Descriptor,
+    ticket: Ticket,
+    target: DriverTarget,
+    guard?: ResolveGuard,
+  ) => Promise<ObservedElement>;
+  readonly resolveGroup: (
+    requests: ReadonlyArray<ResolveRequest>,
+    ticket: Ticket,
+    target: DriverTarget,
+    guard: ResolveGuard,
+  ) => Promise<ResolvedGroup>;
+  readonly expectations: (
+    conditions: ReadonlyArray<Precondition>,
+    ticket: Ticket,
+    target: DriverTarget,
+  ) => Promise<void>;
+  readonly settled: (
+    options: SettledOptions,
+    ticket: WaitTicket,
+    target: DriverTarget,
+  ) => Promise<SettledEvidence>;
+  readonly scrollTo: (
+    target: ObservedElement | ResolvedElement,
+    ticket: Ticket,
+    browserTarget: DriverTarget,
+  ) => Promise<string>;
   readonly pageControl?: {
     readonly state: (page: PageInfo, ticket: Ticket) => Promise<PageExecutionState>;
     readonly suspend: (page: PageInfo, ticket: Ticket) => Promise<PageSuspension>;
     readonly resume: (receipt: PageSuspension, ticket: Ticket) => Promise<void>;
-    readonly checkTarget: (target: DriverTarget | undefined, ticket: Ticket) => Promise<void>;
+    readonly checkTarget: (target: DriverTarget, ticket: Ticket) => Promise<void>;
   };
   readonly selected: () => { readonly pageId: string; readonly frameId: string };
   readonly selectedTargetId: () => Promise<string>;
@@ -222,39 +307,39 @@ export interface Driver {
   readonly resolvePage: (page: PageInfo, ticket: Ticket) => Promise<DriverTarget>;
   readonly selectPage: (page: PageInfo, ticket: Ticket) => Promise<void>;
   readonly newPage: (ticket: Ticket) => Promise<PageInfo>;
-  readonly closePage: (page: PageInfo, ticket: Ticket) => Promise<void>;
+  readonly closePage: (page: PageInfo, ticket: Ticket, onDispatch?: () => void) => Promise<void>;
   /**
    * Closes a page whose last mutation has an unknown outcome, and settles only once the browser
    * has closed it; a page already closed settles at once. Never asked of the selected page.
    */
   readonly containPage: (pageId: string) => Promise<void>;
-  readonly listFrames: (ticket: Ticket, page?: PageInfo) => Promise<ReadonlyArray<FrameInfo>>;
+  readonly listFrames: (ticket: Ticket, page: PageInfo) => Promise<ReadonlyArray<FrameInfo>>;
   readonly resolveFrame: (
     page: PageInfo,
     frame: FrameInfo,
     ticket: Ticket,
   ) => Promise<DriverTarget>;
-  readonly selectFrame: (id: string, ticket: Ticket) => Promise<void>;
   /** Issued exactly once; returns while the browser is still loading. The only navigator. */
   readonly beginNavigation: (
     url: string,
     timeoutMillis: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
     control?: NavigationControl,
   ) => Promise<NativeNavigation>;
   readonly readText: (
     selector: string | undefined,
     maximumBytes: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<string>;
   readonly observe: (
     scope: "document" | "viewport",
     maximumBytes: number,
     controls: number,
     ticket: Ticket,
-    match?: string,
+    match: string | undefined,
+    target: DriverTarget,
   ) => Promise<NativeObservation>;
   readonly checkpoint: (
     maximumBytes: number,
@@ -262,30 +347,40 @@ export interface Driver {
     /** Absent means no picture is taken. */
     pictureBytes: number | undefined,
     ticket: Ticket,
+    target: DriverTarget,
   ) => Promise<NativeCheckpoint>;
   /** Fresh facts from the exact node an observation named. */
-  readonly controlFacts: (target: ObservedElement, ticket: Ticket) => Promise<ControlFacts>;
+  readonly controlFacts: (
+    target: ObservedElement,
+    ticket: Ticket,
+    browserTarget: DriverTarget,
+  ) => Promise<ControlFacts>;
   /** After a hold: is this still the attached control that was inspected? */
-  readonly revalidate: (target: ObservedElement, ticket: Ticket) => Promise<void>;
+  readonly revalidate: (
+    target: ObservedElement,
+    ticket: Ticket,
+    browserTarget: DriverTarget,
+  ) => Promise<void>;
   readonly click: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     capture: InputCapture,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<ClickResult>;
   readonly fill: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     value: string,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   readonly selectOption: (
-    target: ObservedElement,
-    options: SelectOptions,
+    target: ObservedElement | ResolvedElement,
+    options: NativeSelectOptions,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   /**
    * One form step on an exact observed node that may have become enabled since it was observed.
@@ -295,12 +390,13 @@ export interface Driver {
    * a state other than the requested one.
    */
   readonly formStep: (
-    target: ObservedElement,
-    field: FormField,
+    target: ObservedElement | ResolvedElement,
+    field: NativeFormField,
     ticket: Ticket,
     policy: AdmissionPolicy | undefined,
     settleMillis: number,
     capture: InputCapture,
+    browserTarget: DriverTarget,
   ) => Promise<{
     readonly status: "set" | "unchanged";
     readonly reached: boolean;
@@ -310,64 +406,66 @@ export interface Driver {
   }>;
   /** Private current states of retained nodes, without identity checks; absent when detached. */
   readonly formState: (
-    targets: ReadonlyArray<ObservedElement>,
+    targets: ReadonlyArray<ObservedElement | ResolvedElement>,
     ticket: Ticket,
+    browserTarget: DriverTarget,
   ) => Promise<ReadonlyArray<string | undefined>>;
   /** The one submit click, on an exact observed node that may have become enabled. */
   readonly formSubmit: (
-    target: ObservedElement,
+    target: ObservedElement | ResolvedElement,
     ticket: Ticket,
     capture: InputCapture,
-    policy?: AdmissionPolicy,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<ClickResult>;
   /** Script in the page. It raises no wheel event, which is what tells it from `wheel`. */
   readonly scroll: (
     deltaX: number,
     deltaY: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<string>;
   readonly pointerMove: (
     to: NativePoint,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<NativeInput>;
   readonly hover: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<NativeInput>;
   readonly wheel: (
     deltaX: number,
     deltaY: number,
     at: NativePoint | undefined,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<NativeInput>;
   /** One key stroke to whatever has focus, or only to `into` if it already has it. */
   readonly press: (
     key: string,
     modifiers: ReadonlyArray<KeyModifier>,
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<NativeInput>;
   readonly type: (
     text: string,
-    into: string | ObservedElement | undefined,
+    into: ElementTarget | undefined,
     ticket: Ticket,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
+    policy: AdmissionPolicy | undefined,
+    browserTarget: DriverTarget,
   ) => Promise<NativeInput>;
   readonly screenshot: (
     fullPage: boolean,
     maximumBytes: number,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => Promise<Uint8Array>;
-  readonly resize: (viewport: Viewport, ticket: Ticket) => Promise<void>;
+  readonly resize: (viewport: Viewport, ticket: Ticket, target: DriverTarget) => Promise<void>;
   readonly waitFor: (
     selector: string,
     state: "visible" | "hidden" | "attached" | "detached",
@@ -375,42 +473,51 @@ export interface Driver {
     target: DriverTarget,
   ) => Promise<void>;
   readonly waitForElement: (
-    reference: ObservedElement,
+    reference: ObservedElement | ResolvedElement,
     state: WaitForElementRequest["state"],
     ticket: WaitTicket,
     target: DriverTarget,
   ) => Promise<void>;
   readonly clickAndWait: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
     capture: InputCapture,
+    browserTarget: DriverTarget,
   ) => Promise<ClickResult>;
   readonly clickForDownload: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
+    browserTarget: DriverTarget,
   ) => Promise<{
     readonly downloadId: string;
     readonly filename: string;
     readonly state: "completed" | "failed";
   }>;
   readonly selectFiles: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   /** The chooser observer is registered before the single click dispatch that opens it. */
   readonly clickForFileSelection: (
-    target: string | ObservedElement,
+    target: ElementTarget,
     files: ReadonlyArray<NativeFileSelection>,
     ticket: Ticket,
+    browserTarget: DriverTarget,
   ) => Promise<string>;
   /** Evaluated once per document; a later document never inherits an earlier one's result. */
-  readonly documentReadiness: (ticket: Ticket, target?: DriverTarget) => Promise<ReadinessState>;
+  readonly documentReadiness: (ticket: Ticket, target: DriverTarget) => Promise<ReadinessState>;
   readonly dismissDialogs: (ticket: Ticket) => Promise<void>;
-  readonly capture: (target?: CaptureTarget) => Promise<CaptureBinding>;
-  readonly invalidateObservation: (scope?: ObservationScope) => void;
+  readonly capture: (target: CaptureTarget) => Promise<CaptureBinding>;
+  readonly invalidateObservation: (scope?: ObservationScope, origin?: AbortSignal) => void;
   /** Synchronous retirement precedes canceling consumer callback fibers. */
   readonly fenceInitialization?: () => void;
+  readonly fenceInitializationPage?: (pageId: string) => void;
+  readonly restoreInitializationPage?: (pageId: string, held: (pageId: string) => boolean) => void;
+  /** Work on a `quarantined` page belongs to its operator and cannot block a handoff. */
+  readonly handoffDrained?: (quarantined: (pageId: string) => boolean) => boolean;
+  readonly retireInitializationPage?: (pageId: string) => void;
   /** Remove this connection's registrations while its native connection is still usable. */
   readonly disposeInitialization?: () => Promise<void>;
   /** Closes this client connection, not an assertion about remote provider termination. */

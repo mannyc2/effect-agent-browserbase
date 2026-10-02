@@ -9,7 +9,6 @@ import { CallbackTasks } from "./CallbackTasks.ts";
 import { makeCaptureSources } from "./CaptureSource.ts";
 import type { Driver, DriverEvents, DriverOptions } from "./Driver.ts";
 import { makeInitialization } from "./Initialization.ts";
-import { makeKeyboard } from "./Keyboard.ts";
 import {
   closeWithin,
   failure,
@@ -20,7 +19,6 @@ import {
 } from "./NativeCalls.ts";
 import { makePageControl } from "./NativePageControl.ts";
 import { makeObservation } from "./Observation.ts";
-import { makePointer } from "./Pointer.ts";
 import { PolicyCleanup } from "./PolicyCleanup.ts";
 import { type Entry, makeTargets } from "./Targets.ts";
 
@@ -125,6 +123,7 @@ export const makePlaywrightDriver = async (
     identity.namespace,
     () => closing,
     {
+      lifecycle: (event) => events.pageLifecycle?.(event),
       opened: (entry, created) => {
         if (initialized && !created && options.popupPolicy === "close") {
           void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
@@ -136,13 +135,14 @@ export const makePlaywrightDriver = async (
             await pageControl.execution(entry);
           });
         if (initialized) initialization.attachPage(entry.page);
-        if (initialized && !created && options.popupPolicy === "pause") events.pause("popup");
+        if (initialized && !created && options.popupPolicy === "pause")
+          events.pause("popup", entry.id);
       },
       external: (entry) => {
         if (!initialized) return;
         if (options.popupPolicy === "close")
           void policyCleanup.run(entry.page, () => entry.page.close({ runBeforeUnload: false }));
-        else if (options.popupPolicy === "pause") events.pause("popup");
+        else if (options.popupPolicy === "pause") events.pause("popup", entry.id);
       },
       overflow: (entry) => {
         if (options.popupPolicy === "close")
@@ -158,15 +158,17 @@ export const makePlaywrightDriver = async (
           });
       },
       closed: (entry) => {
-        actions.waitChanged(entry);
+        actions.retireWaitPage(entry);
+        keyboard.retirePage(entry.page);
         for (const [dialog, beforeUnload] of dialogs)
           if (dialog.page() === entry.page) {
             beforeUnload?.dismissed(false);
             dialogs.delete(dialog);
           }
-        observation.invalidate({ pageId: entry.id });
+        observation.retirePage(entry.id);
         pageControl.closed(entry);
         captures.forget(entry);
+        events.pageClosed?.(entry.id, targets.cachedPage(entry));
       },
       navigating: (entry, frame) => pageControl.navigating(entry, frame),
       navigated: (entry, frame) => {
@@ -174,6 +176,7 @@ export const makePlaywrightDriver = async (
       },
       sameDocumentNavigated: (entry, frame) => sameDocumentCapture(entry, frame),
       frameChanged: (entry, frame) => {
+        if (frame.isDetached()) events.frameClosed?.(entry.id, targets.frameId(frame));
         actions.waitChanged(entry, frame);
         // Only the frame an observation read can change what it names.
         observation.invalidate({ pageId: entry.id, frameId: targets.frameId(frame) });
@@ -193,8 +196,8 @@ export const makePlaywrightDriver = async (
           });
         else {
           dialogs.set(dialog, beforeUnload);
-          observation.invalidate();
-          events.pause("dialog");
+          observation.invalidate({ pageId: entry.id });
+          events.pause("dialog", entry.id);
         }
       },
       changed: (reason, scope) => observation.changed(reason, scope),
@@ -240,7 +243,12 @@ export const makePlaywrightDriver = async (
     () => closing,
   );
 
-  const observation = makeObservation(targets, identity.namespace, events);
+  const observation = makeObservation(
+    targets,
+    identity.namespace,
+    events,
+    options.observationLimits,
+  );
 
   const actions = makeActions(
     context,
@@ -249,10 +257,7 @@ export const makePlaywrightDriver = async (
     (error) => error instanceof errors.TimeoutError,
   );
 
-  const pointer = makePointer(targets, actions);
-
-  actions.setPointerInvalidator(pointer.invalidate);
-  const keyboard = makeKeyboard(targets, actions, pointer.receipt);
+  const { pointer, keyboard } = actions;
   const captures = makeCaptureSources(targets);
 
   sameDocumentCapture = captures.sameDocumentNavigated;
@@ -275,6 +280,7 @@ export const makePlaywrightDriver = async (
 
   const retired = () => {
     policyCleanup.retired();
+    keyboard.retire();
     actions.retireWait();
     observation.retireConnection();
     events.retired?.();
@@ -315,10 +321,31 @@ export const makePlaywrightDriver = async (
   const driver: Driver = {
     ...(options.pageControl
       ? {
-          pageControl: pageControl.operations,
+          pageControl: {
+            ...pageControl.operations,
+            suspend: async (page, ticket) => {
+              try {
+                return await pageControl.operations.suspend(page, ticket);
+              } finally {
+                const entry = entries.get(page.pageId);
+
+                if (entry !== undefined) targets.notifyDisplay(entry);
+              }
+            },
+            resume: async (receipt, ticket) => {
+              try {
+                await pageControl.operations.resume(receipt, ticket);
+              } finally {
+                const entry = entries.get(receipt.pageId);
+
+                if (entry !== undefined) targets.notifyDisplay(entry);
+              }
+            },
+          },
         }
       : {}),
     selected: targets.selected,
+    cachedPages: targets.cachedPages,
     selectedTargetId: targets.selectedTargetId,
     listPages: targets.listPages,
     describePage: targets.describePage,
@@ -329,13 +356,18 @@ export const makePlaywrightDriver = async (
     containPage: targets.containPage,
     listFrames: targets.listFrames,
     resolveFrame: targets.resolveFrame,
-    selectFrame: targets.selectFrame,
     beginNavigation: actions.beginNavigation,
     readText: observation.readText,
     observe: observation.observe,
     checkpoint: observation.checkpoint,
     controlFacts: observation.controlFacts,
     revalidate: observation.revalidate,
+    resolveDescriptor: (descriptor, ticket, target, guard) =>
+      observation.resolveDescriptor(descriptor, ticket, target, guard ?? { _tag: "Strict" }),
+    resolveGroup: observation.resolveGroup,
+    expectations: observation.expectations,
+    settled: actions.settled,
+    scrollTo: actions.scrollTo,
     click: actions.click,
     fill: actions.fill,
     formStep: actions.formStep,
@@ -349,15 +381,16 @@ export const makePlaywrightDriver = async (
     press: keyboard.press,
     type: keyboard.type,
     screenshot: observation.screenshot,
-    resize: (viewport, ticket) =>
+    resize: (viewport, ticket, target) =>
       sanitize(async () => {
-        const page = current().entry.page;
-        const entry = current().entry;
+        const { entry } = current(target);
+        const { page } = entry;
 
         ticket.dispatch();
         captures.invalidate(entry, "resized");
         observation.changed("resized", { pageId: entry.id });
         await page.setViewportSize(viewport);
+        ticket.acknowledge?.();
         ticket.check();
       }),
     waitFor: actions.waitFor,
@@ -375,6 +408,10 @@ export const makePlaywrightDriver = async (
             settled: (disposition) => beforeUnload?.dismissed(disposition === "confirmed"),
           });
 
+          if (disposition === "confirmed") {
+            ticket.acknowledge?.();
+            ticket.followUp?.();
+          }
           ticket.check();
           if (disposition !== "confirmed")
             throw failure(
@@ -387,6 +424,19 @@ export const makePlaywrightDriver = async (
     capture: captures.capture,
     invalidateObservation: observation.invalidate,
     fenceInitialization: initialization.fence,
+    fenceInitializationPage: initialization.fencePage,
+    restoreInitializationPage: initialization.restorePage,
+    handoffDrained: (quarantined) =>
+      initialization.drained(quarantined) &&
+      callbacks.drained() &&
+      policyCleanup.drained() &&
+      observation.drained(quarantined) &&
+      keyboard.drained((page) => {
+        const pageId = targets.pageIdOf(page);
+
+        return pageId !== undefined && quarantined(pageId);
+      }),
+    retireInitializationPage: initialization.retirePage,
     disposeInitialization: initialization.dispose,
     disconnect: () =>
       sanitize(async () => {
@@ -447,6 +497,7 @@ export const makePlaywrightDriver = async (
     if (options.pageControl)
       for (const entry of entries.values()) await pageControl.execution(entry);
     initialized = true;
+    for (const entry of entries.values()) targets.notifyDisplay(entry);
 
     return driver;
   } catch (error) {

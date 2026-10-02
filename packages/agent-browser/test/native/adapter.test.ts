@@ -88,7 +88,7 @@ it.live(
 
           expect(ended).toBeDefined();
           if (ended === undefined) return yield* Effect.die("Missing owned session");
-          expect((yield* ended.observe().pipe(Effect.flip)).reason._tag).toBe("Closed");
+          expect((yield* ended.initialPage.observe().pipe(Effect.flip)).reason._tag).toBe("Closed");
         }
         expect(values).toEqual([7, 7]);
         expect(new Set(opened.map((session) => session.reference.id)).size).toBe(2);
@@ -97,7 +97,7 @@ it.live(
 );
 
 it.live(
-  "current and retained framework handles preserve exact ownership across real page selection",
+  "framework handles keep their issued Page across display selection and preserve owner-wide cleanup",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -105,52 +105,53 @@ it.live(
 
         yield* Browser.scoped(Chromium.launch(BrowserPolicy.unrestricted()), (browser) =>
           Effect.gen(function* () {
-            yield* browser.navigate({ url: site.url });
-            const [first] = yield* browser.pages;
+            const firstPage = browser.initialPage;
+
+            yield* firstPage.navigate({ url: site.url });
+            const [first] = yield* browser.listPages();
 
             if (first === undefined) return yield* Effect.die("Missing original page");
-            const current = yield* fromSession(browser, { selection: "current" });
-            const retained = yield* fromSession(browser, { selection: "retained" });
-            const laterRetention = fromSession(browser, { selection: "retained" });
-            const nextNavigation = current.handle.navigate({ url: `${site.url}?current=1` });
-            const pinned = yield* browser.pinPage(first);
-            const second = yield* browser.createPage;
+            const adaptedFirst = yield* fromSession(browser, firstPage);
+            const laterAdaptation = fromSession(browser, firstPage);
+            const nextNavigation = adaptedFirst.handle.navigate({ url: `${site.url}?first=1` });
+            const secondPage = yield* browser.createPage();
+            const adaptedSecond = yield* fromSession(browser, secondPage);
 
-            expect(current.browser).toBe(browser);
-            expect(retained.browser).toBe(browser);
-            expect(second.selected).toBe(false);
-            expect(yield* browser.selectPage(second)).toBeUndefined();
+            expect(adaptedFirst.browser).toBe(browser);
+            expect(adaptedSecond.browser).toBe(browser);
+            expect((yield* secondPage.describe()).selected).toBe(false);
+            expect(yield* browser.selectPage(secondPage)).toBeUndefined();
             yield* nextNavigation;
-            const retainedSecond = yield* laterRetention;
+            const recheckedFirst = yield* laterAdaptation;
 
-            expect((yield* retainedSecond.handle.readText({ selector: "#visible" })).text).toBe(
+            expect((yield* recheckedFirst.handle.readText({ selector: "#visible" })).text).toBe(
               "VISIBLE WORDS",
             );
-            expect((yield* retained.handle.readText({}).pipe(Effect.flip))._tag).toBe(
-              "InteractiveBrowserExpiredError",
-            );
-
-            yield* pinned.navigate({ url: `${site.url}?pinned=1` });
-            const pages = yield* browser.pages;
+            yield* adaptedSecond.handle.navigate({ url: `${site.url}?second=1` });
+            const pages = yield* browser.listPages();
 
             expect(pages.find((page) => page.pageId === first.pageId)?.url).toBe(
-              `${site.url}?pinned=1`,
+              `${site.url}?first=1`,
             );
-            expect(pages.find((page) => page.pageId === second.pageId)?.url).toBe(
-              `${site.url}?current=1`,
+            expect(pages.find((page) => page.pageId === secondPage.identity.pageId)?.url).toBe(
+              `${site.url}?second=1`,
             );
-            expect((yield* browser.target).pageId).toBe(second.pageId);
+            expect(pages.find((page) => page.selected)?.pageId).toBe(secondPage.identity.pageId);
 
-            yield* browser.selectPage(first);
-            yield* browser.selectPage(second);
-            expect((yield* retainedSecond.handle.readText({}).pipe(Effect.flip))._tag).toBe(
+            yield* browser.selectPage(firstPage);
+            yield* browser.selectPage(secondPage);
+            expect((yield* adaptedFirst.handle.readText({ selector: "#visible" })).text).toBe(
+              "VISIBLE WORDS",
+            );
+            yield* firstPage.close();
+            expect((yield* adaptedFirst.handle.readText({}).pipe(Effect.flip))._tag).toBe(
               "InteractiveBrowserExpiredError",
             );
-            expect((yield* current.handle.readText({ selector: "#visible" })).text).toBe(
+            expect((yield* adaptedSecond.handle.readText({ selector: "#visible" })).text).toBe(
               "VISIBLE WORDS",
             );
             yield* browser.closeChecked;
-            expect((yield* current.handle.readText({}).pipe(Effect.flip))._tag).toBe(
+            expect((yield* adaptedSecond.handle.readText({}).pipe(Effect.flip))._tag).toBe(
               "InteractiveBrowserExpiredError",
             );
           }),

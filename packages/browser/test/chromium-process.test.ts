@@ -76,7 +76,7 @@ const started = Effect.fnUntraced(function* (
 
     const pid = Number(pidText);
 
-    if (Number.isSafeInteger(pid) && pid > 0 && args?.endsWith("about:blank\n"))
+    if (Number.isSafeInteger(pid) && pid > 0 && args?.endsWith("--no-startup-window\n"))
       return { pid, args };
     yield* Effect.sleep(10);
   }

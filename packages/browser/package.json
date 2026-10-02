@@ -25,7 +25,11 @@
     "./chromium": "./src/Chromium.ts",
     "./errors": "./src/Errors.ts",
     "./page-control": "./src/PageControl.ts",
-    "./testing": "./src/Testing.ts"
+    "./plan": "./src/Plan.ts",
+    "./plan-data": "./src/PlanData.ts",
+    "./testing": "./src/Testing.ts",
+    "./timeline": "./src/Timeline.ts",
+    "./timeline-data": "./src/TimelineData.ts"
   },
   "publishConfig": {
     "access": "public"

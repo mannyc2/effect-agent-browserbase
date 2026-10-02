@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect";
-import type { AnySession, ElementAdmission } from "effect-browser/browser";
+import type { ElementAdmission, Frame, Page } from "effect-browser/browser";
 import { FillFormOptions, type Observation } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import { checkRunOptions, type RunOptions } from "effect-browser/plan";
 
 import { ResultMaxBytes } from "./Model.ts";
 
@@ -16,13 +17,14 @@ export interface InspectionRequest {
 
 /**
  * How the Tools read the page, for `browser_inspect` and for the observation after an action.
- * The default is `browser.observe(request)`. A replacement may wait, retry or narrow first, but
- * must return a reading the same browser issued, because its references are what later actions
- * name. A failure is reported like any other failed reading.
+ * The default is `page.observe(request)` on the Page or Frame the Tools are bound to. A
+ * replacement may wait, retry or narrow first, but must return a reading the same browser
+ * issued, because its references are what later actions name. A failure is reported like any
+ * other failed reading.
  */
 export type Observe = (
   request: InspectionRequest,
-  browser: AnySession,
+  page: Page | Frame,
 ) => Effect.Effect<Observation, BrowserError>;
 
 export interface HandlerOptions {
@@ -44,7 +46,17 @@ export interface HandlerOptions {
    */
   readonly continuationBytes?: number;
   /** Synchronous, on fresh exact-node facts under the owner's permit. Never a Tool parameter. */
-  readonly admission?: ElementAdmission;
+  readonly policy?: ElementAdmission;
+  /**
+   * Host-only single-step timing and queue configuration; never a model parameter. A fixed
+   * `style.seed` is a base: the nth run these handlers start uses `seed + n - 1`. A host runs
+   * `browser_navigate` as its original NavigationOperation, which takes `within`,
+   * `timeoutMillis` and `admission` but no `checkpoint`.
+   */
+  readonly execution?: Pick<
+    RunOptions,
+    "style" | "within" | "admission" | "timeoutMillis" | "checkpoint"
+  >;
   /** How `browser_fill_form` proceeds: verification before submit and settling between steps. */
   readonly form?: FillFormOptions;
   /** Replaces how the Tools read the page; see `Observe`. */
@@ -58,7 +70,8 @@ export interface ResolvedOptions {
   readonly observationScope: "document" | "viewport";
   readonly resultMaxBytes: number;
   readonly continuationBytes: number;
-  readonly admission: ElementAdmission | undefined;
+  readonly policy: ElementAdmission | undefined;
+  readonly execution: RunOptions;
   readonly form: FillFormOptions;
   readonly observe: Observe;
 }
@@ -83,12 +96,50 @@ export const option = <A>(
         Effect.mapError(() => configuration(path)),
       );
 
+/**
+ * Refuses a key nothing reads, naming it, so a renamed or misspelt option such as the old
+ * `admission` for `policy` fails when a Layer is built instead of being silently ignored.
+ */
+export const knownKeys = (
+  path: string,
+  value: unknown,
+  keys: Readonly<Record<string, true>>,
+): Effect.Effect<void, BrowserError> => {
+  if (value === undefined) return Effect.void;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return Effect.fail(configuration(path));
+  const unknown = Object.keys(value).find((key) => !Object.hasOwn(keys, key));
+
+  return unknown === undefined
+    ? Effect.void
+    : Effect.fail(configuration(path === "" ? unknown : `${path}.${unknown}`));
+};
+
+const handlerKeys = {
+  maxTextBytes: true,
+  maxControls: true,
+  observationScope: true,
+  resultMaxBytes: true,
+  continuationBytes: true,
+  policy: true,
+  execution: true,
+  form: true,
+  observe: true,
+} as const satisfies Record<keyof HandlerOptions, true>;
+
 const TextBytes = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 131072 }));
 
 const defaultObserve: Observe = (request, browser) => browser.observe(request);
 
-/** Checked when a host or handler Layer is built, so an invalid bound never reaches the model. */
-export const resolveOptions = Effect.fnUntraced(function* (options: HandlerOptions) {
+/**
+ * Checked when a host or handler Layer is built, so an invalid bound never reaches the model.
+ * `hostKeys` names the options a host reads beside these; any other key is refused.
+ */
+export const resolveOptions = Effect.fnUntraced(function* (
+  options: HandlerOptions,
+  hostKeys: Readonly<Record<string, true>> = {},
+) {
+  yield* knownKeys("", options, { ...handlerKeys, ...hostKeys });
   const maxTextBytes = yield* option("maxTextBytes", TextBytes, options.maxTextBytes, 8192);
 
   const maxControls = yield* option(
@@ -121,10 +172,22 @@ export const resolveOptions = Effect.fnUntraced(function* (options: HandlerOptio
 
   const form = yield* option("form", FillFormOptions, options.form, {});
 
-  if (options.admission !== undefined && typeof options.admission?.admit !== "function")
-    return yield* configuration("admission");
+  if (options.policy !== undefined && typeof options.policy?.admit !== "function")
+    return yield* configuration("policy");
   if (options.observe !== undefined && typeof options.observe !== "function")
     return yield* configuration("observe");
+
+  const execution = yield* checkRunOptions(
+    options.execution === undefined ? {} : options.execution,
+  );
+
+  if (
+    execution.inputs !== undefined ||
+    execution.through !== undefined ||
+    execution.policy !== undefined ||
+    execution.startAt !== undefined
+  )
+    return yield* configuration("execution");
 
   return {
     maxTextBytes,
@@ -133,7 +196,8 @@ export const resolveOptions = Effect.fnUntraced(function* (options: HandlerOptio
     resultMaxBytes,
     continuationBytes,
     // A host's later edits to its own object never change an admitted policy.
-    admission: options.admission === undefined ? undefined : { admit: options.admission.admit },
+    policy: options.policy === undefined ? undefined : { admit: options.policy.admit },
+    execution,
     form,
     observe: options.observe ?? defaultObserve,
   } satisfies ResolvedOptions;

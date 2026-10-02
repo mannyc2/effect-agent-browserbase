@@ -6,7 +6,7 @@ import { NavigateRequest, ReadTextRequest } from "effect-browser/browser-data";
 import { BrowserError, InitializationError } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { CleanupResult } from "effect-browserbase/cleanup";
-import type { Frame, Page } from "playwright-core";
+import type { Dialog, Frame, Page } from "playwright-core";
 
 import {
   localBrowser,
@@ -147,17 +147,19 @@ it.live(
 
             const session = yield* acquisition.connect;
 
-            const reading = yield* session
+            const reading = yield* session.initialPage
               .navigate(NavigateRequest.make({ url: fixture.url }))
               .pipe(
-                Effect.andThen(session.readText(ReadTextRequest.make({ selector: "#settings" }))),
+                Effect.andThen(
+                  session.initialPage.readText(ReadTextRequest.make({ selector: "#settings" })),
+                ),
                 Effect.forkScoped,
               );
 
             yield* Deferred.await(entered).pipe(Effect.timeout(3000));
             yield* Deferred.succeed(release, undefined);
             expect((yield* Fiber.join(reading)).text).toBe("host settings:7");
-            expect(yield* session.ready).toEqual({ _tag: "Ready" });
+            expect(yield* session.initialPage.ready()).toEqual({ _tag: "Ready" });
             expect(versions.length).toBeGreaterThan(0);
             expect(versions.every((version) => version === 7)).toBe(true);
 
@@ -238,7 +240,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
             const args = (label: string) => JSON.stringify({ label, claimedOrigin: first });
 
@@ -372,7 +374,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
 
             yield* native("wait for the fixture child document", () =>
@@ -451,7 +453,7 @@ it.live(
               );
               expect(retiring.isDetached()).toBe(true);
             }
-            expect((yield* session.observe()).url).toBe(fixture.url);
+            expect((yield* session.initialPage.observe()).url).toBe(fixture.url);
             expect(yield* call(child, "frameReply", '"still-current"')).toEqual({
               _tag: "Returned",
               value: "still-current",
@@ -588,8 +590,17 @@ it.live(
       Effect.gen(function* () {
         const fixture = yield* localBrowser;
         const cleanup: CleanupResult[] = [];
+        const entered = yield* Deferred.make<void>();
+        const paused = yield* Deferred.make<Dialog>();
         let failedNativeRegistration = false;
         let finalized = false;
+        let nativePage: Page | undefined;
+        let nativeFailure: unknown;
+        let release = () => {};
+
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
 
         const bootstrap = Bootstrap.binding({
           ...limits,
@@ -607,43 +618,86 @@ it.live(
 
             return yield* Browser.scoped(browser.open(policy, { bootstrap }), (session) =>
               Effect.gen(function* () {
-                yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
                 const page = pageFor(fixture, session.reference.sessionId);
                 const context = page.context();
                 // oxlint-disable-next-line typescript/unbound-method -- called on this context
                 const original = context.newCDPSession;
 
-                // One instance-local transport failpoint, after genuine successful initialization.
-                // No global Playwright replacement or second connection is involved in this failure.
+                // Gate an original Chromium rejection after setup starts on the owned connection.
+                // Quarantine must suppress new setup without erasing this already-started failure.
                 yield* Effect.acquireRelease(
                   Effect.sync(() => {
                     context.newCDPSession = async (subject) => {
-                      if ("context" in subject && subject !== page && !failedNativeRegistration) {
-                        failedNativeRegistration = true;
-                        throw new Error("PRIVATE-NATIVE-REGISTRATION-CAUSE");
+                      const cdp = await original.call(context, subject);
+
+                      if ("mainFrame" in subject && subject !== page) {
+                        const send = cdp.send.bind(cdp);
+
+                        cdp.send = (method, params) => {
+                          if (method !== "Runtime.enable" || nativePage !== undefined)
+                            return send(method, params);
+                          nativePage = subject;
+
+                          return send("Runtime.addBinding", {
+                            name: "PRIVATE-NATIVE-REGISTRATION-CAUSE",
+                            executionContextId: -1,
+                          })
+                            .then(() => send(method, params))
+                            .catch((cause: unknown) => {
+                              failedNativeRegistration = true;
+                              nativeFailure = cause;
+                              Deferred.doneUnsafe(entered, Effect.void);
+
+                              return held.then(() => {
+                                throw cause;
+                              });
+                            });
+                        };
                       }
 
-                      return original.call(context, subject);
+                      return cdp;
                     };
                   }),
                   () =>
                     Effect.sync(() => {
+                      release();
                       context.newCDPSession = original;
                       finalized = true;
                     }),
                 );
-                yield* native("open failing popup", () =>
-                  page.evaluate("void window.open('about:blank')"),
+                const registering = yield* session.createPage();
+
+                yield* Deferred.await(entered);
+                expect(nativeFailure).toBeInstanceOf(Error);
+                if (!(nativeFailure instanceof Error))
+                  throw new Error("Native registration did not fail");
+                expect(nativeFailure.message).toBe(
+                  "cdpSession.send: Protocol error (Runtime.addBinding): Cannot find execution context with given executionContextId",
                 );
+                if (nativePage === undefined)
+                  throw new Error("The native fixture has no registering page");
+
+                nativePage.once("dialog", (dialog) =>
+                  Deferred.doneUnsafe(paused, Effect.succeed(dialog)),
+                );
+                void nativePage.evaluate("alert('registration quarantine')").catch(() => {});
+                const dialog = yield* Deferred.await(paused);
+
+                expect(yield* registering.status).toMatchObject({ phase: "paused" });
+                // Native dismissal lets cleanup settle; it does not restore the Page authority.
+                yield* native("dismiss registration quarantine dialog", () => dialog.dismiss());
+                expect(yield* registering.status).toMatchObject({ phase: "paused" });
+                expect(yield* session.status).toMatchObject({ phase: "open" });
+                yield* Effect.sync(release);
 
                 return yield* Effect.never;
               }),
             ).pipe(Effect.result, Effect.timeout(5000));
           }),
           {
-            // The popup pauses action admission synchronously, but it is still this live connection.
-            // Registration supervision must not mistake paused for retired.
             popupPolicy: "pause",
+            dialogPolicy: "pause",
             onCleanup: (report) =>
               Effect.sync(() => {
                 cleanup.push(report);
@@ -662,6 +716,9 @@ it.live(
             reason: "native",
           });
           expect(JSON.stringify(result.failure)).not.toContain("PRIVATE-NATIVE-REGISTRATION-CAUSE");
+          if (!(nativeFailure instanceof Error))
+            throw new Error("Native registration did not fail");
+          expect(JSON.stringify(result.failure)).not.toContain(nativeFailure.message);
         }
         expect(fixture.createBodies).toHaveLength(1);
         expect(fixture.connections).toEqual(["session-1"]);
@@ -706,7 +763,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
 
             for (const source of [
@@ -752,7 +809,7 @@ it.live(
               "large-output",
               "healthy",
             ]);
-            expect((yield* session.observe()).url).toBe(fixture.url);
+            expect((yield* session.initialPage.observe()).url).toBe(fixture.url);
           }),
         );
       }),
@@ -796,7 +853,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
             const held = yield* call(page, "boundedWork", '"hold"').pipe(Effect.forkScoped);
 
@@ -849,7 +906,7 @@ it.live(
             const browser = yield* BrowserbaseBrowser;
             const session = yield* browser.open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const failed = yield* session.failure.pipe(Effect.result, Effect.forkScoped);
 
             expect(
@@ -874,12 +931,12 @@ it.live(
               expect(retained._tag).toBe("Failure");
               if (retained._tag === "Failure") expect(retained.failure).toBe(secret);
             }
-            expect((yield* session.observe().pipe(Effect.result))._tag).toBe("Failure");
+            expect((yield* session.initialPage.observe().pipe(Effect.result))._tag).toBe("Failure");
             yield* session.close;
 
             const supervised = yield* Browser.scoped(browser.open(policy, { bootstrap }), (owned) =>
               Effect.gen(function* () {
-                yield* owned.navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* owned.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
                 yield* call(pageFor(fixture, owned.reference.sessionId), "fatalSettings", "null");
 
                 return yield* Effect.never;
@@ -929,7 +986,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const page = pageFor(fixture, session.reference.sessionId);
             const frame = page.mainFrame();
 
@@ -939,7 +996,7 @@ it.live(
             );
 
             yield* Deferred.await(entered).pipe(Effect.timeout(3000));
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             expect(page.mainFrame()).toBe(frame);
             expect(page.url()).toBe(fixture.url);
             expect(yield* call(page, "documentReply", '"new"')).toEqual({
@@ -1006,7 +1063,7 @@ for (const transition of ["close", "reconnect"] as const) {
             Effect.gen(function* () {
               const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-              yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+              yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
               const page = pageFor(fixture, session.reference.sessionId);
 
               const old = yield* call(page, "connectionReply", '"old"').pipe(
@@ -1019,8 +1076,12 @@ for (const transition of ["close", "reconnect"] as const) {
               else yield* session.detach;
               yield* Deferred.await(finalized).pipe(Effect.timeout(3000));
               if (transition === "reconnect") {
-                yield* session.reconnect(true);
-                yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+                const inventory = yield* session.reconnect(true);
+
+                expect(inventory.pages).toHaveLength(1);
+                const reissued = yield* session.page(inventory.pages[0]!);
+
+                yield* reissued.navigate(NavigateRequest.make({ url: fixture.url }));
                 expect(
                   yield* call(
                     pageFor(fixture, session.reference.sessionId),
@@ -1083,7 +1144,7 @@ it.live(
             const browser = yield* BrowserbaseBrowser;
             const owner = yield* browser.open(policy);
 
-            yield* owner.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* owner.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
             const detached = yield* owner.detach;
 
             yield* Effect.scoped(
@@ -1094,7 +1155,7 @@ it.live(
                   target: { targetId: detached.targetId },
                 });
 
-                yield* attached.navigate(NavigateRequest.make({ url: fixture.url }));
+                yield* attached.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
                 expect(
                   yield* call(
                     pageFor(fixture, attached.reference.sessionId),
@@ -1160,7 +1221,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy, { bootstrap });
 
-            reentrant = session.observe().pipe(
+            reentrant = session.initialPage.observe().pipe(
               Effect.result,
               Effect.map((result) => {
                 if (result._tag === "Success")
@@ -1172,9 +1233,9 @@ it.live(
                 };
               }),
             );
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
-            expect(yield* session.ready).toEqual({ _tag: "Ready" });
-            expect((yield* session.observe()).url).toBe(fixture.url);
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
+            expect(yield* session.initialPage.ready()).toEqual({ _tag: "Ready" });
+            expect((yield* session.initialPage.observe()).url).toBe(fixture.url);
             expect((yield* session.bindingDiagnostics).faulted).toBe(false);
           }),
         );

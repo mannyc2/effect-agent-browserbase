@@ -2,7 +2,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { Effect } from "effect";
 
 import { Viewport } from "../../src/BrowserData.ts";
-import { type ConnectRequest, fromNativeAttempt } from "../../src/internal/browser/Binding.ts";
+import type { ConnectRequest } from "../../src/internal/browser/Binding.ts";
 import type { Bindings } from "../../src/internal/browser/Bindings.ts";
 import type {
   CaptureSource,
@@ -11,6 +11,7 @@ import type {
   NativeNavigation,
   ReadinessState,
 } from "../../src/internal/browser/Driver.ts";
+import { fromNativeAttempt } from "../../src/internal/browser/NativeAttempt.ts";
 import type { Ticket } from "../../src/internal/browser/Owner.ts";
 import { acquireSession } from "../../src/internal/browser/Session.ts";
 import { makeScriptedBrowser, type EngineTimers } from "../../src/internal/testing/Engine.ts";
@@ -148,11 +149,11 @@ export const fixture = Effect.fnUntraced(function* (options: OwnerOptions = {}) 
       ...(options.onNavigate === undefined
         ? {}
         : {
-            beginNavigation: async (url, _timeoutMillis, ticket) => {
+            beginNavigation: async (url, _timeoutMillis, ticket, target) => {
               ticket.dispatch();
               events.invalidate("target-changed");
 
-              return options.onNavigate!(url, engine.selected().pageId);
+              return options.onNavigate!(url, target?.pageId ?? engine.selected().pageId);
             },
           }),
       observe: async (...args) => {
@@ -169,35 +170,37 @@ export const fixture = Effect.fnUntraced(function* (options: OwnerOptions = {}) 
       pointerMove: async (to, ticket, target) => {
         const result = await engine.pointerMove(to, ticket, target);
 
-        state.input.push(`move ${engine.selected().pageId} ${to.x},${to.y}`);
+        state.input.push(`move ${target?.pageId ?? engine.selected().pageId} ${to.x},${to.y}`);
 
         return result;
       },
       hover: async (element, ticket, policy, target) => {
         const result = await engine.hover(element, ticket, policy, target);
 
-        state.input.push(`hover ${engine.selected().pageId}`);
+        state.input.push(`hover ${target?.pageId ?? engine.selected().pageId}`);
 
         return result;
       },
       wheel: async (deltaX, deltaY, at, ticket, target) => {
         const result = await engine.wheel(deltaX, deltaY, at, ticket, target);
 
-        state.input.push(`wheel ${engine.selected().pageId} ${deltaX},${deltaY}`);
+        state.input.push(`wheel ${target?.pageId ?? engine.selected().pageId} ${deltaX},${deltaY}`);
 
         return result;
       },
       press: async (key, modifiers, into, ticket, policy, target) => {
         const result = await engine.press(key, modifiers, into, ticket, policy, target);
 
-        state.input.push(`press ${engine.selected().pageId} ${[...modifiers, key].join("+")}`);
+        state.input.push(
+          `press ${target?.pageId ?? engine.selected().pageId} ${[...modifiers, key].join("+")}`,
+        );
 
         return result;
       },
       type: async (text, into, ticket, policy, target) => {
         const result = await engine.type(text, into, ticket, policy, target);
 
-        state.input.push(`type ${engine.selected().pageId} ${[...text].length}`);
+        state.input.push(`type ${target?.pageId ?? engine.selected().pageId} ${[...text].length}`);
 
         return result;
       },

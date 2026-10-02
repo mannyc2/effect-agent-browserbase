@@ -7,6 +7,7 @@ import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import * as PageControl from "effect-browser/page-control";
+import * as Plan from "effect-browser/plan";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { localSite } from "../fixtures/StandaloneBrowser.ts";
@@ -25,18 +26,14 @@ const result = await Effect.runPromise(
           Effect.gen(function* () {
             assert.equal(session.reference.provider, "chromium");
             assert.equal(session.implementation, "chromium-playwright-cdp");
-            yield* session.navigate({ url: site.url });
-            assert.match((yield* session.observe()).text, /ownership fixture/);
+            yield* session.initialPage.navigate({ url: site.url });
+            assert.match((yield* session.initialPage.observe()).text, /ownership fixture/);
 
-            const copied = yield* Capture.start({ ...session }).pipe(Effect.result);
+            const copied = yield* Capture.start({ ...session.initialPage }).pipe(Effect.result);
 
-            assert.equal(
-              copied._tag,
-              "Failure",
-              "copying the session cannot copy capture authority",
-            );
+            assert.equal(copied._tag, "Failure", "copying the Page cannot copy capture authority");
 
-            const interval = yield* Capture.start(session, {
+            const interval = yield* Capture.start(session.initialPage, {
               lifetime: "page",
               maxDurationMillis: 10000,
             });
@@ -46,15 +43,42 @@ const result = await Effect.runPromise(
             assert.equal(frames.length, 1);
             assert.ok(frames[0] !== undefined && frames[0].bytes.length > 0);
             const snapshot = yield* interval.snapshot;
-            const page = (yield* session.pages).find((candidate) => candidate.selected);
+            const page = (yield* session.listPages()).find((candidate) => candidate.selected);
 
             assert.ok(page);
-            const held = yield* PageControl.suspend(session, page);
+            const held = yield* PageControl.suspend(yield* session.page(page));
 
-            assert.equal((yield* PageControl.state(session, page)).state, "suspended");
-            yield* PageControl.resume(session, held);
-            yield* session.click({ selector: "#increment" });
-            assert.equal((yield* session.readText({ selector: "#count" })).text, "1");
+            assert.equal((yield* PageControl.state(yield* session.page(page))).state, "suspended");
+            yield* PageControl.resume(session.initialPage, held);
+            const issuedPage = yield* session.page(page);
+
+            const ran = yield* issuedPage.run(
+              {
+                version: 1,
+                steps: [
+                  {
+                    id: "increment",
+                    action: {
+                      _tag: "Click",
+                      target: {
+                        _tag: "Descriptor",
+                        descriptor: { kind: "button", label: "Increment", matchScope: "document" },
+                      },
+                    },
+                  },
+                ],
+              },
+              { style: "plain" },
+            );
+
+            assert.equal((yield* session.initialPage.readText({ selector: "#count" })).text, "1");
+            assert.equal(ran.completion._tag, "Complete");
+            assert.equal(ran.steps[0]?.recorded._tag, "Complete");
+            const recorded = yield* Plan.recorded(ran);
+            const durable = yield* Plan.decode(yield* Plan.encode(recorded));
+
+            yield* issuedPage.run(durable, { style: "plain" });
+            assert.equal((yield* session.initialPage.readText({ selector: "#count" })).text, "2");
             const summary = yield* interval.stop;
 
             assert.equal(summary.nativeStop, "confirmed");

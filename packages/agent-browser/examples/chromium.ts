@@ -19,8 +19,8 @@ const policy = BrowserPolicy.unrestricted({
 export const runChromiumAgent = (request: string) =>
   Browser.scoped(Chromium.launch(policy), (browser) =>
     Effect.gen(function* () {
-      const run = yield* turns(browser, request);
-      const seen = yield* browser.observe({ scope: "viewport" });
+      const run = yield* turns(browser, browser.initialPage, request);
+      const seen = yield* browser.initialPage.observe({ scope: "viewport" });
 
       return { ...run.output, url: seen.url, turns: run.turns };
     }),

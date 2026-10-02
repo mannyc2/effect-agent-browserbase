@@ -46,7 +46,7 @@ it.effect.each([false, true])(
         yield* browser!.next("navigate", { _tag: "Hold", gate: loading, dispatched: true });
 
       const operation = pending
-        ? yield* session.startNavigation({ url: "https://example.test/slow" })
+        ? yield* session.initialPage.startNavigation({ url: "https://example.test/slow" })
         : undefined;
 
       yield* TestClock.adjust(100);
@@ -71,7 +71,7 @@ it.effect.each([false, true])(
         reason: "expired",
         unresolvedDispatch: false,
       });
-      expect(yield* Effect.result(session.click({ selector: "#act" }))).toMatchObject({
+      expect(yield* Effect.result(session.initialPage.click({ selector: "#act" }))).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Expired" }, outcome: "undispatched" },
       });
@@ -87,15 +87,21 @@ it.effect("unconfirmed owned release cannot retire a dispatched operation's cont
     const session = yield* acquisition.connect;
     const [browser] = yield* scripted.browsers;
 
+    // This case needs unconfirmed native containment as well as unconfirmed provider release.
+    yield* browser!.next("close-page", {
+      _tag: "Fail",
+      reason: Reasons.Provider.make({}),
+      outcome: "unknown",
+    });
     // The click is sent and its acknowledgement is lost.
     yield* browser!.next("click", {
       _tag: "Fail",
       reason: Reasons.Provider.make({}),
       outcome: "unknown",
     });
-    expect(yield* Effect.result(session.click({ selector: "#act" }))).toMatchObject({
+    expect(yield* Effect.result(session.initialPage.click({ selector: "#act" }))).toMatchObject({
       _tag: "Failure",
-      failure: { outcome: "unknown" },
+      failure: { outcome: "unknown", containment: { _tag: "SessionFenced" } },
     });
     const original = yield* session.status;
 

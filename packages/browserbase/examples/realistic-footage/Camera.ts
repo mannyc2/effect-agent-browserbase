@@ -1,10 +1,12 @@
-import { Clock, Deferred, Effect, Fiber, Schema, Stream } from "effect";
-import type { AnySession } from "effect-browser/browser";
+import { Deferred, Effect, Exit, Fiber, FileSystem, Schema, Stream } from "effect";
+import { type AnySession, type Page, checkPage } from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { Broadcast } from "./Broadcast.ts";
+import * as Compositor from "./Compositor.ts";
 import { FootageError } from "./FootageError.ts";
+import * as Presentation from "./Presentation.ts";
 import * as Reel from "./Reel.ts";
 import { type Metrics, Telemetry } from "./Telemetry.ts";
 
@@ -40,6 +42,17 @@ const Defaults = {
   constantRateFactor: 18,
   closingHoldMillis: 1_200,
 } satisfies Required<FilmOptions>;
+
+const Options = Schema.Struct({
+  framesPerSecond: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60 })),
+  size: Schema.Struct({
+    width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 8192 })),
+    height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 8192 })),
+  }),
+  quality: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
+  constantRateFactor: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 51 })),
+  closingHoldMillis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 30000 })),
+});
 
 const Probe = Schema.fromJsonString(
   Schema.Struct({
@@ -86,16 +99,12 @@ interface Signals {
  * bounded at ten minutes. If it ends before the film is cut, the film fails
  * rather than silently holding its last picture to the end.
  */
-const footage = (
-  session: AnySession,
-  options: Required<FilmOptions>,
-  telemetry: Telemetry["Service"],
-) =>
+const footage = (page: Page, options: Required<FilmOptions>, telemetry: Telemetry["Service"]) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const attemptedAt = yield* telemetry.now;
 
-      const interval = yield* Capture.start(session, {
+      const interval = yield* Capture.start(page, {
         lifetime: "page",
         quality: options.quality,
         size: options.size,
@@ -123,17 +132,19 @@ const footage = (
  * reel of JPEG bytes for the encoder, until the cut.
  */
 const reel = (
-  session: AnySession,
+  page: Page,
   options: Required<FilmOptions>,
   signals: Signals,
   telemetry: Telemetry["Service"],
   broadcast: Broadcast["Service"],
+  presentation: Presentation.Presentation["Service"],
 ) =>
-  footage(session, options, telemetry).pipe(
+  footage(page, options, telemetry).pipe(
     Stream.tap((frame) =>
       Effect.all([
         telemetry.frame(frame),
         broadcast.publish(frame),
+        presentation.frame(frame),
         Deferred.succeed(signals.rolling, undefined),
       ]),
     ),
@@ -144,20 +155,30 @@ const reel = (
         Stream.map((atNanos): Rush => ({ _tag: "Cut", atNanos })),
       ),
     ),
-    Stream.mapAccum(
+    Stream.mapAccumEffect(
       () => ({ reel: undefined as Reel.Reel | undefined, receivedNanos: 0n }),
-      (state, rush) => {
-        if (rush._tag === "Cut") {
-          // Receipt times share the host's monotonic clock with the cut; source times do not.
-          const stillMillis = Number(rush.atNanos - state.receivedNanos) / 1_000_000;
+      (state, rush) =>
+        Effect.try({
+          try: () => {
+            if (rush._tag === "Cut") {
+              // Receipt times share the host's monotonic clock with the cut; source times do not.
+              const stillMillis = Number(rush.atNanos - state.receivedNanos) / 1_000_000;
 
-          return [state, Reel.cut(state.reel, stillMillis)];
-        }
+              return [state, Reel.cut(state.reel, stillMillis)] as const;
+            }
 
-        const [next, settled] = Reel.expose(state.reel, rush.frame, options.framesPerSecond);
+            const [next, settled] = Reel.expose(state.reel, rush.frame, options.framesPerSecond);
 
-        return [{ reel: next, receivedNanos: rush.frame.receivedMonotonicNanos }, settled];
-      },
+            return [
+              { reel: next, receivedNanos: rush.frame.receivedMonotonicNanos },
+              settled,
+            ] as const;
+          },
+          catch: (cause) =>
+            Schema.is(FootageError)(cause)
+              ? cause
+              : FootageError.make({ reason: "presentation-limit", cause }),
+        }),
     ),
     // The reel repeats a picture by reference, so identity is what marks a held frame.
     Stream.mapAccum(
@@ -218,7 +239,14 @@ const probe = Effect.fnUntraced(function* (outputPath: string) {
         outputPath,
       ]),
     )
-    .pipe(Effect.mapError(encoderFailure("ffprobe")));
+    .pipe(
+      Effect.mapError(encoderFailure("ffprobe")),
+      Effect.timeoutOrElse({
+        duration: "1 minute",
+        orElse: () =>
+          Effect.fail(FootageError.make({ reason: "encoder", detail: "ffprobe deadline" })),
+      }),
+    );
 
   const decoded = yield* Schema.decodeEffect(Probe)(report).pipe(
     Effect.mapError(encoderFailure("ffprobe-report")),
@@ -228,7 +256,7 @@ const probe = Effect.fnUntraced(function* (outputPath: string) {
 });
 
 /**
- * Film `performance` from the session's selected page into `outputPath`.
+ * Film `performance` from its issued Page into `outputPath`.
  *
  * The performance starts only once the first frame has arrived, and the reel is
  * cut a moment after it ends. A failed performance interrupts the encoder with
@@ -236,21 +264,39 @@ const probe = Effect.fnUntraced(function* (outputPath: string) {
  */
 export const film = Effect.fn("Camera.film")(function* <A, E, R>(
   session: AnySession,
+  page: Page,
   outputPath: string,
   performance: Effect.Effect<A, E, R>,
   overrides: FilmOptions = {},
 ) {
-  const options = { ...Defaults, ...overrides };
+  yield* checkPage(session, page).pipe(
+    Effect.mapError((cause) =>
+      FootageError.make({ reason: "presentation-limit", detail: "invalid Page owner", cause }),
+    ),
+  );
+
+  const options = yield* Schema.decodeEffect(Options)({ ...Defaults, ...overrides }).pipe(
+    Effect.mapError((cause) => FootageError.make({ reason: "presentation-limit", cause })),
+  );
+
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const telemetry = yield* Telemetry;
+
+  yield* telemetry.bindOwner(session);
   const broadcast = yield* Broadcast;
+  const fs = yield* FileSystem.FileSystem;
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "browser-footage-raw-" });
+  const rawPath = `${directory}/raw.mp4`;
+  const presentation = yield* Presentation.make(session, page, broadcast, telemetry);
+  const graphicsReader = yield* presentation.read("graphics").pipe(Effect.forkScoped);
+  const metricsReader = yield* presentation.read("metrics").pipe(Effect.forkScoped);
   const rolling = yield* Deferred.make<void>();
   const cut = yield* Deferred.make<bigint>();
 
   const encoder = yield* spawner
     // A wedged encoder must not hold the scope open: SIGTERM, then SIGKILL after five seconds.
     .spawn(
-      ChildProcess.make("ffmpeg", encoderArguments(options, outputPath), {
+      ChildProcess.make("ffmpeg", encoderArguments(options, rawPath), {
         forceKillAfter: "5 seconds",
       }),
     )
@@ -258,14 +304,32 @@ export const film = Effect.fn("Camera.film")(function* <A, E, R>(
 
   const complaints = yield* encoder.stderr.pipe(
     Stream.decodeText(),
-    Stream.mkString,
+    Stream.runFold(
+      () => "",
+      (tail, chunk) => (tail + chunk).slice(-2000),
+    ),
     Effect.orElseSucceed(() => ""),
     Effect.forkScoped,
   );
 
-  const encoding = yield* reel(session, options, { rolling, cut }, telemetry, broadcast).pipe(
-    Stream.run(encoder.stdin),
-    Effect.forkScoped,
+  const encoding = yield* reel(
+    page,
+    options,
+    { rolling, cut },
+    telemetry,
+    broadcast,
+    presentation,
+  ).pipe(Stream.run(encoder.stdin), Effect.forkScoped);
+
+  yield* Effect.addFinalizer((exit) =>
+    Exit.isFailure(exit)
+      ? presentation.stop.pipe(
+          Effect.andThen(Fiber.interrupt(encoding)),
+          Effect.andThen(Fiber.interrupt(graphicsReader)),
+          Effect.andThen(Fiber.interrupt(metricsReader)),
+          Effect.andThen(presentation.abort),
+        )
+      : Effect.void,
   );
 
   yield* Deferred.await(rolling).pipe(
@@ -276,15 +340,56 @@ export const film = Effect.fn("Camera.film")(function* <A, E, R>(
     }),
   );
 
-  const result = yield* performance;
-
-  yield* Effect.sleep(options.closingHoldMillis);
-  yield* Deferred.succeed(cut, yield* Clock.clockWith((clock) => clock.monotonicTimeNanos));
-  yield* Fiber.join(encoding).pipe(
-    Effect.catchTag("PlatformError", (cause) => Effect.fail(encoderFailure("ffmpeg-input")(cause))),
+  const result = yield* performance.pipe(
+    Effect.provideService(Presentation.Presentation, presentation),
+    Effect.raceFirst(
+      Fiber.join(encoding).pipe(
+        Effect.andThen(
+          Effect.fail(
+            FootageError.make({ reason: "capture-ended", detail: "encoder ended before cut" }),
+          ),
+        ),
+      ),
+    ),
+    Effect.raceFirst(
+      Fiber.join(graphicsReader).pipe(
+        Effect.andThen(
+          Effect.fail(
+            FootageError.make({ reason: "capture-ended", detail: "graphics reader ended" }),
+          ),
+        ),
+      ),
+    ),
+    Effect.raceFirst(
+      Fiber.join(metricsReader).pipe(
+        Effect.andThen(
+          Effect.fail(
+            FootageError.make({ reason: "capture-ended", detail: "metrics reader ended" }),
+          ),
+        ),
+      ),
+    ),
   );
 
-  const exitCode = yield* encoder.exitCode.pipe(Effect.mapError(encoderFailure("ffmpeg-exit")));
+  yield* Effect.sleep(options.closingHoldMillis);
+  yield* Deferred.succeed(cut, yield* session.monotonicTimeNanos);
+  yield* Fiber.join(encoding).pipe(
+    Effect.catchTag("PlatformError", (cause) => Effect.fail(encoderFailure("ffmpeg-input")(cause))),
+    Effect.timeoutOrElse({
+      duration: "2 minutes",
+      orElse: () =>
+        Effect.fail(FootageError.make({ reason: "encoder", detail: "input drain deadline" })),
+    }),
+  );
+
+  const exitCode = yield* encoder.exitCode.pipe(
+    Effect.mapError(encoderFailure("ffmpeg-exit")),
+    Effect.timeoutOrElse({
+      duration: "2 minutes",
+      orElse: () =>
+        Effect.fail(FootageError.make({ reason: "encoder", detail: "ffmpeg exit deadline" })),
+    }),
+  );
 
   if (exitCode !== ChildProcessSpawner.ExitCode(0))
     return yield* FootageError.make({
@@ -292,6 +397,24 @@ export const film = Effect.fn("Camera.film")(function* <A, E, R>(
       detail: `ffmpeg exited ${String(exitCode)}: ${(yield* Fiber.join(complaints)).slice(-2000)}`,
     });
 
+  yield* presentation.stop;
+  yield* Fiber.join(graphicsReader);
+  yield* Fiber.join(metricsReader);
+  const rawVideo = yield* probe(rawPath);
+  const graphics = yield* presentation.graphics;
+  const started = yield* session.monotonicTimeNanos;
+
+  yield* Compositor.compose(
+    rawPath,
+    outputPath,
+    graphics,
+    rawVideo.duration,
+    options.constantRateFactor,
+  );
+  yield* telemetry.composed(
+    Number((yield* session.monotonicTimeNanos) - started) / 1_000_000,
+    Number(graphics.clockUncertaintyNanos) / 1_000_000,
+  );
   const video = yield* probe(outputPath);
 
   return {

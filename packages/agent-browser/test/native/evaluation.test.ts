@@ -67,12 +67,19 @@ const checks: Record<string, (evidence: Evidence) => Effect.Effect<void, ReplayD
     Effect.sync(() => {
       expect(evidence.facts.applicationWrites).toBe(0);
     }),
-  // The write lands and its acknowledgement never does: one account, a fenced owner, and a
-  // read-back the owner refuses rather than a guess.
+  // The write lands and its acknowledgement never does: one account, the exact Page closed,
+  // and a read-back refused before dispatch while the original outcome remains unknown.
   "lost-acknowledgement-base-stops-unresolved-0": (evidence) =>
     Effect.gen(function* () {
       expect(evidence.facts.submissions).toEqual([account]);
-      expect(evidence.facts.owner).toMatchObject({ phase: "uncertain", unresolvedDispatch: true });
+      expect(evidence.facts.owner).toMatchObject({ phase: "open", unresolvedDispatch: false });
+      const page = evidence.facts.owner?.page;
+
+      expect(page?.containment).toMatchObject({
+        _tag: "PageClosed",
+        pageId: page?.identity.pageId,
+        generation: page?.identity.generation,
+      });
       expect(evidence.facts.toolFailures).toEqual([
         expect.objectContaining({
           tool: "browser_fill_form",

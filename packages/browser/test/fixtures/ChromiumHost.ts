@@ -18,7 +18,7 @@ await Effect.runPromise(
       if (phase === "connected") {
         const session = yield* acquired.connect;
 
-        assert.equal((yield* session.readText({ selector: "body" })).text, "");
+        assert.equal((yield* session.initialPage.readText({ selector: "body" })).text, "");
       }
 
       const command = yield* Effect.promise(

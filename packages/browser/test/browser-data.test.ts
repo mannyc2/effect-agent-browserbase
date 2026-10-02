@@ -81,6 +81,7 @@ it("a receipt has nowhere to say which key was pressed or what was typed", () =>
   expect(Object.keys(InputReceipt.fields).sort()).toEqual([
     "completedMonotonicNanos",
     "delta",
+    "intended",
     "kind",
     "position",
     "startedMonotonicNanos",

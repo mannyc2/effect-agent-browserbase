@@ -88,6 +88,56 @@ export const localSite = Effect.acquireRelease(
 
         return;
       }
+      if (url.pathname === "/keyboard") {
+        response.end(`<!doctype html><meta charset=utf-8><title>Trusted keyboard input</title>
+        <label>First<input id=first></label><label>Second<input id=second></label>
+        <output id=events></output><output id=values></output>
+        <script>
+          const entries = [];
+          const first = document.querySelector('#first');
+          const second = document.querySelector('#second');
+          const moveAfter = Number(new URLSearchParams(location.search).get('moveAfter'));
+          let inputs = 0;
+          for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
+            document.addEventListener(type, event => {
+              entries.push([event.type, event.target.id, event.key ?? null,
+                event.code ?? null, event.repeat ?? false, event.shiftKey ?? false,
+                event.ctrlKey ?? false, event.altKey ?? false, event.metaKey ?? false,
+                event.data ?? null, event.inputType ?? null, event.isTrusted]);
+              document.querySelector('#events').textContent = JSON.stringify(entries);
+              document.querySelector('#values').textContent = JSON.stringify([first.value, second.value]);
+              if (type === 'input' && event.target === first && ++inputs === moveAfter) second.focus();
+            });
+          }
+        </script>`);
+
+        return;
+      }
+      if (url.pathname === "/binding-then-confirm") {
+        // The page calls a host binding, then opens its own dialog before the reply arrives.
+        response.end(`<!doctype html><title>Binding then confirm</title>
+        <script>
+        globalThis.slowEcho?.("call");
+        setTimeout(() => confirm("Proceed?"), 150);
+        </script>`);
+
+        return;
+      }
+      if (url.pathname === "/confirm-later") {
+        // The page opens its own dialog shortly after loading, without any input.
+        response.end(`<!doctype html><title>Confirm later</title>
+        <script>setTimeout(() => confirm("Proceed?"), 600)</script>`);
+
+        return;
+      }
+      if (url.pathname === "/confirm") {
+        response.end(`<!doctype html><title>Confirm</title>
+        <button id=ask onclick="answer.textContent=String(confirm('Proceed?'))">Ask</button>
+        <button id=other onclick="count.textContent=Number(count.textContent)+1">Other</button>
+        <output id=answer></output><span id=count>0</span>`);
+
+        return;
+      }
       if (url.pathname === "/pinned-frame") {
         response.end(`<!doctype html><title>Pinned child</title>
         <strong id=frame-name>${url.searchParams.get("name") ?? "child"}</strong>
@@ -216,6 +266,10 @@ export const externalChromium = Effect.acquireRelease(
       const deadline = performance.now() + 25000;
       let address: string | undefined;
 
+      const nativeTargets = Schema.Array(
+        Schema.Struct({ type: Schema.String, url: Schema.String }),
+      );
+
       while (performance.now() < deadline) {
         if (child.exitCode !== null || child.signalCode !== null)
           throw new Error("External Chromium exited");
@@ -229,8 +283,22 @@ export const externalChromium = Effect.acquireRelease(
           const [port, path] = portFile.trim().split("\n");
 
           if (port !== undefined && path !== undefined) {
-            address = `ws://127.0.0.1:${port}${path}`;
-            break;
+            // This external host promises an initial about:blank Page to its observers.
+            // Debugger readiness alone precedes that target on a cold Chromium launch.
+            const targets: unknown = await fetch(`http://127.0.0.1:${port}/json/list`, {
+              redirect: "error",
+              signal: AbortSignal.timeout(Math.max(1, Math.ceil(deadline - performance.now()))),
+            })
+              .then((response) => response.json())
+              .catch(() => undefined);
+
+            if (
+              Schema.is(nativeTargets)(targets) &&
+              targets.some((target) => target.type === "page" && target.url === "about:blank")
+            ) {
+              address = `ws://127.0.0.1:${port}${path}`;
+              break;
+            }
           }
         }
         await delay(20);

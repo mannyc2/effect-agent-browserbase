@@ -31,16 +31,16 @@ it.effect("a pending wait releases admission for host reads while excluding conf
         maxHostReads: 1,
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             ticket.signal.addEventListener("abort", () => admissionReleased.resolve(), {
               once: true,
             });
 
-            return driver.documentReadiness(ticket);
+            return driver.documentReadiness(ticket, target);
           },
           click: async (_selector, ticket, capture, _policy, target) => {
             ticket.dispatch();
-            inputs.push(target?.pageId ?? driver.selected().pageId);
+            inputs.push(target.pageId);
 
             return {
               url: "https://example.test/",
@@ -80,38 +80,53 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const first = (yield* session.pages)[0];
+      const first = (yield* session.listPages())[0];
 
       expect(first).toBeDefined();
       if (first === undefined) return;
       // The scout's page is a real second page, opened before the wait begins.
-      const second = yield* session.createPage();
-      const waiting = yield* Effect.forkChild(session.waitFor("#ready", "visible"));
+      const second = (yield* session.createPage()).record.info;
+
+      const waiting = yield* Effect.forkChild(
+        session.initialPage().controls.waitFor("#ready", "visible"),
+      );
 
       yield* Effect.promise(() => entered.promise);
       // Native polling begins before the short guard returns. Cross that admission boundary once.
       yield* Effect.promise(() => admissionReleased.promise);
       expect(waitTicket?.signal.aborted).toBe(false);
-      yield* session.checkpoint({ picture: false });
-      expect(yield* session.pages).toHaveLength(2);
+      yield* session.initialPage().controls.checkpoint({ picture: false });
+      expect(yield* session.listPages()).toHaveLength(2);
       expect(yield* session.status).toMatchObject({
         phase: "open",
         busy: true,
         unresolvedDispatch: false,
       });
-      expect(yield* Effect.result(session.observe())).toMatchObject(busy);
-      expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject(busy);
+      expect(yield* Effect.result(session.initialPage().controls.observe())).toMatchObject(busy);
       expect(
-        yield* Effect.result(session.operations.navigate("https://example.test/next")),
+        yield* Effect.result(session.initialPage().controls.operations.click("#act")),
       ).toMatchObject(busy);
-      expect(yield* Effect.result(session.pageControl.suspend(first))).toMatchObject(busy);
       expect(
         yield* Effect.result(
-          session.pageControl.resume({ pageId: "page-1", targetId: "target-1", suspensionId: "x" }),
+          session.initialPage().controls.operations.navigate("https://example.test/next"),
         ),
       ).toMatchObject(busy);
-      expect(yield* Effect.result(session.waitFor("#other", "attached"))).toMatchObject(busy);
-      const scout = yield* session.pinPage(second);
+      expect(
+        yield* Effect.result(session.initialPage().controls.pageControl.suspend(first)),
+      ).toMatchObject(busy);
+      expect(
+        yield* Effect.result(
+          session.initialPage().controls.pageControl.resume({
+            pageId: "page-1",
+            targetId: "target-1",
+            suspensionId: "x",
+          }),
+        ),
+      ).toMatchObject(busy);
+      expect(
+        yield* Effect.result(session.initialPage().controls.waitFor("#other", "attached")),
+      ).toMatchObject(busy);
+      const scout = yield* session.page(second).pipe(Effect.map((page) => page.controls));
 
       yield* scout.operations.click("#scout");
       yield* session.selectPage(second);
@@ -119,7 +134,7 @@ it.effect("a pending wait releases admission for host reads while excluding conf
       yield* session.selectPage(first);
       finish.resolve();
       yield* Fiber.join(waiting);
-      yield* session.operations.click("#act");
+      yield* session.initialPage().controls.operations.click("#act");
       expect(inputs).toEqual(["page-2", "page-1"]);
       expect({ nativeWaits, holds, observationReads }).toEqual({
         nativeWaits: 1,
@@ -166,18 +181,22 @@ it.effect(
         const session = yield* (yield* f.acquisition).connect;
 
         const waiting = yield* Effect.forkChild(
-          session.waitForElement({ reference, state: "enabled" }),
+          session.initialPage().controls.waitForElement({ reference, state: "enabled" }),
         );
 
         yield* Effect.promise(() => entered.promise);
         yield* Fiber.interrupt(waiting);
         expect(Exit.hasInterrupts(yield* Fiber.await(waiting))).toBe(true);
         expect(original?.signal.aborted).toBe(true);
-        yield* session.observe();
-        yield* session.operations.click("#act");
+        yield* session
+          .initialPage()
+          .controls.observe(undefined, { admission: { queue: "1 second" } });
+        yield* session.initialPage().controls.operations.click("#act");
         for (let i = 0; i < 3; i++)
           expect(
-            yield* Effect.result(session.waitForElement({ reference, state: "hidden" })),
+            yield* Effect.result(
+              session.initialPage().controls.waitForElement({ reference, state: "hidden" }),
+            ),
           ).toMatchObject(busy);
         expect(calls).toBe(1);
         expect(yield* session.status).toMatchObject({
@@ -187,7 +206,7 @@ it.effect(
         });
         finish.resolve();
         yield* Effect.promise(() => retired.promise);
-        yield* session.waitForElement({ reference, state: "hidden" });
+        yield* session.initialPage().controls.waitForElement({ reference, state: "hidden" });
         expect(calls).toBe(2);
         expect(yield* session.status).toMatchObject({
           phase: "open",
@@ -212,11 +231,11 @@ it.effect("the wait deadline includes readiness and cannot widen host policy", (
         actionMillis: 100,
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             preparing.resolve();
             await ready.promise;
 
-            return driver.documentReadiness(ticket);
+            return driver.documentReadiness(ticket, target);
           },
           waitForElement: async (_ref, _state, ticket) => {
             remaining = ticket.remainingMillis();
@@ -232,7 +251,8 @@ it.effect("the wait deadline includes readiness and cannot widen host policy", (
 
       const waiting = yield* Effect.forkChild(
         session
-          .waitForElement({ reference, state: "visible", timeoutMillis: 60000 })
+          .initialPage()
+          .controls.waitForElement({ reference, state: "visible", timeoutMillis: 60000 })
           .pipe(Effect.result),
       );
 
@@ -264,12 +284,12 @@ it.effect("canceled readiness retains capacity until settlement and cannot start
       const f = yield* fixture({
         onConnect: async (driver) => ({
           ...driver,
-          documentReadiness: async (ticket) => {
+          documentReadiness: async (ticket, target) => {
             entered.resolve();
             try {
               await finish.promise;
 
-              return await driver.documentReadiness(ticket);
+              return await driver.documentReadiness(ticket, target);
             } finally {
               readyRetired.resolve();
             }
@@ -282,17 +302,22 @@ it.effect("canceled readiness retains capacity until settlement and cannot start
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const waiting = yield* Effect.forkChild(session.waitFor("#ready", "attached"));
+
+      const waiting = yield* Effect.forkChild(
+        session.initialPage().controls.waitFor("#ready", "attached"),
+      );
 
       yield* Effect.promise(() => entered.promise);
       yield* Fiber.interrupt(waiting);
-      yield* session.pages;
-      expect(yield* Effect.result(session.waitFor("#next", "visible"))).toMatchObject(busy);
+      yield* session.listPages();
+      expect(
+        yield* Effect.result(session.initialPage().controls.waitFor("#next", "visible")),
+      ).toMatchObject(busy);
       finish.resolve();
       yield* Effect.promise(() => readyRetired.promise);
       // Let the raw readiness caller execute its retirement finally before the next admission.
       yield* Effect.yieldNow;
-      yield* session.waitFor("#next", "visible");
+      yield* session.initialPage().controls.waitFor("#next", "visible");
       expect(waits).toBe(1);
     }),
   ),
@@ -337,13 +362,13 @@ it.effect("closing a wait and a concurrent host read prevents either from succee
       const session = yield* (yield* f.acquisition).connect;
 
       const waiting = yield* Effect.forkChild(
-        session.waitFor("#ready", "visible").pipe(Effect.result),
+        session.initialPage().controls.waitFor("#ready", "visible").pipe(Effect.result),
       );
 
       yield* Effect.promise(() => waitingEntered.promise);
 
       const reading = yield* Effect.forkChild(
-        session.checkpoint({ picture: false }).pipe(Effect.result),
+        session.initialPage().controls.checkpoint({ picture: false }).pipe(Effect.result),
       );
 
       yield* Effect.promise(() => readEntered.promise);
@@ -391,13 +416,111 @@ it.effect("a held page refuses wait admission without starting native polling", 
 
       const session = yield* (yield* f.acquisition).connect;
 
-      expect(yield* Effect.result(session.waitFor("#ready", "visible"))).toMatchObject(busy);
+      expect(
+        yield* Effect.result(session.initialPage().controls.waitFor("#ready", "visible")),
+      ).toMatchObject(busy);
       expect(calls).toBe(0);
       expect(yield* session.status).toMatchObject({
         phase: "open",
         busy: false,
         unresolvedDispatch: false,
       });
+    }),
+  ),
+);
+
+it.effect("a handoff refuses a pending pure wait instead of draining it into uncertainty", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const entered = gate<void>();
+      const admissionReleased = gate<void>();
+      const finish = gate<void>();
+
+      const f = yield* fixture({
+        onConnect: async (driver) => ({
+          ...driver,
+          documentReadiness: async (ticket, target) => {
+            ticket.signal.addEventListener("abort", () => admissionReleased.resolve(), {
+              once: true,
+            });
+
+            return driver.documentReadiness(ticket, target);
+          },
+          // The condition never holds, and the native wait outlives every caller.
+          waitFor: async (_selector, _state, ticket) => {
+            entered.resolve();
+            try {
+              await finish.promise;
+            } finally {
+              ticket.retire();
+            }
+          },
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+
+      const waiting = yield* Effect.forkChild(
+        session.initialPage().controls.waitFor("#never", "visible"),
+      );
+
+      yield* Effect.promise(() => entered.promise);
+      // The wait's own admission ends once native polling starts.
+      yield* Effect.promise(() => admissionReleased.promise);
+      const handoff = yield* session.beginHandoff(Effect.succeed("view"));
+
+      expect(handoff.view).toBe("view");
+      expect(yield* session.status).toMatchObject({
+        phase: "paused",
+        reason: "handoff",
+        unresolvedDispatch: false,
+      });
+      expect(yield* Fiber.join(waiting).pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Stale" },
+        outcome: "undispatched",
+      });
+      finish.resolve();
+    }),
+  ),
+);
+
+it.effect("a handoff that cannot drain in time fails and leaves automation running", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const loaded = gate<string>();
+
+      const f = yield* fixture({
+        lifetimeMillis: 20000,
+        onNavigate: (_url, pageId) => ({
+          pageId,
+          settled: loaded.promise,
+          stop: async () => "settled",
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+
+      const navigation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow");
+
+      // The navigation is still loading, so the drain cannot finish before its bound.
+      const handoff = yield* Effect.forkChild(session.beginHandoff(Effect.succeed("view")));
+
+      yield* TestClock.adjust(3000);
+      const refused = yield* Fiber.join(handoff).pipe(Effect.flip);
+
+      expect(refused).toMatchObject({
+        operation: "handoff",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+        containment: { _tag: "NotRequired" },
+      });
+      expect(yield* session.status).toMatchObject({ phase: "open", reason: null });
+      loaded.resolve("https://example.test/slow");
+      expect(yield* navigation.completed).toBe("https://example.test/slow");
+      yield* session.initialPage().controls.operations.click("#act");
+      expect(f.state.clicks).toBe(1);
     }),
   ),
 );

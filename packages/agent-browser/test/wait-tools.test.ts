@@ -7,7 +7,7 @@ import { Toolkit } from "effect/unstable/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 
-const reference = { observationId: "observed", elementId: "control" };
+const reference = { observationId: "observation-1", elementId: "control" };
 
 it.effect(
   "wait tools pass only bounded exact-node conditions and preserve native refusal facts",
@@ -22,17 +22,29 @@ it.effect(
           outcome: "undispatched",
         });
 
-        const browser = scriptedSession({
-          waitForElement: (request) =>
-            Effect.suspend(() => {
-              calls++;
-              expect(request).toEqual({ reference, state: "enabled", timeoutMillis: 100 });
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Wait") {
+              return Effect.suspend(() => {
+                calls++;
+                expect(action).toMatchObject({
+                  mode: {
+                    _tag: "Element",
+                    target: { _tag: "Ref", reference },
+                    state: "enabled",
+                    timeoutMillis: 100,
+                  },
+                });
 
-              return Effect.fail(error);
-            }),
+                return Effect.fail(error);
+              });
+            }
+
+            return Effect.void;
+          },
         });
 
-        const host = yield* Tools.makeHost(browser);
+        const host = yield* Tools.makeHost(browser, browser.initialPage);
         const ready = yield* Tools.waitToolkit.pipe(Effect.provide(host.waitHandlers));
 
         const result = yield* Stream.runCollect(
@@ -80,30 +92,36 @@ it.effect(
         let inputs = 0;
         let reads = 0;
 
-        const browser = scriptedSession({
-          waitForElement: () =>
-            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
-          pages: Effect.sync(() => {
-            reads++;
-
-            return [];
-          }),
-          scroll: () =>
-            Effect.sync(() => {
-              inputs++;
-
-              return { url: "https://example.test/" };
-            }),
+        const browser = yield* scriptedSession({
+          beforeStart: (action) =>
+            action._tag === "Wait"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.sync(() => {
+                  inputs++;
+                }),
         });
 
-        const host = yield* Tools.makeHost(browser);
+        const originalList = browser.listPages;
+
+        Object.assign(browser, {
+          listPages: () =>
+            originalList().pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  reads++;
+                }),
+              ),
+            ),
+        });
+
+        const host = yield* Tools.makeHost(browser, browser.initialPage);
 
         const ready = yield* Toolkit.merge(Tools.waitToolkit, Tools.toolkit).pipe(
           Effect.provide(host.layer),
         );
 
         const wait = yield* ready
-          .handle("browser_wait_for", { reference, state: "hidden" })
+          .handle("browser_wait_for", { reference, state: "enabled" })
           .pipe(Effect.flatMap(Stream.runCollect), Effect.forkScoped);
 
         yield* Deferred.await(entered);
@@ -113,7 +131,7 @@ it.effect(
           .pipe(Effect.flatMap(Stream.runCollect), Effect.forkScoped);
 
         yield* TestClock.adjust(1);
-        expect(yield* browser.pages).toEqual([]);
+        expect(yield* browser.listPages()).toHaveLength(1);
         expect(reads).toBe(1);
         expect(inputs).toBe(0);
         yield* Deferred.succeed(release, undefined);
@@ -137,28 +155,34 @@ it.effect(
         let cancellations = 0;
         let inputs = 0;
 
-        const browser = scriptedSession({
-          waitForElement: () =>
-            Effect.sync(() => {
-              waits++;
-            }).pipe(
-              Effect.andThen(Deferred.succeed(entered, undefined)),
-              Effect.andThen(Effect.never),
-              Effect.ensuring(
-                Effect.sync(() => {
-                  cancellations++;
-                }),
-              ),
-            ),
-          scroll: () =>
-            Effect.sync(() => {
-              inputs++;
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Wait") {
+              return Effect.sync(() => {
+                waits++;
+              }).pipe(
+                Effect.andThen(Deferred.succeed(entered, undefined)),
+                Effect.andThen(Effect.never),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    cancellations++;
+                  }),
+                ),
+              );
+            }
+            if (action._tag === "Scroll") {
+              return Effect.sync(() => {
+                inputs++;
 
-              return { url: "https://example.test/" };
-            }),
+                return { url: "https://example.test/" };
+              });
+            }
+
+            return Effect.void;
+          },
         });
 
-        const host = yield* Tools.makeHost(browser).pipe(Scope.provide(scope));
+        const host = yield* Tools.makeHost(browser, browser.initialPage).pipe(Scope.provide(scope));
 
         const ready = yield* Toolkit.merge(Tools.waitToolkit, Tools.toolkit).pipe(
           Effect.provide(host.layer),

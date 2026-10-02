@@ -118,6 +118,15 @@ export class Chromium extends Context.Service<
           implementation: "chromium-playwright-cdp",
           ...(options.viewport === undefined ? {} : { viewport: options.viewport }),
           automation: {
+            ...(options.timelineLimits === undefined
+              ? {}
+              : { timelineLimits: options.timelineLimits }),
+            ...(options.admissionLimits === undefined
+              ? {}
+              : { admissionLimits: options.admissionLimits }),
+            ...(options.observationLimits === undefined
+              ? {}
+              : { observationLimits: options.observationLimits }),
             ...(options.actionTimeoutMillis === undefined
               ? {}
               : { actionTimeoutMillis: options.actionTimeoutMillis }),

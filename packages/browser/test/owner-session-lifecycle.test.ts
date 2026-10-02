@@ -117,6 +117,7 @@ it.effect.each([
       );
 
       owner.transition("open");
+      owner.pageAdmission("page-1", owner.state.generation);
       const navigation = owner.reserve("page-1");
 
       // Navigation recovery is bounded by the lifetime, so it can give up at that very instant,
@@ -128,6 +129,33 @@ it.effect.each([
         (yield* owner.diagnostics).records.map((record) => [record.reason, record.disposition]),
       ).toEqual(reason === "expired" ? [["expired", "confirmed"]] : []);
     }),
+);
+
+it.effect("a session that ends while policy cleanup is pending refuses work Closed, not Busy", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner({
+      maxActions: 2,
+      maxHostReads: 2,
+      maxElapsedMillis: 60_000,
+      actionTimeoutMillis: 1000,
+    });
+
+    owner.transition("open");
+    owner.policy(
+      { source: "policy", reason: "dialog-overflow", token: {}, disposition: "pending" },
+      owner.state.generation,
+    );
+    // Pending cleanup defers work only while the session could still admit it.
+    expect(yield* owner.guard("read-text", () => Effect.void).pipe(Effect.flip)).toMatchObject({
+      reason: { _tag: "Busy" },
+      outcome: "undispatched",
+    });
+    owner.terminate("native-failure", "known");
+    expect(yield* owner.guard("read-text", () => Effect.void).pipe(Effect.flip)).toMatchObject({
+      reason: { _tag: "Closed" },
+      outcome: "undispatched",
+    });
+  }),
 );
 
 it.effect(
@@ -172,7 +200,10 @@ it.effect(
 
         const session = yield* (yield* f.acquisition).connect;
         const prior = yield* session.status;
-        const click = yield* Effect.forkChild(session.operations.click("#act"));
+
+        const click = yield* Effect.forkChild(
+          session.initialPage().controls.operations.click("#act"),
+        );
 
         yield* Effect.promise(() => entered.promise);
         const during = yield* session.status;
@@ -186,7 +217,9 @@ it.effect(
         });
         clicked.resolve();
         yield* Fiber.join(click);
-        expect(yield* Effect.result(session.operations.readText())).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.readText()),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
@@ -196,7 +229,7 @@ it.effect(
           token,
           disposition: "confirmed",
         });
-        expect(yield* session.operations.readText()).toBe("initial");
+        expect(yield* session.initialPage().controls.operations.readText()).toBe("initial");
         const diagnostics = yield* session.diagnostics;
 
         expect(diagnostics.records.map(({ disposition }) => disposition)).toEqual([
@@ -280,7 +313,9 @@ it.effect(
           reason: "dialog-overflow",
           unresolvedDispatch: false,
         });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
@@ -313,6 +348,131 @@ it.effect(
     ),
 );
 
+/**
+ * A keep-alive session whose page close lands natively and then waits for the test before the
+ * owner hears back, while a detach is held in its inventory read behind the lifecycle barrier.
+ */
+const closeBehindDetach = Effect.fnUntraced(function* (actionMillis?: number) {
+  const listing = gate<void>();
+  const listed = gate<void>();
+  const closing = gate<void>();
+  const closed = gate<void>();
+  let holdList = false;
+
+  const f = yield* fixture({
+    keepAlive: true,
+    ...(actionMillis === undefined ? {} : { actionMillis }),
+    onConnect: async (driver) => ({
+      ...driver,
+      listPages: async (ticket) => {
+        if (holdList) {
+          holdList = false;
+          listing.resolve();
+          await listed.promise;
+        }
+
+        return driver.listPages(ticket);
+      },
+      closePage: async (page, ticket, onDispatch) => {
+        await driver.closePage(page, ticket, onDispatch);
+        closing.resolve();
+        await closed.promise;
+      },
+    }),
+  });
+
+  const session = yield* (yield* f.acquisition).connect;
+  const second = (yield* session.createPage()).record.info;
+  const issued = yield* session.page(second);
+
+  holdList = true;
+  const detaching = yield* Effect.forkChild(session.detach);
+
+  yield* Effect.promise(() => listing.promise);
+  // Page closure is bounded cleanup, admitted even while the lifecycle barrier is up.
+  const closure = yield* Effect.forkChild(issued.controls.close());
+
+  yield* Effect.promise(() => closing.promise);
+  listed.resolve();
+
+  return { f, session, detaching, closure, release: () => closed.resolve() };
+});
+
+it.effect("detach waits for a page close admitted behind its barrier before disconnecting", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, detaching, closure, release } = yield* closeBehindDetach();
+
+      yield* Effect.yieldNow;
+      release();
+      yield* Fiber.join(closure);
+      yield* Fiber.join(detaching);
+      expect(yield* session.status).toMatchObject({
+        phase: "detached",
+        reason: "detached",
+        unresolvedDispatch: false,
+      });
+    }),
+  ),
+);
+
+it.effect("a detach refused before it disconnects leaves the session open", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { f, session, detaching, closure, release } = yield* closeBehindDetach(10_000);
+
+      yield* TestClock.adjust(3000);
+      expect(yield* Fiber.join(detaching).pipe(Effect.flip)).toMatchObject({
+        operation: "detach",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+      });
+      expect(yield* session.status).toMatchObject({ phase: "open", reason: null });
+      release();
+      yield* Fiber.join(closure);
+      yield* session.initialPage().controls.operations.click("#act");
+      expect(f.state.clicks).toBe(1);
+    }),
+  ),
+);
+
+it.effect("detach waits for a started navigation instead of cutting it off", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const loaded = gate<string>();
+
+      const f = yield* fixture({
+        keepAlive: true,
+        lifetimeMillis: 20000,
+        onNavigate: (_url, pageId) => ({
+          pageId,
+          settled: loaded.promise,
+          stop: async () => "settled",
+        }),
+      });
+
+      const session = yield* (yield* f.acquisition).connect;
+
+      const navigation = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/slow");
+
+      // The navigation released its permit, but the browser is still loading its document.
+      const detaching = yield* Effect.forkChild(session.detach);
+
+      yield* TestClock.adjust(3000);
+      expect(yield* Fiber.join(detaching).pipe(Effect.flip)).toMatchObject({
+        operation: "detach",
+        reason: { _tag: "Timeout" },
+        outcome: "undispatched",
+      });
+      expect(yield* session.status).toMatchObject({ phase: "open", reason: null });
+      loaded.resolve("https://example.test/slow");
+      expect(yield* navigation.completed).toBe("https://example.test/slow");
+    }),
+  ),
+);
+
 it.effect("an old connection cannot change replacement status or diagnostics", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -337,7 +497,12 @@ it.effect("an old connection cannot change replacement status or diagnostics", (
         reason: "detached",
         unresolvedDispatch: false,
       });
-      yield* session.reconnect(true);
+      const inventory = yield* session.reconnect(true);
+      const info = inventory.pages[0];
+
+      expect(info).toBeDefined();
+      if (info === undefined) return;
+      const fresh = yield* session.page(info);
       const before = yield* session.status;
       const diagnostics = yield* session.diagnostics;
 
@@ -347,7 +512,7 @@ it.effect("an old connection cannot change replacement status or diagnostics", (
       old?.disconnected();
       expect(yield* session.status).toEqual(before);
       expect(yield* session.diagnostics).toEqual(diagnostics);
-      yield* session.operations.click("#act");
+      yield* fresh.controls.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -434,7 +599,7 @@ it.effect(
 
         const session = yield* (yield* f.acquisition).connect;
 
-        operations = session.operations;
+        operations = session.initialPage().controls.operations;
         const hold = connection?.bindings.find(({ name }) => name === "hold");
         const fail = connection?.bindings.find(({ name }) => name === "fail");
 
@@ -451,7 +616,10 @@ it.effect(
           .catch(() => "rejected");
 
         yield* Deferred.await(entered);
-        const input = yield* Effect.forkChild(session.operations.click("#act").pipe(Effect.result));
+
+        const input = yield* Effect.forkChild(
+          session.initialPage().controls.operations.click("#act").pipe(Effect.result),
+        );
 
         yield* Effect.promise(() => inputEntered.promise);
         yield* Effect.promise(async () => {
@@ -527,7 +695,9 @@ it.effect("capacity refusal is a known terminal block without invented native un
           generation: 0,
         }),
       ]);
-      expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+      expect(
+        yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+      ).toMatchObject({
         _tag: "Failure",
         failure: { outcome: "undispatched" },
       });
@@ -566,13 +736,20 @@ it.effect(
         });
 
         const session = yield* (yield* f.acquisition).connect;
-        const predecessor = yield* session.operations.startNavigation("https://example.test/first");
+
+        const predecessor = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/first");
+
         const captured = controls[0]?.beforeUnload();
 
         expect(captured).toBeDefined();
         first.resolve("https://example.test/first");
         expect(yield* predecessor.completed).toBe("https://example.test/first");
-        const successor = yield* session.operations.startNavigation("https://example.test/second");
+
+        const successor = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/second");
 
         captured?.dismissed(false);
         controls[0]?.beforeUnload().dismissed(false);
@@ -658,7 +835,9 @@ it.effect.each(["consumer", "consumer-initialization-error", "registration"] as 
           reason: origin === "registration" ? "registration-failure" : "callback-failure",
           unresolvedDispatch: origin === "registration",
         });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { outcome: "undispatched" },
         });
@@ -695,7 +874,12 @@ it.effect.each(["ack-first", "reject-first", "unconfirmed"] as const)(
         });
 
         const session = yield* (yield* f.acquisition).connect;
-        const operation = yield* session.operations.startNavigation("https://example.test/first");
+        const page = session.initialPage();
+
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/first");
+
         const dialog = control?.beforeUnload();
 
         expect(dialog).toBeDefined();
@@ -711,20 +895,34 @@ it.effect.each(["ack-first", "reject-first", "unconfirmed"] as const)(
           failure: {
             reason: { _tag: order === "unconfirmed" ? "Provider" : "Interrupted" },
             outcome: "unknown",
+            ...(order === "unconfirmed"
+              ? { containment: { _tag: "PageClosed", pageId: page.record.identity.pageId } }
+              : {}),
           },
         });
         expect(dispatches).toBe(1);
         expect(yield* session.status).toMatchObject({
-          phase: order === "unconfirmed" ? "uncertain" : "open",
-          unresolvedDispatch: order === "unconfirmed",
+          phase: "open",
+          unresolvedDispatch: false,
         });
         dialog?.dismissed(true);
-        if (order === "unconfirmed")
-          expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        if (order === "unconfirmed") {
+          expect(yield* page.status).toMatchObject({ phase: "closed" });
+          expect(
+            (yield* f.control.calls).filter((call) => call.operation === "close-page"),
+          ).toMatchObject([
+            { pageId: page.record.identity.pageId, dispatched: true, settled: "completed" },
+          ]);
+          expect(
+            yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+          ).toMatchObject({
             _tag: "Failure",
+            failure: { outcome: "undispatched" },
           });
-        else {
-          yield* session.operations.click("#act");
+          expect(f.state.clicks).toBe(0);
+          expect(dispatches).toBe(1);
+        } else {
+          yield* session.initialPage().controls.operations.click("#act");
           expect(f.state.clicks).toBe(1);
         }
       }),

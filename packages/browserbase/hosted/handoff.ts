@@ -17,7 +17,7 @@ await h.run(
     Effect.gen(function* () {
       const session = yield* h.open();
 
-      yield* session.navigate(NavigateRequest.make({ url: start }));
+      yield* session.initialPage.navigate(NavigateRequest.make({ url: start }));
       const handoff = yield* session.beginHandoff(240);
       const page = handoff.view.pages[0];
 
@@ -37,7 +37,12 @@ await h.run(
 
       yield* h.report("operator", { released });
       // The boolean is the operator's own statement, never inferred from the page.
-      const observation = yield* session.resume(handoff.token, released);
+      const inventory = yield* session.resume(handoff.token, released);
+      const selected = inventory.pages.find((page) => page.selected);
+
+      if (selected === undefined)
+        return yield* Effect.die("the resumed inventory has no selected page");
+      const observation = yield* (yield* session.page(selected)).observe();
       const cleanup = yield* session.close;
 
       yield* h.established({ released, moved: observation.url !== start });

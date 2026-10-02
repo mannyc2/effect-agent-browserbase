@@ -1,16 +1,16 @@
 import { Crypto, Effect, type Option, Redacted, Schema, Scope } from "effect";
 
 import * as Bootstrap from "./Bootstrap.ts";
-import type { BrowserSession, OpenOptions } from "./Browser.ts";
+import type { BrowserSession, OpenOptions, OperationOptions, Page } from "./Browser.ts";
 import {
   ActionResult,
   AutomationOptions,
   BrowserPolicy,
   ClickRequest,
   Identifier,
+  type Inventory,
   InlineFiles,
   type InlineFile,
-  type Observation,
   SafeFilename,
   Selector,
   Viewport,
@@ -21,18 +21,22 @@ import {
   type BrowserOperation,
   type InitializationError,
 } from "./Errors.ts";
-import {
-  bindingImplementation,
-  fromNativeAttempt,
-  issueBinding,
-} from "./internal/browser/Binding.ts";
+import { bindingImplementation, issueBinding } from "./internal/browser/Binding.ts";
 import { makeBindings, preparePlan } from "./internal/browser/Bindings.ts";
 import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
 import type { ConnectionCleanup } from "./internal/browser/ConnectionCleanup.ts";
 import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driver.ts";
+import { fromNativeAttempt } from "./internal/browser/NativeAttempt.ts";
+import { resolvePageControlsForSession } from "./internal/browser/PageRegistry.ts";
 import { connectPlaywrightEndpoint } from "./internal/browser/Playwright.ts";
-import { checked, decoded, makeSession } from "./internal/browser/PublicSession.ts";
-import { acquireSession } from "./internal/browser/Session.ts";
+import {
+  checked,
+  checkedOperationOptions,
+  decoded,
+  makeSession,
+} from "./internal/browser/PublicSession.ts";
+import { acquireSession, type PageControls } from "./internal/browser/Session.ts";
+import { TimelineDefaults } from "./TimelineData.ts";
 
 export {
   cleanupStep,
@@ -159,27 +163,45 @@ export class DownloadEvent extends Schema.Class<DownloadEvent>("BrowserDownloadE
  * Modeled host operations for the integration creating this connection. Native authority stays
  * inside the owner; the integration adds only the capabilities its public session supports.
  */
-export interface Integration<Reference> {
-  readonly clickForDownload: (request: ClickRequest) => Effect.Effect<DownloadEvent, BrowserError>;
-  readonly selectFiles: (request: FileRequest) => Effect.Effect<ActionResult, BrowserError>;
+export interface TransferOperations {
+  readonly clickForDownload: (
+    request: ClickRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<DownloadEvent, BrowserError>;
+  readonly selectFiles: (
+    request: FileRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
   readonly clickForFileSelection: (
     request: FileRequest,
+    options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly liveView: <A>(issue: Effect.Effect<A, BrowserError>) => Effect.Effect<A, BrowserError>;
+}
+
+/** The transfer bridge accepts only a Page issued by this exact session on its original owner. */
+export interface Integration<Reference> {
+  readonly forPage: (page: Page) => Effect.Effect<TransferOperations, BrowserError>;
+  readonly liveView: <A>(
+    issue: Effect.Effect<A, BrowserError>,
+    options?: OperationOptions,
+  ) => Effect.Effect<A, BrowserError>;
   readonly beginHandoff: <A>(
     issue: Effect.Effect<A, BrowserError>,
+    options?: OperationOptions,
   ) => Effect.Effect<{ readonly token: Redacted.Redacted<string>; readonly view: A }, BrowserError>;
   readonly resume: (
     token: Redacted.Redacted<string>,
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError>;
+    options?: OperationOptions,
+  ) => Effect.Effect<Inventory, BrowserError>;
   readonly detach: Effect.Effect<
-    { readonly reference: Reference; readonly targetId: string },
+    { readonly reference: Reference; readonly targetId: string; readonly inventory: Inventory },
     BrowserError
   >;
   readonly reconnect: (
     operatorReleasedControl: boolean,
-  ) => Effect.Effect<Observation, BrowserError | InitializationError>;
+    options?: OperationOptions,
+  ) => Effect.Effect<Inventory, BrowserError | InitializationError>;
 }
 
 export interface Connection<Reference, E = never> {
@@ -247,6 +269,46 @@ const resolveFiles = (
     ),
   );
 
+const makeTransferOperations = (
+  controls: Pick<PageControls, "clickForDownload" | "selectFiles" | "clickForFileSelection">,
+): TransferOperations => {
+  const fileOperation = (
+    operation: "select-files" | "file-chooser",
+    request: FileRequest,
+    options?: OperationOptions,
+  ) =>
+    checkedOperationOptions(options, operation).pipe(
+      Effect.flatMap((options) =>
+        checked(Selector, request.selector, operation).pipe(
+          Effect.flatMap((selector) =>
+            resolveFiles(request.selection, operation).pipe(
+              Effect.flatMap((files) =>
+                operation === "select-files"
+                  ? controls.selectFiles(selector, files, options)
+                  : controls.clickForFileSelection(selector, files, options),
+              ),
+            ),
+          ),
+        ),
+      ),
+      Effect.flatMap((url) => decoded(ActionResult, "action-result", "performed")({ url })),
+    );
+
+  return {
+    clickForDownload: (request, options) =>
+      checked(ClickRequest, request, "download-action").pipe(
+        Effect.flatMap((value) =>
+          checkedOperationOptions(options, "download-action").pipe(
+            Effect.flatMap((options) => controls.clickForDownload(value.selector, options)),
+          ),
+        ),
+        Effect.flatMap(decoded(DownloadEvent, "download-action", "performed")),
+      ),
+    selectFiles: (request, options) => fileOperation("select-files", request, options),
+    clickForFileSelection: (request, options) => fileOperation("file-chooser", request, options),
+  };
+};
+
 /**
  * Validate immutable connection configuration without loading a peer or acquiring a lifetime.
  * Connection ids and handoff tokens come from the `Crypto` service captured here, so a Layer
@@ -276,6 +338,18 @@ export const make = Effect.fnUntraced(function* (
   );
 
   const keepAlive = yield* checked(Schema.Boolean, options.keepAlive ?? false, "configure");
+
+  const timelineLimits = Object.freeze({
+    ...TimelineDefaults,
+    ...automation.timelineLimits,
+    maxEventBytes:
+      automation.timelineLimits?.maxEventBytes ??
+      Math.min(
+        TimelineDefaults.maxEventBytes,
+        automation.timelineLimits?.maxBytes ?? TimelineDefaults.maxBytes,
+      ),
+  });
+
   const engine = bindingImplementation(options.binding ?? defaultBinding);
 
   if (engine === undefined)
@@ -288,6 +362,11 @@ export const make = Effect.fnUntraced(function* (
   const pageControl = automation.pageControl ?? false;
   const popupPolicy = automation.popupPolicy ?? "retain";
   const dialogPolicy = automation.dialogPolicy ?? "dismiss";
+
+  const observationLimits =
+    automation.observationLimits === undefined
+      ? undefined
+      : Object.freeze({ ...automation.observationLimits });
 
   if (pageControl && (keepAlive || popupPolicy === "pause" || dialogPolicy === "pause"))
     return yield* BrowserError.make({
@@ -303,6 +382,7 @@ export const make = Effect.fnUntraced(function* (
     popupPolicy,
     dialogPolicy,
     preserveViewport,
+    ...(observationLimits === undefined ? {} : { observationLimits }),
     ...(automation.initialPage === undefined
       ? {}
       : "targetId" in automation.initialPage
@@ -345,6 +425,7 @@ export const make = Effect.fnUntraced(function* (
             dialogPolicy,
             newPage: false,
             preserveViewport: true,
+            ...(observationLimits === undefined ? {} : { observationLimits }),
             ...(existing.targetId === undefined ? {} : { initialTargetId: existing.targetId }),
           };
 
@@ -354,6 +435,10 @@ export const make = Effect.fnUntraced(function* (
         maxElapsedMillis: fixed.maxElapsedMillis,
         actionTimeoutMillis: automation.actionTimeoutMillis ?? 10_000,
         maxHostReads: automation.maxHostReads ?? 10_000,
+        timelineLimits,
+        ...(automation.admissionLimits === undefined
+          ? {}
+          : { admissionLimits: automation.admissionLimits }),
       },
       {
         implementation,
@@ -369,38 +454,32 @@ export const make = Effect.fnUntraced(function* (
     const connected = yield* Effect.cached(
       acquired.connect.pipe(
         Effect.map((controls): Connection<L["reference"], E> => {
-          const fileOperation = (
-            operation: "select-files" | "file-chooser",
-            request: FileRequest,
-          ) =>
-            checked(Selector, request.selector, operation).pipe(
-              Effect.flatMap((selector) =>
-                resolveFiles(request.selection, operation).pipe(
-                  Effect.flatMap((files) =>
-                    operation === "select-files"
-                      ? controls.selectFiles(selector, files)
-                      : controls.clickForFileSelection(selector, files),
-                  ),
-                ),
-              ),
-              Effect.flatMap((url) => decoded(ActionResult, "action-result", "unknown")({ url })),
-            );
+          const session = makeSession(controls, bindings);
 
           return {
-            session: makeSession(controls, bindings),
+            session,
             operations: {
-              clickForDownload: (request) =>
-                checked(ClickRequest, request, "download-action").pipe(
-                  Effect.flatMap((value) => controls.clickForDownload(value.selector)),
-                  Effect.flatMap(decoded(DownloadEvent, "download-action", "unknown")),
+              forPage: (page) =>
+                resolvePageControlsForSession(session, page).pipe(
+                  Effect.map(makeTransferOperations),
                 ),
-              selectFiles: (request) => fileOperation("select-files", request),
-              clickForFileSelection: (request) => fileOperation("file-chooser", request),
-              liveView: controls.liveView,
-              beginHandoff: controls.beginHandoff,
-              resume: controls.resume,
+              liveView: (issue, options) =>
+                checkedOperationOptions(options, "live-view").pipe(
+                  Effect.flatMap((options) => controls.liveView(issue, options)),
+                ),
+              beginHandoff: (issue, options) =>
+                checkedOperationOptions(options, "handoff").pipe(
+                  Effect.flatMap((options) => controls.beginHandoff(issue, options)),
+                ),
+              resume: (token, released, options) =>
+                checkedOperationOptions(options, "resume").pipe(
+                  Effect.flatMap((options) => controls.resume(token, released, options)),
+                ),
               detach: controls.detach,
-              reconnect: controls.reconnect,
+              reconnect: (released, options) =>
+                checkedOperationOptions(options, "reconnect").pipe(
+                  Effect.flatMap((options) => controls.reconnect(released, options)),
+                ),
             },
           };
         }),

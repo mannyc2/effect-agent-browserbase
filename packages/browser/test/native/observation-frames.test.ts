@@ -48,32 +48,32 @@ it.live(
           policy: BrowserPolicy.unrestricted({ maxActions: 100, maxElapsedMillis: 120_000 }),
         });
 
-        yield* session.navigate({ url: `${origin}/` });
+        yield* session.initialPage.navigate({ url: `${origin}/` });
 
         for (let i = 0; i < 20; i++) {
-          const reading = yield* session.observe({ scope: "viewport" });
+          const reading = yield* session.initialPage.observe({ scope: "viewport" });
 
           expect(reading.text).toContain("market words");
         }
 
-        const observed = yield* session.observe({ scope: "viewport" });
+        const observed = yield* session.initialPage.observe({ scope: "viewport" });
         const buy = observed.controls.find((control) => control.label === "Buy");
 
         expect(buy).toBeDefined();
         // Several reloads of the advertisement happen before the click.
         yield* Effect.sleep(500);
-        yield* session.clickElement(
+        yield* session.initialPage.clickElement(
           ObservedElement.make({
             observationId: observed.observationId,
             elementId: buy?.elementId ?? "",
           }),
         );
-        expect((yield* session.readText({ selector: "#bought" })).text).toBe("bought");
+        expect((yield* session.initialPage.readText({ selector: "#bought" })).text).toBe("bought");
 
         // The page's own navigation still retires it.
-        yield* session.navigate({ url: `${origin}/` });
+        yield* session.initialPage.navigate({ url: `${origin}/` });
 
-        const stale = yield* session
+        const stale = yield* session.initialPage
           .clickElement(
             ObservedElement.make({
               observationId: observed.observationId,

@@ -1,14 +1,22 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Exit, Scope, Stream } from "effect";
+import { Effect, Exit, Redacted, Schema, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import type { BrowserSession } from "effect-browser/browser";
-import { InputReceipt, Observation, SessionStatus, Target } from "effect-browser/browser-data";
+import {
+  BrowserPolicy,
+  InputReceipt,
+  Observation,
+  SessionStatus,
+} from "effect-browser/browser-data";
+import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
+import * as Testing from "effect-browser/testing";
 import { Toolkit } from "effect/unstable/ai";
 
-import { scriptedSession } from "./fixtures/ScriptedSession.ts";
+import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 
 const reference = { observationId: "observation-1", elementId: "element-1" };
+const selection = { reference: { ...reference, elementId: "element-3" }, options: ["option-1"] };
 
 const requests = [
   ["browser_navigate", { url: "https://example.test/" }, "navigate"],
@@ -48,7 +56,7 @@ it.effect(
         let reads = 0;
         let actions = 0;
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           status: Effect.sync(() => {
             reads++;
 
@@ -69,7 +77,11 @@ it.effect(
         });
 
         const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-        const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
+
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage).pipe(
+          Scope.provide(scope),
+        );
+
         const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
         const result = yield* Stream.runCollect(
@@ -124,21 +136,43 @@ it.effect(
             return Effect.fail(error);
           });
 
-        const browser = scriptedSession({
-          startNavigation: refuse("navigate"),
+        const browser = yield* scriptedSession({
+          beforeStart: (action) => {
+            if (action._tag === "Click") {
+              return refuse("click")();
+            }
+            if (action._tag === "Fill") {
+              return refuse("fill")();
+            }
+            if (action._tag === "Scroll") {
+              return refuse("scroll")();
+            }
+            if (action._tag === "PointerMove") {
+              return refuse("pointer-move")();
+            }
+            if (action._tag === "Hover") {
+              return refuse("hover")();
+            }
+            if (action._tag === "Wheel") {
+              return refuse("wheel")();
+            }
+            if (action._tag === "Press") {
+              return refuse("press")();
+            }
+            if (action._tag === "Type") {
+              return refuse("type")();
+            }
+            if (action._tag === "Select") {
+              return refuse("select-option")();
+            }
+
+            return Effect.void;
+          },
+          beforeNavigation: refuse("navigate"),
           observe: refuse("observe"),
-          clickElement: refuse("click"),
-          fillElement: refuse("fill"),
-          scroll: refuse("scroll"),
-          pointerMove: refuse("pointer-move"),
-          hoverElement: refuse("hover"),
-          wheel: refuse("wheel"),
-          pressElement: refuse("press"),
-          typeElement: refuse("type"),
-          selectOption: refuse("select-option"),
         });
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
         const tools = yield* allTools.pipe(Effect.provide(host.layer));
 
         for (const [name, request, operation] of requests) {
@@ -176,21 +210,27 @@ const projections: ReadonlyArray<
   readonly [BrowserReason, BrowserTools.BrowserToolFailure["reason"]]
 > = [
   [Reasons.Stale.make({}), "stale"],
+  [Reasons.Drifted.make({}), "stale"],
   [Reasons.TargetChanged.make({}), "stale"],
   [Reasons.Resized.make({}), "stale"],
   [Reasons.Interrupted.make({}), "stale"],
   [Reasons.Busy.make({}), "busy"],
+  [Reasons.QueueFull.make({ scope: "page", maximum: 32, observed: 33 }), "busy"],
   [Reasons.Active.make({}), "busy"],
   [Reasons.RateLimited.make({ retryAfterMillis: 123 }), "busy"],
   [Reasons.Denied.make({}), "denied"],
   [Reasons.Authorization.make({}), "denied"],
   [Reasons.UnsafeUrl.make({}), "denied"],
   [Reasons.NotFound.make({}), "not-found"],
+  [Reasons.Missing.make({}), "not-found"],
   [Reasons.Ambiguous.make({}), "ambiguous"],
   [Reasons.NotVisible.make({}), "not-visible"],
   [Reasons.NotFocused.make({}), "not-focused"],
   [Reasons.Limit.make({ dimension: "pages", maximum: 1, observed: 2 }), "limit"],
   [Reasons.Timeout.make({}), "timeout"],
+  [Reasons.ScheduleMissed.make({}), "timeout"],
+  [Reasons.TimingBudgetExceeded.make({}), "timeout"],
+  [Reasons.QueueExpired.make({}), "timeout"],
   [Reasons.Closed.make({}), "closed"],
   [Reasons.Expired.make({}), "closed"],
   [Reasons.Disconnected.make({}), "closed"],
@@ -202,6 +242,7 @@ const projections: ReadonlyArray<
   [Reasons.Provider.make({ status: 500 }), "failed"],
   [Reasons.Disabled.make({}), "disabled"],
   [Reasons.Failed.make({}), "failed"],
+  [Reasons.Incomplete.make({}), "failed"],
   [Reasons.ContentType.make({}), "failed"],
   [Reasons.Timestamp.make({}), "failed"],
   [Reasons.ContextLease.make({}), "failed"],
@@ -218,12 +259,12 @@ it.effect(
           outcome: "undispatched",
         });
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           observe: () => Effect.suspend(() => Effect.fail(error)),
         });
 
         const tools = yield* BrowserTools.toolkit.pipe(
-          Effect.provide(BrowserTools.handlers(browser)),
+          Effect.provide(BrowserTools.handlers(browser, browser.initialPage)),
         );
 
         expect(projections.map(([reason]) => reason._tag).sort()).toEqual(
@@ -256,7 +297,7 @@ it.effect(
         const reason = Reasons.Provider.make({ status: 503 });
         const error = BrowserError.make({ operation: "observe", reason, outcome: "rejected" });
 
-        const browser = scriptedSession({
+        const browser = yield* scriptedSession({
           observe: () =>
             Effect.suspend(() => {
               calls++;
@@ -266,7 +307,11 @@ it.effect(
         });
 
         const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-        const host = yield* BrowserTools.makeHost(browser).pipe(Scope.provide(scope));
+
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage).pipe(
+          Scope.provide(scope),
+        );
+
         const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
         yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}, "first"));
@@ -322,111 +367,193 @@ it.effect(
     ),
 );
 
+it.effect.each(["page", "session"] as const)(
+  "after its bound %s closes, every Tool tells the model the browser is closed, not stale",
+  (retired) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* scriptedSession();
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
+        const tools = yield* allTools.pipe(Effect.provide(host.layer));
+
+        yield* retired === "page" ? browser.initialPage.close() : browser.closeChecked;
+
+        for (const [name, request] of requests)
+          expect(
+            (yield* Stream.runCollect(yield* tools.handle(name, request, name)))[0]?.encodedResult,
+          ).toEqual({ _tag: "BrowserToolFailure", reason: "closed", outcome: "undispatched" });
+        expect((yield* host.toolFailures).failures).toHaveLength(requests.length);
+      }),
+    ),
+);
+
 it.effect(
-  "malformed typed results are recorded once before projection without replay or receipt callbacks",
+  "after a keep-alive reconnection, every Tool on the old Page tells the model it is closed",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const target = Target.make({ generation: 1, pageId: "page", frameId: "frame" });
+        const scripted = yield* Testing.binding(fixtureScript);
 
-        const receipt = InputReceipt.make({
-          target,
-          kind: "pointer-move",
-          position: null,
-          startedMonotonicNanos: 1n,
-          completedMonotonicNanos: 2n,
-        });
+        const runtime = yield* BrowserRuntime.make({
+          implementation: "tools-under-test",
+          binding: scripted.binding,
+          keepAlive: true,
+        }).pipe(Effect.provide(NodeCrypto.layer));
 
-        const observation = Observation.make({
-          target,
-          observationId: "observation",
-          revision: 0,
-          scope: "document",
-          url: "https://example.test/",
-          text: "",
-          controls: [],
-          controlsTruncated: false,
-          textTruncated: false,
-          viewport: {
-            width: 1,
-            height: 1,
-            clippedText: 0,
-            coveredText: 0,
-            uncertainText: 0,
-            unreachableControls: 0,
-            exhausted: false,
-          },
-        });
+        const acquired = yield* runtime.acquire(BrowserPolicy.unrestricted(), (cleanup) =>
+          Effect.gen(function* () {
+            const release = yield* Effect.cached(
+              cleanup.fence.pipe(
+                Effect.andThen(cleanup.capture),
+                Effect.andThen(cleanup.initialization),
+                Effect.andThen(cleanup.disconnect),
+                Effect.orDie,
+                Effect.asVoid,
+              ),
+            );
 
-        Reflect.set(receipt, "kind", "PRIVATE-MALFORMED-RECEIPT");
-        Reflect.set(observation, "scope", "PRIVATE-MALFORMED-OBSERVATION");
-        let starts = 0;
-        let stops = 0;
-        let inputs = 0;
-        const invalidAction = () => Effect.succeed({ url: "PRIVATE-MALFORMED-URL" });
-        const invalidInput = () => Effect.succeed(receipt);
+            yield* Effect.addFinalizer(() => release);
 
-        const browser = scriptedSession({
-          startNavigation: () =>
-            Effect.sync(() => {
-              starts++;
+            return {
+              reference: "tools-under-test",
+              connection: () => Effect.succeed(Redacted.make("wss://keep-alive.test/")),
+              release,
+              cleanupResult: Effect.succeedNone,
+              closeChecked: release,
+              verifyReconnect: Effect.void,
+            };
+          }),
+        );
 
-              return {
-                target,
-                completed: invalidAction(),
-                stop: Effect.sync(() => {
-                  stops++;
-                }),
-              };
-            }),
-          observe: () => Effect.succeed(observation),
-          clickElement: invalidAction,
-          fillElement: invalidAction,
-          scroll: invalidAction,
-          pointerMove: invalidInput,
-          hoverElement: invalidInput,
-          wheel: invalidInput,
-          pressElement: invalidInput,
-          typeElement: invalidInput,
-          selectOption: invalidAction,
-        });
-
-        const host = yield* BrowserTools.makeHost(browser, {
-          onInput: () =>
-            Effect.sync(() => {
-              inputs++;
-            }),
-        });
-
+        const { session, operations } = yield* acquired.connect;
+        const host = yield* BrowserTools.makeHost(session, session.initialPage);
         const tools = yield* allTools.pipe(Effect.provide(host.layer));
 
-        for (const [name, request] of requests) {
-          const results = yield* Stream.runCollect(yield* tools.handle(name, request, name));
+        yield* operations.detach;
+        yield* operations.reconnect(true);
+        // Reconnection issues fresh Pages; the bound one is stale for good, so inspecting it
+        // again can never help.
+        expect(yield* session.initialPage.status).toMatchObject({ phase: "stale" });
 
-          expect(results[0]?.encodedResult).toEqual({
-            _tag: "BrowserToolFailure",
-            reason: "failed",
-            outcome: "unknown",
-          });
-        }
-        const snapshot = yield* host.toolFailures;
-
-        expect(snapshot.failures).toHaveLength(11);
-        expect(snapshot.failures.map((entry) => entry.toolCallId)).toEqual(
-          requests.map(([name]) => name),
+        for (const [name, request] of requests)
+          expect(
+            (yield* Stream.runCollect(yield* tools.handle(name, request, name)))[0]?.encodedResult,
+          ).toEqual({ _tag: "BrowserToolFailure", reason: "closed", outcome: "undispatched" });
+        expect((yield* host.toolFailures).failures.map(({ error }) => error.reason._tag)).toEqual(
+          requests.map(() => "Stale"),
         );
-        expect(
-          snapshot.failures.every(
-            (entry) => entry.error.reason._tag === "Malformed" && entry.error.outcome === "unknown",
-          ),
-        ).toBe(true);
-        expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-");
-        expect(starts).toBe(1);
-        expect(stops).toBe(0);
-        expect(inputs).toBe(0);
-        expect(yield* host.run(Effect.succeed(true))).toBe(true);
       }),
     ),
+);
+
+it.effect(
+  "malformed typed results are recorded once before projection without replay or receipt callbacks",
+  () =>
+    Effect.gen(function* () {
+      const malformedUrl = { url: "PRIVATE-MALFORMED-URL" };
+      const malformedInput = { kind: "PRIVATE-MALFORMED-RECEIPT" };
+
+      // One browser per Tool: each action retires the references the next one would name.
+      for (const [name, request] of requests) {
+        if (name === "browser_inspect") continue;
+        let inputs = 0;
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const browser = yield* scriptedSession({
+              receipt: (receipt) =>
+                Schema.is(InputReceipt)(receipt) ? malformedInput : malformedUrl,
+              navigationResult: () => malformedUrl,
+            });
+
+            const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+              onInput: () =>
+                Effect.sync(() => {
+                  inputs++;
+                }),
+            });
+
+            const tools = yield* allTools.pipe(Effect.provide(host.layer));
+            let target: unknown = name === "browser_select_option" ? selection : request;
+
+            // Keyboard input needs a focused control: click it, then name a fresh reading.
+            if (name === "browser_press" || name === "browser_type") {
+              yield* browser.initialPage.clickElement(reference);
+              const { observationId } = yield* browser.initialPage.observe();
+
+              target = { ...request, reference: { ...reference, observationId } };
+            }
+
+            // @ts-expect-error Each call pairs its parameters with the Tool it names.
+            const handled = yield* tools.handle(name, target, name);
+
+            expect((yield* Stream.runCollect(handled))[0]?.encodedResult).toEqual({
+              _tag: "BrowserToolFailure",
+              reason: "failed",
+              outcome: "unknown",
+            });
+            const snapshot = yield* host.toolFailures;
+
+            expect(snapshot.failures).toMatchObject([
+              {
+                toolCallId: name,
+                error: { reason: { _tag: "Malformed" }, outcome: "unknown" },
+              },
+            ]);
+            expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-");
+            expect(
+              (yield* browser.control.calls).filter((call) => call.operation === "navigate-stop"),
+            ).toEqual([]);
+            expect(inputs).toBe(0);
+            expect(yield* host.run(Effect.succeed(true))).toBe(true);
+          }),
+        );
+      }
+    }),
+);
+
+it.effect("a malformed replacement reading is recorded without input or replay", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let reads = 0;
+      let inputs = 0;
+      const browser = yield* scriptedSession();
+      const original = yield* browser.initialPage.observe();
+      const malformed = Observation.make({ ...original });
+
+      Reflect.set(malformed, "scope", "PRIVATE-MALFORMED-OBSERVATION");
+
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        observe: () =>
+          Effect.sync(() => {
+            reads++;
+
+            return malformed;
+          }),
+        onInput: () =>
+          Effect.sync(() => {
+            inputs++;
+          }),
+      });
+
+      const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+      expect(
+        yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}, "malformed")),
+      ).toMatchObject([
+        { isFailure: true, encodedResult: { reason: "failed", outcome: "unknown" } },
+      ]);
+      const snapshot = yield* host.toolFailures;
+
+      expect(snapshot.failures).toMatchObject([
+        { toolCallId: "malformed", error: { reason: { _tag: "Malformed" } } },
+      ]);
+      expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-");
+      expect(reads).toBe(1);
+      expect(inputs).toBe(0);
+      expect(yield* host.run(Effect.succeed(true))).toBe(true);
+    }),
+  ),
 );
 
 it.effect(
@@ -440,20 +567,15 @@ it.effect(
           outcome: "unknown",
         });
 
-        let stops = 0;
+        const browser = yield* scriptedSession();
 
-        const browser: BrowserSession = scriptedSession({
-          startNavigation: () =>
-            Effect.succeed({
-              target: Target.make({ generation: 1, pageId: "page", frameId: "frame" }),
-              completed: Effect.fail(error),
-              stop: Effect.sync(() => {
-                stops++;
-              }),
-            }),
+        yield* browser.control.next("navigate", {
+          _tag: "Fail",
+          reason: error.reason,
+          outcome: "undispatched",
         });
 
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
         const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
 
         const results = yield* Stream.runCollect(
@@ -463,16 +585,18 @@ it.effect(
         expect(results[0]?.encodedResult).toEqual({
           _tag: "BrowserToolFailure",
           reason: "stale",
-          outcome: "unknown",
+          outcome: "undispatched",
         });
         const snapshot = yield* host.toolFailures;
 
         expect(snapshot.failures).toHaveLength(1);
         expect(snapshot.failures[0]).toMatchObject({
-          error: { reason: { _tag: "Interrupted" }, outcome: "unknown" },
+          error: { reason: { _tag: "Interrupted" }, outcome: "undispatched" },
           toolCallId: "completed",
         });
-        expect(stops).toBe(0);
+        expect(
+          (yield* browser.control.calls).filter((call) => call.operation === "navigate-stop"),
+        ).toHaveLength(0);
       }),
     ),
 );
@@ -482,20 +606,17 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        let calls = 0;
+        const browser = yield* scriptedSession();
+        const selected = { ...reference, elementId: "element-3" };
 
-        const browser = scriptedSession({
-          selectOption: (selected, options) =>
-            Effect.sync(() => {
-              calls++;
-              expect(selected).toEqual(reference);
-              expect(options).toEqual(["option-1"]);
+        const calls = () =>
+          browser.control.calls.pipe(
+            Effect.map(
+              (records) => records.filter((call) => call.operation === "select-option").length,
+            ),
+          );
 
-              return { url: "https://example.test/" };
-            }),
-        });
-
-        const host = yield* BrowserTools.makeHost(browser);
+        const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
         const tools = yield* BrowserTools.selectionToolkit.pipe(
           Effect.provide(host.selectionHandlers),
@@ -511,20 +632,23 @@ it.effect(
         ]) {
           const results = yield* Stream.runCollect(
             // @ts-expect-error Exercise invalid model parameters at the actual decoding boundary.
-            yield* tools.handle("browser_select_option", { reference, options }),
+            yield* tools.handle("browser_select_option", { reference: selected, options }),
           );
 
           expect(results).toHaveLength(1);
           expect(results[0]?.isFailure).toBe(true);
         }
-        expect(calls).toBe(0);
+        expect(yield* calls()).toBe(0);
         expect((yield* host.toolFailures).failures).toEqual([]);
         expect(
           yield* Stream.runCollect(
-            yield* tools.handle("browser_select_option", { reference, options: ["option-1"] }),
+            yield* tools.handle("browser_select_option", {
+              reference: selected,
+              options: ["option-1"],
+            }),
           ),
         ).toMatchObject([{ isFailure: false }]);
-        expect(calls).toBe(1);
+        expect(yield* calls()).toBe(1);
       }),
     ),
 );

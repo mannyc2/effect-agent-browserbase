@@ -1,20 +1,21 @@
-import { Crypto, Effect, type PlatformError, Schema, type Scope, Stream } from "effect";
+import { Crypto, Effect, type PlatformError, type Scope, Stream } from "effect";
 
-import type { BrowserSession } from "./Browser.ts";
-import { PageInfo } from "./BrowserData.ts";
-import type {
-  CapturedFrame,
+import type { Page } from "./Browser.ts";
+import {
+  type CapturedFrame,
   CaptureOptions,
-  CaptureSnapshot,
-  CaptureSummary,
+  type CaptureSnapshot,
+  type CaptureSummary,
 } from "./CaptureData.ts";
 import { BrowserError, Reasons } from "./Errors.ts";
-import { captureParent } from "./internal/browser/Association.ts";
+import { capturePageParent } from "./internal/browser/PageRegistry.ts";
+import { checked, checkedOperationOptions } from "./internal/browser/PublicSession.ts";
 import { startCapture } from "./internal/capture/Capture.ts";
 
 export {
   CapturedFrame,
   CaptureOptions,
+  CaptureQualification,
   CaptureSize,
   CaptureSnapshot,
   CaptureSummary,
@@ -22,6 +23,8 @@ export {
 
 /** Live stream/Effect capabilities intentionally have no data schema or serialization contract. */
 export interface CaptureInterval {
+  /** Opaque original interval identity; metadata refers to this id and actual frame sequences. */
+  readonly id: string;
   /** Single subscription. Ending or interrupting it stops this interval, not its browser. */
   readonly frames: Stream.Stream<CapturedFrame, BrowserError>;
   /**
@@ -36,19 +39,19 @@ export interface CaptureInterval {
 /**
  * Capture one remote page independently of the session's selected page.
  *
- * Requires the exact live session returned by the host; copying a session object or decoding
- * a durable reference cannot copy its capture authority. The private owner is not frame data.
+ * Requires an exact issued Page; copying an object or decoding a durable reference cannot
+ * copy its capture authority. The private owner is not frame data.
  * `CapturedFrame` and `CaptureOptions` are Schema values as well as structural types. Frame
  * decoding checks binary/metadata fields, not the complete JPEG bitstream or target authority,
  * and does not copy bytes. Options decoding preserves omissions; admission applies defaults.
  * `CaptureInterval` remains a live scoped capability, not a schema or JSON/Tool value.
  */
-export const start = <E>(
-  session: BrowserSession<E>,
+export const start = (
+  page: Page,
   options: CaptureOptions = {},
 ): Effect.Effect<CaptureInterval, BrowserError, Scope.Scope> =>
   Effect.suspend(() => {
-    const parent = captureParent(session);
+    const parent = capturePageParent(page);
 
     if (parent === undefined)
       return Effect.fail(
@@ -58,17 +61,20 @@ export const start = <E>(
           outcome: "undispatched",
         }),
       );
-    if (options.target === undefined) return startCapture(parent, options);
 
-    return Schema.decodeEffect(PageInfo)(options.target, { onExcessProperty: "error" }).pipe(
-      Effect.mapError(() =>
-        BrowserError.make({
-          operation: "capture",
-          reason: Reasons.Configuration.make({}),
-          outcome: "undispatched",
-        }),
+    return checked(CaptureOptions, options, "capture").pipe(
+      Effect.flatMap(({ admission, ...capture }) =>
+        checkedOperationOptions(admission === undefined ? {} : { admission }, "capture").pipe(
+          Effect.flatMap((operationOptions) =>
+            startCapture(parent, {
+              ...capture,
+              ...(operationOptions.admission === undefined
+                ? {}
+                : { admission: operationOptions.admission }),
+            }),
+          ),
+        ),
       ),
-      Effect.flatMap((target) => startCapture(parent, { ...options, target })),
     );
   });
 
@@ -79,11 +85,11 @@ export const start = <E>(
  * Unconfirmed native cleanup retains the page reservation. Use start when the host needs
  * explicit stop acknowledgement, interval snapshots and the final capture summary.
  */
-export const stream = <E>(
-  session: BrowserSession<E>,
+export const stream = (
+  page: Page,
   options: CaptureOptions = {},
 ): Stream.Stream<CapturedFrame, BrowserError> =>
-  Stream.unwrap(start(session, options).pipe(Effect.map((interval) => interval.frames)));
+  Stream.unwrap(start(page, options).pipe(Effect.map((interval) => interval.frames)));
 
 /** A `multipart/x-mixed-replace` body and the content type that names its boundary. */
 export interface MultipartBody<E, R> {

@@ -93,6 +93,16 @@ export type SessionReason = typeof SessionReason.Type;
 
 const DiagnosticCounter = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
 
+/**
+ * Bounded fresh metadata from one owner generation. Native URL/title reads are non-atomic.
+ * PageInfo is data; callers must acquire an issued Page and observe it explicitly before input.
+ * The separate pages lifecycle stream attaches its cached registry snapshot and cursor atomically.
+ */
+export class Inventory extends Schema.Class<Inventory>("BrowserInventory")({
+  generation: DiagnosticCounter,
+  pages: Schema.Array(PageInfo).check(Schema.isMaxLength(32)),
+}) {}
+
 /** The bound on one session's model-reachable actions, like the host-read allowance's. */
 const ActionAllowance = PositiveInt.check(Schema.isLessThanOrEqualTo(1_000_000));
 
@@ -603,12 +613,13 @@ const TypedText = Schema.NonEmptyString.check(
 );
 
 /**
- * Text as the real key strokes that produce it, two native commands for each character, one
- * after another under a single action timeout: send a long passage as several shorter runs.
+ * Text as the real key strokes that produce it, with ordered native commands submitted in
+ * bounded windows under a single action timeout. An interrupted run is never replayed.
  * A character the US layout cannot produce is inserted as text, as an input method commits it,
  * and raises no key events. Control characters are refused, so a line break can never press
  * Enter from inside a run of text: a named key is always its own `press`. `into` works as it
- * does for `PressRequest`: a guard on where the text lands, never a focus.
+ * does for `PressRequest`: a guard on where the text lands, never a focus. The exact node is
+ * checked before subsequent windows; already submitted input cannot be recalled on focus loss.
  */
 export class TypeRequest extends Schema.Class<TypeRequest>("BrowserTypeRequest")({
   text: TypedText,
@@ -630,6 +641,13 @@ export class InputReceipt extends Schema.Class<InputReceipt>("BrowserInputReceip
   target: Target,
   kind: Schema.Literals(["pointer-move", "hover", "wheel", "click", "press", "type"]),
   position: Schema.NullOr(ViewportPoint),
+  intended: Schema.optionalKey(
+    Schema.Struct({
+      position: ViewportPoint,
+      relativePosition: ViewportPoint,
+      qualification: Schema.Literal("checked-exact-node-sample"),
+    }),
+  ),
   delta: Schema.optionalKey(Schema.Struct({ x: WheelDelta, y: WheelDelta })),
   startedMonotonicNanos: Schema.BigInt,
   completedMonotonicNanos: Schema.BigInt,
@@ -700,7 +718,57 @@ export const InlineFiles = Schema.Array(InlineFile).check(
   ),
 );
 
+export const AdmissionLimits = Schema.Struct({
+  pendingPerPage: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1024 })),
+  ),
+  pendingPerSession: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1024 })),
+  ),
+});
+
+export type AdmissionLimits = typeof AdmissionLimits.Type;
+
+/** Finite metadata retention and subscriber resources; native capture bytes have separate limits. */
+export const TimelineLimits = Schema.Struct({
+  maxDurationMillis: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 21600000 })),
+  ),
+  maxEvents: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65536 }))),
+  maxBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 2048, maximum: 64 * 1024 * 1024 })),
+  ),
+  maxSubscribers: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 256 })),
+  ),
+  maxEventBytes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 2048, maximum: 1024 * 1024 })),
+  ),
+}).check(
+  Schema.makeFilter(
+    (limits) =>
+      limits.maxEventBytes === undefined ||
+      limits.maxBytes === undefined ||
+      limits.maxEventBytes <= limits.maxBytes,
+    { title: "event metadata fits the retained metadata budget" },
+  ),
+);
+
+export type TimelineLimits = typeof TimelineLimits.Type;
+
 export const AutomationOptions = Schema.Struct({
+  timelineLimits: Schema.optionalKey(TimelineLimits),
+  admissionLimits: Schema.optionalKey(AdmissionLimits),
+  observationLimits: Schema.optionalKey(
+    Schema.Struct({
+      maxSnapshotsPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 128 })),
+      maxSnapshotsPerSession: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4096 })),
+      maxHandlesPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65536 })),
+      maxHandlesPerSession: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2097152 })),
+      maxBytesPerPage: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 268435456 })),
+      maxBytesPerSession: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1073741824 })),
+    }),
+  ),
   actionTimeoutMillis: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 60000 })),
   ),

@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { type Effect, type Scope } from "effect";
 import {
-  type TargetOperations,
-  type RetainedTarget,
+  type PageOperations,
+  type Page,
   type NavigationOperation,
   type BrowserSession,
 } from "effect-browser/browser";
@@ -41,10 +41,7 @@ const hostErrors: Same<
   AllocationError | BrowserError | ContextError | InitializationError
 > = true;
 
-const operationErrors: Same<
-  Effect.Error<ReturnType<BrowserbaseSession["clickElement"]>>,
-  BrowserError
-> = true;
+const operationErrors: Same<Effect.Error<ReturnType<Page["clickElement"]>>, BrowserError> = true;
 
 const receiptClose: Same<BrowserbaseSession["close"], Effect.Effect<CleanupResult>> = true;
 const acquisitionClose: Same<BrowserAcquisition["close"], Effect.Effect<CleanupResult>> = true;
@@ -54,54 +51,54 @@ const checkedClose: Same<
   Effect.Effect<CleanupResult, BrowserError>
 > = true;
 
-const retainedTarget: Same<
-  BrowserbaseSession["retain"],
-  Effect.Effect<RetainedTarget, BrowserError>
+const issuedPage: Same<
+  ReturnType<BrowserbaseSession["page"]>,
+  Effect.Effect<Page, BrowserError>
 > = true;
 
 const genericClose: Same<BrowserSession["closeChecked"], Effect.Effect<void, BrowserError>> = true;
 
 /** Native input is an ordinary owned operation: one receipt, one error, no environment. */
 const inputEffect: Same<
-  ReturnType<TargetOperations["wheel"]>,
+  ReturnType<PageOperations["wheel"]>,
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
 const hoverElementEffect: Same<
-  ReturnType<BrowserbaseSession["hoverElement"]>,
+  ReturnType<Page["hoverElement"]>,
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
 /** Key input is the same kind of owned operation, by selector or by the node an observation named. */
 const keyEffect: Same<
-  ReturnType<TargetOperations["press"]>,
+  ReturnType<PageOperations["press"]>,
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
 const keyElementEffect: Same<
-  ReturnType<BrowserbaseSession["pressElement"]>,
+  ReturnType<Page["pressElement"]>,
   Effect.Effect<InputReceipt, BrowserError>
 > = true;
 
 /** Host-only reads and the hold check are owned operations with no environment of their own. */
 const checkpointEffect: Same<
-  ReturnType<BrowserbaseSession["checkpoint"]>,
+  ReturnType<Page["checkpoint"]>,
   Effect.Effect<Checkpoint, BrowserError>
 > = true;
 
 const factsEffect: Same<
-  ReturnType<BrowserbaseSession["controlFacts"]>,
+  ReturnType<Page["controlFacts"]>,
   Effect.Effect<ControlFacts, BrowserError>
 > = true;
 
 const revalidateEffect: Same<
-  ReturnType<BrowserbaseSession["revalidateElement"]>,
+  ReturnType<Page["revalidateElement"]>,
   Effect.Effect<ObservedElement, BrowserError>
 > = true;
 
 /** A navigation left in flight is a scoped resource; completing or stopping it needs nothing. */
 const navigationEffect: Same<
-  ReturnType<TargetOperations["startNavigation"]>,
+  ReturnType<PageOperations["startNavigation"]>,
   Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>
 > = true;
 
@@ -127,7 +124,7 @@ it("retains scoped ownership, declared acquisition failures and framework-free o
       acquisitionClose &&
       checkedClose &&
       genericClose &&
-      retainedTarget &&
+      issuedPage &&
       inputEffect &&
       hoverElementEffect &&
       keyEffect &&

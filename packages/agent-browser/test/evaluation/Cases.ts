@@ -246,7 +246,7 @@ export const cases = {
   },
   "lost-acknowledgement": {
     family: "uncertain-mutation",
-    revision: 2,
+    revision: 3,
     split: "tuning",
     goal: signupGoal,
     initialState:
@@ -313,7 +313,7 @@ export const cases = {
   },
   "cancelled-mutation": {
     family: "uncertain-mutation",
-    revision: 1,
+    revision: 2,
     split: "tuning",
     goal: "Accept terms once.",
     initialState:

@@ -103,7 +103,7 @@ const fixture = Effect.fnUntraced(function* (behaviour?: Behaviour) {
     policy: BrowserPolicy.unrestricted({ maxActions: 250, maxElapsedMillis: 60000 }),
   });
 
-  yield* session.navigate({ url: site.url });
+  yield* session.initialPage.navigate({ url: site.url });
   const page = observer.contexts()[0]?.pages()[0];
 
   assert.ok(page);
@@ -161,9 +161,9 @@ it.live("a form sets text, toggles and options in order, then submits once", () 
   Effect.scoped(
     Effect.gen(function* () {
       const { session, page } = yield* fixture();
-      const observed = yield* session.observe({ maxControls: 64 });
+      const observed = yield* session.initialPage.observe({ maxControls: 64 });
 
-      const result = yield* session.fillForm({
+      const result = yield* session.initialPage.fillForm({
         observationId: observed.observationId,
         fields: [
           text(observed, "Email", "ada@example.test"),
@@ -200,7 +200,9 @@ it.live("a form sets text, toggles and options in order, then submits once", () 
       );
       // The form retired the observation it used.
       expect(
-        yield* Effect.result(session.fillElement(reference(observed, "Email"), "again")),
+        yield* Effect.result(
+          session.initialPage.fillElement(reference(observed, "Email"), "again"),
+        ),
       ).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
@@ -214,7 +216,7 @@ it.live("a refused first step fails the form and a later one stops it before sub
   Effect.scoped(
     Effect.gen(function* () {
       const { session, page } = yield* fixture("rerender");
-      const observed = yield* session.observe({ maxControls: 64 });
+      const observed = yield* session.initialPage.observe({ maxControls: 64 });
 
       for (const field of [
         { elementId: id(observed, "Plan A"), checked: false },
@@ -224,7 +226,10 @@ it.live("a refused first step fails the form and a later one stops it before sub
       ])
         expect(
           yield* Effect.result(
-            session.fillForm({ observationId: observed.observationId, fields: [field] }),
+            session.initialPage.fillForm({
+              observationId: observed.observationId,
+              fields: [field],
+            }),
           ),
         ).toMatchObject({
           _tag: "Failure",
@@ -236,7 +241,7 @@ it.live("a refused first step fails the form and a later one stops it before sub
         });
       expect(
         yield* Effect.result(
-          session.fillForm(
+          session.initialPage.fillForm(
             {
               observationId: observed.observationId,
               fields: [text(observed, "Email", "a@b.test")],
@@ -251,7 +256,7 @@ it.live("a refused first step fails the form and a later one stops it before sub
       expect(yield* value(page, "age")).toBe("");
 
       // Nothing was dispatched, so the observation is still the current one.
-      const result = yield* session.fillForm({
+      const result = yield* session.initialPage.fillForm({
         observationId: observed.observationId,
         fields: [
           text(observed, "Email", "ada@example.test"),
@@ -282,7 +287,7 @@ it.live("verification stops a submit after an asynchronous reset and passes a ma
   Effect.scoped(
     Effect.gen(function* () {
       const reset = yield* fixture("reset");
-      const observed = yield* reset.session.observe({ maxControls: 64 });
+      const observed = yield* reset.session.initialPage.observe({ maxControls: 64 });
 
       const request = {
         observationId: observed.observationId,
@@ -293,7 +298,7 @@ it.live("verification stops a submit after an asynchronous reset and passes a ma
         submit: id(observed, "Sign up"),
       };
 
-      expect(yield* reset.session.fillForm(request)).toMatchObject({
+      expect(yield* reset.session.initialPage.fillForm(request)).toMatchObject({
         fields: [{ status: "set" }, { status: "set" }],
         submitted: false,
         stopped: {
@@ -305,10 +310,10 @@ it.live("verification stops a submit after an asynchronous reset and passes a ma
       expect(yield* events(reset.page)).toBe("");
 
       // A host that opts out of verification sends what its steps completed.
-      const again = yield* reset.session.observe({ maxControls: 64 });
+      const again = yield* reset.session.initialPage.observe({ maxControls: 64 });
 
       expect(
-        yield* reset.session.fillForm(
+        yield* reset.session.initialPage.fillForm(
           {
             observationId: again.observationId,
             fields: [
@@ -324,10 +329,10 @@ it.live("verification stops a submit after an asynchronous reset and passes a ma
       expect(yield* events(reset.page)).toContain("submit:email=&password=PRIVATE-SECRET");
 
       yield* reset.load("mask");
-      const view = yield* reset.session.observe({ maxControls: 64 });
+      const view = yield* reset.session.initialPage.observe({ maxControls: 64 });
 
       expect(
-        yield* reset.session.fillForm({
+        yield* reset.session.initialPage.fillForm({
           observationId: view.observationId,
           fields: [text(view, "Phone", "5551234567"), text(view, "Email", "ada@example.test")],
           submit: id(view, "Sign up"),
@@ -342,13 +347,13 @@ it.live("a submit that became enabled is clicked, a refused toggle or submit sto
   Effect.scoped(
     Effect.gen(function* () {
       const enabled = yield* fixture("enable");
-      const observed = yield* enabled.session.observe({ maxControls: 64 });
+      const observed = yield* enabled.session.initialPage.observe({ maxControls: 64 });
 
       expect(observed.controls.find((control) => control.label === "Sign up")).toMatchObject({
         disabled: true,
       });
       expect(
-        yield* enabled.session.fillForm({
+        yield* enabled.session.initialPage.fillForm({
           observationId: observed.observationId,
           fields: [
             text(observed, "Email", "ada@example.test"),
@@ -362,10 +367,10 @@ it.live("a submit that became enabled is clicked, a refused toggle or submit sto
       const refused = enabled;
 
       yield* refused.load("refuse");
-      const view = yield* refused.session.observe({ maxControls: 64 });
+      const view = yield* refused.session.initialPage.observe({ maxControls: 64 });
 
       expect(
-        yield* refused.session.fillForm({
+        yield* refused.session.initialPage.fillForm({
           observationId: view.observationId,
           fields: [
             text(view, "Email", "ada@example.test"),
@@ -384,10 +389,10 @@ it.live("a submit that became enabled is clicked, a refused toggle or submit sto
       });
       expect(yield* events(refused.page)).toBe("click:remember;");
 
-      const denied = yield* refused.session.observe({ maxControls: 64 });
+      const denied = yield* refused.session.initialPage.observe({ maxControls: 64 });
 
       expect(
-        yield* refused.session.fillForm(
+        yield* refused.session.initialPage.fillForm(
           {
             observationId: denied.observationId,
             fields: [text(denied, "Password", "PRIVATE-SECRET")],
@@ -414,7 +419,7 @@ it.live("fill refuses what native input would only refuse after dispatch", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { session, page } = yield* fixture();
-      const observed = yield* session.observe({ maxControls: 64 });
+      const observed = yield* session.initialPage.observe({ maxControls: 64 });
 
       for (const [label, input, reason] of [
         ["Age", "forty-two", "Unsupported"],
@@ -422,7 +427,7 @@ it.live("fill refuses what native input would only refuse after dispatch", () =>
         ["Remember me", "on", "Unsupported"],
       ] as const)
         expect(
-          yield* Effect.result(session.fillElement(reference(observed, label), input)),
+          yield* Effect.result(session.initialPage.fillElement(reference(observed, label), input)),
         ).toMatchObject({
           _tag: "Failure",
           failure: { operation: "fill", reason: { _tag: reason }, outcome: "undispatched" },
@@ -433,12 +438,14 @@ it.live("fill refuses what native input would only refuse after dispatch", () =>
         }),
       );
       expect(
-        yield* Effect.result(session.fillElement(reference(observed, "Phone"), "5551234567")),
+        yield* Effect.result(
+          session.initialPage.fillElement(reference(observed, "Phone"), "5551234567"),
+        ),
       ).toMatchObject({
         _tag: "Failure",
         failure: { reason: { _tag: "NotVisible" }, outcome: "undispatched" },
       });
-      yield* session.fillElement(reference(observed, "Age"), "42");
+      yield* session.initialPage.fillElement(reference(observed, "Age"), "42");
       expect(yield* value(page, "age")).toBe("42");
       expect((yield* session.status).phase).toBe("open");
     }),
@@ -461,29 +468,31 @@ it.live("match keeps matching controls and lines ahead of the control limit", ()
         <select aria-label=Language><option>English</option><option>Deutsch</option></select>
         </main>`),
       );
-      const crowded = yield* session.observe({ maxControls: 16 });
+      const crowded = yield* session.initialPage.observe({ maxControls: 16 });
 
       expect(crowded.controls.some((control) => control.label === "Sign in")).toBe(false);
 
-      const found = yield* session.observe({ match: "SIGN IN", maxControls: 16 });
+      const found = yield* session.initialPage.observe({ match: "SIGN IN", maxControls: 16 });
 
       expect(found.match).toBe("SIGN IN");
       expect(found.controls.map((control) => control.label)).toEqual(["Sign in"]);
       expect(found.text.split("\n")).toEqual(["Sign in to continue", "Sign in"]);
 
-      const language = yield* session.observe({ match: "deutsch", maxControls: 16 });
+      const language = yield* session.initialPage.observe({ match: "deutsch", maxControls: 16 });
 
       expect(language.controls.map((control) => control.label)).toEqual([
         "Language",
         "English",
         "Deutsch",
       ]);
-      yield* session.selectOption(reference(language, "Language"), [id(language, "Deutsch")]);
+      yield* session.initialPage.selectOption(reference(language, "Language"), [
+        id(language, "Deutsch"),
+      ]);
 
-      const viewport = yield* session.observe({ scope: "viewport", match: "password" });
+      const viewport = yield* session.initialPage.observe({ scope: "viewport", match: "password" });
 
       expect(viewport.controls.map((control) => control.label)).toEqual(["Password"]);
-      expect(yield* Effect.result(session.observe({ match: "   " }))).toMatchObject({
+      expect(yield* Effect.result(session.initialPage.observe({ match: "   " }))).toMatchObject({
         _tag: "Failure",
         failure: { operation: "observe", reason: { _tag: "Configuration" } },
       });
@@ -497,11 +506,14 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const { session, page } = yield* fixture();
-        const observed = yield* session.observe({ maxControls: 64 });
-        const stage = (yield* session.pages).find((candidate) => candidate.selected);
+        const observed = yield* session.initialPage.observe({ maxControls: 64 });
+        const stage = (yield* session.listPages()).find((candidate) => candidate.selected);
 
         assert.ok(stage);
-        yield* PageControl.resume(session, yield* PageControl.suspend(session, stage));
+        yield* PageControl.resume(
+          session.initialPage,
+          yield* PageControl.suspend(yield* session.page(stage)),
+        );
 
         const request = {
           observationId: observed.observationId,
@@ -509,13 +521,13 @@ it.live(
           submit: id(observed, "Sign up"),
         };
 
-        expect(yield* Effect.result(session.fillForm(request))).toMatchObject({
+        expect(yield* Effect.result(session.initialPage.fillForm(request))).toMatchObject({
           _tag: "Failure",
           failure: { operation: "fill-form", reason: { _tag: "Stale" }, outcome: "undispatched" },
         });
         // Revalidation is per node: the field may be set, but its submit control was not checked.
-        yield* session.revalidateElement(reference(observed, "Email"));
-        expect(yield* session.fillForm(request)).toMatchObject({
+        yield* session.initialPage.revalidateElement(reference(observed, "Email"));
+        expect(yield* session.initialPage.fillForm(request)).toMatchObject({
           fields: [{ status: "set" }],
           submitted: false,
           stopped: {
@@ -532,17 +544,17 @@ it.live(
           page.setContent(`<!doctype html><form action="${site.url}" method=get>
           <input name=q aria-label=Query><button>Search</button></form>`),
         );
-        const search = yield* session.observe();
+        const search = yield* session.initialPage.observe();
 
         expect(
-          yield* session.fillForm({
+          yield* session.initialPage.fillForm({
             observationId: search.observationId,
             fields: [text(search, "Query", "effect")],
             submit: id(search, "Search"),
           }),
         ).toMatchObject({ fields: [{ status: "set" }], submitted: true });
         yield* Effect.promise(() => page.waitForURL(/[?]q=effect$/));
-        expect((yield* session.observe()).url).toMatch(/[?]q=effect$/);
+        expect((yield* session.initialPage.observe()).url).toMatch(/[?]q=effect$/);
         expect((yield* session.status).phase).toBe("open");
       }),
     ).pipe(Effect.provide(controlled)),

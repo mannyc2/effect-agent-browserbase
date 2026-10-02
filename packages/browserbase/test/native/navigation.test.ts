@@ -42,7 +42,7 @@ const evidenceOf = <E>(
   options: { readonly picture?: boolean } = {},
 ) =>
   settle(
-    session.checkpoint(options).pipe(
+    session.initialPage.checkpoint(options).pipe(
       Effect.catchIf(
         (error) => error.reason._tag === "TargetChanged" && error.outcome === "undispatched",
         () => Effect.void,
@@ -98,13 +98,13 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
         Effect.gen(function* () {
           const session = yield* BrowserbaseBrowser.open(policy);
 
-          const previous = yield* session.startNavigation({ url: f.url });
+          const previous = yield* session.initialPage.startNavigation({ url: f.url });
 
           expect((yield* previous.completed).url).toBe(f.url);
           const [page] = f.nativePages(session.reference.sessionId);
 
           assert.ok(page);
-          yield* session.click({ selector: "#increment" });
+          yield* session.initialPage.click({ selector: "#increment" });
 
           const activated = yield* Effect.promise(() =>
             page.evaluate(() => {
@@ -138,9 +138,8 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
               }),
           );
           const stops = yield* countStops(page);
-          const original = yield* session.target;
 
-          const cancelled = yield* session.startNavigation({
+          const cancelled = yield* session.initialPage.startNavigation({
             url: `${f.url}next`,
             timeoutMillis: 5000,
           });
@@ -166,9 +165,16 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
           expect((yield* previous.completed).url).toBe(f.url);
           expect(page.isClosed()).toBe(false);
           expect(stops.count()).toBe(0);
-          expect((yield* session.target).pageId).toBe(original.pageId);
-          yield* session.click({ selector: "#increment" });
-          expect((yield* session.readText({ selector: "#count" })).text).toBe("2");
+          // The refused leave kept the same native page in the same generation: the registry
+          // lists only that page, and issuing it again returns the original canonical Page.
+          const [listed, ...others] = yield* session.listPages();
+
+          assert.ok(listed);
+          expect(others).toEqual([]);
+          expect(listed.pageId).toBe(session.initialPage.identity.pageId);
+          expect(yield* session.page(listed)).toBe(session.initialPage);
+          yield* session.initialPage.click({ selector: "#increment" });
+          expect((yield* session.initialPage.readText({ selector: "#count" })).text).toBe("2");
           expect(yield* session.status).toMatchObject({
             phase: "open",
             reason: null,
@@ -182,7 +188,7 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
           );
 
           // A successor is independent of both completed predecessors and their stop handles.
-          const successor = yield* session.startNavigation({
+          const successor = yield* session.initialPage.startNavigation({
             url: `${f.url}next`,
             timeoutMillis: 5000,
           });
@@ -192,7 +198,7 @@ it.live("real CDP: acknowledged before-unload dismissal retires only its rejecte
           expect((yield* successor.completed).url).toBe(`${f.url}next`);
           expect(stops.count()).toBe(0);
           expect(dialogs).toBe(1);
-          expect((yield* session.readText({})).text).toContain("next page");
+          expect((yield* session.initialPage.readText({})).text).toContain("next page");
         }),
       );
     }),
@@ -210,14 +216,14 @@ for (const phase of ["streaming", "precommit"] as const)
           Effect.gen(function* () {
             const session = yield* BrowserbaseBrowser.open(policy);
 
-            yield* session.navigate({ url: f.url });
+            yield* session.initialPage.navigate({ url: f.url });
             const [page] = f.nativePages(session.reference.sessionId);
 
             assert.ok(page);
             const stops = yield* countStops(page);
             const path = phase === "streaming" ? "/slow" : "/precommit";
 
-            const result = yield* session
+            const result = yield* session.initialPage
               .navigate({ url: new URL(path, f.url).href, timeoutMillis: 500 })
               .pipe(Effect.result);
 
@@ -230,17 +236,21 @@ for (const phase of ["streaming", "precommit"] as const)
             expect(f.connections).toEqual([session.reference.sessionId]);
 
             if (phase === "streaming") {
-              expect((yield* session.readText({})).text).toContain("chunk 1");
-              yield* session.click({ selector: "#act" });
-              expect((yield* session.readText({ selector: "#act" })).text).toBe("clicked");
+              expect((yield* session.initialPage.readText({})).text).toContain("chunk 1");
+              yield* session.initialPage.click({ selector: "#act" });
+              expect((yield* session.initialPage.readText({ selector: "#act" })).text).toBe(
+                "clicked",
+              );
             } else {
-              expect((yield* session.readText({})).text).toContain("Local browser fixture");
-              yield* session.click({ selector: "#increment" });
-              expect((yield* session.readText({ selector: "#count" })).text).toBe("1");
+              expect((yield* session.initialPage.readText({})).text).toContain(
+                "Local browser fixture",
+              );
+              yield* session.initialPage.click({ selector: "#increment" });
+              expect((yield* session.initialPage.readText({ selector: "#count" })).text).toBe("1");
             }
 
-            yield* session.navigate({ url: `${f.url}next` });
-            expect((yield* session.observe()).text).toContain("next page");
+            yield* session.initialPage.navigate({ url: `${f.url}next` });
+            expect((yield* session.initialPage.observe()).text).toContain("next page");
             expect(stops.count()).toBe(1);
             const receipt = yield* session.closeChecked;
 
@@ -266,7 +276,7 @@ it.live("real CDP: a lost recovery stop acknowledgement fences without a second 
           assert.ok(page);
           const stops = yield* countStops(page, true);
 
-          const operation = yield* session.startNavigation({
+          const operation = yield* session.initialPage.startNavigation({
             url: `${f.url}slow`,
             timeoutMillis: 500,
           });
@@ -282,7 +292,9 @@ it.live("real CDP: a lost recovery stop acknowledgement fences without a second 
               _tag: "Failure",
               failure: { outcome: "unknown" },
             });
-          expect(yield* session.click({ selector: "#act" }).pipe(Effect.result)).toMatchObject({
+          expect(
+            yield* session.initialPage.click({ selector: "#act" }).pipe(Effect.result),
+          ).toMatchObject({
             _tag: "Failure",
             failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
@@ -306,21 +318,21 @@ it.live("real CDP: a pinned child timeout never sends an automatic page-wide sto
         Effect.gen(function* () {
           const session = yield* BrowserbaseBrowser.open(policy);
 
-          yield* session.navigate({ url: f.url });
+          yield* session.initialPage.navigate({ url: f.url });
           const [page] = f.nativePages(session.reference.sessionId);
-          const selected = (yield* session.pages).find((candidate) => candidate.selected);
+          const selected = (yield* session.listPages()).find((candidate) => candidate.selected);
 
           assert.ok(page);
           assert.ok(selected);
 
-          const frames = yield* settle(session.framesOf(selected), (listed) =>
+          const frames = yield* settle((yield* session.page(selected)).listFrames(), (listed) =>
             listed.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
           );
 
           const child = frames.find((frame) => frame.name === "child");
 
           assert.ok(child);
-          const pinned = yield* session.pinFrame(selected, child);
+          const pinned = yield* (yield* session.page(selected)).frame(child);
           const stops = yield* countStops(page);
 
           expect(
@@ -330,7 +342,7 @@ it.live("real CDP: a pinned child timeout never sends an automatic page-wide sto
             failure: { reason: { _tag: "Timeout" }, outcome: "unknown" },
           });
           expect(stops.count()).toBe(0);
-          expect(yield* session.readText({}).pipe(Effect.result)).toMatchObject({
+          expect(yield* session.initialPage.readText({}).pipe(Effect.result)).toMatchObject({
             _tag: "Failure",
             failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
@@ -352,8 +364,8 @@ it.live(
           f,
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
-            const handle = session;
-            const [stage] = yield* session.pages;
+            const handle = session.initialPage;
+            const [stage] = yield* session.listPages();
 
             assert.ok(stage);
 
@@ -400,11 +412,13 @@ it.live(
             }
 
             // Another page is independent: it navigates and reads while the first still loads.
-            yield* session.selectPage(yield* session.createPage);
+            const other = yield* session.createPage();
 
-            yield* session.navigate(NavigateRequest.make({ url: `${f.url}next` }));
-            expect((yield* session.readText(ReadTextRequest.make({}))).text).toContain("next page");
-            yield* session.selectPage(stage);
+            yield* session.selectPage(other);
+
+            yield* other.navigate(NavigateRequest.make({ url: `${f.url}next` }));
+            expect((yield* other.readText(ReadTextRequest.make({}))).text).toContain("next page");
+            yield* session.selectPage(session.initialPage);
 
             const native = f
               .nativePages(session.reference.sessionId)
@@ -414,11 +428,11 @@ it.live(
 
             // Hold it mid-load. A chunk that arrives meanwhile is not parsed, and timers stop:
             // the page's own freeze and resume handlers saw the same counters.
-            const receipt = yield* PageControl.suspend(session, stage);
+            const receipt = yield* PageControl.suspend(yield* session.page(stage));
 
             f.slow.send(chunk(2));
             yield* Effect.sleep(400);
-            yield* PageControl.resume(session, receipt);
+            yield* PageControl.resume(session.initialPage, receipt);
             const resumed = yield* settle(read(native), (progress) => progress.chunks === 2);
 
             expect(resumed.freezes).toHaveLength(1);
@@ -427,9 +441,9 @@ it.live(
             expect(resumed.chunks).toBe(2);
             expect(resumed.state).toBe("loading");
             // A receipt resumes once.
-            expect((yield* PageControl.resume(session, receipt).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
+            expect(
+              (yield* PageControl.resume(session.initialPage, receipt).pipe(Effect.result))._tag,
+            ).toBe("Failure");
 
             f.slow.send(chunk(3));
             f.slow.end();
@@ -440,7 +454,7 @@ it.live(
             expect((yield* read(native)).chunks).toBe(3);
             // One dispatch, never replayed, and the page takes input again.
             expect(f.requests.filter((path) => path === "/slow")).toHaveLength(1);
-            yield* session.click(ClickRequest.make({ selector: "#act" }));
+            yield* session.initialPage.click(ClickRequest.make({ selector: "#act" }));
             yield* session.close;
           }),
           { pageControl: true },
@@ -458,7 +472,7 @@ it.live("real CDP: stopping a navigation is a known outcome, and the session sta
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session;
+          const handle = session.initialPage;
 
           const operation = yield* handle.startNavigation(
             StartNavigationRequest.make({ url: `${f.url}slow`, timeoutMillis: 30000 }),
@@ -496,12 +510,12 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session;
+          const handle = session.initialPage;
 
           yield* handle.navigate(NavigateRequest.make({ url: f.url }));
 
           // Started before the navigation it is meant to cover.
-          const interval = yield* Capture.start(session, {
+          const interval = yield* Capture.start(session.initialPage, {
             lifetime: "page",
             maxFrames: 64,
             maxDurationMillis: 10000,
@@ -535,17 +549,19 @@ it.live("real CDP: a capture that follows its page covers the loading between tw
             `${f.url}clocks`,
           ]);
 
-          const [page] = yield* session.pages;
+          const [page] = yield* session.listPages();
 
           assert.ok(page);
-          const held = yield* PageControl.suspend(session, page);
+          const held = yield* PageControl.suspend(yield* session.page(page));
           const whileHeld = yield* interval.snapshot;
 
           // This reads metadata already recorded by the capture, without touching the held DOM.
           expect(whileHeld.phase).toBe("capturing");
           expect(whileHeld.documentBoundaries).toEqual(live.documentBoundaries);
-          expect((yield* session.checkpoint().pipe(Effect.result))._tag).toBe("Failure");
-          yield* PageControl.resume(session, held);
+          expect((yield* session.initialPage.checkpoint().pipe(Effect.result))._tag).toBe(
+            "Failure",
+          );
+          yield* PageControl.resume(session.initialPage, held);
           const summary = yield* interval.stop;
 
           // One native screencast the whole way: it was never restarted, so this package left no

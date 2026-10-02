@@ -33,15 +33,15 @@ const scrolling = Effect.scoped(
     const session = yield* h.open();
 
     mkdirSync(h.output, { recursive: true });
-    yield* session.navigate(
+    yield* session.initialPage.navigate(
       NavigateRequest.make({ url: "https://en.wikipedia.org/wiki/Web_browser" }),
     );
-    yield* session.pointerMove(PointerMoveRequest.make({ to: { x: 640, y: 400 } }));
+    yield* session.initialPage.pointerMove(PointerMoveRequest.make({ to: { x: 640, y: 400 } }));
 
     const cycles = [];
 
     for (let cycle = 0; cycle < 3; cycle++) {
-      const interval = yield* Capture.start(session, {
+      const interval = yield* Capture.start(session.initialPage, {
         lifetime: "page",
         size: { width: 1280, height: 720 },
         maxFrames: 256,
@@ -55,7 +55,9 @@ const scrolling = Effect.scoped(
       let lastInput = 0n;
 
       for (let wheel = 0; wheel < 3; wheel++) {
-        const receipt = yield* session.wheel(WheelRequest.make({ deltaX: 0, deltaY: 500 }));
+        const receipt = yield* session.initialPage.wheel(
+          WheelRequest.make({ deltaX: 0, deltaY: 500 }),
+        );
 
         lastInput = receipt.completedMonotonicNanos;
         yield* Effect.sleep(120);
@@ -67,7 +69,7 @@ const scrolling = Effect.scoped(
       const received = frames.map((frame) => frame.receivedMonotonicNanos);
       const last = frames.at(-1);
       // A screenshot forces a fresh frame, so it is taken only after the interval stopped.
-      const shot = yield* session.screenshot({ fullPage: false });
+      const shot = yield* session.initialPage.screenshot({ fullPage: false });
 
       if (last !== undefined)
         writeFileSync(join(h.output, `last-${String(cycle)}.jpg`), last.bytes);
@@ -108,7 +110,9 @@ const occlusion = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* h.open();
 
-    yield* session.navigate(NavigateRequest.make({ url: "https://www.coingecko.com/" }));
+    yield* session.initialPage.navigate(
+      NavigateRequest.make({ url: "https://www.coingecko.com/" }),
+    );
     yield* Effect.sleep(7000);
 
     // A live page may change its document under a read, which is refused undispatched and
@@ -138,11 +142,11 @@ const occlusion = Effect.scoped(
       });
 
     const viewport = yield* timed(
-      session.observe({ scope: "viewport", maxControls: 32, maxTextBytes: 6000 }),
+      session.initialPage.observe({ scope: "viewport", maxControls: 32, maxTextBytes: 6000 }),
     );
 
     const document = yield* timed(
-      session.observe({ scope: "document", maxControls: 0, maxTextBytes: 6000 }),
+      session.initialPage.observe({ scope: "document", maxControls: 0, maxTextBytes: 6000 }),
     );
 
     return {

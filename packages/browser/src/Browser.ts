@@ -1,4 +1,4 @@
-import { Effect, type Scope } from "effect";
+import { type Duration, Effect, type Scope, type Stream } from "effect";
 import { dual } from "effect/Function";
 
 import type * as Bootstrap from "./Bootstrap.ts";
@@ -39,13 +39,299 @@ import type {
   Target,
   Viewport,
 } from "./BrowserData.ts";
-import type { BrowserError, InitializationError } from "./Errors.ts";
+import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
+import { resolveTargetControlsForSession } from "./internal/browser/PageRegistry.ts";
+import type { PlanOperations } from "./Plan.ts";
+import type { DescriptorEncoded, ResolveGuard, SettledEvidence } from "./PlanData.ts";
+import type { Timeline } from "./Timeline.ts";
+import type { PageEvent, TimelineError } from "./TimelineData.ts";
+
+/**
+ * Host-only ordinary admission. Omission or zero fails immediately; positive finite duration
+ * queues FIFO. Page closure uses reserved fail-fast admission and a deadline-bounded shared close.
+ */
+export interface AdmissionOptions {
+  readonly queue?: Duration.Input;
+}
+
+/** Explicit host options, separate from request data and exact-element admission callbacks. */
+export interface OperationOptions {
+  readonly timeoutMillis?: number;
+  readonly admission?: AdmissionOptions;
+}
+
+/** Explicit descriptor guard and ordinary host admission; no selector or geometry fallback. */
+export interface ResolveOptions extends OperationOptions {
+  readonly guard?: typeof ResolveGuard.Encoded;
+}
+
+/** Named native quiet signals within the original positive finite deadline. */
+export interface SettledRequest {
+  readonly quiet: Duration.Input;
+  readonly within: Duration.Input;
+}
+
+/** A bounded host-memory snapshot; it grants no priority or native authority. */
+export interface AdmissionStatus {
+  readonly active: BrowserOperation | null;
+  readonly waiting: number;
+  readonly maximum: number;
+  readonly oldestWaitMillis: number | null;
+  readonly nativePending: number;
+  readonly nativeWaitPending: boolean;
+  readonly stopSetupPending: boolean;
+}
+
+export interface SessionAdmissionStatus {
+  readonly waiting: number;
+  readonly maximum: number;
+  readonly nativePending: number;
+  readonly nativeMaximum: number;
+  readonly nativeWaits: number;
+  readonly stopSetups: number;
+  readonly registry: AdmissionStatus;
+}
+
+/** Terminal facts remain readable after this page loses live authority. */
+export interface PageStatus {
+  readonly identity: Target;
+  readonly phase: "open" | "paused" | "closing" | "closed" | "stale";
+  readonly containment: Containment;
+  readonly admission: AdmissionStatus;
+}
+
+export interface PageOperations {
+  readonly navigate: (
+    request: NavigateRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<NavigationResult, BrowserError>;
+  /** `navigate`, left in flight: the same single dispatch, completed by the caller. */
+  readonly startNavigation: (
+    request: StartNavigationRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>;
+  readonly readText: (
+    request: ReadTextRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<TextResult, BrowserError>;
+  readonly click: (
+    request: ClickRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  readonly fill: (
+    request: FillRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  /** Script in the page: instantaneous, and it raises no wheel event. */
+  readonly scroll: (
+    request: ScrollRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  /** One real pointer move, in main-frame viewport pixels. */
+  readonly pointerMove: (
+    request: PointerMoveRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** Places the pointer on one exact element where it is, or fails `not-visible` unsent. */
+  readonly hover: (
+    request: HoverRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** One real wheel event; the browser decides what under the pointer scrolls. */
+  readonly wheel: (
+    request: WheelRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** One real key stroke to whatever has focus, or fails `not-focused` unsent if `into` lacks it. */
+  readonly press: (
+    request: PressRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** Text as the real key strokes that produce it, under the same focus rule as `press`. */
+  readonly type: (
+    request: TypeRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  readonly screenshot: (
+    request: ScreenshotRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ScreenshotResult, BrowserError>;
+  /**
+   * The one observation whose nodes later actions may name. `scope: "viewport"` keeps only text
+   * and controls that are on screen and reachable, plus bounded choices of visible native
+   * selects; the default reads the whole document. It carries no destination, form or field value.
+   */
+  readonly observe: (
+    options?: ObservationOptions,
+    operationOptions?: OperationOptions,
+  ) => Effect.Effect<Observation, BrowserError>;
+  /**
+   * Passive evidence for a recorder, with a picture when asked. It issues no references and
+   * leaves the observation above exactly as it was. Host-only: it carries control facts.
+   */
+  readonly checkpoint: (
+    options?: CheckpointOptions,
+    operationOptions?: OperationOptions,
+  ) => Effect.Effect<Checkpoint, BrowserError>;
+  /** Host-only facts about one observed control, read from that exact node just now. */
+  readonly controlFacts: (
+    reference: ObservedElement,
+    options?: OperationOptions,
+  ) => Effect.Effect<ControlFacts, BrowserError>;
+  /**
+   * After a page hold, nothing observed on that page may be acted on unchecked. This checks one
+   * reference: still attached, and still the control that was inspected. It never searches by
+   * selector or label for a substitute, and it sends nothing.
+   */
+  readonly revalidateElement: (
+    reference: ObservedElement,
+    options?: OperationOptions,
+  ) => Effect.Effect<ObservedElement, BrowserError>;
+  readonly clickElement: (
+    reference: ObservedElement,
+    admission?: ElementAdmission,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  readonly fillElement: (
+    reference: ObservedElement,
+    value: string,
+    admission?: ElementAdmission,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  /** One selection using this exact select and its issued option element IDs, with fresh checks. */
+  readonly selectOption: (
+    reference: ObservedElement,
+    options: SelectOptions,
+    admission?: ElementAdmission,
+    operationOptions?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  readonly hoverElement: (
+    reference: ObservedElement,
+    admission?: ElementAdmission,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** A key stroke sent only if the exact node an observation named already has focus. */
+  readonly pressElement: (
+    reference: ObservedElement,
+    stroke: KeyStroke,
+    admission?: ElementAdmission,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /** Real typing with `fillElement`'s exactness: that node must already have focus. */
+  readonly typeElement: (
+    reference: ObservedElement,
+    text: string,
+    admission?: ElementAdmission,
+    options?: OperationOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
+  /**
+   * Set several controls of one observation in order, then optionally click one submit control.
+   * Every step acts on the exact observed node after the same fresh checks as `fillElement`,
+   * except that a control may have become enabled since it was observed, and each is admitted
+   * and charged as its own action. The observation stays usable for this form's own steps only;
+   * anything else that changes the page still retires it, and the form retires it when it ends.
+   * The first refused or uncertain step ends the form. Submit is sent only after every field
+   * succeeded and, unless `verify` is false, still holds what its step left there. Fields set
+   * before a stop stay set. It fails only when its first step does; otherwise `stopped` says
+   * where it ended and why.
+   */
+  readonly fillForm: (
+    request: FillFormRequest,
+    admission?: ElementAdmission,
+    options?: FillFormOptions,
+    operationOptions?: OperationOptions,
+  ) => Effect.Effect<FillFormResult, BrowserError>;
+  /**
+   * Wait on the original observed node within the host deadline. Hidden includes its detachment;
+   * document replacement is stale. Success observes a condition, without authorizing later input.
+   */
+  readonly waitForElement: (
+    request: WaitForElementRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<void, BrowserError>;
+  readonly waitFor: (
+    request: {
+      readonly selector: string;
+      readonly state: "visible" | "hidden" | "attached" | "detached";
+    },
+    options?: OperationOptions,
+  ) => Effect.Effect<void, BrowserError>;
+  /** Navigation observation is registered before the single click dispatch. */
+  readonly clickAndWait: (
+    request: ClickRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<ActionResult, BrowserError>;
+  /**
+   * Readiness of the current document only. Dependent operations wait for it themselves;
+   * this reports it without charging an action, so a caller can decide what to do about a
+   * document that predates the registrations.
+   */
+  readonly ready: (
+    options?: OperationOptions,
+  ) => Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
+}
+
+/**
+ * Issued live authority for one native frame; navigation keeps the frame and retires its references.
+ *
+ * Pass the issued object itself. Capture, page control, provider transfers, agent tools and
+ * `checkPage` authenticate it by identity, so a spread copy, wrapper or Proxy is refused
+ * `UnregisteredSession` even though its copied methods still run. Observe work through the
+ * timeline and run receipts rather than by wrapping methods.
+ */
+export interface Frame extends PageOperations, PlanOperations {
+  readonly identity: Target;
+  readonly status: Effect.Effect<PageStatus>;
+  /**
+   * The original owner's host monotonic clock, the same one `session.monotonicTimeNanos` reads,
+   * so a host bound to this Page or Frame can compute a plan's `startAt` without the session.
+   */
+  readonly monotonicTimeNanos: Effect.Effect<bigint>;
+  /** Resolve full descriptor intent against the complete current native candidate inventory. */
+  readonly resolve: (
+    descriptor: DescriptorEncoded,
+    options?: ResolveOptions,
+  ) => Effect.Effect<ObservedElement, BrowserError>;
+  /**
+   * Quiet DOM mutation, scroll, root geometry and viewport signals in one pinned document.
+   * This does not establish network, animation or business completion.
+   */
+  readonly settled: (
+    request: SettledRequest,
+    options?: OperationOptions,
+  ) => Effect.Effect<SettledEvidence, BrowserError>;
+}
+
+/** Issued live authority for one native page on its original connection; pass it as issued, see `Frame`. */
+export interface Page extends Frame {
+  /** Evidence for this issued Page's original domain; navigation does not change its journal. */
+  readonly timeline: Timeline;
+  /**
+   * Read this page's address and title. Like `listFrames`, it is a read of the page and shares
+   * its permit; pass `admission.queue` to wait behind work already running there.
+   */
+  readonly describe: (options?: OperationOptions) => Effect.Effect<PageInfo, BrowserError>;
+  readonly listFrames: (
+    options?: OperationOptions,
+  ) => Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
+  /** Issue a child Frame. Like `session.page`, issuing takes the registry permit, not this page's. */
+  readonly frame: (
+    info: FrameInfo,
+    options?: OperationOptions,
+  ) => Effect.Effect<Frame, BrowserError>;
+  readonly resizeViewport: (
+    viewport: Viewport,
+    options?: OperationOptions,
+  ) => Effect.Effect<void, BrowserError>;
+  /** Reserved fail-fast admission; timeoutMillis bounds joining a close, not admission.queue. */
+  readonly close: (options?: OperationOptions) => Effect.Effect<void, BrowserError>;
+}
 
 /**
  * A host's decision about one control, made on facts read from the exact node immediately
  * before input. Returning anything but `true`, or throwing, sends nothing and fails `denied`.
  * It is a plain synchronous function on purpose: it runs while the owner's permit is held, where
- * waiting on a model or a network call would stall every other operation. It is not an atomic
+ * waiting on a model or a network call would stall other ordinary operations on that Page. It is not an atomic
  * check-and-input transaction, because page script can still run before the native input lands.
  */
 export interface ElementAdmission {
@@ -57,7 +343,8 @@ export interface ElementAdmission {
  * dispatched, so while it loads a host may read, `checkpoint`, hold and resume this page, and
  * use any other page. Anything that would change this page fails `busy` until it settles.
  *
- * Leaving its scope unsettled fences the session, exactly as an interrupted mutation does,
+ * Leaving its scope unsettled revokes and attempts to close its exact page. Positive closure
+ * preserves healthy peers; unconfirmed closure fences the session. Its outcome remains unknown
  * because nothing then knows what the browser did. It is never replayed.
  */
 export interface NavigationOperation {
@@ -80,186 +367,76 @@ export interface NavigationOperation {
   readonly stop: Effect.Effect<void, BrowserError>;
 }
 
-/** Common operations. Direct, retained and pinned views choose their target at different times. */
-export interface TargetOperations {
-  readonly navigate: (request: NavigateRequest) => Effect.Effect<NavigationResult, BrowserError>;
-  /** `navigate`, left in flight: the same single dispatch, completed by the caller. */
-  readonly startNavigation: (
-    request: StartNavigationRequest,
-  ) => Effect.Effect<NavigationOperation, BrowserError, Scope.Scope>;
-  readonly readText: (request: ReadTextRequest) => Effect.Effect<TextResult, BrowserError>;
-  readonly click: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserError>;
-  readonly fill: (request: FillRequest) => Effect.Effect<ActionResult, BrowserError>;
-  /** Script in the page: instantaneous, and it raises no wheel event. */
-  readonly scroll: (request: ScrollRequest) => Effect.Effect<ActionResult, BrowserError>;
-  /** One real pointer move, in main-frame viewport pixels. */
-  readonly pointerMove: (request: PointerMoveRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** Places the pointer on one exact element where it is, or fails `not-visible` unsent. */
-  readonly hover: (request: HoverRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** One real wheel event; the browser decides what under the pointer scrolls. */
-  readonly wheel: (request: WheelRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** One real key stroke to whatever has focus, or fails `not-focused` unsent if `into` lacks it. */
-  readonly press: (request: PressRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  /** Text as the real key strokes that produce it, under the same focus rule as `press`. */
-  readonly type: (request: TypeRequest) => Effect.Effect<InputReceipt, BrowserError>;
-  readonly screenshot: (
-    request: ScreenshotRequest,
-  ) => Effect.Effect<ScreenshotResult, BrowserError>;
-}
-
-/**
- * One explicit page/frame target. Selection may move independently; each operation re-resolves
- * this identity inside the same owner and connection. Closing/detaching it or reconnecting makes
- * the handle stale before dispatch.
- */
-export interface PinnedTarget extends TargetOperations {
-  readonly target: Target;
-}
-
-/** A checked selection retained at acquisition; moving selection away and back makes it stale. */
-export interface RetainedTarget extends TargetOperations {}
-
 /**
  * Host control over one owned browser. This is not a serializable model value: copying a
  * session object cannot copy its capture, page-control or connection authority.
  *
- * The inherited target operations resolve the selected page/frame when their Effect executes.
- * Use `retain` to retain the current selection with stale-on-selection-change semantics, or
- * `pinPage` / `pinFrame` when work must stay on an explicit target while selection moves.
+ * Browser operations belong to issued Page and Frame objects. Display selection and owner
+ * lifecycle are separate from those exact capabilities.
  */
-export interface BrowserSession<E = never> extends TargetOperations {
+export interface BrowserSession<E = never> {
+  /** The original owner's host clock, for same-runtime absolute cue scheduling. */
+  readonly monotonicTimeNanos: Effect.Effect<bigint>;
+  /** Stable facade: each snapshot/stream captures the current journal when it executes. */
+  readonly timeline: Timeline;
+  /** Atomic cached Inventory baseline followed by lifecycle evidence on its pinned journal. */
+  readonly pages: Stream.Stream<PageEvent, TimelineError>;
+  /** The page acquired on the initial connection, independent of later display selection. */
+  readonly initialPage: Page;
+  /**
+   * Authenticate `info` against the live native page and return its canonical issued Page. This
+   * takes the registry permit, not the page's own: it never waits for, or fails `busy` on, work
+   * already running on that page.
+   */
+  readonly page: (info: PageInfo, options?: OperationOptions) => Effect.Effect<Page, BrowserError>;
+  readonly listPages: (
+    options?: OperationOptions,
+  ) => Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
   /** The implementation which owns this live connection. */
   readonly implementation: string;
   /** Copied host-only state, readable without admission in every lifecycle phase. */
   readonly status: Effect.Effect<SessionStatus>;
   /** Bounded native/policy diagnostics. Typed callback causes remain in bindingDiagnostics. */
   readonly diagnostics: Effect.Effect<BrowserDiagnostics>;
+  readonly admission: Effect.Effect<SessionAdmissionStatus>;
   /** Close this scope and require its own ownership-specific cleanup evidence. */
   readonly closeChecked: Effect.Effect<void, BrowserError>;
   /** First fail-session callback cause, preserving the consumer's error type on the host. */
   readonly failure: Effect.Effect<never, E | InitializationError>;
   /** Bounded host-only evidence; consumer causes are never projected into a page reply. */
   readonly bindingDiagnostics: Effect.Effect<Bootstrap.BindingDiagnostics<E>>;
-  /** Resolve, validate and retain the selection under owner admission. */
-  readonly retain: Effect.Effect<RetainedTarget, BrowserError>;
-  readonly target: Effect.Effect<Target, BrowserError>;
   /**
-   * The one observation whose nodes later actions may name. `scope: "viewport"` keeps only text
-   * and controls that are on screen and reachable, plus bounded choices of visible native
-   * selects; the default reads the whole document. It carries no destination, form or field value.
+   * Choose the displayed page, which is also the page `detach` records and `reconnect` resumes on.
+   * Nothing else: it never retargets a Page or Frame operation, which keep their own exact
+   * authority. Pass a Page this session issued; a closed or stale one is refused unsent.
    */
-  readonly observe: (options?: ObservationOptions) => Effect.Effect<Observation, BrowserError>;
+  readonly selectPage: (
+    page: Page,
+    options?: OperationOptions,
+  ) => Effect.Effect<void, BrowserError>;
   /**
-   * Passive evidence for a recorder, with a picture when asked. It issues no references and
-   * leaves the observation above exactly as it was. Host-only: it carries control facts.
+   * Open a page in its own window, sized like the others, without selecting it, and return the
+   * Page issued for it. Chromium paints every window, so any page can be pictured and read at
+   * speed, not only the one in front. Registry admission fails immediately by default; pass a
+   * positive finite admission.queue to wait FIFO within the operation deadline.
    */
-  readonly checkpoint: (options?: CheckpointOptions) => Effect.Effect<Checkpoint, BrowserError>;
-  /** Host-only facts about one observed control, read from that exact node just now. */
-  readonly controlFacts: (reference: ObservedElement) => Effect.Effect<ControlFacts, BrowserError>;
-  /**
-   * After a page hold, nothing observed on that page may be acted on unchecked. This checks one
-   * reference: still attached, and still the control that was inspected. It never searches by
-   * selector or label for a substitute, and it sends nothing.
-   */
-  readonly revalidateElement: (
-    reference: ObservedElement,
-  ) => Effect.Effect<ObservedElement, BrowserError>;
-  readonly clickElement: (
-    reference: ObservedElement,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly fillElement: (
-    reference: ObservedElement,
-    value: string,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<ActionResult, BrowserError>;
-  /** One selection using this exact select and its issued option element IDs, with fresh checks. */
-  readonly selectOption: (
-    reference: ObservedElement,
-    options: SelectOptions,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<ActionResult, BrowserError>;
-  readonly hoverElement: (
-    reference: ObservedElement,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<InputReceipt, BrowserError>;
-  /** A key stroke sent only if the exact node an observation named already has focus. */
-  readonly pressElement: (
-    reference: ObservedElement,
-    stroke: KeyStroke,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<InputReceipt, BrowserError>;
-  /** Real typing with `fillElement`'s exactness: that node must already have focus. */
-  readonly typeElement: (
-    reference: ObservedElement,
-    text: string,
-    admission?: ElementAdmission,
-  ) => Effect.Effect<InputReceipt, BrowserError>;
-  /**
-   * Set several controls of one observation in order, then optionally click one submit control.
-   * Every step acts on the exact observed node after the same fresh checks as `fillElement`,
-   * except that a control may have become enabled since it was observed, and each is admitted
-   * and charged as its own action. The observation stays usable for this form's own steps only;
-   * anything else that changes the page still retires it, and the form retires it when it ends.
-   * The first refused or uncertain step ends the form. Submit is sent only after every field
-   * succeeded and, unless `verify` is false, still holds what its step left there. Fields set
-   * before a stop stay set. It fails only when its first step does; otherwise `stopped` says
-   * where it ended and why.
-   */
-  readonly fillForm: (
-    request: FillFormRequest,
-    admission?: ElementAdmission,
-    options?: FillFormOptions,
-  ) => Effect.Effect<FillFormResult, BrowserError>;
-  readonly pages: Effect.Effect<ReadonlyArray<PageInfo>, BrowserError>;
-  /**
-   * One exact page's address and title as they are now, and whether it is selected, without
-   * reading every other page as `pages` does. An identity that no longer names an open page
-   * fails undispatched.
-   */
-  readonly describePage: (page: PageInfo) => Effect.Effect<PageInfo, BrowserError>;
-  readonly frames: Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
-  /** List frames on one exact page without selecting it. */
-  readonly framesOf: (page: PageInfo) => Effect.Effect<ReadonlyArray<FrameInfo>, BrowserError>;
-  /** Pin the page's main frame without changing the session selection. */
-  readonly pinPage: (page: PageInfo) => Effect.Effect<PinnedTarget, BrowserError>;
-  /** Pin one frame that currently belongs to the exact page, without changing selection. */
-  readonly pinFrame: (
-    page: PageInfo,
-    frame: FrameInfo,
-  ) => Effect.Effect<PinnedTarget, BrowserError>;
-  readonly selectPage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
-  readonly selectFrame: (frameId: string) => Effect.Effect<void, BrowserError>;
-  /**
-   * Open a page in its own window, sized like the others, without selecting it, and return that
-   * exact page's checked identity. Chromium paints every window, so any page can be pictured
-   * and read at speed, not only the one in front. It waits its turn behind other operations,
-   * within its action timeout, rather than failing `busy`.
-   */
-  readonly createPage: Effect.Effect<PageInfo, BrowserError>;
-  readonly closePage: (page: PageInfo) => Effect.Effect<void, BrowserError>;
-  readonly resizeViewport: (viewport: Viewport) => Effect.Effect<void, BrowserError>;
-  /**
-   * Wait on the original observed node within the host deadline. Hidden includes its detachment;
-   * document replacement is stale. Success observes a condition, without authorizing later input.
-   */
-  readonly waitForElement: (request: WaitForElementRequest) => Effect.Effect<void, BrowserError>;
-  readonly waitFor: (request: {
-    readonly selector: string;
-    readonly state: "visible" | "hidden" | "attached" | "detached";
-  }) => Effect.Effect<void, BrowserError>;
-  /** Navigation observation is registered before the single click dispatch. */
-  readonly clickAndWait: (request: ClickRequest) => Effect.Effect<ActionResult, BrowserError>;
-  /**
-   * Readiness of the current document only. Dependent operations wait for it themselves;
-   * this reports it without charging an action, so a caller can decide what to do about a
-   * document that predates the registrations.
-   */
-  readonly ready: Effect.Effect<Bootstrap.ReadinessOutcome, InitializationError>;
+  readonly createPage: (options?: OperationOptions) => Effect.Effect<Page, BrowserError>;
 }
 
 /** Helpers that do not supervise callback failures accept any live browser session. */
 export type AnySession = BrowserSession<unknown>;
+
+/**
+ * Check that `page` is a Page or Frame this session issued, by identity, and that its authority
+ * is still current: a foreign or copied object fails `UnregisteredSession`, a closed, stale or
+ * detached one fails with the same refusal its own operations would report. Adapters such as
+ * agent-browser hosts call it once when they bind, so a wrong target fails before any work.
+ */
+export const checkPage = (
+  session: AnySession,
+  page: Page | Frame,
+): Effect.Effect<void, BrowserError> =>
+  resolveTargetControlsForSession(session, page).pipe(Effect.asVoid);
 
 /** Dependencies are captured at acquisition, not erased into an environment-free service Layer. */
 export interface OpenOptions<E = never, R = never> {

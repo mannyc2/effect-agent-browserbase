@@ -17,7 +17,14 @@ import {
 } from "effect-agent/interactive-browser";
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
-import type { AnySession, BrowserSession, TargetOperations } from "effect-browser/browser";
+import {
+  checkPage,
+  type AnySession,
+  type BrowserSession,
+  type Frame,
+  type Page,
+  type PageOperations,
+} from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
@@ -43,6 +50,7 @@ const operationError = (
 ): InteractiveBrowserError => {
   switch (error.reason._tag) {
     case "Busy":
+    case "QueueFull":
       return InteractiveBrowserBusyError.make({
         implementation,
         message: "Browser control is busy or handed to an operator",
@@ -91,16 +99,23 @@ const operationError = (
     case "ContextLease":
     case "Denied":
     case "Disabled":
+    // A resolved target that moved from its guarded box is refused before input; the handle lives.
+    case "Drifted":
     case "Failed":
     case "Interrupted":
+    case "Incomplete":
+    case "Missing":
     case "NotFocused":
     case "NotFound":
     case "NotVisible":
     case "Provider":
+    case "QueueExpired":
     case "RateLimited":
     case "Resized":
     case "TargetChanged":
     case "Timeout":
+    case "ScheduleMissed":
+    case "TimingBudgetExceeded":
     case "Timestamp":
     case "Transport":
     case "UnregisteredSession":
@@ -117,7 +132,9 @@ const operationError = (
         ? "The browser action was not dispatched"
         : error.outcome === "rejected"
           ? "The browser action was rejected"
-          : "The browser action failed; its outcome may be unknown",
+          : error.outcome === "performed"
+            ? "The browser action was performed, but its follow-up failed"
+            : "The browser action failed; its outcome may be unknown",
   });
 };
 
@@ -127,7 +144,7 @@ const decode = <A>(schema: Schema.Codec<A, unknown, never, never>, value: unknow
   );
 
 const makeHandle = (
-  target: TargetOperations,
+  target: PageOperations,
   close: Effect.Effect<void, BrowserError>,
   implementation: SandboxImplementation,
 ): BrowserHandle => ({
@@ -181,38 +198,24 @@ const makeHandle = (
   ),
 });
 
-/** Choose follow-selection operations or a checked selection retained when adaptation executes. */
-export interface SelectionOptions {
-  readonly selection: "current" | "retained";
-}
-
-const selectionOptions = Schema.Struct({ selection: Schema.Literals(["current", "retained"]) });
-
-/** Adapt the exact owner. Retention is checked lazily; neither mode opens another browser. */
+/**
+ * Adapt one issued Page, or one Frame a Page issued, and its exact owner. Framework close is
+ * owner-wide checked cleanup.
+ */
 export const fromSession = Effect.fnUntraced(function* <S extends AnySession>(
   browser: S,
-  options: SelectionOptions,
+  page: Page | Frame,
 ): Effect.fn.Return<AdaptedSession<S>, BrowserError> {
-  const fixed = yield* Schema.decodeEffect(selectionOptions)(options).pipe(
-    Effect.mapError(() =>
-      BrowserError.make({
-        operation: "configure",
-        reason: Reasons.Configuration.make({ path: "selection" }),
-        outcome: "undispatched",
-      }),
-    ),
-  );
+  yield* checkPage(browser, page);
 
   const implementation = SandboxImplementation.make({
     isolation: "isolated",
     identity: browser.implementation,
   });
 
-  const target = fixed.selection === "retained" ? yield* browser.retain : browser;
-
   return {
     browser,
-    handle: makeHandle(target, browser.closeChecked, implementation),
+    handle: makeHandle(page, browser.closeChecked, implementation),
   };
 });
 
@@ -288,7 +291,7 @@ export const interactiveLayer = <E, R>(
               ),
             );
 
-            const adapted = yield* fromSession(browser, { selection: "retained" }).pipe(
+            const adapted = yield* fromSession(browser, browser.initialPage).pipe(
               Effect.mapError((error) => operationError("navigate", error, implementation)),
             );
 

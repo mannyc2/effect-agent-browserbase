@@ -61,7 +61,7 @@ const program = Effect.gen(function* () {
 
   const reference = yield* Browser.scoped(BrowserbaseBrowser.open(policy), (session) =>
     Effect.gen(function* () {
-      yield* session.navigate(NavigateRequest.make({ url: "https://example.com" }));
+      yield* session.initialPage.navigate(NavigateRequest.make({ url: "https://example.com" }));
 
       // Browser.scoped checks the owner's release before returning this durable identity.
       return session.reference;
@@ -110,9 +110,9 @@ A bounded hosted check ran a page producing a known 440 Hz tone two independent 
 
 Prefer provider recording when post-session MP4/HLS is enough. Use `capture` when you need frames during the session, need to transform or encode them yourself, did not enable provider recording, are testing locally without a paid session, or need a live-frame path distinct from Browserbase's post-session artifact lifetime. BYOS recording completion is reported explicitly even when Browserbase does not return a download URL.
 
-`Capture.start(session, { target: page })` accepts a `PageInfo` from `session.pages` and pins the interval to that page independently of the selected automation target. Omitting `target` binds to the page selected when capture starts; later selection changes do not move or stop it. An agent can drive a scout tab while the stage page keeps recording. Distinct pages may capture concurrently, with one interval per native target, at most four active or quarantined intervals, and 64 MiB of aggregate reserved buffering per session. The maintained Playwright screencast callback is JPEG-only here and the public API does not expose an FPS cap or lossless format.
+`Capture.start(page)` requires an issued `Page`, such as `session.initialPage` or `yield* session.page(info)` for exact metadata from `session.listPages()`. The interval belongs to that Page independently of display selection; later selection changes do not move or stop it. An agent can drive a scout tab while the stage page keeps recording. Distinct pages may capture concurrently, with one interval per native target, at most four active or quarantined intervals, and 64 MiB of aggregate reserved buffering per session. The maintained Playwright screencast callback is JPEG-only here and the public API does not expose an FPS cap or lossless format.
 
-`Capture.start(session, { target: page, size: { width: 640, height: 360 } })` requests source frames fitted within those pixel bounds without resizing the live viewport. Both dimensions must be integers from 1 through 16,384; the existing 33,554,432-pixel and byte limits still apply to actual frames. The request is validated and copied before native work or capture-budget admission. Omitting `size` preserves Playwright's default (the viewport fitted within 800×800). An already-active native screencast can override a requested size, so the package independently checks actual JPEG dimensions and ends the affected interval with a `limit` error before delivering an oversized frame. It does not silently resize bytes, invent dimensions, alter timestamps, or end a sibling page's capture. A size request is not a frame-rate limit or a guarantee about bytes produced before they reach the package.
+`Capture.start(page, { size: { width: 640, height: 360 } })` requests source frames fitted within those pixel bounds without resizing the live viewport. Both dimensions must be integers from 1 through 16,384; the existing 33,554,432-pixel and byte limits still apply to actual frames. The request is validated and copied before native work or capture-budget admission. Omitting `size` preserves Playwright's default (the viewport fitted within 800×800). An already-active native screencast can override a requested size, so the package independently checks actual JPEG dimensions and ends the affected interval with a `limit` error before delivering an oversized frame. It does not silently resize bytes, invent dimensions, alter timestamps, or end a sibling page's capture. A size request is not a frame-rate limit or a guarantee about bytes produced before they reach the package.
 
 ## Session, reference, and ownership
 
@@ -133,11 +133,11 @@ fails. An outer race can discard that checked error, so keep any required host r
 the raced workflow. The shared guide's [Layer and receipt examples](../browser/README.md#a-long-lived-session-in-a-layer)
 describe sharing one bounded session and the supervision that a Layer alone does not provide.
 
-Mutations are serialized. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome and is never automatically replayed. Unresolved control fences the owner; the shared runtime's main-frame navigation recovery can preserve usability after one acknowledged stop while still reporting `Timeout/unknown`. Recovery is bounded by the loading deadline plus at most three seconds and the existing lifetime. Child-frame timeouts retain the conservative fence. `undispatched` is used only when the package established that native mutation dispatch did not occur.
+Each Page serializes its operations with its frames; operations on independent Pages can proceed concurrently. An observation identifies retained native nodes only until the next invalidating event; it is not a DOM snapshot version. Replaced or detached nodes fail instead of silently resolving to replacements. An action interrupted or timed out after native dispatch has an **unknown** outcome and is never automatically replayed. Unresolved control fences the affected Page until confirmed closure; unsuccessful containment fences the session. The shared runtime's main-frame navigation recovery can preserve usability after one acknowledged stop while still reporting `Timeout/unknown`. Recovery is bounded by the loading deadline plus at most three seconds and the existing lifetime. Child-frame timeouts retain conservative containment. `undispatched` is used only when the package established that native mutation dispatch did not occur.
 
 ## Shared browser operations
 
-Navigation, observation, native input, typed bootstrap bindings, live capture and page holds are implemented by [`effect-browser`](../browser/README.md). Import their contracts from that package and use them with the exact `BrowserbaseSession` returned here. The [`effect-agent-browser`](../agent-browser/README.md) adapter and maintained tools accept both this session and self-managed Chromium without a second connection.
+Navigation, observation, native input, typed bootstrap bindings, live capture and page holds are implemented by [`effect-browser`](../browser/README.md). Import their contracts from that package. Session owns lifecycle and inventory; its issued Pages and Frames own browser operations. `session.initialPage` keeps its original identity when display selection changes, and `page.frame(info)` issues exact Frame authority. Capture and page holds require an issued Page. The [`effect-agent-browser`](../agent-browser/README.md) adapter and maintained tools accept both this session and self-managed Chromium without a second connection.
 
 The shared session also provides passive `status` and bounded `diagnostics`, including after
 closure. Known expiry, callback failure and policy pressure are not automatically labeled
@@ -151,6 +151,10 @@ it is independent of model action accounting and never a tool parameter.
 
 Small selection needs no provisioning: `session.selectFiles` attaches in-memory bytes the caller already holds, and `session.clickForFileSelection` registers the chooser observation before the single click that opens it and attaches exactly once.
 
+`session.selectFiles(page, request)`, `session.clickForFileSelection(page, request)` and `session.clickForDownload(page, request)` take an issued `Page` from that session first, as `Capture.start(page)` and `PageControl` do, such as `session.initialPage` or `yield* session.page(info)`. Transfers stay on that Page through the original connection while display selection moves. Cloned, foreign and retired Pages fail before transfer dispatch.
+
+Each transfer accepts trailing host-only `OperationOptions`: `session.selectFiles(page, request, { timeoutMillis: 5000, admission: { queue: "1 second" } })`. Queue omission or zero fails immediately when conflicting work is active; a positive finite duration allows bounded FIFO waiting. Waiting counts toward the operation deadline, and neither option extends the browser's policy or lifetime. `QueueFull` and `QueueExpired` distinguish capacity refusal and expired waiting from immediate `Busy`. Live View, handoff, resume and reconnect also accept trailing operation options; cleanup effects retain their owned lifetime.
+
 Larger files use `BrowserbaseUploads.create`, which places bytes for the exact running session and returns a receipt. A stored file is named to the browser process, which opens the path itself; only in-memory bytes are streamed from this client, and the two mechanisms are never mixed. Attachment authority is the identity of a receipt this package issued for that session, so a value that merely has the right shape carries none: no caller, and no model, turns a server pathname into an attached file. The receipt reports the provider's remote path only when the provider returned one; when it does not, attachment by path is refused rather than guessed. Hosted H6 remains the check for real provider upload identity and routing.
 
 ## Borrowed attachment
@@ -161,22 +165,32 @@ Larger files use `BrowserbaseUploads.create`, which places bytes for the exact r
 
 ## Shared API migration
 
-| Before                                                         | Now                                                                                                                                                             |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session.bind()` or `yield* session.currentTarget`             | Ordinary calls use `session` directly; `yield* session.retain` explicitly obtains checked stale-on-selection semantics                                          |
-| Bare page IDs in selection/closure, selection returns a handle | Pass `PageInfo` to `selectPage`/`closePage`; selection returns `void`, and `createPage` returns the exact created record                                        |
-| Reuse old page/frame metadata after reconnect                  | In the same known browser lifetime, read fresh pages and match exactly one saved `targetId`; then read fresh frames. No fallback to order, old ID, URL or title |
-| `Adapter.fromSession(session)` or `currentHandle`              | Await the Effect with explicit `{ selection: "current" }` or `{ selection: "retained" }`; its browser is the original concrete session                          |
-| `BrowserError.reason` string and optional outcome              | Tagged reason and required outcome. Use `Effect.catchReason`; factual limit/status/retry fields belong to their reason                                          |
-| All host reason names reach model output                       | A compact eleven-reason tool failure; original structured fields and bounded call IDs remain in `ToolHost.toolFailures`                                         |
-| `closeChecked` success is `undefined`                          | Concrete receipt success after the existing ownership check; `close` and `cleanupResult` remain available                                                       |
-| Capture `dropped`                                              | `discarded = overflow + late + duplicates + rejected`; no change to default capacity or unknown upstream loss                                                   |
-| Non-supervising helper takes default `BrowserSession`          | Use `AnySession`; keep supervising helpers generic in callback error or concrete session                                                                        |
+| Before                                                | Now                                                                                                                                                                                 |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session action calls or retained/pinned wrappers      | Use `session.initialPage` or `yield* session.page(info)` for Page operations and `yield* page.frame(info)` for Frame operations; display selection never retargets issued authority |
+| Bare page IDs in selection/closure                    | Pass an issued Page to `session.selectPage(page)` for display selection, and close exact issued authority with `page.close()`                                                       |
+| Reuse old page/frame metadata after reconnect         | In the same known browser lifetime, read fresh pages and match exactly one saved `targetId`; then read fresh frames. No fallback to order, old ID, URL or title                     |
+| `Adapter.fromSession(session)` or implicit selection  | Supply the owning session and issued Page to `yield* Adapter.fromSession(session, page)`; its lifecycle remains on the original browser owner                                       |
+| `BrowserError.reason` string and optional outcome     | Tagged reason and required outcome. Use `Effect.catchReason`; factual limit/status/retry fields belong to their reason                                                              |
+| All host reason names reach model output              | A compact eleven-reason tool failure; original structured fields and bounded call IDs remain in `ToolHost.toolFailures`                                                             |
+| `closeChecked` success is `undefined`                 | Concrete receipt success after the existing ownership check; `close` and `cleanupResult` remain available                                                                           |
+| Capture `dropped`                                     | `discarded = overflow + late + duplicates + rejected`; no change to default capacity or unknown upstream loss                                                                       |
+| Non-supervising helper takes default `BrowserSession` | Use `AnySession`; keep supervising helpers generic in callback error or concrete session                                                                                            |
+| Session readiness, target and frame shortcuts         | Use `page.ready()`, immutable `page.identity`, `page.listFrames()` and `page.frame(info)`; Session retains `listPages()` and `createPage()`                                         |
+| Transfers called as `(request, page, options)`        | Pass the issued Page first: `selectFiles(page, request, options)`, `clickForFileSelection(page, request, options)` and `clickForDownload(page, request, options)`                   |
+
+`resume(token, operatorReleasedControl)` and `reconnect(operatorReleasedControl)` return a
+bounded `Inventory` containing the new owner generation and fresh Page metadata. They do not
+read page content or issue observed references. Acquire an issued Page from `inventory.pages`
+and call `page.observe()` explicitly. `detach` returns its pre-disconnection inventory and exact
+selected native `targetId`, preserving bounded target identities for deliberate attachment;
+its Page IDs are old authority and cannot be reused after reconnect. Page metadata is a sequence
+of native reads and is non-atomic.
 
 Binding omission defaults are one concurrent call, 64 KiB each direction, 10 seconds and
 `reject-call`; explicit values remain validated. Combined readiness uses the most conservative
 `existingDocuments` policy. Common navigation now accepts optional `timeoutMillis` with the same
-bounds as `startNavigation`; direct, retained and pinned operations share it. Observations add
+bounds as `startNavigation`; issued Page and Frame operations share it. Observations add
 bounded checked/selected/inputType/required state without field values or destinations. These
 contracts live in the [common browser guide](../browser/README.md).
 
@@ -249,7 +263,7 @@ it.effect("release is requested once and confirmed", () =>
       BrowserbaseBrowser.open(BrowserPolicy.unrestricted()),
       (session) =>
         Effect.gen(function* () {
-          yield* session.navigate({ url: "https://shop.test/" });
+          yield* session.initialPage.navigate({ url: "https://shop.test/" });
 
           return yield* session.closeChecked;
         }),
@@ -324,13 +338,13 @@ Rates are outside this package's runtime contract. As reviewed on 25 September 2
 
 Every expected failure says three things. `operation` is what you asked for, from a closed vocabulary per error class: `BrowserError` names the browser operations, `SessionError` only session calls, and so on, so you can match on them exhaustively and a misspelling is a type error, not a string that happens to compile. `reason` is why it failed. `outcome`, when present, is the package's dispatch evidence: `undispatched` proves this package did not send the mutation and is safe to retry, `rejected` means a provider response refused it, and `unknown` means dispatch or acceptance cannot be ruled out. None is a billing decision. Mutations with `unknown` outcome are never replayed for you. Why an extension archive was refused is a `reason` (`limit`, `unsafe-filename`, `configuration`) of the one `extension-archive` operation. A native step's own name never appears: the driver raises a private failure, and the owner stamps the operation it admitted.
 
-Everything under `src/internal/` is private; the common runtime offers a modeled integration constructor, while no consumer CDP seam is exported; `browser-binding` chooses the engine and where it connects, never what runs over the connection. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside the mutation permit that serializes them and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
+Everything under `src/internal/` is private; the common runtime offers a modeled integration constructor, while no consumer CDP seam is exported; `browser-binding` chooses the engine and where it connects, never what runs over the connection. The driver does hold a CDP session; exposing it, or the ownership internals, would place actions outside their Page's admission and outside the fencing that makes an uncertain outcome detectable. Opening a second debugger connection beside this one has the same effect and is equally unsupported. An unmodeled need is a request for a modeled entry point, not a reason to reach around the boundary.
 
 ## Artifact and capture guarantees
 
 Provider recordings have an independent post-session lifetime. Assembly POST is a mutation; an uncertain POST is reconciled with status before any deliberate retry. Polling is bounded and preserves per-page partial success/failure. BYOS completion without a Browserbase download URL is reported explicitly.
 
-Website downloads retain their provider download ID, safe filename, MIME type and declared size. Streaming enforces configured MIME, byte and deadline bounds and verifies the completed byte count. A click result alone is never reported as a completed file.
+Website downloads retain their provider download ID, safe filename, MIME type and declared size. Streaming enforces configured MIME, byte and deadline bounds and verifies the completed byte count. A click result alone is never reported as a completed file. Provider download enumeration is session-wide; concurrent clicks on different Pages do not establish an automatic association between a native download event and a provider download ID.
 
 Replay playlists reject arbitrary URI-bearing tags and proxy only indexed media from the validated playlist. API credentials are never returned to a browser client.
 

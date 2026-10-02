@@ -3,8 +3,19 @@ import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
 import { dispatchNavigationStop } from "../src/internal/browser/Actions.ts";
-import type { NativeNavigation } from "../src/internal/browser/Driver.ts";
+import type { DriverEvents, NativeNavigation } from "../src/internal/browser/Driver.ts";
 import { fixture, gate } from "./fixtures/ScriptedOwner.ts";
+
+const awaitNativeRetirement = (session: {
+  readonly admissionStatus: Effect.Effect<{ readonly nativePending: number }>;
+}) =>
+  Effect.gen(function* () {
+    for (let turn = 0; turn < 64; turn++) {
+      if ((yield* session.admissionStatus).nativePending === 0) return;
+      yield* Effect.yieldNow;
+    }
+    expect((yield* session.admissionStatus).nativePending).toBe(0);
+  });
 
 /** Script only the native setup/acknowledgement; the real session, permit and dispatch path run. */
 const flight = (open: Parameters<typeof dispatchNavigationStop>[3]) => {
@@ -25,75 +36,81 @@ const flight = (open: Parameters<typeof dispatchNavigationStop>[3]) => {
   };
 };
 
-it.effect("a busy first stop retries and concurrent callers share one native dispatch", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const observing = gate<void>();
-      const observed = gate<void>();
-      const dispatched = gate<void>();
-      const acknowledged = gate<void>();
-      let opens = 0;
-      let sends = 0;
-      let closes = 0;
+it.effect(
+  "reserved stop proceeds during a held observation and callers share one native dispatch",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const observing = gate<void>();
+        const observed = gate<void>();
+        const dispatched = gate<void>();
+        const acknowledged = gate<void>();
+        let opens = 0;
+        let sends = 0;
+        let closes = 0;
 
-      const navigation = flight(async () => {
-        opens++;
+        const navigation = flight(async () => {
+          opens++;
 
-        return {
-          stop: async () => {
-            sends++;
-            dispatched.resolve();
-            await acknowledged.promise;
+          return {
+            stop: async () => {
+              sends++;
+              dispatched.resolve();
+              await acknowledged.promise;
+            },
+            close: async () => {
+              closes++;
+            },
+          };
+        });
+
+        const f = yield* fixture({
+          onNavigate: navigation.script,
+          onObserve: async () => {
+            observing.resolve();
+            await observed.promise;
           },
-          close: async () => {
-            closes++;
-          },
-        };
-      });
+        });
 
-      const f = yield* fixture({
-        onNavigate: navigation.script,
-        onObserve: async () => {
-          observing.resolve();
-          await observed.promise;
-        },
-      });
+        const session = yield* (yield* f.acquisition).connect;
 
-      const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/slow");
-      const holder = yield* Effect.forkChild(session.observe());
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow");
 
-      yield* Effect.promise(() => observing.promise);
-      expect(yield* Effect.result(operation.stop)).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
-      });
-      expect(opens).toBe(0);
-      observed.resolve();
-      yield* Fiber.join(holder);
+        const holder = yield* Effect.forkChild(session.initialPage().controls.observe());
 
-      const first = yield* Effect.forkChild(operation.stop);
+        yield* Effect.promise(() => observing.promise);
+        const first = yield* Effect.forkChild(operation.stop);
 
-      yield* Effect.promise(() => dispatched.promise);
-      const canceledWaiter = yield* Effect.forkChild(operation.stop, { startImmediately: true });
-      const joined = yield* Effect.forkChild(operation.stop, { startImmediately: true });
+        yield* Effect.promise(() => dispatched.promise);
+        expect({ opens, sends }).toEqual({ opens: 1, sends: 1 });
+        expect(holder.pollUnsafe()).toBeUndefined();
+        const canceledWaiter = yield* Effect.forkChild(operation.stop, { startImmediately: true });
+        const joined = yield* Effect.forkChild(operation.stop, { startImmediately: true });
 
-      yield* Fiber.interrupt(canceledWaiter);
-      expect(Exit.hasInterrupts(yield* Fiber.await(canceledWaiter))).toBe(true);
-      acknowledged.resolve();
-      yield* Fiber.join(first);
-      yield* Fiber.join(joined);
-      yield* operation.stop;
+        yield* Fiber.interrupt(canceledWaiter);
+        expect(Exit.hasInterrupts(yield* Fiber.await(canceledWaiter))).toBe(true);
+        acknowledged.resolve();
+        yield* Fiber.join(first);
+        yield* Fiber.join(joined);
+        yield* operation.stop;
+        observed.resolve();
+        expect(yield* Fiber.join(holder).pipe(Effect.flip)).toMatchObject({
+          operation: "observe",
+          reason: { _tag: "Stale" },
+          outcome: "undispatched",
+        });
 
-      expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 1, closes: 1 });
-      expect(yield* Effect.result(operation.completed)).toMatchObject({
-        _tag: "Failure",
-        failure: { operation: "navigate", reason: { _tag: "Interrupted" }, outcome: "unknown" },
-      });
-      yield* session.operations.click("#act");
-      expect(f.state.clicks).toBe(1);
-    }),
-  ),
+        expect({ opens, sends, closes }).toEqual({ opens: 1, sends: 1, closes: 1 });
+        expect(yield* Effect.result(operation.completed)).toMatchObject({
+          _tag: "Failure",
+          failure: { operation: "navigate", reason: { _tag: "Interrupted" }, outcome: "unknown" },
+        });
+        yield* session.initialPage().controls.operations.click("#act");
+        expect(f.state.clicks).toBe(1);
+      }),
+    ),
 );
 
 it.effect.each(["cancel", "timeout"] as const)(
@@ -132,7 +149,11 @@ it.effect.each(["cancel", "timeout"] as const)(
 
         const f = yield* fixture({ onNavigate: navigation.script, lifetimeMillis: 20000 });
         const session = yield* (yield* f.acquisition).connect;
-        const operation = yield* session.operations.startNavigation("https://example.test/slow");
+
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow");
+
         const first = yield* Effect.forkChild(operation.stop);
 
         yield* Effect.promise(() => opened.promise);
@@ -158,7 +179,7 @@ it.effect.each(["cancel", "timeout"] as const)(
           });
         }
         expect({ opens, sends }).toEqual({ opens: 1, sends: 0 });
-        expect(yield* session.operations.readText()).toBe("initial");
+        expect(yield* session.initialPage().controls.operations.readText()).toBe("initial");
 
         setup.resolve();
         yield* Effect.promise(() => closing.promise);
@@ -168,6 +189,8 @@ it.effect.each(["cancel", "timeout"] as const)(
         });
         close.resolve();
         yield* Effect.promise(() => navigation.nativeFinished.promise);
+        // The abandoned attempt never dispatched; with its setup and port retired, a retry is safe.
+        yield* awaitNativeRetirement(session);
         yield* operation.stop;
         yield* operation.stop;
         expect({ opens, sends, closes }).toEqual({ opens: 2, sends: 1, closes: 2 });
@@ -175,7 +198,7 @@ it.effect.each(["cancel", "timeout"] as const)(
           _tag: "Failure",
           failure: { reason: { _tag: "Interrupted" } },
         });
-        yield* session.operations.click("#act");
+        yield* session.initialPage().controls.operations.click("#act");
         expect(f.state.clicks).toBe(1);
       }),
     ),
@@ -221,14 +244,21 @@ it.effect(
         });
 
         const session = yield* (yield* f.acquisition).connect;
-        const first = yield* session.operations.startNavigation("https://example.test/first");
+
+        const first = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/first");
+
         const canceled = yield* Effect.forkChild(first.stop);
 
         yield* Effect.promise(() => opened.promise);
         yield* Fiber.interrupt(canceled);
         predecessor.completed.resolve("https://example.test/first");
         expect(yield* first.completed).toBe("https://example.test/first");
-        const second = yield* session.operations.startNavigation("https://example.test/second");
+
+        const second = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/second");
 
         for (let index = 0; index < 16; index++) {
           expect(yield* Effect.result(second.stop)).toMatchObject({
@@ -239,9 +269,12 @@ it.effect(
         expect(successorOpens).toBe(0);
         setup.resolve();
         yield* Effect.promise(() => predecessor.nativeFinished.promise);
+        yield* awaitNativeRetirement(session);
         yield* first.stop;
         expect(predecessorSends).toBe(0);
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
@@ -250,61 +283,69 @@ it.effect(
           successorOpens: 1,
           successorSends: 1,
         });
-        yield* session.operations.click("#act");
+        yield* session.initialPage().controls.operations.click("#act");
         expect(f.state.clicks).toBe(1);
       }),
     ),
 );
 
-it.effect("natural completion during stop setup keeps the permit and sends no stop", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const opened = gate<void>();
-      const setup = gate<void>();
-      let sends = 0;
+it.effect(
+  "natural completion during retained stop setup permits a successor and sends no old stop",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const opened = gate<void>();
+        const setup = gate<void>();
+        let sends = 0;
 
-      const navigation = flight(async () => {
-        opened.resolve();
-        await setup.promise;
+        const navigation = flight(async () => {
+          opened.resolve();
+          await setup.promise;
 
-        return {
-          stop: async () => {
-            sends++;
-          },
-          close: async () => {},
-        };
-      });
+          return {
+            stop: async () => {
+              sends++;
+            },
+            close: async () => {},
+          };
+        });
 
-      const f = yield* fixture({
-        onNavigate: (url, pageId) =>
-          url.endsWith("first")
-            ? navigation.script(url, pageId)
-            : { pageId, settled: Promise.resolve(url), stop: async () => "settled" },
-      });
+        const f = yield* fixture({
+          onNavigate: (url, pageId) =>
+            url.endsWith("first")
+              ? navigation.script(url, pageId)
+              : { pageId, settled: Promise.resolve(url), stop: async () => "settled" },
+        });
 
-      const session = yield* (yield* f.acquisition).connect;
-      const operation = yield* session.operations.startNavigation("https://example.test/first");
-      const stopping = yield* Effect.forkChild(operation.stop);
+        const session = yield* (yield* f.acquisition).connect;
 
-      yield* Effect.promise(() => opened.promise);
-      navigation.completed.resolve("https://example.test/first");
-      yield* operation.completed;
-      expect(
-        yield* Effect.result(session.operations.navigate("https://example.test/next")),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
-      });
-      setup.resolve();
-      yield* Fiber.join(stopping);
-      expect(sends).toBe(0);
-      const next = yield* session.operations.startNavigation("https://example.test/next");
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/first");
 
-      yield* operation.stop;
-      expect(yield* next.completed).toBe("https://example.test/next");
-      expect(sends).toBe(0);
-    }),
-  ),
+        const stopping = yield* Effect.forkChild(operation.stop);
+
+        yield* Effect.promise(() => opened.promise);
+        navigation.completed.resolve("https://example.test/first");
+        yield* operation.completed;
+        expect(
+          yield* session.initialPage().controls.operations.navigate("https://example.test/next"),
+        ).toBe("https://example.test/next");
+        expect(stopping.pollUnsafe()).toBeUndefined();
+        expect(sends).toBe(0);
+        setup.resolve();
+        yield* Fiber.join(stopping);
+        expect(sends).toBe(0);
+
+        const next = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/next");
+
+        yield* operation.stop;
+        expect(yield* next.completed).toBe("https://example.test/next");
+        expect(sends).toBe(0);
+      }),
+    ),
 );
 
 it.effect.each(["failure", "cancel"] as const)(
@@ -328,7 +369,11 @@ it.effect.each(["failure", "cancel"] as const)(
 
         const f = yield* fixture({ onNavigate: navigation.script });
         const session = yield* (yield* f.acquisition).connect;
-        const operation = yield* session.operations.startNavigation("https://example.test/slow");
+
+        const operation = yield* session
+          .initialPage()
+          .controls.operations.startNavigation("https://example.test/slow");
+
         const first = yield* Effect.forkChild(operation.stop);
 
         yield* Effect.promise(() => dispatched.promise);
@@ -344,7 +389,9 @@ it.effect.each(["failure", "cancel"] as const)(
 
         expect(repeated).toEqual(original);
         expect(sends).toBe(1);
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
@@ -392,7 +439,11 @@ it.effect("failed late detach keeps setup quarantined across subsequent navigati
       });
 
       const session = yield* (yield* f.acquisition).connect;
-      const first = yield* session.operations.startNavigation("https://example.test/first");
+
+      const first = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/first");
+
       const canceled = yield* Effect.forkChild(first.stop);
 
       yield* Effect.promise(() => opened.promise);
@@ -402,7 +453,9 @@ it.effect("failed late detach keeps setup quarantined across subsequent navigati
       predecessor.completed.resolve("https://example.test/first");
       yield* first.completed;
 
-      const second = yield* session.operations.startNavigation("https://example.test/second");
+      const second = yield* session
+        .initialPage()
+        .controls.operations.startNavigation("https://example.test/second");
 
       expect(yield* Effect.result(second.stop)).toMatchObject({
         _tag: "Failure",
@@ -411,7 +464,7 @@ it.effect("failed late detach keeps setup quarantined across subsequent navigati
       expect({ sends, successorOpens }).toEqual({ sends: 0, successorOpens: 0 });
       successor.completed.resolve("https://example.test/second");
       yield* second.completed;
-      yield* session.operations.click("#act");
+      yield* session.initialPage().controls.operations.click("#act");
       expect(f.state.clicks).toBe(1);
     }),
   ),
@@ -446,9 +499,9 @@ it.effect(
 
         const stopping = yield* Effect.scoped(
           Effect.gen(function* () {
-            const operation = yield* session.operations.startNavigation(
-              "https://example.test/slow",
-            );
+            const operation = yield* session
+              .initialPage()
+              .controls.operations.startNavigation("https://example.test/slow");
 
             const fiber = yield* Effect.forkScoped(operation.stop);
 
@@ -462,11 +515,60 @@ it.effect(
         setup.resolve();
         yield* Effect.promise(() => navigation.nativeFinished.promise);
         expect({ sends, closes }).toEqual({ sends: 0, closes: 1 });
-        expect(yield* Effect.result(session.operations.click("#act"))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage().controls.operations.click("#act")),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
         });
         expect(f.state.clicks).toBe(0);
+      }),
+    ),
+);
+
+it.effect(
+  "a quarantined page's pending stop setup does not hold up the handoff that releases it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const opened = gate<void>();
+        let events: DriverEvents | undefined;
+
+        // The stop's native setup never completes, so it stays pending after its caller is gone.
+        const stuck = flight(async () => {
+          opened.resolve();
+
+          return new Promise<never>(() => {});
+        });
+
+        const f = yield* fixture({
+          lifetimeMillis: 20000,
+          onConnect: async (driver, connected) => {
+            events = connected;
+
+            return driver;
+          },
+          onNavigate: (url, pageId) => stuck.script(url, pageId),
+        });
+
+        const session = yield* (yield* f.acquisition).connect;
+        const page = session.initialPage();
+
+        const navigation = yield* page.controls.operations.startNavigation(
+          "https://example.test/slow",
+        );
+
+        const canceled = yield* Effect.forkChild(navigation.stop);
+
+        yield* Effect.promise(() => opened.promise);
+        yield* Fiber.interrupt(canceled);
+        // A dialog quarantines the page; only the operator's handoff can release it.
+        events?.pause("dialog", page.record.identity.pageId);
+
+        const handoff = yield* Effect.forkChild(session.beginHandoff(Effect.succeed("view")));
+
+        yield* TestClock.adjust(3000);
+        expect((yield* Fiber.join(handoff)).view).toBe("view");
       }),
     ),
 );

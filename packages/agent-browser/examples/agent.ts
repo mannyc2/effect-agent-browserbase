@@ -17,6 +17,7 @@ import * as InMemory from "effect-agent/in-memory";
 import * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
+import { BrowserError, Reasons } from "effect-browser/errors";
 import * as Account from "effect-browserbase/account";
 import { BrowserbaseBrowser, type LiveView } from "effect-browserbase/browser";
 import { recipe } from "effect-browserbase/launch";
@@ -46,11 +47,11 @@ const host = Layer.mergeAll(
 export const runBrowserAgent = (request: string) =>
   Browser.scoped(BrowserbaseBrowser.open(genericPolicy), (session) =>
     Effect.gen(function* () {
-      const run = yield* turns(session, request);
+      const run = yield* turns(session, session.initialPage, request);
 
       // Through the generic session, with the host-only facts an Observation handed to a model
       // never carries. Leaving the scope releases the browser and reports how that went.
-      const seen = yield* session.observe({ scope: "viewport" });
+      const seen = yield* session.initialPage.observe({ scope: "viewport" });
 
       return { ...run.output, url: seen.url, turns: run.turns };
     }),
@@ -67,7 +68,7 @@ export const runWithOperator = (
 ) =>
   Browser.scoped(BrowserbaseBrowser.open(genericPolicy), (session) =>
     Effect.gen(function* () {
-      const first = yield* turns(session, request);
+      const first = yield* turns(session, session.initialPage, request);
 
       if (!first.output.needsOperator) return first.output;
 
@@ -77,11 +78,28 @@ export const runWithOperator = (
 
       yield* operator(handoff.view);
       // The boolean is this host's own decision that the operator has let go. The page cannot say.
-      yield* session.resume(handoff.token, true);
+      const inventory = yield* session.resume(handoff.token, true);
+
+      // Resume retires every issued Page. Acquire the one the first run worked on afresh from
+      // the inventory; display selection only says what the operator last looked at.
+      const worked = inventory.pages.find(
+        (page) => page.pageId === session.initialPage.identity.pageId,
+      );
+
+      if (worked === undefined)
+        return yield* BrowserError.make({
+          operation: "target",
+          reason: Reasons.Missing.make({}),
+          outcome: "undispatched",
+        });
+      const resumedPage = yield* session.page(worked);
+
+      yield* resumedPage.observe();
 
       const second = yield* turns(
         session,
-        "The operator has signed in; continue from the page as it is now.",
+        resumedPage,
+        "The operator has signed in; inspect the resumed page for fresh references and continue from it as it is now.",
         first.threadId,
       );
 
@@ -129,5 +147,5 @@ const bootstrap = Bootstrap.binding({
  */
 export const runSupervised = (request: string) =>
   Browser.scoped(BrowserbaseBrowser.open(genericPolicy, { bootstrap }), (browser) =>
-    turns(browser, request),
+    turns(browser, browser.initialPage, request),
   ).pipe(Effect.provide(host));

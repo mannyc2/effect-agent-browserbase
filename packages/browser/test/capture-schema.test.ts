@@ -1,10 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema, type Scope, Stream } from "effect";
-import { type PageInfo, Target } from "effect-browser/browser-data";
+import type { AdmissionOptions } from "effect-browser/browser";
+import { PageInfo, Target } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import type { BrowserError } from "effect-browser/errors";
 
-import type { CaptureParent } from "../src/internal/browser/Association.ts";
+import type { PageCaptureParent } from "../src/internal/browser/Association.ts";
 import type { NativeFrame } from "../src/internal/browser/Driver.ts";
 import { makeOwner } from "../src/internal/browser/Owner.ts";
 import { startCapture } from "../src/internal/capture/Capture.ts";
@@ -30,7 +31,7 @@ interface PreviousFrame {
 }
 
 interface PreviousOptions {
-  readonly target?: PageInfo;
+  readonly admission?: AdmissionOptions;
   readonly maxFrames?: number;
   readonly maxBufferedBytes?: number;
   readonly maxFrameBytes?: number;
@@ -41,7 +42,12 @@ interface PreviousOptions {
 }
 
 const frameShape: Same<Capture.CapturedFrame, PreviousFrame> = true;
-const optionsShape: Same<Capture.CaptureOptions, PreviousOptions> = true;
+
+const optionsShape: Same<
+  { [K in keyof Capture.CaptureOptions]: Capture.CaptureOptions[K] },
+  PreviousOptions
+> = true;
+
 const error: Same<Effect.Error<ReturnType<typeof Capture.start>>, BrowserError> = true;
 const scope: Same<Requirements<ReturnType<typeof Capture.start>>, Scope.Scope> = true;
 const decoderEnvironment: Same<typeof Capture.CapturedFrame.DecodingServices, never> = true;
@@ -60,6 +66,14 @@ const frame: Capture.CapturedFrame = {
   viewportWidth: 800,
   viewportHeight: 600,
 };
+
+const selectedPage = PageInfo.make({
+  pageId: frame.target.pageId,
+  targetId: "native-page-1",
+  url: "",
+  title: "",
+  selected: true,
+});
 
 it("adds data schemas without changing structural public shapes or capture E/R", () => {
   expect(frameShape && optionsShape && error && scope && decoderEnvironment).toBe(true);
@@ -150,9 +164,13 @@ it.effect("rejects invalid admission before resolving a native target or reservi
       owner.state.phase = "open";
       let resolutions = 0;
 
-      const parent: CaptureParent = {
+      const parent: PageCaptureParent = {
         owner,
-        target: () => frame.target,
+        newCaptureId: Effect.die("invalid limits must not allocate a capture id"),
+        validate: () => Effect.die("invalid limits must not check page authority"),
+        get page(): never {
+          throw new Error("invalid limits must not read target metadata");
+        },
         resolve: () => {
           resolutions++;
 
@@ -204,9 +222,11 @@ it.effect("returned target metadata cannot mutate the capture generation guard",
       let stops = 0;
       const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
 
-      const parent: CaptureParent = {
+      const parent: PageCaptureParent = {
         owner,
-        target: () => target,
+        newCaptureId: Effect.succeed("capture-fixture-identity"),
+        validate: () => Effect.void,
+        page: selectedPage,
         resolve: () =>
           Effect.succeed({
             key: "native-page-1",
@@ -276,9 +296,11 @@ it.effect(
         let stops = 0;
         const target = Target.make({ generation: 0, pageId: "page-1", frameId: "frame-1" });
 
-        const parent: CaptureParent = {
+        const parent: PageCaptureParent = {
           owner,
-          target: () => target,
+          newCaptureId: Effect.succeed("capture-fixture-accounting"),
+          validate: () => Effect.void,
+          page: selectedPage,
           resolve: () =>
             Effect.succeed({
               key: "capture-accounting",

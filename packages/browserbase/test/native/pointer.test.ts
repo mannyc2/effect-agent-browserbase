@@ -51,13 +51,13 @@ it.live("real CDP: hover reaches a nested cross-origin frame in main-viewport co
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: f.url }));
           const [page] = f.nativePages(session.reference.sessionId);
 
           assert.ok(page);
           yield* Effect.promise(() => page.setContent(site.page));
 
-          const frames = yield* settle(session.frames, (listed) =>
+          const frames = yield* settle(session.initialPage.listFrames(), (listed) =>
             listed.some((frame) => frame.name === "leaf"),
           );
 
@@ -68,8 +68,7 @@ it.live("real CDP: hover reaches a nested cross-origin frame in main-viewport co
           assert.ok(leaf);
           expect(new URL(leaf.url()).origin).toBe(site.origin);
           expect(site.origin).not.toBe(new URL(page.url()).origin);
-          yield* session.selectFrame(target.frameId);
-          const handle = session;
+          const handle = yield* session.initialPage.frame(target);
           const receipt = yield* handle.hover(HoverRequest.make({ selector: "#target" }));
 
           const events = yield* Effect.promise<unknown>(() => leaf.evaluate("window.moves")).pipe(
@@ -98,13 +97,13 @@ it.live("real CDP: a nested hover refuses clipping and occlusion in every ancest
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: f.url }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: f.url }));
           const [page] = f.nativePages(session.reference.sessionId);
 
           assert.ok(page);
           yield* Effect.promise(() => page.setContent(site.page));
 
-          const frames = yield* settle(session.frames, (listed) =>
+          const frames = yield* settle(session.initialPage.listFrames(), (listed) =>
             listed.some((frame) => frame.name === "leaf"),
           );
 
@@ -115,8 +114,7 @@ it.live("real CDP: a nested hover refuses clipping and occlusion in every ancest
           assert.ok(target);
           assert.ok(outer);
           assert.ok(leaf);
-          yield* session.selectFrame(target.frameId);
-          const handle = session;
+          const handle = yield* session.initialPage.frame(target);
 
           const counts = () =>
             Effect.promise<unknown>(() =>
@@ -190,7 +188,7 @@ it.live(
           f,
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
-            const handle = session;
+            const handle = session.initialPage;
 
             yield* handle.navigate(NavigateRequest.make({ url: `${f.url}pointer` }));
             const [native] = f.nativePages(session.reference.sessionId);
@@ -211,7 +209,7 @@ it.live(
 
             expect(moved.kind).toBe("pointer-move");
             expect(moved.position).toEqual({ x: 140, y: 100 });
-            expect(moved.target).toEqual(yield* session.target);
+            expect(moved.target).toEqual(session.initialPage.identity);
             expect(moved.completedMonotonicNanos).toBeGreaterThanOrEqual(
               moved.startedMonotonicNanos,
             );
@@ -276,7 +274,7 @@ it.live("real CDP: hover places the pointer on one exact element, or sends nothi
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session;
+          const handle = session.initialPage;
 
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}pointer` }));
           const [native] = f.nativePages(session.reference.sessionId);
@@ -308,12 +306,12 @@ it.live("real CDP: hover places the pointer on one exact element, or sends nothi
           }
 
           // The exact node an observation named, not whatever a selector matches later.
-          const observation = yield* session.observe();
+          const observation = yield* session.initialPage.observe();
           const plain = observation.controls.find((control) => control.label === "Plain");
 
           assert.ok(plain);
 
-          const byNode = yield* session.hoverElement(
+          const byNode = yield* session.initialPage.hoverElement(
             ObservedElement.make({
               observationId: observation.observationId,
               elementId: plain.elementId,
@@ -329,7 +327,7 @@ it.live("real CDP: hover places the pointer on one exact element, or sends nothi
   ),
 );
 
-it.live("real CDP: input through a handle bound to another page reaches neither page", () =>
+it.live("real CDP: a closed issued page cannot send input to another page", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* localBrowser;
@@ -338,16 +336,18 @@ it.live("real CDP: input through a handle bound to another page reaches neither 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const first = yield* session.retain;
+          const first = session.initialPage;
 
           yield* first.navigate(NavigateRequest.make({ url: `${f.url}pointer` }));
-          yield* session.selectPage(yield* session.createPage);
-          const second = yield* session.retain;
+          const second = yield* session.createPage();
+
+          yield* session.selectPage(second);
 
           yield* second.navigate(NavigateRequest.make({ url: `${f.url}pointer#second` }));
+          yield* first.close();
           const natives = f.nativePages(session.reference.sessionId);
 
-          expect(natives).toHaveLength(2);
+          expect(natives).toHaveLength(1);
 
           const inputs = [
             first.pointerMove(PointerMoveRequest.make({ to: { x: 140, y: 100 } })),
@@ -360,7 +360,7 @@ it.live("real CDP: input through a handle bound to another page reaches neither 
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") {
-              expect(refused.failure.reason._tag).toBe("Stale");
+              expect(refused.failure.reason._tag).toBe("Closed");
               expect(refused.failure.outcome).toBe("undispatched");
             }
           }
@@ -392,10 +392,10 @@ it.live("real CDP: a receipt and the frames it caused share one timeline", () =>
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
-          const handle = session;
+          const handle = session.initialPage;
 
           yield* handle.navigate(NavigateRequest.make({ url: `${f.url}pointer` }));
-          const interval = yield* Capture.start(session, { maxDurationMillis: 8000 });
+          const interval = yield* Capture.start(session.initialPage, { maxDurationMillis: 8000 });
           const received: Array<bigint> = [];
 
           yield* Stream.runForEach(interval.frames, (frame) =>

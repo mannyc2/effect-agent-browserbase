@@ -19,7 +19,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* BrowserbaseBrowser.open(policy);
 
-            yield* session.navigate({ url: fixture.url });
+            yield* session.initialPage.navigate({ url: fixture.url });
             const [page] = fixture.nativePages(session.reference.sessionId);
 
             assert.ok(page);
@@ -45,7 +45,7 @@ it.live(
         <script>window.clicks=0</script>`),
             );
 
-            const observation = yield* session.observe({ maxControls: 32 });
+            const observation = yield* session.initialPage.observe({ maxControls: 32 });
 
             const named = (label: string) => {
               const found = observation.controls.find((control) => control.label === label);
@@ -105,13 +105,15 @@ it.live(
                 (node as HTMLInputElement).checked = false;
               }),
             );
-            expect(yield* session.clickElement(checkbox).pipe(Effect.flip)).toMatchObject({
+            expect(
+              yield* session.initialPage.clickElement(checkbox).pipe(Effect.flip),
+            ).toMatchObject({
               reason: { _tag: "Stale" },
               outcome: "undispatched",
             });
             expect(yield* Effect.promise(() => page.evaluate("window.clicks"))).toBe(0);
 
-            const fresh = yield* session.observe({ maxControls: 32 });
+            const fresh = yield* session.initialPage.observe({ maxControls: 32 });
             const option = fresh.controls.find((control) => control.label === "Native option")!;
             const select = fresh.controls.find((control) => control.label === "Native select")!;
 
@@ -125,7 +127,7 @@ it.live(
             );
             for (const control of [option, select]) {
               expect(
-                yield* session
+                yield* session.initialPage
                   .controlFacts({
                     observationId: fresh.observationId,
                     elementId: control.elementId,

@@ -177,11 +177,15 @@ it.live(
         });
 
         // An attached browser keeps its own window; the fixtures are laid out for 640 x 480.
-        yield* session.resizeViewport({ width: 640, height: 480 });
+        yield* session.initialPage.resizeViewport({ width: 640, height: 480 });
 
         for (const [name, expected] of Object.entries(cases)) {
-          yield* session.navigate({ url: `${origin}/${name}` });
-          const viewport = yield* session.observe({ scope: "viewport", maxControls: 32 });
+          yield* session.initialPage.navigate({ url: `${origin}/${name}` });
+
+          const viewport = yield* session.initialPage.observe({
+            scope: "viewport",
+            maxControls: 32,
+          });
 
           for (const phrase of expected.read)
             expect(viewport.text, `${name}: ${phrase}`).toContain(phrase);
@@ -196,12 +200,12 @@ it.live(
         }
 
         // A checkpoint reads the viewport the same way.
-        yield* session.navigate({ url: `${origin}/transparent-shell` });
-        expect((yield* session.checkpoint()).text).toContain("market text under shell");
+        yield* session.initialPage.navigate({ url: `${origin}/transparent-shell` });
+        expect((yield* session.initialPage.checkpoint()).text).toContain("market text under shell");
 
         // An exhausted scan leaves every point to the browser rather than every point unread.
-        yield* session.navigate({ url: `${origin}/large` });
-        const large = yield* session.observe({ scope: "viewport" });
+        yield* session.initialPage.navigate({ url: `${origin}/large` });
+        const large = yield* session.initialPage.observe({ scope: "viewport" });
 
         expect(large.text).toContain("first large words");
         expect(large.viewport.exhausted).toBe(true);

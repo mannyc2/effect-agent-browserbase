@@ -44,14 +44,14 @@ const shop: Testing.Script = {
 const reference = (observation: { observationId: string }, elementId: string) =>
   ObservedElement.make({ observationId: observation.observationId, elementId });
 
-const acceptCookies = (browser: Browser.AnySession) =>
+const acceptCookies = (browser: Browser.AnySession, options?: Browser.OperationOptions) =>
   Effect.gen(function* () {
-    const observation = yield* browser.observe({ scope: "viewport" });
+    const observation = yield* browser.initialPage.observe({ scope: "viewport" }, options);
 
     const accept = observation.controls.find((c) => c.label === "Accept all");
 
     if (accept === undefined) return "absent" as const;
-    yield* browser.clickElement(reference(observation, accept.elementId), {
+    yield* browser.initialPage.clickElement(reference(observation, accept.elementId), {
       admit: (facts) => facts.destination === undefined || facts.destination.startsWith(origin),
     });
 
@@ -75,11 +75,11 @@ it.effect("opens the real owner over the scripted engine and closes it with a re
           kept = browser;
           expect(browser.reference.provider).toBe("scripted");
           expect(browser.implementation).toBe("scripted");
-          yield* browser.navigate({ url: `${origin}/` });
+          yield* browser.initialPage.navigate({ url: `${origin}/` });
           const result = yield* acceptCookies(browser);
 
           expect((yield* browser.control.document.current).url).toBe(`${origin}/?consent=1`);
-          expect((yield* browser.readText({})).text).toBe("Welcome back.");
+          expect((yield* browser.initialPage.readText({})).text).toBe("Welcome back.");
 
           return result;
         }),
@@ -101,7 +101,7 @@ it.effect("opens the real owner over the scripted engine and closes it with a re
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({ connection: "closed", issues: [] });
     expect(yield* kept.status).toMatchObject({ phase: "closed" });
-    expect(yield* kept.observe().pipe(Effect.flip)).toMatchObject({
+    expect(yield* kept.initialPage.observe().pipe(Effect.flip)).toMatchObject({
       reason: { _tag: "Closed" },
       outcome: "undispatched",
     });
@@ -162,9 +162,9 @@ it.effect("an expired lifetime refuses undispatched under the test clock", () =>
     Testing.open(shop, { policy: BrowserPolicy.unrestricted({ maxElapsedMillis: 60_000 }) }),
     (browser) =>
       Effect.gen(function* () {
-        yield* browser.observe();
+        yield* browser.initialPage.observe();
         yield* TestClock.adjust("61 seconds");
-        expect(yield* browser.observe().pipe(Effect.flip)).toMatchObject({
+        expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
           reason: { _tag: "Expired" },
           outcome: "undispatched",
         });
@@ -177,6 +177,7 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
   Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
     Effect.gen(function* () {
       const gate = yield* browser.control.gate;
+      const page = browser.initialPage;
 
       yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
       const attempt = yield* acceptCookies(browser).pipe(Effect.forkScoped);
@@ -187,13 +188,19 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
         operation: "click",
         reason: { _tag: "Timeout" },
         outcome: "unknown",
+        containment: { _tag: "PageClosed", pageId: page.identity.pageId },
       });
       expect(yield* browser.status).toMatchObject({
-        phase: "uncertain",
-        reason: "native-failure",
-        unresolvedDispatch: true,
+        phase: "open",
+        reason: null,
+        unresolvedDispatch: false,
       });
-      // A retry in application code cannot get past the owner: nothing is re-sent.
+      expect(yield* page.status).toMatchObject({ phase: "closed" });
+      expect(yield* browser.listPages()).toEqual([]);
+      expect(
+        (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
+      ).toMatchObject([{ pageId: page.identity.pageId, dispatched: true, settled: "completed" }]);
+      // The original page closed, so application retries cannot replay its input.
       expect(yield* acceptCookies(browser).pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Closed" },
         outcome: "undispatched",
@@ -204,11 +211,6 @@ it.effect("a click held after dispatch times out unknown and is never replayed",
       expect(clicks[0]).toMatchObject({ dispatched: true });
       yield* gate.open;
     }),
-  ).pipe(
-    // The uncertain owner cannot confirm cleanup; the scope still closes.
-    Effect.catchTag("BrowserError", (error) =>
-      error.operation === "close" ? Effect.void : Effect.fail(error),
-    ),
   ),
 );
 
@@ -236,19 +238,19 @@ it.effect("interruption before dispatch leaves the session usable", () =>
 it.effect("a dispatched mutation and a replaced document both make earlier nodes stale", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      const first = yield* browser.observe();
+      const first = yield* browser.initialPage.observe();
 
-      yield* browser.fillElement(reference(first, "name"), "Ada");
+      yield* browser.initialPage.fillElement(reference(first, "name"), "Ada");
       expect(
-        yield* browser.clickElement(reference(first, "accept")).pipe(Effect.flip),
+        yield* browser.initialPage.clickElement(reference(first, "accept")).pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
-      const second = yield* browser.observe();
+      const second = yield* browser.initialPage.observe();
 
       yield* browser.control.document.replace({ url: `${origin}/`, text: "Changed underneath." });
       expect(
-        yield* browser.controlFacts(reference(second, "name")).pipe(Effect.flip),
+        yield* browser.initialPage.controlFacts(reference(second, "name")).pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Stale" } });
-      expect((yield* browser.observe()).text).toBe("Changed underneath.");
+      expect((yield* browser.initialPage.observe()).text).toBe("Changed underneath.");
     }),
   ),
 );
@@ -261,10 +263,10 @@ it.effect("scripted failures keep their reason and outcome through the owner", (
         reason: Reasons.RateLimited.make({ retryAfterMillis: 1000 }),
         outcome: "rejected",
       });
-      const observation = yield* browser.observe();
+      const observation = yield* browser.initialPage.observe();
 
       expect(
-        yield* browser.clickElement(reference(observation, "accept")).pipe(Effect.flip),
+        yield* browser.initialPage.clickElement(reference(observation, "accept")).pipe(Effect.flip),
       ).toMatchObject({
         operation: "click",
         reason: { _tag: "RateLimited", retryAfterMillis: 1000 },
@@ -281,7 +283,7 @@ it.effect("a lost connection is reported as disconnected and refused afterwards"
     Effect.gen(function* () {
       yield* browser.control.disconnect;
       expect(yield* browser.status).toMatchObject({ phase: "uncertain", reason: "disconnected" });
-      expect(yield* browser.observe().pipe(Effect.flip)).toMatchObject({
+      expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
@@ -296,23 +298,26 @@ it.effect("a lost connection is reported as disconnected and refused afterwards"
 it.effect("an input receipt reports the pointer placed on its own page", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      yield* browser.navigate({ url: `${origin}/` });
-      const home = (yield* browser.pages).find((page) => page.selected);
+      yield* browser.initialPage.navigate({ url: `${origin}/` });
+      const home = (yield* browser.listPages()).find((page) => page.selected);
 
       expect(home).toBeDefined();
       if (home === undefined) return;
-      expect((yield* browser.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual({
+      expect((yield* browser.initialPage.pointerMove({ to: { x: 12, y: 34 } })).position).toEqual({
         x: 12,
         y: 34,
       });
-      const other = yield* browser.createPage;
+      const other = yield* browser.createPage();
 
       yield* browser.selectPage(other);
       // Nothing placed the pointer on this page, whatever the last command did elsewhere.
-      expect((yield* browser.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
+      expect((yield* other.wheel({ deltaX: 0, deltaY: 40 })).position).toBeNull();
       expect(yield* browser.control.pointer).toEqual({ x: 12, y: 34 });
-      yield* browser.selectPage(home);
-      expect((yield* browser.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({ x: 12, y: 34 });
+      yield* browser.selectPage(yield* browser.page(home));
+      expect((yield* browser.initialPage.wheel({ deltaX: 0, deltaY: 40 })).position).toEqual({
+        x: 12,
+        y: 34,
+      });
     }),
   ),
 );
@@ -320,9 +325,9 @@ it.effect("an input receipt reports the pointer placed on its own page", () =>
 it.effect("waits observe the exact node until the document changes or the deadline passes", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      const observation = yield* browser.observe();
+      const observation = yield* browser.initialPage.observe();
 
-      const hidden = yield* browser
+      const hidden = yield* browser.initialPage
         .waitForElement({ reference: reference(observation, "accept"), state: "hidden" })
         .pipe(Effect.forkScoped);
 
@@ -336,7 +341,7 @@ it.effect("waits observe the exact node until the document changes or the deadli
       yield* Fiber.join(hidden);
 
       // Document replacement is stale for a wait, never a satisfied condition.
-      const replaced = yield* browser
+      const replaced = yield* browser.initialPage
         .waitForElement({ reference: reference(observation, "name"), state: "disabled" })
         .pipe(Effect.forkScoped);
 
@@ -352,9 +357,9 @@ it.effect("waits observe the exact node until the document changes or the deadli
         text: "Replaced.",
         controls: [{ id: "name", kind: "input", label: "Name" }],
       });
-      const fresh = yield* browser.observe();
+      const fresh = yield* browser.initialPage.observe();
 
-      const never = yield* browser
+      const never = yield* browser.initialPage
         .waitForElement({
           reference: reference(fresh, "name"),
           state: "disabled",
@@ -380,22 +385,26 @@ it.effect("waits observe the exact node until the document changes or the deadli
 it.effect("keyboard input needs focus, values stay out of the recorder", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      const observation = yield* browser.observe();
+      const observation = yield* browser.initialPage.observe();
 
       expect(
-        yield* browser.typeElement(reference(observation, "name"), "Ada").pipe(Effect.flip),
+        yield* browser.initialPage
+          .typeElement(reference(observation, "name"), "Ada")
+          .pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "NotFocused" }, outcome: "undispatched" });
-      yield* browser.clickElement(reference(observation, "name"));
-      const focused = yield* browser.observe();
+      yield* browser.initialPage.clickElement(reference(observation, "name"));
+      const focused = yield* browser.initialPage.observe();
 
-      yield* browser.typeElement(reference(focused, "name"), "Ada");
+      yield* browser.initialPage.typeElement(reference(focused, "name"), "Ada");
       // Real key input is a mutation: the observation it was named from is retired.
       expect(
-        yield* browser.pressElement(reference(focused, "name"), { key: "!" }).pipe(Effect.flip),
+        yield* browser.initialPage
+          .pressElement(reference(focused, "name"), { key: "!" })
+          .pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
-      const again = yield* browser.observe();
+      const again = yield* browser.initialPage.observe();
 
-      yield* browser.pressElement(reference(again, "name"), { key: "!" });
+      yield* browser.initialPage.pressElement(reference(again, "name"), { key: "!" });
       expect((yield* browser.control.document.values).get("name")).toBe("Ada!");
       expect(JSON.stringify(yield* browser.control.calls)).not.toContain("Ada");
     }),
@@ -405,23 +414,23 @@ it.effect("keyboard input needs focus, values stay out of the recorder", () =>
 it.effect("native selects, downloads and file selection follow the same admission", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      const observation = yield* browser.observe();
+      const observation = yield* browser.initialPage.observe();
 
       expect(observation.controls.map((c) => c.elementId)).toContain("phish");
       expect(observation.viewport.unreachableControls).toBe(0);
       expect(
-        yield* browser.hoverElement(reference(observation, "phish")).pipe(Effect.flip),
+        yield* browser.initialPage.hoverElement(reference(observation, "phish")).pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "NotVisible" }, outcome: "undispatched" });
-      yield* browser.selectOption(reference(observation, "size"), ["large"]);
+      yield* browser.initialPage.selectOption(reference(observation, "size"), ["large"]);
       const controls = (yield* browser.control.document.current).controls ?? [];
 
       expect(controls.find((c) => c.id === "large")?.selected).toBe(true);
       expect(controls.find((c) => c.id === "small")?.selected).toBe(false);
       // A dispatched selection retires the observation it was named from.
       expect(
-        yield* browser.hoverElement(reference(observation, "phish")).pipe(Effect.flip),
+        yield* browser.initialPage.hoverElement(reference(observation, "phish")).pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Stale" } });
-      const viewport = yield* browser.observe({ scope: "viewport" });
+      const viewport = yield* browser.initialPage.observe({ scope: "viewport" });
 
       expect(viewport.controls.map((c) => c.elementId)).not.toContain("phish");
       expect(viewport.viewport.unreachableControls).toBe(1);
@@ -463,18 +472,18 @@ it.effect("forms and matched readings take the real owner's steps, stops and ret
     }),
     (browser) =>
       Effect.gen(function* () {
-        const news = yield* browser.observe({ match: "NEWS" });
+        const news = yield* browser.initialPage.observe({ match: "NEWS" });
 
         expect(news).toMatchObject({ match: "NEWS", text: "Newsletter preferences" });
         expect(news.controls.map((c) => [c.elementId, c.checked])).toEqual([["news", false]]);
         // A select matches through an option label and keeps its options beside it.
-        const large = yield* browser.observe({ match: "large" });
+        const large = yield* browser.initialPage.observe({ match: "large" });
 
         expect(large.controls.map((c) => c.elementId)).toEqual(["size", "small", "large"]);
 
-        const observation = yield* browser.observe();
+        const observation = yield* browser.initialPage.observe();
 
-        const stopped = yield* browser.fillForm({
+        const stopped = yield* browser.initialPage.fillForm({
           observationId: observation.observationId,
           fields: [
             { elementId: "name", value: "Ada" },
@@ -500,12 +509,12 @@ it.effect("forms and matched readings take the real owner's steps, stops and ret
         // observation when it ended.
         expect((yield* browser.control.document.values).get("name")).toBe("Ada");
         expect(
-          yield* browser.clickElement(reference(observation, "pay")).pipe(Effect.flip),
+          yield* browser.initialPage.clickElement(reference(observation, "pay")).pipe(Effect.flip),
         ).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
 
-        const again = yield* browser.observe();
+        const again = yield* browser.initialPage.observe();
 
-        const submitted = yield* browser.fillForm({
+        const submitted = yield* browser.initialPage.fillForm({
           observationId: again.observationId,
           fields: [
             { elementId: "news", checked: true },
@@ -544,6 +553,63 @@ it.effect("forms and matched readings take the real owner's steps, stops and ret
   ),
 );
 
+it.effect("each form step has its own action deadline", () =>
+  Browser.scoped(
+    Testing.open(
+      {
+        documents: [
+          {
+            url: `${origin}/`,
+            text: "Sign up",
+            controls: [
+              { id: "name", kind: "input", label: "Name", inputType: "text" },
+              { id: "email", kind: "input", label: "Email", inputType: "text" },
+            ],
+          },
+        ],
+      },
+      { automation: { actionTimeoutMillis: 5_000 } },
+    ),
+    (browser) =>
+      Effect.gen(function* () {
+        const first = yield* browser.control.gate;
+        const second = yield* browser.control.gate;
+
+        yield* browser.control.next("fill-form", { _tag: "Hold", gate: first, dispatched: false });
+        yield* browser.control.next("fill-form", { _tag: "Hold", gate: second, dispatched: false });
+        const observation = yield* browser.initialPage.observe();
+
+        const form = yield* browser.initialPage
+          .fillForm({
+            observationId: observation.observationId,
+            fields: [
+              { elementId: "name", value: "Ada" },
+              { elementId: "email", value: "ada@example.test" },
+            ],
+          })
+          .pipe(Effect.forkChild);
+
+        // Together the steps take longer than one action timeout; neither does on its own.
+        yield* first.reached;
+        yield* TestClock.adjust("3 seconds");
+        yield* first.open;
+        yield* second.reached;
+        yield* TestClock.adjust("3 seconds");
+        yield* second.open;
+
+        const result = yield* Fiber.join(form);
+
+        expect(result).toMatchObject({
+          fields: [
+            { elementId: "name", status: "set" },
+            { elementId: "email", status: "set" },
+          ],
+        });
+        expect(result.stopped).toBeUndefined();
+      }),
+  ),
+);
+
 it.effect("a disabled or textless control refuses text before it is sent", () =>
   Browser.scoped(
     Testing.open({
@@ -561,10 +627,12 @@ it.effect("a disabled or textless control refuses text before it is sent", () =>
     }),
     (browser) =>
       Effect.gen(function* () {
-        const observation = yield* browser.observe();
+        const observation = yield* browser.initialPage.observe();
 
         const refused = (elementId: string, value: string) =>
-          browser.fillElement(reference(observation, elementId), value).pipe(Effect.flip);
+          browser.initialPage
+            .fillElement(reference(observation, elementId), value)
+            .pipe(Effect.flip);
 
         expect(yield* refused("code", "42")).toMatchObject({
           reason: { _tag: "Disabled" },
@@ -579,7 +647,7 @@ it.effect("a disabled or textless control refuses text before it is sent", () =>
           outcome: "undispatched",
         });
         // Nothing was sent, so the observation still admits a number.
-        yield* browser.fillElement(reference(observation, "age"), "40");
+        yield* browser.initialPage.fillElement(reference(observation, "age"), "40");
         expect((yield* browser.control.document.values).get("age")).toBe("40");
       }),
   ),
@@ -590,7 +658,7 @@ it.effect("capture delivers scripted frames with the real accounting", () =>
     Effect.gen(function* () {
       const summary = yield* Effect.scoped(
         Effect.gen(function* () {
-          const interval = yield* Capture.start(browser, {
+          const interval = yield* Capture.start(browser.initialPage, {
             maxFrames: 2,
             maxDurationMillis: 10_000,
           });
@@ -620,7 +688,7 @@ it.effect("capture delivers scripted frames with the real accounting", () =>
       });
 
       const unconfirmed = yield* Effect.scoped(
-        Capture.start(browser, { maxDurationMillis: 10_000 }).pipe(
+        Capture.start(browser.initialPage, { maxDurationMillis: 10_000 }).pipe(
           Effect.flatMap((interval) => interval.stop),
         ),
       );
@@ -671,19 +739,39 @@ const settings = Bootstrap.combine(
   }),
 );
 
+it.live("a plan can pause before the first navigation its bootstrap requires", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(shop, { bootstrap: settings });
+
+      // A duration pause reads no document, so the starting document's readiness is irrelevant.
+      expect((yield* browser.initialPage.ready())._tag).toBe("RequiresNavigation");
+
+      const ran = yield* browser.initialPage.run({
+        version: 1,
+        steps: [
+          { id: "pause", action: { _tag: "Wait", mode: { _tag: "Duration", milliseconds: 5 } } },
+        ],
+      });
+
+      expect(ran.steps.map((step) => step.id)).toEqual(["pause"]);
+    }),
+  ),
+);
+
 it.effect("typed callbacks run through the real admission and fail the session as declared", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const browser = yield* Testing.open(shop, { bootstrap: settings });
 
       // The starting document predates registration, so dependent work is refused until navigation.
-      expect((yield* browser.ready)._tag).toBe("RequiresNavigation");
-      expect(yield* browser.observe().pipe(Effect.flip)).toMatchObject({
+      expect((yield* browser.initialPage.ready())._tag).toBe("RequiresNavigation");
+      expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
         operation: "observe",
         reason: { _tag: "Stale" },
       });
-      yield* browser.navigate({ url: `${origin}/` });
-      expect((yield* browser.ready)._tag).toBe("Ready");
+      yield* browser.initialPage.navigate({ url: `${origin}/` });
+      expect((yield* browser.initialPage.ready())._tag).toBe("Ready");
 
       expect(yield* browser.control.invoke("getSettings", { revision: 7 })).toEqual({
         ok: true,
@@ -722,7 +810,7 @@ it.effect("typed callbacks run through the real admission and fail the session a
         SettingsUnavailable.make({ revision: -1 }),
       );
       expect((yield* browser.bindingDiagnostics).faulted).toBe(true);
-      expect(yield* browser.observe().pipe(Effect.flip)).toMatchObject({
+      expect(yield* browser.initialPage.observe().pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Closed" },
       });
     }),
@@ -732,103 +820,185 @@ it.effect("typed callbacks run through the real admission and fail the session a
 it.effect("page holds refuse input on the held page until it is resumed and revalidated", () =>
   Browser.scoped(Testing.open(shop, { automation: { pageControl: true } }), (browser) =>
     Effect.gen(function* () {
-      const observation = yield* browser.observe();
-      const page = (yield* browser.pages).find((candidate) => candidate.selected);
+      const observation = yield* browser.initialPage.observe();
+      const page = (yield* browser.listPages()).find((candidate) => candidate.selected);
 
       expect(page).toBeDefined();
       if (page === undefined) return;
-      const held = yield* PageControl.suspend(browser, page);
+      const held = yield* PageControl.suspend(yield* browser.page(page));
 
-      expect((yield* PageControl.state(browser, page)).state).toBe("suspended");
+      expect((yield* PageControl.state(yield* browser.page(page))).state).toBe("suspended");
       // A held page is refused, never woken: the owner says so before any node check.
       expect(
-        yield* browser.clickElement(reference(observation, "accept")).pipe(Effect.flip),
+        yield* browser.initialPage.clickElement(reference(observation, "accept")).pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Busy" }, outcome: "undispatched" });
-      yield* PageControl.resume(browser, held);
-      expect(yield* PageControl.resume(browser, held).pipe(Effect.flip)).toMatchObject({
+      yield* PageControl.resume(browser.initialPage, held);
+      expect(yield* PageControl.resume(browser.initialPage, held).pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Stale" },
       });
       // After a hold nothing observed on that page may be acted on unchecked.
       expect(
-        yield* browser.clickElement(reference(observation, "accept")).pipe(Effect.flip),
+        yield* browser.initialPage.clickElement(reference(observation, "accept")).pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Stale" }, outcome: "undispatched" });
-      yield* browser.revalidateElement(reference(observation, "accept"));
-      yield* browser.clickElement(reference(observation, "accept"));
+      yield* browser.initialPage.revalidateElement(reference(observation, "accept"));
+      yield* browser.initialPage.clickElement(reference(observation, "accept"));
       expect((yield* browser.control.document.current).url).toBe(`${origin}/?consent=1`);
     }),
   ),
 );
 
-it.effect("pages can be created, pinned, selected and closed", () =>
+it.effect("a plan's scroll to a target refuses a held page before resolving anything on it", () =>
+  Browser.scoped(Testing.open(shop, { automation: { pageControl: true } }), (browser) =>
+    Effect.gen(function* () {
+      const page = (yield* browser.listPages()).find((candidate) => candidate.selected);
+
+      expect(page).toBeDefined();
+      if (page === undefined) return;
+      const held = yield* PageControl.suspend(yield* browser.page(page));
+      const before = (yield* browser.control.calls).length;
+
+      const failed = yield* browser.initialPage
+        .run({
+          version: 1,
+          steps: [
+            {
+              id: "show-name",
+              action: {
+                _tag: "Scroll",
+                mode: {
+                  _tag: "To",
+                  target: {
+                    _tag: "Descriptor",
+                    descriptor: { kind: "input", label: "Name", matchScope: "document" },
+                  },
+                },
+              },
+            },
+          ],
+        })
+        .pipe(Effect.flip);
+
+      // A held page is refused, never woken: nothing is resolved or scrolled on it.
+      expect(failed).toMatchObject({
+        error: { reason: { _tag: "Busy" }, outcome: "undispatched" },
+      });
+      expect((yield* browser.control.calls).slice(before)).toEqual([]);
+      yield* PageControl.resume(browser.initialPage, held);
+    }),
+  ),
+);
+
+it.effect("issued Pages can be created, selected for display and closed independently", () =>
   Browser.scoped(Testing.open(shop, { automation: { maxPages: 2 } }), (browser) =>
     Effect.gen(function* () {
-      const created = yield* browser.createPage;
+      const pinned = yield* browser.createPage();
 
-      expect((yield* browser.pages).map((page) => page.selected)).toEqual([true, false]);
-      const pinned = yield* browser.pinPage(created);
+      expect((yield* browser.listPages()).map((page) => page.selected)).toEqual([true, false]);
 
       yield* pinned.navigate({ url: `${origin}/?consent=1` });
       expect((yield* pinned.readText({})).text).toBe("Welcome back.");
-      expect((yield* browser.readText({})).text).toBe("Welcome. We use cookies.");
-      expect(yield* browser.createPage.pipe(Effect.flip)).toMatchObject({
+      expect((yield* browser.initialPage.readText({})).text).toBe("Welcome. We use cookies.");
+      expect(yield* browser.createPage().pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Limit", dimension: "pages", maximum: 2, observed: 2 },
       });
-      yield* browser.selectPage(created);
-      expect((yield* browser.observe()).url).toBe(`${origin}/?consent=1`);
-      yield* browser.closePage(created);
-      expect(yield* browser.observe().pipe(Effect.flip)).toMatchObject({
+      yield* browser.selectPage(pinned);
+      expect((yield* pinned.observe()).url).toBe(`${origin}/?consent=1`);
+      yield* pinned.close();
+      expect(yield* pinned.observe().pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Closed" },
+        outcome: "undispatched",
       });
+      expect((yield* browser.initialPage.observe()).url).toBe(`${origin}/`);
     }),
   ),
 );
 
-it.effect("opening a page waits its turn behind another operation rather than refusing busy", () =>
-  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+it.effect("issuing a Page or Frame takes the registry permit, not the busy page's own", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
       const gate = yield* browser.control.gate;
+      const [main] = yield* browser.initialPage.listFrames();
 
-      yield* browser.control.next("read-text", { _tag: "Hold", gate, dispatched: false });
-      const reading = yield* browser.readText({}).pipe(Effect.forkScoped);
+      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: false });
+
+      const clicking = yield* browser.initialPage
+        .click({ selector: "#accept" })
+        .pipe(Effect.forkScoped);
 
       yield* gate.reached;
-      // Everything else is still refused while the read holds the owner.
-      expect(yield* browser.pages.pipe(Effect.flip)).toMatchObject({
+      // The page's own permit is held: a read of it refuses, but issuing only authenticates.
+      expect(yield* browser.initialPage.readText({}).pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Busy" },
         outcome: "undispatched",
       });
-      const opening = yield* browser.createPage.pipe(Effect.forkScoped);
+      const [info] = yield* browser.listPages();
 
-      yield* TestClock.adjust("1 second");
-      expect(opening.pollUnsafe()).toBeUndefined();
+      expect(yield* browser.page(info!)).toBe(browser.initialPage);
+      expect((yield* browser.initialPage.frame(main!)).identity.frameId).toBe(main!.frameId);
       yield* gate.open;
-      expect((yield* Fiber.join(reading)).text).toBe("Welcome. We use cookies.");
-      expect(yield* Fiber.join(opening)).toMatchObject({ selected: false });
-      expect(yield* browser.pages).toHaveLength(2);
+      yield* Fiber.join(clicking);
     }),
   ),
 );
 
-it.effect("a page still waiting for its turn at its deadline opens nothing", () =>
+it.effect(
+  "explicitly queued page creation waits behind registry work while a healthy Page reads",
+  () =>
+    Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+      Effect.gen(function* () {
+        const gate = yield* browser.control.gate;
+
+        yield* browser.control.next("new-page", { _tag: "Hold", gate, dispatched: false });
+        const creating = yield* browser.createPage().pipe(Effect.forkScoped);
+
+        yield* gate.reached;
+        // Registry work conflicts with registry work; the original Page remains independent.
+        expect(yield* browser.listPages().pipe(Effect.flip)).toMatchObject({
+          reason: { _tag: "Busy" },
+          outcome: "undispatched",
+        });
+        expect((yield* browser.initialPage.readText({})).text).toBe("Welcome. We use cookies.");
+
+        const opening = yield* browser
+          .createPage({ admission: { queue: "1 second" } })
+          .pipe(Effect.forkScoped);
+
+        yield* TestClock.adjust("500 millis");
+        expect(opening.pollUnsafe()).toBeUndefined();
+        yield* gate.open;
+        expect(yield* (yield* Fiber.join(creating)).describe()).toMatchObject({ selected: false });
+        expect(yield* (yield* Fiber.join(opening)).describe()).toMatchObject({ selected: false });
+        expect(yield* browser.listPages()).toHaveLength(3);
+      }),
+    ),
+);
+
+it.effect("explicitly queued page creation at its operation deadline opens nothing", () =>
   Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
     Effect.gen(function* () {
       const gate = yield* browser.control.gate;
 
-      yield* browser.control.next("read-text", { _tag: "Hold", gate, dispatched: false });
-      const reading = yield* browser.readText({}).pipe(Effect.forkScoped);
+      yield* browser.control.next("new-page", { _tag: "Hold", gate, dispatched: false });
+      const creating = yield* browser.createPage().pipe(Effect.forkScoped);
 
       yield* gate.reached;
-      const opening = yield* browser.createPage.pipe(Effect.forkScoped);
 
-      yield* TestClock.adjust("5 seconds");
+      const opening = yield* browser
+        .createPage({ timeoutMillis: 1_000, admission: { queue: "2 seconds" } })
+        .pipe(Effect.forkScoped);
+
+      yield* TestClock.adjust("1 second");
       expect(yield* Fiber.join(opening).pipe(Effect.flip)).toMatchObject({
         operation: "new-page",
         reason: { _tag: "Timeout" },
         outcome: "undispatched",
       });
       yield* gate.open;
-      yield* Fiber.join(reading).pipe(Effect.ignore);
-      expect(yield* browser.pages).toHaveLength(1);
+      yield* Fiber.join(creating);
+      expect(yield* browser.listPages()).toHaveLength(2);
+      expect(
+        (yield* browser.control.calls).filter((call) => call.operation === "new-page"),
+      ).toHaveLength(1);
       expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
     }),
   ),
@@ -837,12 +1007,13 @@ it.effect("a page still waiting for its turn at its deadline opens nothing", () 
 it.effect("one page's address and title are read without reading any other page", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      const created = yield* browser.createPage;
+      const issued = yield* browser.createPage();
+      const created = yield* issued.describe();
 
-      yield* (yield* browser.pinPage(created)).navigate({ url: `${origin}/?consent=1` });
+      yield* issued.navigate({ url: `${origin}/?consent=1` });
       const before = (yield* browser.control.calls).length;
 
-      expect(yield* browser.describePage(created)).toMatchObject({
+      expect(yield* issued.describe()).toMatchObject({
         pageId: created.pageId,
         targetId: created.targetId,
         url: `${origin}/?consent=1`,
@@ -851,11 +1022,19 @@ it.effect("one page's address and title are read without reading any other page"
       expect((yield* browser.control.calls).slice(before)).toMatchObject([
         { operation: "describe-page", pageId: created.pageId, dispatched: false },
       ]);
-      yield* browser.closePage(created);
-      expect(yield* browser.describePage(created).pipe(Effect.flip)).toMatchObject({
-        operation: "describe-page",
-        outcome: "undispatched",
-      });
+      yield* issued.close();
+      // A refusal names the operation the caller asked for, whichever surface it came through.
+      for (const [refused, operation] of [
+        [issued.describe().pipe(Effect.asVoid), "describe-page"],
+        [issued.readText({}).pipe(Effect.asVoid), "read-text"],
+        [Effect.scoped(Capture.start(issued, { maxDurationMillis: 1000 })), "capture-start"],
+        [PageControl.state(issued).pipe(Effect.asVoid), "page-state"],
+      ] as const)
+        expect(yield* Effect.flip(refused)).toMatchObject({
+          operation,
+          reason: { _tag: "Closed" },
+          outcome: "undispatched",
+        });
     }),
   ),
 );
@@ -863,12 +1042,11 @@ it.effect("one page's address and title are read without reading any other page"
 /** A second page, pinned and showing the shop, that is not the selected one. */
 const background = (browser: Testing.ScriptedSession) =>
   Effect.gen(function* () {
-    const page = yield* browser.createPage;
-    const pinned = yield* browser.pinPage(page);
+    const pinned = yield* browser.createPage();
 
     yield* pinned.navigate({ url: `${origin}/` });
 
-    return { page, pinned };
+    return { page: pinned.identity, pinned };
   });
 
 it.effect(
@@ -898,17 +1076,19 @@ it.effect(
         expect((yield* browser.diagnostics).records).toMatchObject([
           { reason: "page-contained", disposition: "confirmed" },
         ]);
-        expect(yield* browser.pages).toMatchObject([{ selected: true }]);
+        expect(yield* browser.listPages()).toMatchObject([{ selected: true }]);
         expect(yield* pinned.readText({}).pipe(Effect.flip)).toMatchObject({
           outcome: "undispatched",
         });
-        expect(yield* browser.describePage(page).pipe(Effect.flip)).toMatchObject({
+        expect(yield* pinned.describe().pipe(Effect.flip)).toMatchObject({
           outcome: "undispatched",
         });
         // The selected page, and a page opened afterwards, keep working.
-        expect((yield* browser.readText({})).text).toBe("Welcome. We use cookies.");
-        yield* browser.clickElement(reference(yield* browser.observe(), "accept"));
-        expect(yield* browser.createPage).toMatchObject({ selected: false });
+        expect((yield* browser.initialPage.readText({})).text).toBe("Welcome. We use cookies.");
+        yield* browser.initialPage.clickElement(
+          reference(yield* browser.initialPage.observe(), "accept"),
+        );
+        expect(yield* (yield* browser.createPage()).describe()).toMatchObject({ selected: false });
         const calls = yield* browser.control.calls;
 
         expect(calls.filter((call) => call.operation === "click")).toMatchObject([
@@ -935,40 +1115,60 @@ it.effect("a page that is not selected also takes an interrupted mutation with i
       yield* gate.reached;
       yield* Fiber.interrupt(typing);
       expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
-      expect(yield* browser.pages).toHaveLength(1);
+      expect(yield* browser.listPages()).toHaveLength(1);
       yield* gate.open;
     }),
   ),
 );
 
-it.effect("an unknown outcome on the selected page still fences, even through a pin", () =>
-  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
-    Effect.gen(function* () {
-      yield* browser.createPage;
-      const selected = (yield* browser.pages).find((page) => page.selected)!;
-      const pinned = yield* browser.pinPage(selected);
-      const gate = yield* browser.control.gate;
+it.effect(
+  "an unknown outcome on the selected page closes that exact page and keeps its peer usable",
+  () =>
+    Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
+      Effect.gen(function* () {
+        const peer = yield* browser.createPage();
 
-      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
-      const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+        yield* peer.navigate({ url: `${origin}/` });
+        const selected = (yield* browser.listPages()).find((page) => page.selected)!;
+        const pinned = yield* browser.page(selected);
+        const gate = yield* browser.control.gate;
 
-      yield* gate.reached;
-      yield* TestClock.adjust("5 seconds");
-      yield* Fiber.join(clicking).pipe(Effect.flip);
-      expect(yield* browser.status).toMatchObject({
-        phase: "uncertain",
-        unresolvedDispatch: true,
-      });
-      expect(
-        (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
-      ).toEqual([]);
-      yield* gate.open;
-    }),
-  ).pipe(
-    Effect.catchTag("BrowserError", (error) =>
-      error.operation === "close" ? Effect.void : Effect.fail(error),
+        yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
+        const clicking = yield* pinned.click({ selector: "#accept" }).pipe(Effect.forkScoped);
+
+        yield* gate.reached;
+        yield* TestClock.adjust("5 seconds");
+        expect(yield* Fiber.join(clicking).pipe(Effect.flip)).toMatchObject({
+          operation: "click",
+          reason: { _tag: "Timeout" },
+          outcome: "unknown",
+          containment: { _tag: "PageClosed", pageId: selected.pageId },
+        });
+        expect(yield* browser.status).toMatchObject({
+          phase: "open",
+          unresolvedDispatch: false,
+        });
+        expect(yield* browser.initialPage.status).toMatchObject({ phase: "closed" });
+        expect((yield* browser.listPages()).map((page) => page.pageId)).toEqual([
+          peer.identity.pageId,
+        ]);
+        expect(
+          (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
+        ).toMatchObject([{ pageId: selected.pageId, dispatched: true, settled: "completed" }]);
+        expect(yield* pinned.readText({}).pipe(Effect.flip)).toMatchObject({
+          outcome: "undispatched",
+        });
+        expect((yield* peer.readText({})).text).toBe("Welcome. We use cookies.");
+        yield* peer.clickElement(reference(yield* peer.observe(), "accept"));
+        expect((yield* peer.readText({})).text).toBe("Welcome back.");
+        expect(
+          (yield* browser.control.calls).filter(
+            (call) => call.operation === "click" && call.pageId === selected.pageId,
+          ),
+        ).toHaveLength(1);
+        yield* gate.open;
+      }),
     ),
-  ),
 );
 
 it.effect("a page that does not close when its outcome is unknown fences the session", () =>
@@ -992,7 +1192,7 @@ it.effect("a page that does not close when its outcome is unknown fences the ses
         phase: "uncertain",
         unresolvedDispatch: true,
       });
-      expect(yield* browser.readText({}).pipe(Effect.flip)).toMatchObject({
+      expect(yield* browser.initialPage.readText({}).pipe(Effect.flip)).toMatchObject({
         reason: { _tag: "Closed" },
         outcome: "undispatched",
       });
@@ -1014,10 +1214,12 @@ it.effect("an in-flight navigation can be watched, stopped, or time out under th
 
       const stopped = yield* Effect.scoped(
         Effect.gen(function* () {
-          const operation = yield* browser.startNavigation({ url: `${origin}/?consent=1` });
+          const operation = yield* browser.initialPage.startNavigation({
+            url: `${origin}/?consent=1`,
+          });
 
           yield* gate.reached;
-          expect((yield* browser.readText({})).text).toBe("Welcome. We use cookies.");
+          expect((yield* browser.initialPage.readText({})).text).toBe("Welcome. We use cookies.");
           yield* operation.stop;
 
           return yield* operation.completed.pipe(Effect.flip);
@@ -1031,7 +1233,7 @@ it.effect("an in-flight navigation can be watched, stopped, or time out under th
 
       yield* browser.control.next("navigate", { _tag: "Hold", gate: late, dispatched: true });
 
-      const attempt = yield* browser
+      const attempt = yield* browser.initialPage
         .navigate({ url: `${origin}/?consent=1` })
         .pipe(Effect.forkScoped);
 
@@ -1053,16 +1255,18 @@ it.effect("an in-flight navigation can be watched, stopped, or time out under th
 it.effect("a wait its script refuses still releases the wait slot for the next one", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      yield* browser.navigate({ url: `${origin}/` });
+      yield* browser.initialPage.navigate({ url: `${origin}/` });
       yield* browser.control.next("wait", {
         _tag: "Fail",
         reason: Reasons.Timeout.make({}),
         outcome: "undispatched",
       });
       expect(
-        yield* browser.waitFor({ selector: "#accept", state: "attached" }).pipe(Effect.flip),
+        yield* browser.initialPage
+          .waitFor({ selector: "#accept", state: "attached" })
+          .pipe(Effect.flip),
       ).toMatchObject({ reason: { _tag: "Timeout" }, outcome: "undispatched" });
-      yield* browser.waitFor({ selector: "#accept", state: "attached" });
+      yield* browser.initialPage.waitFor({ selector: "#accept", state: "attached" });
       expect(yield* browser.status).toMatchObject({ phase: "open", busy: false });
     }),
   ),
@@ -1071,13 +1275,13 @@ it.effect("a wait its script refuses still releases the wait slot for the next o
 it.effect("moving the selection leaves a pending wait running on its page", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
-      yield* browser.navigate({ url: `${origin}/` });
-      const home = (yield* browser.pages).find((page) => page.selected);
+      yield* browser.initialPage.navigate({ url: `${origin}/` });
+      const home = (yield* browser.listPages()).find((page) => page.selected);
 
       expect(home).toBeDefined();
       if (home === undefined) return;
 
-      const pending = yield* browser
+      const pending = yield* browser.initialPage
         .waitFor({ selector: "#banner", state: "attached" })
         .pipe(Effect.forkChild);
 
@@ -1086,7 +1290,11 @@ it.effect("moving the selection leaves a pending wait running on its page", () =
 
       for (let attempt = 0; attempt < 100 && !moved; attempt++) {
         yield* Effect.yieldNow;
-        moved = (yield* browser.selectPage(home).pipe(Effect.result))._tag === "Success";
+        moved =
+          (yield* browser.page(home).pipe(
+            Effect.flatMap((page) => browser.selectPage(page)),
+            Effect.result,
+          ))._tag === "Success";
       }
       expect(moved).toBe(true);
       const current = yield* browser.control.document.current;
@@ -1115,7 +1323,9 @@ it.effect("a navigation stop is recorded and can be held before it is sent", () 
 
       const stopped = yield* Effect.scoped(
         Effect.gen(function* () {
-          const operation = yield* browser.startNavigation({ url: `${origin}/?consent=1` });
+          const operation = yield* browser.initialPage.startNavigation({
+            url: `${origin}/?consent=1`,
+          });
 
           yield* loading.reached;
           const stop = yield* operation.stop.pipe(Effect.forkChild);
@@ -1249,8 +1459,9 @@ it.effect("a keep-alive reconnection finds the pages its browser kept while deta
       );
 
       const { session, operations } = yield* acquired.connect;
+      const original = session.initialPage;
 
-      yield* session.navigate({ url: `${origin}/` });
+      yield* session.initialPage.navigate({ url: `${origin}/` });
       const [control] = yield* scripted.browsers;
 
       expect(control).toBeDefined();
@@ -1258,9 +1469,32 @@ it.effect("a keep-alive reconnection finds the pages its browser kept while deta
       yield* operations.detach;
       // A person changes the page while no connection is open.
       yield* control.document.update({ url: `${origin}/`, text: "Changed while detached." });
-      const observed = yield* operations.reconnect(true);
+      const inventory = yield* operations.reconnect(true);
+      const [freshInfo] = inventory.pages;
+
+      expect(freshInfo).toBeDefined();
+      if (freshInfo === undefined) return;
+      const observed = yield* (yield* session.page(freshInfo)).observe();
 
       expect(observed.text).toBe("Changed while detached.");
+      expect(session.initialPage).toBe(original);
+      expect(yield* original.status).toMatchObject({ phase: "stale" });
+      const callsBeforeStale = (yield* control.calls).length;
+
+      expect(yield* original.observe().pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "Stale" },
+        outcome: "undispatched",
+      });
+      expect(yield* control.calls).toHaveLength(callsBeforeStale);
+      const [info] = yield* session.listPages();
+
+      expect(info).toBeDefined();
+      if (info === undefined) return;
+      const fresh = yield* session.page(info);
+
+      expect(fresh.identity.generation).toBeGreaterThan(original.identity.generation);
+      expect(yield* fresh.status).toMatchObject({ phase: "open" });
+      expect((yield* fresh.observe()).text).toBe("Changed while detached.");
       expect(yield* scripted.browsers).toHaveLength(1);
       expect(yield* control.connections).toEqual(["refused", "closed", "open"]);
     }),
@@ -1305,7 +1539,7 @@ it.effect("the same engine composes under browser-runtime as an opaque binding",
       const [control] = yield* scripted.browsers;
 
       expect(control).toBeDefined();
-      expect((yield* session.observe()).text).toBe("Welcome. We use cookies.");
+      expect((yield* session.initialPage.observe()).text).toBe("Welcome. We use cookies.");
       expect((yield* control!.calls).map((call) => call.operation)).toEqual(["observe"]);
     }),
   ),

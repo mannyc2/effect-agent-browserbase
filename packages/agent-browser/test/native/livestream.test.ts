@@ -183,16 +183,21 @@ it.live(
             ),
             (session) =>
               Effect.gen(function* () {
-                const outcome = yield* livestream(session, "Open the pricing page.", {
-                  delayMillis: Delay,
-                  size: { width: 640, height: 480 },
-                  onAir: (event) =>
-                    Effect.sync(() => {
-                      aired.push(event);
-                    }),
-                });
+                const outcome = yield* livestream(
+                  session,
+                  session.initialPage,
+                  "Open the pricing page.",
+                  {
+                    delayMillis: Delay,
+                    size: { width: 640, height: 480 },
+                    onAir: (event) =>
+                      Effect.sync(() => {
+                        aired.push(event);
+                      }),
+                  },
+                );
 
-                const text = (yield* session.observe({ scope: "document" })).text;
+                const text = (yield* session.initialPage.observe({ scope: "document" })).text;
 
                 return { ...outcome, text };
               }),
@@ -335,4 +340,88 @@ it.live(
       }),
     ),
   { timeout: 90_000 },
+);
+
+// A still page whose own script changes its address a second after loading: no picture follows,
+// so the address can only reach viewers through the delayed cue line.
+const stillSite = Effect.acquireRelease(
+  Effect.promise(
+    () =>
+      new Promise<{ readonly origin: string; readonly close: () => void }>((resolve) => {
+        const server = createServer((_request, response) => {
+          response.writeHead(200, { "content-type": "text/html" });
+          response.end(`<!doctype html><title>Still</title><p>Nothing moves here.</p>
+<script>setTimeout(() => history.pushState({}, "", "/later"), 1000)</script>`);
+        });
+
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          const port = typeof address === "object" && address !== null ? address.port : 0;
+
+          resolve({ origin: `http://127.0.0.1:${String(port)}`, close: () => server.close() });
+        });
+      }),
+  ),
+  (server) => Effect.sync(server.close),
+);
+
+it.live(
+  "real AgentRuntime: a cue stamped after the last picture still airs before the presentation ends",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { origin } = yield* stillSite;
+        const aired: Array<AirEvent> = [];
+        const narratorModel = yield* Layer.build(scripted([said(null)]));
+
+        const result = yield* Browser.scoped(
+          Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 10, maxElapsedMillis: 60_000 })),
+          (session) =>
+            livestream(session, session.initialPage, "Watch the page.", {
+              // Longer than the run's tail, so the address cue airs after the last picture has.
+              delayMillis: 3000,
+              size: { width: 640, height: 480 },
+              onAir: (event) =>
+                Effect.sync(() => {
+                  aired.push(event);
+                }),
+            }),
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Stage.layer({ port: 0 }),
+              Narrator.layer.pipe(Layer.provide(Layer.succeedContext(narratorModel))),
+              InMemory.layer,
+              Chromium.layer({
+                launch: {
+                  ...(process.env.BROWSERBASE_CHROMIUM === undefined
+                    ? {}
+                    : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+                  chromiumSandbox: false,
+                  startupTimeoutMillis: 25000,
+                },
+                viewport: { width: 640, height: 480 },
+              }).pipe(Layer.provide(NodeCrypto.layer)),
+              NodeCrypto.layer,
+              scripted([
+                call("navigate", "browser_navigate", { url: `${origin}/` }),
+                answer('{"summary":"Watched the page"}'),
+              ]),
+            ),
+          ),
+        );
+
+        expect(result.outcome._tag).toBe("Success");
+
+        const later = aired.findIndex(
+          (event) => event._tag === "Address" && event.address === `${origin}/later`,
+        );
+
+        const ended = aired.findIndex((event) => event._tag === "PresentationEnded");
+
+        expect(later).toBeGreaterThanOrEqual(0);
+        expect(ended).toBeGreaterThan(later);
+      }),
+    ),
+  { timeout: 60_000 },
 );

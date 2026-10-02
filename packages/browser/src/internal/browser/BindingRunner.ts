@@ -1,7 +1,8 @@
-import { Effect, Exit, FiberSet, Scope } from "effect";
+import { Effect, Exit, type Fiber, FiberSet, Scope } from "effect";
 
 import type { CallbackFailureMode } from "./CallbackTasks.ts";
 import type { DriverFault } from "./Driver.ts";
+import { exitPromise } from "./NativeCalls.ts";
 
 export type BindingRejection = "closed" | "capacity";
 
@@ -19,6 +20,8 @@ export interface BindingRunner<I, A, E> {
   readonly close: () => void;
   /** Native owner faults request cancellation immediately; the Scope still joins every fiber. */
   readonly interrupt: () => void;
+  /** Revoke selected accepted work without closing admission for other inputs. */
+  readonly interruptWhere: (predicate: (input: I) => boolean) => void;
   readonly submit: (input: I, failureMode?: CallbackFailureMode) => BindingAdmission<A, E>;
 }
 
@@ -37,7 +40,8 @@ export const makeBindingRunner = <I, A, E, R>(
     const runtimeScope = yield* Scope.fork(parent, "sequential");
 
     const fibers = yield* FiberSet.make<Exit.Exit<A, E>, never>().pipe(Scope.provide(runtimeScope));
-    const run = yield* FiberSet.runtimePromise(fibers)<R>();
+    const run = yield* FiberSet.runtime(fibers)<R>();
+    const inputs = new Map<Fiber.Fiber<Exit.Exit<A, E>, never>, I>();
 
     let accepting = true;
     let faulted = false;
@@ -51,6 +55,12 @@ export const makeBindingRunner = <I, A, E, R>(
       close();
       // Called synchronously by native owner fencing; scoped FiberSet cleanup performs the join.
       for (const fiber of fibers) fiber.interruptUnsafe();
+    };
+
+    const interruptWhere = (predicate: (input: I) => boolean) => {
+      for (const [fiber, input] of inputs) {
+        if (predicate(input)) fiber.interruptUnsafe();
+      }
     };
 
     const fault = () => {
@@ -77,7 +87,17 @@ export const makeBindingRunner = <I, A, E, R>(
       inFlight++;
       // Construct the consumer Effect inside the admitted fiber as well: a consumer callback
       // that throws while producing its Effect is a host defect, not work allowed before admission.
-      const execution = run(Effect.exit(Effect.suspend(() => handle(input))));
+      const fiber = run(Effect.exit(Effect.suspend(() => handle(input))));
+
+      inputs.set(fiber, input);
+
+      fiber.addObserver(() => {
+        inputs.delete(fiber);
+      });
+
+      const execution = exitPromise(fiber).then((exit) =>
+        Exit.isSuccess(exit) ? exit.value : Exit.failCause(exit.cause),
+      );
 
       const result = execution
         .then(
@@ -102,6 +122,6 @@ export const makeBindingRunner = <I, A, E, R>(
       return { _tag: "Accepted", result };
     };
 
-    return { close, interrupt, submit };
+    return { close, interrupt, interruptWhere, submit };
   });
 };

@@ -42,7 +42,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
 
             // Spend Chromium's screencast startup outside the measured interval.
             // Pinned Playwright's Screencast.addClient calls _startScreencast
@@ -62,7 +62,7 @@ it.live(
             // assertions below with the same values as before.
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const warm = yield* Capture.start(session, {
+                const warm = yield* Capture.start(session.initialPage, {
                   maxFrames: 2,
                   maxDurationMillis: 4_000,
                 });
@@ -128,7 +128,7 @@ it.live(
               });
             }
             // Child capture/encoding ended; the same browser remains usable.
-            expect((yield* session.observe()).text).toContain("Local browser fixture");
+            expect((yield* session.initialPage.observe()).text).toContain("Local browser fixture");
           }),
         );
       }),

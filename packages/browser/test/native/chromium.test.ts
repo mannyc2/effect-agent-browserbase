@@ -44,9 +44,9 @@ it.live(
             expect(yield* acquired.connect).toBe(session);
             expect(session.reference.provider).toBe("chromium");
             expect("sessionId" in session.reference).toBe(false);
-            yield* session.navigate(NavigateRequest.make({ url: site.url }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: site.url }));
 
-            const capture = yield* Capture.start(session, {
+            const capture = yield* Capture.start(session.initialPage, {
               lifetime: "page",
               maxDurationMillis: 10000,
             });
@@ -54,14 +54,15 @@ it.live(
             const frames = yield* capture.frames.pipe(Stream.take(1), Stream.runCollect);
 
             expect(frames.length).toBe(1);
-            const page = (yield* session.pages).find((page) => page.selected)!;
-            const held = yield* PageControl.suspend(session, page);
+            const page = (yield* session.listPages()).find((page) => page.selected)!;
+            const held = yield* PageControl.suspend(yield* session.page(page));
 
-            expect((yield* PageControl.state(session, page)).state).toBe("suspended");
-            yield* PageControl.resume(session, held);
-            yield* session.click(ClickRequest.make({ selector: "#increment" }));
+            expect((yield* PageControl.state(yield* session.page(page))).state).toBe("suspended");
+            yield* PageControl.resume(session.initialPage, held);
+            yield* session.initialPage.click(ClickRequest.make({ selector: "#increment" }));
             expect(
-              (yield* session.readText(ReadTextRequest.make({ selector: "#count" }))).text,
+              (yield* session.initialPage.readText(ReadTextRequest.make({ selector: "#count" })))
+                .text,
             ).toBe("1");
             expect((yield* capture.stop).nativeStop).toBe("confirmed");
           }),
@@ -97,23 +98,23 @@ it.live("same-document navigation preserves observations and capture document id
 
       yield* Effect.addFinalizer(() => Effect.sync(firstVisit.close));
 
-      yield* session.navigate({ url: firstVisit.url });
-      const observed = yield* session.observe({ scope: "viewport" });
+      yield* session.initialPage.navigate({ url: firstVisit.url });
+      const observed = yield* session.initialPage.observe({ scope: "viewport" });
       const push = observed.controls.find((control) => control.label === "Push route");
 
       expect(push).toBeDefined();
 
-      const documentCapture = yield* Capture.start(session);
+      const documentCapture = yield* Capture.start(session.initialPage);
 
       yield* Effect.promise(() => firstVisit.push.arrived);
       firstVisit.push.release();
-      yield* session.waitFor({ selector: "#pushed", state: "visible" });
+      yield* session.initialPage.waitFor({ selector: "#pushed", state: "visible" });
       yield* Effect.promise(() => firstVisit.fragment.arrived);
       firstVisit.fragment.release();
-      yield* session.waitFor({ selector: "#fragmented", state: "visible" });
-      yield* session.pages;
+      yield* session.initialPage.waitFor({ selector: "#fragmented", state: "visible" });
+      yield* session.listPages();
 
-      const retainedFacts = yield* session.controlFacts(
+      const retainedFacts = yield* session.initialPage.controlFacts(
         ObservedElement.make({
           observationId: observed.observationId,
           elementId: push?.elementId ?? "",
@@ -127,22 +128,24 @@ it.live("same-document navigation preserves observations and capture document id
       expect(stillCapturing.phase).toBe("capturing");
       expect(stillCapturing.reason).toBe(null);
       expect(stillCapturing.nativeStop).toBe(null);
-      expect((yield* session.readText({ selector: "#section" })).text).toBe("Stable page");
+      expect((yield* session.initialPage.readText({ selector: "#section" })).text).toBe(
+        "Stable page",
+      );
       yield* documentCapture.stop;
 
       const secondVisit = site.spaVisit();
 
       yield* Effect.addFinalizer(() => Effect.sync(secondVisit.close));
-      yield* session.navigate({ url: secondVisit.url });
-      const pageCapture = yield* Capture.start(session, { lifetime: "page" });
+      yield* session.initialPage.navigate({ url: secondVisit.url });
+      const pageCapture = yield* Capture.start(session.initialPage, { lifetime: "page" });
 
       yield* Effect.promise(() => secondVisit.push.arrived);
       secondVisit.push.release();
-      yield* session.waitFor({ selector: "#pushed", state: "visible" });
+      yield* session.initialPage.waitFor({ selector: "#pushed", state: "visible" });
       yield* Effect.promise(() => secondVisit.fragment.arrived);
       secondVisit.fragment.release();
-      yield* session.waitFor({ selector: "#fragmented", state: "visible" });
-      yield* session.pages;
+      yield* session.initialPage.waitFor({ selector: "#fragmented", state: "visible" });
+      yield* session.listPages();
 
       const sameDocument = yield* pageCapture.snapshot;
 
@@ -152,8 +155,8 @@ it.live("same-document navigation preserves observations and capture document id
         { document: 0, url: `${site.url}spa/route#section`, sameDocument: true },
       ]);
 
-      yield* session.navigate({ url: site.url });
-      yield* session.pages;
+      yield* session.initialPage.navigate({ url: site.url });
+      yield* session.listPages();
       const crossDocument = yield* pageCapture.snapshot;
 
       expect(crossDocument.currentDocument).toBe(1);
@@ -180,10 +183,10 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* Chromium).attach(host.endpoint, { policy });
 
-            yield* session.navigate(NavigateRequest.make({ url: site.url }));
-            yield* session.click(ClickRequest.make({ selector: "#increment" }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: site.url }));
+            yield* session.initialPage.click(ClickRequest.make({ selector: "#increment" }));
             yield* session.closeChecked;
-            expect(yield* Effect.result(session.retain)).toMatchObject({
+            expect(yield* Effect.result(session.initialPage.describe())).toMatchObject({
               _tag: "Failure",
               failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
             });
@@ -238,7 +241,7 @@ it.live(
 );
 
 it.live(
-  "pinned pages and child frames stay explicit while direct commands follow live selection",
+  "issued pages and child frames stay exact across display changes and independent lifetimes",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -250,20 +253,20 @@ it.live(
             const stageUrl = new URL("/pinned?name=stage", site.url).href;
             const scoutUrl = new URL("/pinned?name=scout", site.url).href;
 
-            yield* session.navigate(NavigateRequest.make({ url: stageUrl }));
-            const stageInfo = (yield* session.pages).find((page) => page.selected)!;
-            const selectedStage = yield* session.retain;
-            const stage = yield* session.pinPage(stageInfo);
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: stageUrl }));
+            const stageInfo = (yield* session.listPages()).find((page) => page.selected)!;
+            const originalStage = session.initialPage;
+            const stage = yield* session.page(stageInfo);
 
-            const childInfo = (yield* session.framesOf(stageInfo)).find(
+            const childInfo = (yield* stage.listFrames()).find(
               (frame) => frame.parentFrameId !== null,
             )!;
 
-            const child = yield* session.pinFrame(stageInfo, childInfo);
+            const child = yield* stage.frame(childInfo);
 
-            expect(stage.target.pageId).toBe(stageInfo.pageId);
-            expect(child.target).toEqual({
-              generation: stage.target.generation,
+            expect(stage.identity.pageId).toBe(stageInfo.pageId);
+            expect(child.identity).toEqual({
+              generation: stage.identity.generation,
               pageId: stageInfo.pageId,
               frameId: childInfo.frameId,
             });
@@ -271,36 +274,32 @@ it.live(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frame-name" }))).text,
             ).toBe("stage-child");
 
-            const scoutInfo = yield* session.createPage;
+            const scout = yield* session.createPage();
+            const scoutInfo = yield* scout.describe();
 
             expect(scoutInfo.selected).toBe(false);
-            // Resolve selection when this Effect runs, not when it is constructed.
-            const navigateScout = session.navigate(NavigateRequest.make({ url: scoutUrl }));
+            // This issued Page stays exact even when display selection changes before execution.
+            const navigateScout = scout.navigate(NavigateRequest.make({ url: scoutUrl }));
 
-            expect(yield* session.selectPage(scoutInfo)).toBeUndefined();
-            const scoutTarget = yield* session.target;
+            expect(yield* session.selectPage(scout)).toBeUndefined();
+
+            const scoutTarget = yield* session
+              .listPages()
+              .pipe(Effect.map((pages) => pages.find((page) => page.selected)!));
 
             yield* navigateScout;
             expect(
-              (yield* session.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
+              (yield* scout.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
             ).toBe("scout");
 
-            const staleSelected = yield* selectedStage
-              .readText(ReadTextRequest.make({ selector: "#page-name" }))
-              .pipe(Effect.result);
+            expect((yield* originalStage.readText({ selector: "#page-name" })).text).toBe("stage");
 
-            expect(staleSelected._tag).toBe("Failure");
-            if (staleSelected._tag === "Failure")
-              expect(staleSelected.failure.reason._tag).toBe("Stale");
+            const issuedScout = yield* session.page(scoutInfo);
 
-            const retainedScout = yield* session.retain;
-
-            yield* session.selectPage(stageInfo);
-            yield* session.selectPage(scoutInfo);
-            expect(yield* Effect.result(retainedScout.readText({}))).toMatchObject({
-              _tag: "Failure",
-              failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-            });
+            expect(issuedScout).toBe(scout);
+            yield* session.selectPage(stage);
+            yield* session.selectPage(issuedScout);
+            expect((yield* issuedScout.readText({ selector: "#page-name" })).text).toBe("scout");
 
             expect(
               (yield* stage.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
@@ -308,38 +307,50 @@ it.live(
             expect(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frame-name" }))).text,
             ).toBe("stage-child");
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect(
+              (yield* session
+                .listPages()
+                .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+            ).toBe(scoutTarget.pageId);
 
             const hovered = yield* child.hover(HoverRequest.make({ selector: "#frame-increment" }));
 
-            expect(hovered.target).toEqual(child.target);
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect(hovered.target).toEqual(child.identity);
+            expect(
+              (yield* session
+                .listPages()
+                .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+            ).toBe(scoutTarget.pageId);
 
-            const observation = yield* session.observe();
+            const observation = yield* scout.observe();
 
             const increment = observation.controls.find(
               (control) => control.label === "Increment",
             )!;
 
-            // A pinned read is passive and must not retire the selected page's exact-node receipt.
+            // A passive read on another Page preserves the scout's exact-node receipt.
             yield* stage.readText(ReadTextRequest.make({ selector: "#count" }));
-            yield* session.clickElement(
+            yield* scout.clickElement(
               ObservedElement.make({
                 observationId: observation.observationId,
                 elementId: increment.elementId,
               }),
             );
-            expect(
-              (yield* session.readText(ReadTextRequest.make({ selector: "#count" }))).text,
-            ).toBe("1");
+            expect((yield* scout.readText(ReadTextRequest.make({ selector: "#count" }))).text).toBe(
+              "1",
+            );
 
             yield* stage.click(ClickRequest.make({ selector: "#increment" }));
             expect((yield* stage.readText(ReadTextRequest.make({ selector: "#count" }))).text).toBe(
               "1",
             );
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect(
+              (yield* session
+                .listPages()
+                .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+            ).toBe(scoutTarget.pageId);
 
-            const held = yield* PageControl.suspend(session, stageInfo);
+            const held = yield* PageControl.suspend(stage);
 
             const heldRead = yield* stage
               .readText(ReadTextRequest.make({ selector: "#count" }))
@@ -348,15 +359,19 @@ it.live(
             expect(heldRead._tag).toBe("Failure");
             if (heldRead._tag === "Failure") expect(heldRead.failure.reason._tag).toBe("Busy");
             expect(
-              (yield* session.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
+              (yield* scout.readText(ReadTextRequest.make({ selector: "#page-name" }))).text,
             ).toBe("scout");
-            yield* PageControl.resume(session, held);
+            yield* PageControl.resume(stage, held);
 
             yield* child.click(ClickRequest.make({ selector: "#frame-increment" }));
             expect(
               (yield* child.readText(ReadTextRequest.make({ selector: "#frameCount" }))).text,
             ).toBe("1");
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect(
+              (yield* session
+                .listPages()
+                .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+            ).toBe(scoutTarget.pageId);
 
             yield* stage.click(ClickRequest.make({ selector: "#remove-frame" }));
 
@@ -369,7 +384,11 @@ it.live(
               expect(detached.failure.reason._tag).toBe("Stale");
               expect(detached.failure.outcome).toBe("undispatched");
             }
-            const detachedPin = yield* session.pinFrame(stageInfo, childInfo).pipe(Effect.result);
+
+            const detachedPin = yield* session.page(stageInfo).pipe(
+              Effect.flatMap((page) => page.frame(childInfo)),
+              Effect.result,
+            );
 
             expect(detachedPin._tag).toBe("Failure");
             if (detachedPin._tag === "Failure") {
@@ -377,10 +396,11 @@ it.live(
               expect(detachedPin.failure.outcome).toBe("undispatched");
             }
 
-            const closedInfo = yield* session.createPage;
+            const closing = yield* session.createPage();
+            const closedInfo = yield* closing.describe();
 
-            yield* session.closePage(closedInfo);
-            const closedPin = yield* session.pinPage(closedInfo).pipe(Effect.result);
+            yield* closing.close();
+            const closedPin = yield* session.page(closedInfo).pipe(Effect.result);
 
             expect(closedPin._tag).toBe("Failure");
             if (closedPin._tag === "Failure") {
@@ -412,7 +432,7 @@ it.live(
               StartNavigationRequest.make({ url: slowUrl, timeoutMillis: 10000 }),
             );
 
-            expect(operation.target).toEqual(stage.target);
+            expect(operation.target).toEqual(stage.identity);
 
             const reserved = yield* stage
               .click(ClickRequest.make({ selector: "#increment" }))
@@ -425,13 +445,13 @@ it.live(
             }
 
             const scoutBefore = Number(
-              (yield* session.readText(ReadTextRequest.make({ selector: "#count" }))).text,
+              (yield* scout.readText(ReadTextRequest.make({ selector: "#count" }))).text,
             );
 
-            yield* session.click(ClickRequest.make({ selector: "#increment" }));
-            expect(
-              (yield* session.readText(ReadTextRequest.make({ selector: "#count" }))).text,
-            ).toBe(String(scoutBefore + 1));
+            yield* scout.click(ClickRequest.make({ selector: "#increment" }));
+            expect((yield* scout.readText(ReadTextRequest.make({ selector: "#count" }))).text).toBe(
+              String(scoutBefore + 1),
+            );
 
             yield* operation.stop;
             const completion = yield* operation.completed.pipe(Effect.result);
@@ -439,7 +459,11 @@ it.live(
             expect(completion._tag).toBe("Failure");
             if (completion._tag === "Failure")
               expect(completion.failure.reason._tag).toBe("Interrupted");
-            expect((yield* session.target).pageId).toBe(scoutTarget.pageId);
+            expect(
+              (yield* session
+                .listPages()
+                .pipe(Effect.map((pages) => pages.find((page) => page.selected)!))).pageId,
+            ).toBe(scoutTarget.pageId);
           }),
         ).pipe(
           Effect.provide(

@@ -23,7 +23,7 @@ runs it on a local Chromium with scripted models for both the agent and the narr
 
 ## How it works
 
-- **Delay.** One capture interval follows the page across documents. Its own bounded buffer is
+- **Delay.** Capture and Tools bind one issued Page beside its original session. One capture interval follows that Page across documents. Its own bounded buffer is
   the delay line: each frame is shown once it is `delayMillis` old on the host monotonic clock.
   A delay of `0` is live. What does not fit is dropped oldest-first and counted as `overflow` in
   the capture summary.
@@ -31,8 +31,20 @@ runs it on a local Chromium with scripted models for both the agent and the narr
   over a sliding fan-out. A slow viewer skips pictures and slows nobody else.
 - **The window.** The screencast shows the page and nothing else, so `Viewer.ts` draws a
   browser window around it. The address comes from the capture's document boundaries and airs
-  with the first picture of each document. The tab title is read with `session.pages` while the
-  model is thinking, when no browser call is running, and airs `delayMillis` later.
+  with the first picture of each document. Same-document address changes come from their own
+  capture-boundary timeline events. The tab title is read from that exact Page with bounded
+  admission, then airs `delayMillis` after the read; another Page host may still be running.
+- **Metadata.** Two independent subscribers read snapshot plus events(resumeAfter): one projects
+  composition and pointer graphics, the other counts native outcomes. Neither subscribes to pixels
+  or stops capture. The composition reader takes each event at once and queues the pointer and
+  address graphics it implies in air-time order, so a delay longer than the timeline's retention
+  never lets unread events be evicted; more than 16,384 queued cues resets presentation as a
+  timeline gap does. Timeline offsets are bridged to the capture owner's monotonic clock with
+  measured uncertainty. A Gap is reported and resets presentation; older queued pictures are
+  skipped explicitly rather than paired with invented history. Page terminal and capture-stream
+  failures are reported separately from the agent outcome. Capture draining publishes an ended
+  presentation even while the Page remains open. This is the original logical capture end; an
+  unconfirmed native stop stays qualified in the capture summary.
 - **Captions.** `Narrator.ts` is a separate Effect Agent with its own conversation store. It
   keeps one conversation for the whole stream and takes one Run per browser step, in order, so it
   builds on what it already said. Each step reaches it as facts: the tool, the label of the
@@ -48,11 +60,18 @@ runs it on a local Chromium with scripted models for both the agent and the narr
   picture from the previous step. Each skip is reported as `late`, `silent` or `failed`. The run
   events that time each step are stamped on receipt. Live (`delayMillis: 0`), the same frame
   ordering applies without a delay.
-- **What viewers get.** Pictures, and `{ address, title, caption }` as server-sent events. The
+- **What viewers get.** Pictures, bounded address/title/caption/pointer/viewport/status graphics
+  as server-sent events. The
   address is origin and path only, because a query or fragment can carry a token. No session,
   page or target identifier is sent. Every value is page-derived and untrusted, so the viewer
-  sets it with `textContent`. Captions are drawn over the footage, never into the page, so the
+  sets text with `textContent`. Pointer schedules describe intended artwork, not proof that pixels
+  changed. Captions and pointer graphics are drawn over the footage, never into the page, so the
   agent never reads them.
+
+The host joins toolCallIds to actual bounded Tool-host receipts and their run/step/attempt IDs.
+Agent RunEvents still define model/tool lifecycle and narration context; they do not supply native
+dispatch times. Typed inputs and agent reasoning never reach the narrator or audience. The returned
+host diagnostics retain timeline gaps, clock uncertainty and original capture failures.
 
 ## Limits
 

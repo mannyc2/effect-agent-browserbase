@@ -1,6 +1,10 @@
 import { Clock, Context, Effect, Layer, Ref, Schema } from "effect";
+import type { AnySession } from "effect-browser/browser";
 import type { InputReceipt } from "effect-browser/browser-data";
 import type { CapturedFrame, CaptureSummary } from "effect-browser/capture";
+import type { Event } from "effect-browser/timeline-data";
+
+import { FootageError } from "./FootageError.ts";
 
 /**
  * What this layer of a recording or a livestream is answerable for.
@@ -38,6 +42,27 @@ export const ClockSample = Schema.Struct({
 });
 
 export type ClockSample = typeof ClockSample.Type;
+
+/**
+ * What a page returns for one exchange the host opened: the identifier the host's reply carried
+ * and the page's own two stamps. The host's two stamps never leave the host.
+ */
+export const PageClockStamps = Schema.Struct({
+  exchange: Schema.String.check(Schema.isMaxLength(64)),
+  pageSentMillis: Schema.Finite,
+  pageReceivedMillis: Schema.Finite,
+});
+
+export type PageClockStamps = typeof PageClockStamps.Type;
+
+const OutcomeCounts = Schema.Struct({
+  undispatched: Schema.Int,
+  rejected: Schema.Int,
+  unknown: Schema.Int,
+  performed: Schema.Int,
+});
+
+const emptyOutcomes = { undispatched: 0, rejected: 0, unknown: 0, performed: 0 } as const;
 
 export const Metrics = Schema.Struct({
   capture: Schema.Struct({
@@ -108,15 +133,23 @@ export const Metrics = Schema.Struct({
     actionMillis: Schema.Record(Schema.String, Distribution),
     /** From the receipt of native input: the native command alone, with admission excluded. */
     inputMillis: Schema.Record(Schema.String, Distribution),
-    /** A `Locate` cue out and its report back: the page-to-host channel's round trip. */
-    cueRoundTripMillis: Schema.NullOr(Distribution),
-    /** A click's dispatch to the next frame received: an upper bound on action-to-pixel. */
-    clickToFrameMillis: Schema.NullOr(Distribution),
+    /** Temporal proximity from a native click return to the next receipt; no causality claim. */
+    nativeReturnToNextFrameMillis: Schema.NullOr(Distribution),
+    timeline: Schema.Struct({
+      events: Schema.Int,
+      gaps: Schema.Struct({ graphics: Schema.Int, metrics: Schema.Int }),
+      /** Metadata events, not distinct actions: native and run failures can share one cause. */
+      failures: OutcomeCounts,
+      cancellations: OutcomeCounts,
+      contained: Schema.Int,
+    }),
   }),
   output: Schema.Struct({
     frames: Schema.Int,
     /** Output frames that repeat the previous picture. High on still pages, by design. */
     heldFrames: Schema.Int,
+    compositionMillis: Schema.NullOr(Schema.Finite),
+    alignmentUncertaintyMillis: Schema.NullOr(Schema.Finite),
   }),
 });
 
@@ -153,7 +186,13 @@ export const clockOffset = (samples: ReadonlyArray<ClockSample>) => {
         sample.pageSentMillis -
         (sample.hostRepliedMillis - sample.hostReceivedMillis),
     }))
-    .filter((sample) => sample.roundTripMillis >= 0)
+    .filter(
+      (sample) =>
+        Number.isFinite(sample.offsetMillis) &&
+        Number.isFinite(sample.roundTripMillis) &&
+        sample.roundTripMillis >= 0 &&
+        sample.roundTripMillis <= 30000,
+    )
     .sort((left, right) => left.roundTripMillis - right.roundTripMillis)[0];
 
   return measured === undefined
@@ -184,12 +223,19 @@ interface Records {
   readonly interval: CaptureSummary | null;
   readonly commits: ReadonlyArray<Commit>;
   readonly clock: ReadonlyArray<ClockSample>;
+  readonly ownerClockUncertaintyMillis: number;
   readonly actions: Readonly<Record<string, ReadonlyArray<number>>>;
   readonly inputs: Readonly<Record<string, ReadonlyArray<number>>>;
-  readonly cues: ReadonlyArray<number>;
+  readonly timelineEvents: number;
+  readonly failures: typeof OutcomeCounts.Type;
+  readonly cancellations: typeof OutcomeCounts.Type;
+  readonly contained: number;
+  readonly gaps: { readonly graphics: number; readonly metrics: number };
   readonly clicksAtMillis: ReadonlyArray<number>;
   readonly outputFrames: number;
   readonly heldFrames: number;
+  readonly compositionMillis: number | null;
+  readonly alignmentUncertaintyMillis: number | null;
 }
 
 const empty: Records = {
@@ -198,16 +244,26 @@ const empty: Records = {
   interval: null,
   commits: [],
   clock: [],
+  ownerClockUncertaintyMillis: 0,
   actions: {},
   inputs: {},
-  cues: [],
+  timelineEvents: 0,
+  failures: emptyOutcomes,
+  cancellations: emptyOutcomes,
+  contained: 0,
+  gaps: { graphics: 0, metrics: 0 },
   clicksAtMillis: [],
   outputFrames: 0,
   heldFrames: 0,
+  compositionMillis: null,
+  alignmentUncertaintyMillis: null,
 };
 
 /** Ten minutes at sixty frames a second; past it the oldest samples are let go. */
 const MaximumSamples = 36_000;
+
+/** Only the newest exchanges can still be completed; an older identifier completes nothing. */
+const MaximumOpenExchanges = 16;
 
 const appended = <A>(values: ReadonlyArray<A>, value: A) =>
   values.length < MaximumSamples ? [...values, value] : [...values.slice(1), value];
@@ -225,7 +281,15 @@ const distributions = (byKind: Readonly<Record<string, ReadonlyArray<number>>>) 
   );
 
 export const summarize = (records: Records): Metrics => {
-  const clock = clockOffset(records.clock);
+  const measured = clockOffset(records.clock);
+
+  const clock =
+    measured === null
+      ? null
+      : {
+          ...measured,
+          uncertaintyMillis: measured.uncertaintyMillis + records.ownerClockUncertaintyMillis,
+        };
 
   // Frames say which documents were filmed as they arrive; the library's summary adds the
   // address and the commit of each once the interval has ended.
@@ -304,8 +368,14 @@ export const summarize = (records: Records): Metrics => {
     control: {
       actionMillis: distributions(records.actions),
       inputMillis: distributions(records.inputs),
-      cueRoundTripMillis: distribution(records.cues),
-      clickToFrameMillis: distribution(
+      timeline: {
+        events: records.timelineEvents,
+        gaps: records.gaps,
+        failures: records.failures,
+        cancellations: records.cancellations,
+        contained: records.contained,
+      },
+      nativeReturnToNextFrameMillis: distribution(
         records.clicksAtMillis.flatMap((clickedAt) => {
           const next = records.frames.find((frame) => frame.receivedMillis > clickedAt);
 
@@ -313,7 +383,12 @@ export const summarize = (records: Records): Metrics => {
         }),
       ),
     },
-    output: { frames: records.outputFrames, heldFrames: records.heldFrames },
+    output: {
+      frames: records.outputFrames,
+      heldFrames: records.heldFrames,
+      compositionMillis: records.compositionMillis,
+      alignmentUncertaintyMillis: records.alignmentUncertaintyMillis,
+    },
   };
 };
 
@@ -331,7 +406,21 @@ export class Telemetry extends Context.Service<
     readonly captureEnded: (summary: CaptureSummary) => Effect.Effect<void>;
     readonly frame: (frame: CapturedFrame) => Effect.Effect<void>;
     readonly output: (held: boolean) => Effect.Effect<void>;
-    readonly clock: (sample: ClockSample) => Effect.Effect<void>;
+    /**
+     * Opens one exchange and completes the one a page names. The host keeps its own two stamps,
+     * keyed by an unguessable identifier that the reply carries; a page returns only its two
+     * stamps for that identifier, once. An unknown or reused identifier records nothing.
+     */
+    readonly clockExchange: (completed?: PageClockStamps) => Effect.Effect<string>;
+    /** One recording binds the original owner's clock; another owner needs its own layer. */
+    readonly bindOwner: (session: AnySession) => Effect.Effect<void, FootageError>;
+    /** Maps a browser presentation stamp onto the same monotonic clock as its receipt. */
+    readonly presentationTime: (
+      frame: CapturedFrame,
+    ) => Effect.Effect<
+      { readonly monotonicNanos: bigint; readonly uncertaintyNanos: bigint },
+      FootageError
+    >;
     /** Time one of the session's actions; a click is also remembered for click-to-frame. */
     readonly action: <A, E, R>(
       kind: string,
@@ -346,7 +435,9 @@ export class Telemetry extends Context.Service<
       kind: string,
       effect: Effect.Effect<InputReceipt, E, R>,
     ) => Effect.Effect<InputReceipt, E, R>;
-    readonly cueRoundTrip: (millis: number) => Effect.Effect<void>;
+    readonly timeline: (event: Event) => Effect.Effect<void>;
+    readonly timelineGap: (consumer: "graphics" | "metrics") => Effect.Effect<void>;
+    readonly composed: (millis: number, uncertaintyMillis: number) => Effect.Effect<void>;
     readonly metrics: Effect.Effect<Metrics>;
   }
 >()("effect-browserbase/examples/realistic-footage/Telemetry") {
@@ -354,11 +445,26 @@ export class Telemetry extends Context.Service<
     Telemetry,
     Effect.gen(function* () {
       const records = yield* Ref.make(empty);
+
+      const exchanges = yield* Ref.make<
+        ReadonlyMap<
+          string,
+          { readonly hostReceivedMillis: number; readonly hostRepliedMillis: number }
+        >
+      >(new Map());
+
       const clock = yield* Clock.Clock;
       const epochMillis = clock.currentTimeMillisUnsafe();
       const epochNanos = clock.monotonicTimeNanosUnsafe();
-      const hostMillis = (nanos: bigint) => epochMillis + Number(nanos - epochNanos) / 1_000_000;
-      const now = Effect.map(clock.monotonicTimeNanos, hostMillis);
+      const hostNowMillis = (nanos: bigint) => epochMillis + Number(nanos - epochNanos) / 1_000_000;
+      const now = Effect.map(clock.monotonicTimeNanos, hostNowMillis);
+      let ownerSession: AnySession | undefined;
+      let ownerEpochNanos = epochNanos;
+      let ownerEpochMillis = epochMillis;
+      let ownerUncertaintyNanos = 0n;
+
+      const hostMillis = (nanos: bigint) =>
+        ownerEpochMillis + Number(nanos - ownerEpochNanos) / 1_000_000;
 
       return Telemetry.of({
         now,
@@ -389,8 +495,103 @@ export class Telemetry extends Context.Service<
             outputFrames: all.outputFrames + 1,
             heldFrames: all.heldFrames + (held ? 1 : 0),
           })),
-        clock: (sample) =>
-          Ref.update(records, (all) => ({ ...all, clock: appended(all.clock, sample) })),
+        clockExchange: (completed) =>
+          Effect.gen(function* () {
+            const hostReceivedMillis = yield* now;
+
+            if (completed !== undefined) {
+              const host = yield* Ref.modify(exchanges, (open) => {
+                const stamps = open.get(completed.exchange);
+
+                if (stamps === undefined) return [undefined, open] as const;
+                const remaining = new Map(open);
+
+                remaining.delete(completed.exchange);
+
+                return [stamps, remaining] as const;
+              });
+
+              if (host !== undefined)
+                yield* Ref.update(records, (all) => ({
+                  ...all,
+                  clock: appended(all.clock, {
+                    pageSentMillis: completed.pageSentMillis,
+                    hostReceivedMillis: host.hostReceivedMillis,
+                    hostRepliedMillis: host.hostRepliedMillis,
+                    pageReceivedMillis: completed.pageReceivedMillis,
+                  }),
+                }));
+            }
+            const exchange = yield* Effect.sync(() => crypto.randomUUID());
+            const hostRepliedMillis = yield* now;
+
+            yield* Ref.update(exchanges, (open) => {
+              const next = new Map(open);
+              const oldest = next.keys().next();
+
+              if (next.size >= MaximumOpenExchanges && oldest.done !== true)
+                next.delete(oldest.value);
+              next.set(exchange, { hostReceivedMillis, hostRepliedMillis });
+
+              return next;
+            });
+
+            return exchange;
+          }),
+        bindOwner: (session) =>
+          Effect.gen(function* () {
+            const before = yield* session.monotonicTimeNanos;
+            const atMillis = yield* now;
+            const after = yield* session.monotonicTimeNanos;
+
+            if (ownerSession !== undefined) {
+              if (ownerSession === session) return;
+
+              return yield* FootageError.make({
+                reason: "presentation-limit",
+                detail: "telemetry is already bound to another browser owner",
+              });
+            }
+            ownerSession = session;
+            ownerEpochNanos = (before + after) / 2n;
+            ownerEpochMillis = atMillis;
+            ownerUncertaintyNanos = (after - before) / 2n;
+            yield* Ref.update(records, (all) => ({
+              ...all,
+              ownerClockUncertaintyMillis: Number(ownerUncertaintyNanos) / 1_000_000,
+            }));
+          }),
+        presentationTime: (frame) =>
+          Effect.gen(function* () {
+            const measured = clockOffset((yield* Ref.get(records)).clock);
+
+            if (measured === null || ownerSession === undefined)
+              return yield* FootageError.make({
+                reason: "presentation-limit",
+                detail: "browser clock comparison unavailable",
+              });
+
+            const receiptDelayMillis =
+              hostMillis(frame.receivedMonotonicNanos) -
+              (frame.sourceTimeMillis + measured.offsetMillis);
+
+            const delayNanos = Math.round(receiptDelayMillis * 1_000_000);
+
+            if (!Number.isSafeInteger(delayNanos))
+              return yield* FootageError.make({
+                reason: "presentation-limit",
+                detail: "browser clock comparison is outside the supported interval",
+              });
+
+            return {
+              monotonicNanos: frame.receivedMonotonicNanos - BigInt(delayNanos),
+              // Unix millisecond doubles lose sub-microsecond precision; include that rounding.
+              uncertaintyNanos:
+                BigInt(Math.ceil(measured.uncertaintyMillis * 1_000_000)) +
+                ownerUncertaintyNanos +
+                1000n,
+            };
+          }),
         action: (kind, effect) =>
           Effect.gen(function* () {
             const startedAt = yield* now;
@@ -400,8 +601,6 @@ export class Telemetry extends Context.Service<
             yield* Ref.update(records, (all) => ({
               ...all,
               actions: { ...all.actions, [kind]: appended(all.actions[kind] ?? [], millis) },
-              clicksAtMillis:
-                kind === "click" ? appended(all.clicksAtMillis, startedAt) : all.clicksAtMillis,
             }));
 
             return result;
@@ -410,6 +609,10 @@ export class Telemetry extends Context.Service<
           Effect.tap(effect, (receipt) =>
             Ref.update(records, (all) => ({
               ...all,
+              clicksAtMillis:
+                receipt.kind === "click"
+                  ? appended(all.clicksAtMillis, hostMillis(receipt.completedMonotonicNanos))
+                  : all.clicksAtMillis,
               inputs: {
                 ...all.inputs,
                 [kind]: appended(
@@ -420,8 +623,31 @@ export class Telemetry extends Context.Service<
               },
             })),
           ),
-        cueRoundTrip: (millis) =>
-          Ref.update(records, (all) => ({ ...all, cues: appended(all.cues, millis) })),
+        timeline: ({ event }) =>
+          Ref.update(records, (all) => ({
+            ...all,
+            timelineEvents: all.timelineEvents + 1,
+            failures:
+              event._tag === "Failed"
+                ? { ...all.failures, [event.outcome]: all.failures[event.outcome] + 1 }
+                : all.failures,
+            cancellations:
+              event._tag === "Cancelled"
+                ? { ...all.cancellations, [event.outcome]: all.cancellations[event.outcome] + 1 }
+                : all.cancellations,
+            contained: all.contained + (event._tag === "Contained" ? 1 : 0),
+          })),
+        timelineGap: (consumer) =>
+          Ref.update(records, (all) => ({
+            ...all,
+            gaps: { ...all.gaps, [consumer]: all.gaps[consumer] + 1 },
+          })),
+        composed: (millis, uncertaintyMillis) =>
+          Ref.update(records, (all) => ({
+            ...all,
+            compositionMillis: millis,
+            alignmentUncertaintyMillis: uncertaintyMillis,
+          })),
         metrics: Effect.map(Ref.get(records), summarize),
       });
     }),

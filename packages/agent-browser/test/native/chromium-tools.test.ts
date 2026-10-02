@@ -1,13 +1,15 @@
+import { createServer } from "node:http";
+
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Deferred, Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Predicate, Schedule, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
-import { BrowserPolicy } from "effect-browser/browser-data";
+import { BrowserPolicy, Observation } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import { Model, Toolkit } from "effect/unstable/ai";
@@ -53,9 +55,9 @@ it.live(
             Effect.gen(function* () {
               expect(local.reference.provider).toBe("chromium");
 
-              const host = yield* BrowserTools.makeHost(local, {
+              const host = yield* BrowserTools.makeHost(local, local.initialPage, {
                 observationScope: "viewport",
-                admission: { admit: (facts) => facts.kind === "button" },
+                policy: { admit: (facts) => facts.kind === "button" },
                 onNavigation: ({ toolCallId }) =>
                   Effect.gen(function* () {
                     navigationCallbacks++;
@@ -113,9 +115,11 @@ it.live(
               expect(result.output.done).toBe(true);
               expect(navigationCallbacks).toBe(1);
               expect(callbackFinalizers).toBe(1);
-              expect((yield* local.readText({ selector: "#log" })).text).toContain('"clicks":1');
+              expect((yield* local.initialPage.readText({ selector: "#log" })).text).toContain(
+                '"clicks":1',
+              );
 
-              const interval = yield* Capture.start(local, {
+              const interval = yield* Capture.start(local.initialPage, {
                 lifetime: "page",
                 maxDurationMillis: 5000,
               });
@@ -181,6 +185,7 @@ it.live(
             Effect.gen(function* () {
               const result = yield* BrowserTools.run(
                 browser,
+                browser.initialPage,
                 AgentRuntime.run(agent, "inspect the partial page after a loading deadline").pipe(
                   Effect.provide(
                     Layer.mergeAll(
@@ -244,14 +249,18 @@ it.live(
               );
 
               expect(result.output.done).toBe(true);
-              expect((yield* browser.readText({ selector: "#act" })).text).toBe("clicked");
-              expect((yield* browser.pages).length).toBe(1);
-              expect((yield* browser.target).pageId).toBe((yield* browser.pages)[0]!.pageId);
-              yield* browser.navigate({ url: site.url });
-              expect((yield* browser.observe()).text).toContain("VISIBLE WORDS");
-              const created = yield* browser.createPage;
+              expect((yield* browser.initialPage.readText({ selector: "#act" })).text).toBe(
+                "clicked",
+              );
+              expect((yield* browser.listPages()).length).toBe(1);
+              expect(browser.initialPage.identity.pageId).toBe(
+                (yield* browser.listPages())[0]!.pageId,
+              );
+              yield* browser.initialPage.navigate({ url: site.url });
+              expect((yield* browser.initialPage.observe()).text).toContain("VISIBLE WORDS");
+              const created = yield* browser.createPage();
 
-              yield* browser.closePage(created);
+              yield* created.close();
             }),
         ).pipe(
           Effect.provide(
@@ -313,10 +322,8 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              yield* browser.navigate({ url: site.url });
-              const bothConstructed = yield* Deferred.make<void>();
-              const originalScroll = browser.scroll;
-              const originalPointer = browser.pointerMove;
+              yield* browser.initialPage.navigate({ url: site.url });
+              const originalStart = browser.initialPage.start;
               let prepared = 0;
               let active = 0;
               let peak = 0;
@@ -324,14 +331,12 @@ it.live(
 
               const tracked = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) => {
                 prepared++;
-                if (prepared === 2) Deferred.doneUnsafe(bothConstructed, Effect.void);
 
                 return Effect.gen(function* () {
                   calls.push(name);
                   peak = Math.max(peak, ++active);
-                  // Both actual Toolkit handlers construct their operations in the same model turn.
-                  // The host lane alone decides when each complete operation may execute.
-                  yield* Deferred.await(bothConstructed);
+                  // The original Page plan executes only after the host admits its call.
+                  yield* Effect.sleep(20);
 
                   return yield* effect;
                 }).pipe(
@@ -343,24 +348,22 @@ it.live(
                 );
               };
 
-              const scroll: typeof originalScroll = (request) =>
-                tracked("scroll", originalScroll(request));
-
-              const pointerMove: typeof originalPointer = (request) =>
-                tracked("pointer", originalPointer(request));
+              const start: typeof originalStart = (plan, options) =>
+                tracked(
+                  plan.steps[0]?.action._tag === "PointerMove" ? "pointer" : "scroll",
+                  originalStart(plan, options).pipe(Effect.tap((operation) => operation.completed)),
+                );
 
               yield* Effect.acquireRelease(
-                Effect.sync(() => Object.assign(browser, { scroll, pointerMove })),
+                Effect.sync(() => Object.assign(browser.initialPage, { start })),
                 () =>
-                  Effect.sync(() =>
-                    Object.assign(browser, {
-                      scroll: originalScroll,
-                      pointerMove: originalPointer,
-                    }),
-                  ),
+                  Effect.sync(() => Object.assign(browser.initialPage, { start: originalStart })),
               );
+
               // The engine may start both calls at once; only the host lane orders them.
-              const host = yield* BrowserTools.makeHost(browser, { scheduling: "lane" });
+              const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+                scheduling: "lane",
+              });
 
               const result = yield* host.run(
                 AgentRuntime.run(concurrent, "scroll and move the pointer").pipe(
@@ -460,9 +463,8 @@ it.live(
           Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
           (browser) =>
             Effect.gen(function* () {
-              yield* browser.navigate({ url: site.url });
-              const originalScroll = browser.scroll;
-              const originalPointer = browser.pointerMove;
+              yield* browser.initialPage.navigate({ url: site.url });
+              const originalStart = browser.initialPage.start;
               const log: string[] = [];
 
               // A handler builds its browser operation when the engine starts the call, so the
@@ -479,26 +481,22 @@ it.live(
 
               let scrolls = 0;
 
-              const scroll: typeof originalScroll = (request) =>
+              const start: typeof originalStart = (plan, options) =>
                 tracked(
-                  ++scrolls === 1 ? "first-scroll" : "second-scroll",
-                  originalScroll(request),
+                  plan.steps[0]?.action._tag === "PointerMove"
+                    ? "pointer"
+                    : ++scrolls === 1
+                      ? "first-scroll"
+                      : "second-scroll",
+                  originalStart(plan, options).pipe(Effect.tap((operation) => operation.completed)),
                 );
 
-              const pointerMove: typeof originalPointer = (request) =>
-                tracked("pointer", originalPointer(request));
-
               yield* Effect.acquireRelease(
-                Effect.sync(() => Object.assign(browser, { scroll, pointerMove })),
+                Effect.sync(() => Object.assign(browser.initialPage, { start })),
                 () =>
-                  Effect.sync(() =>
-                    Object.assign(browser, {
-                      scroll: originalScroll,
-                      pointerMove: originalPointer,
-                    }),
-                  ),
+                  Effect.sync(() => Object.assign(browser.initialPage, { start: originalStart })),
               );
-              const host = yield* BrowserTools.makeHost(browser);
+              const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
 
               const result = yield* host.run(
                 AgentRuntime.run(ordered, "scroll twice and move the pointer").pipe(
@@ -579,4 +577,98 @@ it.live(
         );
       }),
     ),
+);
+
+// An outer page whose child frame holds its own counter; each button reports only to its own.
+const framedSite = Effect.acquireRelease(
+  Effect.promise(
+    () =>
+      new Promise<{ readonly url: string; readonly close: () => void }>((resolve) => {
+        const server = createServer((request, response) => {
+          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          if (request.url === "/inner")
+            return void response.end(`<!doctype html><title>Inner</title>
+<button id="inner" onclick="count.textContent=Number(count.textContent)+1">Inner</button>
+<output id="count">0</output>`);
+          response.end(`<!doctype html><title>Outer</title>
+<button id="outer" onclick="count.textContent=Number(count.textContent)+1">Outer</button>
+<output id="count">0</output>
+<iframe src="/inner" width="300" height="120"></iframe>`);
+        });
+
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          const port = typeof address === "object" && address !== null ? address.port : 0;
+
+          resolve({ url: `http://127.0.0.1:${String(port)}/`, close: () => server.close() });
+        });
+      }),
+  ),
+  (site) => Effect.sync(site.close),
+);
+
+it.live("real Chromium: Tools bound to an issued Frame read and act inside that frame", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* framedSite;
+
+      yield* Browser.scoped(
+        Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 })),
+        (local) =>
+          Effect.gen(function* () {
+            const page = local.initialPage;
+
+            yield* page.navigate({ url: site.url });
+
+            // The child document loads after its parent's DOMContentLoaded.
+            const inner = yield* page.listFrames().pipe(
+              Effect.map((frames) => frames.find((frame) => frame.url.endsWith("/inner"))),
+              Effect.filterOrFail(Predicate.isNotUndefined, () => "child frame not loaded yet"),
+              Effect.retry({ times: 50, schedule: Schedule.spaced("100 millis") }),
+            );
+
+            const frame = yield* page.frame(inner);
+            const host = yield* BrowserTools.makeHost(local, frame);
+            const tools = yield* BrowserTools.toolkit.pipe(Effect.provide(host.handlers));
+
+            const inspected = yield* Stream.runCollect(
+              yield* tools.handle("browser_inspect", { scope: "document" }),
+            );
+
+            expect(inspected).toMatchObject([{ isFailure: false }]);
+
+            const observation = yield* Schema.decodeUnknownEffect(Observation)(
+              inspected[0]?.result,
+            );
+
+            expect(observation.controls.map((control) => control.label)).toEqual(["Inner"]);
+
+            const clicked = yield* Stream.runCollect(
+              yield* tools.handle("browser_click", {
+                observationId: observation.observationId,
+                elementId: observation.controls[0]?.elementId ?? "",
+              }),
+            );
+
+            expect(clicked).toMatchObject([{ isFailure: false }]);
+            expect((yield* frame.readText({ selector: "#count" })).text).toBe("1");
+            expect((yield* page.readText({ selector: "#count" })).text).toBe("0");
+            expect((yield* host.toolFailures).failures).toEqual([]);
+          }),
+      ).pipe(
+        Effect.provide(
+          Chromium.layer({
+            launch: {
+              ...(process.env.BROWSERBASE_CHROMIUM === undefined
+                ? {}
+                : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+              chromiumSandbox: false,
+              startupTimeoutMillis: 25000,
+            },
+            viewport: { width: 640, height: 480 },
+          }).pipe(Layer.provide(NodeCrypto.layer)),
+        ),
+      );
+    }),
+  ),
 );

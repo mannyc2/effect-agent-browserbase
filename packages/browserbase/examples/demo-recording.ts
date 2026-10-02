@@ -47,7 +47,7 @@ export const recordDemo = (
     const scrollSteps = options.scrollSteps ?? 4;
     const scrollDelta = options.scrollDelta ?? 320;
 
-    yield* session.navigate(NavigateRequest.make({ url }));
+    yield* session.initialPage.navigate(NavigateRequest.make({ url }));
 
     const driver = Effect.gen(function* () {
       let dispatched = 0;
@@ -56,10 +56,8 @@ export const recordDemo = (
       // capture window rather than after the encoder has stopped collecting.
       for (let step = 0; step < scrollSteps; step++) {
         yield* Effect.sleep(Math.floor(durationMillis / (scrollSteps + 2)));
-        // Re-verify the selected target between actions, the way the
-        // model-facing scroll Tool does, rather than reusing a handle taken
-        // before the navigation.
-        const handle = session;
+        // Drive the original issued Page; display changes never move these scrolls.
+        const handle = session.initialPage;
 
         yield* handle.scroll(ScrollRequest.make({ deltaX: 0, deltaY: scrollDelta }));
         dispatched++;
@@ -71,7 +69,11 @@ export const recordDemo = (
     const driving = yield* driver.pipe(Effect.forkChild);
     const recording = yield* recordInterval(session, outputPath, durationMillis);
     const scrolled = yield* Fiber.join(driving);
-    const observation = yield* session.observe({ maxTextBytes: 8 * 1024, maxControls: 8 });
+
+    const observation = yield* session.initialPage.observe({
+      maxTextBytes: 8 * 1024,
+      maxControls: 8,
+    });
 
     return {
       target: observation.url,

@@ -25,7 +25,10 @@ const open = Effect.fnUntraced(function* (selectOption: Driver["selectOption"]) 
     onConnect: async (driver) => ({ ...driver, selectOption }),
   });
 
-  return makeSession(yield* (yield* f.acquisition).rawConnect, bindings);
+  return {
+    session: makeSession(yield* (yield* f.acquisition).rawConnect, bindings),
+    control: f.control,
+  };
 });
 
 it.effect(
@@ -35,7 +38,7 @@ it.effect(
       Effect.gen(function* () {
         let calls = 0;
 
-        const session = yield* open(async () => {
+        const { session } = yield* open(async () => {
           calls++;
 
           return "https://example.test/";
@@ -52,7 +55,7 @@ it.effect(
         ]) {
           // Exercise untyped callers at the actual public boundary.
           expect(
-            yield* Effect.result(session.selectOption(reference, options as never)),
+            yield* Effect.result(session.initialPage.selectOption(reference, options as never)),
           ).toMatchObject({
             _tag: "Failure",
             failure: {
@@ -69,7 +72,7 @@ it.effect(
 );
 
 it.effect.each(["before", "after"] as const)(
-  "selection timeout %s dispatch keeps accurate outcomes and fences late native work",
+  "selection timeout %s dispatch keeps accurate outcomes and contains late native work",
   (position) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -78,7 +81,7 @@ it.effect.each(["before", "after"] as const)(
         const retired = gate<void>();
         let dispatches = 0;
 
-        const session = yield* open(async (_target, _options, ticket) => {
+        const { session, control } = yield* open(async (_target, _options, ticket) => {
           try {
             if (position === "after") {
               ticket.dispatch();
@@ -98,12 +101,14 @@ it.effect.each(["before", "after"] as const)(
           }
         });
 
-        const selecting = yield* session
+        const selecting = yield* session.initialPage
           .selectOption(reference, ["element-1"])
           .pipe(Effect.result, Effect.forkChild);
 
         yield* Effect.promise(() => entered.promise);
-        expect(yield* Effect.result(session.selectOption(reference, ["element-2"]))).toMatchObject({
+        expect(
+          yield* Effect.result(session.initialPage.selectOption(reference, ["element-2"])),
+        ).toMatchObject({
           _tag: "Failure",
           failure: { reason: { _tag: "Busy" }, outcome: "undispatched" },
         });
@@ -114,20 +119,35 @@ it.effect.each(["before", "after"] as const)(
             operation: "select-option",
             reason: { _tag: "Timeout" },
             outcome: position === "before" ? "undispatched" : "unknown",
+            containment:
+              position === "before"
+                ? { _tag: "NotRequired" }
+                : { _tag: "PageClosed", pageId: session.initialPage.identity.pageId },
           },
         });
         release.resolve();
         yield* Effect.promise(() => retired.promise);
         expect(dispatches).toBe(position === "before" ? 0 : 1);
-        expect((yield* session.status).phase).toBe(position === "before" ? "open" : "uncertain");
-        if (position === "before") expect((yield* session.readText({})).text).toBe("initial");
-        else
+        expect(yield* session.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+        if (position === "before")
           expect(
-            yield* Effect.result(session.selectOption(reference, ["element-1"])),
+            (yield* session.initialPage.readText({}, { admission: { queue: "1 second" } })).text,
+          ).toBe("initial");
+        else {
+          expect(yield* session.initialPage.status).toMatchObject({ phase: "closed" });
+          expect(
+            (yield* control.calls).filter((call) => call.operation === "close-page"),
+          ).toMatchObject([
+            { pageId: session.initialPage.identity.pageId, dispatched: true, settled: "completed" },
+          ]);
+          expect(
+            yield* Effect.result(session.initialPage.selectOption(reference, ["element-1"])),
           ).toMatchObject({
             _tag: "Failure",
             failure: { reason: { _tag: "Closed" }, outcome: "undispatched" },
           });
+          expect(dispatches).toBe(1);
+        }
       }),
     ),
 );
@@ -140,7 +160,7 @@ it.effect("closing a session cancels selection admission before any late dispatc
       const retired = gate<void>();
       let dispatches = 0;
 
-      const session = yield* open(async (_target, _options, ticket) => {
+      const { session } = yield* open(async (_target, _options, ticket) => {
         entered.resolve();
         await release.promise;
         try {
@@ -153,7 +173,7 @@ it.effect("closing a session cancels selection admission before any late dispatc
         }
       });
 
-      const selecting = yield* session
+      const selecting = yield* session.initialPage
         .selectOption(reference, ["element-1"])
         .pipe(Effect.result, Effect.forkChild);
 

@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 import type {
   BrowserContext,
   Download,
@@ -8,20 +8,18 @@ import type {
   Page,
 } from "playwright-core";
 
-import {
-  type ControlFacts,
-  type InputReceipt,
-  type ObservedElement,
-  SafeFilename,
-} from "../../BrowserData.ts";
+import { type InputReceipt, SafeFilename } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type {
   Driver,
   DriverTarget,
+  ElementTarget,
   InputCapture,
   NativeFileSelection,
   NavigationControl,
 } from "./Driver.ts";
+import { makeElementAccess } from "./ElementAccess.ts";
+import { makeKeyboard } from "./Keyboard.ts";
 import {
   closeWithin,
   failure,
@@ -30,25 +28,44 @@ import {
   sanitize,
   timeout,
 } from "./NativeCalls.ts";
-import {
-  type AdmissionPolicy,
-  holdsChecked,
-  type Observation,
-  readFieldState,
-} from "./Observation.ts";
+import { isPerformed, ownerPacing, type PerformedTicket } from "./NativePacing.ts";
+import { holdsChecked, type Observation, readFieldState } from "./Observation.ts";
 import type { Ticket, WaitTicket } from "./Owner.ts";
+import { scroll as scrollSchedule, type KeySchedule } from "./Performance.ts";
+import { makePointer } from "./Pointer.ts";
+import { makeSettledResource } from "./Settled.ts";
 import type { Entry, Targets } from "./Targets.ts";
+
+/**
+ * Input types whose whole value is assigned, as Playwright's fill does, rather than typed key by
+ * key. A fill checks each on a detached probe; performed typing cannot produce any of them.
+ */
+const AssignedInputTypes: ReadonlyArray<string> = [
+  "color",
+  "date",
+  "time",
+  "datetime-local",
+  "month",
+  "range",
+  "week",
+];
+
+/** Refuses, undispatched, performed typing into a control whose value can only be assigned. */
+const refusePerformedTyping = (inputType: string | undefined) => {
+  if (inputType !== undefined && AssignedInputTypes.includes(inputType))
+    throw failure(Reasons.Unsupported.make({}), "undispatched");
+};
 
 /**
  * What Playwright's own input would refuse only after dispatch, checked before it: a node it
  * would wait for until the deadline, or text it would not put into this control. Either way the
  * wait or the thrown error would be an unknown outcome that fences the owner. It mirrors
  * Playwright's visible, enabled and editable checks and its fill rules for the control and text.
- * Runs in the page, so it is self-contained.
+ * Runs in the page, so it is self-contained and receives the assigned input types from the host.
  */
 const inputRefusal = (
   node: Element,
-  text: string | undefined,
+  { text, assigned }: { readonly text?: string; readonly assigned: ReadonlyArray<string> },
 ): "not-visible" | "disabled" | "unsupported" | null => {
   const style = getComputedStyle(node);
 
@@ -66,7 +83,6 @@ const inputRefusal = (
   if (text === undefined) return null;
   if (node instanceof HTMLInputElement) {
     const type = node.type.toLowerCase();
-    const assigned = ["color", "date", "time", "datetime-local", "month", "range", "week"];
     const typed = ["", "email", "number", "password", "search", "tel", "text", "url"];
 
     if (node.readOnly || (!typed.includes(type) && !assigned.includes(type))) return "unsupported";
@@ -268,8 +284,8 @@ export const nativeSelection = (
 };
 
 /**
- * Input to the selected document. A mutation marks its ticket dispatched immediately before the
- * one native command that may change the page; any outcome after that point is uncertain.
+ * Input to one exact document. Each native mutation marks dispatch before it starts and records
+ * its acknowledgement before follow-up reads, which may fail after the mutation was performed.
  */
 export const makeActions = (
   context: BrowserContext,
@@ -278,11 +294,12 @@ export const makeActions = (
   isTimeoutError: (error: unknown) => boolean,
 ) => {
   const { current } = targets;
-  let invalidatePointer = (_page: Page): void => {};
-
-  const setPointerInvalidator = (invalidate: (page: Page) => void) => {
-    invalidatePointer = invalidate;
-  };
+  // Built in dependency order: exact-node admission, then the pointer and keyboard drivers that
+  // use it, then the actions that use all three.
+  const elements = makeElementAccess(observation);
+  const { targetFor, withAdmittedElement, withElement } = elements;
+  const pointer = makePointer(targets, elements);
+  const keyboard = makeKeyboard(targets, elements, pointer.receipt);
 
   const navigationControls = new Map<
     string,
@@ -309,60 +326,70 @@ export const makeActions = (
     return value;
   };
 
-  const postUrl = (target?: DriverTarget) => httpUrl(targets.url(target));
-
-  /**
-   * Acts on the exact attached node a target names. The observation seam establishes that it is
-   * still the control that was inspected and that the host's policy, if any, admits it. `admit`
-   * then sees that node before anything is dispatched, so a refusal it raises is undispatched
-   * too, and what it learns reaches the action without the node being resolved a second time.
-   * `enablement` is a form step's: see `Observation.resolve`.
-   */
-  const withAdmittedElement = async <Admitted, A>(
-    target: string | ObservedElement,
-    ticket: Ticket,
-    admit: (element: ElementHandle<Element>, facts: ControlFacts | undefined) => Promise<Admitted>,
-    action: (element: ElementHandle<Element>, admitted: Admitted) => Promise<A>,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
-    enablement = false,
-  ): Promise<A> => {
-    const { element, kept, check, facts } = await observation.resolve(
-      target,
-      ticket,
-      policy,
-      false,
-      browserTarget,
-      enablement,
-    );
-
+  const reportable = (value: string): string | undefined => {
     try {
-      check();
-      const admitted = await admit(element, facts);
+      const url = new URL(value);
 
-      check();
-      ticket.check();
-      // ElementHandle actions do not re-resolve the selector onto a replacement node.
-      ticket.dispatch();
-
-      return await action(element, admitted);
-    } finally {
-      if (!kept) await closeWithin(() => element.dispose()).catch(() => {});
+      return value.length <= 8192 &&
+        ["http:", "https:"].includes(url.protocol) &&
+        url.hostname !== "" &&
+        !url.username &&
+        !url.password
+        ? value
+        : undefined;
+    } catch {
+      return undefined;
     }
   };
 
-  const withElement = <A>(
-    target: string | ObservedElement,
-    ticket: Ticket,
-    action: (element: ElementHandle<Element>) => Promise<A>,
-    policy?: AdmissionPolicy,
-    browserTarget?: DriverTarget,
-  ): Promise<A> =>
-    withAdmittedElement(target, ticket, async () => {}, action, policy, browserTarget);
+  const ownHttpAddress = (value: string): boolean => {
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * The frame's own http(s) address or, for a document without one (srcdoc, about:blank, data:),
+   * its nearest ancestor's. An http(s) address that cannot be reported (longer than 8,192
+   * characters, or carrying credentials) is never replaced by an ancestor's, which belongs to a
+   * different document: it yields nothing.
+   */
+  const addressOf = (frame: Frame): string | undefined => {
+    for (let at: Frame | null = frame; at !== null; at = at.parentFrame()) {
+      const value = at.url();
+
+      if (ownHttpAddress(value)) return reportable(value);
+    }
+
+    return undefined;
+  };
+
+  /**
+   * The address an action reports, read from the host's frame tree and never from the page. A
+   * document without an http(s) URL of its own (`about:srcdoc`, `about:blank`, `data:`) reports
+   * its nearest ancestor frame's, which is also its base URL. It is resolved before dispatch, so
+   * an action never fails over its URL after its input landed: a target with no reportable
+   * address, including one whose own http(s) address is too long or carries credentials, is
+   * refused unsent, and afterwards the address read before dispatch stands in when the action
+   * left none, including when the action removed its own frame or closed its page.
+   */
+  const resultUrl = (target: DriverTarget) => {
+    const { frame } = current(target);
+    const before = addressOf(frame);
+
+    if (before === undefined) throw failure(Reasons.Unsupported.make({}), "undispatched");
+
+    return () => (frame.isDetached() ? before : (addressOf(frame) ?? before));
+  };
 
   /** Refuses, undispatched, what `inputRefusal` finds on this exact node right now. */
   const refuseInput = async (element: ElementHandle<Element>, text?: string) => {
-    const refusal: unknown = await element.evaluate(inputRefusal, text);
+    const refusal: unknown = await element.evaluate(inputRefusal, {
+      ...(text === undefined ? {} : { text }),
+      assigned: AssignedInputTypes,
+    });
 
     if (refusal === "not-visible") throw failure(Reasons.NotVisible.make({}), "undispatched");
     if (refusal === "disabled") throw failure(Reasons.Disabled.make({}), "undispatched");
@@ -379,10 +406,39 @@ export const makeActions = (
     element: ElementHandle<Element>,
     ticket: Ticket,
     capture?: InputCapture,
+    check: () => void = () => ticket.check(),
+    readmit?: () => Promise<void>,
   ): Promise<InputReceipt | undefined> => {
+    if (isPerformed(ticket)) {
+      return pointer.preparePress(page, element, ticket, check).then(async (planned) => {
+        await readmit?.();
+        check();
+
+        const dispatch = async () => {
+          check();
+          ticket.dispatch();
+          // The click moves the pointer where it aimed; the next glide starts there.
+          pointer.invalidate(page, planned.intended.position);
+          await element.click({
+            timeout: timeout(ticket),
+            scroll: "none",
+            position: planned.intended.relativePosition,
+          });
+          ticket.acknowledge?.();
+          ticket.followUp?.();
+        };
+
+        return capture === undefined
+          ? dispatch().then(() => undefined)
+          : capture(dispatch, planned);
+      });
+    }
+
     const dispatch = async () => {
-      invalidatePointer(page);
+      pointer.invalidate(page);
       await element.click({ timeout: timeout(ticket) });
+      ticket.acknowledge?.();
+      ticket.followUp?.();
     };
 
     return capture === undefined
@@ -392,33 +448,50 @@ export const makeActions = (
 
   const click: Driver["click"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const { page } = current(browserTarget).entry;
 
-      const input = await withElement(
+      const input = await withAdmittedElement(
         target,
         ticket,
-        (element) => clickElement(page, element, ticket, capture),
+        (element) => (ticket.performance === undefined ? Promise.resolve() : refuseInput(element)),
+        (element, _admitted, check, readmit) =>
+          clickElement(page, element, ticket, capture, check, readmit),
         policy,
         browserTarget,
+        false,
+        ticket.performance === undefined,
       );
 
       ticket.check();
 
-      if (input === undefined) throw failure(Reasons.Malformed.make({}), "unknown");
+      if (input === undefined) throw failure(Reasons.Malformed.make({}));
 
-      return { url: postUrl(browserTarget), input };
+      return { url: url(), input };
     });
 
   const clickWithoutReceipt = async (
-    target: string | ObservedElement,
+    target: ElementTarget,
     ticket: Ticket,
+    browserTarget: DriverTarget,
   ): Promise<string> => {
-    const { page } = current().entry;
+    browserTarget = targetFor(target, browserTarget);
+    const url = resultUrl(browserTarget);
+    const { page } = current(browserTarget).entry;
 
-    await withElement(target, ticket, (element) => clickElement(page, element, ticket));
+    await withElement(
+      target,
+      ticket,
+      (element, _admitted, check, readmit) =>
+        clickElement(page, element, ticket, undefined, check, readmit),
+      undefined,
+      browserTarget,
+      ticket.performance === undefined,
+    );
     ticket.check();
 
-    return postUrl();
+    return url();
   };
 
   /**
@@ -427,12 +500,13 @@ export const makeActions = (
    * command dispatches. A retained node or child frame is refused rather than approximated.
    */
   const attachStoredFiles = async (
-    target: string | ObservedElement,
+    target: ElementTarget,
     paths: ReadonlyArray<string>,
     ticket: Ticket,
+    browserTarget: DriverTarget,
   ) => {
     if (typeof target !== "string") throw failure(Reasons.Unsupported.make({}), "undispatched");
-    const { entry, frame } = current();
+    const { entry, frame } = current(browserTarget);
 
     if (frame !== entry.page.mainFrame())
       throw failure(Reasons.Unsupported.make({}), "undispatched");
@@ -461,6 +535,8 @@ export const makeActions = (
         );
       ticket.dispatch();
       await cdp.send("DOM.setFileInputFiles", { files: [...paths], nodeId });
+      ticket.acknowledge?.();
+      ticket.followUp?.();
     } finally {
       await closeWithin(() => cdp.detach()).catch(() => {});
     }
@@ -532,17 +608,38 @@ export const makeActions = (
 
   const fill: Driver["fill"] = (target, value, ticket, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
       await withAdmittedElement(
         target,
         ticket,
-        (element) => refuseInput(element, value),
-        (element) => element.fill(value, { timeout: timeout(ticket) }),
+        async (element, facts) => {
+          await refuseInput(element, value);
+          if (!isPerformed(ticket)) return undefined;
+          refusePerformedTyping(facts?.inputType);
+
+          return { ticket, schedule: keyboard.prepareKeys(value, ticket) };
+        },
+        (element, performed, check, readmit) =>
+          performed === undefined
+            ? element.fill(value, { timeout: timeout(ticket) })
+            : keyboard.fillElement(
+                current(browserTarget).entry.page,
+                element,
+                performed.schedule,
+                performed.ticket,
+                check,
+                readmit,
+              ),
         policy,
         browserTarget,
+        false,
+        ticket.performance === undefined,
       );
       ticket.check();
 
-      return postUrl(browserTarget);
+      return url();
     });
 
   /**
@@ -552,178 +649,327 @@ export const makeActions = (
    * in the requested state, and a native radio is never asked to clear itself. Options are the
    * issued nodes of the same observation, exactly as `selectOption` sends them.
    */
-  const formStep: Driver["formStep"] = (target, field, ticket, policy, settleMillis, capture) =>
+  const formStep: Driver["formStep"] = (
+    target,
+    field,
+    ticket,
+    policy,
+    settleMillis,
+    capture,
+    browserTarget,
+  ) =>
     sanitize(async () => {
-      const { element, check, facts } = await observation.resolve(
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
+      const {
+        element,
+        reference: leasedReference,
+        check,
+        readmit,
+        facts,
+        capture: sampled,
+        release,
+      } = await observation.resolve(
         target,
         ticket,
         policy,
         false,
-        undefined,
+        browserTarget,
         true,
+        ticket.performance !== undefined,
       );
 
-      check();
-      if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
-      let act: (() => Promise<unknown>) | undefined;
-      let input: InputReceipt | undefined;
+      try {
+        check();
+        if (facts === undefined) throw failure(Reasons.Malformed.make({}), "undispatched");
+        let act: (() => Promise<unknown>) | undefined;
+        let input: InputReceipt | undefined;
 
-      if (field.options !== undefined) {
-        const admitted = await observation.selectOptions(
-          target,
-          field.options,
-          element,
-          ticket,
-          true,
-        );
+        if (field.options !== undefined) {
+          const admitted = await observation.selectOptions(
+            target,
+            field.options,
+            element,
+            ticket,
+            true,
+            browserTarget,
+          );
 
-        act = async () => {
-          const values = await element.selectOption(admitted.handles, { timeout: timeout(ticket) });
-          const expected = [...admitted.values].sort();
-
-          if (
-            values.length !== expected.length ||
-            values.sort().some((value, i) => value !== expected[i])
-          )
-            throw failure(Reasons.Stale.make({}), "unknown");
-        };
-      } else if (field.checked !== undefined) {
-        if (facts.checked === undefined)
-          throw failure(Reasons.Unsupported.make({}), "undispatched");
-        if (facts.checked !== field.checked) {
-          if (!field.checked && facts.inputType === "radio")
-            throw failure(Reasons.Unsupported.make({}), "undispatched");
-          await refuseInput(element);
           act = async () => {
-            input = await clickElement(current().entry.page, element, ticket, capture);
-          };
-        }
-      } else {
-        const text = field.value ?? "";
+            const values = await element.selectOption(admitted.handles, {
+              timeout: timeout(ticket),
+            });
 
-        await refuseInput(element, text);
-        act = async () => {
-          await element.fill(text, { timeout: timeout(ticket) });
-          await bounded(
-            element.evaluate((node) => {
+            ticket.acknowledge?.();
+            ticket.followUp?.();
+            const expected = [...admitted.values].sort();
+
+            if (
+              values.length !== expected.length ||
+              values.sort().some((value, i) => value !== expected[i])
+            )
+              throw failure(Reasons.Stale.make({}));
+          };
+        } else if (field.checked !== undefined) {
+          if (facts.checked === undefined)
+            throw failure(Reasons.Unsupported.make({}), "undispatched");
+          if (facts.checked !== field.checked) {
+            if (!field.checked && facts.inputType === "radio")
+              throw failure(Reasons.Unsupported.make({}), "undispatched");
+            await refuseInput(element);
+            act = async () => {
+              input = await clickElement(
+                current(browserTarget).entry.page,
+                element,
+                ticket,
+                capture,
+                check,
+                readmit,
+              );
+            };
+          }
+        } else {
+          const text = field.value ?? "";
+
+          await refuseInput(element, text);
+
+          let performed:
+            | { readonly ticket: PerformedTicket; readonly schedule: KeySchedule }
+            | undefined;
+
+          if (isPerformed(ticket)) {
+            refusePerformedTyping(facts.inputType);
+            performed = { ticket, schedule: keyboard.prepareKeys(text, ticket) };
+          }
+          act = async () => {
+            if (performed === undefined) await element.fill(text, { timeout: timeout(ticket) });
+            else
+              await keyboard.fillElement(
+                current(browserTarget).entry.page,
+                element,
+                performed.schedule,
+                performed.ticket,
+                check,
+                readmit,
+              );
+            ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
+            check();
+            ticket.dispatch();
+            await element.evaluate((node) => {
               if (node instanceof HTMLElement && node.ownerDocument.activeElement === node)
                 node.blur();
-            }),
-            readBack(ticket, 1000),
-            undefined,
-          );
+            });
+            ticket.acknowledge?.();
+            ticket.followUp?.();
+          };
+        }
+        check();
+        ticket.check();
+        ticket.captureTarget?.(target, sampled);
+        if (act !== undefined) {
+          // ElementHandle actions do not re-resolve onto a replacement node.
+          if (ticket.performance === undefined || field.options !== undefined) ticket.dispatch();
+          await act();
+          if (settleMillis > 0)
+            await bounded(
+              observation.passiveRead(
+                leasedReference ?? target,
+                ticket,
+                () => element.evaluate(settleInPage, settleMillis),
+                browserTarget,
+              ),
+              readBack(ticket, settleMillis + 250),
+              undefined,
+            );
+        }
+
+        const state = await bounded(
+          observation.passiveRead(
+            leasedReference ?? target,
+            ticket,
+            () => readFieldState(element),
+            browserTarget,
+          ),
+          readBack(ticket, 1000),
+          undefined,
+        );
+
+        ticket.check();
+
+        return {
+          status: act === undefined ? "unchanged" : "set",
+          reached:
+            field.checked === undefined ||
+            state === undefined ||
+            holdsChecked(state, field.checked),
+          state,
+          url: url(),
+          ...(input === undefined ? {} : { input }),
         };
+      } finally {
+        await closeWithin(release).catch(() => {});
       }
-      check();
-      ticket.check();
-      if (act !== undefined) {
-        // ElementHandle actions do not re-resolve onto a replacement node.
-        ticket.dispatch();
-        await act();
-        if (settleMillis > 0)
-          await bounded(
-            element.evaluate(settleInPage, settleMillis),
-            readBack(ticket, settleMillis + 250),
-            undefined,
-          );
-      }
-      const state = await bounded(readFieldState(element), readBack(ticket, 1000), undefined);
-
-      ticket.check();
-
-      return {
-        status: act === undefined ? "unchanged" : "set",
-        reached:
-          field.checked === undefined || state === undefined || holdsChecked(state, field.checked),
-        state,
-        url: postUrl(),
-        ...(input === undefined ? {} : { input }),
-      };
     });
 
   /** The one submit click, on an exact observed node that may have become enabled. */
-  const formSubmit: Driver["formSubmit"] = (target, ticket, capture, policy) =>
+  const formSubmit: Driver["formSubmit"] = (target, ticket, capture, policy, browserTarget) =>
     sanitize(async () => {
-      const { page } = current().entry;
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+      const { page } = current(browserTarget).entry;
 
       const input = await withAdmittedElement(
         target,
         ticket,
         (element) => refuseInput(element),
-        (element) => clickElement(page, element, ticket, capture),
+        (element, _admitted, check, readmit) =>
+          clickElement(page, element, ticket, capture, check, readmit),
         policy,
-        undefined,
+        browserTarget,
         true,
+        ticket.performance === undefined,
       );
 
       ticket.check();
 
-      if (input === undefined) throw failure(Reasons.Malformed.make({}), "unknown");
+      if (input === undefined) throw failure(Reasons.Malformed.make({}));
 
-      return { url: postUrl(), input };
+      return { url: url(), input };
     });
 
-  const selectOption: Driver["selectOption"] = (target, options, ticket, policy) =>
+  const selectOption: Driver["selectOption"] = (target, options, ticket, policy, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
       await withAdmittedElement(
         target,
         ticket,
-        (element) => observation.selectOptions(target, options, element, ticket),
+        (element) =>
+          observation.selectOptions(target, options, element, ticket, false, browserTarget),
         async (element, admitted) => {
           // Only issued native nodes reach this command. Its returned values stay private.
           const values = await element.selectOption(admitted.handles, { timeout: timeout(ticket) });
+
+          ticket.acknowledge?.();
+          ticket.followUp?.();
           const expected = [...admitted.values].sort();
 
           if (
             values.length !== expected.length ||
             values.sort().some((value, i) => value !== expected[i])
           )
-            throw failure(Reasons.Stale.make({}), "unknown");
+            throw failure(Reasons.Stale.make({}));
         },
         policy,
+        browserTarget,
       );
       ticket.check();
 
-      return postUrl();
+      return url();
     });
 
   const scroll: Driver["scroll"] = (deltaX, deltaY, ticket, target) =>
     sanitize(async () => {
       const { frame } = current(target);
+      const url = resultUrl(target);
 
+      if (isPerformed(ticket)) {
+        const pacing = ownerPacing(ticket);
+        const planned = scrollSchedule(ticket.performance.plan, deltaX, deltaY);
+
+        if (Result.isFailure(planned)) throw planned.failure;
+        pacing.requireDuration(planned.success.durationMillis);
+        const epoch = targets.epochOf(frame);
+        const started = pacing.now();
+
+        for (const sample of planned.success.samples) {
+          await pacing.pauseUntil(started + BigInt(Math.round(sample.offsetMillis * 1e6)));
+          ticket.check();
+          if (current(target).frame !== frame || targets.epochOf(frame) !== epoch)
+            throw failure(Reasons.Stale.make({}), "undispatched");
+          const requested = pacing.now();
+
+          ticket.dispatch();
+          await frame.evaluate(
+            ({ x, y }) => window.scrollBy({ left: x, top: y, behavior: "instant" }),
+            { x: sample.deltaX, y: sample.deltaY },
+          );
+          ticket.acknowledge?.({ subphase: "scroll-burst", logicalComplete: false });
+          ticket.recordScroll?.({
+            target,
+            x: sample.deltaX,
+            y: sample.deltaY,
+            startedMonotonicNanos: requested,
+            completedMonotonicNanos: pacing.now(),
+          });
+        }
+        ticket.acknowledge?.();
+        ticket.followUp?.();
+        ticket.check();
+
+        return url();
+      }
       ticket.dispatch();
       await frame.evaluate(
         ({ x, y }) => window.scrollBy({ left: x, top: y, behavior: "instant" }),
         { x: deltaX, y: deltaY },
       );
+      ticket.acknowledge?.();
+      ticket.followUp?.();
       ticket.check();
 
-      return postUrl(target);
+      return url();
+    });
+
+  const scrollTo: Driver["scrollTo"] = (target, ticket, browserTarget) =>
+    sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+
+      await withElement(
+        target,
+        ticket,
+        (element) =>
+          element.evaluate((node) =>
+            node.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }),
+          ),
+        undefined,
+        browserTarget,
+      );
+      ticket.check();
+
+      return url();
     });
 
   let waitConnectionRetired = false;
 
-  let pendingWait:
-    | { readonly entry: Entry; readonly frame: Frame; readonly ticket: WaitTicket }
-    | undefined;
+  const pendingWaits = new Map<Entry, { readonly frame: Frame; readonly ticket: WaitTicket }>();
 
   /** Capture native identity before releasing admission; no later read follows live selection. */
-  const waitOn = (
+  const waitOn = <A>(
     ticket: WaitTicket,
     target: DriverTarget,
     acquire: () => {
-      readonly wait: () => Promise<void>;
+      readonly wait: () => Promise<A>;
       readonly check?: () => void;
       readonly dispose: () => Promise<void>;
     },
-  ): Promise<void> => {
+  ): Promise<A> => {
     ticket.check();
     const { entry, frame } = current(target);
+
+    if (waitConnectionRetired) throw failure(Reasons.Closed.make({}), "undispatched");
+    // One native wait per exact Page, including canceled waits whose disposal has not been
+    // confirmed. The aggregate remains finite even when closed caller fibers leave work behind.
+    if (pendingWaits.has(entry) || pendingWaits.size >= 32)
+      throw failure(Reasons.Busy.make({}), "undispatched");
     const epoch = targets.epochOf(frame);
     const resource = acquire();
-    const pending = { entry, frame, ticket };
+    const pending = { frame, ticket };
 
-    pendingWait = pending;
+    pendingWaits.set(entry, pending);
 
     const check = () => {
       ticket.check();
@@ -740,10 +986,12 @@ export const makeActions = (
     };
 
     return sanitize(async () => {
+      let result: A;
+
       try {
         try {
           check();
-          await resource.wait();
+          result = await resource.wait();
           check();
         } catch (error) {
           // Lifecycle/deadline evidence wins over a native cancellation or detached-node error.
@@ -752,15 +1000,16 @@ export const makeActions = (
           throw error;
         }
       } finally {
-        try {
-          // This raw release is observed after caller cancellation, without renewing its deadline.
-          await resource.dispose();
-          ticket.retire();
-        } finally {
-          if (pendingWait === pending) pendingWait = undefined;
-        }
+        // This raw release is observed after caller cancellation, without renewing its deadline.
+        // A rejected disposal proves no retirement, so keep that Page's native capacity until
+        // positive Page or connection closure. Old completion never frees a successor's slot.
+        await resource.dispose();
+        ticket.retire();
+        if (pendingWaits.get(entry) === pending) pendingWaits.delete(entry);
       }
       check();
+
+      return result;
     });
   };
 
@@ -785,8 +1034,9 @@ export const makeActions = (
     });
 
   const waitForElement: Driver["waitForElement"] = (reference, state, ticket, target) =>
-    waitOn(ticket, target, () => {
-      const leased = observation.lease(reference, ticket);
+    waitOn(ticket, targetFor(reference, target) ?? target, () => {
+      target = targetFor(reference, target) ?? target;
+      const leased = observation.lease(reference, ticket, target);
 
       /** A node that can no longer be read, because its document is gone, is not attached. */
       const attached = async () => {
@@ -823,9 +1073,14 @@ export const makeActions = (
       };
     });
 
-  const clickAndWait: Driver["clickAndWait"] = (target, ticket, capture) =>
+  const settled: Driver["settled"] = (options, ticket, target) =>
+    waitOn(ticket, target, () => makeSettledResource(current(target).frame, ticket, options));
+
+  const clickAndWait: Driver["clickAndWait"] = (target, ticket, capture, browserTarget) =>
     sanitize(async () => {
-      const { entry, frame } = current();
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
+      const { entry, frame } = current(browserTarget);
 
       const observer = waitEvent<Frame>(
         (on) => entry.page.on("framenavigated", on),
@@ -835,21 +1090,22 @@ export const makeActions = (
       );
 
       try {
-        const clicked = await click(target, ticket, capture);
+        const clicked = await click(target, ticket, capture, undefined, browserTarget);
 
         await observer.promise;
         await frame.waitForLoadState("domcontentloaded", { timeout: timeout(ticket) });
         ticket.check();
 
-        return { url: postUrl(), input: clicked.input };
+        return { url: url(), input: clicked.input };
       } finally {
         observer.cancel();
       }
     });
 
-  const clickForDownload: Driver["clickForDownload"] = (target, ticket) =>
+  const clickForDownload: Driver["clickForDownload"] = (target, ticket, browserTarget) =>
     sanitize(async () => {
-      const page = current().entry.page;
+      browserTarget = targetFor(target, browserTarget);
+      const page = current(browserTarget).entry.page;
 
       const observer = waitEvent<Download>(
         (on) => page.on("download", on),
@@ -858,7 +1114,7 @@ export const makeActions = (
       );
 
       try {
-        await clickWithoutReceipt(target, ticket);
+        await clickWithoutReceipt(target, ticket, browserTarget);
         const download = await observer.promise;
 
         const filename = safeDecode(SafeFilename, download.suggestedFilename());
@@ -877,28 +1133,42 @@ export const makeActions = (
       }
     });
 
-  const selectFiles: Driver["selectFiles"] = (target, files, ticket) =>
+  const selectFiles: Driver["selectFiles"] = (target, files, ticket, browserTarget) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const selection = nativeSelection(files);
 
-      if (selection._tag === "Remote") await attachStoredFiles(target, selection.paths, ticket);
+      if (selection._tag === "Remote")
+        await attachStoredFiles(target, selection.paths, ticket, browserTarget);
       else
-        await withElement(target, ticket, (element) =>
-          element.setInputFiles(selection.payload, { timeout: timeout(ticket) }),
+        await withElement(
+          target,
+          ticket,
+          (element) => element.setInputFiles(selection.payload, { timeout: timeout(ticket) }),
+          undefined,
+          browserTarget,
         );
       ticket.check();
 
-      return postUrl();
+      return url();
     });
 
-  const clickForFileSelection: Driver["clickForFileSelection"] = (target, files, ticket) =>
+  const clickForFileSelection: Driver["clickForFileSelection"] = (
+    target,
+    files,
+    ticket,
+    browserTarget,
+  ) =>
     sanitize(async () => {
+      browserTarget = targetFor(target, browserTarget);
+      const url = resultUrl(browserTarget);
       const selection = nativeSelection(files);
 
       // A chooser is satisfied with bytes this client holds. A provider-stored file is
       // attached to an exact input node instead, where the browser can open the path.
       if (selection._tag === "Remote") throw failure(Reasons.Unsupported.make({}), "undispatched");
-      const page = current().entry.page;
+      const page = current(browserTarget).entry.page;
 
       const observer = waitEvent<FileChooser>(
         (on) => page.on("filechooser", on),
@@ -907,25 +1177,30 @@ export const makeActions = (
       );
 
       try {
-        await clickWithoutReceipt(target, ticket);
+        await clickWithoutReceipt(target, ticket, browserTarget);
         const chooser = await observer.promise;
 
         ticket.check();
         if (!chooser.isMultiple() && selection.payload.length > 1)
           throw failure(Reasons.Unsupported.make({}));
         // Exactly one attachment for this chooser; a second would open another dispatch.
+        ticket.dispatch();
         await chooser.setFiles(selection.payload, { timeout: timeout(ticket) });
+        ticket.acknowledge?.();
+        ticket.followUp?.();
         ticket.check();
 
-        return postUrl();
+        return url();
       } finally {
         observer.cancel();
       }
     });
 
   return {
-    setPointerInvalidator,
+    pointer,
+    keyboard,
     withAdmittedElement,
+    targetFor,
     beginNavigation,
     /** Capture the exact navigation at dialog arrival; acknowledgement never looks it up again. */
     beforeUnload: (pageId: string) => {
@@ -939,22 +1214,34 @@ export const makeActions = (
     formSubmit,
     selectOption,
     scroll,
+    scrollTo,
+    settled,
     waitFor,
     waitForElement,
     waitChanged: (entry: Entry, frame?: Frame) => {
-      const pending = pendingWait;
+      const pending = pendingWaits.get(entry);
 
       if (
-        pending?.entry === entry &&
+        pending !== undefined &&
         (frame === undefined || frame === pending.frame || frame === entry.page.mainFrame())
       )
         pending.ticket.invalidate();
     },
+    retireWaitPage: (entry: Entry) => {
+      const pending = pendingWaits.get(entry);
+
+      if (pending === undefined) return;
+      pending.ticket.invalidate();
+      pending.ticket.retire();
+      if (pendingWaits.get(entry) === pending) pendingWaits.delete(entry);
+    },
     retireWait: () => {
       waitConnectionRetired = true;
-      pendingWait?.ticket.invalidate();
-      pendingWait?.ticket.retire();
-      pendingWait = undefined;
+      for (const pending of pendingWaits.values()) {
+        pending.ticket.invalidate();
+        pending.ticket.retire();
+      }
+      pendingWaits.clear();
     },
     clickAndWait,
     clickForDownload,

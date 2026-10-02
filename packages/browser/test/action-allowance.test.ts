@@ -35,18 +35,18 @@ it.effect(
       (browser) =>
         Effect.gen(function* () {
           expect((yield* browser.status).actions).toEqual({ used: 0, maximum: 20 });
-          yield* browser.navigate({ url: `${origin}/` });
-          const observation = yield* browser.observe();
+          yield* browser.initialPage.navigate({ url: `${origin}/` });
+          const observation = yield* browser.initialPage.observe();
 
           // Host reads spend their own allowance, and reading status spends nothing.
-          yield* browser.checkpoint({ picture: true });
-          yield* browser.controlFacts(
+          yield* browser.initialPage.checkpoint({ picture: true });
+          yield* browser.initialPage.controlFacts(
             ObservedElement.make({ observationId: observation.observationId, elementId: "name" }),
           );
           expect(yield* used(browser)).toBe(2);
 
           // Two fields and the submit are three actions; the verification between them is not.
-          const verified = yield* browser.fillForm({
+          const verified = yield* browser.initialPage.fillForm({
             observationId: observation.observationId,
             fields: [
               { elementId: "name", value: "Ada" },
@@ -61,10 +61,10 @@ it.effect(
           });
           expect(yield* used(browser)).toBe(5);
 
-          yield* browser.navigate({ url: `${origin}/` });
-          const again = yield* browser.observe();
+          yield* browser.initialPage.navigate({ url: `${origin}/` });
+          const again = yield* browser.initialPage.observe();
 
-          const unverified = yield* browser.fillForm(
+          const unverified = yield* browser.initialPage.fillForm(
             {
               observationId: again.observationId,
               fields: [
@@ -91,11 +91,11 @@ it.effect(
       Testing.open(site, { policy: BrowserPolicy.unrestricted({ maxActions: 1001 }) }),
       (browser) =>
         Effect.gen(function* () {
-          yield* browser.navigate({ url: `${origin}/` });
-          for (let action = 1; action < 1001; action++) yield* browser.readText(read);
+          yield* browser.initialPage.navigate({ url: `${origin}/` });
+          for (let action = 1; action < 1001; action++) yield* browser.initialPage.readText(read);
           expect((yield* browser.status).actions).toEqual({ used: 1001, maximum: 1001 });
 
-          const refused = yield* browser.readText(read).pipe(Effect.flip);
+          const refused = yield* browser.initialPage.readText(read).pipe(Effect.flip);
 
           expect(refused).toMatchObject({
             reason: { _tag: "Limit", dimension: "actions", maximum: 1001, observed: 1001 },
@@ -108,7 +108,7 @@ it.effect(
             actions: { used: 1001, maximum: 1001 },
           });
           // Host reads keep their own allowance after the actions are spent.
-          yield* browser.checkpoint({ picture: false });
+          yield* browser.initialPage.checkpoint({ picture: false });
         }),
     ),
 );

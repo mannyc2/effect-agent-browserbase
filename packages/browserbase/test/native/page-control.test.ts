@@ -46,19 +46,20 @@ for (const capture of [false, true])
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.navigate(NavigateRequest.make({ url: `${f.url}clocks` }));
-            const stage = (yield* session.pages)[0];
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}clocks` }));
+            const stage = (yield* session.listPages())[0];
 
             assert.ok(stage);
-            const scoutPage = yield* session.createPage;
+            const scoutAuthority = yield* session.createPage();
+            const scoutPage = scoutAuthority.identity;
 
-            yield* session.selectPage(scoutPage);
+            yield* session.selectPage(scoutAuthority);
 
             // The fragment never reaches the fixture server, so both pages load the
             // same document while staying individually identifiable. Selecting the
             // native pages positionally would silently pick up any stray tab the
             // browser happens to expose, which surfaces far from its cause.
-            yield* session.navigate(NavigateRequest.make({ url: `${f.url}clocks#scout` }));
+            yield* scoutAuthority.navigate(NavigateRequest.make({ url: `${f.url}clocks#scout` }));
             const nativePages = f.nativePages(session.reference.sessionId);
 
             expect(nativePages.map((page) => page.url())).toHaveLength(2);
@@ -82,7 +83,7 @@ for (const capture of [false, true])
             let scoutCount = 0;
 
             const interval = capture
-              ? yield* Capture.start(session, { target: stage, maxDurationMillis: 5000 })
+              ? yield* Capture.start(yield* session.page(stage), { maxDurationMillis: 5000 })
               : undefined;
 
             const consumer =
@@ -95,7 +96,7 @@ for (const capture of [false, true])
                   ).pipe(Effect.forkScoped);
 
             const scoutInterval = capture
-              ? yield* Capture.start(session, { target: scoutPage, maxDurationMillis: 5000 })
+              ? yield* Capture.start(scoutAuthority, { maxDurationMillis: 5000 })
               : undefined;
 
             const scoutConsumer =
@@ -129,19 +130,20 @@ for (const capture of [false, true])
 
             const framesBefore = count;
             const scoutFramesBefore = scoutCount;
-            const receipt = yield* PageControl.suspend(session, stage);
+            const receipt = yield* PageControl.suspend(yield* session.page(stage));
 
-            expect((yield* PageControl.state(session, stage)).state).toBe("suspended");
-            yield* session.selectPage(stage);
+            expect((yield* PageControl.state(session.initialPage)).state).toBe("suspended");
+            yield* session.selectPage(session.initialPage);
 
             expect(
-              (yield* session.click(ClickRequest.make({ selector: "#click" })).pipe(Effect.result))
-                ._tag,
+              (yield* session.initialPage
+                .click(ClickRequest.make({ selector: "#click" }))
+                .pipe(Effect.result))._tag,
             ).toBe("Failure");
-            yield* session.selectPage(scoutPage);
+            yield* session.selectPage(scoutAuthority);
 
             yield* Effect.sleep(350);
-            yield* session.click(ClickRequest.make({ selector: "#click" }));
+            yield* scoutAuthority.click(ClickRequest.make({ selector: "#click" }));
 
             const scoutDuring = yield* settle(
               read(scoutNative),
@@ -161,13 +163,16 @@ for (const capture of [false, true])
               expect(scoutDelivered).toBeGreaterThan(scoutFramesBefore);
             }
             const stale = PageSuspension.make({ ...receipt, suspensionId: "foreign" });
-            const refused = yield* PageControl.resume(session, stale).pipe(Effect.result);
+
+            const refused = yield* PageControl.resume(session.initialPage, stale).pipe(
+              Effect.result,
+            );
 
             expect(refused._tag).toBe("Failure");
             if (refused._tag === "Failure") expect(refused.failure.outcome).toBe("undispatched");
             const framesHeld = count;
 
-            yield* PageControl.resume(session, receipt);
+            yield* PageControl.resume(session.initialPage, receipt);
             const after = yield* read(stageNative);
 
             const freeze = after.freezes[0],
@@ -198,13 +203,13 @@ for (const capture of [false, true])
             expect(
               (yield* Effect.promise(() => cdp.send("Animation.getPlaybackRate"))).playbackRate,
             ).toBe(0.5);
-            expect((yield* PageControl.state(session, stage)).state).toBe("running");
-            expect((yield* session.pages).find((page) => page.selected)?.pageId).toBe(
+            expect((yield* PageControl.state(session.initialPage)).state).toBe("running");
+            expect((yield* session.listPages()).find((page) => page.selected)?.pageId).toBe(
               scoutPage.pageId,
             );
-            expect((yield* PageControl.resume(session, receipt).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
+            expect(
+              (yield* PageControl.resume(session.initialPage, receipt).pipe(Effect.result))._tag,
+            ).toBe("Failure");
             if (interval !== undefined && consumer !== undefined) {
               const delivered = yield* settle(
                 Effect.sync(() => count),
@@ -222,19 +227,21 @@ for (const capture of [false, true])
               yield* Fiber.join(scoutConsumer);
               expect((yield* scoutInterval.completed).nativeStop).toBe("confirmed");
             }
-            yield* PageControl.suspend(session, stage);
-            yield* session.closePage(stage);
-            expect((yield* PageControl.state(session, stage).pipe(Effect.result))._tag).toBe(
+            yield* PageControl.suspend(yield* session.page(stage));
+            yield* (yield* session.page(stage)).close();
+            expect((yield* PageControl.state(session.initialPage).pipe(Effect.result))._tag).toBe(
               "Failure",
             );
 
-            const remaining = (yield* session.pages).find(
+            const remaining = (yield* session.listPages()).find(
               (page) => page.pageId === scoutPage.pageId,
             );
 
             assert.ok(remaining);
-            expect((yield* PageControl.state(session, remaining)).state).toBe("running");
-            yield* session.click(ClickRequest.make({ selector: "#click" }));
+            expect((yield* PageControl.state(yield* session.page(remaining))).state).toBe(
+              "running",
+            );
+            yield* scoutAuthority.click(ClickRequest.make({ selector: "#click" }));
             expect((yield* read(scoutNative)).clicks).toBe(2);
             yield* session.close;
           }),
@@ -262,10 +269,13 @@ it.live("real CDP: control is opt-in and rejects keep-alive before allocation", 
         f,
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy),
-            page = (yield* session.pages)[0];
+            page = (yield* session.listPages())[0];
 
           assert.ok(page);
-          const unsupported = yield* PageControl.suspend(session, page).pipe(Effect.result);
+
+          const unsupported = yield* PageControl.suspend(yield* session.page(page)).pipe(
+            Effect.result,
+          );
 
           expect(unsupported._tag).toBe("Failure");
           if (unsupported._tag === "Failure")

@@ -28,17 +28,20 @@ await h.run(
     Effect.gen(function* () {
       const session = yield* h.open({ bootstrap: plan });
 
-      yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=before` }));
-      const before = yield* session.ready;
+      yield* session.initialPage.navigate(NavigateRequest.make({ url: `${origin}/?phase=before` }));
+      const before = yield* session.initialPage.ready();
       const detached = yield* session.detach;
 
       yield* h.report("detached", detached);
       // Reconnecting asserts that no operator holds the page, which is true: none was invited.
       const reconnected = yield* session.reconnect(true);
-      const selected = (yield* session.pages).find((page) => page.selected);
+      const selected = reconnected.pages.find((page) => page.targetId === detached.targetId);
 
-      yield* session.navigate(NavigateRequest.make({ url: `${origin}/?phase=after` }));
-      const after = yield* session.ready;
+      if (selected === undefined) return yield* Effect.die("Reconnected page missing");
+      const reissued = yield* session.page(selected);
+
+      yield* reissued.navigate(NavigateRequest.make({ url: `${origin}/?phase=after` }));
+      const after = yield* reissued.ready();
       const cleanup = yield* session.close;
 
       yield* h.established({
@@ -51,7 +54,7 @@ await h.run(
         reference: session.reference,
         before,
         sameTarget: selected?.targetId === detached.targetId,
-        reconnectedUrl: reconnected.url,
+        reconnectedUrl: selected?.url,
         after,
         cleanup,
       };

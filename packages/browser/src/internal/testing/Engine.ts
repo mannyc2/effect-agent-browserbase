@@ -9,10 +9,9 @@ import {
   PageSuspension,
   ViewportEvidence,
   ViewportRect,
-  type FormField,
+  ObservedElement,
   type InputReceipt,
   type KeyModifier,
-  type ObservedElement,
   type SelectOptions,
   type Viewport,
   type ViewportPoint,
@@ -26,7 +25,21 @@ import {
   type BrowserOutcome,
   type BrowserReason,
 } from "../../Errors.ts";
+import type {
+  Descriptor,
+  Precondition,
+  ResolveGuard,
+  SettledEvidence,
+  SettledOptions,
+} from "../../PlanData.ts";
 import type { NativeBinding } from "../browser/Bindings.ts";
+import {
+  MaximumGroupNodes,
+  type DescriptorSample,
+  type ResolvedElement,
+  type ResolvedGroup,
+  type ResolveRequest,
+} from "../browser/Descriptor.ts";
 import type {
   CaptureBinding,
   CaptureStart,
@@ -38,11 +51,14 @@ import type {
   NativeCheckpoint,
   NativeFileSelection,
   NativeNavigation,
+  NativeCachedPage,
   NativeObservation,
   ReadinessState,
 } from "../browser/Driver.ts";
+import { pngGeometry } from "../browser/Images.ts";
 import type { AdmissionPolicy } from "../browser/Observation.ts";
 import type { ObservationScope, ReadTicket, Ticket, WaitTicket } from "../browser/Owner.ts";
+import { identityOf, stableIdentityOf } from "../browser/PageRead.ts";
 import type { NativeInput } from "../browser/Pointer.ts";
 import { checked } from "../browser/PublicSession.ts";
 import { jpegFrame } from "./Frame.ts";
@@ -79,7 +95,11 @@ export interface ScriptedBrowser {
 
 /** What the browser needs from each connection open to it. */
 interface Live {
+  readonly opened: (pageId: string) => void;
+  readonly navigated: (pageId: string, sameDocument: boolean) => void;
+  readonly metadata: (pageId: string) => void;
   readonly retire: (pageId: string) => void;
+  readonly closed: (pageId: string) => void;
   readonly announce: (pageId: string) => void;
   readonly drop: () => void;
   readonly invoke: (
@@ -88,7 +108,7 @@ interface Live {
     origin: string | undefined,
   ) => Promise<BindingReply>;
   readonly pointer: () => ViewportPoint | null;
-  readonly viewport: () => Viewport;
+  readonly viewport: (pageId: string) => Viewport;
 }
 
 interface ControlState {
@@ -115,28 +135,54 @@ interface Page {
   readonly targetId: string;
   readonly frameId: string;
   document: DocumentState;
+  cachedTitle?: string | null;
   epoch: number;
   /** The document epoch that predates registration; `-1` when every document ran the bundle. */
   readonly registeredEpoch: number;
   readonly values: Map<string, string>;
   readonly files: Map<string, ReadonlyArray<string>>;
+  readonly scroll: { x: number; y: number };
+  mutations: number;
   focused: string | undefined;
   closed: boolean;
   held: { readonly suspensionId: string; readonly by: Live } | undefined;
   navigation: InFlight | undefined;
   readonly watchers: Set<() => void>;
+  viewport?: Viewport;
   capture: { readonly start: CaptureStart; readonly by: Live } | undefined;
 }
 
 interface Snapshot {
   readonly id: string;
   readonly pageId: string;
+  readonly frameId: string;
   readonly epoch: number;
   readonly generation: number;
+  readonly scope: "document" | "viewport";
+  origin?: AbortSignal;
   validity: "valid" | "suspended" | "invalid";
   readonly nodes: Map<string, ControlState>;
+  readonly identities: Map<string, { readonly identity: string; readonly stable: string }>;
   readonly revalidated: Set<string>;
 }
+
+interface ResolvedNode {
+  readonly node: ControlState;
+  readonly snapshot: Snapshot;
+  readonly scope: "document" | "viewport";
+  readonly identity: string;
+  readonly stable: string;
+  readonly parent?: ControlState;
+  readonly descriptor?: Descriptor;
+}
+
+type ElementTarget = ObservedElement | ResolvedElement;
+type Selection = SelectOptions | ReadonlyArray<ResolvedElement>;
+type FormStep = {
+  readonly value?: string;
+  readonly checked?: boolean;
+  readonly options?: Selection;
+};
 
 interface InternalGate {
   readonly reach: () => void;
@@ -310,6 +356,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       registeredEpoch: registered ? 0 : -1,
       values: new Map(),
       files: new Map(),
+      scroll: { x: 0, y: 0 },
+      mutations: 0,
       focused: undefined,
       closed: false,
       held: undefined,
@@ -319,6 +367,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     pages.set(page.pageId, page);
+    for (const connection of live) connection.opened(page.pageId);
 
     return page;
   };
@@ -334,12 +383,17 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
   /** The page shows a new document: nodes go stale, values reset, captures learn of it. */
   const commit = (page: Page, document: DocumentState) => {
     page.document = document;
+    page.cachedTitle = undefined;
     page.epoch++;
     page.values.clear();
     page.files.clear();
     page.focused = undefined;
+    page.scroll.x = 0;
+    page.scroll.y = 0;
+    page.mutations++;
     page.navigation = undefined;
     for (const connection of live) connection.retire(page.pageId);
+    for (const connection of live) connection.navigated(page.pageId, false);
     if (page.capture !== undefined) {
       const { start } = page.capture;
 
@@ -352,6 +406,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
   /** In-document change: identity survives by control id, so retained nodes and waits carry on. */
   const update = (page: Page, document: DocumentScript) => {
+    const previousUrl = page.document.url;
+    const before = JSON.stringify(page.document);
     const previous = new Map(page.document.controls.map((control) => [control.script.id, control]));
 
     const controls = (document.controls ?? []).map((script): ControlState => {
@@ -371,7 +427,12 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       text: document.text,
       controls,
     };
+    if (JSON.stringify(page.document) !== before) page.mutations++;
     if (page.focused !== undefined && !previous.has(page.focused)) page.focused = undefined;
+    if (previousUrl !== document.url) {
+      for (const connection of live) connection.navigated(page.pageId, true);
+      page.capture?.start.document?.(document.url, true);
+    }
     notify(page);
   };
 
@@ -405,12 +466,14 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     }
 
     const bindings: ReadonlyArray<NativeBinding> = options.bindings ?? [];
-    let viewport: Viewport = { ...options.viewport };
+    const viewport: Viewport = { ...options.viewport };
     // Chromium keeps a pointer position per page; a receipt reports the one placed on its page.
     const positions = new Map<string, ViewportPoint>();
     let pointer: ViewportPoint | null = null;
     let selectedId: string | undefined;
-    let snapshot: Snapshot | undefined;
+    const snapshots = new Map<string, Snapshot>();
+    const privateSnapshots = new Set<Snapshot>();
+    const resolvedElements = new WeakMap<ResolvedElement, ResolvedNode>();
     let disconnected = false;
     let index = -1;
 
@@ -429,8 +492,16 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     const receipt = (pageId: string): NativeInput => ({ position: positions.get(pageId) ?? null });
 
     const select = (pageId: string | undefined) => {
+      const previous = selectedId;
+
       selectedId = pageId;
       lastSelected = pageId;
+      for (const id of previous === pageId ? [pageId] : [previous, pageId]) {
+        const page = id === undefined ? undefined : pages.get(id);
+
+        if (page !== undefined && !page.closed)
+          events.pageLifecycle?.({ _tag: "Display", page: cachedPage(page) });
+      }
     };
 
     const selectedPage = (operation: BrowserOperation = "target"): Page => {
@@ -442,8 +513,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       return page;
     };
 
-    const current = (target: DriverTarget | undefined, operation: BrowserOperation): Page => {
-      if (target === undefined) return selectedPage(operation);
+    const current = (target: DriverTarget, operation: BrowserOperation): Page => {
       if (disconnected) throw fail(operation, Reasons.Closed.make({}));
       const page = pages.get(target.pageId);
 
@@ -463,14 +533,63 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       return page;
     };
 
-    const info = (page: Page): PageInfo =>
-      PageInfo.make({
+    const cachedPage = (page: Page): NativeCachedPage =>
+      Object.freeze({
+        pageId: page.pageId,
+        frameId: page.frameId,
+        targetId: page.targetId,
+        documentEpoch: page.epoch,
+        url: page.document.url.length <= 8192 ? page.document.url : null,
+        urlQualification: page.document.url.length <= 8192 ? "NativeCached" : "Omitted",
+        title: page.cachedTitle ?? null,
+        titleQualification:
+          page.cachedTitle === undefined
+            ? "Unread"
+            : page.cachedTitle === null
+              ? "Omitted"
+              : "ObservedCached",
+        selected: page.pageId === selectedId,
+        displayState:
+          options.pageControl === true
+            ? page.held === undefined
+              ? "running"
+              : "suspended"
+            : "unknown",
+      });
+
+    const info = (page: Page): PageInfo => {
+      page.cachedTitle = page.document.title.length <= 512 ? page.document.title : null;
+
+      const value = PageInfo.make({
         pageId: page.pageId,
         targetId: page.targetId,
         url: page.document.url,
         title: page.document.title,
         selected: page.pageId === selectedId,
       });
+
+      events.pageLifecycle?.({ _tag: "Metadata", page: cachedPage(page) });
+
+      return value;
+    };
+
+    const picture = (page: Page, ticket: Ticket): Uint8Array => {
+      const target = { pageId: page.pageId, frameId: page.frameId };
+      const geometry = pngGeometry(PNG);
+
+      ticket.picture?.({ phase: "Requested", target, documentEpoch: page.epoch, geometry });
+      const bytes = new Uint8Array(PNG);
+
+      ticket.picture?.({
+        phase: "Returned",
+        target,
+        documentEpoch: page.epoch,
+        geometry,
+        byteLength: bytes.length,
+      });
+
+      return bytes;
+    };
 
     const frameInfo = (page: Page): FrameInfo =>
       FrameInfo.make({
@@ -480,13 +599,18 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         name: "",
       });
 
-    const invalidateSnapshot = (scope: ObservationScope = "all") => {
-      if (
-        snapshot !== undefined &&
-        scope !== "none" &&
-        (scope === "all" || scope.pageId === snapshot.pageId)
-      )
-        snapshot.validity = "invalid";
+    const invalidateSnapshot = (scope: ObservationScope = "all", origin?: AbortSignal) => {
+      for (const snapshot of [...snapshots.values(), ...privateSnapshots])
+        if (
+          scope !== "none" &&
+          (scope === "all" ||
+            (scope.pageId === snapshot.pageId &&
+              (scope.frameId === undefined || scope.frameId === snapshot.frameId)))
+        ) {
+          if (privateSnapshots.has(snapshot) && origin !== undefined && snapshot.origin === origin)
+            continue;
+          snapshot.validity = "invalid";
+        }
     };
 
     /** The page closes as a browser closes it: every connection learns, and nothing on it lasts. */
@@ -497,11 +621,12 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       target.capture = undefined;
       notify(target);
       if (selectedId === target.pageId) select(undefined);
-      invalidateSnapshot({ pageId: target.pageId });
+      snapshots.delete(target.frameId);
+      events.pageClosed?.(target.pageId, cachedPage(target));
       events.invalidate("target-changed", { pageId: target.pageId });
       for (const other of live) {
         if (other === connection) continue;
-        other.retire(target.pageId);
+        other.closed(target.pageId);
         other.announce(target.pageId);
       }
     };
@@ -510,6 +635,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     const dropConnection = (announce: boolean, ended: ScriptedConnection = "dropped") => {
       if (disconnected) return;
       disconnected = true;
+      invalidateSnapshot();
+      snapshots.clear();
+      privateSnapshots.clear();
       connections[index] = ended;
       live.delete(connection);
       for (const page of pages.values()) {
@@ -519,6 +647,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         notify(page);
       }
       if (announce) events.disconnected();
+      events.retired?.();
     };
 
     const dispatch = (ticket: ReadTicket, record: MutableCall) => {
@@ -633,6 +762,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         const value = await body(record);
 
         record.settled = "completed";
+        if (ticket !== undefined && isTicket(ticket)) ticket.acknowledge?.();
 
         return value;
       } catch (error) {
@@ -641,12 +771,15 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       }
     };
 
-    const meta = (target: string | ObservedElement | undefined) =>
+    const meta = (target: string | ElementTarget | undefined) =>
       target === undefined
         ? {}
         : typeof target === "string"
           ? { selector: target }
-          : { elementId: target.elementId };
+          : {
+              elementId:
+                "_tag" in target ? resolvedElements.get(target)?.node.script.id : target.elementId,
+            };
 
     const facts = (control: ControlState): ControlFacts => {
       const { script: value } = control;
@@ -663,7 +796,9 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         editable: extra.editable ?? isEditable(value),
         ...(value.inputType === undefined ? {} : { inputType: value.inputType }),
         ...(extra.autocomplete === undefined ? {} : { autocomplete: extra.autocomplete }),
-        ...(value.destination === undefined ? {} : { destination: value.destination }),
+        ...(value.destination === undefined || value.destination.length > 2048
+          ? {}
+          : { destination: value.destination }),
         ...(extra.formMethod === undefined ? {} : { formMethod: extra.formMethod }),
         box: ViewportRect.make(extra.box ?? { x: 0, y: 0, width: 120, height: 24 }),
         placement: extra.placement ?? (value.offscreen === true ? "outside" : "inside"),
@@ -707,37 +842,107 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       operation: BrowserOperation,
       allowSuspended = false,
       attached = true,
+      browserTarget: DriverTarget,
     ) => {
       ticket.check();
       const stale = () => fail(operation, Reasons.Stale.make({}));
-      const current = snapshot;
+      const page = current(browserTarget, operation);
+      const snapshot = snapshots.get(page.frameId);
 
-      if (current === undefined || current.id !== target.observationId) throw stale();
-      const node = current.nodes.get(target.elementId);
+      if (
+        snapshot === undefined ||
+        snapshot.pageId !== page.pageId ||
+        snapshot.id !== target.observationId
+      )
+        throw stale();
+      const node = snapshot.nodes.get(target.elementId);
 
       if (node === undefined) throw stale();
-      if (current.validity === "invalid" || current.generation !== ticket.generation) throw stale();
-      const page = pages.get(current.pageId);
-
-      if (page === undefined || page.closed || page.epoch !== current.epoch) throw stale();
-      if (selectedId !== current.pageId) throw stale();
+      if (snapshot.validity === "invalid" || snapshot.generation !== ticket.generation)
+        throw stale();
+      if (page.epoch !== snapshot.epoch) throw stale();
       if (
-        current.validity === "suspended" &&
+        snapshot.validity === "suspended" &&
         !allowSuspended &&
-        !current.revalidated.has(target.elementId)
+        !snapshot.revalidated.has(target.elementId)
       )
         throw stale();
       if (attached && !page.document.controls.includes(node)) throw stale();
 
-      return { node, page, snapshot: current };
+      return { node, page, snapshot };
     };
 
-    const resolve = (
-      target: string | ObservedElement,
+    const privateRetained = (
+      target: ResolvedElement,
       ticket: ReadTicket,
       operation: BrowserOperation,
-      policy?: AdmissionPolicy,
-      browserTarget?: DriverTarget,
+      browserTarget: DriverTarget,
+      attached = true,
+    ) => {
+      ticket.check();
+      const record = resolvedElements.get(target);
+      const page = current(browserTarget, operation);
+
+      if (
+        record === undefined ||
+        record.snapshot.validity !== "valid" ||
+        !privateSnapshots.has(record.snapshot) ||
+        record.snapshot.generation !== ticket.generation ||
+        record.snapshot.pageId !== page.pageId ||
+        record.snapshot.frameId !== page.frameId ||
+        record.snapshot.epoch !== page.epoch ||
+        (attached && !page.document.controls.includes(record.node)) ||
+        (record.parent !== undefined &&
+          (!page.document.controls.includes(record.parent) ||
+            record.node.script.selectElementId !== record.parent.script.id))
+      )
+        throw fail(operation, Reasons.Stale.make({}));
+
+      return { ...record, page };
+    };
+
+    const retainedElement = (
+      target: ElementTarget,
+      ticket: ReadTicket,
+      operation: BrowserOperation,
+      allowSuspended = false,
+      attached = true,
+      browserTarget: DriverTarget,
+    ) =>
+      "_tag" in target
+        ? privateRetained(target, ticket, operation, browserTarget, attached)
+        : retained(target, ticket, operation, allowSuspended, attached, browserTarget);
+
+    const sample = (
+      node: ControlState,
+      fresh: ControlFacts,
+      scope: "document" | "viewport",
+      descriptor?: Descriptor,
+    ): DescriptorSample => ({
+      facts: fresh,
+      scope,
+      frameComplete: true,
+      completeness: {
+        label: "complete",
+        inputType: node.script.inputType === undefined ? "absent" : "complete",
+        autocomplete: node.script.facts?.autocomplete === undefined ? "absent" : "complete",
+        destination:
+          node.script.destination === undefined
+            ? "absent"
+            : node.script.destination.length > 2048
+              ? "omitted"
+              : "complete",
+        formMethod: node.script.facts?.formMethod === undefined ? "absent" : "complete",
+      },
+      ...(descriptor?.ordinal === undefined ? {} : { ordinal: descriptor.ordinal }),
+    });
+
+    const resolve = (
+      target: string | ElementTarget,
+      ticket: ReadTicket,
+      operation: BrowserOperation,
+      policy: AdmissionPolicy | undefined,
+      browserTarget: DriverTarget,
       allowSuspended = false,
       enablement = false,
     ) => {
@@ -748,9 +953,28 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         page = current(browserTarget, operation);
         node = bySelector(page, target, operation);
       } else {
-        ({ node, page } = retained(target, ticket, operation, allowSuspended));
+        ({ node, page } = retainedElement(
+          target,
+          ticket,
+          operation,
+          allowSuspended,
+          true,
+          browserTarget,
+        ));
       }
       const fresh = facts(node);
+      const captured = ControlFacts.make({ ...fresh, box: ViewportRect.make({ ...fresh.box }) });
+
+      const privateTarget =
+        typeof target !== "string" && "_tag" in target ? resolvedElements.get(target) : undefined;
+
+      if (
+        privateTarget !== undefined &&
+        (enablement
+          ? stableIdentityOf(fresh) !== privateTarget.stable
+          : identityOf(fresh) !== privateTarget.identity)
+      )
+        throw fail(operation, Reasons.Stale.make({}));
 
       // A form step's control may have become enabled since it was observed; it must be now.
       if (enablement && node.script.disabled === true)
@@ -766,8 +990,286 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         if (!admitted) throw fail(operation, Reasons.Denied.make({}));
       }
       ticket.check();
+      if (isTicket(ticket)) {
+        const scope =
+          privateTarget?.scope ??
+          (typeof target === "string"
+            ? "document"
+            : (snapshots.get(page.frameId)?.scope ?? "document"));
+
+        ticket.captureTarget?.(target, sample(node, captured, scope, privateTarget?.descriptor));
+      }
 
       return { node, page, facts: fresh };
+    };
+
+    /** The complete scripted document, never a previously clipped observation, proves cardinality. */
+    const descriptorNode = (
+      descriptor: Descriptor,
+      page: Page,
+      operation: BrowserOperation,
+      contextual: boolean,
+      parent?: ControlState,
+    ): ControlState => {
+      if (descriptor.frame !== undefined) throw fail(operation, Reasons.Unsupported.make({}));
+
+      const matches = page.document.controls.filter((node) => {
+        const fresh = facts(node);
+        const identity = descriptor.identity;
+
+        return (
+          fresh.kind === descriptor.kind &&
+          fresh.label === descriptor.label &&
+          (parent === undefined ||
+            (parent.script.kind === "select" &&
+              node.script.selectElementId === parent.script.id)) &&
+          (descriptor.destination === undefined || fresh.destination === descriptor.destination) &&
+          (identity?.inputType === undefined || fresh.inputType === identity.inputType) &&
+          (identity?.autocomplete === undefined || fresh.autocomplete === identity.autocomplete) &&
+          (identity?.formMethod === undefined || fresh.formMethod === identity.formMethod)
+        );
+      });
+
+      const viewportMatches = matches.filter((node) => facts(node).hitTest === "self");
+
+      if (descriptor.matchScope === "viewport") {
+        if (
+          matches.some((node) => {
+            const fresh = facts(node);
+
+            return fresh.hitTest === "uncertain" && fresh.placement !== "outside";
+          })
+        )
+          throw fail(operation, Reasons.Incomplete.make({}));
+        if (!contextual && matches.length > 1)
+          throw fail(operation, Reasons.Ambiguous.make({ count: matches.length }));
+      }
+      const candidates = descriptor.matchScope === "viewport" ? viewportMatches : matches;
+
+      if (candidates.length === 0) throw fail(operation, Reasons.Missing.make({}));
+      if (descriptor.ordinal !== undefined && descriptor.ordinal.of !== candidates.length)
+        throw fail(operation, Reasons.Incomplete.make({}));
+      if (descriptor.ordinal === undefined && candidates.length !== 1)
+        throw fail(operation, Reasons.Ambiguous.make({ count: candidates.length }));
+      const picked = candidates[descriptor.ordinal?.index ?? 0];
+
+      if (picked === undefined) throw fail(operation, Reasons.Incomplete.make({}));
+
+      return picked;
+    };
+
+    const expectations = (
+      conditions: ReadonlyArray<Precondition>,
+      ticket: Ticket,
+      browserTarget: DriverTarget,
+    ): void => {
+      ticket.check();
+      const page = current(browserTarget, "run");
+      const size = page.viewport ?? viewport;
+
+      if (conditions.length > 16)
+        throw fail(
+          "run",
+          Reasons.Limit.make({ dimension: "controls", maximum: 16, observed: conditions.length }),
+        );
+      for (const condition of conditions) {
+        ticket.check();
+        let matches: boolean;
+
+        switch (condition._tag) {
+          case "Origin":
+            matches = originOf(page.document.url) === condition.value;
+            break;
+          case "Path":
+            matches = new URL(page.document.url).pathname === condition.value;
+            break;
+          case "Viewport":
+            matches = size.width === condition.width && size.height === condition.height;
+            break;
+          case "Scroll":
+            matches = page.scroll.x === condition.x && page.scroll.y === condition.y;
+            break;
+          case "Text":
+            if (condition.scope === "viewport") throw fail("run", Reasons.Unsupported.make({}));
+            matches =
+              condition.match === "equals"
+                ? page.document.text === condition.value
+                : page.document.text.includes(condition.value);
+            break;
+          case "Geometry": {
+            const node = descriptorNode(condition.target, page, "run", false);
+            const box = facts(node).box;
+
+            matches =
+              box.x === condition.box.x &&
+              box.y === condition.box.y &&
+              box.width === condition.box.width &&
+              box.height === condition.box.height;
+            break;
+          }
+        }
+        if (!matches) throw fail("run", Reasons.Denied.make({}));
+      }
+      ticket.check();
+    };
+
+    const resolveGroup = (
+      requests: ReadonlyArray<ResolveRequest>,
+      ticket: Ticket,
+      browserTarget: DriverTarget,
+      guard: ResolveGuard,
+    ): ResolvedGroup => {
+      ticket.check();
+      const page = current(browserTarget, "resolve");
+
+      if (requests.length === 0 || requests.length > MaximumGroupNodes)
+        throw fail(
+          "resolve",
+          Reasons.Limit.make({
+            dimension: "controls",
+            maximum: MaximumGroupNodes,
+            observed: requests.length,
+          }),
+        );
+      if (guard._tag === "ViewportContext") expectations(guard.before, ticket, browserTarget);
+      const retainedSnapshots = [...snapshots.values(), ...privateSnapshots];
+
+      const perPage = retainedSnapshots.filter(
+        (snapshot) => snapshot.pageId === page.pageId,
+      ).length;
+
+      const pageMaximum = options.observationLimits?.maxSnapshotsPerPage ?? 16;
+      const sessionMaximum = options.observationLimits?.maxSnapshotsPerSession ?? 64;
+
+      if (perPage >= pageMaximum || retainedSnapshots.length >= sessionMaximum)
+        throw fail(
+          "resolve",
+          Reasons.Limit.make({
+            dimension: "observation-snapshots",
+            maximum: perPage >= pageMaximum ? pageMaximum : sessionMaximum,
+            observed: perPage >= pageMaximum ? perPage + 1 : retainedSnapshots.length + 1,
+          }),
+        );
+
+      const snapshot: Snapshot = {
+        id: `observation-${++observationSerial}`,
+        pageId: page.pageId,
+        frameId: page.frameId,
+        epoch: page.epoch,
+        generation: ticket.generation,
+        scope: "document",
+        validity: "valid",
+        nodes: new Map(),
+        identities: new Map(),
+        revalidated: new Set(),
+      };
+
+      const elements: ResolvedElement[] = [];
+      const records: ResolvedNode[] = [];
+      const samples: Array<DescriptorSample | undefined> = [];
+
+      privateSnapshots.add(snapshot);
+
+      const release = async (): Promise<void> => {
+        snapshot.validity = "invalid";
+        privateSnapshots.delete(snapshot);
+      };
+
+      try {
+        for (const [index, request] of requests.entries()) {
+          ticket.check();
+          if (
+            request.parent !== undefined &&
+            (!Number.isInteger(request.parent) || request.parent < 0 || request.parent >= index)
+          )
+            throw fail("resolve", Reasons.Malformed.make({}));
+          const parent = request.parent === undefined ? undefined : records[request.parent]?.node;
+          let node: ControlState;
+          let scope: "document" | "viewport";
+          let identity: string;
+          let stable: string;
+
+          if (request.target._tag === "Ref") {
+            const source = retained(
+              request.target.reference,
+              ticket,
+              "resolve",
+              false,
+              true,
+              browserTarget,
+            );
+
+            const captured = source.snapshot.identities.get(request.target.reference.elementId);
+
+            if (captured === undefined) throw fail("resolve", Reasons.Incomplete.make({}));
+            node = source.node;
+            scope = source.snapshot.scope;
+            ({ identity, stable } = captured);
+          } else {
+            node = descriptorNode(
+              request.target.descriptor,
+              page,
+              "resolve",
+              guard._tag === "ViewportContext",
+              parent,
+            );
+            scope = request.target.descriptor.matchScope;
+            const fresh = facts(node);
+
+            identity = identityOf(fresh);
+            stable = stableIdentityOf(fresh);
+          }
+          if (
+            parent !== undefined &&
+            (parent.script.kind !== "select" || node.script.selectElementId !== parent.script.id)
+          )
+            throw fail("resolve", Reasons.Stale.make({}));
+
+          const element: ResolvedElement = Object.freeze({
+            _tag: "ResolvedElement",
+            target: Object.freeze({ pageId: page.pageId, frameId: page.frameId }),
+          });
+
+          const record: ResolvedNode = {
+            node,
+            snapshot,
+            scope,
+            identity,
+            stable,
+            ...(parent === undefined ? {} : { parent }),
+            ...(request.target._tag === "Descriptor"
+              ? { descriptor: request.target.descriptor }
+              : {}),
+          };
+
+          snapshot.nodes.set(node.script.id, node);
+          snapshot.identities.set(node.script.id, { identity, stable });
+          resolvedElements.set(element, record);
+          elements.push(element);
+          records.push(record);
+          samples.push(
+            request.target._tag === "Descriptor" ||
+              (request.captureInitial === true && ticket.captureTarget !== undefined)
+              ? sample(node, facts(node), scope, record.descriptor)
+              : undefined,
+          );
+        }
+        ticket.check();
+
+        return {
+          elements: Object.freeze(elements),
+          samples: Object.freeze(samples),
+          activate: (next) => {
+            for (const element of elements) privateRetained(element, next, "run", browserTarget);
+            snapshot.origin = next.signal;
+          },
+          release,
+        };
+      } catch (error) {
+        snapshot.validity = "invalid";
+        privateSnapshots.delete(snapshot);
+        throw error;
+      }
     };
 
     const requireRunning = (page: Page, operation: BrowserOperation) => {
@@ -775,10 +1277,11 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const heldObservation = (pageId: string) => {
-      if (snapshot?.pageId === pageId && snapshot.validity === "valid") {
-        snapshot.validity = "suspended";
-        snapshot.revalidated.clear();
-      }
+      for (const snapshot of snapshots.values())
+        if (snapshot.pageId === pageId && snapshot.validity === "valid") {
+          snapshot.validity = "suspended";
+          snapshot.revalidated.clear();
+        }
     };
 
     const activate = (page: Page, node: ControlState) => {
@@ -795,11 +1298,11 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const focusedOrRefuse = (
-      into: string | ObservedElement | undefined,
+      into: string | ElementTarget | undefined,
       ticket: ReadTicket,
       operation: BrowserOperation,
       policy: AdmissionPolicy | undefined,
-      browserTarget: DriverTarget | undefined,
+      browserTarget: DriverTarget,
     ) => {
       if (into === undefined) return current(browserTarget, operation);
       const { node, page } = resolve(into, ticket, operation, policy, browserTarget);
@@ -820,17 +1323,68 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     /** Issued options of one select, refused exactly where native selection refuses them. */
-    const chosen = (node: ControlState, ids: SelectOptions, operation: BrowserOperation) => {
-      const current = snapshot;
-
-      if (current === undefined) throw fail(operation, Reasons.Stale.make({}));
+    const chosen = (
+      page: Page,
+      node: ControlState,
+      ids: Selection,
+      ticket: Ticket,
+      operation: BrowserOperation,
+      enablement = false,
+    ) => {
       if (!isSelectable(node.script.kind)) throw fail(operation, Reasons.Unsupported.make({}));
 
       const options = ids.map((id) => {
-        const option = current.nodes.get(id);
+        let option: ControlState;
 
-        if (option === undefined || option.script.selectElementId !== node.script.id)
+        if (typeof id === "string") {
+          const snapshot = snapshots.get(page.frameId);
+          const kept = snapshot?.nodes.get(id);
+
+          if (
+            snapshot === undefined ||
+            kept === undefined ||
+            snapshot.nodes.get(node.script.id) !== node
+          )
+            throw fail(operation, Reasons.Stale.make({}));
+          option = kept;
+        } else {
+          const kept = privateRetained(id, ticket, operation, {
+            pageId: page.pageId,
+            frameId: page.frameId,
+          });
+
+          const fresh = facts(kept.node);
+
+          if (
+            kept.parent !== node ||
+            (enablement
+              ? stableIdentityOf(fresh) !== kept.stable
+              : identityOf(fresh) !== kept.identity)
+          )
+            throw fail(operation, Reasons.Stale.make({}));
+          option = kept.node;
+        }
+        if (
+          option.script.selectElementId !== node.script.id ||
+          !page.document.controls.includes(option)
+        )
           throw fail(operation, Reasons.Stale.make({}));
+        ticket.captureTarget?.(
+          typeof id === "string"
+            ? ObservedElement.make({
+                observationId: snapshots.get(page.frameId)?.id ?? "",
+                elementId: id,
+              })
+            : id,
+          sample(
+            option,
+            facts(option),
+            typeof id === "string"
+              ? (snapshots.get(page.frameId)?.scope ?? "document")
+              : (resolvedElements.get(id)?.scope ?? "document"),
+            typeof id === "string" ? undefined : resolvedElements.get(id)?.descriptor,
+          ),
+        );
 
         return option;
       });
@@ -876,7 +1430,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     const formStep = async (
       page: Page,
       node: ControlState,
-      field: FormField,
+      field: FormStep,
       ticket: Ticket,
       record: MutableCall,
       capture: InputCapture,
@@ -886,7 +1440,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       let input: InputReceipt | undefined;
 
       if (field.options !== undefined) {
-        const options = chosen(node, field.options, "fill-form");
+        const options = chosen(page, node, field.options, ticket, "fill-form", true);
 
         act = () => choose(page, node, options);
       } else if (field.checked !== undefined) {
@@ -1046,6 +1600,126 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         check();
       });
 
+    /** Quiet in the finite scripted source; the actual Chromium observer owns native root metrics. */
+    const waitSettled = (
+      options: SettledOptions,
+      ticket: WaitTicket,
+      page: Page,
+      record: MutableCall,
+    ): Promise<SettledEvidence> =>
+      new Promise<SettledEvidence>((resolve, reject) => {
+        const epoch = page.epoch;
+        const started = ticket.deadline - ticket.remainingMillis();
+        const elapsed = () => Math.max(0, ticket.deadline - ticket.remainingMillis() - started);
+
+        const geometry = () =>
+          JSON.stringify(page.document.controls.map((node) => facts(node).box));
+
+        const size = () => page.viewport ?? viewport;
+        let previousGeometry = geometry();
+        let previousViewport = JSON.stringify(size());
+        let previousScroll = JSON.stringify(page.scroll);
+        let previousMutations = page.mutations;
+        let lastChanged = 0;
+        let samples = 0;
+        let mutations = 0;
+        let scrollChanges = 0;
+        let geometryChanges = 0;
+        let viewportChanges = 0;
+        let finished = false;
+        let timer: ReturnType<EngineTimers["sleep"]> | undefined;
+
+        const cleanup = () => {
+          timer?.cancel();
+          timer = undefined;
+          page.watchers.delete(check);
+          ticket.signal.removeEventListener("abort", onAbort);
+        };
+
+        const failWait = (error: unknown) => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          record.settled = "failed";
+          reject(error);
+        };
+
+        const onAbort = () => failWait(aborted(ticket, "settled"));
+
+        const check = () => {
+          if (finished) return;
+          try {
+            ticket.check();
+            if (disconnected) throw fail("settled", Reasons.Disconnected.make({}));
+            if (page.closed || page.epoch !== epoch) throw fail("settled", Reasons.Stale.make({}));
+            const now = elapsed();
+            const nextGeometry = geometry();
+            const nextViewport = JSON.stringify(size());
+            const nextScroll = JSON.stringify(page.scroll);
+
+            const changed =
+              page.mutations !== previousMutations ||
+              nextGeometry !== previousGeometry ||
+              nextViewport !== previousViewport ||
+              nextScroll !== previousScroll;
+
+            samples = Math.min(Number.MAX_SAFE_INTEGER, samples + 1);
+            mutations = Math.min(
+              Number.MAX_SAFE_INTEGER,
+              mutations + Math.max(0, page.mutations - previousMutations),
+            );
+            if (nextGeometry !== previousGeometry) geometryChanges++;
+            if (nextViewport !== previousViewport) viewportChanges++;
+            if (nextScroll !== previousScroll) scrollChanges++;
+            previousMutations = page.mutations;
+            previousGeometry = nextGeometry;
+            previousViewport = nextViewport;
+            previousScroll = nextScroll;
+            if (changed) lastChanged = now;
+            if (now >= options.withinMillis) throw fail("settled", Reasons.Timeout.make({}));
+            if (now - lastChanged >= options.quietMillis) {
+              finished = true;
+              cleanup();
+              resolve({
+                quietMillis: options.quietMillis,
+                withinMillis: options.withinMillis,
+                observedMillis: now,
+                signals: ["dom-mutation", "scroll", "root-geometry", "viewport"],
+                samples,
+                mutations,
+                scrollChanges,
+                geometryChanges,
+                viewportChanges,
+                visibility: "visible",
+              });
+
+              return;
+            }
+            timer?.cancel();
+            timer = timers.sleep(
+              Math.min(
+                25,
+                options.quietMillis - (now - lastChanged),
+                options.withinMillis - now,
+                ticket.remainingMillis(),
+              ),
+            );
+            timer.done.then(check, () => {});
+          } catch (error) {
+            failWait(error);
+          }
+        };
+
+        if (ticket.signal.aborted) {
+          onAbort();
+
+          return;
+        }
+        ticket.signal.addEventListener("abort", onAbort, { once: true });
+        page.watchers.add(check);
+        check();
+      });
+
     const invokeBinding = async (
       name: string,
       input: unknown,
@@ -1130,6 +1804,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           dispatch(ticket, record);
           target.held = { suspensionId: `suspension-${++suspensionSerial}`, by: connection };
           heldObservation(target.pageId);
+          ticket.acknowledge?.();
+          events.pageLifecycle?.({ _tag: "Display", page: cachedPage(target) });
 
           return PageSuspension.make({
             pageId: target.pageId,
@@ -1152,6 +1828,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           dispatch(ticket, record);
           target.held = undefined;
           heldObservation(target.pageId);
+          ticket.acknowledge?.();
+          events.pageLifecycle?.({ _tag: "Display", page: cachedPage(target) });
         }),
       checkTarget: async (target, ticket) => {
         ticket.check();
@@ -1160,6 +1838,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const driver: Driver = {
+      cachedPages: () => Object.freeze(openPages().map(cachedPage)),
       ...(options.pageControl === true ? { pageControl } : {}),
       selected: () => {
         const page = selectedPage();
@@ -1203,13 +1882,19 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             createPage(state({ url: "https://scripted.invalid/blank", text: "" }), false),
           );
         }),
-      closePage: (page, ticket) =>
-        attempt("close-page", ticket, { pageId: page.pageId }, async (record) => {
-          const target = pageOf(page, "close-page");
+      closePage: (page, ticket, onDispatch) =>
+        attempt(
+          "close-page",
+          ticket,
+          { pageId: page.pageId },
+          async (record) => {
+            const target = pageOf(page, "close-page");
 
-          dispatch(ticket, record);
-          close(target);
-        }),
+            dispatch(ticket, record);
+            close(target);
+          },
+          onDispatch,
+        ),
       // Recorded as a close; an armed `close-page` failure makes it fail instead, so the owner
       // fences, and the page stays open.
       containPage: (pageId) =>
@@ -1224,9 +1909,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           close(target);
         }),
       listFrames: (ticket, page) =>
-        attempt("list-frames", ticket, {}, async () => [
-          frameInfo(page === undefined ? selectedPage("list-frames") : pageOf(page, "list-frames")),
-        ]),
+        attempt("list-frames", ticket, {}, async () => [frameInfo(pageOf(page, "list-frames"))]),
       resolveFrame: async (page, frame, ticket) => {
         ticket.check();
         const target = pageOf(page, "target");
@@ -1235,15 +1918,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
         return { pageId: target.pageId, frameId: target.frameId };
       },
-      selectFrame: (id, ticket) =>
-        attempt("select-frame", ticket, {}, async () => {
-          const page = selectedPage("select-frame");
-
-          if (id !== page.frameId) throw fail("select-frame", Reasons.NotFound.make({}));
-          events.invalidate("target-changed", "none");
-        }),
       beginNavigation: (url, timeoutMillis, ticket, target) =>
-        attempt("navigate", undefined, { pageId: target?.pageId }, async (record) => {
+        attempt("navigate", undefined, { pageId: target.pageId }, async (record) => {
           ticket.check();
           const page = current(target, "navigate");
 
@@ -1324,7 +2000,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           return navigation;
         }),
       readText: (selector, maximumBytes, ticket, target) =>
-        attempt("read-text", ticket, { pageId: target?.pageId, ...meta(selector) }, async () => {
+        attempt("read-text", ticket, { pageId: target.pageId, ...meta(selector) }, async () => {
           const page = current(target, "read-text");
 
           if (selector === undefined) return bounded(page.document.text, maximumBytes).text;
@@ -1332,134 +2008,229 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
           return bounded(control.script.text ?? control.script.label, maximumBytes).text;
         }),
-      observe: (scope, maximumBytes, controls, ticket, match) =>
-        attempt("observe", ticket, {}, async (): Promise<NativeObservation> => {
-          const page = selectedPage("observe");
-          const needle = match?.toLowerCase();
+      observe: (scope, maximumBytes, controls, ticket, match, target) =>
+        attempt(
+          "observe",
+          ticket,
+          { pageId: target.pageId },
+          async (): Promise<NativeObservation> => {
+            const page = current(target, "observe");
+            const size = page.viewport ?? viewport;
+            const needle = match?.toLowerCase();
 
-          const matches = (value: string) =>
-            needle === undefined || value.toLowerCase().includes(needle);
+            const matches = (value: string) =>
+              needle === undefined || value.toLowerCase().includes(needle);
 
-          snapshot = undefined;
+            snapshots.delete(page.frameId);
 
-          // A select matches through its own label or an option's, and keeps its options with it.
-          const selects = new Set(
-            page.document.controls
-              .filter(
-                (control) =>
-                  isSelectable(control.script.kind) &&
-                  (matches(control.script.label) ||
-                    page.document.controls.some(
-                      (option) =>
-                        option.script.selectElementId === control.script.id &&
-                        matches(option.script.label),
-                    )),
-              )
-              .map((control) => control.script.id),
+            // A select matches through its own label or an option's, and keeps its options with it.
+            const selects = new Set(
+              page.document.controls
+                .filter(
+                  (control) =>
+                    isSelectable(control.script.kind) &&
+                    (matches(control.script.label) ||
+                      page.document.controls.some(
+                        (option) =>
+                          option.script.selectElementId === control.script.id &&
+                          matches(option.script.label),
+                      )),
+                )
+                .map((control) => control.script.id),
+            );
+
+            const matching = page.document.controls.filter((control) =>
+              control.script.selectElementId !== undefined
+                ? selects.has(control.script.selectElementId)
+                : isSelectable(control.script.kind)
+                  ? selects.has(control.script.id)
+                  : matches(control.script.label),
+            );
+
+            const reachable = matching.filter(
+              (control) => scope === "document" || control.script.offscreen !== true,
+            );
+
+            const kept = reachable.slice(0, controls);
+
+            const text = bounded(
+              needle === undefined
+                ? page.document.text
+                : page.document.text
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter((line) => line !== "" && matches(line))
+                    .join("\n"),
+              maximumBytes,
+            );
+
+            const next: Snapshot = {
+              id: `observation-${++observationSerial}`,
+              pageId: page.pageId,
+              frameId: page.frameId,
+              epoch: page.epoch,
+              generation: ticket.generation,
+              scope,
+              validity: "valid",
+              nodes: new Map(kept.map((control) => [control.script.id, control])),
+              identities: new Map(
+                kept.map((control) => {
+                  const fresh = facts(control);
+
+                  return [
+                    control.script.id,
+                    { identity: identityOf(fresh), stable: stableIdentityOf(fresh) },
+                  ];
+                }),
+              ),
+              revalidated: new Set(),
+            };
+
+            snapshots.set(page.frameId, next);
+
+            return {
+              observationId: next.id,
+              scope,
+              ...(match === undefined ? {} : { match }),
+              url: page.document.url,
+              text: text.text,
+              textTruncated: text.truncated,
+              controls: kept.map(observed),
+              controlsTruncated: kept.length < reachable.length,
+              viewport: ViewportEvidence.make({
+                width: size.width,
+                height: size.height,
+                clippedText: 0,
+                coveredText: 0,
+                uncertainText: 0,
+                unreachableControls: matching.length - reachable.length,
+                exhausted: false,
+              }),
+            };
+          },
+        ),
+      checkpoint: (maximumBytes, controls, pictureBytes, ticket, target) =>
+        attempt(
+          "checkpoint",
+          ticket,
+          { pageId: target.pageId },
+          async (): Promise<NativeCheckpoint> => {
+            const page = current(target, "checkpoint");
+            const size = page.viewport ?? viewport;
+            const text = bounded(page.document.text, maximumBytes);
+
+            const reachable = page.document.controls.filter(
+              (control) => control.script.offscreen !== true,
+            );
+
+            return {
+              url: page.document.url,
+              text: text.text,
+              textTruncated: text.truncated,
+              controls: reachable.slice(0, controls).map(facts),
+              controlsTruncated: reachable.length > controls,
+              viewport: ViewportEvidence.make({
+                width: size.width,
+                height: size.height,
+                clippedText: 0,
+                coveredText: 0,
+                uncertainText: 0,
+                unreachableControls: page.document.controls.length - reachable.length,
+                exhausted: false,
+              }),
+              documentChanged: false,
+              ...(pictureBytes === undefined ? {} : { picture: picture(page, ticket) }),
+            };
+          },
+        ),
+      controlFacts: (target, ticket, browserTarget) =>
+        attempt(
+          "control-facts",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async () => resolve(target, ticket, "control-facts", undefined, browserTarget).facts,
+        ),
+      resolveDescriptor: (
+        descriptor: Descriptor,
+        ticket: Ticket,
+        target: DriverTarget,
+        guard: ResolveGuard = { _tag: "Strict" },
+      ) =>
+        attempt("resolve", ticket, { pageId: target.pageId }, async () => {
+          const group = resolveGroup(
+            [{ target: { _tag: "Descriptor", descriptor } }],
+            ticket,
+            target,
+            guard,
           );
 
-          const matching = page.document.controls.filter((control) =>
-            control.script.selectElementId !== undefined
-              ? selects.has(control.script.selectElementId)
-              : isSelectable(control.script.kind)
-                ? selects.has(control.script.id)
-                : matches(control.script.label),
-          );
+          const element = group.elements[0];
+          const resolved = element === undefined ? undefined : resolvedElements.get(element);
 
-          const reachable = matching.filter(
-            (control) => scope === "document" || control.script.offscreen !== true,
-          );
+          if (resolved === undefined) {
+            await group.release();
+            throw fail("resolve", Reasons.Malformed.make({}));
+          }
+          try {
+            ticket.check();
+            const previous = snapshots.get(resolved.snapshot.frameId);
 
-          const kept = reachable.slice(0, controls);
+            if (previous !== undefined) previous.validity = "invalid";
+            privateSnapshots.delete(resolved.snapshot);
+            snapshots.set(resolved.snapshot.frameId, {
+              ...resolved.snapshot,
+              scope: resolved.scope,
+            });
 
-          const text = bounded(
-            needle === undefined
-              ? page.document.text
-              : page.document.text
-                  .split("\n")
-                  .map((line) => line.trim())
-                  .filter((line) => line !== "" && matches(line))
-                  .join("\n"),
-            maximumBytes,
-          );
-
-          const next: Snapshot = {
-            id: `observation-${++observationSerial}`,
-            pageId: page.pageId,
-            epoch: page.epoch,
-            generation: ticket.generation,
-            validity: "valid",
-            nodes: new Map(kept.map((control) => [control.script.id, control])),
-            revalidated: new Set(),
-          };
-
-          snapshot = next;
-
-          return {
-            observationId: next.id,
-            scope,
-            ...(match === undefined ? {} : { match }),
-            url: page.document.url,
-            text: text.text,
-            textTruncated: text.truncated,
-            controls: kept.map(observed),
-            controlsTruncated: kept.length < reachable.length,
-            viewport: ViewportEvidence.make({
-              width: viewport.width,
-              height: viewport.height,
-              clippedText: 0,
-              coveredText: 0,
-              uncertainText: 0,
-              unreachableControls: matching.length - reachable.length,
-              exhausted: false,
-            }),
-          };
+            return ObservedElement.make({
+              observationId: resolved.snapshot.id,
+              elementId: resolved.node.script.id,
+            });
+          } catch (error) {
+            await group.release();
+            throw error;
+          }
         }),
-      checkpoint: (maximumBytes, controls, pictureBytes, ticket) =>
-        attempt("checkpoint", ticket, {}, async (): Promise<NativeCheckpoint> => {
-          const page = selectedPage("checkpoint");
-          const text = bounded(page.document.text, maximumBytes);
+      resolveGroup: (
+        requests: ReadonlyArray<ResolveRequest>,
+        ticket: Ticket,
+        target: DriverTarget,
+        guard: ResolveGuard,
+      ) =>
+        attempt("resolve", ticket, { pageId: target.pageId }, async () =>
+          resolveGroup(requests, ticket, target, guard),
+        ),
+      expectations: (
+        conditions: ReadonlyArray<Precondition>,
+        ticket: Ticket,
+        target: DriverTarget,
+      ) =>
+        attempt("run", ticket, { pageId: target.pageId }, async () =>
+          expectations(conditions, ticket, target),
+        ),
+      revalidate: (target, ticket, browserTarget) =>
+        attempt(
+          "revalidate",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async () => {
+            const { snapshot: current } = retained(
+              target,
+              ticket,
+              "revalidate",
+              true,
+              true,
+              browserTarget,
+            );
 
-          const reachable = page.document.controls.filter(
-            (control) => control.script.offscreen !== true,
-          );
-
-          return {
-            url: page.document.url,
-            text: text.text,
-            textTruncated: text.truncated,
-            controls: reachable.slice(0, controls).map(facts),
-            controlsTruncated: reachable.length > controls,
-            viewport: ViewportEvidence.make({
-              width: viewport.width,
-              height: viewport.height,
-              clippedText: 0,
-              coveredText: 0,
-              uncertainText: 0,
-              unreachableControls: page.document.controls.length - reachable.length,
-              exhausted: false,
-            }),
-            documentChanged: false,
-            ...(pictureBytes === undefined ? {} : { picture: new Uint8Array(PNG) }),
-          };
-        }),
-      controlFacts: (target, ticket) =>
-        attempt("control-facts", ticket, meta(target), async () => {
-          selectedPage("control-facts");
-
-          return resolve(target, ticket, "control-facts").facts;
-        }),
-      revalidate: (target, ticket) =>
-        attempt("revalidate", ticket, meta(target), async () => {
-          const { snapshot: current } = retained(target, ticket, "revalidate", true);
-
-          current.revalidated.add(target.elementId);
-        }),
+            current.revalidated.add(target.elementId);
+          },
+        ),
       click: (target, ticket, capture, policy, browserTarget) =>
         attempt(
           "click",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(target, ticket, "click", policy, browserTarget);
 
@@ -1476,13 +2247,13 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return { url, input };
           },
-          () => invalidatePointer(browserTarget?.pageId ?? selectedId ?? ""),
+          () => invalidatePointer(browserTarget.pageId),
         ),
       fill: (target, value, ticket, policy, browserTarget) =>
         attempt(
           "fill",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(target, ticket, "fill", policy, browserTarget);
 
@@ -1497,30 +2268,35 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             return page.document.url;
           },
         ),
-      selectOption: (target, ids, ticket, policy) =>
-        attempt("select-option", ticket, meta(target), async (record) => {
-          const { node, page } = resolve(target, ticket, "select-option", policy);
+      selectOption: (target, ids, ticket, policy, browserTarget) =>
+        attempt(
+          "select-option",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async (record) => {
+            const { node, page } = resolve(target, ticket, "select-option", policy, browserTarget);
 
-          requireRunning(page, "select-option");
-          const options = chosen(node, ids as SelectOptions, "select-option");
+            requireRunning(page, "select-option");
+            const options = chosen(page, node, ids, ticket, "select-option");
 
-          dispatch(ticket, record);
-          choose(page, node, options);
+            dispatch(ticket, record);
+            choose(page, node, options);
 
-          return page.document.url;
-        }),
-      formStep: (target, field, ticket, policy, _settleMillis, capture) =>
+            return page.document.url;
+          },
+        ),
+      formStep: (target, field, ticket, policy, _settleMillis, capture, browserTarget) =>
         attempt(
           "fill-form",
           ticket,
-          meta(target),
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(
               target,
               ticket,
               "fill-form",
               policy,
-              undefined,
+              browserTarget,
               false,
               true,
             );
@@ -1529,29 +2305,36 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return formStep(page, node, field, ticket, record, capture);
           },
-          field.checked === undefined ? undefined : () => invalidatePointer(selectedId ?? ""),
+          field.checked === undefined ? undefined : () => invalidatePointer(browserTarget.pageId),
         ),
-      formState: (targets, ticket) =>
-        attempt("fill-form", ticket, {}, async () =>
+      formState: (targets, ticket, browserTarget) =>
+        attempt("fill-form", ticket, { pageId: browserTarget.pageId }, async () =>
           targets.map((target) => {
             // A node the form's own steps detached reads as absent rather than stale.
-            const { node, page } = retained(target, ticket, "fill-form", false, false);
+            const { node, page } = retainedElement(
+              target,
+              ticket,
+              "fill-form",
+              false,
+              false,
+              browserTarget,
+            );
 
             return page.document.controls.includes(node) ? fieldState(page, node) : undefined;
           }),
         ),
-      formSubmit: (target, ticket, capture, policy) =>
+      formSubmit: (target, ticket, capture, policy, browserTarget) =>
         attempt(
           "fill-form",
           ticket,
-          meta(target),
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
             const { node, page } = resolve(
               target,
               ticket,
               "fill-form",
               policy,
-              undefined,
+              browserTarget,
               false,
               true,
             );
@@ -1569,22 +2352,48 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return { url, input };
           },
-          () => invalidatePointer(selectedId ?? ""),
+          () => invalidatePointer(browserTarget.pageId),
         ),
-      scroll: (_deltaX, _deltaY, ticket, target) =>
-        attempt("scroll", ticket, { pageId: target?.pageId }, async (record) => {
+      scroll: (deltaX, deltaY, ticket, target) =>
+        attempt("scroll", ticket, { pageId: target.pageId }, async (record) => {
           const page = current(target, "scroll");
 
           requireRunning(page, "scroll");
           dispatch(ticket, record);
+          page.scroll.x += deltaX;
+          page.scroll.y += deltaY;
+          notify(page);
 
           return page.document.url;
         }),
+      scrollTo: (target: ElementTarget, ticket: Ticket, browserTarget: DriverTarget) =>
+        attempt(
+          "scroll",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async (record) => {
+            const { page, facts: fresh } = resolve(
+              target,
+              ticket,
+              "scroll",
+              undefined,
+              browserTarget,
+            );
+
+            requireRunning(page, "scroll");
+            dispatch(ticket, record);
+            page.scroll.x += fresh.box.x;
+            page.scroll.y += fresh.box.y;
+            notify(page);
+
+            return page.document.url;
+          },
+        ),
       pointerMove: (to, ticket, target) =>
         attempt(
           "pointer-move",
           ticket,
-          { pageId: target?.pageId },
+          { pageId: target.pageId },
           async (record): Promise<NativeInput> => {
             const page = current(target, "pointer-move");
 
@@ -1599,7 +2408,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "hover",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(target) },
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record): Promise<NativeInput> => {
             const {
               node,
@@ -1618,17 +2427,20 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             return receipt(page.pageId);
           },
         ),
-      wheel: (_deltaX, _deltaY, at, ticket, target) =>
+      wheel: (deltaX, deltaY, at, ticket, target) =>
         attempt(
           "wheel",
           ticket,
-          { pageId: target?.pageId },
+          { pageId: target.pageId },
           async (record): Promise<NativeInput> => {
             const page = current(target, "wheel");
 
             requireRunning(page, "wheel");
             dispatch(ticket, record);
             if (at !== undefined) place(page.pageId, { x: at.x, y: at.y });
+            page.scroll.x += deltaX;
+            page.scroll.y += deltaY;
+            notify(page);
 
             return receipt(page.pageId);
           },
@@ -1637,7 +2449,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "press",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(into) },
+          { pageId: browserTarget.pageId, ...meta(into) },
           async (record): Promise<NativeInput> => {
             const page = focusedOrRefuse(into, ticket, "press", policy, browserTarget);
 
@@ -1652,7 +2464,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
         attempt(
           "type",
           ticket,
-          { pageId: browserTarget?.pageId, ...meta(into) },
+          { pageId: browserTarget.pageId, ...meta(into) },
           async (record): Promise<NativeInput> => {
             const page = focusedOrRefuse(into, ticket, "type", policy, browserTarget);
 
@@ -1664,19 +2476,19 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           },
         ),
       screenshot: (_fullPage, _maximumBytes, ticket, target) =>
-        attempt("screenshot", ticket, { pageId: target?.pageId }, async () => {
-          current(target, "screenshot");
+        attempt("screenshot", ticket, { pageId: target.pageId }, async () => {
+          const page = current(target, "screenshot");
 
-          return new Uint8Array(PNG);
+          return picture(page, ticket);
         }),
-      resize: (next, ticket) =>
-        attempt("resize", ticket, {}, async (record) => {
-          const page = selectedPage("resize");
+      resize: (next, ticket, target) =>
+        attempt("resize", ticket, { pageId: target.pageId }, async (record) => {
+          const page = current(target, "resize");
 
           dispatch(ticket, record);
-          viewport = { width: next.width, height: next.height };
+          page.viewport = { width: next.width, height: next.height };
           page.capture?.start.invalidate("resized");
-          events.invalidate("resized");
+          events.invalidate("resized", { pageId: page.pageId });
         }),
       waitFor: (selector, state, ticket, target) =>
         attempt("wait", ticket, { pageId: target.pageId, selector }, async (record) => {
@@ -1715,47 +2527,56 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             () => page.closed || page.epoch !== epoch,
           );
         }).finally(() => ticket.retire()),
+      settled: (options: SettledOptions, ticket: WaitTicket, target: DriverTarget) =>
+        attempt("settled", ticket, { pageId: target.pageId }, async (record) => {
+          const page = current(target, "settled");
+
+          requireRunning(page, "settled");
+
+          return waitSettled(options, ticket, page, record);
+        }).finally(() => ticket.retire()),
       waitForElement: (reference, state, ticket, target) =>
-        attempt(
-          "wait",
-          ticket,
-          { pageId: target.pageId, elementId: reference.elementId },
-          async (record) => {
-            const page = current(target, "wait");
-            const { node } = retained(reference, ticket, "wait", true);
-            const epoch = page.epoch;
+        attempt("wait", ticket, { pageId: target.pageId, ...meta(reference) }, async (record) => {
+          const page = current(target, "wait");
+          const { node } = retainedElement(reference, ticket, "wait", true, true, target);
+          const epoch = page.epoch;
 
-            await waitUntil(
-              ticket,
-              page,
-              "wait",
-              record,
-              () => {
-                const present = page.document.controls.includes(node);
-                const visible = present && node.script.offscreen !== true;
+          await waitUntil(
+            ticket,
+            page,
+            "wait",
+            record,
+            () => {
+              const present = page.document.controls.includes(node);
+              const visible = present && node.script.offscreen !== true;
 
-                switch (state satisfies WaitForElementRequest["state"]) {
-                  case "visible":
-                    return visible;
-                  case "hidden":
-                    return !visible;
-                  case "enabled":
-                    return present && node.script.disabled !== true;
-                  case "disabled":
-                    return present && node.script.disabled === true;
-                }
-              },
-              () => page.closed || page.epoch !== epoch,
-            );
-          },
-        ).finally(() => ticket.retire()),
-      clickAndWait: (target, ticket, capture) =>
+              switch (state satisfies WaitForElementRequest["state"]) {
+                case "visible":
+                  return visible;
+                case "hidden":
+                  return !visible;
+                case "enabled":
+                  return present && node.script.disabled !== true;
+                case "disabled":
+                  return present && node.script.disabled === true;
+              }
+            },
+            () => page.closed || page.epoch !== epoch,
+          );
+        }).finally(() => ticket.retire()),
+      clickAndWait: (target, ticket, capture, browserTarget) =>
         attempt(
           "click-and-wait",
           ticket,
-          meta(target),
+          { pageId: browserTarget.pageId, ...meta(target) },
           async (record) => {
-            const { node, page } = resolve(target, ticket, "click-and-wait");
+            const { node, page } = resolve(
+              target,
+              ticket,
+              "click-and-wait",
+              undefined,
+              browserTarget,
+            );
 
             requireRunning(page, "click-and-wait");
             dispatch(ticket, record);
@@ -1770,31 +2591,50 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
 
             return { url, input };
           },
-          () => invalidatePointer(selectedId ?? ""),
+          () => invalidatePointer(browserTarget.pageId),
         ),
-      clickForDownload: (target, ticket) =>
-        attempt("download-action", ticket, meta(target), async (record) => {
-          const { node, page } = resolve(target, ticket, "download-action");
+      clickForDownload: (target, ticket, browserTarget) =>
+        attempt(
+          "download-action",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async (record) => {
+            const { node, page } = resolve(
+              target,
+              ticket,
+              "download-action",
+              undefined,
+              browserTarget,
+            );
 
-          requireRunning(page, "download-action");
-          if (node.script.download === undefined)
-            throw fail("download-action", Reasons.Unsupported.make({}));
-          dispatch(ticket, record);
-          page.focused = node.script.id;
+            requireRunning(page, "download-action");
+            if (node.script.download === undefined)
+              throw fail("download-action", Reasons.Unsupported.make({}));
+            dispatch(ticket, record);
+            page.focused = node.script.id;
 
-          return {
-            downloadId: `download-${++downloadSerial}`,
-            filename: node.script.download,
-            state: "completed" as const,
-          };
-        }),
-      selectFiles: (target, files, ticket) =>
-        attempt("select-files", ticket, meta(target), async (record) =>
-          selectFilesOn(target, files, ticket, record, "select-files"),
+            return {
+              downloadId: `download-${++downloadSerial}`,
+              filename: node.script.download,
+              state: "completed" as const,
+            };
+          },
         ),
-      clickForFileSelection: (target, files, ticket) =>
-        attempt("file-chooser", ticket, meta(target), async (record) =>
-          selectFilesOn(target, files, ticket, record, "file-chooser"),
+      selectFiles: (target, files, ticket, browserTarget) =>
+        attempt(
+          "select-files",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async (record) =>
+            selectFilesOn(target, files, ticket, record, "select-files", browserTarget),
+        ),
+      clickForFileSelection: (target, files, ticket, browserTarget) =>
+        attempt(
+          "file-chooser",
+          ticket,
+          { pageId: browserTarget.pageId, ...meta(target) },
+          async (record) =>
+            selectFilesOn(target, files, ticket, record, "file-chooser", browserTarget),
         ),
       documentReadiness: async (ticket, target): Promise<ReadinessState> => {
         ticket.check();
@@ -1818,19 +2658,16 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
       },
       dismissDialogs: async () => {},
       capture: async (target): Promise<CaptureBinding> => {
-        const page =
-          target === undefined
-            ? selectedPage("capture")
-            : pageOf(
-                PageInfo.make({
-                  pageId: target.pageId,
-                  targetId: target.targetId,
-                  url: "",
-                  title: "",
-                  selected: false,
-                }),
-                "capture",
-              );
+        const page = pageOf(
+          PageInfo.make({
+            pageId: target.pageId,
+            targetId: target.targetId,
+            url: "",
+            title: "",
+            selected: false,
+          }),
+          "capture",
+        );
 
         return {
           pageId: page.pageId,
@@ -1852,8 +2689,8 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           },
         };
       },
-      invalidateObservation: (scope) => {
-        invalidateSnapshot(scope);
+      invalidateObservation: (scope, origin) => {
+        invalidateSnapshot(scope, origin);
       },
       disconnect: async () => {
         if (disconnected) return;
@@ -1875,13 +2712,14 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const selectFilesOn = (
-      target: string | ObservedElement,
+      target: string | ElementTarget,
       files: ReadonlyArray<NativeFileSelection>,
       ticket: Ticket,
       record: MutableCall,
       operation: "select-files" | "file-chooser",
+      browserTarget: DriverTarget,
     ) => {
-      const { node, page } = resolve(target, ticket, operation);
+      const { node, page } = resolve(target, ticket, operation, undefined, browserTarget);
 
       requireRunning(page, operation);
       if (node.script.kind !== "input" || node.script.inputType !== "file")
@@ -1896,12 +2734,43 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
     };
 
     const connection: Live = {
+      opened: (pageId) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined) events.pageLifecycle?.({ _tag: "Opened", page: cachedPage(page) });
+      },
+      navigated: (pageId, sameDocument) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined)
+          events.pageLifecycle?.({
+            _tag: "Navigated",
+            page: cachedPage(page),
+            frameId: page.frameId,
+            documentEpoch: page.epoch,
+            sameDocument,
+            url: page.document.url.length <= 8192 ? page.document.url : null,
+            urlQualification: page.document.url.length <= 8192 ? "NativeCached" : "Omitted",
+          });
+      },
+      metadata: (pageId) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined)
+          events.pageLifecycle?.({ _tag: "Metadata", page: cachedPage(page) });
+      },
       retire: (pageId) => invalidateSnapshot({ pageId }),
+      closed: (pageId) => {
+        const page = pages.get(pageId);
+
+        if (page !== undefined) snapshots.delete(page.frameId);
+        events.pageClosed?.(pageId, page === undefined ? undefined : cachedPage(page));
+      },
       announce: (pageId) => events.invalidate("target-changed", { pageId }),
       drop: () => dropConnection(true),
       invoke: invokeBinding,
       pointer: () => pointer,
-      viewport: () => viewport,
+      viewport: (pageId) => pages.get(pageId)?.viewport ?? viewport,
     };
 
     index = connections.push("open") - 1;
@@ -1981,7 +2850,7 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             if (running === undefined)
               return Effect.fail(fail("capture-consume", Reasons.NotFound.make({})));
             const timestamp = frame.timestamp ?? lastTimestamp + 40;
-            const viewport = page.capture?.by.viewport() ?? { width: 0, height: 0 };
+            const viewport = page.capture?.by.viewport(page.pageId) ?? { width: 0, height: 0 };
 
             lastTimestamp = Math.max(lastTimestamp, timestamp);
 

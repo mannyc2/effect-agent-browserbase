@@ -1,124 +1,13 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Fiber, Random, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { InputReceipt, Target } from "effect-browser/browser-data";
 import { type CapturedFrame, CaptureSummary } from "effect-browser/capture";
 import { TestClock } from "effect/testing";
 
-import { Cue, PollMillis, type Stage } from "../examples/realistic-footage/Cues.ts";
-import { Director } from "../examples/realistic-footage/Director.ts";
-import * as Humanize from "../examples/realistic-footage/Humanize.ts";
+import * as ClockProbe from "../examples/realistic-footage/ClockProbe.ts";
 import * as Reel from "../examples/realistic-footage/Reel.ts";
 import { Storyboard } from "../examples/realistic-footage/Storyboard.ts";
 import { clockOffset, distribution, Telemetry } from "../examples/realistic-footage/Telemetry.ts";
-
-const seeded = <A>(effect: Effect.Effect<A>, seed = "footage") =>
-  Effect.runSync(effect.pipe(Random.withSeed(seed)));
-
-const stage: Stage = {
-  pointer: { x: 10, y: 10 },
-  viewport: { width: 1280, height: 720 },
-  scroll: { top: 0, maximumTop: 0 },
-};
-
-it("one seed performs one film: the same path, keys and scroll every time", () => {
-  const performance = Effect.all([
-    Humanize.pointerPath({ x: 40, y: 600 }, { x: 1100, y: 90 }, 32),
-    Humanize.keystrokes("Sleep through the border"),
-    Humanize.scrollTrack(0, 1400),
-  ]);
-
-  expect(seeded(performance)).toEqual(seeded(performance));
-  expect(seeded(performance, "another")).not.toEqual(seeded(performance));
-});
-
-it("a pointer path ends on its target, never stalls in time and takes longer for harder reaches", () => {
-  const to = { x: 1100, y: 90 };
-  const path = seeded(Humanize.pointerPath({ x: 40, y: 600 }, to, 32));
-  const last = path[path.length - 1]!;
-
-  expect(last.x).toBeCloseTo(to.x, 6);
-  expect(last.y).toBeCloseTo(to.y, 6);
-  expect(
-    path.every((point, index) => index === 0 || point.atMillis > path[index - 1]!.atMillis),
-  ).toBe(true);
-  // The cue schema is what the page will actually be sent.
-  expect(Schema.is(Cue)({ _tag: "Glide", id: 1, path })).toBe(true);
-
-  expect(Humanize.fittsMillis(800, 20)).toBeGreaterThan(Humanize.fittsMillis(800, 200));
-  expect(Humanize.fittsMillis(800, 40)).toBeGreaterThan(Humanize.fittsMillis(100, 40));
-});
-
-it("a click is aimed inside the control and off its exact centre", () => {
-  const box = { x: 100, y: 200, width: 240, height: 48 };
-
-  for (const seed of ["a", "b", "c", "d", "e", "f"]) {
-    const aim = seeded(Humanize.aimPoint(box), seed);
-
-    expect(aim.x).toBeGreaterThanOrEqual(box.x + box.width * Humanize.Pointer.aimInset);
-    expect(aim.x).toBeLessThanOrEqual(box.x + box.width * (1 - Humanize.Pointer.aimInset));
-    expect(aim.y).toBeGreaterThanOrEqual(box.y + box.height * Humanize.Pointer.aimInset);
-    expect(aim.y).toBeLessThanOrEqual(box.y + box.height * (1 - Humanize.Pointer.aimInset));
-    expect(aim).not.toEqual({ x: 220, y: 224 });
-  }
-});
-
-it("typing always arrives at the text, one key at a time, and a slip is taken back", () => {
-  const text = "Where do you want to wake up";
-  const careful = seeded(Humanize.keystrokes(text, { typoChance: 0 }));
-
-  // A careful typist presses exactly the keys of the text, and never Backspace.
-  expect(careful.map((stroke) => (stroke._tag === "Character" ? stroke.character : "⌫"))).toEqual(
-    Array.from(text),
-  );
-  expect(careful.every((stroke) => stroke.afterMillis >= Humanize.Typing.floorMillis)).toBe(true);
-
-  const clumsy = seeded(Humanize.keystrokes(text, { typoChance: 1 }));
-
-  expect(Humanize.typedText(clumsy)).toBe(text);
-  expect(clumsy.length).toBeGreaterThan(careful.length);
-
-  // A slip is a wrong key, a Backspace once it is noticed, then the key that was meant.
-  const takenBack = clumsy.flatMap((stroke, index) =>
-    stroke._tag === "Backspace" ? [[clumsy[index - 1], clumsy[index + 1]] as const] : [],
-  );
-
-  expect(takenBack.length).toBeGreaterThan(0);
-  for (const [slip, meant] of takenBack) {
-    expect(slip?._tag).toBe("Character");
-    expect(meant?._tag).toBe("Character");
-    expect(slip).not.toEqual(meant);
-  }
-});
-
-it("Shift is held for the keys a keyboard only produces with it", () => {
-  for (const shifted of ["V", "Z", "!", "?", "_", '"'])
-    expect(Humanize.needsShift(shifted)).toBe(true);
-  // A space, a digit, a lower-case letter, and a capital no US key produces.
-  for (const plain of ["v", "1", " ", "-", "É"]) expect(Humanize.needsShift(plain)).toBe(false);
-});
-
-it("a scroll is several eased flicks that land exactly, in either direction", () => {
-  for (const [from, to] of [
-    [0, 1400],
-    [900, 120],
-  ] as const) {
-    const track = seeded(Humanize.scrollTrack(from, to));
-    const direction = Math.sign(to - from);
-
-    expect(track[track.length - 1]!.top).toBeCloseTo(to, 6);
-    expect(
-      track.every(
-        (sample, index) => index === 0 || (sample.top - track[index - 1]!.top) * direction >= 0,
-      ),
-    ).toBe(true);
-    // A pause between flicks shows as a gap longer than one display frame.
-    expect(
-      track.some((sample, index) => index > 0 && sample.atMillis - track[index - 1]!.atMillis > 60),
-    ).toBe(true);
-  }
-
-  expect(seeded(Humanize.scrollTrack(300, 300))).toEqual([]);
-});
 
 it("the reel holds a still page and keeps only the newest picture in a slot", () => {
   const picture = (label: number) => new Uint8Array([label]);
@@ -147,62 +36,56 @@ it("the reel holds a still page and keeps only the newest picture in a slot", ()
   expect(Reel.cut(undefined, 500)).toEqual([]);
 });
 
-it.effect("the director hands a cue over until it is answered, and idles a quiet poll", () =>
-  Effect.gen(function* () {
-    const director = yield* Director;
-
-    const performing = yield* director
-      .perform({ _tag: "Locate", selector: "#hold" })
-      .pipe(Effect.forkChild);
-
-    // A call left behind by a replaced document takes the cue without consuming it.
-    const abandoned = yield* director.exchange({ _tag: "Waiting", stage });
-    const delivered = yield* director.exchange({ _tag: "Waiting", stage });
-
-    expect(abandoned).toEqual({ _tag: "Locate", id: 1, selector: "#hold" });
-    expect(delivered).toEqual(abandoned);
-
-    const polling = yield* director
-      .exchange({ _tag: "Located", id: 1, box: { x: 0, y: 0, width: 80, height: 40 }, stage })
-      .pipe(Effect.forkChild);
-
-    expect((yield* Fiber.join(performing))._tag).toBe("Located");
-
-    yield* TestClock.adjust(PollMillis);
-    expect(yield* Fiber.join(polling)).toEqual({ _tag: "Idle" });
-  }).pipe(Effect.provide(Director.layer)),
-);
-
-it.effect("a cue no page answers fails as a silent stagehand and is withdrawn", () =>
-  Effect.gen(function* () {
-    const director = yield* Director;
-
-    const performing = yield* director
-      .perform({ _tag: "Caption", text: "unanswered" })
-      .pipe(Effect.flip, Effect.forkChild);
-
-    yield* TestClock.adjust("30 seconds");
-    expect((yield* Fiber.join(performing)).reason).toBe("stagehand-silent");
-
-    const polling = yield* director.exchange({ _tag: "Waiting", stage }).pipe(Effect.forkChild);
-
-    yield* TestClock.adjust(PollMillis);
-    expect(yield* Fiber.join(polling)).toEqual({ _tag: "Idle" });
-  }).pipe(Effect.provide(Director.layer)),
-);
-
 it("a storyboard is decoded before it is performed", () => {
   const accepts = Schema.is(Storyboard);
 
-  expect(accepts([{ _tag: "Click", selector: "#hold" }])).toBe(true);
+  const target = {
+    _tag: "Descriptor",
+    descriptor: { kind: "input", label: "Destination", matchScope: "document" },
+  } as const;
+
+  const typed = (text: string) => [
+    {
+      _tag: "Browser",
+      step: {
+        id: "type",
+        action: { _tag: "Type", target, text: { _tag: "Literal", value: text } },
+        resolution: { _tag: "Strict" },
+      },
+    },
+  ];
+
+  expect(
+    accepts([
+      {
+        _tag: "Browser",
+        step: {
+          id: "hold",
+          action: { _tag: "Click", target },
+          resolution: { _tag: "Strict" },
+        },
+      },
+    ]),
+  ).toBe(true);
   expect(accepts([])).toBe(false);
-  expect(accepts([{ _tag: "Click", selector: "" }])).toBe(false);
+  expect(
+    accepts([
+      {
+        _tag: "Browser",
+        step: {
+          id: "",
+          action: { _tag: "Click", target },
+          resolution: { _tag: "Strict" },
+        },
+      },
+    ]),
+  ).toBe(false);
   expect(accepts([{ _tag: "Evaluate", script: "alert(1)" }])).toBe(false);
   // Typed text is held to the library's own rule: a line break would press Enter, so it is
   // refused while the storyboard is decoded rather than halfway through a film.
-  expect(accepts([{ _tag: "Type", selector: "#q", text: "Venice" }])).toBe(true);
-  expect(accepts([{ _tag: "Type", selector: "#q", text: "Venice\n" }])).toBe(false);
-  expect(accepts([{ _tag: "Type", selector: "#q", text: "" }])).toBe(false);
+  expect(accepts(typed("Venice"))).toBe(true);
+  expect(accepts(typed("Venice\n"))).toBe(false);
+  expect(accepts(typed(""))).toBe(false);
 });
 
 it("two clocks are compared from the tightest exchange, and its round trip bounds the error", () => {
@@ -221,6 +104,61 @@ it("two clocks are compared from the tightest exchange, and its round trip bound
   expect(Math.abs(-250 - measured!.offsetMillis)).toBeLessThanOrEqual(measured!.uncertaintyMillis);
   expect(clockOffset([])).toBeNull();
 });
+
+it.effect("a clock sample keeps the host's own stamps, from an exchange the probe opened", () =>
+  Effect.gen(function* () {
+    const telemetry = yield* Telemetry;
+
+    const call = (payload: unknown) =>
+      Schema.decodeUnknownEffect(ClockProbe.Call)(payload).pipe(
+        Effect.flatMap(ClockProbe.answer("probe-secret")),
+      );
+
+    const forged = {
+      pageSentMillis: 0,
+      hostReceivedMillis: 9_000,
+      hostRepliedMillis: 9_000,
+      pageReceivedMillis: 0,
+    };
+
+    // Another script on the probe's origin offers host time of its choosing and no round trip.
+    yield* call({ sample: forged }).pipe(Effect.ignore);
+    yield* call({ secret: "guess", sample: forged }).pipe(Effect.ignore);
+    expect((yield* telemetry.metrics).capture.clock).toBeNull();
+    // Without this plan's secret a call opens no exchange at all.
+    expect(yield* call({ secret: "guess" }).pipe(Effect.orElseSucceed(() => null))).toEqual({
+      exchange: null,
+    });
+
+    // The probe's own call opens an exchange whose reply names it and carries no host time;
+    // its next call returns only the page's two stamps for it.
+    const first = yield* call({ secret: "probe-secret" });
+
+    expect(first).toEqual({ exchange: expect.any(String) });
+    const exchange = first.exchange ?? "";
+
+    yield* call({
+      secret: "probe-secret",
+      previous: { exchange, pageSentMillis: 5_000, pageReceivedMillis: 5_004 },
+    });
+    // A replayed or invented exchange completes nothing.
+    yield* call({
+      secret: "probe-secret",
+      previous: { exchange, pageSentMillis: 0, pageReceivedMillis: 0 },
+    });
+    yield* call({
+      secret: "probe-secret",
+      previous: { exchange: "invented", pageSentMillis: 0, pageReceivedMillis: 0 },
+    });
+
+    // The host stamped that exchange at 0 on this layer's clock: a 4 ms round trip, all in flight.
+    expect((yield* telemetry.metrics).capture.clock).toEqual({
+      offsetMillis: -5_002,
+      uncertaintyMillis: 2,
+      samples: 1,
+    });
+  }).pipe(Effect.provide(Telemetry.layer)),
+);
 
 it("quantiles are nearest-rank, and nothing measured is reported as nothing", () => {
   expect(distribution([])).toBeNull();
@@ -321,6 +259,12 @@ it.effect("each document gets the library's address and commit, and this layer's
     yield* telemetry.captureEnded(
       CaptureSummary.make({
         target,
+        qualification: {
+          authority: "open",
+          containment: { _tag: "NotRequired" },
+          ownerPhase: "open",
+          ownerGeneration: target.generation,
+        },
         reason: "stopped",
         received: 3,
         delivered: 3,

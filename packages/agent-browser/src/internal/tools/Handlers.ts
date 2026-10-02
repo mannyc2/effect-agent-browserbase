@@ -1,12 +1,21 @@
-import { Effect, Schema } from "effect";
+import { Effect, Schema, type Scope } from "effect";
 import {
   BrowserActionResult,
   type BrowserNavigateRequest,
   BrowserNavigationResult,
 } from "effect-agent/interactive-browser";
-import type { BrowserSession } from "effect-browser/browser";
-import { InputReceipt, Observation } from "effect-browser/browser-data";
+import type { Frame, Page } from "effect-browser/browser";
+import {
+  ActionResult,
+  FillFormResult,
+  InputReceipt,
+  Observation,
+  type KeyStroke,
+  type ObservedElement,
+} from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import type { RunOperation, StepFailed } from "effect-browser/plan";
+import type { Action, InputBindings, RunReceipt } from "effect-browser/plan-data";
 
 import {
   allObservedTools,
@@ -22,6 +31,7 @@ import {
   BrowserFormFailure,
   type BrowserToolFailure,
   type FillFormParameters,
+  formInputs,
   type FollowUpObservation,
   FormFillResult,
   type InspectRequest,
@@ -54,16 +64,41 @@ export interface Hooks {
   ) => Effect.Effect<BrowserNavigationResult, BrowserToolFailure>;
   readonly input?: (receipt: InputReceipt, call: Call) => Effect.Effect<void, BrowserToolFailure>;
   readonly failure?: (error: BrowserError, call: Call) => void;
+  readonly operation?: (operation: RunOperation, call: Call) => void;
+  readonly refused?: (error: StepFailed, call: Call) => void;
 }
 
 export const direct: Hooks = { run: (effect) => effect };
 
-/** Records the original error on the host, then gives the model its compact projection. */
-export const failureWith = (hooks: Hooks, call: Call) => (error: BrowserError) => {
-  hooks.failure?.(error, call);
+/**
+ * Whether a refusal came from a bound Page or Frame that is no longer open. Such a target refuses
+ * every later call too: a closed or stale one for good, and a page a dialog or popup quarantined
+ * until an operator's handoff, which issues fresh Pages, so this binding never works again. A
+ * replaced document or reference on an open target stays `stale`, which a fresh inspection answers.
+ */
+export const retiredBy =
+  (target: Page | Frame) =>
+  (error: BrowserError): Effect.Effect<boolean> =>
+    error.reason._tag === "Stale"
+      ? target.status.pipe(Effect.map((status) => status.phase !== "open"))
+      : Effect.succeed(false);
 
-  return projectFailure(error);
-};
+/** Records the original error on the host, then gives the model its compact projection. */
+export const failureWith =
+  (hooks: Hooks, call: Call) =>
+  (error: BrowserError, retired = false) => {
+    hooks.failure?.(error, call);
+
+    return projectFailure(error, retired);
+  };
+
+/** Fails with the model's projection of an error from work on `target`, recorded on the host. */
+export const failureFrom =
+  (hooks: Hooks, call: Call, target: Page | Frame) =>
+  (error: BrowserError): Effect.Effect<never, BrowserToolFailure> =>
+    retiredBy(target)(error).pipe(
+      Effect.flatMap((retired) => Effect.fail(failureWith(hooks, call)(error, retired))),
+    );
 
 const malformed = (operation: BrowserError["operation"]) =>
   BrowserError.make({ operation, reason: Reasons.Malformed.make({}), outcome: "unknown" });
@@ -98,16 +133,69 @@ const oversized = (maximum: number, observed: number) =>
  * The maintained operations, each defined once. A plain Tool runs one inside the host's lane;
  * its `_and_inspect` variant runs the same operation and then one fitted reading in that lane.
  */
-export const makeOperations = <E>(
-  browser: BrowserSession<E>,
+export const makeOperations = (
+  page: Page | Frame,
   options: ResolvedOptions,
   hooks: Hooks,
   continuation: Continuation,
 ) => {
-  const { admission } = options;
+  const { policy } = options;
+  const failure = (call: Call) => failureFrom(hooks, call, page);
+  let runs = 0n;
+
+  /**
+   * A fixed performed seed is the base of a sequence: the nth run these handlers start uses
+   * `seed + n - 1`, so every call draws its own timing and the same calls reproduce it. Past the
+   * largest safe integer the sequence continues from the smallest, so every seed stays valid.
+   */
+  const execution = (): ResolvedOptions["execution"] => {
+    const { style } = options.execution;
+
+    if (style === undefined || style === "plain" || style.seed === undefined)
+      return options.execution;
+    const smallest = BigInt(Number.MIN_SAFE_INTEGER);
+    const span = BigInt(Number.MAX_SAFE_INTEGER) - smallest + 1n;
+    const seed = Number(smallest + ((BigInt(style.seed) - smallest + runs++) % span));
+
+    return { ...options.execution, style: { ...style, seed } };
+  };
+
+  /** One original executor owns authority, recording, attempts and interruption evidence. */
+  const execute = Effect.fnUntraced(function* (
+    intent: Action,
+    call: Call,
+    inputs: InputBindings = {},
+  ): Effect.fn.Return<RunReceipt, BrowserError, Scope.Scope> {
+    const operation = yield* page
+      .start(
+        { version: 1, steps: [{ id: call.tool, action: intent }] },
+        { ...execution(), inputs, ...(policy === undefined ? {} : { policy }) },
+      )
+      .pipe(
+        Effect.tapError((error) => Effect.sync(() => hooks.refused?.(error, call))),
+        Effect.mapError((error) => error.error),
+      );
+
+    hooks.operation?.(operation, call);
+
+    return yield* operation.completed.pipe(
+      Effect.flatMap((ran) =>
+        ran.steps[0] === undefined
+          ? Effect.fail(malformed("run"))
+          : Effect.succeed(ran.steps[0].receipt),
+      ),
+      Effect.catchTag("StepFailed", (error) =>
+        intent._tag === "FillForm" &&
+        error.attempt?.receipt !== undefined &&
+        "stopped" in error.attempt.receipt
+          ? Effect.succeed(error.attempt.receipt)
+          : Effect.fail(error.error),
+      ),
+    );
+  }, Effect.scoped);
 
   const observe = (request: InspectionRequest) =>
-    options.observe(request, browser).pipe(Effect.flatMap(decoded(Observation, "observe")));
+    options.observe(request, page).pipe(Effect.flatMap(decoded(Observation, "observe")));
 
   /** A reading, with the continuation read beside it; a policy that returns less reads less. */
   const reading = (choice: InspectRequest) => {
@@ -147,7 +235,7 @@ export const makeOperations = <E>(
           ? Effect.fail(oversized(options.resultMaxBytes, observationSize(observation)))
           : Effect.succeed(fitted.observation);
       }),
-      Effect.mapError(failureWith(hooks, call)),
+      Effect.catch(failure(call)),
     );
 
   const readMore = (observationId: string, call: Call) =>
@@ -177,41 +265,89 @@ export const makeOperations = <E>(
 
   const navigate = (request: BrowserNavigateRequest, call: Call) =>
     hooks.navigate === undefined
-      ? browser.navigate(request).pipe(
+      ? execute({ _tag: "Navigate", ...request }, call).pipe(
+          Effect.flatMap(decoded(ActionResult, "navigate")),
           Effect.flatMap((result) => navigationResult(result.url)),
-          Effect.mapError(failureWith(hooks, call)),
+          Effect.catch(failure(call)),
         )
       : hooks.navigate(request, call);
 
-  const action = (
-    effect: Effect.Effect<{ readonly url: string; readonly input?: InputReceipt }, BrowserError>,
-    call: Call,
-  ) =>
-    effect.pipe(
-      Effect.mapError(failureWith(hooks, call)),
+  const action = (intent: Action, call: Call, inputs?: InputBindings) =>
+    execute(intent, call, inputs).pipe(
+      Effect.flatMap(decoded(ActionResult, "action-result")),
+      Effect.catch(failure(call)),
       Effect.flatMap((result) =>
         (result.input === undefined
           ? Effect.void
           : (hooks.input?.(result.input, call) ?? Effect.void)
-        ).pipe(
-          Effect.andThen(actionResult(result.url).pipe(Effect.mapError(failureWith(hooks, call)))),
-        ),
+        ).pipe(Effect.andThen(actionResult(result.url).pipe(Effect.catch(failure(call))))),
       ),
     );
 
-  const input = (effect: Effect.Effect<InputReceipt, BrowserError>, call: Call) =>
-    effect.pipe(
-      Effect.tap((receipt) => decoded(InputReceipt, "action-result")(receipt)),
-      Effect.mapError(failureWith(hooks, call)),
+  const input = (intent: Action, call: Call, inputs?: InputBindings) =>
+    execute(intent, call, inputs).pipe(
+      Effect.flatMap(decoded(InputReceipt, "action-result")),
+      Effect.catch(failure(call)),
       Effect.tap((receipt) => hooks.input?.(receipt, call) ?? Effect.void),
       Effect.as(NativeInputResult.make({ dispatched: true })),
     );
 
   /** A stopped form lists what it completed, and records the original stop on the host. */
   const fillForm = (request: FillFormParameters, call: Call) =>
-    browser.fillForm(request, admission, options.form).pipe(
-      Effect.mapError((error) => stopped(failureWith(hooks, call)(error), [])),
-      Effect.flatMap((result) => {
+    execute(
+      {
+        _tag: "FillForm",
+        fields: request.fields.map((field, index) => {
+          const target = {
+            _tag: "Ref" as const,
+            reference: {
+              observationId: request.observationId,
+              elementId: field.elementId,
+            },
+          };
+
+          return field.value !== undefined
+            ? {
+                _tag: "Value" as const,
+                target,
+                value: { _tag: "Input" as const, name: `field-${index}` },
+              }
+            : field.checked !== undefined
+              ? { _tag: "Checked" as const, target, checked: field.checked }
+              : {
+                  _tag: "Options" as const,
+                  target,
+                  options: (field.options ?? []).map((elementId) => ({
+                    _tag: "Ref" as const,
+                    reference: { observationId: request.observationId, elementId },
+                  })),
+                };
+        }),
+        ...(request.submit === undefined
+          ? {}
+          : {
+              submit: {
+                _tag: "Ref" as const,
+                reference: { observationId: request.observationId, elementId: request.submit },
+              },
+            }),
+        options: options.form,
+      },
+      call,
+      formInputs(request.fields),
+    ).pipe(
+      Effect.flatMap(decoded(FillFormResult, "fill-form")),
+      Effect.catch((error) =>
+        failure(call)(error).pipe(Effect.mapError((projected) => stopped(projected, []))),
+      ),
+      Effect.flatMap((result) =>
+        result.stopped === undefined
+          ? Effect.succeed({ result, retired: false })
+          : retiredBy(page)(result.stopped.error).pipe(
+              Effect.map((retired) => ({ result, retired })),
+            ),
+      ),
+      Effect.flatMap(({ result, retired }) => {
         const completed = result.fields.map(({ elementId, status }) => ({ elementId, status }));
 
         const stoppedForm =
@@ -219,7 +355,7 @@ export const makeOperations = <E>(
             ? undefined
             : {
                 facts: result.stopped,
-                projected: failureWith(hooks, call)(result.stopped.error),
+                projected: failureWith(hooks, call)(result.stopped.error, retired),
               };
 
         return Effect.forEach(
@@ -286,8 +422,8 @@ export const makeOperations = <E>(
       const result = yield* effect;
       const observed = yield* Effect.result(reading({}));
 
-      const unavailable = (error: BrowserError) => {
-        const { reason, outcome } = failureWith(hooks, call)(error);
+      const unavailable = (error: BrowserError, retired = false) => {
+        const { reason, outcome } = failureWith(hooks, call)(error, retired);
 
         return {
           action: result,
@@ -295,7 +431,8 @@ export const makeOperations = <E>(
         };
       };
 
-      if (observed._tag === "Failure") return unavailable(observed.failure);
+      if (observed._tag === "Failure")
+        return unavailable(observed.failure, yield* retiredBy(page)(observed.failure));
 
       const available = (observation: Observation) => ({
         action: result,
@@ -316,23 +453,79 @@ export const makeOperations = <E>(
     click: (
       reference: { readonly observationId: string; readonly elementId: string },
       call: Call,
-    ) => action(browser.clickElement(reference, admission), call),
+    ) => action({ _tag: "Click", target: { _tag: "Ref", reference } }, call),
     fill: (
       request: {
         readonly reference: { readonly observationId: string; readonly elementId: string };
         readonly value: string;
       },
       call: Call,
-    ) => action(browser.fillElement(request.reference, request.value, admission), call),
+    ) =>
+      action(
+        {
+          _tag: "Fill",
+          target: { _tag: "Ref", reference: request.reference },
+          value: { _tag: "Input", name: "value" },
+        },
+        call,
+        { value: request.value },
+      ),
     scroll: (request: { readonly deltaX: number; readonly deltaY: number }, call: Call) =>
-      action(browser.scroll(request), call),
+      action({ _tag: "Scroll", mode: { _tag: "By", ...request } }, call),
     selectOption: (
       request: {
         readonly reference: { readonly observationId: string; readonly elementId: string };
         readonly options: ReadonlyArray<string>;
       },
       call: Call,
-    ) => action(browser.selectOption(request.reference, request.options, admission), call),
+    ) =>
+      action(
+        {
+          _tag: "Select",
+          target: { _tag: "Ref", reference: request.reference },
+          options: request.options.map((elementId) => ({
+            _tag: "Ref",
+            reference: { observationId: request.reference.observationId, elementId },
+          })),
+        },
+        call,
+      ),
+    pointerMove: (request: Parameters<Frame["pointerMove"]>[0], call: Call) =>
+      input({ _tag: "PointerMove", ...request }, call),
+    hover: (reference: ObservedElement, call: Call) =>
+      input({ _tag: "Hover", target: { _tag: "Ref", reference } }, call),
+    wheel: (request: Parameters<Frame["wheel"]>[0], call: Call) =>
+      input({ _tag: "Wheel", ...request }, call),
+    press: (request: KeyStroke & { readonly reference: ObservedElement }, call: Call) => {
+      const { reference, ...stroke } = request;
+
+      return input({ _tag: "Press", target: { _tag: "Ref", reference }, ...stroke }, call);
+    },
+    type: (request: { readonly reference: ObservedElement; readonly text: string }, call: Call) =>
+      input(
+        {
+          _tag: "Type",
+          target: { _tag: "Ref", reference: request.reference },
+          text: { _tag: "Input", name: "text" },
+        },
+        call,
+        { text: request.text },
+      ),
+    wait: (request: Parameters<Frame["waitForElement"]>[0], call: Call) =>
+      execute(
+        {
+          _tag: "Wait",
+          mode: {
+            _tag: "Element",
+            target: { _tag: "Ref", reference: request.reference },
+            state: request.state,
+            ...(request.timeoutMillis === undefined
+              ? {}
+              : { timeoutMillis: request.timeoutMillis }),
+          },
+        },
+        call,
+      ).pipe(Effect.as({ satisfied: true as const }), Effect.catch(failure(call))),
     fillForm,
     input,
     followed,
@@ -345,15 +538,15 @@ export const makeOperations = <E>(
   };
 };
 
-/** Every maintained handler Layer over one browser, one resolved configuration and one host. */
-export const makeLayers = <E>(
-  browser: BrowserSession<E>,
+/** Every maintained handler Layer over one bound target, one resolved configuration and one host. */
+export const makeLayers = (
+  page: Page | Frame,
   options: ResolvedOptions,
   hooks: Hooks,
   continuation: Continuation,
 ) => {
-  const operations = makeOperations(browser, options, hooks, continuation);
-  const { input, followed, sizes } = operations;
+  const operations = makeOperations(page, options, hooks, continuation);
+  const { followed, sizes } = operations;
 
   const call = (tool: string, context: { readonly toolCallId?: string | undefined }): Call => ({
     tool,
@@ -387,33 +580,22 @@ export const makeLayers = <E>(
     }),
     nativeHandlers: nativeToolkit.toLayer({
       browser_pointer_move: (request, context) =>
-        hooks.run(input(browser.pointerMove(request), call("browser_pointer_move", context))),
+        hooks.run(operations.pointerMove(request, call("browser_pointer_move", context))),
       browser_hover: (reference, context) =>
-        hooks.run(
-          input(browser.hoverElement(reference, options.admission), call("browser_hover", context)),
-        ),
+        hooks.run(operations.hover(reference, call("browser_hover", context))),
       browser_wheel: (request, context) =>
-        hooks.run(input(browser.wheel(request), call("browser_wheel", context))),
+        hooks.run(operations.wheel(request, call("browser_wheel", context))),
     }),
     keyboardHandlers: keyboardToolkit.toLayer({
       browser_press: ({ reference, key, modifiers }, context) =>
         hooks.run(
-          input(
-            browser.pressElement(
-              reference,
-              modifiers === undefined ? { key } : { key, modifiers },
-              options.admission,
-            ),
+          operations.press(
+            { reference, key, ...(modifiers === undefined ? {} : { modifiers }) },
             call("browser_press", context),
           ),
         ),
       browser_type: ({ reference, text }, context) =>
-        hooks.run(
-          input(
-            browser.typeElement(reference, text, options.admission),
-            call("browser_type", context),
-          ),
-        ),
+        hooks.run(operations.type({ reference, text }, call("browser_type", context))),
     }),
     selectionHandlers: selectionToolkit.toLayer({
       browser_select_option: (request, context) =>
@@ -421,14 +603,7 @@ export const makeLayers = <E>(
     }),
     waitHandlers: waitToolkit.toLayer({
       browser_wait_for: (request, context) =>
-        hooks.run(
-          browser
-            .waitForElement(request)
-            .pipe(
-              Effect.as({ satisfied: true as const }),
-              Effect.mapError(failureWith(hooks, call("browser_wait_for", context))),
-            ),
-        ),
+        hooks.run(operations.wait(request, call("browser_wait_for", context))),
     }),
     formHandlers: formToolkit.toLayer({
       browser_fill_form: (request, context) =>
@@ -469,37 +644,25 @@ export const makeLayers = <E>(
       browser_pointer_move_and_inspect: (request, context) => {
         const current = call("browser_pointer_move_and_inspect", context);
 
-        return hooks.run(
-          followed(input(browser.pointerMove(request), current), current, sizes.input),
-        );
+        return hooks.run(followed(operations.pointerMove(request, current), current, sizes.input));
       },
       browser_hover_and_inspect: (reference, context) => {
         const current = call("browser_hover_and_inspect", context);
 
-        return hooks.run(
-          followed(
-            input(browser.hoverElement(reference, options.admission), current),
-            current,
-            sizes.input,
-          ),
-        );
+        return hooks.run(followed(operations.hover(reference, current), current, sizes.input));
       },
       browser_wheel_and_inspect: (request, context) => {
         const current = call("browser_wheel_and_inspect", context);
 
-        return hooks.run(followed(input(browser.wheel(request), current), current, sizes.input));
+        return hooks.run(followed(operations.wheel(request, current), current, sizes.input));
       },
       browser_press_and_inspect: ({ reference, key, modifiers }, context) => {
         const current = call("browser_press_and_inspect", context);
 
         return hooks.run(
           followed(
-            input(
-              browser.pressElement(
-                reference,
-                modifiers === undefined ? { key } : { key, modifiers },
-                options.admission,
-              ),
+            operations.press(
+              { reference, key, ...(modifiers === undefined ? {} : { modifiers }) },
               current,
             ),
             current,
@@ -511,11 +674,7 @@ export const makeLayers = <E>(
         const current = call("browser_type_and_inspect", context);
 
         return hooks.run(
-          followed(
-            input(browser.typeElement(reference, text, options.admission), current),
-            current,
-            sizes.input,
-          ),
+          followed(operations.type({ reference, text }, current), current, sizes.input),
         );
       },
       browser_fill_form_and_inspect: (request, context) => {

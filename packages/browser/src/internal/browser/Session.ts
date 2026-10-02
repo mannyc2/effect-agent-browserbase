@@ -3,46 +3,77 @@ import {
   Clock,
   Crypto,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Option,
+  Queue,
   Redacted,
   Schema,
   Scope,
 } from "effect";
 
+import type { OperationOptions, PageStatus } from "../../Browser.ts";
 import {
   type FillFormRequest,
   type FrameInfo,
   type InputReceipt,
+  Inventory,
   type KeyModifier,
   Observation,
   type ObservedElement,
   type PageInfo,
   type PageSuspension,
-  type SelectOptions,
   Target,
   type Viewport,
   type WaitForElementRequest,
 } from "../../BrowserData.ts";
 import type { Lifetime, Source } from "../../BrowserRuntime.ts";
 import { BrowserError, Reasons, type BrowserOperation } from "../../Errors.ts";
-import { type CaptureParent } from "./Association.ts";
+import type {
+  Descriptor,
+  ResolveGuard,
+  SettledOptions,
+  SettledEvidence,
+  RunPhase,
+} from "../../PlanData.ts";
+import {
+  TimelineDefaults,
+  type Retention,
+  type Terminal,
+  type TerminalReason,
+} from "../../TimelineData.ts";
+import {
+  cachedTarget,
+  captureMetadata,
+  operationEvents,
+  planPublisher,
+  publish,
+} from "../timeline/Producers.ts";
+import { makeRetirement } from "../timeline/Retirement.ts";
+import { makeJournal } from "../timeline/SessionJournal.ts";
+import { makeStore } from "../timeline/Store.ts";
+import { type CaptureMetadata, type CaptureParent } from "./Association.ts";
 import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
 import { cleanupStep, type ConnectionCleanup, type ConnectionState } from "./ConnectionCleanup.ts";
 import type {
   Driver,
+  NativeCachedPage,
   DriverEvents,
   DriverFault,
   DriverOptions,
   DriverTarget,
+  ElementTarget,
+  NativeSelectOptions,
+  NativeFormField,
   InputCapture,
   NativeFileSelection,
   NavigationControl,
 } from "./Driver.ts";
 import { publicError } from "./NativeCalls.ts";
-import type { AdmissionPolicy } from "./Observation.ts";
+import type { AdmissionPolicy, ResolvedElement } from "./Observation.ts";
+import { type ExecutedOperation, policyOf } from "./OperationPolicy.ts";
 import {
   makeOwner,
   native,
@@ -50,9 +81,14 @@ import {
   type Limits,
   type ObservationScope,
   type OwnedWait,
+  type ExecutionEvidence,
+  type PerformanceRequest,
   type Ticket,
   type WaitTicket,
 } from "./Owner.ts";
+import { makePageRegistry, type PageRecord } from "./PageRegistry.ts";
+import { makePlanExecution } from "./PlanExecution.ts";
+import { makePlanSteps } from "./PlanSteps.ts";
 import type { NativeInput, NativePoint } from "./Pointer.ts";
 import { randomUuid } from "./Random.ts";
 
@@ -72,6 +108,94 @@ export interface FormSettings {
   readonly verify: boolean;
   readonly settleMillis: number;
 }
+
+/** Private composite bounds and evidence cannot enter through decoded public options. */
+export interface ExecutionOptions extends OperationOptions {
+  readonly performance?: PerformanceRequest;
+  readonly operationDeadline?: number;
+  readonly queueDeadline?: number;
+  readonly evidence?: ExecutionEvidence;
+  readonly beforeNative?: (driver: Driver, ticket: Ticket) => Promise<void>;
+  readonly phase?: (phase: RunPhase, fieldIndex?: number) => void;
+}
+
+type DeferredElementTarget = ElementTarget | (() => ElementTarget);
+
+/**
+ * What one admission of page or registry work supplies beyond its operation's policy, which
+ * decides admission, charge, observation retirement, containment and the native checks.
+ */
+interface Work extends ExecutionOptions {
+  /** The exact issued target the work acts through; registry work has none. */
+  readonly target?: DriverTarget;
+  /** The target's connection generation: work for an earlier one is stale. */
+  readonly generation?: number;
+  /** The record the target was issued from, so containment closes exactly that page. */
+  readonly authority?: PageRecord;
+  /** The page the work is confined to, when it is not the target's own (page control). */
+  readonly pageId?: string;
+  /** The issued capability's own check, run before admission and again once admitted. */
+  readonly validate?: (operation: BrowserOperation) => Effect.Effect<void, BrowserError>;
+  /** Further checks once admitted, after validation and the page's reservation. */
+  readonly preflight?: Effect.Effect<void, BrowserError>;
+  /** A step of a composite operation that only reads: it sends no input and costs nothing. */
+  readonly readOnly?: boolean;
+  /** A composite operation's own steps keep the page's observation usable for each other. */
+  readonly retainObservation?: boolean;
+  /** Recovery admission's absolute bound, which also bounds waiting for the permit. */
+  readonly waitUntil?: number;
+}
+
+const codePointCount = (text: string): number => {
+  let count = 0;
+
+  for (const _point of text) count++;
+
+  return count;
+};
+
+const elementTarget = (value: DeferredElementTarget): ElementTarget =>
+  typeof value === "function" ? value() : value;
+
+const effectiveTarget = (value: ElementTarget | undefined, fallback: DriverTarget): DriverTarget =>
+  typeof value === "object" && "_tag" in value && value._tag === "ResolvedElement"
+    ? value.target
+    : fallback;
+
+/**
+ * A form as the form engine runs it. Each field and the submit carry the ID the outcome reports
+ * for them and the exact node they act on, read when that step runs, so an outcome names only the
+ * controls the caller named: there is no placeholder ID to translate back.
+ */
+export interface FormSteps {
+  readonly fields: ReadonlyArray<{
+    readonly reportedId: string;
+    readonly reference: () => ObservedElement | ResolvedElement;
+    readonly field: () => NativeFormField;
+  }>;
+  readonly submit?: {
+    readonly reportedId: string;
+    readonly reference: () => ObservedElement | ResolvedElement;
+  };
+  /** An observation's steps keep it usable for each other; resolved targets need no such care. */
+  readonly retainObservation: boolean;
+}
+
+/** A form over one observation's controls, reporting the IDs the caller named. */
+export const observedForm = (request: FillFormRequest): FormSteps => {
+  const at = (elementId: string) => () => ({ observationId: request.observationId, elementId });
+  const submit = request.submit;
+
+  return {
+    fields: request.fields.map((field) => ({
+      reportedId: field.elementId,
+      reference: at(field.elementId),
+      field: () => field,
+    })),
+    ...(submit === undefined ? {} : { submit: { reportedId: submit, reference: at(submit) } }),
+    retainObservation: true,
+  };
+};
 
 /** What a form did; the public boundary decodes it. */
 export interface FormOutcome {
@@ -245,7 +369,7 @@ export interface SessionOptions<L extends SessionLease, E, R = never> {
  * decides whether release also terminates a browser and how that termination is observed.
  */
 export const acquireSession = Effect.fnUntraced(function* <L extends SessionLease, E, R>(
-  limits: Limits,
+  limits: Limits & { readonly timelineLimits?: Retention },
   options: SessionOptions<L, E, R>,
 ) {
   // The engine is resolved before anything is allocated, so an unissued binding costs nothing.
@@ -263,8 +387,33 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   const bindingLifetime = yield* Scope.fork(parentScope, "sequential");
   const ended = yield* Deferred.make<void>();
   const owner = yield* makeOwner(limits);
-  const clock = yield* Clock.Clock;
-  const uuid = randomUuid(yield* Crypto.Crypto);
+  const clock = owner.clock;
+  let activeRuns = 0;
+  const pageRuns = new Map<string, number>();
+  const crypto = yield* Crypto.Crypto;
+  const uuid = randomUuid(crypto);
+  const clockId = yield* uuid;
+  const originNanos = clock.monotonicTimeNanosUnsafe();
+
+  const makeDomain = (storeId: string, coversFromNanos?: bigint) => {
+    const store = makeStore({
+      clock,
+      originNanos,
+      identity: { storeId, clockId },
+      limits: limits.timelineLimits ?? TimelineDefaults,
+      ...(coversFromNanos === undefined ? {} : { coversFromNanos }),
+    });
+
+    return {
+      store,
+      retirement: makeRetirement((reason) => {
+        store.finish(reason);
+      }),
+    };
+  };
+
+  let domain = makeDomain(yield* uuid);
+  let hasConnectedStore = false;
 
   let driver: Driver | undefined;
   let connectPending = false;
@@ -274,9 +423,123 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   let handoffToken: string | undefined;
   let reconnectTarget: string | undefined;
   let activeBindings: ConnectionBindings | undefined;
-  // A canceled setup may outlive its operation and connection. Keep one slot across the owner
-  // until that native setup and its port actually retire; a new operation cannot evade the bound.
-  let stopSetupPending: Deferred.Deferred<void> | undefined;
+
+  const pages = makePageRegistry();
+
+  const journal = makeJournal({
+    store: () => domain.store,
+    cachedPages: () => driver?.cachedPages() ?? [],
+    pageStatus: (pageId) => {
+      const record = pages.get(pageId);
+
+      return record === undefined
+        ? owner.state.phase === "open" || owner.state.phase === "acquiring"
+          ? undefined
+          : {
+              phase:
+                owner.state.phase === "closing"
+                  ? "closing"
+                  : owner.state.phase === "closed"
+                    ? "closed"
+                    : owner.state.phase === "paused"
+                      ? "paused"
+                      : "stale",
+              containment:
+                owner.state.phase === "uncertain"
+                  ? { _tag: "SessionFenced", generation: owner.state.generation }
+                  : { _tag: "NotRequired" },
+            }
+        : {
+            phase: record.identity.generation === owner.state.generation ? record.phase : "stale",
+            containment: record.containment,
+          };
+    },
+    generation: () => owner.state.generation,
+  });
+
+  owner.observePhase((phase) => {
+    publish(domain.store, { target: null, correlation: null, event: { _tag: "Lifecycle", phase } });
+  });
+
+  owner.observeOperations(
+    operationEvents({
+      store: () => domain.store,
+      originNanos,
+      retain: (pageId) => {
+        const releaseDomain = domain.retirement.retain();
+
+        const releasePage =
+          pageId === undefined ? undefined : pages.get(pageId)?.retirement.retain();
+
+        return () => {
+          releasePage?.();
+          releaseDomain();
+        };
+      },
+    }),
+  );
+
+  const retirePageTimeline = (record: PageRecord, reason: TerminalReason) => {
+    record.retirement.request(reason);
+  };
+
+  const endTimeline = (reason: TerminalReason) => {
+    for (const record of pages.records()) retirePageTimeline(record, reason);
+    domain.retirement.request(reason);
+  };
+
+  let initialTarget: DriverTarget | undefined;
+  let initialInfo: PageInfo | undefined;
+  let initialAuthority: ReturnType<typeof registerPage> | undefined;
+
+  const pageClosed = (pageId: string, cached?: NativeCachedPage, store = domain.store) => {
+    driver?.retireInitializationPage?.(pageId);
+    activeBindings?.retirePage(pageId);
+    const page = pages.get(pageId);
+
+    // A native callback supplies the cached fact; its later owner confirmation is idempotent.
+    if (page !== undefined || cached !== undefined)
+      publish(store, {
+        target:
+          cached === undefined
+            ? {
+                generation: page?.identity.generation ?? owner.state.generation,
+                pageId,
+                frameId: null,
+                document: null,
+              }
+            : cachedTarget(cached, owner.state.generation),
+        correlation: null,
+        event: { _tag: "PageClosed" },
+      });
+    if (page !== undefined) retirePageTimeline(page, "closed");
+
+    if (page !== undefined && page.phase !== "closing") owner.revokePage(pageId);
+    owner.retirePage(pageId);
+    pages.closed(pageId);
+  };
+
+  const pendingPageFaults = new Map<
+    string,
+    { readonly generation: number; readonly authority: PageRecord | undefined }
+  >();
+
+  // Pages whose faults await containment, in arrival order. The pending map bounds it.
+  const pageFaults = yield* Queue.unbounded<string>();
+
+  const revokePage = (pageId: string, except?: AbortSignal) => {
+    pages.closing(pageId);
+    owner.revokePage(pageId, except);
+    activeBindings?.fencePage(pageId);
+    driver?.fenceInitializationPage?.(pageId);
+    owner.invalidate("closed", { pageId });
+  };
+
+  const restorePageAuthority = (pageId: string) => {
+    owner.restorePageAdmission(pageId);
+    driver?.restoreInitializationPage?.(pageId, owner.paused);
+    activeBindings?.resumePage(pageId);
+  };
 
   const fenceBindings = () => {
     activeBindings?.close();
@@ -305,18 +568,11 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
   const capture: CaptureParent = {
     owner,
-    target: () => {
-      if (driver === undefined)
-        throw BrowserError.make({
-          operation: "target",
-          reason: Reasons.Closed.make({}),
-          outcome: "undispatched",
-        });
+    newCaptureId: uuid,
+    resolve: (ticket, requested) => {
+      const admittedDomain = domain;
 
-      return Target.make({ generation: owner.state.generation, ...driver.selected() });
-    },
-    resolve: (ticket, requested) =>
-      native("capture-start", ticket, async () => {
+      return native("capture-start", ticket, async () => {
         if (driver === undefined)
           throw BrowserError.make({
             operation: "capture",
@@ -325,33 +581,112 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           });
         const binding = await driver.capture(requested);
 
+        ticket.check();
+        const generation = ticket.generation;
+
+        const target = Target.make({
+          generation,
+          pageId: binding.pageId,
+          frameId: binding.frameId,
+        });
+
+        const authority =
+          pages.get(binding.pageId) ?? registerPage(requested, target, generation).record;
+
+        const publishMetadata = captureMetadata(admittedDomain.store, originNanos);
+        let releaseCapture: (() => void) | undefined;
+
         return {
           key: binding.targetId,
-          target: Target.make({
-            generation: owner.state.generation,
-            pageId: binding.pageId,
-            frameId: binding.frameId,
+          target,
+          metadata: (event: CaptureMetadata) => {
+            if (
+              releaseCapture === undefined &&
+              event._tag === "Capture" &&
+              event.phase === "Reserved"
+            ) {
+              const releaseDomain = admittedDomain.retirement.retain();
+              const releasePage = authority.retirement.retain();
+
+              releaseCapture = () => {
+                releasePage();
+                releaseDomain();
+              };
+            }
+            publishMetadata(event);
+            if (event._tag === "Capture" && event.phase === "Stopped") releaseCapture?.();
+          },
+          status: () => ({
+            phase:
+              authority.phase === "closed"
+                ? "closed"
+                : generation !== owner.state.generation
+                  ? "stale"
+                  : authority.phase,
+            containment: authority.containment,
           }),
           source: binding.source,
         };
-      }),
+      });
+    },
     captureLeases: new Map(),
     captureReservedBytes: 0,
   };
 
-  owner.onInvalidate((reason, scope) => {
-    driver?.invalidateObservation(scope);
-    if (["disconnected", "uncertain", "closed"].includes(reason)) fenceBindings();
-    if (["paused", "disconnected", "uncertain", "closed"].includes(reason))
-      for (const lease of capture.captureLeases.values()) lease.invalidate(reason);
+  owner.onInvalidate((reason, scope, origin) => {
+    driver?.invalidateObservation(scope, reason === "observation" ? origin : undefined);
+    if (scope !== "all" && scope !== "none" && (reason === "paused" || reason === "closed")) {
+      const record = pages.get(scope.pageId);
+
+      if (record !== undefined && record.phase !== "open")
+        publish(record.store, {
+          target: { ...record.identity, document: null },
+          correlation: null,
+          event: { _tag: "Lifecycle", phase: record.phase },
+        });
+    }
+    if (reason === "uncertain" && scope === "all")
+      for (const page of pages.records())
+        pages.contain(page, { _tag: "SessionFenced", generation: owner.state.generation });
+    if (scope === "all" && ["paused", "disconnected", "uncertain", "closed"].includes(reason)) {
+      if (reason === "paused")
+        for (const page of pages.records()) retirePageTimeline(page, "stale");
+      else
+        endTimeline(
+          owner.reason === "expired"
+            ? "expired"
+            : owner.reason === "detached"
+              ? "detached"
+              : owner.state.phase === "faulted"
+                ? "faulted"
+                : reason === "uncertain"
+                  ? "uncertain"
+                  : reason === "disconnected"
+                    ? "disconnected"
+                    : "closed",
+        );
+      pages.clear();
+    }
+    if (["disconnected", "uncertain", "closed"].includes(reason) && scope === "all")
+      fenceBindings();
+    if (["paused", "disconnected", "uncertain", "closed"].includes(reason)) {
+      if (reason !== "paused" && scope !== "all" && scope !== "none")
+        activeBindings?.fencePage(scope.pageId);
+      for (const lease of capture.captureLeases.values())
+        if (scope === "all" || (scope !== "none" && lease.pageId === scope.pageId))
+          lease.invalidate(reason);
+    }
   });
 
   /**
    * The local half of cleanup. Each step is an independent fact for the canonical
    * coordinator, which owns the release request and the terminal status observation.
    */
+  let releaseTimelineCleanup: (() => void) | undefined;
+
   const local: ConnectionCleanup = {
     fence: Effect.sync(() => {
+      releaseTimelineCleanup ??= domain.retirement.retain();
       owner.fence("closing", "closed");
       handoffToken = undefined;
       activeConnection = undefined;
@@ -383,6 +718,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       Effect.ensuring(
         Effect.sync(() => {
           owner.transition("closed");
+          releaseTimelineCleanup?.();
         }),
       ),
     ),
@@ -404,6 +740,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     ),
     Effect.asVoid,
     Effect.ignoreCause,
+    Effect.provideService(Clock.Clock, clock),
   );
 
   const ref: L["reference"] = acquired.reference;
@@ -417,66 +754,164 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     Effect.tap(() => retireControl),
     Effect.ensuring(Deferred.succeed(ended, undefined)),
     Effect.asVoid,
+    Effect.provideService(Clock.Clock, clock),
   );
 
-  const connectionEvents = (connectionLease: object, generation: number): DriverEvents => ({
-    retired: () => owner.retireWait(connectionLease),
-    invalidate: (reason, scope) => {
-      if (activeConnection === connectionLease) owner.invalidate(reason, scope);
-    },
-    disconnected: () => {
-      owner.retireWait(connectionLease);
-      if (activeConnection !== connectionLease) return;
-      if (
-        owner.state.phase !== "closing" &&
-        owner.state.phase !== "closed" &&
-        owner.state.phase !== "detached"
-      ) {
-        owner.terminate("disconnected", "unknown", generation);
-      }
-    },
-    pause: (reason = "dialog") => {
-      if (activeConnection !== connectionLease) return;
-      const trigger = reason === "popup" ? "popup-policy" : "dialog-policy";
+  const connectionEvents = (connectionLease: object, generation: number): DriverEvents => {
+    const connectionDomain = domain;
 
-      owner.record(trigger, "confirmed", generation);
-      if (owner.state.phase === "open") owner.fence("paused", "paused", trigger);
-      // An unsolicited popup/dialog during setup cannot be silently admitted by
-      // the later connect commit. No usable handle has been exposed: fail closed.
-      else if (owner.state.phase === "acquiring") owner.terminate(trigger, "known", generation);
-    },
-    fault: (event) => {
-      if (activeConnection !== connectionLease) return;
-      if (event.source === "policy") {
-        owner.policy(event, generation);
+    return {
+      pageLifecycle: (event) => {
+        if (activeConnection !== connectionLease) return;
 
-        return;
-      }
-      if (owner.state.phase === "closing" || owner.state.phase === "closed") return;
-      owner.terminate(
-        event.source === "binding"
-          ? "callback-failure"
-          : event.disposition === "not-dispatched"
-            ? "cleanup-capacity"
-            : event.reason === "registration"
-              ? "registration-failure"
-              : event.reason === "connection"
-                ? "disconnected"
-                : "native-failure",
-        event.disposition,
-        generation,
-      );
-    },
-  });
+        const target =
+          event._tag === "Navigated"
+            ? {
+                generation: owner.state.generation,
+                pageId: event.page.pageId,
+                frameId: event.frameId,
+                document: event.documentEpoch,
+              }
+            : cachedTarget(event.page, owner.state.generation);
+
+        publish(connectionDomain.store, {
+          target,
+          correlation: null,
+          event:
+            event._tag === "Opened"
+              ? { _tag: "PageOpened" }
+              : event._tag === "Navigated"
+                ? {
+                    _tag: "Navigated",
+                    sameDocument: event.sameDocument,
+                    url: event.url !== null && event.url.length <= 8192 ? event.url : null,
+                    urlQualification:
+                      event.url !== null && event.url.length > 8192
+                        ? "Omitted"
+                        : event.urlQualification,
+                  }
+                : event._tag === "Display"
+                  ? {
+                      _tag: "DisplayChanged",
+                      selected: event.page.selected,
+                      displayState:
+                        event.page.displayState === "suspended" ? "held" : event.page.displayState,
+                    }
+                  : { _tag: "MetadataChanged" },
+        });
+      },
+      pageFault: (pageId) => {
+        if (activeConnection !== connectionLease) return;
+        if (pendingPageFaults.has(pageId)) return;
+        if (owner.state.phase !== "open" || pendingPageFaults.size >= options.driver.maxPages) {
+          owner.terminate("native-failure", "unknown", owner.state.generation);
+
+          return;
+        }
+        pendingPageFaults.set(pageId, {
+          generation: owner.state.generation,
+          authority: pages.get(pageId),
+        });
+        revokePage(pageId);
+        Queue.offerUnsafe(pageFaults, pageId);
+      },
+      frameClosed: (pageId, frameId) => {
+        if (activeConnection !== connectionLease) return;
+        pages.detachFrame(pageId, frameId);
+      },
+      pageClosed: (pageId, cached) => {
+        if (activeConnection === connectionLease)
+          pageClosed(pageId, cached, connectionDomain.store);
+      },
+      retired: () => owner.retireWait(connectionLease),
+      invalidate: (reason, scope) => {
+        if (activeConnection === connectionLease) owner.invalidate(reason, scope);
+      },
+      disconnected: () => {
+        owner.retireWait(connectionLease);
+        if (activeConnection !== connectionLease) return;
+        if (
+          owner.state.phase !== "closing" &&
+          owner.state.phase !== "closed" &&
+          owner.state.phase !== "detached"
+        ) {
+          owner.terminate("disconnected", "unknown", generation);
+        }
+      },
+      pause: (reason = "dialog", pageId) => {
+        if (activeConnection !== connectionLease) return;
+        const trigger = reason === "popup" ? "popup-policy" : "dialog-policy";
+
+        owner.record(trigger, "confirmed", generation);
+        if (pageId !== undefined && owner.state.phase === "open") {
+          if (!owner.paused(pageId) && owner.pausedPages >= options.driver.maxPages) {
+            owner.terminate(trigger, "unknown", generation);
+
+            return;
+          }
+          pages.pause(pageId);
+          activeBindings?.fencePage(pageId);
+          driver?.fenceInitializationPage?.(pageId);
+          owner.pausePage(pageId);
+          owner.invalidate("paused", { pageId });
+          // This issued Page never runs again: the operator's release issues fresh Pages. Retire
+          // it as an all-page pause retires every page, so work waiting on it ends now.
+          const record = pages.get(pageId);
+
+          if (record !== undefined) retirePageTimeline(record, "stale");
+
+          return;
+        }
+        if (owner.state.phase === "open") owner.fence("paused", "paused", trigger);
+        // An unsolicited popup/dialog during setup cannot be silently admitted by
+        // the later connect commit. No usable handle has been exposed: fail closed.
+        else if (owner.state.phase === "acquiring") owner.terminate(trigger, "known", generation);
+      },
+      fault: (event) => {
+        if (activeConnection !== connectionLease) return;
+        if (event.source === "policy") {
+          owner.policy(event, generation);
+
+          return;
+        }
+        if (owner.state.phase === "closing" || owner.state.phase === "closed") return;
+        owner.terminate(
+          event.source === "binding"
+            ? "callback-failure"
+            : event.disposition === "not-dispatched"
+              ? "cleanup-capacity"
+              : event.reason === "registration"
+                ? "registration-failure"
+                : event.reason === "connection"
+                  ? "disconnected"
+                  : "native-failure",
+          event.disposition,
+          generation,
+        );
+      },
+    };
+  };
 
   const connectNative = (url: Redacted.Redacted<unknown>, nativeOptions: DriverOptions) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         // Drawn before this attempt claims the connection, so a failed draw leaves nothing to undo.
         const identity: ConnectionIdentity = { namespace: yield* uuid, bindings: yield* uuid };
+
+        if (hasConnectedStore) {
+          endTimeline("detached");
+          domain = makeDomain(yield* uuid, clock.monotonicTimeNanosUnsafe() - originNanos);
+        }
+        hasConnectedStore = true;
+        publish(domain.store, {
+          target: null,
+          correlation: null,
+          event: { _tag: "Lifecycle", phase: "acquiring" },
+        });
         const connectionLease = {};
 
         activeConnection = connectionLease;
+        owner.setConnection(connectionLease);
         connectPending = true;
         const events = connectionEvents(connectionLease, owner.state.generation);
 
@@ -575,39 +1010,15 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
   };
 
   /**
-   * Work that depends on an initialized document waits for the current document's readiness.
-   * Navigation, selection and page management deliberately do not: initialization must never
-   * deadlock the navigation that produces the document it is waiting for.
+   * Waits for the current document's readiness. Only work whose policy depends on an initialized
+   * document asks: navigation, selection and page management deliberately do not, because
+   * initialization must never deadlock the navigation that produces the document it waits for.
    */
-  const dependent = [
-    "read-text",
-    "checkpoint",
-    "control-facts",
-    "revalidate",
-    "click",
-    "fill",
-    "fill-form",
-    "scroll",
-    "pointer-move",
-    "hover",
-    "wheel",
-    "press",
-    "type",
-    "screenshot",
-    "observe",
-    "wait",
-    "click-and-wait",
-    "download-action",
-    "select-files",
-    "file-chooser",
-  ];
-
   const requireReady = async (
     operation: BrowserOperation,
     ticket: Ticket,
-    target?: DriverTarget,
+    target: DriverTarget,
   ) => {
-    if (!dependent.includes(operation)) return;
     const state = await getDriver().documentReadiness(ticket, target);
 
     if (state._tag === "Ready" || state._tag === "NotApplicable") return;
@@ -623,31 +1034,45 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     });
   };
 
+  /** The policy's native checks on the exact target, before any of the work's own commands. */
   /**
-   * `dependent` is false for lifecycle observations, which report what is actually on the
-   * reattached page. Readiness governs work that depends on initialization, not the reading
-   * that tells a caller whether this document was initialized at all.
+   * The page checks an operation's policy requires before its native call. Work that reads no
+   * document (`document: false`, a plan's duration pause) keeps the held-page refusal but never
+   * waits for document readiness, so it can run before a navigation the bootstrap requires.
    */
+  const prepare = async (
+    operation: ExecutedOperation,
+    ticket: Ticket,
+    target: DriverTarget,
+    reads: { readonly document?: boolean } = {},
+  ) => {
+    const policy = policyOf(operation);
+
+    if (policy.work !== "page") return;
+    // A held page is refused, never woken.
+    if (policy.refuseHeld) await getDriver().pageControl?.checkTarget(target, ticket);
+    if (policy.ready && reads.document !== false) await requireReady(operation, ticket, target);
+  };
+
   const observeInside = (
     ticket: Ticket,
-    maximumBytes = Math.min(options.maxReturnedBytes, 16384),
-    controls = 32,
-    dependent = true,
-    scope: "document" | "viewport" = "document",
-    match?: string,
+    maximumBytes: number,
+    controls: number,
+    scope: "document" | "viewport",
+    match: string | undefined,
+    target: DriverTarget,
   ) =>
     Effect.suspend(() => {
-      const revision = owner.state.revision;
+      const revision = owner.revision(target.pageId);
 
       return native("observe", ticket, async () => {
-        await getDriver().pageControl?.checkTarget(undefined, ticket);
-        if (dependent) await requireReady("observe", ticket);
+        await prepare("observe", ticket, target);
 
-        return getDriver().observe(scope, maximumBytes, controls, ticket, match);
+        return getDriver().observe(scope, maximumBytes, controls, ticket, match, target);
       }).pipe(
         Effect.flatMap((raw) =>
           Effect.gen(function* () {
-            if (owner.state.revision !== revision)
+            if (owner.revision(target.pageId) !== revision)
               return yield* BrowserError.make({
                 operation: "observe",
                 reason: Reasons.Stale.make({}),
@@ -655,7 +1080,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               });
 
             const result = yield* Effect.try({
-              try: () => Observation.make({ ...raw, target: capture.target(), revision }),
+              try: () =>
+                Observation.make({
+                  ...raw,
+                  target: Target.make({ generation: ticket.generation, ...target }),
+                  revision,
+                }),
               catch: (error) =>
                 publicError(error, "observe", {
                   reason: Reasons.Malformed.make({}),
@@ -713,40 +1143,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       : Effect.succeed(bytes);
   };
 
-  // Reading a target is an ownership operation too. A native mutation that times out
-  // after dispatch fences the owner as uncertain; retaining the last native target
-  // must not manufacture a fresh usable handle in that state.
-  const readSelected = owner.guard(
-    "target",
-    () =>
-      Effect.try({
-        try: capture.target,
-        catch: () =>
-          BrowserError.make({
-            operation: "target",
-            reason: Reasons.Closed.make({}),
-            outcome: "undispatched",
-          }),
-      }),
-    { charge: false },
-  );
-
   /**
-   * While a navigation is in flight on the selected page, nothing else may change that page.
+   * While a navigation is in flight on a page, nothing else may change that page.
    * Reads, checkpoints, holds and every other page proceed.
    */
-  const unreserved = (operation: BrowserOperation, target?: DriverTarget) =>
-    Effect.suspend(() => {
-      let pageId = target?.pageId;
-
-      if (pageId === undefined)
-        try {
-          pageId = driver?.selected().pageId;
-        } catch {
-          // No selected target: the operation itself reports that, with its own reason.
-        }
-
-      return pageId !== undefined && (owner.reserved(pageId) || owner.waitPending(pageId))
+  const unreserved = (operation: BrowserOperation, pageId: string) =>
+    Effect.suspend(() =>
+      owner.reserved(pageId) || owner.waitPending(pageId)
         ? Effect.fail(
             BrowserError.make({
               operation,
@@ -754,37 +1157,65 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
               outcome: "undispatched",
             }),
           )
-        : Effect.void;
-    });
+        : Effect.void,
+    );
 
-  /**
-   * A page other than the selected one can take an unknown outcome of its own mutation with it:
-   * closing it ends everything still bound for it, where the selected page and every other one
-   * go on working. The selected page's own outcome still fences, since direct operations follow
-   * it and nothing could be selected in its place.
-   */
-  const containment = (pageId: string) => {
+  /** Closing the exact affected page contains unknown input without retiring healthy peers. */
+  const containment = (pageId: string, authority = pages.get(pageId)) => {
     const current = driver;
 
     if (current === undefined) return undefined;
-    let selected: string;
-
-    try {
-      selected = current.selected().pageId;
-    } catch {
-      // Without a selection it can read, the owner cannot tell this page is not the selected one.
-      return undefined;
-    }
-    if (selected === pageId) return undefined;
 
     return {
       pageId,
-      close: Effect.promise(() =>
-        current.containPage(pageId).then(
-          () => true,
-          () => false,
-        ),
-      ),
+      close: Effect.suspend(() => {
+        const page = authority;
+        const generation = page?.identity.generation ?? owner.state.generation;
+
+        const confirmed = () => {
+          if (page !== undefined && page.containment._tag === "NotRequired")
+            pages.contain(page, { _tag: "PageClosed", pageId, generation });
+
+          return true;
+        };
+
+        if (page?.phase === "closed") return Effect.sync(confirmed);
+        if (page?.attempt !== undefined)
+          return Deferred.await(page.attempt).pipe(
+            Effect.timeoutOrElse({ duration: 3000, orElse: () => Effect.succeed(false) }),
+            Effect.tap((closed) =>
+              Effect.sync(() => {
+                if (closed) confirmed();
+                else pages.contain(page, { _tag: "SessionFenced", generation });
+              }),
+            ),
+          );
+        const attempt = Deferred.makeUnsafe<boolean>();
+
+        if (page !== undefined) pages.attempting(page, attempt);
+        revokePage(pageId);
+
+        return Effect.promise(async () => {
+          try {
+            await current.containPage(pageId);
+            confirmed();
+            pageClosed(pageId);
+
+            return true;
+          } catch {
+            return false;
+          }
+        }).pipe(
+          Effect.timeoutOrElse({ duration: 3000, orElse: () => Effect.succeed(false) }),
+          Effect.tap((closed) =>
+            Effect.sync(() => {
+              if (!closed && page !== undefined)
+                pages.contain(page, { _tag: "SessionFenced", generation });
+            }),
+          ),
+          Effect.tap((closed) => Deferred.succeed(attempt, closed)),
+        );
+      }),
     };
   };
 
@@ -801,221 +1232,272 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         : Effect.void,
     );
 
-  const nativeOperation = <A>(
+  /**
+   * Why a capability that can no longer act was refused, most specific first. A refused owner
+   * outranks staleness: every phase change advances the generation, so a closed, expired,
+   * disconnected or paused session must not look like a stale Page. A closed Page is closed. Only
+   * work the owner would still admit is stale: a replaced generation, a closing page or a detached
+   * frame, which a fresh Page or observation can replace.
+   */
+  const unavailable = (
     operation: BrowserOperation,
-    action: (driver: Driver, ticket: Ticket) => Promise<A>,
-    options: {
-      readonly mutation?: boolean;
-      readonly charge?: boolean | "host-read";
-      /** Opening or closing a tab is independent of the selected page's document. */
-      readonly anyPage?: boolean;
-      /** Waits its turn for the permit instead of refusing `busy`. */
-      readonly queue?: boolean;
-      readonly mutationScope?: () => ObservationScope;
-      readonly preflight?: Effect.Effect<void, BrowserError>;
-    } = {},
+    page?: { readonly phase: "open" | "paused" | "closing" | "closed" },
+    admission?: { readonly recovery?: boolean },
   ) =>
-    owner.guard(
+    BrowserError.make({
+      operation,
+      reason:
+        owner.refusal(admission) ??
+        (page?.phase === "closed" ? Reasons.Closed.make({}) : Reasons.Stale.make({})),
+      outcome: "undispatched",
+    });
+
+  const checkTarget = (
+    operation: BrowserOperation,
+    target?: DriverTarget,
+    generation?: number,
+    admission?: { readonly recovery?: boolean },
+  ) =>
+    Effect.suspend(() =>
+      (generation !== undefined && generation !== owner.state.generation) ||
+      (target !== undefined && pages.get(target.pageId)?.phase === "closing")
+        ? Effect.fail(unavailable(operation, undefined, admission))
+        : Effect.void,
+    );
+
+  /**
+   * Admits page or registry work under its operation's policy. The policy decides the permit, the
+   * charge, which observations input retires and where an unknown outcome is contained; a call
+   * supplies only what varies (its target, deadlines, evidence and further checks). The issued
+   * capability is validated before admission and again once admitted.
+   */
+  const admit = <A, E, R>(
+    operation: ExecutedOperation,
+    body: (ticket: Ticket) => Effect.Effect<A, E, R>,
+    work: Work = {},
+  ): Effect.Effect<A, E | BrowserError, R> => {
+    const policy = policyOf(operation);
+    const page = policy.work === "page" ? policy : undefined;
+    const pageId = page === undefined ? undefined : (work.pageId ?? work.target?.pageId);
+    const mutation = policy.mutation && work.readOnly !== true;
+    const charge = work.readOnly === true ? "none" : policy.charge;
+    const scope = (): ObservationScope => (pageId === undefined ? "none" : { pageId });
+
+    const validate = (operation: BrowserOperation) =>
+      work.validate?.(operation) ?? checkTarget(operation, work.target, work.generation);
+
+    // While a navigation is loading, or a native wait observes the page, nothing else may change
+    // that page; recovery stops or closes exactly that work, so it is not refused by it.
+    const settledPage =
+      page === undefined || pageId === undefined
+        ? Effect.void
+        : mutation && !page.recovery
+          ? unreserved(operation, pageId)
+          : page.refuseWhileWaiting
+            ? waitFree(operation, pageId)
+            : Effect.void;
+
+    return validate(operation).pipe(
+      Effect.andThen(
+        owner.guard(operation, body, {
+          ...(work.admission === undefined ? {} : { admission: work.admission }),
+          ...(work.timeoutMillis === undefined ? {} : { timeoutMillis: work.timeoutMillis }),
+          ...(work.operationDeadline === undefined
+            ? {}
+            : { operationDeadline: work.operationDeadline }),
+          ...(work.queueDeadline === undefined ? {} : { queueDeadline: work.queueDeadline }),
+          ...(work.evidence === undefined ? {} : { evidence: work.evidence }),
+          ...(work.performance === undefined ? {} : { performance: work.performance }),
+          ...(work.waitUntil === undefined ? {} : { waitUntil: work.waitUntil }),
+          mutation,
+          charge: charge === "none" ? false : charge === "host-read" ? "host-read" : true,
+          recovery: page?.recovery === true,
+          targetScope: scope,
+          mutationScope: () => (work.retainObservation === true ? "none" : scope()),
+          // Registry work has no page to close, so an unknown outcome fences the owner.
+          contain: () =>
+            pageId === undefined
+              ? undefined
+              : containment(pageId, pageId === work.target?.pageId ? work.authority : undefined),
+          preflight: validate(operation).pipe(
+            Effect.andThen(settledPage),
+            Effect.andThen(work.preflight ?? Effect.void),
+          ),
+        }),
+      ),
+    );
+  };
+
+  /**
+   * One native action under its operation's policy: the policy's checks on the exact target
+   * (a held page, the document's readiness), the work's own preparation, then the action.
+   */
+  const execute = <A>(
+    operation: ExecutedOperation,
+    action: (driver: Driver, ticket: Ticket) => Promise<A>,
+    work: Work = {},
+  ) =>
+    admit(
       operation,
       (ticket) =>
         native(operation, ticket, async () => {
-          // A held page is refused, never woken: none of these may run against one.
-          if (
-            [
-              "resize",
-              "wait",
-              "click-and-wait",
-              "download-action",
-              "select-files",
-              "select-option",
-              "fill-form",
-              "file-chooser",
-              "checkpoint",
-              "control-facts",
-              "revalidate",
-            ].includes(operation)
-          )
-            await getDriver().pageControl?.checkTarget(undefined, ticket);
-          await requireReady(operation, ticket);
+          if (work.target !== undefined) await prepare(operation, ticket, work.target);
+          await work.beforeNative?.(getDriver(), ticket);
+          ticket.check();
 
           return action(getDriver(), ticket);
         }),
-      {
-        ...options,
-        mutationScope: options.mutationScope ?? (() => ({ pageId: getDriver().selected().pageId })),
-        preflight: (options.mutation === true && options.anyPage !== true
-          ? unreserved(operation)
-          : Effect.void
-        ).pipe(Effect.andThen(options.preflight ?? Effect.void)),
-      },
+      work,
     );
 
   const wait = (
-    start: (driver: Driver, ticket: WaitTicket, target: DriverTarget) => Promise<void>,
-    timeoutMillis?: number,
+    start: (
+      driver: Driver,
+      ticket: WaitTicket,
+      target: DriverTarget,
+      operationTicket: Ticket,
+    ) => Promise<void>,
+    timeoutMillis: number | undefined,
+    work: Work & { readonly target: DriverTarget },
+    operation: "wait" | "settled" = "wait",
   ): Effect.Effect<void, BrowserError> =>
     Effect.suspend(() => {
+      const target = work.target;
       let owned: OwnedWait | undefined;
 
-      return owner
-        .guard(
-          "wait",
-          (ticket) =>
-            native("wait", ticket, async () => {
-              const driver = getDriver();
-              const connection = activeConnection;
+      return admit(
+        operation,
+        (ticket) =>
+          native(operation, ticket, async () => {
+            const driver = getDriver();
+            const connection = activeConnection;
 
-              if (connection === undefined)
-                throw BrowserError.make({
-                  operation: "wait",
-                  reason: Reasons.Closed.make({}),
-                  outcome: "undispatched",
-                });
-              const target = driver.selected();
-              const admitted = owner.beginWait(ticket, target, connection);
+            if (connection === undefined)
+              throw BrowserError.make({
+                operation,
+                reason: Reasons.Closed.make({}),
+                outcome: "undispatched",
+              });
+            const admitted = owner.beginWait(ticket, target, connection, operation);
 
-              owned = admitted;
-              let started = false;
+            owned = admitted;
+            let started = false;
 
-              try {
-                await driver.pageControl?.checkTarget(target, ticket);
-                ticket.check();
-                await requireReady("wait", ticket, target);
-                ticket.check();
-                admitted.start(() => start(driver, admitted.ticket, target));
-                started = true;
+            try {
+              await prepare(operation, ticket, target);
+              ticket.check();
+              await work.beforeNative?.(driver, ticket);
+              ticket.check();
+              admitted.start(() => start(driver, admitted.ticket, target, ticket));
+              started = true;
 
-                return admitted;
-              } finally {
-                // Canceled readiness may still be native work: retire only when its raw task exits.
-                if (!started) admitted.ticket.retire();
-              }
-            }),
-          {
-            ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
-            preflight: Effect.suspend(() =>
-              owner.waitAvailable()
-                ? unreserved("wait")
-                : Effect.fail(
-                    BrowserError.make({
-                      operation: "wait",
-                      reason: Reasons.Busy.make({}),
-                      outcome: "undispatched",
-                    }),
-                  ),
-            ),
-          },
-        )
-        .pipe(
-          Effect.flatMap((operation) => operation.completed),
-          Effect.ensuring(Effect.sync(() => owned?.cancel())),
-        );
+              return admitted;
+            } finally {
+              // Canceled readiness may still be native work: retire only when its raw task exits.
+              if (!started) admitted.ticket.retire();
+            }
+          }),
+        {
+          ...work,
+          ...(timeoutMillis === undefined
+            ? {}
+            : { timeoutMillis: Math.min(timeoutMillis, work.timeoutMillis ?? timeoutMillis) }),
+          // A page has one native wait slot; a wait never starts during a loading navigation.
+          preflight: Effect.suspend(() =>
+            owner.waitAvailable(target.pageId)
+              ? unreserved(operation, target.pageId)
+              : Effect.fail(
+                  BrowserError.make({
+                    operation,
+                    reason: Reasons.Busy.make({}),
+                    outcome: "undispatched",
+                  }),
+                ),
+          ),
+        },
+      ).pipe(
+        Effect.flatMap((operation) => operation.completed),
+        Effect.ensuring(Effect.sync(() => owned?.cancel())),
+      );
     });
 
-  /**
-   * Direct operations resolve selection under admission. Retained operations capture selection
-   * and generation; pinned operations capture generation and their explicit page/frame only.
-   */
+  /** Input receipt boundaries retain the admitted exact target and original owner clock. */
   const captureClickAt =
-    (target: Target): InputCapture =>
+    (target: Target, ticket: Ticket): InputCapture =>
     async (dispatch, dispatched) => {
       const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
 
       await dispatch();
 
-      return {
+      const receipt = {
         ...dispatched,
         target,
-        kind: "click",
+        kind: "click" as const,
         startedMonotonicNanos,
         completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
       };
+
+      ticket.recordInput?.(receipt);
+
+      return receipt;
     };
 
-  const makeOperations = (retained?: {
-    readonly generation: number;
-    readonly selection?: number;
-    readonly target?: DriverTarget;
-  }) => {
-    const browserTarget = retained?.target;
-
-    const check = () => {
-      if (
-        retained !== undefined &&
-        (owner.state.generation !== retained.generation ||
-          (retained.selection !== undefined && owner.state.selection !== retained.selection))
-      ) {
-        return Effect.fail(
-          BrowserError.make({
-            operation: "handle",
-            reason: Reasons.Stale.make({}),
-            outcome: "undispatched",
-          }),
-        );
-      }
-
-      return Effect.void;
-    };
+  const makeOperations = (
+    issued: Work & {
+      readonly target: DriverTarget;
+      readonly generation: number;
+    },
+  ) => {
+    const browserTarget = issued.target;
 
     const run = <A>(
-      operation: BrowserOperation,
-      action: (driver: Driver, ticket: Ticket) => Promise<A>,
-      mutation = false,
+      operation: ExecutedOperation,
+      action: (driver: Driver, ticket: Ticket, target: DriverTarget) => Promise<A>,
+      operationOptions?: ExecutionOptions,
     ) =>
-      owner.guard(
-        operation,
-        (ticket) =>
-          native(operation, ticket, async () => {
-            await getDriver().pageControl?.checkTarget(browserTarget, ticket);
-            await requireReady(operation, ticket, browserTarget);
+      execute(operation, (driver, ticket) => action(driver, ticket, browserTarget), {
+        ...issued,
+        ...operationOptions,
+      });
 
-            return action(getDriver(), ticket);
-          }),
-        {
-          mutation,
-          mutationScope: () => ({ pageId: browserTarget?.pageId ?? getDriver().selected().pageId }),
-          preflight: mutation
-            ? Effect.suspend(check).pipe(Effect.andThen(unreserved(operation, browserTarget)))
-            : Effect.suspend(check),
-          ...(browserTarget === undefined
-            ? {}
-            : { contain: () => containment(browserTarget.pageId) }),
-        },
-      );
-
-    const operationTarget = () =>
-      retained?.target === undefined
-        ? capture.target()
-        : Target.make({
-            generation: retained.generation,
-            pageId: retained.target.pageId,
-            frameId: retained.target.frameId,
-          });
+    const operationTarget = (target: DriverTarget) =>
+      Target.make({ generation: issued.generation, ...target });
 
     /**
      * Native input, stamped on the host monotonic clock that stamps captured frames, around
      * the native command alone: admission and readiness are over before the clock is read.
      */
     const input = (
-      operation: BrowserOperation,
-      action: (driver: Driver, ticket: Ticket) => Promise<NativeInput>,
+      operation: "pointer-move" | "hover" | "wheel" | "press" | "type",
+      action: (driver: Driver, ticket: Ticket, target: DriverTarget) => Promise<NativeInput>,
+      operationOptions?: ExecutionOptions,
+      inputTarget?: (target: DriverTarget) => DriverTarget,
+      keys?: {
+        readonly count: number;
+        readonly countUnit: "unicode-codepoints" | "logical-strokes";
+      },
     ) =>
       run(
         operation,
-        async (driver, ticket) => {
+        async (driver, ticket, browserTarget) => {
           // What the input is sent to, read first: input may replace the document it reaches.
-          const target = operationTarget();
+          const target = operationTarget(inputTarget?.(browserTarget) ?? browserTarget);
           const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
-          const dispatched = await action(driver, ticket);
+          const dispatched = await action(driver, ticket, browserTarget);
 
-          return {
+          const receipt = {
             ...dispatched,
+            kind: operation,
             target,
             startedMonotonicNanos,
             completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
           };
+
+          ticket.recordInput?.(receipt, keys);
+
+          return receipt;
         },
-        true,
+        operationOptions,
       );
 
     /**
@@ -1025,297 +1507,485 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
      * navigation that fails after dispatch, fences the owner exactly as an interrupted mutation
      * always has. Interrupting a waiter on `completed` stops nothing; `stop` is the one way to.
      */
-    const startNavigation = Effect.fnUntraced(function* (
-      url: string,
-      timeoutMillis: number = limits.actionTimeoutMillis,
-    ) {
-      let active = true;
-      let dismissals = 0;
-      let beforeUnload = false;
-      let dismissalUnknown = false;
-      let rejected: BrowserError | undefined;
-      let reconsider = () => {};
+    const startNavigation = Effect.fnUntraced(
+      function* (
+        url: string,
+        timeoutMillis: number = limits.actionTimeoutMillis,
+        operationOptions?: ExecutionOptions,
+      ) {
+        const requestedTimeout = Math.min(
+          timeoutMillis,
+          operationOptions?.timeoutMillis ?? timeoutMillis,
+        );
 
-      const control: NavigationControl = {
-        identity: {},
-        beforeUnload: () => {
-          if (!active) return { dismissed: () => {} };
-          beforeUnload = true;
-          dismissals++;
-          let settled = false;
+        const loadingDeadline = Math.min(
+          Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + requestedTimeout,
+          owner.lifetimeDeadline,
+          operationOptions?.operationDeadline ?? Number.POSITIVE_INFINITY,
+        );
 
-          return {
-            dismissed: (confirmed) => {
-              if (settled || !active) return;
-              settled = true;
-              dismissals--;
-              if (!confirmed) dismissalUnknown = true;
-              reconsider();
-            },
-          };
-        },
-      };
+        let active = true;
+        let dismissals = 0;
+        let beforeUnload = false;
+        let dismissalUnknown = false;
+        let rejected: BrowserError | undefined;
+        let reconsider = () => {};
 
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          active = false;
-        }),
-      );
+        const control: NavigationControl = {
+          identity: {},
+          beforeUnload: () => {
+            if (!active) return { dismissed: () => {} };
+            beforeUnload = true;
+            dismissals++;
+            let settled = false;
 
-      const begun = yield* run(
-        "navigate",
-        async (driver, ticket) => {
-          const target = operationTarget();
+            return {
+              dismissed: (confirmed) => {
+                if (settled || !active) return;
+                settled = true;
+                dismissals--;
+                if (!confirmed) dismissalUnknown = true;
+                reconsider();
+              },
+            };
+          },
+        };
 
-          const loadingStarted = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
-          const remainingLifetime = owner.lifetimeDeadline - loadingStarted;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            active = false;
+          }),
+        );
 
-          if (remainingLifetime <= 0)
-            throw BrowserError.make({
-              operation: "navigate",
-              reason: Reasons.Expired.make({}),
-              outcome: "undispatched",
-            });
+        const begun = yield* run(
+          "navigate",
+          async (driver, ticket, browserTarget) => {
+            const target = operationTarget(browserTarget);
 
-          const loadingTimeout = Math.min(timeoutMillis, remainingLifetime);
+            const loadingStarted = Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000;
+            const remainingLifetime = owner.lifetimeDeadline - loadingStarted;
 
-          const navigation = await driver.beginNavigation(
-            url,
-            loadingTimeout,
-            ticket,
-            browserTarget,
-            control,
-          );
+            if (remainingLifetime <= 0)
+              throw BrowserError.make({
+                operation: "navigate",
+                reason: Reasons.Expired.make({}),
+                outcome: "undispatched",
+              });
 
-          // A continuation that outlived its permit takes no reservation: whatever gave that
-          // permit up has already decided this dispatch's outcome.
-          ticket.check();
+            const loadingTimeout = loadingDeadline - loadingStarted;
 
-          return {
-            target,
-            navigation,
-            reservation: owner.reserve(navigation.pageId),
-            recoveryDeadline: Math.min(
-              loadingStarted + loadingTimeout + 3000,
-              owner.lifetimeDeadline,
-            ),
-          };
-        },
-        true,
-      );
+            if (loadingTimeout <= 0)
+              throw BrowserError.make({
+                operation: "navigate",
+                reason: Reasons.Timeout.make({}),
+                outcome: "undispatched",
+              });
 
-      const { navigation, reservation } = begun;
-      const outcome = yield* Deferred.make<string, BrowserError>();
-      const timeoutRecovery = yield* Deferred.make<boolean>();
-      let stopDispatched = false;
-      let timedOut = false;
-      let deciding = false;
+            const navigation = await driver.beginNavigation(
+              url,
+              loadingTimeout,
+              ticket,
+              browserTarget,
+              control,
+            );
 
-      const failed = (reason: BrowserError["reason"]) =>
-        Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
+            // A continuation that outlived its permit takes no reservation: whatever gave that
+            // permit up has already decided this dispatch's outcome.
+            ticket.check();
 
-      /**
-       * A navigation has exactly one outcome, and whoever decides it first settles the
-       * reservation. It is released before anyone waiting is told, so the operation a waiter
-       * runs next is admitted rather than finding its own page still reserved.
-       */
-      const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
-        if (deciding || Deferred.isDoneUnsafe(outcome)) return;
-        deciding = true;
-        active = false;
-        reservation.settle(known ? "known" : "unknown");
-        Deferred.doneUnsafe(outcome, result);
-        Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
-        deciding = false;
-      };
+            const reservation = owner.reserve(navigation.pageId);
 
-      reconsider = () => {
-        if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
-        if (beforeUnload) {
-          // Both facts are required: this goto rejected and its exact dialog was dismissed.
-          decide(
-            dismissalUnknown ? Effect.fail(rejected) : failed(Reasons.Interrupted.make({})),
-            !dismissalUnknown,
-          );
-        } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
-          timedOut = true;
-          Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
-        } else {
-          decide(Effect.fail(rejected), false);
-        }
-      };
+            ticket.acknowledge?.();
 
-      navigation.settled.then(
-        (url) => {
-          if (!stopDispatched) decide(Effect.succeed(url), true);
-        },
-        (error: unknown) => {
-          if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
-
-          rejected = publicError(error, "navigate", {
-            reason: Reasons.Provider.make({}),
-            outcome: "unknown",
-          });
-          reconsider();
-        },
-      );
-
-      // A fence already cleared the reservation; this only releases anyone still waiting.
-      const aborted = () =>
-        decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), true);
-
-      reservation.signal.addEventListener("abort", aborted, {
-        once: true,
-      });
-      // Left unsettled, nothing knows what the browser did with it.
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), false);
-          reservation.signal.removeEventListener("abort", aborted);
-        }),
-      );
-
-      const stop = yield* makeNavigationStopCoordinator(
-        () => Deferred.isDoneUnsafe(outcome),
-        (onDispatch, retainSetup, deadline) =>
-          owner.guard(
-            "navigate-stop",
-            (ticket) =>
-              Effect.suspend(() =>
-                deadline !== undefined && stopSetupPending !== undefined
-                  ? Deferred.await(stopSetupPending)
-                  : Effect.void,
-              ).pipe(
-                Effect.andThen(
-                  native("navigate-stop", ticket, () =>
-                    navigation.stop(
-                      ticket,
-                      () => !Deferred.isDoneUnsafe(outcome),
-                      () => {
-                        onDispatch();
-                        stopDispatched = true;
-                      },
-                      () => {
-                        if (stopSetupPending !== undefined)
-                          throw BrowserError.make({
-                            operation: "navigate-stop",
-                            reason: Reasons.Busy.make({}),
-                            outcome: "undispatched",
-                          });
-                        const setup = Deferred.makeUnsafe<void>();
-
-                        stopSetupPending = setup;
-                        const retired = retainSetup();
-
-                        return () => {
-                          if (stopSetupPending === setup) stopSetupPending = undefined;
-                          Deferred.doneUnsafe(setup, Effect.void);
-                          retired();
-                        };
-                      },
-                    ),
-                  ),
-                ),
-                Effect.timeoutOrElse({
-                  duration: Math.min(3000, ticket.remainingMillis()),
-                  orElse: () =>
-                    Effect.fail(
-                      BrowserError.make({
-                        operation: "navigate-stop",
-                        reason: Reasons.Timeout.make({}),
-                        outcome: ticket.dispatched ? "unknown" : "undispatched",
-                      }),
-                    ),
-                }),
+            return {
+              target,
+              navigation,
+              reservation,
+              authority: pages.get(navigation.pageId),
+              recoveryDeadline: Math.min(
+                loadingStarted + loadingTimeout + 3000,
+                owner.lifetimeDeadline,
               ),
-            {
-              mutation: true,
-              mutationScope: () => ({ pageId: navigation.pageId }),
-              charge: false,
-              ...(deadline === undefined ? {} : { waitUntil: deadline }),
-            },
-          ),
-        () =>
-          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Interrupted.make({})), true),
-      );
+            };
+          },
+          { ...operationOptions, timeoutMillis: requestedTimeout },
+        );
 
-      // One operation-scoped supervisor, signalled only by the exact native timeout classifier.
-      // Its absolute deadline bounds joined public stops, permit wait and late setup retirement too.
-      yield* Deferred.await(timeoutRecovery).pipe(
-        Effect.flatMap((recover) =>
-          recover
-            ? stop.recover(begun.recoveryDeadline).pipe(
-                Effect.onExit((exit) =>
+        const { navigation, reservation } = begun;
+
+        const admission =
+          begun.authority?.admission ??
+          owner.pageAdmission(navigation.pageId, begun.target.generation);
+
+        const outcome = yield* Deferred.make<string, BrowserError>();
+        const timeoutRecovery = yield* Deferred.make<boolean>();
+        const unknown = yield* Deferred.make<void>();
+        let pendingDecision: Effect.Effect<string, BrowserError> | undefined;
+        let stopDispatched = false;
+        let timedOut = false;
+        let deciding = false;
+
+        const failed = (reason: BrowserError["reason"]) =>
+          Effect.fail(BrowserError.make({ operation: "navigate", reason, outcome: "unknown" }));
+
+        const settleUnknown = yield* Effect.cached(
+          Effect.suspend(() => {
+            const decision = pendingDecision;
+
+            if (decision === undefined || Deferred.isDoneUnsafe(outcome)) return Effect.void;
+
+            return owner
+              .contain(containment(navigation.pageId, begun.authority), begun.target.generation)
+              .pipe(
+                Effect.tap((contained) =>
                   Effect.sync(() => {
-                    if (Exit.isFailure(exit)) decide(failed(Reasons.Timeout.make({})), false);
+                    reservation.settle(contained._tag === "PageClosed" ? "known" : "unknown");
+                    Deferred.doneUnsafe(
+                      outcome,
+                      decision.pipe(
+                        Effect.mapError((error) =>
+                          BrowserError.make({
+                            ...error,
+                            outcome: "unknown",
+                            containment: contained,
+                          }),
+                        ),
+                      ),
+                    );
                   }),
                 ),
-              )
-            : Effect.void,
-        ),
-        Effect.ignoreCause,
-        Effect.forkScoped,
-      );
+                Effect.asVoid,
+              );
+          }),
+        ).pipe(Effect.map(Effect.uninterruptible));
 
-      return {
-        target: begun.target,
-        completed: Deferred.await(outcome),
         /**
-         * The browser's acknowledgement is the known outcome. Playwright's own promise is not
-         * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
+         * A navigation has exactly one outcome, and whoever decides it first settles the
+         * reservation. It is released before anyone waiting is told, so the operation a waiter
+         * runs next is admitted rather than finding its own page still reserved.
          */
-        stop: stop.stop,
-      };
-    });
+        const decide = (result: Effect.Effect<string, BrowserError>, known: boolean) => {
+          if (deciding || Deferred.isDoneUnsafe(outcome)) return;
+          deciding = true;
+          active = false;
+          if (known) {
+            reservation.settle("known");
+            Deferred.doneUnsafe(outcome, result);
+            deciding = false;
+          } else {
+            pendingDecision = result;
+            Deferred.doneUnsafe(unknown, Effect.void);
+          }
+          Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(false));
+        };
+
+        reconsider = () => {
+          if (!active || rejected === undefined || dismissals !== 0 || stopDispatched) return;
+          if (beforeUnload) {
+            // Both facts are required: this goto rejected and its exact dialog was dismissed.
+            decide(
+              dismissalUnknown ? Effect.fail(rejected) : failed(Reasons.Interrupted.make({})),
+              !dismissalUnknown,
+            );
+          } else if (navigation.mainFrame === true && rejected.reason._tag === "Timeout") {
+            timedOut = true;
+            Deferred.doneUnsafe(timeoutRecovery, Effect.succeed(true));
+          } else {
+            decide(Effect.fail(rejected), false);
+          }
+        };
+
+        navigation.settled.then(
+          (url) => {
+            if (!stopDispatched) decide(Effect.succeed(url), true);
+          },
+          (error: unknown) => {
+            if (stopDispatched || Deferred.isDoneUnsafe(outcome)) return;
+
+            rejected = publicError(error, "navigate", {
+              reason: Reasons.Provider.make({}),
+              outcome: "unknown",
+            });
+            reconsider();
+          },
+        );
+
+        // A fence already cleared the reservation; this only releases anyone still waiting.
+        const aborted = () =>
+          decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), true);
+
+        reservation.signal.addEventListener("abort", aborted, {
+          once: true,
+        });
+        // Left unsettled, nothing knows what the browser did with it.
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            decide(failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Stale.make({})), false);
+            reservation.signal.removeEventListener("abort", aborted);
+          }).pipe(Effect.andThen(settleUnknown)),
+        );
+        yield* Deferred.await(unknown).pipe(Effect.andThen(settleUnknown), Effect.forkScoped);
+
+        const stopTarget = { pageId: navigation.pageId, frameId: begun.target.frameId };
+
+        const stop = yield* makeNavigationStopCoordinator(
+          () => Deferred.isDoneUnsafe(outcome),
+          (onDispatch, retainSetup, deadline) =>
+            admit(
+              "navigate-stop",
+              (ticket) =>
+                Effect.suspend(() =>
+                  deadline !== undefined && admission.native.stopSetupPending !== undefined
+                    ? Deferred.await(admission.native.stopSetupPending)
+                    : Effect.void,
+                ).pipe(
+                  Effect.andThen(
+                    native("navigate-stop", ticket, () =>
+                      navigation.stop(
+                        ticket,
+                        () => !Deferred.isDoneUnsafe(outcome),
+                        () => {
+                          onDispatch();
+                          stopDispatched = true;
+                        },
+                        () => {
+                          const settle = owner.beginStopSetup(admission, activeConnection);
+
+                          if (settle === undefined)
+                            throw BrowserError.make({
+                              operation: "navigate-stop",
+                              reason: Reasons.Busy.make({}),
+                              outcome: "undispatched",
+                            });
+                          const retired = retainSetup();
+
+                          return () => {
+                            settle();
+                            retired();
+                          };
+                        },
+                      ),
+                    ),
+                  ),
+                  Effect.timeoutOrElse({
+                    duration: Math.min(3000, ticket.remainingMillis()),
+                    orElse: () =>
+                      Effect.fail(
+                        BrowserError.make({
+                          operation: "navigate-stop",
+                          reason: Reasons.Timeout.make({}),
+                          outcome: ticket.dispatched ? "unknown" : "undispatched",
+                        }),
+                      ),
+                  }),
+                ),
+              {
+                target: stopTarget,
+                generation: begun.target.generation,
+                ...(begun.authority === undefined ? {} : { authority: begun.authority }),
+                // Stopping is recovery: the lifecycle barrier and policy cleanup do not refuse it.
+                validate: (operation) =>
+                  checkTarget(operation, stopTarget, begun.target.generation, { recovery: true }),
+                ...(deadline === undefined ? {} : { waitUntil: deadline }),
+              },
+            ),
+          () =>
+            decide(
+              failed(timedOut ? Reasons.Timeout.make({}) : Reasons.Interrupted.make({})),
+              true,
+            ),
+        );
+
+        // One operation-scoped supervisor, signalled only by the exact native timeout classifier.
+        // Its absolute deadline bounds joined public stops, permit wait and late setup retirement too.
+        yield* Deferred.await(timeoutRecovery).pipe(
+          Effect.flatMap((recover) =>
+            recover
+              ? stop.recover(begun.recoveryDeadline).pipe(
+                  Effect.onExit((exit) =>
+                    Effect.sync(() => {
+                      if (Exit.isFailure(exit)) decide(failed(Reasons.Timeout.make({})), false);
+                    }),
+                  ),
+                )
+              : Effect.void,
+          ),
+          Effect.ignoreCause,
+          Effect.forkScoped,
+        );
+
+        return {
+          target: begun.target,
+          completed: Deferred.await(outcome),
+          /**
+           * The browser's acknowledgement is the known outcome. Playwright's own promise is not
+           * waited for: an aborted parse fires no DOMContentLoaded, so it only ever times out.
+           */
+          stop: stop.stop,
+        };
+      },
+      Effect.provideService(Clock.Clock, clock),
+    );
 
     return {
       startNavigation,
       // The same machinery, scoped to the call: leaving it unsettled fences, as it always has.
-      navigate: (url: string, timeoutMillis?: number) =>
+      navigate: (url: string, timeoutMillis?: number, operationOptions?: ExecutionOptions) =>
         Effect.scoped(
-          startNavigation(url, timeoutMillis).pipe(
+          startNavigation(url, timeoutMillis, operationOptions).pipe(
             Effect.flatMap((operation) => operation.completed),
           ),
         ),
-      readText: (selector?: string) =>
-        run("read-text", (driver, ticket) =>
-          driver.readText(selector, options.maxReturnedBytes, ticket, browserTarget),
+      readText: (selector?: string, operationOptions?: ExecutionOptions) =>
+        run(
+          "read-text",
+          (driver, ticket, browserTarget) =>
+            driver.readText(selector, options.maxReturnedBytes, ticket, browserTarget),
+          operationOptions,
         ),
-      click: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
+      click: (
+        target: DeferredElementTarget,
+        policy?: AdmissionPolicy,
+        operationOptions?: ExecutionOptions,
+      ) =>
         run(
           "click",
-          (driver, ticket) =>
-            driver.click(target, ticket, captureClickAt(operationTarget()), policy, browserTarget),
-          true,
+          (driver, ticket, browserTarget) =>
+            driver.click(
+              elementTarget(target),
+              ticket,
+              captureClickAt(
+                operationTarget(effectiveTarget(elementTarget(target), browserTarget)),
+                ticket,
+              ),
+              policy,
+              effectiveTarget(elementTarget(target), browserTarget),
+            ),
+          operationOptions,
         ),
-      fill: (target: string | ObservedElement, value: string, policy?: AdmissionPolicy) =>
+      fill: (
+        target: DeferredElementTarget,
+        value: string,
+        policy?: AdmissionPolicy,
+        operationOptions?: ExecutionOptions,
+      ) =>
         run(
           "fill",
-          (driver, ticket) => driver.fill(target, value, ticket, policy, browserTarget),
-          true,
+          (driver, ticket, browserTarget) =>
+            driver.fill(
+              elementTarget(target),
+              value,
+              ticket,
+              policy,
+              effectiveTarget(elementTarget(target), browserTarget),
+            ),
+          operationOptions,
         ),
-      scroll: (x: number, y: number) =>
-        run("scroll", (driver, ticket) => driver.scroll(x, y, ticket, browserTarget), true),
-      pointerMove: (to: NativePoint) =>
-        input("pointer-move", (driver, ticket) => driver.pointerMove(to, ticket, browserTarget)),
-      hover: (target: string | ObservedElement, policy?: AdmissionPolicy) =>
-        input("hover", (driver, ticket) => driver.hover(target, ticket, policy, browserTarget)),
-      wheel: (deltaX: number, deltaY: number, at?: NativePoint) =>
-        input("wheel", (driver, ticket) => driver.wheel(deltaX, deltaY, at, ticket, browserTarget)),
+      scroll: (x: number, y: number, operationOptions?: ExecutionOptions) =>
+        run(
+          "scroll",
+          async (driver, ticket, browserTarget) => {
+            const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+            const result = await driver.scroll(x, y, ticket, browserTarget);
+
+            if (ticket.performance === undefined)
+              ticket.recordScroll?.({
+                target: browserTarget,
+                x,
+                y,
+                startedMonotonicNanos,
+                completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+              });
+
+            return result;
+          },
+          operationOptions,
+        ),
+      pointerMove: (to: NativePoint, operationOptions?: ExecutionOptions) =>
+        input(
+          "pointer-move",
+          (driver, ticket, browserTarget) => driver.pointerMove(to, ticket, browserTarget),
+          operationOptions,
+        ),
+      hover: (
+        target: DeferredElementTarget,
+        policy?: AdmissionPolicy,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        input(
+          "hover",
+          (driver, ticket, browserTarget) =>
+            driver.hover(
+              elementTarget(target),
+              ticket,
+              policy,
+              effectiveTarget(elementTarget(target), browserTarget),
+            ),
+          operationOptions,
+          (browserTarget) => effectiveTarget(elementTarget(target), browserTarget),
+        ),
+      wheel: (
+        deltaX: number,
+        deltaY: number,
+        at?: NativePoint,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        input(
+          "wheel",
+          (driver, ticket, browserTarget) =>
+            driver.wheel(deltaX, deltaY, at, ticket, browserTarget),
+          operationOptions,
+        ),
       press: (
         key: string,
         modifiers: ReadonlyArray<KeyModifier>,
-        into?: string | ObservedElement,
+        into?: DeferredElementTarget,
         policy?: AdmissionPolicy,
+        operationOptions?: ExecutionOptions,
       ) =>
-        input("press", (driver, ticket) =>
-          driver.press(key, modifiers, into, ticket, policy, browserTarget),
+        input(
+          "press",
+          (driver, ticket, browserTarget) =>
+            driver.press(
+              key,
+              modifiers,
+              into === undefined ? undefined : elementTarget(into),
+              ticket,
+              policy,
+              effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+            ),
+          operationOptions,
+          (browserTarget) =>
+            effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+          { count: 1, countUnit: "logical-strokes" },
         ),
-      type: (text: string, into?: string | ObservedElement, policy?: AdmissionPolicy) =>
-        input("type", (driver, ticket) => driver.type(text, into, ticket, policy, browserTarget)),
-      screenshot: (full: boolean) =>
-        run("screenshot", (driver, ticket) =>
-          driver.screenshot(full, options.maxReturnedBytes, ticket, browserTarget),
+      type: (
+        text: string,
+        into?: DeferredElementTarget,
+        policy?: AdmissionPolicy,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        input(
+          "type",
+          (driver, ticket, browserTarget) =>
+            driver.type(
+              text,
+              into === undefined ? undefined : elementTarget(into),
+              ticket,
+              policy,
+              effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+            ),
+          operationOptions,
+          (browserTarget) =>
+            effectiveTarget(into === undefined ? undefined : elementTarget(into), browserTarget),
+          { count: codePointCount(text), countUnit: "unicode-codepoints" },
+        ),
+      screenshot: (full: boolean, operationOptions?: ExecutionOptions) =>
+        run(
+          "screenshot",
+          (driver, ticket, browserTarget) =>
+            driver.screenshot(full, options.maxReturnedBytes, ticket, browserTarget),
+          operationOptions,
         ),
     };
   };
@@ -1343,7 +2013,18 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
             Effect.flatMap((url) => connectNative(url, options.driver)),
             Effect.andThen(
               native("connect", ticket, async () => {
-                getDriver().selected();
+                initialTarget = getDriver().selected();
+                const targetId = await getDriver().selectedTargetId();
+
+                ticket.check();
+                initialInfo = {
+                  pageId: initialTarget.pageId,
+                  targetId,
+                  url: "",
+                  title: "",
+                  selected: true,
+                };
+                initialAuthority = registerPage(initialInfo, initialTarget, ticket.generation);
               }),
             ),
             Effect.tap(() =>
@@ -1373,234 +2054,325 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return port;
   };
 
-  const pinned = (resolve: (driver: Driver, ticket: Ticket) => Promise<DriverTarget>) =>
-    owner.guard(
-      "target",
-      (ticket) =>
-        native("target", ticket, async () => {
-          const value = await resolve(getDriver(), ticket);
+  const makePageControls = (authority: PageRecord, target: DriverTarget, generation: number) => {
+    const frameAuthority = authority.frames.get(target.frameId);
 
-          ticket.check();
+    // Validation failures keep the operation the caller asked for.
+    const validate = (operation: BrowserOperation) =>
+      Effect.suspend(() =>
+        authority.phase !== "open" || frameAuthority?.detached === true
+          ? Effect.fail(unavailable(operation, authority))
+          : checkTarget(operation, target, generation),
+      );
 
-          return {
-            target: Target.make({ generation: ticket.generation, ...value }),
-            operations: makeOperations({ generation: ticket.generation, target: value }),
-          };
-        }),
-      { charge: false },
-    );
+    /** The issued capability every operation on it acts through. */
+    const bound = { validate, target, generation, authority };
 
-  const retain = owner.guard(
-    "target",
-    () =>
-      Effect.try({
-        try: () => {
-          const target = capture.target();
+    const targetData = (actual: DriverTarget = target) => Target.make({ generation, ...actual });
 
-          return makeOperations({
-            generation: target.generation,
-            selection: owner.state.selection,
-          });
-        },
-        catch: (error) =>
-          publicError(error, "target", {
-            reason: Reasons.Closed.make({}),
-            outcome: "undispatched",
-          }),
-      }),
-    { charge: false },
-  );
-
-  const controls = {
-    implementation: options.implementation,
-    status: owner.status,
-    diagnostics: owner.diagnostics,
-    pageControl: {
-      state: (page: PageInfo) =>
-        nativeOperation("page-state", (_driver, ticket) => execution().state(page, ticket), {
-          charge: false,
-        }),
-      suspend: (page: PageInfo) =>
-        nativeOperation("page-suspend", (_driver, ticket) => execution().suspend(page, ticket), {
-          charge: false,
-          preflight: waitFree("page-suspend", page.pageId),
-        }),
-      resume: (receipt: PageSuspension) =>
-        nativeOperation("page-resume", (_driver, ticket) => execution().resume(receipt, ticket), {
-          charge: false,
-          preflight: waitFree("page-resume", receipt.pageId),
-        }),
-    },
-    reference: ref,
-    capture,
-    operations: makeOperations(),
-    retain,
-    target: readSelected,
-    cleanupResult,
-    close: release.pipe(Effect.tap(() => retireControl)),
-    closeChecked: acquired.closeChecked.pipe(Effect.onExit(() => retireControl)),
-    observe: (reading: Reading = { scope: "document" }) =>
-      textBudget("observe", reading.maxTextBytes).pipe(
-        Effect.flatMap((bytes) =>
-          owner.guard(
-            "observe",
-            (ticket) =>
-              observeInside(
-                ticket,
-                bytes,
-                reading.maxControls ?? 32,
-                true,
-                reading.scope,
-                reading.match,
-              ),
-            { preflight: waitFree("observe") },
-          ),
+    const controls = {
+      resolve: (descriptor: Descriptor, guard: ResolveGuard, operationOptions?: ExecutionOptions) =>
+        execute(
+          "resolve",
+          (driver, ticket) => driver.resolveDescriptor(descriptor, ticket, target, guard),
+          { ...bound, ...operationOptions },
         ),
-      ),
-    /**
-     * Passive: not a mutation, so the action observation and the selection are left exactly as
-     * they were. A held page is refused rather than woken to be read.
-     */
-    checkpoint: (reading: Omit<Reading, "scope"> & { readonly picture: boolean }) =>
-      textBudget("checkpoint", reading.maxTextBytes).pipe(
-        Effect.flatMap((bytes) =>
-          nativeOperation(
-            "checkpoint",
-            async (driver, ticket) => {
-              const target = capture.target();
-              const revision = owner.state.revision;
-              const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
+      settled: (
+        settle: SettledOptions,
+        operationOptions?: ExecutionOptions,
+      ): Effect.Effect<SettledEvidence, BrowserError> =>
+        Effect.suspend(() => {
+          let evidence: SettledEvidence | undefined;
 
-              const sampled = await driver.checkpoint(
-                bytes,
-                reading.maxControls ?? 32,
-                reading.picture ? options.maxReturnedBytes : undefined,
-                ticket,
-              );
-
-              return {
-                ...sampled,
-                target,
-                revision,
-                startedMonotonicNanos,
-                completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
-              };
+          return wait(
+            async (driver, ticket, resolved, operationTicket) => {
+              evidence = await driver.settled(settle, ticket, resolved);
+              operationTicket.recordSettled?.(evidence, resolved);
             },
-            { charge: "host-read" },
+            settle.withinMillis,
+            { ...bound, ...operationOptions },
+            "settled",
+          ).pipe(
+            Effect.flatMap(() =>
+              evidence === undefined
+                ? Effect.fail(
+                    BrowserError.make({
+                      operation: "settled",
+                      reason: Reasons.Incomplete.make({}),
+                      outcome: "undispatched",
+                    }),
+                  )
+                : Effect.succeed(evidence),
+            ),
+          );
+        }),
+      pageControl: {
+        state: (page: PageInfo, operationOptions?: ExecutionOptions) =>
+          execute("page-state", (_driver, ticket) => execution().state(page, ticket), {
+            ...bound,
+            ...operationOptions,
+            pageId: page.pageId,
+          }),
+        suspend: (page: PageInfo, operationOptions?: ExecutionOptions) =>
+          execute("page-suspend", (_driver, ticket) => execution().suspend(page, ticket), {
+            ...bound,
+            ...operationOptions,
+            pageId: page.pageId,
+          }),
+        resume: (receipt: PageSuspension, operationOptions?: ExecutionOptions) =>
+          execute("page-resume", (_driver, ticket) => execution().resume(receipt, ticket), {
+            ...bound,
+            ...operationOptions,
+            pageId: receipt.pageId,
+          }),
+      },
+      operations: makeOperations(bound),
+      observe: (reading: Reading = { scope: "document" }, operationOptions?: ExecutionOptions) =>
+        textBudget("observe", reading.maxTextBytes).pipe(
+          Effect.flatMap((bytes) =>
+            admit(
+              "observe",
+              (ticket) =>
+                observeInside(
+                  ticket,
+                  bytes,
+                  reading.maxControls ?? 32,
+                  reading.scope,
+                  reading.match,
+                  target,
+                ),
+              { ...bound, ...operationOptions },
+            ),
           ),
         ),
-      ),
-    controlFacts: (reference: ObservedElement) =>
-      nativeOperation("control-facts", (driver, ticket) => driver.controlFacts(reference, ticket), {
-        charge: "host-read",
-      }),
-    selectOption: (reference: ObservedElement, options: SelectOptions, policy?: AdmissionPolicy) =>
-      nativeOperation(
-        "select-option",
-        (driver, ticket) => driver.selectOption(reference, options, ticket, policy),
-        { mutation: true },
-      ),
-    /**
-     * Each step is its own admitted, charged mutation that leaves the observation usable for the
-     * next one; anything else that changes the page still retires it. The form ends at the first
-     * refusal, and whatever it dispatched retires the observation when it ends, however it ends.
-     */
-    fillForm: (request: FillFormRequest, policy: AdmissionPolicy | undefined, form: FormSettings) =>
-      Effect.suspend(() => {
-        // The page whose observation the steps kept usable, known once one of them dispatched.
-        let pageId: string | undefined;
+      /**
+       * Passive: not a mutation, so the action observation and the selection are left exactly as
+       * they were. A held page is refused rather than woken to be read.
+       */
+      checkpoint: (
+        reading: Omit<Reading, "scope"> & { readonly picture: boolean },
+        operationOptions?: ExecutionOptions,
+      ) =>
+        textBudget("checkpoint", reading.maxTextBytes).pipe(
+          Effect.flatMap((bytes) =>
+            execute(
+              "checkpoint",
+              async (driver, ticket) => {
+                const capturedTarget = targetData();
+                const revision = owner.revision(capturedTarget.pageId);
+                const startedMonotonicNanos = clock.monotonicTimeNanosUnsafe();
 
-        const reference = (elementId: string): ObservedElement => ({
-          observationId: request.observationId,
-          elementId,
-        });
+                const sampled = await driver.checkpoint(
+                  bytes,
+                  reading.maxControls ?? 32,
+                  reading.picture ? options.maxReturnedBytes : undefined,
+                  ticket,
+                  target,
+                );
 
-        const kept = (): ObservationScope => {
-          pageId ??= getDriver().selected().pageId;
+                return {
+                  ...sampled,
+                  target: capturedTarget,
+                  revision,
+                  startedMonotonicNanos,
+                  completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
+                };
+              },
+              { ...bound, ...operationOptions },
+            ),
+          ),
+        ),
+      controlFacts: (reference: ObservedElement, operationOptions?: ExecutionOptions) =>
+        execute(
+          "control-facts",
+          (driver, ticket) => driver.controlFacts(reference, ticket, target),
+          { ...bound, ...operationOptions },
+        ),
+      selectOption: (
+        reference: ObservedElement | ResolvedElement | (() => ObservedElement | ResolvedElement),
+        options: NativeSelectOptions | (() => NativeSelectOptions),
+        policy?: AdmissionPolicy,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        execute(
+          "select-option",
+          (driver, ticket) => {
+            const ref = typeof reference === "function" ? reference() : reference;
 
-          return "none";
-        };
-
-        const body = Effect.gen(function* () {
-          const fields: Array<{
-            elementId: string;
-            status: "set" | "unchanged";
-            input?: InputReceipt;
-          }> = [];
-
-          const states: Array<string | undefined> = [];
-          let url = "";
-
-          const finish = (submitted: boolean): FormOutcome => ({ fields, submitted, url });
-
-          const stop = (
-            stage: "field" | "verify" | "submit",
-            error: BrowserError,
-            elementId?: string,
-          ): FormOutcome => ({
-            ...finish(false),
-            stopped: { stage, error, ...(elementId === undefined ? {} : { elementId }) },
-          });
-
-          for (const field of request.fields) {
-            const exit = yield* Effect.exit(
-              nativeOperation(
-                "fill-form",
-                (driver, ticket) =>
-                  driver.formStep(
-                    reference(field.elementId),
-                    field,
-                    ticket,
-                    policy,
-                    form.settleMillis,
-                    captureClickAt(capture.target()),
-                  ),
-                { mutation: true, mutationScope: kept },
-              ),
+            return driver.selectOption(
+              ref,
+              typeof options === "function" ? options() : options,
+              ticket,
+              policy,
+              effectiveTarget(ref, target),
             );
+          },
+          { ...bound, ...operationOptions },
+        ),
+      /**
+       * Each step is its own admitted, charged mutation that leaves the observation usable for the
+       * next one; anything else that changes the page still retires it. The form ends at the first
+       * refusal, and whatever it dispatched retires the observation when it ends, however it ends.
+       */
+      fillForm: (
+        form: FormSteps,
+        policy: AdmissionPolicy | undefined,
+        settings: FormSettings,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        Effect.suspend(() => {
+          // Each field, the verification read and the submit is its own admitted action, so each
+          // captures its own action and queue deadlines when requested. A bound the caller already
+          // captured, such as a plan step's, still caps every one of them.
+          const formOptions: ExecutionOptions = { ...operationOptions };
 
-            if (Exit.isFailure(exit)) {
-              const error = Cause.findErrorOption(exit.cause);
+          // The page whose observation the steps kept usable, known once one of them dispatched.
+          let pageId: string | undefined;
 
-              // Interruption and defects keep their own meaning. A form that has completed no
-              // step fails exactly as its first step did.
-              if (Option.isNone(error) || fields.length === 0)
-                return yield* Effect.failCause(exit.cause);
+          const body = Effect.gen(function* () {
+            const fields: Array<{
+              elementId: string;
+              status: "set" | "unchanged";
+              input?: InputReceipt;
+            }> = [];
 
-              return stop("field", error.value, field.elementId);
-            }
-            const step = exit.value;
+            const states: Array<string | undefined> = [];
+            let url = "";
 
-            fields.push({
-              elementId: field.elementId,
-              status: step.status,
-              ...(step.input === undefined ? {} : { input: step.input }),
+            const finish = (submitted: boolean): FormOutcome => ({ fields, submitted, url });
+
+            const stop = (
+              stage: "field" | "verify" | "submit",
+              error: BrowserError,
+              elementId?: string,
+            ): FormOutcome => ({
+              ...finish(false),
+              stopped: { stage, error, ...(elementId === undefined ? {} : { elementId }) },
             });
-            states.push(step.state);
-            url = step.url;
-            if (!step.reached)
-              return stop(
-                "field",
-                BrowserError.make({
-                  operation: "fill-form",
-                  reason: Reasons.Failed.make({}),
-                  outcome: "rejected",
-                }),
-                field.elementId,
-              );
-          }
 
-          if (form.verify) {
-            // Not charged, like revalidation: it sends no input and reads nodes already issued.
+            for (const [fieldIndex, step] of form.fields.entries()) {
+              formOptions.phase?.("Field", fieldIndex);
+
+              const exit = yield* Effect.exit(
+                execute(
+                  "fill-form",
+                  async (driver, ticket) => {
+                    try {
+                      const reference = step.reference();
+
+                      return await driver.formStep(
+                        reference,
+                        step.field(),
+                        ticket,
+                        policy,
+                        settings.settleMillis,
+                        captureClickAt(targetData(effectiveTarget(reference, target)), ticket),
+                        effectiveTarget(reference, target),
+                      );
+                    } finally {
+                      if (ticket.dispatched) pageId ??= target.pageId;
+                    }
+                  },
+                  {
+                    ...bound,
+                    ...formOptions,
+                    ...(form.retainObservation ? { retainObservation: true } : {}),
+                  },
+                ),
+              );
+
+              if (Exit.isFailure(exit)) {
+                const error = Cause.findErrorOption(exit.cause);
+
+                // Interruption and defects keep their own meaning. A form that has completed no
+                // step fails exactly as its first step did.
+                if (Option.isNone(error) || fields.length === 0)
+                  return yield* Effect.failCause(exit.cause);
+
+                return stop("field", error.value, step.reportedId);
+              }
+              const done = exit.value;
+
+              fields.push({
+                elementId: step.reportedId,
+                status: done.status,
+                ...(done.input === undefined ? {} : { input: done.input }),
+              });
+              states.push(done.state);
+              url = done.url;
+              if (!done.reached)
+                return stop(
+                  "field",
+                  BrowserError.make({
+                    operation: "fill-form",
+                    reason: Reasons.Failed.make({}),
+                    outcome: "rejected",
+                  }),
+                  step.reportedId,
+                );
+            }
+
+            if (settings.verify) {
+              formOptions.phase?.("Verification");
+
+              // Not charged, like revalidation: it sends no input and reads nodes already issued.
+              const exit = yield* Effect.exit(
+                execute(
+                  "fill-form",
+                  (driver, ticket) =>
+                    driver.formState(
+                      form.fields.map((step) => step.reference()),
+                      ticket,
+                      target,
+                    ),
+                  { ...bound, ...formOptions, readOnly: true },
+                ),
+              );
+
+              if (Exit.isFailure(exit)) {
+                const error = Cause.findErrorOption(exit.cause);
+
+                if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
+
+                return stop("verify", error.value);
+              }
+              for (const [index, step] of form.fields.entries()) {
+                const expected = states[index];
+
+                if (expected === undefined || exit.value[index] !== expected)
+                  return stop(
+                    "verify",
+                    BrowserError.make({
+                      operation: "fill-form",
+                      reason: Reasons.Stale.make({}),
+                      outcome: "undispatched",
+                    }),
+                    step.reportedId,
+                  );
+              }
+            }
+
+            const submit = form.submit;
+
+            if (submit === undefined) return finish(false);
+
+            formOptions.phase?.("Submit");
+
             const exit = yield* Effect.exit(
-              nativeOperation(
+              execute(
                 "fill-form",
-                (driver, ticket) =>
-                  driver.formState(
-                    request.fields.map((field) => reference(field.elementId)),
+                (driver, ticket) => {
+                  const reference = submit.reference();
+
+                  return driver.formSubmit(
+                    reference,
                     ticket,
-                  ),
-                { charge: false },
+                    captureClickAt(targetData(effectiveTarget(reference, target)), ticket),
+                    policy,
+                    effectiveTarget(reference, target),
+                  );
+                },
+                { ...bound, ...formOptions },
               ),
             );
 
@@ -1609,297 +2381,857 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
               if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
 
-              return stop("verify", error.value);
+              return stop("submit", error.value, submit.reportedId);
             }
-            for (const [index, field] of request.fields.entries()) {
-              const expected = states[index];
+            url = exit.value.url;
 
-              if (expected === undefined || exit.value[index] !== expected)
-                return stop(
-                  "verify",
-                  BrowserError.make({
-                    operation: "fill-form",
-                    reason: Reasons.Stale.make({}),
-                    outcome: "undispatched",
-                  }),
-                  field.elementId,
-                );
-            }
-          }
+            return { ...finish(true), submitInput: exit.value.input };
+          });
 
-          if (request.submit === undefined) return finish(false);
-          const submit = request.submit;
-
-          const exit = yield* Effect.exit(
-            nativeOperation(
-              "fill-form",
-              (driver, ticket) =>
-                driver.formSubmit(
-                  reference(submit),
-                  ticket,
-                  captureClickAt(capture.target()),
-                  policy,
-                ),
-              { mutation: true },
+          // The steps kept the observation usable for each other only. A submit that dispatched
+          // has already retired it, as every other mutation does.
+          return body.pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (pageId !== undefined) owner.invalidate("observation", { pageId });
+              }),
             ),
           );
+        }),
+      /** Not charged: it sends no input and reads one node the caller was already given. */
+      revalidate: (reference: ObservedElement, operationOptions?: ExecutionOptions) =>
+        execute("revalidate", (driver, ticket) => driver.revalidate(reference, ticket, target), {
+          ...bound,
+          ...operationOptions,
+        }),
+      // Inspecting readiness is not an action: it charges nothing and mutates nothing.
+      readiness: (operationOptions?: ExecutionOptions) =>
+        execute("ready", (driver, ticket) => driver.documentReadiness(ticket, target), {
+          ...bound,
+          ...operationOptions,
+        }),
+      describe: (operationOptions?: ExecutionOptions) =>
+        execute("describe-page", (driver, ticket) => driver.describePage(authority.info, ticket), {
+          ...bound,
+          ...operationOptions,
+        }),
+      listFrames: (operationOptions?: ExecutionOptions) =>
+        execute("list-frames", (driver, ticket) => driver.listFrames(ticket, authority.info), {
+          ...bound,
+          ...operationOptions,
+        }),
+      close: (operationOptions?: ExecutionOptions) =>
+        Effect.suspend(() => {
+          const page = authority.info;
 
-          if (Exit.isFailure(exit)) {
-            const error = Cause.findErrorOption(exit.cause);
+          const deadline = Math.min(
+            Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 +
+              Math.min(
+                operationOptions?.timeoutMillis ?? limits.actionTimeoutMillis,
+                limits.actionTimeoutMillis,
+              ),
+            owner.lifetimeDeadline,
+          );
 
-            if (Option.isNone(error)) return yield* Effect.failCause(exit.cause);
+          // Closure has reserved recovery admission, which neither a policy cleanup nor a
+          // lifecycle barrier refuses.
+          const stale = () => unavailable("close-page", authority, { recovery: true });
 
-            return stop("submit", error.value, submit);
-          }
-          url = exit.value.url;
+          const checked = Effect.suspend(() =>
+            generation !== owner.state.generation || pages.get(page.pageId) !== authority
+              ? Effect.fail(stale())
+              : Effect.void,
+          );
 
-          return { ...finish(true), submitInput: exit.value.input };
+          const joined = (attempt: Deferred.Deferred<boolean>) =>
+            within(Deferred.await(attempt), deadline, () =>
+              BrowserError.make({
+                operation: "close-page",
+                reason: Reasons.Timeout.make({}),
+                outcome: "undispatched",
+              }),
+            ).pipe(
+              Effect.flatMap((closed) =>
+                closed
+                  ? Effect.void
+                  : owner.contain(containment(page.pageId, authority), generation).pipe(
+                      Effect.flatMap((containment) =>
+                        Effect.fail(
+                          BrowserError.make({
+                            operation: "close-page",
+                            reason: Reasons.Provider.make({}),
+                            outcome: "unknown",
+                            containment,
+                          }),
+                        ),
+                      ),
+                    ),
+              ),
+            );
+
+          if (authority.attempt !== undefined)
+            return checked.pipe(Effect.andThen(joined(authority.attempt)));
+
+          return admit(
+            "close-page",
+            (ticket) =>
+              Effect.gen(function* () {
+                yield* native("close-page", ticket, () => getDriver().resolvePage(page, ticket));
+
+                if (authority.attempt !== undefined) return yield* joined(authority.attempt);
+                const attempt = Deferred.makeUnsafe<boolean>();
+
+                return yield* native("close-page", ticket, async () => {
+                  try {
+                    await getDriver().closePage(page, ticket, () => {
+                      pages.attempting(authority, attempt);
+                      revokePage(page.pageId, ticket.signal);
+                    });
+                    pageClosed(page.pageId);
+                  } catch (error) {
+                    if (authority.attempt === attempt)
+                      Deferred.doneUnsafe(attempt, Effect.succeed(authority.phase === "closed"));
+                    throw error;
+                  }
+                });
+              }),
+            {
+              ...bound,
+              ...operationOptions,
+              // A paused page may still be closed; only its registration must be current.
+              validate: () => checked,
+              waitUntil: deadline,
+              preflight: Effect.suspend(() =>
+                authority.phase !== "open" && authority.phase !== "paused"
+                  ? Effect.fail(stale())
+                  : Effect.void,
+              ),
+            },
+          );
+        }).pipe(Effect.provideService(Clock.Clock, clock)),
+      resize: (viewport: Viewport, operationOptions?: ExecutionOptions) =>
+        execute("resize", (driver, ticket) => driver.resize(viewport, ticket, target), {
+          ...bound,
+          ...operationOptions,
+        }),
+      waitFor: (
+        selector: string,
+        state: "visible" | "hidden" | "attached" | "detached",
+        operationOptions?: ExecutionOptions,
+      ) =>
+        wait(
+          (driver, ticket, resolved) => driver.waitFor(selector, state, ticket, resolved),
+          undefined,
+          { ...bound, ...operationOptions },
+        ),
+      waitForElement: (request: WaitForElementRequest, operationOptions?: ExecutionOptions) =>
+        wait(
+          (driver, ticket, target) =>
+            driver.waitForElement(request.reference, request.state, ticket, target),
+          request.timeoutMillis,
+          { ...bound, ...operationOptions },
+        ),
+      clickAndWait: (element: string | ObservedElement, operationOptions?: ExecutionOptions) =>
+        execute(
+          "click-and-wait",
+          (driver, ticket) =>
+            driver.clickAndWait(element, ticket, captureClickAt(targetData(), ticket), target),
+          { ...bound, ...operationOptions },
+        ),
+      clickForDownload: (element: string | ObservedElement, operationOptions?: ExecutionOptions) =>
+        execute(
+          "download-action",
+          (driver, ticket) => driver.clickForDownload(element, ticket, target),
+          { ...bound, ...operationOptions },
+        ),
+      selectFiles: (
+        element: string | ObservedElement,
+        files: ReadonlyArray<NativeFileSelection>,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        execute(
+          "select-files",
+          (driver, ticket) => driver.selectFiles(element, files, ticket, target),
+          { ...bound, ...operationOptions },
+        ),
+      clickForFileSelection: (
+        element: string | ObservedElement,
+        files: ReadonlyArray<NativeFileSelection>,
+        operationOptions?: ExecutionOptions,
+      ) =>
+        execute(
+          "file-chooser",
+          (driver, ticket) => driver.clickForFileSelection(element, files, ticket, target),
+          { ...bound, ...operationOptions },
+        ),
+      validate,
+    };
+
+    // A plan step's own needs on this page, each admitted under its operation's policy.
+    const executeStep = makePlanSteps({
+      target,
+      chargeHostRead: owner.chargeHostRead,
+      controls: {
+        operations: controls.operations,
+        selectOption: controls.selectOption,
+        settled: controls.settled,
+        fillForm: controls.fillForm,
+        checkpoint: controls.checkpoint,
+        scrollTo: (element, operationOptions) =>
+          execute(
+            "scroll",
+            (driver, ticket) => {
+              const ref = element();
+
+              return driver.scrollTo(ref, ticket, ref.target);
+            },
+            { ...bound, ...operationOptions },
+          ),
+        pause: (milliseconds, operationOptions) =>
+          admit(
+            "wait",
+            (ticket) =>
+              native("wait", ticket, async () => {
+                await prepare("wait", ticket, target, { document: false });
+                await operationOptions.beforeNative?.(getDriver(), ticket);
+              }).pipe(
+                Effect.andThen(Effect.sleep(milliseconds)),
+                Effect.andThen(Effect.sync(() => ticket.check())),
+              ),
+            { ...bound, ...operationOptions },
+          ),
+        waitFor: (element, state, timeoutMillis, operationOptions) =>
+          wait(
+            (driver, ticket) => {
+              const ref = element();
+
+              return driver.waitForElement(ref, state, ticket, ref.target);
+            },
+            timeoutMillis,
+            { ...bound, ...operationOptions },
+          ),
+        expectations: (conditions, operationOptions) =>
+          execute(
+            "run",
+            async (driver, ticket) => {
+              await driver.expectations(conditions, ticket, target);
+            },
+            { ...bound, ...operationOptions },
+          ),
+      },
+    });
+
+    const plans = makePlanExecution({
+      clock,
+      validate: validate("run"),
+      lifetimeDeadline: owner.lifetimeDeadline,
+      actionTimeoutMillis: limits.actionTimeoutMillis,
+      newId: uuid,
+      newSeed: crypto.randomInt,
+      publish: () => {
+        const releaseDomain = domain.retirement.retain();
+        const releasePage = authority.retirement.retain();
+
+        return {
+          append: planPublisher(domain.store, { generation, ...target, document: null }),
+          release: () => {
+            releasePage();
+            releaseDomain();
+          },
+        };
+      },
+      retired: Effect.suspend(() =>
+        Effect.raceFirst(domain.retirement.requested, authority.retirement.requested),
+      ),
+      reserve: Effect.suspend(() => {
+        const pageId = target.pageId;
+        const count = pageRuns.get(pageId) ?? 0;
+
+        if (activeRuns >= 128 || count >= 32)
+          return Effect.fail(
+            BrowserError.make({
+              operation: "run",
+              reason: Reasons.Limit.make({
+                dimension: "runs",
+                maximum: count >= 32 ? 32 : 128,
+                observed: count >= 32 ? count : activeRuns,
+              }),
+              outcome: "undispatched",
+            }),
+          );
+        activeRuns++;
+        pageRuns.set(pageId, count + 1);
+        let released = false;
+
+        return Effect.succeed(() => {
+          if (released) return;
+          released = true;
+          activeRuns--;
+          const remaining = (pageRuns.get(pageId) ?? 1) - 1;
+
+          if (remaining === 0) pageRuns.delete(pageId);
+          else pageRuns.set(pageId, remaining);
+        });
+      }),
+      executeStep,
+    });
+
+    return { ...controls, plans };
+  };
+
+  const registerPage = (info: PageInfo, target: DriverTarget, generation: number) => {
+    let page = pages.get(info.pageId);
+
+    if (page === undefined || page.identity.generation !== generation) {
+      const identity = Target.make({ generation, ...target });
+      const store = domain.store;
+      let terminal: Terminal | null = null;
+
+      const retirement = makeRetirement((reason) => {
+        // Native closure can request retirement before the original containment receipt settles.
+        // Logical owners retain this record until that confirmed outcome is available.
+        const terminalReason = page?.containment._tag === "PageClosed" ? "contained" : reason;
+
+        const result = publish(store, {
+          target: { ...identity, document: null },
+          correlation: null,
+          event: { _tag: "Terminal", scope: "page", reason: terminalReason },
         });
 
-        // The steps kept the observation usable for each other only. A submit that dispatched
-        // has already retired it, as every other mutation does.
-        return body.pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (pageId !== undefined) owner.invalidate("observation", { pageId });
-            }),
-          ),
+        terminal = Object.freeze({
+          cursor:
+            result._tag === "Appended"
+              ? Object.freeze({
+                  storeId: result.event.storeId,
+                  clockId: result.event.clockId,
+                  sequence: result.event.sequence,
+                })
+              : store.cursor(),
+          at: result._tag === "Appended" ? result.event.at : store.now(),
+          scope: "page",
+          reason: terminalReason,
+        });
+      });
+
+      page = pages.add({
+        identity,
+        admission: owner.pageAdmission(info.pageId, generation),
+        info,
+        paused: owner.paused(info.pageId),
+        store,
+        retirement,
+        terminal: () => terminal,
+      });
+    }
+    const record = page;
+
+    return {
+      record,
+      timeline: journal.forPage(
+        record.store,
+        info.pageId,
+        record.identity.generation,
+        () => record.terminal,
+      ),
+      controls: makePageControls(record, target, generation),
+      status: Effect.sync((): PageStatus =>
+        Object.freeze({
+          identity: Object.freeze({ ...record.identity }),
+          phase:
+            record.phase === "closed"
+              ? "closed"
+              : record.identity.generation !== owner.state.generation
+                ? "stale"
+                : record.phase,
+          containment: Object.freeze({ ...record.containment }),
+          admission: owner.admissionSnapshot(record.admission),
+        }),
+      ),
+    };
+  };
+
+  /**
+   * Issuing authenticates a page and registers it; it is not work on that page. It takes the
+   * registry permit, so it never waits for, or is refused by, the page's own operations.
+   */
+  const page = (info: PageInfo, operationOptions?: ExecutionOptions) =>
+    execute(
+      "target",
+      async (driver, ticket) => {
+        const target = await driver.resolvePage(info, ticket);
+
+        ticket.check();
+
+        return registerPage(info, target, ticket.generation);
+      },
+      operationOptions,
+    );
+
+  // A generation change retires every issued capability. Rebuild from the same live connection
+  // while the lifecycle permit is still held, before new operations can be admitted.
+  const refreshPages = (ticket: Ticket, restore = false) =>
+    native("list-pages", ticket, async () => {
+      const current = getDriver();
+      const inventory = await current.listPages(ticket);
+      const resolved = [];
+
+      for (const info of inventory) {
+        const target = await current.resolvePage(info, ticket);
+
+        ticket.check();
+        resolved.push({ info, target });
+      }
+      ticket.check();
+
+      const fresh = Inventory.make({
+        generation: ticket.generation,
+        pages: Object.freeze(inventory.map((info) => Object.freeze({ ...info }))),
+      });
+
+      for (const { info, target } of resolved) {
+        if (restore) {
+          restorePageAuthority(info.pageId);
+        }
+        registerPage(info, target, ticket.generation);
+      }
+
+      return Object.freeze(fresh);
+    });
+
+  const listPages = (operationOptions?: ExecutionOptions) =>
+    admit(
+      "list-pages",
+      (ticket) => refreshPages(ticket).pipe(Effect.map((inventory) => inventory.pages)),
+      operationOptions,
+    );
+
+  const initialPage = () => {
+    if (initialAuthority === undefined)
+      throw BrowserError.make({
+        operation: "target",
+        reason: Reasons.Closed.make({}),
+        outcome: "undispatched",
+      });
+
+    return initialAuthority;
+  };
+
+  /**
+   * Waits until `drained` holds, or fails `Timeout/undispatched` at the bound. The owner signals
+   * settled work; driver and binding cleanup is rechecked meanwhile.
+   */
+  const drainAdmitted = (operation: BrowserOperation, ticket: Ticket, drained: () => boolean) =>
+    Effect.gen(function* () {
+      while (!drained()) {
+        yield* owner.nextChange.pipe(
+          Effect.timeoutOrElse({ duration: Duration.millis(25), orElse: () => Effect.void }),
         );
+        // A settlement can complete the signal synchronously; decide on a later turn.
+        yield* Effect.yieldNow;
+      }
+    }).pipe((drain) =>
+      within(
+        drain,
+        Math.min(ticket.deadline, Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000 + 3000),
+        () =>
+          BrowserError.make({
+            operation,
+            reason: Reasons.Timeout.make({}),
+            outcome: "undispatched",
+          }),
+      ),
+    );
+
+  const lifecycle = <A, E, R>(
+    operation: BrowserOperation,
+    supported: () => boolean,
+    work: () => Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | BrowserError, R> =>
+    // The barrier is installed and its release registered in one uninterruptible step, so an
+    // interruption cannot leave every later operation refused as busy.
+    Effect.acquireUseRelease(
+      Effect.suspend(() => {
+        if (!supported())
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Unsupported.make({}),
+              outcome: "undispatched",
+            }),
+          );
+        // An ordinary active caller owns its deadline. A lifecycle request refuses before
+        // installing its barrier rather than converting that caller's latency into uncertainty.
+        if (owner.hasActive())
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
+          );
+        const barrier = owner.pauseAdmission();
+
+        if (barrier === undefined)
+          return Effect.fail(
+            BrowserError.make({
+              operation,
+              reason: Reasons.Busy.make({}),
+              outcome: "undispatched",
+            }),
+          );
+        activeBindings?.pauseAdmission();
+
+        return Effect.succeed(barrier);
       }),
-    /** Not charged: it sends no input and reads one node the caller was already given. */
-    revalidate: (reference: ObservedElement) =>
-      nativeOperation("revalidate", (driver, ticket) => driver.revalidate(reference, ticket), {
-        charge: false,
-      }),
-    // Inspecting readiness is not an action: it charges nothing and mutates nothing.
-    readiness: owner.guard(
-      "ready",
-      (ticket) => native("ready", ticket, () => getDriver().documentReadiness(ticket)),
-      { charge: false },
-    ),
-    pages: nativeOperation("list-pages", (driver, ticket) => driver.listPages(ticket), {
-      charge: false,
-    }),
-    describePage: (page: PageInfo) =>
-      nativeOperation("describe-page", (driver, ticket) => driver.describePage(page, ticket), {
-        charge: false,
-      }),
-    frames: nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket), {
-      charge: false,
-    }),
-    framesOf: (page: PageInfo) =>
-      nativeOperation("list-frames", (driver, ticket) => driver.listFrames(ticket, page), {
-        charge: false,
-      }),
-    pinPage: (page: PageInfo) => pinned((driver, ticket) => driver.resolvePage(page, ticket)),
-    pinFrame: (page: PageInfo, frame: FrameInfo) =>
-      pinned((driver, ticket) => driver.resolveFrame(page, frame, ticket)),
-    selectPage: (page: PageInfo) =>
-      nativeOperation(
+      () => Effect.suspend(work),
+      (barrier) =>
+        Effect.sync(() => {
+          if (owner.resumeAdmission(barrier) && owner.state.phase === "open")
+            activeBindings?.resumeAdmission();
+        }),
+    );
+
+  const controls = {
+    listPages,
+    selectPage: (page: PageInfo, operationOptions?: ExecutionOptions) =>
+      execute(
         "select-page",
         async (driver, ticket) => {
+          const target = await driver.resolvePage(page, ticket);
+
+          ticket.check();
+          registerPage(page, target, ticket.generation);
           await driver.selectPage(page, ticket);
-          owner.state.selection++;
         },
-        { charge: false },
+        operationOptions,
       ),
-    selectFrame: (id: string) =>
-      nativeOperation(
-        "select-frame",
+    /**
+     * Creation and adoption use the registry lane, independently of Page work. The registration
+     * it returns is what a Page is issued from, so creating and issuing are one admission.
+     */
+    createPage: (operationOptions?: ExecutionOptions) =>
+      execute(
+        "new-page",
         async (driver, ticket) => {
-          await driver.selectFrame(id, ticket);
-          owner.state.selection++;
+          const info = await driver.newPage(ticket);
+
+          ticket.check();
+          const target = await driver.resolvePage(info, ticket);
+
+          return registerPage(info, target, ticket.generation);
         },
-        { charge: false },
+        operationOptions,
       ),
-    /** No other page's work conflicts with opening one, so it waits its turn rather than refusing. */
-    createPage: () =>
-      nativeOperation("new-page", (driver, ticket) => driver.newPage(ticket), {
-        mutation: true,
-        mutationScope: () => "none",
-        charge: false,
-        anyPage: true,
-        queue: true,
-      }),
-    closePage: (page: PageInfo) =>
-      nativeOperation("close-page", (driver, ticket) => driver.closePage(page, ticket), {
-        mutation: true,
-        mutationScope: () => ({ pageId: page.pageId }),
-        charge: false,
-        anyPage: true,
-      }),
-    resize: (viewport: Viewport) =>
-      nativeOperation("resize", (driver, ticket) => driver.resize(viewport, ticket), {
-        mutation: true,
-        charge: false,
-      }),
-    waitFor: (selector: string, state: "visible" | "hidden" | "attached" | "detached") =>
-      wait((driver, ticket, target) => driver.waitFor(selector, state, ticket, target)),
-    waitForElement: (request: WaitForElementRequest) =>
-      wait(
-        (driver, ticket, target) =>
-          driver.waitForElement(request.reference, request.state, ticket, target),
-        request.timeoutMillis,
-      ),
-    clickAndWait: (target: string | ObservedElement) =>
-      nativeOperation(
-        "click-and-wait",
-        (driver, ticket) => driver.clickAndWait(target, ticket, captureClickAt(capture.target())),
-        { mutation: true },
-      ),
-    clickForDownload: (target: string | ObservedElement) =>
-      nativeOperation(
-        "download-action",
-        (driver, ticket) => driver.clickForDownload(target, ticket),
-        { mutation: true },
-      ),
-    selectFiles: (target: string | ObservedElement, files: ReadonlyArray<NativeFileSelection>) =>
-      nativeOperation(
-        "select-files",
-        (driver, ticket) => driver.selectFiles(target, files, ticket),
-        { mutation: true },
-      ),
-    clickForFileSelection: (
-      target: string | ObservedElement,
-      files: ReadonlyArray<NativeFileSelection>,
+
+    monotonicTimeNanos: clock.monotonicTimeNanos,
+    timeline: journal.timeline,
+    pageEvents: journal.pageEvents,
+    initialPage,
+    page,
+    frame: (
+      info: PageInfo,
+      frame: FrameInfo,
+      generation: number,
+      operationOptions?: ExecutionOptions,
     ) =>
-      nativeOperation(
-        "file-chooser",
-        (driver, ticket) => driver.clickForFileSelection(target, files, ticket),
-        { mutation: true },
+      // Like a Page, a Frame is issued under the registry permit, not its page's own.
+      execute(
+        "target",
+        async (driver, ticket) => {
+          const target = await driver.resolveFrame(info, frame, ticket);
+
+          ticket.check();
+          const page = pages.get(info.pageId);
+
+          if (page === undefined || page.phase !== "open")
+            throw BrowserError.make({
+              operation: "target",
+              reason: Reasons.Stale.make({}),
+              outcome: "undispatched",
+            });
+          if (!page.frames.has(target.frameId) && page.frames.size >= 128)
+            throw BrowserError.make({
+              operation: "target",
+              reason: Reasons.Limit.make({
+                dimension: "frames",
+                maximum: 128,
+                observed: page.frames.size + 1,
+              }),
+              outcome: "undispatched",
+            });
+          const record = pages.frame(page, target.frameId);
+
+          return {
+            identity: Target.make({ generation, ...target }),
+            record,
+            controls: makePageControls(page, target, generation),
+          };
+        },
+        { ...operationOptions, generation },
       ),
-    liveView: <A>(issue: Effect.Effect<A, BrowserError>) =>
-      owner.guard("live-view", () => issue, { charge: false, phases: ["open", "paused"] }),
-    beginHandoff: <A>(issue: Effect.Effect<A, BrowserError>) =>
-      owner.guard(
+    implementation: options.implementation,
+    status: owner.status,
+    diagnostics: owner.diagnostics,
+    admissionStatus: owner.admissionStatus,
+    reference: ref,
+    capture,
+    cleanupResult,
+    close: release.pipe(
+      Effect.tap(() => retireControl),
+      Effect.provideService(Clock.Clock, clock),
+    ),
+    closeChecked: acquired.closeChecked.pipe(
+      Effect.onExit(() => retireControl),
+      Effect.provideService(Clock.Clock, clock),
+    ),
+    liveView: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: ExecutionOptions) =>
+      owner.guard("live-view", () => issue, {
+        ...operationOptions,
+        charge: false,
+        phases: ["open", "paused"],
+      }),
+    beginHandoff: <A>(issue: Effect.Effect<A, BrowserError>, operationOptions?: ExecutionOptions) =>
+      lifecycle(
         "handoff",
+        () => !options.driver.pageControl,
         () =>
-          Effect.gen(function* () {
-            if (options.driver.pageControl)
-              return yield* BrowserError.make({
-                operation: "handoff",
-                reason: Reasons.Unsupported.make({}),
-                outcome: "undispatched",
-              });
-            // Drawn before the fence, so the pause and the token that ends it commit together.
-            const token = handoffToken ?? (yield* uuid);
+          owner.guard(
+            "handoff",
+            (ticket) =>
+              Effect.gen(function* () {
+                // Drawn before the fence, so the pause and the token that ends it commit together.
+                const token = handoffToken ?? (yield* uuid);
 
-            if (owner.state.phase === "open") owner.fence("paused", "paused", "handoff");
-            handoffToken ??= token;
-            // A refused authorization leaves automation paused until explicit operator release.
-            const view = yield* issue;
+                if (owner.state.phase === "open") {
+                  yield* Effect.forEach(
+                    [...capture.captureLeases.values()],
+                    (lease) => lease.stop,
+                    {
+                      discard: true,
+                    },
+                  );
+                  // Work that cannot settle in time fails only this request: the barrier lifts and
+                  // automation continues, as nothing was handed over or left undecided.
+                  yield* drainAdmitted(
+                    "handoff",
+                    ticket,
+                    () =>
+                      owner.drained(ticket.signal) &&
+                      activeBindings?.drained(owner.paused) !== false &&
+                      getDriver().handoffDrained?.(owner.paused) !== false &&
+                      pendingPageFaults.size === 0 &&
+                      capture.captureLeases.size === 0,
+                  );
+                  if (owner.state.phase !== "open")
+                    return yield* BrowserError.make({
+                      operation: "handoff",
+                      reason: Reasons.Closed.make({}),
+                      outcome: "undispatched",
+                      containment: { _tag: "SessionFenced", generation: owner.state.generation },
+                    });
+                  owner.fence("paused", "paused", "handoff");
+                }
+                handoffToken ??= token;
+                // A refused authorization leaves automation paused until explicit operator release.
+                const view = yield* issue;
 
-            return { token: Redacted.make(handoffToken), view };
-          }),
-        { charge: false, phases: ["open", "paused"], verifyAfter: false },
+                return { token: Redacted.make(handoffToken), view };
+              }),
+            {
+              ...operationOptions,
+              charge: false,
+              phases: ["open", "paused"],
+              verifyAfter: false,
+              bypassBlocked: true,
+            },
+          ),
       ),
-    resume: (token: Redacted.Redacted<string>, operatorReleasedControl: boolean) =>
-      owner.guard(
+    resume: (
+      token: Redacted.Redacted<string>,
+      operatorReleasedControl: boolean,
+      operationOptions?: ExecutionOptions,
+    ) =>
+      lifecycle(
         "resume",
-        (ticket) =>
-          Effect.gen(function* () {
-            if (
-              !operatorReleasedControl ||
-              handoffToken === undefined ||
-              Redacted.value(token) !== handoffToken
-            ) {
-              return yield* BrowserError.make({
-                operation: "resume",
-                reason: Reasons.Authorization.make({}),
-                outcome: "undispatched",
-              });
-            }
-            yield* native("resume", ticket, () => getDriver().dismissDialogs(ticket));
-            const observation = yield* observeInside(ticket, undefined, undefined, false);
+        () => true,
+        () =>
+          owner.guard(
+            "resume",
+            (ticket) =>
+              Effect.gen(function* () {
+                if (
+                  !operatorReleasedControl ||
+                  handoffToken === undefined ||
+                  Redacted.value(token) !== handoffToken
+                ) {
+                  return yield* BrowserError.make({
+                    operation: "resume",
+                    reason: Reasons.Authorization.make({}),
+                    outcome: "undispatched",
+                  });
+                }
+                yield* native("resume", ticket, () => getDriver().dismissDialogs(ticket));
+                const inventory = yield* refreshPages(ticket, true);
 
-            // This synchronous commit remains under the same permit as the fresh observation.
-            owner.transition("open");
-            handoffToken = undefined;
+                // The fresh registry and phase commit share the lifecycle permit. Reading content
+                // remains an explicit operation on a newly acquired Page.
+                activeBindings?.resumeAdmission();
+                owner.transition("open");
+                handoffToken = undefined;
 
-            return observation;
-          }),
-        { charge: false, phases: ["paused"], verifyAfter: false },
+                return inventory;
+              }),
+            {
+              ...operationOptions,
+              charge: false,
+              phases: ["paused"],
+              verifyAfter: false,
+              bypassBlocked: true,
+            },
+          ),
       ),
-    detach: owner
-      .guard(
-        "detach",
-        (ticket) =>
-          Effect.gen(function* () {
-            if (!options.keepAlive)
-              return yield* BrowserError.make({
-                operation: "detach",
-                reason: Reasons.Unsupported.make({}),
-                outcome: "undispatched",
-              });
-            reconnectTarget = yield* native("detach", ticket, () => getDriver().selectedTargetId());
-            const attached = getDriver();
+    detach: lifecycle(
+      "detach",
+      () => options.keepAlive,
+      () => {
+        // Until the connection is given up, a failed detach leaves the session as it was.
+        let disconnecting = false;
 
-            activeConnection = undefined;
-            owner.fence("detached", "disconnected", "detached");
-            const initialization = yield* Effect.exit(disposeBindings);
+        return owner
+          .guard(
+            "detach",
+            (ticket) =>
+              Effect.gen(function* () {
+                if (!options.keepAlive)
+                  return yield* BrowserError.make({
+                    operation: "detach",
+                    reason: Reasons.Unsupported.make({}),
+                    outcome: "undispatched",
+                  });
 
-            const disconnected = yield* Effect.tryPromise({
-              try: () => attached.disconnect(),
-              catch: () =>
-                BrowserError.make({
-                  operation: "detach",
-                  reason: Reasons.Disconnected.make({}),
-                  outcome: "unknown",
+                const target = yield* native("detach", ticket, () =>
+                  getDriver().selectedTargetId(),
+                );
+
+                const inventory = yield* refreshPages(ticket);
+
+                if (!inventory.pages.some((info) => info.targetId === target))
+                  return yield* BrowserError.make({
+                    operation: "detach",
+                    reason: Reasons.Stale.make({}),
+                    outcome: "undispatched",
+                  });
+                // Bounded cleanup such as a page close is admitted behind the barrier; let it
+                // finish rather than disconnect beneath it. Detach itself disposes bindings.
+                yield* drainAdmitted("detach", ticket, () => owner.idle(ticket.signal));
+                const attached = getDriver();
+
+                disconnecting = true;
+                reconnectTarget = target;
+                activeConnection = undefined;
+                owner.fence("detached", "disconnected", "detached");
+                const initialization = yield* Effect.exit(disposeBindings);
+
+                const disconnected = yield* Effect.tryPromise({
+                  try: () => attached.disconnect(),
+                  catch: () =>
+                    BrowserError.make({
+                      operation: "detach",
+                      reason: Reasons.Disconnected.make({}),
+                      outcome: "unknown",
+                    }),
+                }).pipe(Effect.exit);
+
+                driver = undefined;
+                if (Exit.isFailure(initialization))
+                  return yield* Effect.failCause(initialization.cause);
+                if (Exit.isFailure(disconnected))
+                  return yield* Effect.failCause(disconnected.cause);
+
+                return { reference: ref, targetId: target, inventory };
+              }),
+            { charge: false, verifyAfter: false, bypassBlocked: true },
+          )
+          .pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (disconnecting) owner.fence("uncertain", "uncertain");
+              }),
+            ),
+          );
+      },
+    ),
+    reconnect: (operatorReleasedControl: boolean, operationOptions?: ExecutionOptions) =>
+      lifecycle(
+        "reconnect",
+        () =>
+          options.keepAlive &&
+          reconnectTarget !== undefined &&
+          operatorReleasedControl &&
+          acquired.verifyReconnect !== undefined,
+        () =>
+          owner
+            .guard(
+              "reconnect",
+              (ticket) =>
+                Effect.gen(function* () {
+                  if (
+                    !options.keepAlive ||
+                    reconnectTarget === undefined ||
+                    !operatorReleasedControl ||
+                    acquired.verifyReconnect === undefined
+                  ) {
+                    return yield* BrowserError.make({
+                      operation: "reconnect",
+                      reason: Reasons.Unsupported.make({}),
+                      outcome: "undispatched",
+                    });
+                  }
+
+                  yield* acquired.verifyReconnect;
+                  owner.transition("acquiring");
+                  const endpoint = yield* connectionUrl("reconnect");
+
+                  yield* connectNative(endpoint, {
+                    ...options.driver,
+                    initialTargetId: reconnectTarget,
+                    newPage: false,
+                    preserveViewport: true,
+                  });
+                  const inventory = yield* refreshPages(ticket);
+
+                  owner.transition("open");
+
+                  return inventory;
                 }),
-            }).pipe(Effect.exit);
-
-            driver = undefined;
-            if (Exit.isFailure(initialization))
-              return yield* Effect.failCause(initialization.cause);
-            if (Exit.isFailure(disconnected)) return yield* Effect.failCause(disconnected.cause);
-
-            return { reference: ref, targetId: reconnectTarget };
-          }),
-        { charge: false, verifyAfter: false },
-      )
-      .pipe(Effect.onError(() => Effect.sync(() => owner.fence("uncertain", "uncertain")))),
-    reconnect: (operatorReleasedControl: boolean) =>
-      owner
-        .guard(
-          "reconnect",
-          (ticket) =>
-            Effect.gen(function* () {
-              if (
-                !options.keepAlive ||
-                reconnectTarget === undefined ||
-                !operatorReleasedControl ||
-                acquired.verifyReconnect === undefined
-              ) {
-                return yield* BrowserError.make({
-                  operation: "reconnect",
-                  reason: Reasons.Unsupported.make({}),
-                  outcome: "undispatched",
-                });
-              }
-
-              yield* acquired.verifyReconnect;
-              owner.transition("acquiring");
-              const endpoint = yield* connectionUrl("reconnect");
-
-              yield* connectNative(endpoint, {
-                ...options.driver,
-                initialTargetId: reconnectTarget,
-                newPage: false,
-                preserveViewport: true,
-              });
-              const observation = yield* observeInside(ticket, undefined, undefined, false);
-
-              owner.transition("open");
-
-              return observation;
-            }),
-          { charge: false, phases: ["detached", "acquiring"], verifyAfter: false },
-        )
-        .pipe(
-          Effect.onError(() => closeScope),
-          Effect.onInterrupt(() => closeScope),
-        ),
+              {
+                ...operationOptions,
+                charge: false,
+                phases: ["detached", "acquiring"],
+                verifyAfter: false,
+                bypassBlocked: true,
+              },
+            )
+            .pipe(
+              Effect.onError(() => closeScope),
+              Effect.onInterrupt(() => closeScope),
+            ),
+      ),
   };
+
+  yield* Queue.take(pageFaults).pipe(
+    Effect.flatMap((pageId) => {
+      const fault = pendingPageFaults.get(pageId);
+
+      return fault === undefined
+        ? Effect.void
+        : owner
+            .contain(containment(pageId, fault.authority), fault.generation)
+            .pipe(Effect.ensuring(Effect.sync(() => pendingPageFaults.delete(pageId))));
+    }),
+    Effect.forever,
+    Effect.forkScoped,
+  );
 
   // One timer belongs to the enclosing execution, never to an individual Tool call.
   const remaining = Math.max(
@@ -1946,4 +3278,6 @@ export type SessionControls<L extends SessionLease = SessionLease> =
     ? A
     : never;
 
-export type TargetControls = SessionControls["operations"];
+export type TargetControls = PageControls["operations"];
+
+export type PageControls = ReturnType<SessionControls["initialPage"]>["controls"];

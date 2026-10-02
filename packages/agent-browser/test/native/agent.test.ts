@@ -122,6 +122,7 @@ it.live(
 
                     const result = yield* BrowserTools.run(
                       generic,
+                      generic.initialPage,
                       AgentRuntime.run(agent, "begin").pipe(
                         Effect.provide(Layer.mergeAll(model(turns), InMemory.layer)),
                       ),
@@ -131,7 +132,9 @@ it.live(
                     expect(result.output.done).toBe(true);
                     // Per-turn scopes ended, but the explicitly enclosing execution still owns its browser.
                     expect(f.releaseIds).not.toContain(generic.reference.sessionId);
-                    expect((yield* generic.readText({ selector: "#count" })).text).toBe("0");
+                    expect((yield* generic.initialPage.readText({ selector: "#count" })).text).toBe(
+                      "0",
+                    );
                     const diagnostics = yield* generic.bindingDiagnostics;
 
                     expect(diagnostics.faulted).toBe(false);
@@ -140,7 +143,7 @@ it.live(
 
                     const summary = yield* Effect.scoped(
                       Effect.gen(function* () {
-                        const interval = yield* Capture.start(generic, {
+                        const interval = yield* Capture.start(generic.initialPage, {
                           maxFrames: 2,
                           maxDurationMillis: 5000,
                         });
@@ -162,7 +165,7 @@ it.live(
                     let remainingReads = 0;
 
                     for (let index = 0; index < 4; index++) {
-                      const next = yield* generic
+                      const next = yield* generic.initialPage
                         .observe({ maxTextBytes: 1024 })
                         .pipe(Effect.result);
 
@@ -216,11 +219,12 @@ it.live(
               }),
               (generic) =>
                 Effect.gen(function* () {
-                  yield* generic.navigate({ url: f.url });
+                  yield* generic.initialPage.navigate({ url: f.url });
                   yield* Deferred.succeed(borrowed, generic);
 
                   return yield* BrowserTools.run(
                     generic,
+                    generic.initialPage,
                     AgentRuntime.run(agent, "wait for the host callback").pipe(
                       Effect.provide(
                         Layer.mergeAll(
@@ -255,7 +259,9 @@ it.live(
             yield* Deferred.await(streaming).pipe(Effect.timeout(3000));
             const session = yield* Deferred.await(borrowed);
 
-            yield* session.click({ selector: "#unavailable-settings" }).pipe(Effect.result);
+            yield* session.initialPage
+              .click({ selector: "#unavailable-settings" })
+              .pipe(Effect.result);
             const result = yield* Fiber.join(running).pipe(Effect.timeout(3000));
 
             expect(result._tag).toBe("Failure");
@@ -286,14 +292,16 @@ it.live(
               bootstrap: settingsBootstrap(new URL(f.url).origin),
             });
 
-            yield* generic.navigate({ url: f.url });
-            yield* generic.click({ selector: "#unavailable-settings" }).pipe(Effect.result);
+            const host = yield* BrowserTools.makeHost(generic, generic.initialPage);
+
+            yield* generic.initialPage.navigate({ url: f.url });
+            yield* generic.initialPage
+              .click({ selector: "#unavailable-settings" })
+              .pipe(Effect.result);
             const ownerFailure = yield* generic.failure.pipe(Effect.result);
 
             expect(ownerFailure).toMatchObject({ _tag: "Failure" });
             if (ownerFailure._tag === "Failure") expect(ownerFailure.failure).toBe(expected);
-
-            const host = yield* BrowserTools.makeHost(generic);
 
             const result = yield* host
               .run(
@@ -331,7 +339,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* openAgentBrowser(agentPolicy);
 
-            yield* session.navigate({ url: f.url });
+            yield* session.initialPage.navigate({ url: f.url });
 
             const turns: ScriptedTurnInput[] = [
               {
@@ -374,6 +382,7 @@ it.live(
 
             const result = yield* BrowserTools.run(
               session,
+              session.initialPage,
               AgentRuntime.run(agent, "exercise failure").pipe(
                 Effect.provide(Layer.mergeAll(model(turns), InMemory.layer)),
               ),
@@ -405,6 +414,7 @@ it.live(
             const program = Browser.scoped(open(agentPolicy), (session) =>
               BrowserTools.run(
                 session,
+                session.initialPage,
                 AgentRuntime.run(agent, "wait").pipe(
                   Effect.provide(
                     Layer.mergeAll(
@@ -432,8 +442,8 @@ it.live(
             yield* Fiber.interrupt(fiber);
             expect(finalized).toBe(1);
             expect(f.releaseIds).toEqual(["session-2"]);
-            yield* survivor.navigate({ url: f.url });
-            expect((yield* survivor.observe()).text).toContain("Local browser fixture");
+            yield* survivor.initialPage.navigate({ url: f.url });
+            expect((yield* survivor.initialPage.observe()).text).toContain("Local browser fixture");
           }),
         );
         expect(f.releaseIds).toEqual(["session-2", "session-1"]);
@@ -468,13 +478,17 @@ for (const revalidates of [true, false])
               // What a recorder does on the same owner while the agent is between tools: passive
               // evidence, an explicit hold and resume, then a check of the exact inspected node.
               const recorder = Effect.gen(function* () {
-                const [page] = yield* generic.pages;
+                const [page] = yield* generic.listPages();
 
                 if (page === undefined) return "no page";
-                const before = yield* generic.checkpoint({ picture: true });
+                const before = yield* generic.initialPage.checkpoint({ picture: true });
 
-                yield* PageControl.resume(generic, yield* PageControl.suspend(generic, page));
-                if (revalidates) yield* generic.revalidateElement(ObservedElement.make(increment));
+                yield* PageControl.resume(
+                  generic.initialPage,
+                  yield* PageControl.suspend(generic.initialPage),
+                );
+                if (revalidates)
+                  yield* generic.initialPage.revalidateElement(ObservedElement.make(increment));
 
                 return `${before.text.includes("Local browser fixture")} ${before.picture !== undefined}`;
               }).pipe(
@@ -489,6 +503,7 @@ for (const revalidates of [true, false])
 
               const result = yield* BrowserTools.run(
                 generic,
+                generic.initialPage,
                 AgentRuntime.run(agent, "begin").pipe(
                   Effect.provide(
                     Layer.mergeAll(
@@ -522,7 +537,7 @@ for (const revalidates of [true, false])
 
               expect(result.output.done).toBe(true);
               expect(recorded).toBe("true true");
-              expect((yield* generic.readText({ selector: "#count" })).text).toBe(
+              expect((yield* generic.initialPage.readText({ selector: "#count" })).text).toBe(
                 revalidates ? "1" : "0",
               );
               yield* generic.close;

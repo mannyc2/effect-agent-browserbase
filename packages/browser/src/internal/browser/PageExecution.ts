@@ -107,6 +107,7 @@ export class PageExecution {
     this.check(ticket, revision);
     this.receipt = receipt;
     this.phase = "suspended";
+    ticket.acknowledge?.();
 
     return receipt;
   }
@@ -134,6 +135,7 @@ export class PageExecution {
     await this.write(ticket, revision, () => this.port.rate(rate));
     this.priorRate = undefined;
     this.phase = "running";
+    ticket.acknowledge?.();
   }
   async dispose(): Promise<void> {
     if (this.disposed) return;

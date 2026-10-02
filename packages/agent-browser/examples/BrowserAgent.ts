@@ -3,7 +3,7 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import type { ThreadId } from "effect-agent/identifiers";
-import type { BrowserSession } from "effect-browser/browser";
+import type { BrowserSession, Page } from "effect-browser/browser";
 import { Toolkit } from "effect/unstable/ai";
 
 /**
@@ -31,8 +31,14 @@ export const browserAgent = Agent.make("browser-example", {
  * Every turn borrows the session acquired by the host. Pass an earlier result's `threadId` to
  * continue that conversation. The caller provides the thread store and its LanguageModel.
  */
-export const turns = <E>(browser: BrowserSession<E>, request: string, threadId?: ThreadId) =>
+export const turns = <E>(
+  browser: BrowserSession<E>,
+  page: Page,
+  request: string,
+  threadId?: ThreadId,
+) =>
   BrowserTools.run(
     browser,
+    page,
     AgentRuntime.run(browserAgent, request, threadId === undefined ? {} : { threadId }),
   );

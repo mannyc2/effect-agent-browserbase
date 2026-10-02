@@ -4,7 +4,7 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as Browser from "effect-browser/browser";
-import { BrowserPolicy, Observation, type SessionStatus } from "effect-browser/browser-data";
+import { BrowserPolicy, Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 import type { BrowserError, InitializationError } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
@@ -349,12 +349,13 @@ const settle =
 /** Host-only owner state and the original failures, read after the agent and before close. */
 const owner = (
   journal: Journal,
-  status: Effect.Effect<SessionStatus>,
+  browser: Pick<Browser.AnySession, "status" | "initialPage">,
   failures: Effect.Effect<BrowserTools.ToolFailureSnapshot>,
   scripted: Partial<NonNullable<Journal["facts"]["owner"]>> = {},
 ) =>
   Effect.gen(function* () {
-    const current = yield* status;
+    const current = yield* browser.status;
+    const page = yield* browser.initialPage.status;
     const snapshot = yield* failures;
 
     journal.facts = {
@@ -362,6 +363,7 @@ const owner = (
       owner: {
         phase: current.phase,
         unresolvedDispatch: current.unresolvedDispatch,
+        page: { identity: page.identity, containment: page.containment },
         actionsUsed: current.actions.used,
         dispatched: null,
         settlement: null,
@@ -538,12 +540,12 @@ const drive =
   (journal: Journal, driver: Driver, start: string) =>
   <OwnerError>(browser: Browser.BrowserSession<OwnerError>) =>
     Effect.gen(function* () {
-      const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, hostOptions(journal));
 
       yield* host
         .run(runAgent(journal, driver, start))
         .pipe(Effect.exit, Effect.flatMap(settle(journal)));
-      yield* owner(journal, browser.status, host.toolFailures);
+      yield* owner(journal, browser, host.toolFailures);
     });
 
 /** The owner's own checked close is a fact; any other browser failure is the harness's. */
@@ -778,14 +780,18 @@ const onReceipt = (
 
     yield* Browser.scoped(Testing.open(receipt, scriptedOptions(journal)), (browser) =>
       Effect.gen(function* () {
-        const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+        const host = yield* BrowserTools.makeHost(
+          browser,
+          browser.initialPage,
+          hostOptions(journal),
+        );
 
         yield* host
           .run(runAgent(journal, driver, null))
           .pipe(Effect.exit, Effect.flatMap(settle(journal)));
         const calls = yield* browser.control.calls;
 
-        yield* owner(journal, browser.status, host.toolFailures, {
+        yield* owner(journal, browser, host.toolFailures, {
           dispatched: calls.filter((entry) => entry.dispatched && changesPage.has(entry.operation))
             .length,
         });
@@ -798,7 +804,7 @@ const onReceipt = (
     );
   });
 
-/** The scripted public seam proves cancellation and fencing, not a write-before-lost-ack application state. */
+/** The scripted public seam proves cancellation and containment, not a write-before-lost-ack application state. */
 const onCancelledWaiter = (
   journal: Journal,
   measured: Driver | undefined,
@@ -824,7 +830,13 @@ const onCancelledWaiter = (
           const gate = yield* browser.control.gate;
 
           yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
-          const host = yield* BrowserTools.makeHost(browser, hostOptions(journal));
+
+          const host = yield* BrowserTools.makeHost(
+            browser,
+            browser.initialPage,
+            hostOptions(journal),
+          );
+
           const running = yield* host.run(runAgent(journal, driver, null)).pipe(Effect.forkChild);
 
           // Either way the gate is missed, the run cannot show a held dispatch: a harness fault.
@@ -846,7 +858,7 @@ const onCancelledWaiter = (
           );
           yield* Fiber.interrupt(running);
 
-          const retry = yield* browser
+          const retry = yield* browser.initialPage
             .clickElement({ observationId: "observation-1", elementId: "accept" })
             .pipe(Effect.result);
 
@@ -873,7 +885,7 @@ const onCancelledWaiter = (
             terminal: "cancelled",
             failure: { category: "interrupted", tag: "Interrupt" },
           };
-          yield* owner(journal, browser.status, host.toolFailures, {
+          yield* owner(journal, browser, host.toolFailures, {
             dispatched: clicks.filter((entry) => entry.dispatched).length,
             settlement: clicks[0]?.settled ?? null,
             hostRetry:

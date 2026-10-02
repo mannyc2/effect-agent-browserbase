@@ -3,8 +3,8 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { Cause, Context, Effect, Option, Schema } from "effect";
-import { SessionStatus } from "effect-browser/browser-data";
-import { BrowserOutcome } from "effect-browser/errors";
+import { SessionStatus, Target } from "effect-browser/browser-data";
+import { BrowserOutcome, Containment } from "effect-browser/errors";
 import { Prompt, Tool, type LanguageModel } from "effect/unstable/ai";
 
 import {
@@ -238,6 +238,8 @@ export const Facts = Schema.Struct({
     Schema.Struct({
       phase: SessionStatus.fields.phase,
       unresolvedDispatch: Schema.Boolean,
+      /** Original issued Page facts; absence never proves that an unknown mutation was contained. */
+      page: Schema.optionalKey(Schema.Struct({ identity: Target, containment: Containment })),
       actionsUsed: nonnegative,
       /** Dispatched state-changing operations, where the scripted engine counts them; null on Chromium. */
       dispatched: Schema.NullOr(nonnegative),

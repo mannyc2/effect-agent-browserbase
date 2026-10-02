@@ -88,7 +88,7 @@ const Argument = Text.check(
   Schema.makeFilter(
     (value) =>
       value.startsWith("--") &&
-      !/^--(?:user-data-dir|remote-debugging[^=]*|headless|no-sandbox|disable-setuid-sandbox|single-process|proxy-server|proxy-bypass-list)(?:=|$)/u.test(
+      !/^--(?:user-data-dir|remote-debugging[^=]*|headless|no-sandbox|disable-setuid-sandbox|single-process|proxy-server|proxy-bypass-list|no-startup-window)(?:=|$)/u.test(
         value,
       ),
   ),

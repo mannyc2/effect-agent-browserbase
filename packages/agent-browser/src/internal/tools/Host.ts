@@ -3,6 +3,7 @@ import {
   Clock,
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -13,9 +14,16 @@ import {
   Semaphore,
 } from "effect";
 import { RunToolScheduling } from "effect-agent/run-options";
-import type { BrowserSession, NavigationOperation } from "effect-browser/browser";
+import {
+  checkPage,
+  type BrowserSession,
+  type Frame,
+  type NavigationOperation,
+  type Page,
+} from "effect-browser/browser";
 import type { InputReceipt, SessionStatus } from "effect-browser/browser-data";
 import { BrowserError, Reasons, type InitializationError } from "effect-browser/errors";
+import type { RunOperation, StepFailed } from "effect-browser/plan";
 
 import type {
   FormToolHandlers,
@@ -29,9 +37,16 @@ import type {
   WaitToolHandlers,
 } from "./Definitions.ts";
 import { sequentialScheduling } from "./Guidance.ts";
-import { type Call, failureWith, type Hooks, makeLayers, navigationResult } from "./Handlers.ts";
+import {
+  type Call,
+  failureFrom,
+  failureWith,
+  type Hooks,
+  makeLayers,
+  navigationResult,
+} from "./Handlers.ts";
 import { BrowserToolFailure } from "./Model.ts";
-import { type HandlerOptions, option, resolveOptions } from "./Options.ts";
+import { type HandlerOptions, knownKeys, option, resolveOptions } from "./Options.ts";
 import { continuationFor } from "./Results.ts";
 
 export type ToolRunRequirements<R> = Exclude<Exclude<R, ToolHostServices>, Scope.Scope>;
@@ -80,7 +95,7 @@ export type ToolHostFailure<OwnerError = never, CallbackError = never> =
 
 /** Original bounded browser error fields, copied before the model-facing projection. */
 export interface ToolFailureDiagnostic {
-  readonly error: Pick<BrowserError, "_tag" | "operation" | "reason" | "outcome">;
+  readonly error: Pick<BrowserError, "_tag" | "operation" | "reason" | "outcome" | "containment">;
   /** The Tool whose call failed. */
   readonly toolName: string;
   /** IDs longer than 256 UTF-16 code units are omitted, never shortened into a different ID. */
@@ -93,6 +108,25 @@ export interface ToolFailureSnapshot {
   /** Current owner state at snapshot read time, not historical state at the recorded failure. */
   readonly status: SessionStatus;
   readonly failures: ReadonlyArray<ToolFailureDiagnostic>;
+  /** Entries evicted from the bounded window; saturates at Number.MAX_SAFE_INTEGER. */
+  readonly dropped: number;
+}
+
+/** The host's record of one Tool call: live execution evidence, outside any model or durable schema. */
+export type ToolCallRecord = {
+  readonly invocationId: string;
+  readonly toolName: string;
+  readonly toolCallId: string | undefined;
+  readonly toolCallIdOmitted: boolean;
+} & (
+  | { readonly _tag: "Run"; readonly operation: RunOperation }
+  | { readonly _tag: "Navigation"; readonly operation: NavigationOperation }
+  | { readonly _tag: "Refused"; readonly error: StepFailed | BrowserError }
+);
+
+/** A memory-only snapshot of the latest 32 Tool call records, oldest first. */
+export interface ToolCallSnapshot {
+  readonly receipts: ReadonlyArray<ToolCallRecord>;
   /** Entries evicted from the bounded window; saturates at Number.MAX_SAFE_INTEGER. */
   readonly dropped: number;
 }
@@ -112,6 +146,8 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly failure: Effect.Effect<never, ToolHostFailure<OwnerError, CallbackError>>;
   /** Original ordinary action errors. Reading never enters browser admission and works after close. */
   readonly toolFailures: Effect.Effect<ToolFailureSnapshot>;
+  /** Latest 32 original capabilities, retained independently of timeline eviction. */
+  readonly receipts: Effect.Effect<ToolCallSnapshot>;
   /** Provide this host's handlers and supervise the program without closing the borrowed browser. */
   readonly run: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -139,6 +175,50 @@ const HostSettings = {
   scheduling: Schema.Literals(["sequential", "lane"]),
 };
 
+/** What a host reads beside the handler options; every other key is refused by name. */
+const hostKeys = {
+  onNavigation: true,
+  onInput: true,
+  lane: true,
+  scheduling: true,
+} as const satisfies Record<Exclude<keyof HostOptions, keyof HandlerOptions>, true>;
+
+const laneKeys = {
+  maxOutstanding: true,
+  maxQueueMillis: true,
+} as const satisfies Record<keyof LaneOptions, true>;
+
+/**
+ * The latest `capacity` entries, oldest first. Evictions are counted, saturating at
+ * Number.MAX_SAFE_INTEGER; a snapshot copies and freezes the window.
+ */
+const boundedWindow = <A>(capacity: number) => {
+  const entries: A[] = [];
+  let dropped = 0;
+
+  return {
+    push: (entry: A) => {
+      if (entries.length === capacity) {
+        entries.shift();
+        dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1);
+      }
+      entries.push(entry);
+    },
+    snapshot: () => ({ entries: Object.freeze([...entries]), dropped }),
+  };
+};
+
+/** The Tool and its call ID; IDs longer than 256 UTF-16 code units are omitted, never shortened. */
+const callIdentity = (call: Call) => {
+  const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
+
+  return {
+    toolName: call.tool,
+    toolCallId: toolCallIdOmitted ? undefined : call.id,
+    toolCallIdOmitted,
+  };
+};
+
 /**
  * Scoped host composition over the same maintained handlers. Options are checked here, once;
  * an invalid one fails acquisition with a `Configuration` reason naming it. Dependencies are
@@ -149,9 +229,13 @@ const HostSettings = {
  */
 export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = never>(
   browser: BrowserSession<OwnerError>,
+  page: Page | Frame,
   options: HostOptions<E, R> = {},
 ): Effect.fn.Return<ToolHost<OwnerError, E>, BrowserError, Exclude<R, Scope.Scope> | Scope.Scope> {
-  const resolved = yield* resolveOptions(options);
+  yield* checkPage(browser, page);
+  const resolved = yield* resolveOptions(options, hostKeys);
+
+  yield* knownKeys("lane", options.lane, laneKeys);
 
   const maximumInvocations = yield* option(
     "lane.maxOutstanding",
@@ -181,31 +265,39 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
   const clock = yield* Clock.Clock;
   const identity = {};
   const { onNavigation, onInput } = options;
-  const toolFailures: ToolFailureDiagnostic[] = [];
-  let dropped = 0;
+  const toolFailures = boundedWindow<ToolFailureDiagnostic>(32);
+  const receipts = boundedWindow<ToolCallRecord>(32);
+  let receiptSequence = 0n;
   let closed = false;
   let outstanding = 0;
+
+  const recordReceipt = (
+    call: Call,
+    value:
+      | { readonly _tag: "Run"; readonly operation: RunOperation }
+      | { readonly _tag: "Navigation"; readonly operation: NavigationOperation }
+      | { readonly _tag: "Refused"; readonly error: StepFailed | BrowserError },
+  ) => {
+    receipts.push(
+      Object.freeze({ ...value, invocationId: `call-${++receiptSequence}`, ...callIdentity(call) }),
+    );
+  };
 
   const recordFailure = (error: BrowserError, call: Call) => {
     const encoded = encodeBrowserError(error);
 
     // Only a BrowserError that bypassed its constructor's validation fails to encode.
     if (Result.isFailure(encoded)) throw encoded.failure;
-    const toolCallIdOmitted = call.id !== undefined && call.id.length > 256;
-
-    if (toolFailures.length === 32) {
-      toolFailures.shift();
-      dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1);
-    }
     toolFailures.push(
       Object.freeze({
         error: Object.freeze({
           ...encoded.success,
           reason: Object.freeze({ ...encoded.success.reason }),
+          ...(encoded.success.containment === undefined
+            ? {}
+            : { containment: Object.freeze({ ...encoded.success.containment }) }),
         }),
-        toolName: call.tool,
-        toolCallId: toolCallIdOmitted ? undefined : call.id,
-        toolCallIdOmitted,
+        ...callIdentity(call),
       }),
     );
   };
@@ -223,9 +315,13 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     Effect.forkIn(scope, { startImmediately: true }),
   );
 
-  const callbackFailed = () => BrowserToolFailure.make({ reason: "failed", outcome: "unknown" });
+  const callbackFailed = (outcome: "performed" | "unknown" = "unknown") =>
+    BrowserToolFailure.make({ reason: "failed", outcome });
 
-  const invoke = Effect.fnUntraced(function* (effect: Effect.Effect<void, E, R | Scope.Scope>) {
+  const invoke = Effect.fnUntraced(function* (
+    effect: Effect.Effect<void, E, R | Scope.Scope>,
+    outcome: "performed" | "unknown" = "unknown",
+  ) {
     const enclosing = yield* invocations;
 
     return yield* Effect.scoped(effect).pipe(
@@ -234,7 +330,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
 
         return Deferred.failCause(failure, cause).pipe(
-          Effect.andThen(Effect.fail(callbackFailed())),
+          Effect.andThen(Effect.fail(callbackFailed(outcome))),
         );
       }),
     );
@@ -322,7 +418,45 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 
   const navigate: NonNullable<Hooks["navigate"]> = Effect.fnUntraced(function* (request, call) {
     const onFailure = failureWith({ run, failure: recordFailure }, call);
-    const operation = yield* browser.startNavigation(request).pipe(Effect.mapError(onFailure));
+    const project = failureFrom({ run, failure: recordFailure }, call, page);
+
+    const within =
+      resolved.execution.within === undefined
+        ? undefined
+        : Math.floor(Duration.toMillis(resolved.execution.within));
+
+    if (within !== undefined && within < 1) {
+      const error = BrowserError.make({
+        operation: "navigate",
+        reason: Reasons.TimingBudgetExceeded.make({}),
+        outcome: "undispatched",
+      });
+
+      recordReceipt(call, { _tag: "Refused", error });
+
+      return yield* onFailure(error);
+    }
+
+    const timeoutMillis =
+      within === undefined
+        ? resolved.execution.timeoutMillis
+        : Math.min(within, resolved.execution.timeoutMillis ?? 60000);
+
+    const operation = yield* page
+      .startNavigation(request, {
+        ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
+        ...(resolved.execution.admission === undefined
+          ? {}
+          : { admission: resolved.execution.admission }),
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => recordReceipt(call, { _tag: "Refused", error })),
+        ),
+        Effect.catch(project),
+      );
+
+    recordReceipt(call, { _tag: "Navigation", operation });
     let settled = false;
 
     const completed = operation.completed.pipe(
@@ -332,7 +466,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         }),
       ),
       Effect.flatMap((result) => navigationResult(result.url)),
-      Effect.mapError(onFailure),
+      Effect.catch(project),
     );
 
     // Start the callback before racing completion, including a navigation already settled.
@@ -348,7 +482,10 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
         ? completed
         : Effect.raceFirst(Fiber.join(callback).pipe(Effect.andThen(Effect.never)), completed).pipe(
             Effect.ensuring(Fiber.interrupt(callback)),
-            Effect.filterOrFail(() => !Deferred.isDoneUnsafe(failure), callbackFailed),
+            Effect.filterOrFail(
+              () => !Deferred.isDoneUnsafe(failure),
+              () => callbackFailed(settled ? "performed" : "unknown"),
+            ),
           );
 
     return yield* observed.pipe(
@@ -357,7 +494,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
           ? Effect.void
           : operation.stop.pipe(
               Effect.onError((cause) => Deferred.failCause(failure, cause)),
-              Effect.mapError(onFailure),
+              Effect.catch(project),
             ),
       ),
     );
@@ -367,13 +504,18 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     run,
     navigate,
     failure: recordFailure,
+    operation: (operation, call) => recordReceipt(call, { _tag: "Run", operation }),
+    refused: (error, call) => recordReceipt(call, { _tag: "Refused", error }),
     input: (receipt, call) =>
       onInput === undefined
         ? Effect.void
-        : invoke(Effect.suspend(() => onInput({ receipt, toolCallId: call.id }))),
+        : invoke(
+            Effect.suspend(() => onInput({ receipt, toolCallId: call.id })),
+            "performed",
+          ),
   };
 
-  const layers = makeLayers(browser, resolved, hooks, continuationFor(browser));
+  const layers = makeLayers(page, resolved, hooks, continuationFor(page));
 
   const layer = Layer.mergeAll(
     layers.handlers,
@@ -436,12 +578,14 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     failure: Deferred.await(failure),
     toolFailures: Effect.gen(function* () {
       const status = yield* browser.status;
+      const { entries, dropped } = toolFailures.snapshot();
 
-      return Object.freeze({
-        status,
-        failures: Object.freeze([...toolFailures]),
-        dropped,
-      });
+      return Object.freeze({ status, failures: entries, dropped });
+    }),
+    receipts: Effect.sync(() => {
+      const { entries, dropped } = receipts.snapshot();
+
+      return Object.freeze({ receipts: entries, dropped });
     }),
     run: supervise,
   };
@@ -450,10 +594,12 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
 /** Scope one Tool host and each program run, provide handlers, and supervise without owning the browser. */
 export const run = <OwnerError, A, E2, R2, CallbackError = never, CallbackR = never>(
   browser: BrowserSession<OwnerError>,
+  page: Page | Frame,
   effect: Effect.Effect<A, E2, R2>,
   options: HostOptions<CallbackError, CallbackR> = {},
 ): Effect.Effect<
   A,
   E2 | ToolHostFailure<OwnerError, CallbackError>,
   ToolRunRequirements<R2> | Exclude<CallbackR, Scope.Scope>
-> => Effect.scoped(makeHost(browser, options).pipe(Effect.flatMap((host) => host.run(effect))));
+> =>
+  Effect.scoped(makeHost(browser, page, options).pipe(Effect.flatMap((host) => host.run(effect))));

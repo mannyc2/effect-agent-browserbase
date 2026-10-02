@@ -288,13 +288,13 @@ const scripted = await Effect.runPromise(
       ScriptedBrowser.open(shop, { policy: BrowserPolicy.unrestricted({ maxActions: 3 }) }),
       (browser) =>
         Effect.gen(function* () {
-          yield* browser.navigate({ url: "https://shop.test/" });
-          const observation = yield* browser.observe();
+          yield* browser.initialPage.navigate({ url: "https://shop.test/" });
+          const observation = yield* browser.initialPage.observe();
           const accept = observation.controls[0];
 
           expect(accept?.label === "Accept all", "the scripted control is observed");
           if (accept === undefined) return { calls: 0 };
-          yield* browser.clickElement({
+          yield* browser.initialPage.clickElement({
             observationId: observation.observationId,
             elementId: accept.elementId,
           });
@@ -302,7 +302,7 @@ const scripted = await Effect.runPromise(
             (yield* browser.control.document.current).url === "https://shop.test/?consent=1",
             "a click follows the scripted destination",
           );
-          const budget = yield* browser.observe().pipe(Effect.result);
+          const budget = yield* browser.initialPage.observe().pipe(Effect.result);
 
           expect(
             budget._tag === "Failure" &&
@@ -325,24 +325,24 @@ const scripted = await Effect.runPromise(
           reason: Reasons.Timeout.make({}),
           outcome: "unknown",
         });
-        const observation = yield* browser.observe();
+        const observation = yield* browser.initialPage.observe();
         const accept = observation.controls[0];
 
         if (accept === undefined) throw new Error("Consumer assertion failed: no control");
         const reference = { observationId: observation.observationId, elementId: accept.elementId };
-        const first = yield* browser.clickElement(reference).pipe(Effect.result);
+        const first = yield* browser.initialPage.clickElement(reference).pipe(Effect.result);
 
         expect(
           first._tag === "Failure" && first.failure.outcome === "unknown",
           "the scripted outcome keeps its unknown dispatch evidence",
         );
-        const retry = yield* browser.clickElement(reference).pipe(Effect.result);
+        const retry = yield* browser.initialPage.clickElement(reference).pipe(Effect.result);
 
         expect(
           retry._tag === "Failure" &&
             retry.failure.reason._tag === "Closed" &&
             retry.failure.outcome === "undispatched",
-          "an uncertain owner refuses the retry without sending it",
+          "the retired Page refuses the retry without sending it",
         );
         const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
 
@@ -392,14 +392,14 @@ const scripted = await Effect.runPromise(
         BrowserbaseBrowser.open(BrowserPolicy.unrestricted()),
         (session) =>
           Effect.gen(function* () {
-            yield* session.navigate({ url: "https://shop.test/" });
+            yield* session.initialPage.navigate({ url: "https://shop.test/" });
             const [control] = yield* handles.browsers;
 
             if (control === undefined) throw new Error("Consumer assertion failed: no engine");
 
             const delivered = yield* Effect.scoped(
               Effect.gen(function* () {
-                const interval = yield* Capture.start(session, {
+                const interval = yield* Capture.start(session.initialPage, {
                   maxFrames: 2,
                   maxDurationMillis: 5000,
                 });
@@ -453,7 +453,7 @@ const scripted = await Effect.runPromise(
         BrowserbaseBrowser.open(BrowserPolicy.unrestricted()),
         (session) =>
           Effect.gen(function* () {
-            yield* session.navigate({ url: "https://shop.test/" });
+            yield* session.initialPage.navigate({ url: "https://shop.test/" });
             yield* session.detach;
             const [control] = yield* handles.browsers;
 
@@ -462,7 +462,11 @@ const scripted = await Effect.runPromise(
               url: "https://shop.test/",
               text: "Changed while detached.",
             });
-            const observed = yield* session.reconnect(true);
+            const inventory = yield* session.reconnect(true);
+            const [info] = inventory.pages;
+
+            if (info === undefined) throw new Error("Consumer assertion failed: no fresh page");
+            const observed = yield* (yield* session.page(info)).observe();
 
             expect(
               observed.text === "Changed while detached.",

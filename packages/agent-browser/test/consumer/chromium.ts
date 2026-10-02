@@ -85,6 +85,7 @@ const result = await Effect.runPromise(
 
             const run = yield* BrowserTools.run(
               original,
+              original.initialPage,
               AgentRuntime.run(agent, "read the page").pipe(
                 Effect.provide(
                   Layer.mergeAll(
@@ -99,11 +100,15 @@ const result = await Effect.runPromise(
 
             assert.equal(run.output.done, true);
             assert.equal(run.turns, 3);
-            assert.match((yield* original.observe()).text, /host settings:7/);
+            assert.match((yield* original.initialPage.observe()).text, /host settings:7/);
             const diagnostics = yield* original.bindingDiagnostics;
 
             assert.equal(diagnostics.bindings[0]?.succeeded, 1);
-            const interval = yield* Capture.start(original, { maxDurationMillis: 5000 });
+
+            const interval = yield* Capture.start(original.initialPage, {
+              maxDurationMillis: 5000,
+            });
+
             const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
 
             assert.equal(frames.length, 1);

@@ -57,8 +57,8 @@ it.effect(
             projectId: "project-1",
             sessionId: "session-1",
           });
-          yield* session.navigate({ url: `${origin}/` });
-          expect((yield* session.observe()).text).toBe("Welcome. We use cookies.");
+          yield* session.initialPage.navigate({ url: `${origin}/` });
+          expect((yield* session.initialPage.observe()).text).toBe("Welcome. We use cookies.");
           expect((yield* scripted.provider.sessions)[0]).toMatchObject({
             id: "session-1",
             status: "RUNNING",
@@ -151,7 +151,7 @@ it.effect(
 
     return Effect.gen(function* () {
       const workflow = Browser.scoped(BrowserbaseBrowser.open(policy), (session) =>
-        session.observe(),
+        session.initialPage.observe(),
       ).pipe(
         Effect.provide(
           Testing.layer({
@@ -193,7 +193,7 @@ it.effect("a borrowed attachment disconnects without releasing the owner's sessi
 
     yield* Browser.scoped(BrowserbaseBrowser.open(policy), (owner) =>
       Effect.gen(function* () {
-        const page = (yield* owner.pages).find((candidate) => candidate.selected);
+        const page = (yield* owner.listPages()).find((candidate) => candidate.selected);
 
         expect(page).toBeDefined();
         if (page === undefined) return;
@@ -241,7 +241,7 @@ it.effect("an upload receipt authorizes file selection for the exact session", (
 
         expect(receipt.remotePath).toBe("/tmp/.uploads/notes.txt");
         expect((yield* scripted.provider.sessions)[0]?.uploads).toEqual(["notes.txt"]);
-        yield* session.selectFiles({
+        yield* session.selectFiles(session.initialPage, {
           selector: "#upload",
           selection: { _tag: "Uploaded", uploads: [receipt] },
         });

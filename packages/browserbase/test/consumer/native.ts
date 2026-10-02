@@ -99,8 +99,12 @@ const program = Effect.scoped(
 
               expect(failureType, "the session failure channel retains the consumer error type");
 
-              yield* session.navigate(NavigateRequest.make({ url: fixture.url }));
-              const observation = yield* session.observe({ maxTextBytes: 4096, maxControls: 8 });
+              yield* session.initialPage.navigate(NavigateRequest.make({ url: fixture.url }));
+
+              const observation = yield* session.initialPage.observe({
+                maxTextBytes: 4096,
+                maxControls: 8,
+              });
 
               expect(
                 observation.text.includes("Local browser fixture"),
@@ -110,7 +114,7 @@ const program = Effect.scoped(
 
               const captured = yield* Effect.scoped(
                 Effect.gen(function* () {
-                  const interval = yield* Capture.start(session, {
+                  const interval = yield* Capture.start(session.initialPage, {
                     maxFrames: 4,
                     maxDurationMillis: 5000,
                     size: { width: 320, height: 240 },
@@ -132,12 +136,12 @@ const program = Effect.scoped(
               expect(captured.duplicates === 0, "no frame is delivered twice");
 
               // The registered bundle ran on the document this consumer navigated to.
-              const ready = yield* session.ready;
+              const ready = yield* session.initialPage.ready();
 
               expect(ready._tag === "Ready", "the current document satisfied its readiness");
               expect(
-                (yield* session.readText(ReadTextRequest.make({ selector: "#marker" }))).text ===
-                  "installed by the consumer",
+                (yield* session.initialPage.readText(ReadTextRequest.make({ selector: "#marker" })))
+                  .text === "installed by the consumer",
                 "the init bundle reached the page before the consumer read it",
               );
 
@@ -158,7 +162,7 @@ const program = Effect.scoped(
               );
 
               // Small file selection needs no provisioning of any kind.
-              yield* session.selectFiles({
+              yield* session.selectFiles(session.initialPage, {
                 selector: "#file",
                 selection: {
                   _tag: "Inline",
@@ -173,13 +177,13 @@ const program = Effect.scoped(
               });
 
               expect(
-                (yield* session.readText(ReadTextRequest.make({ selector: "#chosen" }))).text ===
-                  "notes.txt:14",
+                (yield* session.initialPage.readText(ReadTextRequest.make({ selector: "#chosen" })))
+                  .text === "notes.txt:14",
                 "the page received the selected file",
               );
 
               // A second owner borrows the same session and closes without releasing it.
-              const pages = yield* session.pages;
+              const pages = yield* session.listPages();
               const selected = pages.find((page) => page.selected);
 
               if (selected === undefined) throw new Error("The owned session has no selected page");

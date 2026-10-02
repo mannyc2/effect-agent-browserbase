@@ -2,8 +2,8 @@ import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { BrowserError, BrowserOperation, Reasons } from "effect-browser/errors";
 
-import { fromNativeAttempt } from "../src/internal/browser/Binding.ts";
 import type { Driver } from "../src/internal/browser/Driver.ts";
+import { fromNativeAttempt } from "../src/internal/browser/NativeAttempt.ts";
 import {
   failure,
   nativeDetail,
@@ -187,6 +187,129 @@ it.effect("the owner stamps the admitted operation on whatever the native step r
   }),
 );
 
+it.effect(
+  "an acknowledged input with failed follow-up stays performed and leaves admission open",
+  () =>
+    Effect.gen(function* () {
+      const owner = yield* makeOwner(limits);
+      let inputs = 0;
+
+      owner.state.phase = "open";
+
+      const failedRead = yield* owner
+        .guard(
+          "click",
+          (ticket) =>
+            native("click", ticket, async () => {
+              ticket.dispatch();
+              await Promise.resolve();
+              inputs++;
+              ticket.acknowledge?.();
+              throw failure(Reasons.Malformed.make({}));
+            }),
+          { mutation: true },
+        )
+        .pipe(Effect.flip);
+
+      expect(failedRead).toMatchObject({
+        operation: "click",
+        reason: { _tag: "Malformed" },
+        outcome: "performed",
+        containment: { _tag: "NotRequired" },
+      });
+      expect(yield* owner.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+      yield* owner.guard("read-text", () => Effect.void);
+      expect(inputs).toBe(1);
+    }),
+);
+
+it.effect("a connection fault during dispatched input reports the existing session fence", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner(limits);
+    let closes = 0;
+
+    owner.transition("open");
+    owner.pageAdmission("page-a", owner.state.generation);
+
+    const error = yield* owner
+      .guard(
+        "click",
+        (ticket) =>
+          native("click", ticket, async () => {
+            ticket.dispatch();
+            owner.terminate("disconnected", "unknown", ticket.generation);
+            throw failure(Reasons.Disconnected.make({}));
+          }),
+        {
+          mutation: true,
+          mutationScope: () => ({ pageId: "page-a" }),
+          contain: () => ({
+            pageId: "page-a",
+            close: Effect.sync(() => {
+              closes++;
+
+              return true;
+            }),
+          }),
+        },
+      )
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      reason: { _tag: "Stale" },
+      outcome: "unknown",
+      containment: { _tag: "SessionFenced" },
+    });
+    expect(yield* owner.status).toMatchObject({
+      phase: "uncertain",
+      reason: "disconnected",
+      unresolvedDispatch: true,
+    });
+    expect(closes).toBe(0);
+  }),
+);
+
+it.effect("a late acknowledgement cannot revise an already revoked unknown attempt", () =>
+  Effect.gen(function* () {
+    const owner = yield* makeOwner(limits);
+    let closes = 0;
+
+    owner.transition("open");
+    owner.pageAdmission("page-a", owner.state.generation);
+
+    const error = yield* owner
+      .guard(
+        "click",
+        (ticket) =>
+          native("click", ticket, async () => {
+            ticket.dispatch();
+            owner.revokePage("page-a");
+            ticket.acknowledge?.();
+          }),
+        {
+          mutation: true,
+          targetScope: () => ({ pageId: "page-a" }),
+          contain: () => ({
+            pageId: "page-a",
+            close: Effect.sync(() => {
+              closes++;
+
+              return true;
+            }),
+          }),
+        },
+      )
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      outcome: "unknown",
+      containment: { _tag: "PageClosed", pageId: "page-a" },
+    });
+    expect(closes).toBe(1);
+    expect(yield* owner.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+  }),
+);
+
 it.effect("a refused connection keeps the reason the native attempt gave", () =>
   Effect.gen(function* () {
     const request = {
@@ -226,6 +349,8 @@ it.effect("a contained page takes the navigation its own operation reserved with
     const owner = yield* makeOwner(limits);
 
     owner.state.phase = "open";
+    owner.pageAdmission("page-b", owner.state.generation);
+    owner.pageAdmission("page-c", owner.state.generation);
 
     // The navigation was dispatched and reserved, and then the operation gave up on it.
     const abandoned = yield* owner
@@ -239,6 +364,7 @@ it.effect("a contained page takes the navigation its own operation reserved with
           }),
         {
           mutation: true,
+          targetScope: () => ({ pageId: "page-b" }),
           contain: () => ({ pageId: "page-b", close: Effect.succeed(true) }),
         },
       )
@@ -257,7 +383,11 @@ it.effect("a contained page takes the navigation its own operation reserved with
             ticket.dispatch();
             throw new Error("elementHandle.click: Target crashed");
           }),
-        { mutation: true, contain: () => ({ pageId: "page-c", close: Effect.succeed(false) }) },
+        {
+          mutation: true,
+          targetScope: () => ({ pageId: "page-c" }),
+          contain: () => ({ pageId: "page-c", close: Effect.succeed(false) }),
+        },
       )
       .pipe(Effect.flip);
     expect(yield* owner.status).toMatchObject({ phase: "uncertain", unresolvedDispatch: true });

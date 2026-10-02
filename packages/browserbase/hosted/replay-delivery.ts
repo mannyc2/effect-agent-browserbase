@@ -17,8 +17,8 @@ const recorded = Effect.scoped(
   Effect.gen(function* () {
     const session = yield* h.open();
 
-    yield* session.navigate(NavigateRequest.make({ url: "https://example.com/" }));
-    yield* session.scroll({ deltaX: 0, deltaY: 400 });
+    yield* session.initialPage.navigate(NavigateRequest.make({ url: "https://example.com/" }));
+    yield* session.initialPage.scroll({ deltaX: 0, deltaY: 400 });
     const cleanup = yield* session.close;
 
     return { reference: session.reference, cleanup };

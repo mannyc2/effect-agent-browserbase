@@ -19,7 +19,7 @@ const workflows = (
   hostedPlan: Bootstrap.Plan<HostedFailure, BindingService | Scope.Scope>,
   task: Effect.Effect<string, TaskFailure, TaskService | Scope.Scope>,
 ) => {
-  const use = Browser.scoped((browser) => Effect.andThen(browser.observe(), task));
+  const use = Browser.scoped((browser) => Effect.andThen(browser.initialPage.observe(), task));
 
   return {
     hosted: BrowserbaseBrowser.open(policy, { bootstrap: hostedPlan }).pipe(use),

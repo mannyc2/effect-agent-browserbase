@@ -33,8 +33,9 @@ const fixture = Effect.fnUntraced(function* () {
   owner.transition("open");
   const connection = {};
   const target = { pageId: "stage", frameId: "main" };
+
+  owner.pageAdmission(target.pageId, owner.state.generation);
   let epoch = 0;
-  let selected = { ...target };
   const records: Array<ReturnType<typeof node>> = [];
 
   const viewport = {
@@ -146,7 +147,6 @@ const fixture = Effect.fnUntraced(function* () {
   const entry = { id: "stage", page: { mainFrame: () => frame } } as unknown as Entry;
 
   const targets = {
-    selected: () => ({ ...selected }),
     current: () => ({ entry, frame }),
     epochOf: () => epoch,
     url: () => "https://example.test/",
@@ -163,7 +163,9 @@ const fixture = Effect.fnUntraced(function* () {
   const actions = makeActions({} as BrowserContext, targets, observation, () => false);
 
   const observe = owner.guard("observe", (ticket) =>
-    native("observe", ticket, () => observation.observe("document", 1024, 2, ticket)),
+    native("observe", ticket, () =>
+      observation.observe("document", 1024, 2, ticket, undefined, target),
+    ),
   );
 
   const begin = (run: (wait: OwnedWait) => Promise<void>, connectionId = connection) =>
@@ -191,12 +193,6 @@ const fixture = Effect.fnUntraced(function* () {
     selectorResult,
     observe,
     begin,
-    selectElsewhere: () => {
-      selected = { pageId: "scout", frameId: "scout-main" };
-    },
-    selectOriginal: () => {
-      selected = { ...target };
-    },
     replaceDocument: () => {
       epoch++;
       actions.waitChanged(entry, frame);
@@ -204,51 +200,49 @@ const fixture = Effect.fnUntraced(function* () {
   };
 });
 
-it.effect(
-  "an exact wait tolerates changed state and selection without authorizing stale input",
-  () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const seen = yield* f.observe;
+it.effect("an exact wait tolerates changed state without authorizing stale input", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const seen = yield* f.observe;
 
-      const reference = {
-        observationId: seen.observationId,
-        elementId: seen.controls[0]!.elementId,
-      };
+    const reference = {
+      observationId: seen.observationId,
+      elementId: seen.controls[0]!.elementId,
+    };
 
-      const original = f.records[0]!;
+    const original = f.records[0]!;
 
-      const wait = yield* f.begin((wait) =>
-        f.actions.waitForElement(reference, "enabled", wait.ticket, f.target),
-      );
+    const wait = yield* f.begin((wait) =>
+      f.actions.waitForElement(reference, "enabled", wait.ticket, f.target),
+    );
 
-      yield* Effect.promise(() => original.entered.promise);
-      expect(wait.ticket.signal.aborted).toBe(false);
-      original.native.disabled = false;
-      f.selectElsewhere();
-      original.finish.resolve();
-      yield* wait.completed;
-      expect(original.native.waits).toBe(1);
-      expect(original.native.disposals).toBe(0);
-      f.selectOriginal();
-      expect(
-        yield* f.owner
-          .guard("control-facts", (ticket) =>
-            native("control-facts", ticket, () => f.observation.controlFacts(reference, ticket)),
-          )
-          .pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
-      });
-      expect(yield* f.owner.status).toMatchObject({
-        phase: "open",
-        busy: false,
-        unresolvedDispatch: false,
-      });
-      yield* Effect.promise(() => f.observation.dispose());
-      expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
-    }),
+    yield* Effect.promise(() => original.entered.promise);
+    expect(wait.ticket.signal.aborted).toBe(false);
+    original.native.disabled = false;
+    original.finish.resolve();
+    yield* wait.completed;
+    expect(original.native.waits).toBe(1);
+    expect(original.native.disposals).toBe(0);
+    expect(
+      yield* f.owner
+        .guard("control-facts", (ticket) =>
+          native("control-facts", ticket, () =>
+            f.observation.controlFacts(reference, ticket, f.target),
+          ),
+        )
+        .pipe(Effect.result),
+    ).toMatchObject({
+      _tag: "Failure",
+      failure: { reason: { _tag: "Stale" }, outcome: "undispatched" },
+    });
+    expect(yield* f.owner.status).toMatchObject({
+      phase: "open",
+      busy: false,
+      unresolvedDispatch: false,
+    });
+    yield* Effect.promise(() => f.observation.dispose());
+    expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1]);
+  }),
 );
 
 it.effect(
@@ -281,12 +275,12 @@ it.effect(
       expect(f.records.map((record) => record.native.disposals)).toEqual([0, 1, 0, 0]);
       original.finish.resolve();
       yield* Effect.promise(() => original.disposalEntered.promise);
-      expect(f.owner.waitAvailable()).toBe(false);
+      expect(f.owner.waitAvailable(f.target.pageId)).toBe(false);
       expect(f.owner.waitPending()).toBe(false);
       disposal.resolve();
       yield* Effect.promise(() => disposal.promise);
       yield* Effect.yieldNow;
-      expect(f.owner.waitAvailable()).toBe(true);
+      expect(f.owner.waitAvailable(f.target.pageId)).toBe(true);
 
       const current = {
         observationId: successor.observationId,
@@ -294,7 +288,9 @@ it.effect(
       };
 
       yield* f.owner.guard("control-facts", (ticket) =>
-        native("control-facts", ticket, () => f.observation.controlFacts(current, ticket)),
+        native("control-facts", ticket, () =>
+          f.observation.controlFacts(current, ticket, f.target),
+        ),
       );
       yield* Effect.promise(() => f.observation.dispose());
       expect(f.records.map((record) => record.native.disposals)).toEqual([1, 1, 1, 1]);
@@ -325,16 +321,16 @@ it.effect(
       });
       f.selectorResult.resolve(returned.handle);
       yield* Effect.promise(() => returned.disposalEntered.promise);
-      expect(f.owner.waitAvailable()).toBe(false);
+      expect(f.owner.waitAvailable(f.target.pageId)).toBe(false);
       disposal.reject(new Error("PRIVATE-DISPOSAL"));
       yield* Effect.yieldNow;
-      expect(f.owner.waitAvailable()).toBe(false);
+      expect(f.owner.waitAvailable(f.target.pageId)).toBe(false);
       expect(returned.native.disposals).toBe(1);
       expect(yield* f.owner.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
       f.owner.retireWait({});
-      expect(f.owner.waitAvailable()).toBe(false);
+      expect(f.owner.waitAvailable(f.target.pageId)).toBe(false);
       f.owner.retireWait(f.connection);
-      expect(f.owner.waitAvailable()).toBe(true);
+      expect(f.owner.waitAvailable(f.target.pageId)).toBe(true);
     }),
 );
 
@@ -350,9 +346,10 @@ it.effect("a retired connection and a late predecessor cannot release a successo
     });
 
     f.owner.fence("detached", "disconnected", "detached");
-    expect(f.owner.waitAvailable()).toBe(false);
+    expect(f.owner.waitAvailable(f.target.pageId)).toBe(false);
     f.owner.retireWait(f.connection);
     f.owner.transition("open");
+    f.owner.pageAdmission(f.target.pageId, f.owner.state.generation);
 
     const current = yield* f.begin(async (wait) => {
       await currentRaw.promise;
@@ -362,12 +359,12 @@ it.effect("a retired connection and a late predecessor cannot release a successo
     oldRaw.resolve();
     yield* Effect.yieldNow;
     f.owner.retireWait(f.connection);
-    expect(f.owner.waitAvailable()).toBe(false);
+    expect(f.owner.waitAvailable(f.target.pageId)).toBe(false);
     expect(current.ticket.signal.aborted).toBe(false);
     expect((yield* Effect.result(old.completed))._tag).toBe("Failure");
     currentRaw.resolve();
     yield* current.completed;
-    expect(f.owner.waitAvailable()).toBe(true);
+    expect(f.owner.waitAvailable(f.target.pageId)).toBe(true);
   }),
 );
 
@@ -486,7 +483,7 @@ it.effect("remaining lifetime expires a pure wait without inventing unresolved i
     });
     finish.resolve();
     yield* Effect.yieldNow;
-    expect(f.owner.waitAvailable()).toBe(true);
+    expect(f.owner.waitAvailable(f.target.pageId)).toBe(true);
   }),
 );
 

@@ -39,7 +39,7 @@ const unknownOutcome =
 
 export const Navigate = Tool.make("browser_navigate", {
   description:
-    "Load a URL in the selected page. Success means the document loaded, not that anything on it succeeded. Earlier references become stale. Never repeat a failed navigation automatically.",
+    "Load a URL in the host-bound page. Success means the document loaded, not that anything on it succeeded. Earlier references become stale. Never repeat a failed navigation automatically.",
   parameters: BrowserNavigateRequest,
   success: BrowserNavigationResult,
   failure: BrowserToolFailure,
@@ -82,7 +82,7 @@ export const Fill = Tool.make("browser_fill", {
 
 export const Scroll = Tool.make("browser_scroll", {
   description:
-    "Scroll the selected frame by signed CSS pixel deltas; positive deltaY scrolls down. Inspect again to see what is on screen before acting on a control.",
+    "Scroll the host-bound page by signed CSS pixel deltas; positive deltaY scrolls down. Inspect again to see what is on screen before acting on a control.",
   parameters: BrowserScrollRequest,
   success: BrowserActionResult,
   failure: BrowserToolFailure,

@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 
 import { expect, it, vi } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Schema } from "effect";
+import type { PageOperations } from "effect-browser/browser";
 import { NavigateRequest, Observation, ObservedElement } from "effect-browser/browser-data";
 import type { BrowserError } from "effect-browser/errors";
 import * as PageControl from "effect-browser/page-control";
-import { BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
+import { BrowserbaseBrowser } from "effect-browserbase/browser";
 import type { Page } from "playwright-core";
 
 import {
@@ -29,9 +30,9 @@ const read = (page: Page) =>
   );
 
 /** The exact node an observation named, by the label a person would read. */
-const named = <E>(session: BrowserbaseSession<E>, label: string, scope?: "viewport") =>
+const named = (page: PageOperations, label: string, scope?: "viewport") =>
   Effect.gen(function* () {
-    const observation = yield* session.observe(scope === undefined ? {} : { scope });
+    const observation = yield* page.observe(scope === undefined ? {} : { scope });
     const control = observation.controls.find((candidate) => candidate.label === label);
 
     assert.ok(control, `no control labelled ${label}`);
@@ -68,14 +69,14 @@ it.live("real CDP: a viewport reading holds only what is on screen and says what
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
           const secretValue = yield* Effect.promise(() => native.locator("#pass").inputValue());
 
           expect(secretValue).toBe("preexisting-value");
-          const viewport = yield* session.observe({ scope: "viewport" });
+          const viewport = yield* session.initialPage.observe({ scope: "viewport" });
 
           expect(viewport.scope).toBe("viewport");
           expect(viewport.text).toContain("visible paragraph");
@@ -100,7 +101,7 @@ it.live("real CDP: a viewport reading holds only what is on screen and says what
           ]);
 
           // The whole document remains a separate, explicit choice.
-          const document = yield* session.observe();
+          const document = yield* session.initialPage.observe();
 
           expect(document.scope).toBe("document");
           expect(document.text).toContain("far below words");
@@ -138,12 +139,15 @@ it.live(
           Effect.gen(function* () {
             const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-            yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
+            yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
             const [native] = f.nativePages(session.reference.sessionId);
 
             assert.ok(native);
             const origin = new URL(f.url).origin;
-            const link = yield* session.controlFacts(yield* named(session, "Relative link"));
+
+            const link = yield* session.initialPage.controlFacts(
+              yield* named(session.initialPage, "Relative link"),
+            );
 
             // Resolved by the browser against <base href="/base/">, token and all: host-only.
             expect(link.destination).toBe(`${origin}/base/next?token=secret`);
@@ -153,7 +157,9 @@ it.live(
             expect(link.mainFrame).toBe(true);
             expect(link.box.y).toBe(30);
 
-            const secret = yield* session.controlFacts(yield* named(session, "Secret"));
+            const secret = yield* session.initialPage.controlFacts(
+              yield* named(session.initialPage, "Secret"),
+            );
 
             expect(secret.inputType).toBe("password");
             expect(secret.autocomplete).toBe("current-password");
@@ -161,12 +167,17 @@ it.live(
             // Never a value, and never markup.
             expect(Object.keys(secret)).not.toContain("value");
 
-            const submit = yield* session.controlFacts(yield* named(session, "Sign in"));
+            const submit = yield* session.initialPage.controlFacts(
+              yield* named(session.initialPage, "Sign in"),
+            );
 
             expect(submit.destination).toBe(`${origin}/submit`);
             expect(submit.formMethod).toBe("post");
+
             // A formaction/formmethod override is the effective destination, not the form's own.
-            const other = yield* session.controlFacts(yield* named(session, "Other"));
+            const other = yield* session.initialPage.controlFacts(
+              yield* named(session.initialPage, "Other"),
+            );
 
             expect(other.destination).toBe(`${origin}/other`);
             expect(other.formMethod).toBe("get");
@@ -175,19 +186,23 @@ it.live(
             const seen: Array<string | undefined> = [];
 
             yield* refused(
-              session.fillElement(yield* named(session, "Secret"), "hunter2", {
-                admit: (facts) => {
-                  seen.push(facts.inputType);
+              session.initialPage.fillElement(
+                yield* named(session.initialPage, "Secret"),
+                "hunter2",
+                {
+                  admit: (facts) => {
+                    seen.push(facts.inputType);
 
-                  return facts.inputType !== "password";
+                    return facts.inputType !== "password";
+                  },
                 },
-              }),
+              ),
               "Denied",
             );
             expect(seen).toEqual(["password"]);
             // A policy that throws fails closed.
             yield* refused(
-              session.clickElement(yield* named(session, "Sign in"), {
+              session.initialPage.clickElement(yield* named(session.initialPage, "Sign in"), {
                 admit: () => {
                   throw new Error("PRIVATE-POLICY-FAILURE");
                 },
@@ -197,9 +212,13 @@ it.live(
             expect(yield* read(native)).toEqual({ clicks: 0, fills: 0, focused: "" });
 
             // An admitted control is acted on normally.
-            yield* session.fillElement(yield* named(session, "User"), "ada", {
-              admit: (facts) => facts.autocomplete === "username",
-            });
+            yield* session.initialPage.fillElement(
+              yield* named(session.initialPage, "User"),
+              "ada",
+              {
+                admit: (facts) => facts.autocomplete === "username",
+              },
+            );
             expect((yield* read(native)).fills).toBe(1);
             yield* session.close;
           }),
@@ -218,30 +237,30 @@ it.live("real CDP: a control that changed is no longer the control that was insp
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
           const mutate = (script: string) => Effect.promise(() => native.evaluate(script));
 
           // The same attached node, pointed somewhere else.
-          const link = yield* named(session, "Relative link");
+          const link = yield* named(session.initialPage, "Relative link");
 
           yield* mutate("document.querySelector('#rel').href = 'https://elsewhere.example/'");
-          yield* refused(session.clickElement(link), "Stale");
+          yield* refused(session.initialPage.clickElement(link), "Stale");
 
           // The same attached node, now asking for a secret.
-          const user = yield* named(session, "User");
+          const user = yield* named(session.initialPage, "User");
 
           yield* mutate("document.querySelector('#user').type = 'password'");
-          yield* refused(session.fillElement(user, "ada"), "Stale");
+          yield* refused(session.initialPage.fillElement(user, "ada"), "Stale");
 
           // A replacement that looks identical is still not the node that was inspected, and
           // nothing is ever re-found by selector or label.
-          const submit = yield* named(session, "Sign in");
+          const submit = yield* named(session.initialPage, "Sign in");
 
           yield* mutate("go.replaceWith(go.cloneNode(true))");
-          yield* refused(session.clickElement(submit), "Stale");
+          yield* refused(session.initialPage.clickElement(submit), "Stale");
           expect(yield* read(native)).toEqual({ clicks: 0, fills: 0, focused: "" });
           yield* session.close;
         }),
@@ -260,13 +279,13 @@ it.live("real CDP: a checkpoint is passive, so inspect, checkpoint, then act all
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
-          const user = yield* named(session, "User");
-          const target = yield* session.target;
-          const checkpoint = yield* session.checkpoint({ picture: true });
+          const user = yield* named(session.initialPage, "User");
+          const target = session.initialPage.identity;
+          const checkpoint = yield* session.initialPage.checkpoint({ picture: true });
 
           expect(checkpoint.target).toEqual(target);
           expect(checkpoint.text).toContain("visible paragraph");
@@ -288,9 +307,9 @@ it.live("real CDP: a checkpoint is passive, so inspect, checkpoint, then act all
 
           // Several checkpoints later, the inspected node is still actionable and the selection
           // has not moved. `observe()` here would have retired the reference.
-          yield* session.checkpoint();
-          expect(yield* session.target).toEqual(target);
-          yield* session.fillElement(user, "ada");
+          yield* session.initialPage.checkpoint();
+          expect(session.initialPage.identity).toEqual(target);
+          yield* session.initialPage.fillElement(user, "ada");
           expect((yield* read(native)).fills).toBe(1);
           yield* session.close;
         }),
@@ -309,52 +328,63 @@ it.live("real CDP: after a hold, the exact node is checked again before it can b
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
           const [native] = f.nativePages(session.reference.sessionId);
-          const [page] = yield* session.pages;
+          const [page] = yield* session.listPages();
 
           assert.ok(native);
           assert.ok(page);
           const mutate = (script: string) => Effect.promise(() => native.evaluate(script));
 
           // Unchanged across the hold: refused unchecked, then admitted once checked.
-          const user = yield* named(session, "User");
+          const user = yield* named(session.initialPage, "User");
 
-          yield* PageControl.resume(session, yield* PageControl.suspend(session, page));
-          yield* refused(session.fillElement(user, "ada"), "Stale");
-          expect(yield* session.revalidateElement(user)).toEqual(user);
-          yield* session.fillElement(user, "ada");
+          yield* PageControl.resume(
+            session.initialPage,
+            yield* PageControl.suspend(yield* session.page(page)),
+          );
+          yield* refused(session.initialPage.fillElement(user, "ada"), "Stale");
+          expect(yield* session.initialPage.revalidateElement(user)).toEqual(user);
+          yield* session.initialPage.fillElement(user, "ada");
           expect((yield* read(native)).fills).toBe(1);
 
           // Replaced by the page's own `resume` handler: a hold is not semantically harmless.
-          const submit = yield* named(session, "Sign in");
+          const submit = yield* named(session.initialPage, "Sign in");
 
           yield* mutate("window.onResume = () => go.replaceWith(go.cloneNode(true))");
-          yield* PageControl.resume(session, yield* PageControl.suspend(session, page));
-          yield* refused(session.revalidateElement(submit), "Stale");
-          yield* refused(session.clickElement(submit), "Stale");
+          yield* PageControl.resume(
+            session.initialPage,
+            yield* PageControl.suspend(yield* session.page(page)),
+          );
+          yield* refused(session.initialPage.revalidateElement(submit), "Stale");
+          yield* refused(session.initialPage.clickElement(submit), "Stale");
 
           // Changed, not replaced.
           yield* mutate(
             "window.onResume = () => { document.querySelector('#rel').href = '/moved' }",
           );
-          const link = yield* named(session, "Relative link");
+          const link = yield* named(session.initialPage, "Relative link");
 
-          yield* PageControl.resume(session, yield* PageControl.suspend(session, page));
-          yield* refused(session.revalidateElement(link), "Stale");
+          yield* PageControl.resume(
+            session.initialPage,
+            yield* PageControl.suspend(yield* session.page(page)),
+          );
+          yield* refused(session.initialPage.revalidateElement(link), "Stale");
 
           // While held, the page is refused rather than woken to be checked or read.
           yield* mutate("window.onResume = undefined");
-          const held = yield* named(session, "User");
-          const receipt = yield* PageControl.suspend(session, page);
+          const held = yield* named(session.initialPage, "User");
+          const receipt = yield* PageControl.suspend(yield* session.page(page));
 
-          yield* refused(session.revalidateElement(held), "Busy");
-          yield* refused(session.checkpoint(), "Busy");
-          yield* PageControl.resume(session, receipt);
+          yield* refused(session.initialPage.revalidateElement(held), "Busy");
+          yield* refused(session.initialPage.checkpoint(), "Busy");
+          yield* PageControl.resume(session.initialPage, receipt);
 
           // Navigation ends the observation outright; there is nothing left to check.
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport#again` }));
-          yield* refused(session.revalidateElement(held), "Stale");
+          yield* session.initialPage.navigate(
+            NavigateRequest.make({ url: `${f.url}viewport#again` }),
+          );
+          yield* refused(session.initialPage.revalidateElement(held), "Stale");
           yield* session.close;
         }),
         { pageControl: true },
@@ -373,26 +403,28 @@ it.live("real CDP: holding one page leaves another page's observation alone", ()
         Effect.gen(function* () {
           const session = yield* (yield* BrowserbaseBrowser).open(policy);
 
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
-          const [stage] = yield* session.pages;
+          yield* session.initialPage.navigate(NavigateRequest.make({ url: `${f.url}viewport` }));
+          const [stage] = yield* session.listPages();
 
           assert.ok(stage);
-          yield* session.selectPage(yield* session.createPage);
+          const scout = yield* session.createPage();
 
-          yield* session.navigate(NavigateRequest.make({ url: `${f.url}viewport#scout` }));
+          yield* session.selectPage(scout);
+
+          yield* scout.navigate(NavigateRequest.make({ url: `${f.url}viewport#scout` }));
 
           const native = f
             .nativePages(session.reference.sessionId)
             .find((candidate) => candidate.url().endsWith("#scout"));
 
           assert.ok(native);
-          const user = yield* named(session, "User");
-          const receipt = yield* PageControl.suspend(session, stage);
+          const user = yield* named(scout, "User");
+          const receipt = yield* PageControl.suspend(yield* session.page(stage));
 
           // The stage is held for a recording while the agent keeps driving the scout.
-          yield* session.fillElement(user, "ada");
+          yield* scout.fillElement(user, "ada");
           expect((yield* read(native)).fills).toBe(1);
-          yield* PageControl.resume(session, receipt);
+          yield* PageControl.resume(session.initialPage, receipt);
           yield* session.close;
         }),
         { pageControl: true },
@@ -413,14 +445,13 @@ it.live(
           Effect.gen(function* () {
             const session = yield* BrowserbaseBrowser.open(policy);
 
-            yield* session.navigate({ url: `${f.url}viewport` });
-            const [stage] = yield* session.pages;
+            yield* session.initialPage.navigate({ url: `${f.url}viewport` });
+            const [stage] = yield* session.listPages();
             const [nativeStage] = f.nativePages(session.reference.sessionId);
 
             assert.ok(stage);
             assert.ok(nativeStage);
-            const scout = yield* session.createPage;
-            const pinnedScout = yield* session.pinPage(scout);
+            const pinnedScout = yield* session.createPage();
 
             yield* pinnedScout.navigate({ url: `${f.url}viewport#scout` });
 
@@ -429,39 +460,39 @@ it.live(
               .find((page) => page !== nativeStage);
 
             assert.ok(nativeScout);
-            const reference = yield* named(session, "User");
-            const retained = yield* session.retain;
+            const reference = yield* named(session.initialPage, "User");
+            const retained = session.initialPage;
 
-            yield* session.selectPage(scout);
-            expect((yield* session.readText({})).text).toContain("visible paragraph");
-            yield* refused(session.clickElement(reference), "Stale");
+            yield* session.selectPage(pinnedScout);
+            expect((yield* session.initialPage.readText({})).text).toContain("visible paragraph");
+            yield* refused(pinnedScout.clickElement(reference), "Stale");
             expect((yield* read(nativeStage)).clicks).toBe(0);
             expect((yield* read(nativeScout)).clicks).toBe(0);
-            yield* session.selectPage(stage);
-            yield* refused(retained.readText({}), "Stale");
+            yield* session.selectPage(session.initialPage);
+            expect((yield* retained.readText({})).text).toContain("visible paragraph");
 
             // No new observe occurs between naming this node and acting on it.
             expect((yield* pinnedScout.readText({})).text).toContain("visible paragraph");
             yield* pinnedScout.navigate({ url: `${f.url}viewport?scout=updated` });
             yield* pinnedScout.click({ selector: "#user" });
-            const unrelated = yield* session.createPage;
+            const unrelated = yield* session.createPage();
 
-            yield* session.closePage(unrelated);
-            expect((yield* session.controlFacts(reference)).label).toBe("User");
-            yield* session.clickElement(reference);
+            yield* unrelated.close();
+            expect((yield* session.initialPage.controlFacts(reference)).label).toBe("User");
+            yield* session.initialPage.clickElement(reference);
             expect((yield* read(nativeStage)).clicks).toBe(1);
             expect((yield* read(nativeScout)).clicks).toBe(1);
-            expect((yield* session.target).pageId).toBe(stage.pageId);
+            expect(session.initialPage.identity.pageId).toBe(stage.pageId);
 
-            const beforeNavigation = yield* named(session, "User");
-            const pinnedStage = yield* session.pinPage(stage);
+            const beforeNavigation = yield* named(session.initialPage, "User");
+            const pinnedStage = yield* session.page(stage);
 
-            yield* session.selectPage(scout);
+            yield* session.selectPage(pinnedScout);
             yield* pinnedStage.navigate({ url: `${f.url}viewport?stage=replaced` });
-            yield* session.selectPage(stage);
-            yield* refused(session.clickElement(beforeNavigation), "Stale");
+            yield* session.selectPage(session.initialPage);
+            yield* refused(session.initialPage.clickElement(beforeNavigation), "Stale");
             expect((yield* read(nativeStage)).clicks).toBe(0);
-            yield* session.clickElement(yield* named(session, "User"));
+            yield* session.initialPage.clickElement(yield* named(session.initialPage, "User"));
             expect((yield* read(nativeStage)).clicks).toBe(1);
           }),
         );
@@ -479,14 +510,14 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
         Effect.gen(function* () {
           const session = yield* BrowserbaseBrowser.open(policy);
 
-          yield* session.navigate({ url: `${f.url}viewport` });
-          const [stage] = yield* session.pages;
+          yield* session.initialPage.navigate({ url: `${f.url}viewport` });
+          const [stage] = yield* session.listPages();
           const [nativeStage] = f.nativePages(session.reference.sessionId);
 
           assert.ok(stage);
           assert.ok(nativeStage);
-          const scout = yield* session.createPage;
-          const replaced = yield* named(session, "User");
+          const scout = yield* session.createPage();
+          const replaced = yield* named(session.initialPage, "User");
 
           yield* session.selectPage(scout);
           yield* Effect.promise(() =>
@@ -494,10 +525,10 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
               node.replaceWith(node.cloneNode(true));
             }),
           );
-          yield* session.selectPage(stage);
-          yield* refused(session.clickElement(replaced), "Stale");
+          yield* session.selectPage(session.initialPage);
+          yield* refused(session.initialPage.clickElement(replaced), "Stale");
 
-          const changed = yield* named(session, "User");
+          const changed = yield* named(session.initialPage, "User");
 
           yield* session.selectPage(scout);
           yield* Effect.promise(() =>
@@ -505,8 +536,8 @@ it.live("real CDP: returning to a page never authorizes a replacement or changed
               (node as HTMLInputElement).required = true;
             }),
           );
-          yield* session.selectPage(stage);
-          yield* refused(session.fillElement(changed, "must not arrive"), "Stale");
+          yield* session.selectPage(session.initialPage);
+          yield* refused(session.initialPage.fillElement(changed, "must not arrive"), "Stale");
           expect(yield* read(nativeStage)).toEqual({ clicks: 0, fills: 0, focused: "" });
         }),
       );
@@ -526,12 +557,12 @@ it.live(
           Effect.gen(function* () {
             const session = yield* BrowserbaseBrowser.open(policy);
 
-            yield* session.navigate({ url: f.url });
-            const [page] = yield* session.pages;
+            yield* session.initialPage.navigate({ url: f.url });
+            const [page] = yield* session.listPages();
 
             assert.ok(page);
 
-            const frames = yield* settle(session.frames, (frames) =>
+            const frames = yield* settle(session.initialPage.listFrames(), (frames) =>
               frames.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
             );
 
@@ -543,27 +574,29 @@ it.live(
 
             assert.ok(child);
             assert.ok(main);
-            yield* session.selectFrame(child.frameId);
-            const reference = yield* named(session, "Frame action");
+            const childAuthority = yield* session.initialPage.frame(child);
+            const reference = yield* named(childAuthority, "Frame action");
 
-            yield* session.selectFrame(main.frameId);
-            yield* refused(session.clickElement(reference), "Stale");
-            yield* session.selectFrame(child.frameId);
-            expect((yield* session.readText({ selector: "#inner" })).text).toBe("Frame action");
-            yield* session.clickElement(reference);
-            expect((yield* session.readText({ selector: "#inner" })).text).toBe("frame clicked");
+            yield* refused(session.initialPage.clickElement(reference), "Stale");
+            expect((yield* childAuthority.readText({ selector: "#inner" })).text).toBe(
+              "Frame action",
+            );
+            yield* childAuthority.clickElement(reference);
+            expect((yield* childAuthority.readText({ selector: "#inner" })).text).toBe(
+              "frame clicked",
+            );
 
-            const oldDocument = yield* named(session, "frame clicked");
-            const pinnedChild = yield* session.pinFrame(page, child);
+            const oldDocument = yield* named(childAuthority, "frame clicked");
+            const pinnedChild = yield* (yield* session.page(page)).frame(child);
 
-            yield* session.selectFrame(main.frameId);
             yield* pinnedChild.navigate({ url: `${f.url}frame` });
-            yield* session.selectFrame(child.frameId);
-            yield* refused(session.clickElement(oldDocument), "Stale");
-            expect((yield* session.readText({ selector: "#inner" })).text).toBe("Frame action");
+            yield* refused(childAuthority.clickElement(oldDocument), "Stale");
+            expect((yield* childAuthority.readText({ selector: "#inner" })).text).toBe(
+              "Frame action",
+            );
 
             // Adoption preserves node identity and attachment but changes the owning document.
-            const adopted = yield* named(session, "Frame action");
+            const adopted = yield* named(childAuthority, "Frame action");
             const [native] = f.nativePages(session.reference.sessionId);
             const nativeChild = native?.frames().find((frame) => frame.name() === "child");
 
@@ -585,7 +618,7 @@ it.live(
             );
 
             expect(moved).toEqual({ connected: true, sameDocument: false });
-            yield* refused(session.clickElement(adopted), "Stale");
+            yield* refused(session.initialPage.clickElement(adopted), "Stale");
             expect(yield* Effect.promise(() => native.locator("#inner").textContent())).toBe(
               "Frame action",
             );
@@ -605,28 +638,28 @@ it.live("real CDP: same-page pointer input still requires a new observation", ()
         Effect.gen(function* () {
           const session = yield* BrowserbaseBrowser.open(policy);
 
-          yield* session.navigate({ url: `${f.url}viewport` });
+          yield* session.initialPage.navigate({ url: `${f.url}viewport` });
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
-          const superseded = yield* named(session, "User");
-          const current = yield* named(session, "User");
+          const superseded = yield* named(session.initialPage, "User");
+          const current = yield* named(session.initialPage, "User");
 
-          yield* refused(session.clickElement(superseded), "Stale");
-          expect((yield* session.controlFacts(current)).label).toBe("User");
+          yield* refused(session.initialPage.clickElement(superseded), "Stale");
+          expect((yield* session.initialPage.controlFacts(current)).label).toBe("User");
           for (const input of [
-            session.hover({ selector: "#user" }),
-            session.pointerMove({ to: { x: 20, y: 185 } }),
-            session.wheel({ deltaX: 0, deltaY: 1 }),
-            session.scroll({ deltaX: 0, deltaY: 1 }),
+            session.initialPage.hover({ selector: "#user" }),
+            session.initialPage.pointerMove({ to: { x: 20, y: 185 } }),
+            session.initialPage.wheel({ deltaX: 0, deltaY: 1 }),
+            session.initialPage.scroll({ deltaX: 0, deltaY: 1 }),
           ]) {
-            const reference = yield* named(session, "User");
+            const reference = yield* named(session.initialPage, "User");
 
             yield* input;
-            yield* refused(session.clickElement(reference), "Stale");
+            yield* refused(session.initialPage.clickElement(reference), "Stale");
           }
           expect((yield* read(native)).clicks).toBe(0);
-          yield* session.clickElement(yield* named(session, "User"));
+          yield* session.initialPage.clickElement(yield* named(session.initialPage, "User"));
           expect((yield* read(native)).clicks).toBe(1);
         }),
       );
@@ -644,22 +677,27 @@ it.live("real CDP: reconnect cannot substitute a new node for an old observation
         Effect.gen(function* () {
           const session = yield* BrowserbaseBrowser.open(policy);
 
-          yield* session.navigate({ url: `${f.url}viewport` });
-          const reference = yield* named(session, "User");
+          yield* session.initialPage.navigate({ url: `${f.url}viewport` });
+          const reference = yield* named(session.initialPage, "User");
 
           yield* session.detach;
-          const fresh = yield* session.reconnect(true);
+          const inventory = yield* session.reconnect(true);
+          const [info] = inventory.pages;
+
+          assert.ok(info !== undefined);
+          const page = yield* session.page(info);
+          const fresh = yield* page.observe();
           const control = fresh.controls.find((control) => control.label === "User");
 
           assert.ok(control);
           expect(control.elementId).toBe(reference.elementId);
           expect(fresh.observationId).not.toBe(reference.observationId);
-          yield* refused(session.clickElement(reference), "Stale");
+          yield* refused(session.initialPage.clickElement(reference), "Stale");
           const [native] = f.nativePages(session.reference.sessionId);
 
           assert.ok(native);
           expect((yield* read(native)).clicks).toBe(0);
-          yield* session.clickElement({
+          yield* page.clickElement({
             observationId: fresh.observationId,
             elementId: control.elementId,
           });
@@ -685,7 +723,7 @@ it.live(
           Effect.gen(function* () {
             const session = yield* BrowserbaseBrowser.open(policy);
 
-            yield* session.navigate({ url: `${f.url}viewport` });
+            yield* session.initialPage.navigate({ url: `${f.url}viewport` });
             const [native] = f.nativePages(session.reference.sessionId);
 
             assert.ok(native);
@@ -752,18 +790,30 @@ it.live(
               return holder;
             });
 
-            const pending = yield* session.observe().pipe(Effect.forkChild);
+            const pending = yield* session.initialPage.observe().pipe(Effect.forkChild);
 
             yield* Deferred.await(entered);
             yield* Fiber.interrupt(pending);
-            const fresh = yield* named(session, "User");
+            // The interrupted read can no longer change the page, so the page is usable at once.
+            const observation = yield* session.initialPage.observe();
 
+            expect(releases).toBe(0);
             resume();
+
+            const control = observation.controls.find((candidate) => candidate.label === "User");
+
+            assert.ok(control, "no control labelled User");
+
+            const fresh = ObservedElement.make({
+              observationId: observation.observationId,
+              elementId: control.elementId,
+            });
+
             yield* Deferred.await(disposed);
             expect(releases).toBe(1);
-            expect((yield* session.controlFacts(fresh)).label).toBe("User");
+            expect((yield* session.initialPage.controlFacts(fresh)).label).toBe("User");
             expect((yield* read(native)).clicks).toBe(0);
-            yield* session.clickElement(fresh);
+            yield* session.initialPage.clickElement(fresh);
             expect((yield* read(native)).clicks).toBe(1);
           }),
         );
