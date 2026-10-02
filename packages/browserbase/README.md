@@ -182,7 +182,11 @@ Larger files use `BrowserbaseUploads.create`, which places bytes for the exact r
 `resume(token, operatorReleasedControl)` and `reconnect(operatorReleasedControl)` return a
 bounded `Inventory` containing the new owner generation and fresh Page metadata. They do not
 read page content or issue observed references. Acquire an issued Page from `inventory.pages`
-and call `page.observe()` explicitly. `detach` returns its pre-disconnection inventory and exact
+and call `page.observe()` explicitly. A handoff retires Page authority although the connection
+stays open: every Page and Frame issued before `beginHandoff`, `session.initialPage` included,
+belongs to the paused generation, and after `resume` its operations fail `Stale` and
+`undispatched`. Issue each Page again with `session.page(info)` from `inventory.pages`, and its
+Frames with `page.frame(info)`. `detach` returns its pre-disconnection inventory and exact
 selected native `targetId`, preserving bounded target identities for deliberate attachment;
 its Page IDs are old authority and cannot be reused after reconnect. Page metadata is a sequence
 of native reads and is non-atomic.

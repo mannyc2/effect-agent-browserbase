@@ -351,6 +351,11 @@ export interface NavigationOperation {
   /** What was navigated, read before dispatch. */
   readonly target: Target;
   /**
+   * What was asked for, as checked before dispatch. `Plan.recordedNavigation` records this
+   * request, not the address `completed` reports after any redirect.
+   */
+  readonly request: StartNavigationRequest;
+  /**
    * The document reached DOMContentLoaded. It belongs to this one navigation: a successor that
    * reaches the same URL fails it instead. Interrupting a waiter stops nothing in the browser.
    */
