@@ -145,6 +145,13 @@ const settleInPage = (_node: Element, millis: number) =>
  */
 const performedClickRoundTrips = 20;
 
+/**
+ * What a performed click is charged besides its round trips. Playwright's stability check waits
+ * for the node across animation frames, which no round trip measures: without a relay, a whole
+ * click took 57 ms.
+ */
+const performedClickFloorMillis = 100;
+
 /** A step that already dispatched reads back within a bounded wait, and never fails for it. */
 const bounded = async <A>(work: Promise<A>, millis: number, fallback: A): Promise<A> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -419,7 +426,10 @@ export const makeActions = (
     readmit?: () => Promise<void>,
   ): Promise<InputReceipt | undefined> => {
     if (isPerformed(ticket)) {
-      return pointer.preparePress(page, element, ticket, check).then(async (planned) => {
+      return pointer.preparePress(page, element, ticket, check).then(async (prepared) => {
+        // The round trip is measured here to charge the click; it is not part of the receipt.
+        const { roundTripNanos, ...planned } = prepared;
+
         await readmit?.();
         check();
 
@@ -429,7 +439,7 @@ export const makeActions = (
           // first input event. A deadline inside them would report an unknown outcome for input
           // never sent, so the click must fit the deadline at this page's measured round trip.
           ownerPacing(ticket).requireDuration(
-            (performedClickRoundTrips * Number(planned.roundTripNanos)) / 1e6,
+            performedClickFloorMillis + (performedClickRoundTrips * Number(roundTripNanos)) / 1e6,
           );
           ticket.dispatch();
           // The click moves the pointer where it aimed; the next glide starts there.
