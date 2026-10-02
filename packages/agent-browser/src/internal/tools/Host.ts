@@ -48,7 +48,13 @@ import {
   navigationResult,
 } from "./Handlers.ts";
 import { BrowserToolFailure } from "./Model.ts";
-import { type HandlerOptions, knownKeys, option, resolveOptions } from "./Options.ts";
+import {
+  type HandlerOptions,
+  knownKeys,
+  option,
+  type ResolvedOptions,
+  resolveOptions,
+} from "./Options.ts";
 import { continuationFor } from "./Results.ts";
 
 export type ToolRunRequirements<R> = Exclude<Exclude<R, ToolHostServices>, Scope.Scope>;
@@ -157,6 +163,18 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
 }
 
 const encodeBrowserError = Schema.encodeResult(BrowserError);
+
+/** What another capability composed over a host shares with its Tools; never a public value. */
+export interface HostBinding {
+  readonly page: Page | Frame;
+  readonly options: ResolvedOptions;
+  readonly hooks: Hooks;
+}
+
+const bindings = new WeakMap<object, HostBinding>();
+
+/** The binding of a host `makeHost` issued, by identity; a copy or wrapper has none. */
+export const bindingOf = (host: object): HostBinding | undefined => bindings.get(host);
 
 interface Invocation {
   readonly host: object;
@@ -579,7 +597,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
       }),
     );
 
-  return {
+  const host: ToolHost<OwnerError, E> = {
     handlers: layers.handlers,
     readingHandlers: layers.readingHandlers,
     nativeHandlers: layers.nativeHandlers,
@@ -603,6 +621,10 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     }),
     run: supervise,
   };
+
+  bindings.set(host, { page, options: resolved, hooks });
+
+  return host;
 });
 
 /** Scope one Tool host and each program run, provide handlers, and supervise without owning the browser. */

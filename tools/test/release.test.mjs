@@ -56,7 +56,12 @@ const source = (index) => ({
   exports:
     index < 2
       ? { ".": "./src/index.ts", "./client": "./src/Client.ts" }
-      : { ".": "./src/index.ts", "./adapter": "./src/Adapter.ts", "./tools": "./src/Tools.ts" },
+      : {
+          ".": "./src/index.ts",
+          "./adapter": "./src/Adapter.ts",
+          "./browser-use": "./src/BrowserUse.ts",
+          "./tools": "./src/Tools.ts",
+        },
   peerDependencies: {
     effect: "^4.0.0-rc.117",
     ...(index === 0 ? { "playwright-core": "1.63.0" } : { "effect-browser": "workspace:*" }),

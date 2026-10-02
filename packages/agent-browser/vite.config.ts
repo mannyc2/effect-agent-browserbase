@@ -17,7 +17,7 @@ export default defineConfig({
     },
   },
   pack: {
-    entry: ["src/index.ts", "src/Adapter.ts", "src/Tools.ts"],
+    entry: ["src/index.ts", "src/Adapter.ts", "src/BrowserUse.ts", "src/Tools.ts"],
     tsconfig: "tsconfig.build.json",
     // Keep root namespaces on the public entry modules; the pinned bundler otherwise
     // exposes synthetic namespace exports on those entries, even with strict signatures.
