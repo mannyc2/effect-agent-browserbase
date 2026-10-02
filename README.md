@@ -10,7 +10,7 @@ Three packages share one scoped browser owner:
 
 The `0.2.0-beta.8` package set was released from tag `v0.2.0-beta.8` through the [release workflow](docs/RELEASING.md), with provenance, on npm's `beta` dist-tag, after `0.2.0-beta.0` through `0.2.0-beta.7`; `main` may be ahead of any release. Install by exact version or `@beta`: a prerelease never moves `latest`, which still points at a name reservation (`0.0.0-reserved.0`) for `effect-browser` and `effect-agent-browser` and at `0.1.0-beta.102` for `effect-browserbase`. The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`.
 
-Install the shared host runtimes explicitly. Browserbase requires `effect-browser@0.2.0-beta.8` as a peer; the Agent adapter requires that same browser peer and `effect-agent@0.1.0-beta.142`. Those exact prerelease relationships keep the qualified package set coordinated. The Effect peer range is `^4.0.0-rc.117`, with rc.117 as the tested version. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. Peer declarations cannot prevent every duplicate bundle or module evaluation: all callers must still use the same live runtime and session identity.
+Install the shared host runtimes explicitly. In the published `0.2.0-beta.8` set, Browserbase requires `effect-browser@0.2.0-beta.8` as a peer; the Agent adapter requires that same browser peer and `effect-agent@0.1.0-beta.142`. Current `main` instead pins Effect Agent and its testing package to `0.1.0-beta.165`; that upgrade and `effect-agent-browser/browser-use` are unreleased. Those exact prerelease relationships keep the qualified package set coordinated. The Effect peer range is `^4.0.0-rc.117`, with rc.117 as the tested version. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. Peer declarations cannot prevent every duplicate bundle or module evaluation: all callers must still use the same live runtime and session identity.
 
 ## Start a browser
 
@@ -53,7 +53,7 @@ const result = BrowserTools.run(browser, page, AgentRuntime.run(agent, request),
 });
 ```
 
-Every agent turn borrows that exact Page and its original session. `BrowserTools.run` provides the maintained handlers, runs browser calls one at a time in the order the model declared them, and supervises both browser and host callback failures; the host still supplies its LanguageModel and other Agent services. Display selection cannot redirect tools or continuations. Separate hosts on distinct Pages can progress independently. An agent declares the tools it may see: the original five, optional reading, pointer/wheel, keyboard, option-selection, wait and form tools, and `_and_inspect` variants. `BrowserTools.instructions(toolkit)` and `BrowserTools.policy(...)` match those tools, and host options are checked at acquisition. `Adapter.fromSession(browser, page)` adapts the same authority for the framework's `InteractiveBrowser` handle. The [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) share one agent definition. For Effect Agent's own `observe` and `act` Tools from `effect-agent/browser-use`, [`effect-agent-browser/browser-use`](packages/agent-browser/README.md#effect-agents-browseruse-tools) supplies their `BrowserActions` port over the same Page.
+Every agent turn borrows that exact Page and its original session. `BrowserTools.run` provides the maintained handlers, runs browser calls one at a time in the order the model declared them, and supervises both browser and host callback failures; the host still supplies its LanguageModel and other Agent services. Display selection cannot redirect tools or continuations. Separate hosts on distinct Pages can progress independently. An agent declares the tools it may see: the original five, optional reading, pointer/wheel, keyboard, option-selection, wait and form tools, and `_and_inspect` variants. `BrowserTools.instructions(toolkit)` and `BrowserTools.policy(...)` match those tools, and host options are checked at acquisition. `Adapter.fromSession(browser, page)` adapts the same authority for the framework's `InteractiveBrowser` handle. The [Chromium example](packages/agent-browser/examples/chromium.ts) and [Browserbase example](packages/agent-browser/examples/agent.ts) share one agent definition. On `main`, the unreleased [`effect-agent-browser/browser-use`](packages/agent-browser/README.md#effect-agents-browseruse-tools) supplies the `BrowserActions` port for Effect Agent's own `observe` and `act` Tools over the same Page.
 
 ## API migration
 
@@ -61,7 +61,7 @@ For complete operations on an explicit target, use `session.initialPage` or
 `yield* session.page(pageInfo)`, then `yield* page.frame(frameInfo)` for a child frame.
 These issued capabilities include observation and exact-node actions and do not change selection.
 `Capture` and `PageControl` accept the issued Page; provider file operations accept it as their
-final argument. See [Page and Frame authority](packages/browser/README.md#page-and-frame-authority)
+first argument. See [Page and Frame authority](packages/browser/README.md#page-and-frame-authority)
 for independent observations, bounded retention and separate action/containment outcomes.
 
 | Previous composition                                                   | Current API                                                                                                                                                             |
@@ -95,7 +95,7 @@ for independent observations, bounded retention and separate action/containment 
 
 Keyboard tools are a separate opt-in through `keyboardToolkit`. Neither existing toolkit gains tools merely by installing the new handler layers.
 
-The unreleased Page admission API adds trailing host `OperationOptions` to admitted operations.
+The Page admission API released in `0.2.0-beta.8` adds trailing host `OperationOptions` to admitted operations.
 Session owns the registry, display selection and checked lifetime. Page owns navigation,
 readiness, observation, actions and capture; Frame owns exact frame operations. Selected-session,
 retained-selection and pinned-target action wrappers are removed. Capture and PageControl require
