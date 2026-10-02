@@ -63,12 +63,13 @@ const source = (index) => ({
           "./tools": "./src/Tools.ts",
         },
   peerDependencies: {
-    effect: "^4.0.0-rc.117",
+    effect: "4.0.0-rc.117",
     ...(index === 0 ? { "playwright-core": "1.63.0" } : { "effect-browser": "workspace:*" }),
     ...(index === 2 ? { "effect-agent": frameworkVersion } : {}),
   },
   ...(index === 0 ? { peerDependenciesMeta: { "playwright-core": { optional: true } } } : {}),
   devDependencies: {
+    effect: "4.0.0-rc.117",
     typescript: "7.0.2",
     ...(index === 0 ? {} : { "effect-browser": "workspace:*" }),
     ...(index === 2 ? { "effect-agent": frameworkVersion } : {}),
@@ -167,16 +168,16 @@ test("normalization strips dev/source/scripts without mutating inputs, and resol
     assert.equal(JSON.stringify(input), original);
   }
   assert.deepEqual(manifest(0).peerDependencies, {
-    effect: "^4.0.0-rc.117",
+    effect: "4.0.0-rc.117",
     "playwright-core": "1.63.0",
   });
   assert.deepEqual(manifest(0).peerDependenciesMeta, { "playwright-core": { optional: true } });
   assert.deepEqual(manifest(1).peerDependencies, {
-    effect: "^4.0.0-rc.117",
+    effect: "4.0.0-rc.117",
     "effect-browser": version,
   });
   assert.deepEqual(manifest(2).peerDependencies, {
-    effect: "^4.0.0-rc.117",
+    effect: "4.0.0-rc.117",
     "effect-browser": version,
     "effect-agent": frameworkVersion,
   });
@@ -232,7 +233,10 @@ test("framework leakage, native peer on adapter, private packages and unexpected
   assert.throws(
     () =>
       publicationManifest(
-        { ...source(0), devDependencies: { "@effect-agent/testing": "workspace:*" } },
+        {
+          ...source(0),
+          devDependencies: { ...source(0).devDependencies, "@effect-agent/testing": "workspace:*" },
+        },
         versions,
       ),
     /Generic package/,
@@ -322,10 +326,41 @@ test("coordinated package versions and Effect peer contracts are checked before 
     path,
     JSON.stringify({
       ...source(1),
-      peerDependencies: { ...source(1).peerDependencies, effect: "^4.0.0-rc.116" },
+      peerDependencies: { ...source(1).peerDependencies, effect: "4.0.0-rc.116" },
+      devDependencies: { ...source(1).devDependencies, effect: "4.0.0-rc.116" },
     }),
   );
   assert.throws(() => readPackageSet(tree), /Effect peer/);
+});
+
+test("the Effect peer names the tested prerelease exactly; a range is for stable Effect", () => {
+  const withEffect = (peer, development = "4.0.0-rc.117") => ({
+    ...source(1),
+    peerDependencies: { ...source(1).peerDependencies, effect: peer },
+    devDependencies: { ...source(1).devDependencies, effect: development },
+  });
+
+  // rc.118 removed `effect/unstable/*`, which a range from rc.117 would still admit.
+  for (const peer of ["^4.0.0-rc.117", "~4.0.0-rc.117"])
+    assert.throws(
+      () => publicationManifest(withEffect(peer), versions),
+      /Effect prerelease peer must be exact/,
+    );
+  assert.throws(
+    () => publicationManifest(withEffect("4.0.0-rc.116"), versions),
+    /developed against/,
+  );
+  assert.equal(
+    publicationManifest(withEffect("^4.0.0", "4.0.0"), versions).peerDependencies.effect,
+    "^4.0.0",
+  );
+  const built = manifest(1);
+
+  built.peerDependencies.effect = "^4.0.0-rc.117";
+  assert.throws(
+    () => checkManifest(built, { built: true, browserVersion: version, frameworkVersion }),
+    /Effect prerelease peer must be exact/,
+  );
 });
 
 test("release channels and tags reject ambiguous or shell-like input", () => {
