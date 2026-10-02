@@ -136,6 +136,14 @@ const settleInPage = (_node: Element, millis: number) =>
     }, millis);
   });
 
+/**
+ * The round trips a performed click is charged before dispatch. Over relays adding 18 to 70 ms
+ * each way, Playwright 1.63's positioned click took 17 to 23 round trips in all, 14 to 19 of them
+ * checking the node before its first input event. Charging 16 covers most of those checks
+ * without refusing a click the deadline would have seen finish.
+ */
+const performedClickRoundTrips = 16;
+
 /** A step that already dispatched reads back within a bounded wait, and never fails for it. */
 const bounded = async <A>(work: Promise<A>, millis: number, fallback: A): Promise<A> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -416,6 +424,12 @@ export const makeActions = (
 
         const dispatch = async () => {
           check();
+          // Dispatch is marked before Playwright's click, whose own node checks then precede its
+          // first input event. A deadline inside them would report an unknown outcome for input
+          // never sent, so the click must fit the deadline at this page's measured round trip.
+          ownerPacing(ticket).requireDuration(
+            (performedClickRoundTrips * Number(planned.roundTripNanos)) / 1e6,
+          );
           ticket.dispatch();
           // The click moves the pointer where it aimed; the next glide starts there.
           pointer.invalidate(page, planned.intended.position);

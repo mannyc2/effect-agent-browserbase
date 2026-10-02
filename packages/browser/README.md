@@ -589,7 +589,11 @@ reports `ScheduleMissed` without inventing an attempt; an insufficient pacing bu
 offsets, so a slow reply delays one stroke rather than every later one. Before each stroke's
 first key, the rest of the schedule must still fit the deadline at the round trips the browser
 has actually taken; a stroke that could not finish is refused whole, and strokes already
-acknowledged stay `performed`. Receipts retain requested/intended/actual start, deadline
+acknowledged stay `performed`. A performed click is held to the same rule. Playwright's click
+checks the node again before its first input event, and a deadline inside those checks would
+report `unknown` for input never sent, so a click the deadline cannot fit at the press's
+measured round trip is refused `TimingBudgetExceeded`, undispatched, and its Page stays open.
+Receipts retain requested/intended/actual start, deadline
 and lateness. Cancellation stops future submissions and keeps readable attempt history with the
 original Effect Cause. Known preparatory work followed by refusal is rejected with its subphase
 receipts; pending input remains unknown, and acknowledged logical input stays performed when a
