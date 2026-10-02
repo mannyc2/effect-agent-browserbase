@@ -3,7 +3,7 @@ import { connect, createServer as createRelay, type Socket } from "node:net";
 
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Clock, Effect, Exit, Layer, Redacted, Schema } from "effect";
+import { Clock, type Duration, Effect, Exit, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 import * as Plan from "effect-browser/plan";
@@ -73,6 +73,17 @@ for (const type of ["keydown", "keyup"])
   <button style="position: absolute; top: 40px; left: 10px; width: 200px; height: 120px"
     onmouseover="hovered.textContent = 'hovered'">Clipped</button>
 </div>`,
+  // A button that reports which pointer events reached the page, in order, once each.
+  "/press": `<button style="position: absolute; left: 40px; top: 80px; width: 160px; height: 48px">Press</button>
+<p id="events"></p>
+<script>
+const seen = [];
+for (const type of ["pointermove", "pointerdown", "mousedown", "click"])
+  document.addEventListener(type, () => {
+    if (!seen.includes(type)) seen.push(type);
+    document.getElementById("events").textContent = seen.join(",");
+  }, true);
+</script>`,
   // A control far below the fold; the page reports its scroll offset and any hover.
   "/below": `<p id="scrolled">0</p><p id="hovered"></p><div style="height: 4000px"></div>
 <button onmouseover="hovered.textContent = 'hovered'">Far</button>
@@ -634,6 +645,52 @@ it.live("real CDP: a performed Hover reaches a partly clipped control a plain on
 
       expect(yield* hovered(undefined)).toBe("hovered");
       expect(yield* hovered({ seed: 11 })).toBe("hovered");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed click its deadline cannot fit is refused before any input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // A 72 ms round trip. Preparing the press takes about 2.3 s and Playwright's click about
+      // 1.6 s more, most of it checking the node before its first event: 3 s cannot fit both.
+      const session = yield* open("/press", 36);
+      const page = session.initialPage;
+
+      const press = (within: Duration.Input) =>
+        page.run(
+          {
+            version: 1,
+            steps: [
+              {
+                id: "press",
+                action: {
+                  _tag: "Click",
+                  target: {
+                    _tag: "Descriptor",
+                    descriptor: { kind: "button", label: "Press", matchScope: "document" },
+                  },
+                },
+              },
+            ],
+          },
+          { style: { seed: 5 }, within },
+        );
+
+      const failed = stepFailure(yield* press("3 seconds").pipe(Effect.exit));
+
+      expect(failed).toMatchObject({
+        stage: "AttemptFailed",
+        error: { reason: { _tag: "TimingBudgetExceeded" }, outcome: "undispatched" },
+        attempt: { outcome: "undispatched", containment: { _tag: "NotRequired" } },
+      });
+      expect((yield* page.readText({ selector: "#events" })).text).toBe("");
+
+      // The same Page is still usable, and a deadline that fits performs the click.
+      yield* press("30 seconds");
+      expect((yield* page.readText({ selector: "#events" })).text).toBe(
+        "pointermove,pointerdown,mousedown,click",
+      );
     }).pipe(Effect.provide(layer)),
   ),
 );

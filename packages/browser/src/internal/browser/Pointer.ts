@@ -278,7 +278,8 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
   /**
    * Plans and paces the glide to one exact node. A press may first scroll its node into view; a
    * hover never scrolls (`scrollIntoView: false`): it aims inside the node's visible part and
-   * refuses a node with none `NotVisible`.
+   * refuses a node with none `NotVisible`. Each read of the node's box is one protocol round trip
+   * on the main frame, and the fastest of them is returned for the caller to charge its input by.
    */
   const preparePress = async (
     page: Page,
@@ -286,9 +287,25 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
     ticket: PerformedTicket,
     check: () => void,
     options: { readonly scrollIntoView?: boolean } = {},
-  ): Promise<NativeInput & { readonly intended: NonNullable<InputReceipt["intended"]> }> => {
+  ): Promise<
+    NativeInput & {
+      readonly intended: NonNullable<InputReceipt["intended"]>;
+      readonly roundTripNanos: bigint;
+    }
+  > => {
     const pacing = ownerPacing(ticket);
     const { performance } = ticket;
+    let roundTripNanos: bigint | undefined;
+
+    const boxOf = async () => {
+      const started = pacing.now();
+      const measured = await element.boundingBox();
+      const elapsed = pacing.now() - started;
+
+      if (roundTripNanos === undefined || elapsed < roundTripNanos) roundTripNanos = elapsed;
+
+      return measured;
+    };
 
     check();
     const frame = await element.ownerFrame();
@@ -364,7 +381,7 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
     );
 
     check();
-    let box = await element.boundingBox();
+    let box = await boxOf();
 
     check();
     if (box === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
@@ -406,7 +423,7 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
         completedMonotonicNanos: pacing.now(),
       });
       check();
-      const scrolled = await element.boundingBox();
+      const scrolled = await boxOf();
 
       check();
       if (scrolled === null) throw failure(Reasons.NotVisible.make({}), "undispatched");
@@ -456,7 +473,7 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
     if (schedule.durationMillis > 0)
       await pacing.pauseUntil(started + BigInt(Math.round(schedule.durationMillis * 1e6)));
     check();
-    const beforeInput = await element.boundingBox();
+    const beforeInput = await boxOf();
 
     check();
     if (
@@ -477,6 +494,7 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
         relativePosition,
         qualification: "checked-exact-node-sample",
       },
+      roundTripNanos: roundTripNanos ?? 0n,
     };
   };
 
