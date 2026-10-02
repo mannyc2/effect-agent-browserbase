@@ -547,6 +547,12 @@ it.effect("an unknown click outcome is reported as possibly sent and never repla
       expect(yield* actions.act([{ kind: "click", ref: "o1-e9" }]).pipe(Effect.flip)).toMatchObject(
         { code: "invalid" },
       );
+      // Containment closed the bound page itself, and a reading says so.
+      expect(yield* actions.observe.pipe(Effect.flip)).toMatchObject({
+        code: "browser",
+        message:
+          "Observing the page failed (closed, undispatched). The page is gone: stop using the browser.",
+      });
       expect(dispatched(yield* browser.control.calls)).toEqual([["click", "pay"]]);
     }),
   ).pipe(
@@ -603,19 +609,23 @@ it.effect("a host routes BrowserActions through its lane, policy, receipts and c
         }),
       );
 
-      // A closed host refuses before anything runs.
+      // A closed host refuses before anything runs, without claiming the page is gone: it is not.
       yield* Scope.close(hostScope, Exit.void);
-      expect(yield* actions.observe.pipe(Effect.flip)).toMatchObject({
+
+      const unavailable = {
         code: "browser",
-        message: expect.stringContaining("(closed, undispatched)"),
-      });
+        message:
+          "The browser host did not run this call (closed, undispatched). Nothing was sent. These browser tools are no longer available.",
+      };
+
+      expect(yield* actions.observe.pipe(Effect.flip)).toMatchObject(unavailable);
       expect(yield* actions.act([{ kind: "click", ref: "o3-e8" }]).pipe(Effect.flip)).toMatchObject(
-        {
-          code: "browser",
-          message:
-            "This call failed (closed, undispatched). Nothing was sent. The page is gone: stop using the browser.",
-        },
+        unavailable,
       );
+      expect(dispatched(yield* browser.control.calls)).toEqual([["click", "save"]]);
+      const borrowed = yield* actionsOf(BrowserUseActions.layer(browser, browser.initialPage));
+
+      expect((yield* borrowed.observe).controls).toHaveLength(6);
     }),
   ),
 );

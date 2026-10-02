@@ -156,10 +156,32 @@ const outcomes = {
 } as const satisfies Record<Failure["outcome"], string>;
 
 /** Fixed sentences over the projected reason and outcome; nothing native reaches the model. */
+/**
+ * Fixed sentences over the projected reason and outcome of work on the bound target; nothing
+ * native reaches the model. There, `closed` means that target is gone for good.
+ */
 const described = (what: string, failure: Failure, then: string = outcomes[failure.outcome]) =>
-  `${what} failed (${failure.reason}, ${failure.outcome}). ${then}${
-    failure.reason === "closed" ? " The page is gone: stop using the browser." : ""
-  }`;
+  [
+    `${what} failed (${failure.reason}, ${failure.outcome}).`,
+    then,
+    ...(failure.reason === "closed" ? ["The page is gone: stop using the browser."] : []),
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+
+/**
+ * A host that is busy, closed or failed refused the call before it ran, so nothing was sent. A
+ * closed or failed host refuses every later call too, but says nothing about the page itself.
+ */
+const unavailable = (failure: BrowserToolFailure) =>
+  new BrowserUseError({
+    code: "browser",
+    message: `The browser host did not run this call (${failure.reason}, ${failure.outcome}). Nothing was sent.${
+      failure.reason === "closed" || failure.reason === "failed"
+        ? " These browser tools are no longer available."
+        : ""
+    }`,
+  });
 
 const invalid = (message: string) => new BrowserUseError({ code: "invalid", message });
 
@@ -426,26 +448,30 @@ export const makeActions = Effect.fnUntraced(function* (
       } satisfies typeof ActionResult.Type;
     });
 
-  return BrowserActions.of({
-    observe: hooks.run(permit.withPermit(read(call("observe")))).pipe(
-      Effect.mapError(
-        (failure) =>
-          new BrowserUseError({
-            code: "browser",
-            message: described("Observing the page", failure, "Observe again before acting."),
-          }),
-      ),
+  // Inside the lane, a failure is the reading's own; anything the lane itself returns is a refusal.
+  const observe = read(call("observe")).pipe(
+    Effect.mapError(
+      (failure) =>
+        new BrowserUseError({
+          code: "browser",
+          message: described(
+            "Observing the page",
+            failure,
+            failure.reason === "closed" ? "" : "Observe again before acting.",
+          ),
+        }),
     ),
-    // A host that is busy, closed or failed refuses the call before it runs: nothing was sent.
+  );
+
+  return BrowserActions.of({
+    observe: hooks
+      .run(permit.withPermit(observe))
+      .pipe(Effect.catchTag("BrowserToolFailure", (failure) => Effect.fail(unavailable(failure)))),
     act: (actions) =>
       hooks
         .run(permit.withPermit(act(actions)))
         .pipe(
-          Effect.catchTag("BrowserToolFailure", (failure) =>
-            Effect.fail(
-              new BrowserUseError({ code: "browser", message: described("This call", failure) }),
-            ),
-          ),
+          Effect.catchTag("BrowserToolFailure", (failure) => Effect.fail(unavailable(failure))),
         ),
   });
 });
