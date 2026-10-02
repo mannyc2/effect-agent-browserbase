@@ -1,4 +1,6 @@
 // Preparation only: this registered check requires the same explicit hosted opt-in as every case.
+import { inflateSync } from "node:zlib";
+
 import { Effect, Fiber, Schema, Stream } from "effect";
 import * as Bootstrap from "effect-browser/bootstrap";
 import {
@@ -55,7 +57,11 @@ const fixture = Bootstrap.init({
       count.textContent = "0";
       const button = document.createElement("button");
       button.textContent = "Page increment";
-      button.onclick = () => { count.textContent = String(Number(count.textContent) + 1); };
+      // Its first click also marks the whole page, so a picture shows which Page it came from.
+      button.onclick = () => {
+        count.textContent = String(Number(count.textContent) + 1);
+        document.documentElement.style.background = "rgb(0, 102, 204)";
+      };
       const never = document.createElement("a");
       never.textContent = "Never settles";
       never.href = ${JSON.stringify(pendingUrl)};
@@ -128,6 +134,33 @@ const KeyboardEvidence = Schema.Struct({
     ]),
   ).check(Schema.isMaxLength(512)),
 });
+
+/**
+ * The top-left pixel of an 8-bit RGB or RGBA PNG. Every PNG row filter leaves the first byte of
+ * the first row unchanged, so it is read without reconstructing the image.
+ */
+const topLeft = (png: Uint8Array): string | undefined => {
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  const data: Array<Uint8Array> = [];
+  let colorType: number | undefined;
+
+  for (let at = 8; at + 12 <= png.byteLength;) {
+    const length = view.getUint32(at);
+    const type = String.fromCharCode(...png.subarray(at + 4, at + 8));
+    const body = png.subarray(at + 8, at + 8 + length);
+
+    if (type === "IHDR") {
+      if (body[8] !== 8 || body[12] !== 0) return undefined;
+      colorType = body[9];
+    }
+    if (type === "IDAT") data.push(body);
+    at += 12 + length;
+  }
+  if (colorType !== 2 && colorType !== 6) return undefined;
+  const row = inflateSync(Buffer.concat(data));
+
+  return `rgb(${row[1]}, ${row[2]}, ${row[3]})`;
+};
 
 const keyboardEvidence = (text: string) =>
   Schema.decodeEffect(Schema.fromJsonString(KeyboardEvidence))(text);
@@ -205,9 +238,7 @@ await h.run(
         }),
       );
       const pictureB = yield* b.screenshot({ fullPage: false });
-      // The Pages differ now: B's counter reads 1 and A's 0, while A's frame counter reads 1 and
-      // B's 0. A picture of A taken at the same moment therefore differs from B's unless B's
-      // request was routed to A, the only other Page.
+      // B's increment has marked B and A's has not run yet, so each picture shows its Page.
       const pictureA = yield* a.screenshot({ fullPage: false });
 
       yield* a.clickElement(
@@ -295,9 +326,8 @@ await h.run(
       yield* h.established({
         exactPage: countA.text === "1" && countB.text === "1",
         exactPicture:
-          pictureB.bytes.byteLength > 0 &&
-          pictureA.bytes.byteLength > 0 &&
-          !Buffer.from(pictureB.bytes).equals(Buffer.from(pictureA.bytes)),
+          topLeft(pictureB.bytes) === "rgb(0, 102, 204)" &&
+          topLeft(pictureA.bytes) === "rgb(255, 255, 255)",
         exactFrame: frameCount.text === "1",
         exactCapture:
           frames.length > 0 &&
@@ -351,6 +381,7 @@ await h.run(
         frames: frames.length,
         captureStopped: capture.nativeStop,
         actions: status.actions,
+        pictures: { a: topLeft(pictureA.bytes), b: topLeft(pictureB.bytes) },
         typing: {
           codePoints: [...text].length,
           keyDowns: downs.length,
