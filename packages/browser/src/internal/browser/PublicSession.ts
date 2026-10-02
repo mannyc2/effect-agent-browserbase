@@ -192,15 +192,17 @@ const makeTarget = (
       Effect.flatMap((value) =>
         withOperationOptions(options, "navigate", (options) =>
           bound.startNavigation(value.url, value.timeoutMillis, options),
+        ).pipe(
+          Effect.map((operation) => ({
+            target: operation.target,
+            request: value,
+            completed: operation.completed.pipe(
+              Effect.flatMap((url) => decoded(NavigationResult, "navigate", "performed")({ url })),
+            ),
+            stop: operation.stop,
+          })),
         ),
       ),
-      Effect.map((operation) => ({
-        target: operation.target,
-        completed: operation.completed.pipe(
-          Effect.flatMap((url) => decoded(NavigationResult, "navigate", "performed")({ url })),
-        ),
-        stop: operation.stop,
-      })),
     ),
   readText: (request, options) =>
     checked(ReadTextRequest, request, "read-text").pipe(
