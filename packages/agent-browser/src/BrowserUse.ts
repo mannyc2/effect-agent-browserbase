@@ -37,6 +37,13 @@ export interface ReadingOptions {
   readonly maxControls?: number;
   /** `document` by default; `viewport` reads only what is on screen and reachable. */
   readonly observationScope?: "document" | "viewport";
+  /**
+   * The bound on each encoded `observe` or `act` result, 48 KiB by default (16 KiB–1 MiB), or a
+   * host's own for `fromHost`. A reading that does not fit loses text first and then trailing
+   * controls, whose refs then do not resolve. Effect Agent's default `toolResultBounds` is 50 KiB:
+   * raise it with this bound, as `Tools.policy(input, { resultMaxBytes })` does.
+   */
+  readonly resultMaxBytes?: number;
 }
 
 /** The reading, and the exact-node policy and execution the Tools' `HandlerOptions` take. */
@@ -55,6 +62,7 @@ const readingKeys = {
   maxTextBytes: true,
   maxControls: true,
   observationScope: true,
+  resultMaxBytes: true,
 } as const satisfies Record<keyof ReadingOptions, true>;
 
 const optionKeys = {
@@ -123,6 +131,10 @@ export const fromHost = <OwnerError, CallbackError>(
           maxTextBytes: read.maxTextBytes,
           maxControls: read.maxControls,
           observationScope: read.observationScope,
+          resultMaxBytes:
+            options.resultMaxBytes === undefined
+              ? binding.options.resultMaxBytes
+              : read.resultMaxBytes,
         },
         binding.hooks,
       );

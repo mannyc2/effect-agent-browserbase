@@ -1,10 +1,10 @@
 import { Effect, Schema, Semaphore } from "effect";
 import {
   Action,
-  type ActionResult,
+  ActionResult,
   BrowserActions,
   BrowserUseError,
-  type Observation as ModelObservation,
+  Observation as ModelObservation,
 } from "effect-agent/browser-use";
 import type { Frame, Page } from "effect-browser/browser";
 import type { Observation, ObservedControl } from "effect-browser/browser-data";
@@ -12,7 +12,7 @@ import type { Observation, ObservedControl } from "effect-browser/browser-data";
 import { type Call, failureFrom, type Hooks, makeOperations } from "./tools/Handlers.ts";
 import type { BrowserFormFailure, BrowserToolFailure, FillFormParameters } from "./tools/Model.ts";
 import type { ResolvedOptions } from "./tools/Options.ts";
-import { continuationFor } from "./tools/Results.ts";
+import { boundary, continuationFor, largest, measure } from "./tools/Results.ts";
 
 type Failure = Pick<BrowserToolFailure, "reason" | "outcome">;
 
@@ -60,6 +60,22 @@ const fillable: ReadonlySet<string> = new Set(["input", "textarea", "other"]);
 /** The most controls one effect-browser reading issues; every reading asks for all of them. */
 const readingControls = 64;
 
+/** One control the model may be shown, and what its ref resolves to. */
+interface Entry {
+  readonly shown: (typeof ModelObservation.Type)["controls"][number];
+  readonly issued: Issued;
+}
+
+/** A reading projected for the model, before it is fitted to the result bound. */
+interface Projected {
+  readonly generation: number;
+  readonly observationId: string;
+  readonly text: string;
+  readonly textTruncated: boolean;
+  readonly entries: ReadonlyArray<Entry>;
+  readonly controlsTruncated: boolean;
+}
+
 /**
  * The model's observation: enabled controls only, each select with its enabled options' labels,
  * in document order until `maxControls` of them, options included, are shown. Disabled controls
@@ -67,11 +83,7 @@ const readingControls = 64;
  * field's value, so a text field's `value` is always empty; a select's is its selected options'
  * labels and a toggle's says whether it is checked.
  */
-const project = (
-  observation: Observation,
-  generation: number,
-  maxControls: number,
-): { readonly latest: Latest; readonly shown: typeof ModelObservation.Type } => {
+const project = (observation: Observation, generation: number, maxControls: number): Projected => {
   const choices = new Map<
     string,
     Array<{ readonly control: ObservedControl; readonly label: string }>
@@ -84,8 +96,7 @@ const project = (
     list.push({ control, label: control.label });
     choices.set(control.selectElementId, list);
   }
-  const controls = new Map<string, Issued>();
-  const shown: Array<(typeof ModelObservation.Type)["controls"][number]> = [];
+  const entries: Array<Entry> = [];
   let budget = maxControls;
   let truncated = observation.controlsTruncated;
 
@@ -121,30 +132,76 @@ const project = (
 
     const name = ref(generation, index);
 
-    controls.set(name, { elementId: control.elementId, kind, options });
-    shown.push({
-      ref: name,
-      kind,
-      name: control.label,
-      value,
-      options: options.map((option) => option.label),
+    entries.push({
+      shown: {
+        ref: name,
+        kind,
+        name: control.label,
+        value,
+        options: options.map((option) => option.label),
+      },
+      issued: { elementId: control.elementId, kind, options },
     });
   }
 
   return {
-    latest: { generation, observationId: observation.observationId, controls },
-    shown: {
-      text: [
-        observation.text,
-        ...(observation.textTruncated
-          ? ["[Some page text was left out of this observation.]"]
-          : []),
-        ...(truncated ? ["[Some controls were left out of this observation.]"] : []),
-      ]
-        .filter((line) => line.length > 0)
-        .join("\n"),
-      controls: shown,
+    generation,
+    observationId: observation.observationId,
+    text: observation.text,
+    textTruncated: observation.textTruncated,
+    entries,
+    controlsTruncated: truncated,
+  };
+};
+
+/**
+ * The projection within the result bound, as the Tools fit theirs: text first, then trailing
+ * controls, and a note for what was left out. Only the refs it shows resolve. `size` measures
+ * the whole result that carries it.
+ */
+const fit = (
+  projected: Projected,
+  maxBytes: number,
+  size: (observation: typeof ModelObservation.Type) => number,
+): { readonly latest: Latest; readonly shown: typeof ModelObservation.Type } => {
+  const { text, entries } = projected;
+
+  const shape = (length: number, count: number): typeof ModelObservation.Type => ({
+    text: [
+      text.slice(0, length),
+      ...(projected.textTruncated || length < text.length
+        ? ["[Some page text was left out of this observation.]"]
+        : []),
+      ...(projected.controlsTruncated || count < entries.length
+        ? ["[Some controls were left out of this observation.]"]
+        : []),
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+    controls: entries.slice(0, count).map((entry) => entry.shown),
+  });
+
+  const fits = (length: number, count: number) => size(shape(length, count)) <= maxBytes;
+
+  const [length, count] = fits(text.length, entries.length)
+    ? [text.length, entries.length]
+    : fits(0, entries.length)
+      ? [
+          boundary(
+            text,
+            largest(text.length, (n) => fits(boundary(text, n), entries.length)),
+          ),
+          entries.length,
+        ]
+      : [0, largest(entries.length, (n) => fits(0, n))];
+
+  return {
+    latest: {
+      generation: projected.generation,
+      observationId: projected.observationId,
+      controls: new Map(entries.slice(0, count).map((entry) => [entry.shown.ref, entry.issued])),
     },
+    shown: shape(length, count),
   };
 };
 
@@ -155,7 +212,6 @@ const outcomes = {
   unknown: "It may have happened: observe before anything else, and never repeat it blindly.",
 } as const satisfies Record<Failure["outcome"], string>;
 
-/** Fixed sentences over the projected reason and outcome; nothing native reaches the model. */
 /**
  * Fixed sentences over the projected reason and outcome of work on the bound target; nothing
  * native reaches the model. There, `closed` means that target is gone for good.
@@ -298,8 +354,14 @@ export const makeActions = Effect.fnUntraced(function* (
 
   const call = (tool: "observe" | "act"): Call => ({ tool, id: undefined });
 
-  /** A fresh reading replaces the latest observation; a failed one leaves none. */
-  const read = (current: Call) =>
+  const observationSize = measure(ModelObservation);
+  const resultSize = measure(ActionResult);
+
+  /**
+   * A fresh reading, fitted within the result that carries it, replaces the latest observation;
+   * a failed one leaves none.
+   */
+  const read = (current: Call, size: (observation: typeof ModelObservation.Type) => number) =>
     Effect.suspend(() => {
       latest = undefined;
 
@@ -312,11 +374,15 @@ export const makeActions = Effect.fnUntraced(function* (
         .pipe(
           Effect.catch(failureFrom(hooks, current, page)),
           Effect.map((observation) => {
-            const projected = project(observation, ++generation, options.maxControls);
+            const fitted = fit(
+              project(observation, ++generation, options.maxControls),
+              options.resultMaxBytes,
+              size,
+            );
 
-            latest = projected.latest;
+            latest = fitted.latest;
 
-            return projected.shown;
+            return fitted.shown;
           }),
         );
     });
@@ -425,7 +491,11 @@ export const makeActions = Effect.fnUntraced(function* (
         ? single(first, observed.observationId, current)
         : form(steps, observed.observationId, current);
 
-      const after = yield* Effect.result(read(current));
+      const after = yield* Effect.result(
+        read(current, (observation) =>
+          resultSize({ completed: dispatched.completed, error: dispatched.error, observation }),
+        ),
+      );
 
       const error =
         after._tag === "Success"
@@ -449,7 +519,7 @@ export const makeActions = Effect.fnUntraced(function* (
     });
 
   // Inside the lane, a failure is the reading's own; anything the lane itself returns is a refusal.
-  const observe = read(call("observe")).pipe(
+  const observe = read(call("observe"), observationSize).pipe(
     Effect.mapError(
       (failure) =>
         new BrowserUseError({

@@ -444,6 +444,70 @@ it.effect("disabled controls and options never spend the controls a model is sho
   ),
 );
 
+it.effect("a reading is fitted within the result bound, and only the refs it shows resolve", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const bytes = (
+        observation: unknown,
+        schema: Schema.Codec<unknown, unknown> = BrowserUse.Observation,
+      ) =>
+        new TextEncoder().encode(
+          Schema.encodeUnknownSync(Schema.fromJsonString(schema))(observation),
+        ).length;
+
+      const page = (controls: number) =>
+        session({
+          script: {
+            documents: [
+              {
+                url: `${origin}/terms`,
+                text: `Terms. ${"Long words of terms. ".repeat(3000)}`,
+                controls: Array.from({ length: controls }, (_, index) => ({
+                  id: `term-${index}`,
+                  kind: "button" as const,
+                  label: `${index} ${"x".repeat(250)}`,
+                })),
+              },
+            ],
+          },
+        });
+
+      const options = { maxTextBytes: 131072, resultMaxBytes: 16 * 1024 };
+
+      // Text goes first: every control still fits once the text is cut.
+      const few = yield* page(8);
+      const text = yield* actionsOf(BrowserUseActions.layer(few, few.initialPage, options));
+      const read = yield* text.observe;
+
+      expect(bytes(read)).toBeLessThanOrEqual(16 * 1024);
+      expect(read.controls).toHaveLength(8);
+      expect(read.text).toMatch(/^Terms\. Long words/);
+      expect(read.text).toMatch(/\n\[Some page text was left out of this observation\.\]$/);
+
+      const acted = yield* text.act([{ kind: "click", ref: "o1-e0" }]);
+
+      expect(acted).toMatchObject({ completed: 1, error: null });
+      expect(bytes(acted, BrowserUse.ActionResult)).toBeLessThanOrEqual(16 * 1024);
+
+      // Then trailing controls, whose refs do not resolve: they were never shown.
+      const many = yield* page(64);
+      const controls = yield* actionsOf(BrowserUseActions.layer(many, many.initialPage, options));
+      const fitted = yield* controls.observe;
+
+      expect(bytes(fitted)).toBeLessThanOrEqual(16 * 1024);
+      expect(fitted.text).toBe(
+        "[Some page text was left out of this observation.]\n[Some controls were left out of this observation.]",
+      );
+      expect(fitted.controls.length).toBeGreaterThan(0);
+      expect(fitted.controls.length).toBeLessThan(64);
+      expect(
+        yield* controls.act([{ kind: "click", ref: "o1-e63" }]).pipe(Effect.flip),
+      ).toMatchObject({ code: "invalid", message: expect.stringContaining("not in the latest") });
+      expect(dispatched(yield* many.control.calls)).toEqual([]);
+    }),
+  ),
+);
+
 it.effect("a batch the browser cannot keep one observation for is refused before dispatch", () =>
   Effect.scoped(
     Effect.gen(function* () {
