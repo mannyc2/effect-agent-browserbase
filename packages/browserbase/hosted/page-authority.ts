@@ -298,7 +298,7 @@ await h.run(
         retiredPage:
           closed.phase === "closed" &&
           retired._tag === "Failure" &&
-          retired.failure.reason._tag === "Stale" &&
+          retired.failure.reason._tag === "Closed" &&
           retired.failure.outcome === "undispatched",
         siblingReferencePreserved: nextB.text === "2",
         unknownBackgroundContained:
@@ -315,10 +315,11 @@ await h.run(
           downs.every(
             (event, index) => event[1] === ups[index]?.[1] && event[2] === ups[index]?.[2],
           ) &&
+          // Plain typing sends a shifted character as its own key with shiftKey false.
           keys.events.every(
-            (event) => event[8] && !event[3] && !event[5] && !event[6] && !event[7],
+            (event) => event[8] && !event[3] && !event[4] && !event[5] && !event[6] && !event[7],
           ) &&
-          downs.some((event) => event[1] === "A" && event[4]),
+          downs.some((event) => event[1] === "A"),
         oneTypingAction: afterTyping - beforeTyping === 1,
         focusStopsNextWindow:
           focusLoss._tag === "Failure" &&
