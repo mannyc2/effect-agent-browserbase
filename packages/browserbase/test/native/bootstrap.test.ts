@@ -24,7 +24,11 @@ const ordered = (origin: string) =>
       origins: [origin],
       content: `
         globalThis.__second = globalThis.__first + 1;
-        globalThis.__granted = Promise.resolve().then(() => Notification.permission === "granted");
+        globalThis.__granted = new Promise((resolve) => {
+          const granted = () => resolve(Notification.permission === "granted");
+          if (document.readyState === "complete") granted();
+          else globalThis.addEventListener("load", granted, { once: true });
+        });
         document.addEventListener("DOMContentLoaded", () => {
           const marker = document.createElement("p");
           marker.id = "marker";
@@ -70,7 +74,8 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
           expect(yield* session.initialPage.ready()).toEqual({ _tag: "RequiresNavigation" });
           yield* h.navigate(NavigateRequest.make({ url: f.url }));
 
-          // Dependent work waits for the document, and the bundle ran in declared order.
+          // This fixture's readiness waits for native load, including its child documents.
+          // A committed frame URL can precede that frame's new execution context.
           expect((yield* h.readText(ReadTextRequest.make({ selector: "#marker" }))).text).toBe(
             "bootstrap 2",
           );
@@ -81,8 +86,7 @@ it.live("real CDP: one ordered bundle, granted capabilities and per-document rea
 
           // A frame is its own document: the context-level registration reached it, and
           // readiness belongs to that issued Frame rather than the page that contains it.
-          // The main frame reaching DOMContentLoaded says nothing about its iframe: that frame
-          // is attached, and then navigated, by native events that arrive on their own schedule.
+          // The owner still receives frame registration and navigation on separate native events.
           const frames = yield* settle(session.initialPage.listFrames(), (listed) =>
             listed.some((frame) => frame.name === "child" && frame.url.endsWith("/frame")),
           );
