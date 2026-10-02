@@ -57,14 +57,20 @@ const kindOf = (control: ObservedControl): string =>
 /** Controls that may take text; the browser still refuses one that cannot. */
 const fillable: ReadonlySet<string> = new Set(["input", "textarea", "other"]);
 
+/** The most controls one effect-browser reading issues; every reading asks for all of them. */
+const readingControls = 64;
+
 /**
- * The model's observation: enabled controls only, each select with its enabled options' labels.
- * effect-browser never reads a field's value, so a text field's `value` is always empty; a
- * select's is its selected options' labels and a toggle's says whether it is checked.
+ * The model's observation: enabled controls only, each select with its enabled options' labels,
+ * in document order until `maxControls` of them, options included, are shown. Disabled controls
+ * and options are dropped first, so they never spend that budget. effect-browser never reads a
+ * field's value, so a text field's `value` is always empty; a select's is its selected options'
+ * labels and a toggle's says whether it is checked.
  */
 const project = (
   observation: Observation,
   generation: number,
+  maxControls: number,
 ): { readonly latest: Latest; readonly shown: typeof ModelObservation.Type } => {
   const choices = new Map<
     string,
@@ -80,15 +86,26 @@ const project = (
   }
   const controls = new Map<string, Issued>();
   const shown: Array<(typeof ModelObservation.Type)["controls"][number]> = [];
+  let budget = maxControls;
+  let truncated = observation.controlsTruncated;
 
   for (const [index, control] of observation.controls.entries()) {
     if (control.disabled || control.selectElementId !== undefined) continue;
+    if (budget < 1) {
+      truncated = true;
+      break;
+    }
     const kind = kindOf(control);
     const all = control.kind === "select" ? (choices.get(control.elementId) ?? []) : [];
+    const enabled = all.filter((choice) => !choice.control.disabled);
 
-    const options = all
-      .filter((choice) => !choice.control.disabled)
+    // A select keeps the options that still fit; a value naming another one is refused.
+    const options = enabled
+      .slice(0, budget - 1)
       .map((choice) => ({ label: choice.label, elementId: choice.control.elementId }));
+
+    budget -= 1 + options.length;
+    if (options.length < enabled.length || control.optionsTruncated === true) truncated = true;
 
     const value =
       control.kind === "select"
@@ -122,9 +139,7 @@ const project = (
         ...(observation.textTruncated
           ? ["[Some page text was left out of this observation.]"]
           : []),
-        ...(observation.controlsTruncated
-          ? ["[Some controls were left out of this observation.]"]
-          : []),
+        ...(truncated ? ["[Some controls were left out of this observation.]"] : []),
       ]
         .filter((line) => line.length > 0)
         .join("\n"),
@@ -270,12 +285,12 @@ export const makeActions = Effect.fnUntraced(function* (
         .observe({
           scope: options.observationScope,
           maxTextBytes: options.maxTextBytes,
-          maxControls: options.maxControls,
+          maxControls: readingControls,
         })
         .pipe(
           Effect.catch(failureFrom(hooks, current, page)),
           Effect.map((observation) => {
-            const projected = project(observation, ++generation);
+            const projected = project(observation, ++generation, options.maxControls);
 
             latest = projected.latest;
 

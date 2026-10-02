@@ -385,6 +385,65 @@ it.effect("an option label that names several options is refused, never guessed"
   ),
 );
 
+it.effect("disabled controls and options never spend the controls a model is shown", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* session({
+        script: {
+          documents: [
+            {
+              url: `${origin}/sizes`,
+              text: "Sizes",
+              controls: [
+                ...Array.from({ length: 8 }, (_, index) => ({
+                  id: `sold-${index}`,
+                  kind: "button" as const,
+                  label: `Sold out ${index}`,
+                  disabled: true,
+                })),
+                { id: "size", kind: "select", label: "Size", multiple: false },
+                { id: "xs", kind: "other", label: "XS", selectElementId: "size", disabled: true },
+                { id: "s", kind: "other", label: "S", selectElementId: "size", selected: true },
+                { id: "m", kind: "other", label: "M", selectElementId: "size" },
+                { id: "l", kind: "other", label: "L", selectElementId: "size" },
+                { id: "buy", kind: "button", label: "Buy" },
+              ],
+            },
+          ],
+        },
+      });
+
+      const shown = (maxControls: number) =>
+        actionsOf(BrowserUseActions.layer(browser, browser.initialPage, { maxControls })).pipe(
+          Effect.flatMap((actions) =>
+            actions.observe.pipe(Effect.map((observation) => ({ actions, observation }))),
+          ),
+        );
+
+      // Eight disabled buttons and a disabled option come first; five enabled entries still fit.
+      expect((yield* shown(5)).observation).toEqual({
+        text: "Sizes",
+        controls: [
+          { ref: "o1-e8", kind: "select", name: "Size", value: "S", options: ["S", "M", "L"] },
+          { ref: "o1-e13", kind: "button", name: "Buy", value: "", options: [] },
+        ],
+      });
+
+      // Fewer: a select keeps the options that fit, and the reading says it left some out.
+      const { actions, observation } = yield* shown(3);
+
+      expect(observation).toEqual({
+        text: "Sizes\n[Some controls were left out of this observation.]",
+        controls: [{ ref: "o1-e8", kind: "select", name: "Size", value: "S", options: ["S", "M"] }],
+      });
+      expect(
+        yield* actions.act([{ kind: "select", ref: "o1-e8", value: "L" }]).pipe(Effect.flip),
+      ).toMatchObject({ code: "invalid", message: expect.stringContaining("No observed option") });
+      expect(dispatched(yield* browser.control.calls)).toEqual([]);
+    }),
+  ),
+);
+
 it.effect("a batch the browser cannot keep one observation for is refused before dispatch", () =>
   Effect.scoped(
     Effect.gen(function* () {

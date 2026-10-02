@@ -24,12 +24,16 @@ import {
 
 /**
  * How `observe` reads the page. Effect Agent's browser Tools have no scroll or search, so a
- * reading covers the whole document by default and issues as many controls as the browser allows.
+ * reading covers the whole document by default and asks the browser for as many controls as one
+ * reading issues, 64, disabled ones included.
  */
 export interface ReadingOptions {
   /** Text a model is shown from one reading, 8 KiB by default (1–131072 bytes). */
   readonly maxTextBytes?: number;
-  /** Controls read at once, 64 by default (0–64); each option of a select is one of them. */
+  /**
+   * Controls a model is shown, 64 by default (0–64); each option a select lists is one of them.
+   * Disabled controls and options are left out first, so they spend none of it.
+   */
   readonly maxControls?: number;
   /** `document` by default; `viewport` reads only what is on screen and reachable. */
   readonly observationScope?: "document" | "viewport";
