@@ -249,6 +249,8 @@ await h.run(
       // An absolute start on the original owner's monotonic clock, not the moment of the call.
       const startAt = requestedAt + 400_000_000n;
 
+      // At Browserbase round trips (about 72 ms) this plan takes about 8.5 s. Its budget bounds the
+      // check: remote pacing is measured, not promised.
       const ran = yield* stage.run(
         {
           version: 1,
@@ -277,7 +279,7 @@ await h.run(
             },
           ],
         },
-        { style, startAt, within: "8 seconds" },
+        { style, startAt, within: "15 seconds" },
       );
 
       const finishedAt = yield* session.monotonicTimeNanos;
@@ -308,7 +310,7 @@ await h.run(
             { id: "after-reader-cancel", action: { _tag: "PointerMove", to: { x: 600, y: 300 } } },
           ],
         },
-        { style, within: "8 seconds" },
+        { style, within: "15 seconds" },
       );
       yield* Deferred.await(afterCancel).pipe(Effect.timeout(2000));
       yield* peer.clickElement(
@@ -343,7 +345,7 @@ await h.run(
       const cleanup = yield* session.closeChecked;
 
       const started = ran.timing.startedMonotonicNanos;
-      const deadlineFromStart = ran.timing.deadlineMonotonicNanos - (startAt + 8_000_000_000n);
+      const deadlineFromStart = ran.timing.deadlineMonotonicNanos - (startAt + 15_000_000_000n);
 
       yield* h.established({
         sameLogicalBudget: after - before === 3 && ran.steps.length === 3,
