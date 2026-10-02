@@ -376,3 +376,103 @@ it.effect("a model's null for none reaches the browser as the parameter it leave
     expect(sent).toEqual(omitted);
   }),
 );
+
+// Effect Agent's scheduling hook is what keeps model-declared browser calls in order, and its own
+// suite does not test it. The host lane alone would also serialise the calls, so the lane admits
+// one: without the hook the engine starts the later calls early and the lane refuses them.
+it.live("sequential scheduling starts each browser call after the previous one, in order", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      const ordered = Agent.make("sequential-browser-calls", {
+        input: Schema.String,
+        output: Schema.Struct({ done: Schema.Boolean }),
+        instructions: "Perform the browser operations once, in order.",
+        toolkit: Toolkit.merge(BrowserTools.toolkit, BrowserTools.nativeToolkit),
+        policy: { maxTurns: 3, maxToolCalls: 3, maxDuration: "30 seconds" },
+      });
+
+      yield* browser.initialPage.navigate({ url: `${origin}/` });
+      const originalStart = browser.initialPage.start;
+      const log: string[] = [];
+      let scrolls = 0;
+
+      // A handler builds its browser operation when the engine starts the call, so the log shows
+      // whether a later call started before an earlier one finished.
+      const start: typeof originalStart = (plan, options) => {
+        const name =
+          plan.steps[0]?.action._tag === "PointerMove"
+            ? "pointer"
+            : ++scrolls === 1
+              ? "first-scroll"
+              : "second-scroll";
+
+        log.push(`start ${name}`);
+
+        return Effect.sync(() => log.push(`run ${name}`)).pipe(
+          Effect.andThen(Effect.sleep(20)),
+          Effect.andThen(originalStart(plan, options)),
+          Effect.tap((operation) => operation.completed),
+          Effect.ensuring(Effect.sync(() => log.push(`done ${name}`))),
+        );
+      };
+
+      yield* Effect.acquireRelease(
+        Effect.sync(() => Object.assign(browser.initialPage, { start })),
+        () => Effect.sync(() => Object.assign(browser.initialPage, { start: originalStart })),
+      );
+      // One outstanding call, the active one included: a call the engine started early is refused.
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+        lane: { maxOutstanding: 1 },
+      });
+
+      const result = yield* host
+        .run(AgentRuntime.run(ordered, "scroll twice and move the pointer"))
+        .pipe(
+          Effect.provide(
+            model([
+              {
+                _tag: "Stream",
+                parts: [
+                  {
+                    type: "tool-call",
+                    id: "first",
+                    name: "browser_scroll",
+                    params: { deltaX: 0, deltaY: 120 },
+                  },
+                  {
+                    type: "tool-call",
+                    id: "pointer",
+                    name: "browser_pointer_move",
+                    params: { to: { x: 10, y: 10 } },
+                  },
+                  {
+                    type: "tool-call",
+                    id: "second",
+                    name: "browser_scroll",
+                    params: { deltaX: 0, deltaY: 60 },
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ],
+                termination: { _tag: "Complete" },
+              },
+              answer(),
+            ]),
+          ),
+        );
+
+      expect(result.output.done).toBe(true);
+      expect(log).toEqual([
+        "start first-scroll",
+        "run first-scroll",
+        "done first-scroll",
+        "start pointer",
+        "run pointer",
+        "done pointer",
+        "start second-scroll",
+        "run second-scroll",
+        "done second-scroll",
+      ]);
+      expect((yield* host.toolFailures).failures).toEqual([]);
+    }),
+  ),
+);
