@@ -205,6 +205,10 @@ await h.run(
         }),
       );
       const pictureB = yield* b.screenshot({ fullPage: false });
+      // The Pages differ now: B's counter reads 1 and A's 0, while A's frame counter reads 1 and
+      // B's 0. A picture of A taken at the same moment therefore differs from B's unless B's
+      // request was routed to A, the only other Page.
+      const pictureA = yield* a.screenshot({ fullPage: false });
 
       yield* a.clickElement(
         ObservedElement.make({
@@ -289,7 +293,11 @@ await h.run(
       const cleanup = yield* session.closeChecked;
 
       yield* h.established({
-        exactPage: countA.text === "1" && countB.text === "1" && pictureB.bytes.byteLength > 0,
+        exactPage: countA.text === "1" && countB.text === "1",
+        exactPicture:
+          pictureB.bytes.byteLength > 0 &&
+          pictureA.bytes.byteLength > 0 &&
+          !Buffer.from(pictureB.bytes).equals(Buffer.from(pictureA.bytes)),
         exactFrame: frameCount.text === "1",
         exactCapture:
           frames.length > 0 &&
@@ -342,6 +350,7 @@ await h.run(
       return {
         frames: frames.length,
         captureStopped: capture.nativeStop,
+        actions: status.actions,
         typing: {
           codePoints: [...text].length,
           keyDowns: downs.length,
