@@ -905,7 +905,9 @@ on the way to a remote browser is not controlled. The owner is still checked bef
 command, nothing more is sent once a reply has failed, and the stroke drains all of its at most ten
 replies before it resolves. Each stroke therefore still costs its releases' round trip, and its
 focus check's when it names an element: against a remote browser, a stroke whose planned interval
-is shorter than those starts late.
+is shorter than those starts late. A slow renderer still handles a stroke's events one at a time,
+so the deadline check charges each stroke what strokes with as many commands have taken, scaled up
+from smaller strokes until one of its size has drained.
 
 A press waits for native input acknowledgement, without waiting for resulting navigation. If Enter submits a form, wait for what the next document shows with `waitFor`. A receipt carries the same target, pointer position and interval as any other input, and never says which key was pressed or what was typed. Typing a secret is still more observable than one `fill`, because the page sees every stroke; prefer `fill` for one unless the page requires keys. Both operations are available in the model-facing toolkit in `effect-agent-browser`.
 

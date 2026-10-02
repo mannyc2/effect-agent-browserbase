@@ -86,38 +86,77 @@ const heldModifiers = (
 
 const nanos = (milliseconds: number) => BigInt(Math.round(milliseconds * 1e6));
 
+/** The commands a stroke submits: inserted text, or its key and held modifiers down and up. */
+const commandsOf = (stroke: Stroke, modifiers: ReadonlyArray<KeyModifier>, typed: boolean) =>
+  keyDescription(stroke.key) === undefined
+    ? 1
+    : 2 * (1 + heldModifiers(stroke.key, modifiers, typed).length);
+
 /**
  * The measured pace of one performed key run. Strokes start at their absolute schedule offsets,
  * and each key is held from its key-down's submission. Before a stroke's first command, the rest
  * of the schedule must still fit the original deadline at the round trips the browser has
  * actually taken, so a stroke that could not finish is refused whole, never cut between a key and
  * its release.
+ *
+ * A stroke's commands share their round trip, but a renderer handles them one at a time. So each
+ * stroke is measured from its first submission (its span) and from its last (its drain) until its
+ * last reply, and charged as strokes of its own command count were. More commands never finish
+ * sooner: a larger stroke's measures bound a smaller one's, and a smaller one's are scaled up by
+ * command count, which overcharges latency only until a stroke of this size has drained.
  */
 const makePace = (
   pacing: ReturnType<typeof ownerPacing>,
   strokes: ReadonlyArray<Stroke>,
   started: bigint,
   focus: boolean,
+  modifiers: ReadonlyArray<KeyModifier>,
+  typed: boolean,
 ) => {
-  const measured = {
-    focus: { nanos: 0n, count: 0 },
-    // From a stroke's last submission until every one of its replies has arrived.
-    drain: { nanos: 0n, count: 0 },
-  };
+  const focused = { nanos: 0n, count: 0 };
+  const drained = new Map<number, { span: bigint; drain: bigint; count: number }>();
 
-  const mean = ({ nanos: total, count }: { readonly nanos: bigint; readonly count: number }) =>
+  const mean = (total: bigint, count: number) =>
     count === 0 ? 0 : Number(total / BigInt(count)) / 1e6;
 
+  const expected = (commands: number, check: number) => {
+    let bound: number | undefined;
+    let below: number | undefined;
+
+    for (const size of drained.keys()) {
+      if (size >= commands && (bound === undefined || size < bound)) bound = size;
+      if (size < commands && (below === undefined || size > below)) below = size;
+    }
+    const size = bound ?? below;
+    const measured = size === undefined ? undefined : drained.get(size);
+
+    // Before any stroke has drained, a focus check's round trip is the best estimate there is.
+    if (size === undefined || measured === undefined)
+      return { span: 0, drain: check * Math.max(1, commands / 2) };
+    const scale = size < commands ? commands / size : 1;
+
+    return {
+      span: mean(measured.span, measured.count) * scale,
+      drain: mean(measured.drain, measured.count) * scale,
+    };
+  };
+
   return {
-    observe: (kind: "focus" | "drain", elapsed: bigint) => {
-      measured[kind].nanos += elapsed;
-      measured[kind].count++;
+    observeFocus: (elapsed: bigint) => {
+      focused.nanos += elapsed;
+      focused.count++;
+    },
+    observeDrain: (commands: number, span: bigint, drain: bigint) => {
+      const measured = drained.get(commands) ?? { span: 0n, drain: 0n, count: 0 };
+
+      measured.span += span;
+      measured.drain += drain;
+      measured.count++;
+      drained.set(commands, measured);
     },
     /** Called after stroke `from`'s focus check, before its first command. */
     require: (from: number) => {
-      const check = focus ? mean(measured.focus) : 0;
-      // Before any stroke has drained, a focus check's round trip is the best estimate there is.
-      const drain = measured.drain.count > 0 ? mean(measured.drain) : check;
+      const check = focus ? mean(focused.nanos, focused.count) : 0;
       let at = Number(pacing.now() - started) / 1e6;
 
       for (let index = from; index < strokes.length; index++) {
@@ -126,12 +165,13 @@ const makePace = (
         if (stroke === undefined) break;
         // This stroke has already paid for its focus check.
         const down = Math.max(at, stroke.offsetMillis) + (index === from ? 0 : check);
+        const { span, drain } = expected(commandsOf(stroke, modifiers, typed), check);
 
         // A key's releases are submitted once it has been held; inserted text holds after it lands.
         at =
           keyDescription(stroke.key) === undefined
             ? down + Math.max(drain, stroke.holdMillis)
-            : down + stroke.holdMillis + drain;
+            : down + Math.max(stroke.holdMillis + drain, span);
       }
       pacing.requireBy(started + nanos(at));
     },
@@ -373,7 +413,7 @@ export const makeKeyboard = (
       const before = pacing.now();
 
       await requireFocus(element);
-      pace.observe("focus", pacing.now() - before);
+      pace.observeFocus(pacing.now() - before);
     }
     check();
     pace.require(index);
@@ -381,7 +421,8 @@ export const makeKeyboard = (
     const pending: Array<Promise<void>> = [];
     let failed = false;
     let firstFailure: unknown;
-    let submitted = pacing.now();
+    const first = pacing.now();
+    let submitted = first;
 
     const reject = (error: unknown) => {
       if (!failed) {
@@ -403,17 +444,17 @@ export const makeKeyboard = (
     const drain = async () => {
       await Promise.all(pending);
       if (failed) throw firstFailure;
-      pace.observe("drain", pacing.now() - submitted);
+      const replied = pacing.now();
+
+      pace.observeDrain(pending.length, replied - first, replied - submitted);
       ticket.acknowledge?.({ subphase: "key-burst", logicalComplete: false });
     };
 
     // A character the US layout cannot produce is committed as text, as plain typing does.
     if (keyDescription(stroke.key) === undefined) {
-      const down = pacing.now();
-
       submit(() => keyboard.insertText(stroke.key));
       await drain();
-      await pacing.pauseUntil(down + nanos(stroke.holdMillis));
+      await pacing.pauseUntil(first + nanos(stroke.holdMillis));
 
       return;
     }
@@ -445,7 +486,7 @@ export const makeKeyboard = (
 
     pacing.requireDuration(schedule.durationMillis);
     const started = pacing.now();
-    const pace = makePace(pacing, schedule.strokes, started, element !== undefined);
+    const pace = makePace(pacing, schedule.strokes, started, element !== undefined, [], true);
 
     for (const [index, stroke] of schedule.strokes.entries()) {
       check();
@@ -480,9 +521,16 @@ export const makeKeyboard = (
       const roundTrip = pacing.now() - before;
 
       // The erase (a key-down and key-up) and every stroke must fit before the old value goes.
-      const pace = makePace(pacing, schedule.strokes, pacing.now() + 2n * roundTrip, true);
+      const pace = makePace(
+        pacing,
+        schedule.strokes,
+        pacing.now() + 2n * roundTrip,
+        true,
+        [],
+        true,
+      );
 
-      pace.observe("focus", roundTrip);
+      pace.observeFocus(roundTrip);
       pace.require(0);
       check();
       ticket.dispatch();
@@ -558,7 +606,7 @@ export const makeKeyboard = (
                 stroke,
                 performed,
                 check ?? (() => performed.check()),
-                makePace(pacing, [stroke], pacing.now(), element !== undefined),
+                makePace(pacing, [stroke], pacing.now(), element !== undefined, modifiers, false),
                 0,
                 element,
                 modifiers,
