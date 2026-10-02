@@ -1,10 +1,13 @@
 import { EventEmitter } from "node:events";
 
 import { expect, it } from "@effect/vitest";
+import { Effect } from "effect";
 
 import { nativeSelection, waitEvent } from "../src/internal/browser/Actions.ts";
 import { makeKeyboard } from "../src/internal/browser/Keyboard.ts";
 import type { Ticket } from "../src/internal/browser/Owner.ts";
+import { prepare } from "../src/internal/browser/Performance.ts";
+import { DefaultMotionProfile } from "../src/PlanData.ts";
 import { gate } from "./fixtures/ScriptedOwner.ts";
 
 type KeyInput = {
@@ -23,8 +26,12 @@ const scriptedKeyboard = (
   options: {
     readonly setup?: () => Promise<void>;
     readonly detach?: () => Promise<void>;
+    /** The page keyboard that performed strokes drive, one reply per call. */
+    readonly keys?: (command: "down" | "up" | "insertText", key: string) => Promise<void>;
   } = {},
 ) => {
+  const keys = options.keys ?? (async () => {});
+
   const port = Object.assign(new EventEmitter(), {
     send,
     detach: options.detach ?? (async () => {}),
@@ -51,6 +58,9 @@ const scriptedKeyboard = (
         await send("Input.dispatchKeyEvent", { type: "keyDown", key: character });
         await send("Input.dispatchKeyEvent", { type: "keyUp", key: character });
       },
+      down: (key: string) => keys("down", key),
+      up: (key: string) => keys("up", key),
+      insertText: (text: string) => keys("insertText", text),
     },
   };
 
@@ -404,4 +414,177 @@ it("canceled setup and failed detach retain typing capacity until that connectio
     setup.resolve();
     await first;
   }
+});
+
+// Every key is held 20 ms, 30 ms after the last; the owner's clock moves only when it pauses.
+const performedPlan = Effect.runSync(
+  prepare(
+    {
+      motion: {
+        ...DefaultMotionProfile,
+        keys: {
+          interval: { minMillis: 30, maxMillis: 30 },
+          hold: { minMillis: 20, maxMillis: 20 },
+        },
+      },
+      slips: { probability: 0 },
+    },
+    7,
+    "keys",
+  ),
+);
+
+const millis = (value: number) => BigInt(value) * 1_000_000n;
+
+const performedTicket = (
+  clock: { at: bigint },
+  deadline: bigint,
+  acknowledged: Array<bigint> = [],
+  pause: () => Promise<void> = async () => {},
+): Ticket => ({
+  ...ticketFor(new AbortController().signal),
+  acknowledge: () => {
+    acknowledged.push(clock.at);
+  },
+  performance: {
+    plan: performedPlan,
+    now: () => clock.at,
+    remainingTimeNanos: () => deadline - clock.at,
+    pauseUntil: async (at) => {
+      if (at >= deadline) throw new Error("over budget");
+      if (at <= clock.at) return;
+      await pause();
+      clock.at = at;
+    },
+  },
+});
+
+const heldKeys = () => {
+  const sent: Array<string> = [];
+  const held: Array<ReturnType<typeof gate<void>>> = [];
+
+  return {
+    sent,
+    held,
+    keyboard: scriptedKeyboard(async () => {}, {
+      keys: (command, key) => {
+        const reply = gate<void>();
+
+        sent.push(`${command}:${key}`);
+        held.push(reply);
+
+        return reply.promise;
+      },
+    }),
+  };
+};
+
+it("a performed stroke releases its key after its hold, not after its key-down's reply", async () => {
+  const { sent, held, keyboard } = heldKeys();
+  const clock = { at: 0n };
+  const acknowledged: Array<bigint> = [];
+
+  const result = keyboard
+    .type("A", undefined, performedTicket(clock, millis(10_000), acknowledged), undefined, target)
+    .then(
+      () => "completed",
+      () => "failed",
+    );
+
+  await nativeTurn();
+  // Shift and the key went down, were held their planned 20 ms and released, before any reply.
+  expect(sent).toEqual(["down:Shift", "down:A", "up:A", "up:Shift"]);
+  expect(clock.at).toBe(millis(20));
+  // The stroke stays unresolved until its last release has answered.
+  for (const reply of held.slice(0, 3)) reply.resolve();
+  await nativeTurn();
+  expect(acknowledged).toEqual([]);
+  held[3]?.resolve();
+  await expect(result).resolves.toBe("completed");
+  expect(acknowledged.length).toBeGreaterThan(0);
+});
+
+it("a failed reply stops a performed stroke before its releases, after its other replies", async () => {
+  const { sent, held, keyboard } = heldKeys();
+  const hold = gate<void>();
+  let settled = false;
+
+  const result = keyboard
+    .type(
+      "A",
+      undefined,
+      performedTicket({ at: 0n }, millis(10_000), [], () => hold.promise),
+      undefined,
+      target,
+    )
+    .then(
+      () => ({ success: true }),
+      (cause: unknown) => ({ success: false, cause }),
+    )
+    .finally(() => {
+      settled = true;
+    });
+
+  await nativeTurn();
+  expect(sent).toEqual(["down:Shift", "down:A"]);
+  held[0]?.reject(new Error("lost key reply"));
+  hold.resolve();
+  await nativeTurn();
+  // Nothing is sent after the refusal, and the key-down still in flight is waited for.
+  expect(sent).toEqual(["down:Shift", "down:A"]);
+  expect(settled).toBe(false);
+  held[1]?.resolve();
+  await expect(result).resolves.toMatchObject({
+    success: false,
+    cause: { reason: { _tag: "Provider" } },
+  });
+  expect(sent).toEqual(["down:Shift", "down:A"]);
+});
+
+it("a performed run is charged by stroke size, refusing a shifted stroke a slow renderer cannot finish", async () => {
+  // A renderer that takes 100 ms over each key event drains a lowercase stroke 180 ms after its
+  // release. A shifted stroke has twice the events, so after "a" it is charged 400 ms, not 200.
+  const slow = heldKeys();
+  const clock = { at: 0n };
+
+  const refused = slow.keyboard
+    .type("aA", undefined, performedTicket(clock, millis(500)), undefined, target)
+    .then(
+      () => ({ success: true }),
+      (cause: unknown) => ({ success: false, cause }),
+    );
+
+  await nativeTurn();
+  expect(slow.sent).toEqual(["down:a", "up:a"]);
+  clock.at = millis(200);
+  for (const reply of slow.held.splice(0)) reply.resolve();
+  await nativeTurn();
+  expect(slow.sent).toEqual(["down:a", "up:a"]);
+  for (const reply of slow.held.splice(0)) reply.resolve();
+  await expect(refused).resolves.toMatchObject({
+    success: false,
+    cause: { reason: { _tag: "TimingBudgetExceeded" } },
+  });
+
+  // Over a 100 ms round trip, a shifted stroke drains like the shifted stroke before it: its
+  // modifiers do not multiply the round trip once a stroke of its size has been measured.
+  const distant = heldKeys();
+  const later = { at: 0n };
+
+  const typed = distant.keyboard
+    .type("AB", undefined, performedTicket(later, millis(300)), undefined, target)
+    .then(
+      () => "completed",
+      () => "failed",
+    );
+
+  await nativeTurn();
+  expect(distant.sent).toEqual(["down:Shift", "down:A", "up:A", "up:Shift"]);
+  later.at = millis(120);
+  for (const reply of distant.held.splice(0)) reply.resolve();
+  await nativeTurn();
+  expect(distant.sent.slice(4)).toEqual(["down:Shift", "down:B", "up:B", "up:Shift"]);
+  later.at = millis(260);
+  for (const reply of distant.held.splice(0)) reply.resolve();
+  await expect(typed).resolves.toBe("completed");
 });

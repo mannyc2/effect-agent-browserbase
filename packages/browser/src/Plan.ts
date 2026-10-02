@@ -1,6 +1,6 @@
 import { Data, type Duration, Effect, Schema, type Scope } from "effect";
 
-import type { ElementAdmission, OperationOptions } from "./Browser.ts";
+import type { ElementAdmission, NavigationOperation, OperationOptions } from "./Browser.ts";
 import type { CheckpointOptions } from "./BrowserData.ts";
 import type { BrowserError } from "./Errors.ts";
 import { guardedDecode } from "./internal/browser/PlanInput.ts";
@@ -173,5 +173,44 @@ export const recorded = (
 
     return yield* guardedDecode(Plan)(projected, { onExcessProperty: "error" }).pipe(
       Effect.mapError(() => new RecordingIncomplete({ reason: "IncompleteCapture" })),
+    );
+  });
+
+/**
+ * Project one `startNavigation` operation, such as an agent-browser `Navigation` receipt's, as a
+ * plan of one `Navigate` step named `id` ("navigate" by default). It joins `completed`, which
+ * stops nothing: only a navigation that reached DOMContentLoaded is acknowledged, and one that
+ * failed, was stopped or interrupted, or whose outcome is unknown is refused `Unacknowledged`.
+ * The step repeats the request, not the address a redirect reached, as a recorded run's
+ * Navigate step does. An `id` that is not a step identifier fails `IncompleteCapture`.
+ */
+export const recordedNavigation = (
+  operation: NavigationOperation,
+  options?: { readonly id?: string },
+): Effect.Effect<Plan, RecordingIncomplete> =>
+  Effect.gen(function* () {
+    const id = options?.id ?? "navigate";
+    const { url, timeoutMillis } = operation.request;
+
+    yield* operation.completed.pipe(
+      Effect.mapError(() => new RecordingIncomplete({ stepId: id, reason: "Unacknowledged" })),
+    );
+
+    const projected = {
+      version: 1,
+      steps: [
+        {
+          id,
+          action: {
+            _tag: "Navigate",
+            url,
+            ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
+          },
+        },
+      ],
+    };
+
+    return yield* guardedDecode(Plan)(projected, { onExcessProperty: "error" }).pipe(
+      Effect.mapError(() => new RecordingIncomplete({ stepId: id, reason: "IncompleteCapture" })),
     );
   });

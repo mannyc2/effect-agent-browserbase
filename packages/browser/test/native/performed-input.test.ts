@@ -1,8 +1,9 @@
 import { createServer } from "node:http";
+import { connect, createServer as createRelay, type Socket } from "node:net";
 
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Clock, Effect, Exit, Layer } from "effect";
+import { Clock, Effect, Exit, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 import * as Plan from "effect-browser/plan";
@@ -56,6 +57,16 @@ slow.addEventListener("input", () => { mirror.textContent = String(slow.value.le
 <script>
 text.addEventListener("input", () => { mirror.textContent = text.value; });
 </script>`,
+  // Every key event and the page's own time of it, so holds are measured where they land.
+  "/holds": `<input aria-label="Held" id="held"><p id="events">[]</p>
+<script>
+const events = [];
+for (const type of ["keydown", "keyup"])
+  held.addEventListener(type, (event) => {
+    events.push([type, event.key, event.code, performance.now()]);
+    document.getElementById("events").textContent = JSON.stringify(events);
+  });
+</script>`,
   // A control its container clips at the bottom, though its center stays visible.
   "/clipped": `<p id="hovered"></p>
 <div style="position: relative; height: 120px; overflow: hidden">
@@ -102,14 +113,66 @@ const site = Effect.acquireRelease(
   (server) => Effect.sync(server.close),
 );
 
+/**
+ * A loopback relay that delivers every chunk `oneWayMillis` late in each direction, in order, so
+ * the owner drives local Chromium across a remote browser's round trip.
+ */
+const distant = (endpoint: Redacted.Redacted<string>, oneWayMillis: number) =>
+  Effect.acquireRelease(
+    Effect.promise(
+      () =>
+        new Promise<{ readonly endpoint: Redacted.Redacted<string>; readonly close: () => void }>(
+          (resolve) => {
+            const target = new URL(Redacted.value(endpoint));
+            const sockets = new Set<Socket>();
+
+            const relay = (from: Socket, to: Socket) => {
+              sockets.add(from);
+              from.on("data", (chunk) =>
+                setTimeout(() => {
+                  if (!to.destroyed) to.write(chunk);
+                }, oneWayMillis),
+              );
+              from.on("end", () => setTimeout(() => to.end(), oneWayMillis));
+              from.on("error", () => to.destroy());
+            };
+
+            const server = createRelay((client) => {
+              const upstream = connect(Number(target.port), target.hostname);
+
+              relay(client, upstream);
+              relay(upstream, client);
+            });
+
+            server.listen(0, "127.0.0.1", () => {
+              const address = server.address();
+              const port = typeof address === "object" && address !== null ? address.port : 0;
+
+              resolve({
+                endpoint: Redacted.make(`ws://127.0.0.1:${String(port)}${target.pathname}`),
+                close: () => {
+                  for (const socket of sockets) socket.destroy();
+                  server.close();
+                },
+              });
+            });
+          },
+        ),
+    ),
+    (relay) => Effect.sync(relay.close),
+  );
+
 const layer = Chromium.layer({}).pipe(Layer.provide(NodeCrypto.layer));
 
-const open = (path: string) =>
+const open = (path: string, oneWayMillis = 0) =>
   Effect.gen(function* () {
     const { origin } = yield* site;
     const host = yield* externalChromium;
 
-    const session = yield* Chromium.attach(host.endpoint, {
+    const endpoint =
+      oneWayMillis === 0 ? host.endpoint : (yield* distant(host.endpoint, oneWayMillis)).endpoint;
+
+    const session = yield* Chromium.attach(endpoint, {
       policy: BrowserPolicy.unrestricted({ maxActions: 1000, maxElapsedMillis: 120_000 }),
     });
 
@@ -325,6 +388,78 @@ it.live("real CDP: performed typing produces shifted characters exactly", () =>
       );
 
       expect((yield* page.readText({ selector: "#mirror" })).text).toBe("Ab! ~Z");
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: a performed key is held for its plan, not for a remote round trip", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // A 200 ms round trip against 20 ms holds. A key that waited for its key-down's reply was
+      // held for a round trip, and Shift around it for three.
+      const session = yield* open("/holds", 100);
+      const page = session.initialPage;
+
+      yield* page.click({ selector: "#held" });
+      yield* page.run(
+        {
+          version: 1,
+          steps: [
+            {
+              id: "text",
+              action: {
+                _tag: "Type",
+                target: input("Held"),
+                text: { _tag: "Literal", value: "Ab!" },
+              },
+            },
+          ],
+        },
+        {
+          style: {
+            seed: 991,
+            motion: {
+              ...DefaultMotionProfile,
+              keys: {
+                interval: { minMillis: 30, maxMillis: 30 },
+                hold: { minMillis: 20, maxMillis: 20 },
+              },
+            },
+          },
+          within: "30 seconds",
+        },
+      );
+
+      const events = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Array(Schema.Tuple([Schema.String, Schema.String, Schema.String, Schema.Finite])),
+        ),
+      )((yield* page.readText({ selector: "#events" })).text);
+
+      expect(events.map(([type, key]) => `${type}:${key}`)).toEqual([
+        "keydown:Shift",
+        "keydown:A",
+        "keyup:A",
+        "keyup:Shift",
+        "keydown:b",
+        "keyup:b",
+        "keydown:Shift",
+        "keydown:!",
+        "keyup:!",
+        "keyup:Shift",
+      ]);
+      const down = new Map<string, number>();
+      const holds: Array<number> = [];
+
+      for (const [type, , code, at] of events) {
+        const since = down.get(code);
+
+        if (type === "keydown") down.set(code, at);
+        else if (since !== undefined) holds.push(at - since);
+      }
+
+      expect(holds).toHaveLength(5);
+      for (const hold of holds) expect(hold).toBeLessThan(100);
     }).pipe(Effect.provide(layer)),
   ),
 );

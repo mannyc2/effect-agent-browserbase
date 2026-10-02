@@ -299,7 +299,9 @@ formats remain unchanged.
 `host.receipts` returns an immutable `ToolCallSnapshot`: the latest 32 `ToolCallRecord`s, plus a
 dropped count. Run entries hold the original RunOperation; its attempts remain available after interruption
 or timeline eviction. Navigation entries hold the original NavigationOperation and carry no
-invented Plan IDs. Preparation refusals retain the original StepFailed or BrowserError. A local
+invented Plan IDs; `Plan.recordedNavigation(record.operation, { id: record.toolName })` records an
+acknowledged one as a one-step `Navigate` plan of the URL the model asked for. Preparation
+refusals retain the original StepFailed or BrowserError. A local
 invocation ID distinguishes repeated or omitted toolCallIds; overlong toolCallIds are omitted
 explicitly. These live capabilities and descriptor captures are never encoded in tool results.
 Fill/Type/Form input values use named host slots in recorded intent; native success and callback

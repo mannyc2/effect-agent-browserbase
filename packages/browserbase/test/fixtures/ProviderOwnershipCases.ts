@@ -359,6 +359,38 @@ export const providerOwnershipCases: ReadonlyArray<Case> = [
         [],
       );
     }).pipe(Effect.scoped, Effect.provide(layer()))),
+  test("Pages and Frames issued before a handoff are stale after resume on the same connection", () =>
+    Effect.gen(function* () {
+      const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;
+      const browser = yield* scriptedBrowser;
+      const before = session.initialPage;
+      const [main] = yield* before.listFrames();
+
+      assert.ok(main !== undefined);
+      const frame = yield* before.frame(main);
+      const handoff = yield* session.beginHandoff(60);
+      const [info] = (yield* session.resume(handoff.token, true)).pages;
+
+      assert.ok(info !== undefined);
+      for (const issued of [before, frame])
+        assert.deepEqual(
+          yield* issued.click({ selector: "#button" }).pipe(
+            Effect.match({
+              onFailure: ({ reason, outcome }) => [reason._tag, outcome],
+              onSuccess: () => "sent",
+            }),
+          ),
+          ["Stale", "undispatched"],
+        );
+      assert.equal(session.initialPage, before);
+      assert.equal((yield* before.status).phase, "stale");
+      const fresh = yield* session.page(info);
+
+      assert.notEqual(fresh, before);
+      yield* fresh.click({ selector: "#button" });
+      assert.equal((yield* browser.calls).filter((call) => call.operation === "click").length, 1);
+      assert.deepEqual(yield* browser.connections, ["open"]);
+    }).pipe(Effect.scoped, Effect.provide(layer()))),
   test("failed Live View acquisition does not automatically resume", () =>
     Effect.gen(function* () {
       const session = yield* (yield* BrowserbaseBrowser.acquire(policy)).connect;

@@ -369,8 +369,11 @@ await h.run(
           peerCount.text === "1" &&
           peerKeys.value === "" &&
           peerKeys.events.length === 0,
-        // Both readers saw the same ordered events until one was canceled; the other went on.
+        // Both readers saw the same ordered events, the capture's first frame among them, until
+        // one was canceled; the other went on.
         twoActualIndependentReaders:
+          a.firstFrames.get(interval.id) !== undefined &&
+          a.firstFrames.get(interval.id) === b.firstFrames.get(interval.id) &&
           a.sequences.length > 0 &&
           b.sequences.length > a.sequences.length &&
           a.sequences.every((sequence, index) => b.sequences[index] === sequence) &&
@@ -415,6 +418,7 @@ await h.run(
           "observed exact document activeElement at trusted DOM event; OS/operator focus and future input delivery are not guaranteed",
         readerAEvents: a.count,
         readerBEvents: b.count,
+        readerATags: Object.fromEntries(a.tags),
         readerBTags: Object.fromEntries(b.tags),
         capture: {
           received: summary.received,
