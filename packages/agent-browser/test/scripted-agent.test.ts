@@ -7,6 +7,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { Reasons } from "effect-browser/errors";
+import * as Plan from "effect-browser/plan";
 import * as Testing from "effect-browser/testing";
 import { Model, Toolkit, type LanguageModel } from "effect/unstable/ai";
 
@@ -179,6 +180,54 @@ it.effect("the agent clicks the observed control exactly once and finishes", () 
     ),
   );
 });
+
+it.effect("a navigate call's receipt records as a plan, and the model's result is unchanged", () =>
+  Browser.scoped(Testing.open(shop), (browser) =>
+    Effect.gen(function* () {
+      let shown = "";
+
+      const turns = [
+        call("c1", "browser_navigate", { url: `${origin}/` }),
+        answer((request) => {
+          shown = JSON.stringify(toolResults(request, "browser_navigate"));
+        }),
+      ];
+
+      const host = yield* BrowserTools.makeHost(browser, browser.initialPage);
+
+      yield* host
+        .run(AgentRuntime.run(consent, "open the shop"))
+        .pipe(Effect.provide(model(turns)));
+
+      // The model still sees exactly the address reached, and nothing of the receipt.
+      expect(shown).toContain(`"result":${JSON.stringify({ url: `${origin}/` })}`);
+      const { receipts } = yield* host.receipts;
+
+      expect(receipts).toHaveLength(1);
+      const [record] = receipts;
+
+      if (record?._tag !== "Navigation")
+        return yield* Effect.die("Expected the original navigation");
+      const recorded = yield* Plan.recordedNavigation(record.operation, { id: record.toolName });
+
+      expect(recorded).toEqual({
+        version: 1,
+        steps: [
+          {
+            id: "browser_navigate",
+            action: { _tag: "Navigate", url: `${origin}/` },
+            resolution: { _tag: "Strict" },
+          },
+        ],
+      });
+      yield* browser.initialPage.run(recorded);
+      expect((yield* browser.control.calls).map((call) => call.operation)).toEqual([
+        "navigate",
+        "navigate",
+      ]);
+    }),
+  ),
+);
 
 it.effect.each([false, true])(
   "an unknown click outcome is never replayed (failed containment: %s)",
