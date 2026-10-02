@@ -420,6 +420,7 @@ it.live("sequential scheduling starts each browser call after the previous one, 
         Effect.sync(() => Object.assign(browser.initialPage, { start })),
         () => Effect.sync(() => Object.assign(browser.initialPage, { start: originalStart })),
       );
+
       // One outstanding call, the active one included: a call the engine started early is refused.
       const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
         lane: { maxOutstanding: 1 },
