@@ -5,6 +5,13 @@ import {
   type fromSession,
   interactiveLayer,
 } from "effect-agent-browser/adapter";
+import type {
+  fromHost,
+  layer as browserActionsLayer,
+  Options as BrowserActionsOptions,
+  ReadingOptions,
+  sequentialScheduling as browserUseScheduling,
+} from "effect-agent-browser/browser-use";
 import {
   type formHandlers,
   type keyboardHandlers,
@@ -20,7 +27,9 @@ import {
   type ToolHostServices,
   type ToolFailureSnapshot,
 } from "effect-agent-browser/tools";
+import type { BrowserActions } from "effect-agent/browser-use";
 import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
+import type { RunSchedulingHook } from "effect-agent/run-options";
 import type { BrowserSession, Frame, Page } from "effect-browser/browser";
 import type { BrowserPolicy } from "effect-browser/browser-data";
 import type { ChromiumSession } from "effect-browser/chromium";
@@ -198,6 +207,26 @@ const synchronousAdmission: Same<
   boolean
 > = true;
 
+/** Effect Agent's own BrowserActions port over one borrowed Page; building it needs nothing more. */
+const browserActions: Same<
+  ReturnType<typeof browserActionsLayer<CallbackFailure>>,
+  Layer.Layer<BrowserActions, BrowserError>
+> = true;
+
+const hostedBrowserActions: Same<
+  ReturnType<typeof fromHost<OwnerFailure, CallbackFailure>>,
+  Layer.Layer<BrowserActions, BrowserError>
+> = true;
+
+const browserActionsTarget: Same<Parameters<typeof browserActionsLayer>[1], Page | Frame> = true;
+
+/** A host's actions take only reading bounds; its policy and execution are the host's own. */
+const hostedReading: Same<NonNullable<Parameters<typeof fromHost>[1]>, ReadingOptions> = true;
+
+const browserActionsPolicy: Same<BrowserActionsOptions["policy"], HandlerOptions["policy"]> = true;
+
+const browserUseHook: Same<ReturnType<typeof browserUseScheduling>, RunSchedulingHook> = true;
+
 it("retains scoped ownership, original handle identity and typed native Tool failures", () => {
   expect(
     originalContract &&
@@ -229,7 +258,13 @@ it("retains scoped ownership, original handle identity and typed native Tool fai
       scopedRequirements &&
       scopedErrors &&
       callbackHandlersStayRequired &&
-      synchronousAdmission,
+      synchronousAdmission &&
+      browserActions &&
+      hostedBrowserActions &&
+      browserActionsTarget &&
+      hostedReading &&
+      browserActionsPolicy &&
+      browserUseHook,
   ).toBe(true);
   expect(typeof declaredFrameworkFailure).toBe("function");
 });
