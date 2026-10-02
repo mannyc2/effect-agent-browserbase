@@ -139,10 +139,11 @@ const settleInPage = (_node: Element, millis: number) =>
 /**
  * The round trips a performed click is charged before dispatch. Over relays adding 18 to 70 ms
  * each way, Playwright 1.63's positioned click took 17 to 23 round trips in all, 14 to 19 of them
- * checking the node before its first input event. Charging 16 covers most of those checks
- * without refusing a click the deadline would have seen finish.
+ * checking the node before its first input event. A deadline inside those checks closes the Page
+ * over input never sent, while a refusal leaves it open, so the charge covers the most checking
+ * measured, at the cost of refusing a click that had a few round trips to spare.
  */
-const performedClickRoundTrips = 16;
+const performedClickRoundTrips = 20;
 
 /** A step that already dispatched reads back within a bounded wait, and never fails for it. */
 const bounded = async <A>(work: Promise<A>, millis: number, fallback: A): Promise<A> => {
