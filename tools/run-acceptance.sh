@@ -75,7 +75,17 @@ install_native() {
   cd "$TREE"
   # This external installation always executes; --no-cache stops Vite Task replaying a success.
   run install-browser timeout 300s ./node_modules/.bin/vp run --no-cache -F effect-browser install:test-browser
-  run install-media-tools timeout 300s bash -lc 'if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then sudo apt-get update >/dev/null && sudo apt-get install -y ffmpeg; fi; ffmpeg -version && ffprobe -version'
+  # Cold runners need the encoder, not apt's recommended display/audio packages. Bound
+  # stalled fetches separately from the whole install, and retain the complete apt log.
+  run install-media-tools timeout 600s bash -lc '
+    set -e
+    if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+      apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+      sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
+      sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg
+    fi
+    ffmpeg -version && ffprobe -version
+  '
 }
 cd "$SOURCE_ROOT"
 run tooling timeout 120s env npm_config_offline=true node --test tools/test/*.test.mjs
