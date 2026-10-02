@@ -25,7 +25,7 @@
       "name": "effect-agent-browser",
       "version": "0.2.0-beta.8",
       "devDependencies": {
-        "@effect-agent/testing": "0.1.0-beta.142",
+        "@effect-agent/testing": "0.1.0-beta.165",
         "@effect/ai-anthropic": "4.0.0-rc.117",
         "@effect/ai-openai": "4.0.0-rc.117",
         "@effect/platform-bun": "4.0.0-rc.117",
@@ -33,7 +33,7 @@
         "@effect/vitest": "4.0.0-rc.117",
         "@types/node": "26.1.2",
         "effect": "4.0.0-rc.117",
-        "effect-agent": "0.1.0-beta.142",
+        "effect-agent": "0.1.0-beta.165",
         "effect-browser": "workspace:*",
         "effect-browserbase": "workspace:*",
         "playwright-core": "1.63.0",
@@ -42,7 +42,7 @@
       },
       "peerDependencies": {
         "effect": "^4.0.0-rc.117",
-        "effect-agent": "0.1.0-beta.142",
+        "effect-agent": "0.1.0-beta.165",
         "effect-browser": "workspace:*",
       },
     },
@@ -96,7 +96,7 @@
 
     "@blazediff/core": ["@blazediff/core@1.9.1", "", {}, "sha512-ehg3jIkYKulZh+8om/O25vkvSsXXwC+skXmyA87FFx6A/45eqOkZsBltMw/TVteb0mloiGT8oGRTcjRAz66zaA=="],
 
-    "@effect-agent/testing": ["@effect-agent/testing@0.1.0-beta.142", "", { "dependencies": { "effect-agent": "0.1.0-beta.142" }, "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-YXOM54+5wrG97cBzwcu2ve6ykbgRs0P5Id39XmoEBDrJ8MmZckxA8YdP2k9EkrPWAIGSZE9pMIUyhXq9bCxFPA=="],
+    "@effect-agent/testing": ["@effect-agent/testing@0.1.0-beta.165", "", { "dependencies": { "effect-agent": "0.1.0-beta.165" }, "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-kXaztIBWHDzgU+T8FaFNx1XQHp47h91Ia8EDGY2eJuA4Pz49Av13nYDuycoTANEKSQKTAUNyM9t7coi8wJ27zg=="],
 
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-rc.117", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-UENH5wxqQud9NLlX2WqauiWuJ+Q9dBW2bOxMOsUJalZ0YdjbcK3LgNTZjrOR+0jPGTlBR9OIgF9qqFPZg6J0AA=="],
 
@@ -540,7 +540,7 @@
 
     "effect": ["effect@4.0.0-rc.117", "", {}, "sha512-UUyi9QiOW4nySFIBM3KnYbNMd9EZliOdKfBcyLD0mPMPheO2fkuXS5y0opjWc9oqzlJxPQICEGm8gGw3kh9j/w=="],
 
-    "effect-agent": ["effect-agent@0.1.0-beta.142", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-qK4orv+9YGQRWdGPr/Pd3Gmzk3MyT60FEZIJxueLLcd9KrvlkmVYmjBedxgbP5zaJsEJ8hgtD+Ab/YZL60LmGg=="],
+    "effect-agent": ["effect-agent@0.1.0-beta.165", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-OmW6nq8Fffh8vBHg+DeQUw9coJIvOumAOzIF4N+4c4xfOkLujRNSubOpBmK0Mw4ZQlXtG90BQ7uck0t/VXxmdw=="],
 
     "effect-agent-browser": ["effect-agent-browser@workspace:packages/agent-browser"],
 

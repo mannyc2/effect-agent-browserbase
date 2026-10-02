@@ -9,7 +9,7 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 | Node                   | 24.14.1 (`.node-version`)                                          |
 | Bun                    | 1.4.2                                                              |
 | Effect family          | 4.0.0-rc.117                                                       |
-| effect-agent / testing | 0.1.0-beta.142                                                     |
+| effect-agent / testing | 0.1.0-beta.165                                                     |
 | Playwright             | playwright-core 1.63.0                                             |
 | TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
 | Effect tsgo / Oxlint   | 0.45.0 / 1.82.0                                                    |

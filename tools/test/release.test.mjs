@@ -38,7 +38,7 @@ import { verifyReleaseSet } from "../verify-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const version = "0.2.0-beta.0";
-const frameworkVersion = "0.1.0-beta.142";
+const frameworkVersion = "0.1.0-beta.165";
 const sha = "1234567890abcdef1234567890abcdef12345678";
 
 const versions = {
