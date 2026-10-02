@@ -75,8 +75,8 @@ issued Page and retain bounded original operation receipts outside model project
 and livestream consume independent public timelines and render audience artwork outside the
 website. The film measures its additional host composition pass; neither consumer interprets
 the next received frame as proof of an input's pixel effect. The registered `page-authority` and
-`performed-presentation` hosted checks have no provider evidence; exact-commit PR acceptance
-supplies the local qualification record.
+`performed-presentation` hosted checks established their claims on Browserbase at
+`0.2.0-beta.8`; see [the 2 October record](#hosted-checks-at-020-beta8-2-october-2026).
 
 The agent Tools were then reworked around what a real model does with them. `browser_inspect`
 takes object parameters (`find`, `scope`): its former empty struct was refused by the pinned
@@ -358,6 +358,22 @@ From candidate `092c789`, `campaign` ran the approved plan (digest `627a7199…`
 These are the local pilot's results on a hosted browser. Luna-pro passed every case, and every Haiku answer failed the output contract. An earlier run of the same plan at `3330c1c`, before a review's fixes, agreed except that Haiku did not create the account on the re-rendered submit. With the one-session smoke run, 13 Browserbase sessions were used in all.
 
 The lost acknowledgement has no hosted form. After an unknown outcome the owner fences the page's callbacks, so the late write never reaches the host. One trial per cell is not a comparison.
+
+## Hosted checks at 0.2.0-beta.8, 2 October 2026
+
+The owner authorized Browserbase sessions as needed to qualify the Page, Plan and Timeline runtime published as `0.2.0-beta.8` (`5cb3ea2`). `tools/hosted-run.sh` ran from a workspace installed at `8862614`, which is `5cb3ea2` plus the one correction to the `page-authority` check described below. Both fixture URLs were one two-route server on the maintenance host, a landing document and a `pending` document request that never sends headers, reached through a temporary Cloudflare quick tunnel that was torn down afterwards. Fourteen sessions were allocated. Every one released with `remote: "confirmed"`, provider status `COMPLETED` and no issues, apart from the writer `context-crash` kills by design, which the provider reported `COMPLETED` 1.2 s after the kill; no session was left running. No model provider was called. Account, project and session identifiers are omitted, as above.
+
+**`page-authority`** first ran at `5cb3ea2` and failed two of its facts on values the library documents. Observing a Page that containment had already closed was refused `Closed` and undispatched, as `page-dispatch.test.ts` pins, where the check expected `Stale`; and plain typing sent `A` with `shiftKey` false, as the browser guide documents, where the check required Shift. A second run with a temporary diagnostic report showed every other fact holding and no plain-typed event carrying any modifier. `8862614` grades both facts against the documented values, and the check then established its claim:
+
+- a click in a `srcdoc` child frame, clicks on two Pages, a picture of the selected peer and a page-lifetime capture each stayed on their exact Page or Frame;
+- 99 code points were typed as one action: 97 trusted keydown/keyup pairs in order and two characters committed as text, over 1.7 s of host time. Moving focus during typing stopped the next window `NotFocused` and `performed` after 16 characters;
+- the never-settling navigation timed out `unknown` and closed only its own Page (`PageClosed`), the peer's earlier reference still clicked, and closing the last Page left the session open until its checked release.
+
+**`performed-presentation`** established its claim on its first run. The performed plans cost 3 logical actions, the `startAt` schedule began 2.2 ms after its intended instant on the owner's clock, and shifted typing arrived as 12 trusted key events in the focused field. Two timeline readers observed the same capture (59 and 68 events), and cancelling one left the other and the capture running: 311 frames received and delivered, none discarded, native stop confirmed. Keys configured to hold 20 ms were held 72–218 ms as the page measured them, so at hosted round trips performed pacing stretches; the claim measures pacing rather than promising it.
+
+**Regression on the changed runtime.** `keepalive-reconnect`, `live-capture`, `upload-routing`, `extension-identity`, `context-durability`, `context-crash` and `long-session` ran once each at the same source, and each established its existing claim. `long-session` spent all 1,100 actions with no failure in 142 s, against 123 s on 24 September. The per-operation medians are unchanged (wheel 75 ms, viewport reading 339 ms, heading read 75 ms), and the difference is in the tail: one wheel step took 3.4 s. Capture delivered all 1,527 frames across four documents, 344–401 per quarter.
+
+This is one run of each check from one account and region, on controlled fixtures and public pages. It does not cover operator handoff (`handoff` needs a person at the Live View), provider recording delivery (`acceptance` and `replay-delivery` need an approved artifact origin) or any consumer's own configuration.
 
 ## Historical material
 

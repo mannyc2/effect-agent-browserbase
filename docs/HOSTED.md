@@ -22,28 +22,28 @@ approved plan counts and bounds its sessions, as the
 [evaluation guide](../packages/agent-browser/test/evaluation/README.md#browserbase)
 describes.
 
-| Check                    | Question | What a passing run supports                                                                                                                                                                                                                                       |
-| ------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `acceptance`             | —        | allocation, connect, navigation, capture, Live View URL retrieval, confirmed release, recording download                                                                                                                                                          |
-| `demo`                   | —        | README media only; no correctness claim                                                                                                                                                                                                                           |
-| `handoff`                | —        | operator takeover and release through Live View (needs a person at a terminal; never runs in CI)                                                                                                                                                                  |
-| `context-durability`     | H1       | a cookie and localStorage marker survive into a later session on the same context                                                                                                                                                                                 |
-| `context-crash`          | H1       | the same markers survive when the writer's process is killed without a release, once the provider reports its session terminal                                                                                                                                    |
-| `keepalive-reconnect`    | H4       | a keep-alive session survives detach, and an init script is ready after reconnect                                                                                                                                                                                 |
-| `extension-identity`     | H3       | a registered MV3 extension keeps its identity and its content script runs                                                                                                                                                                                         |
-| `upload-routing`         | H6       | uploaded bytes reach the remote file chooser intact                                                                                                                                                                                                               |
-| `page-authority`         | H5       | issued Page/Frame routing, independent references, pictures, trusted typing and focus refusal, exact background containment, and last-page closure distinct from provider termination; registered with no hosted evidence yet                                     |
-| `performed-presentation` | H7       | performed Page plan timing and logical action costs, trusted document-focus-qualified shifted input, independent journal readers sharing one capture, peer references, and checked release on a controlled animated scene; registered with no hosted evidence yet |
-| `replay-delivery`        | H7       | the replay playlist validates and a segment downloads; recording delivery is reported as observed                                                                                                                                                                 |
-| `live-capture`           | —        | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements                                                                                                            |
-| `long-session`           | —        | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements                      |
+| Check                    | Question | What a passing run supports                                                                                                                                                                                                                  |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acceptance`             | —        | allocation, connect, navigation, capture, Live View URL retrieval, confirmed release, recording download                                                                                                                                     |
+| `demo`                   | —        | README media only; no correctness claim                                                                                                                                                                                                      |
+| `handoff`                | —        | operator takeover and release through Live View (needs a person at a terminal; never runs in CI)                                                                                                                                             |
+| `context-durability`     | H1       | a cookie and localStorage marker survive into a later session on the same context                                                                                                                                                            |
+| `context-crash`          | H1       | the same markers survive when the writer's process is killed without a release, once the provider reports its session terminal                                                                                                               |
+| `keepalive-reconnect`    | H4       | a keep-alive session survives detach, and an init script is ready after reconnect                                                                                                                                                            |
+| `extension-identity`     | H3       | a registered MV3 extension keeps its identity and its content script runs                                                                                                                                                                    |
+| `upload-routing`         | H6       | uploaded bytes reach the remote file chooser intact                                                                                                                                                                                          |
+| `page-authority`         | H5       | issued Page/Frame routing, independent references, pictures, trusted typing and focus refusal, exact background containment, and last-page closure distinct from provider termination                                                        |
+| `performed-presentation` | H7       | performed Page plan timing and logical action costs, trusted document-focus-qualified shifted input, independent journal readers sharing one capture, peer references, and checked release on a controlled animated scene                    |
+| `replay-delivery`        | H7       | the replay playlist validates and a segment downloads; recording delivery is reported as observed                                                                                                                                            |
+| `live-capture`           | —        | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements                                                                                       |
+| `long-session`           | —        | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
 
 The question codes come from the design research that preceded the checks
 (retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1
 persistence visibility, H2 context overlap and deletion, H3 extension and
 profile identity, H4 reconnect and cleanup, H5 multi-page evidence, H6 files
 and network routing, H7 observability and retention. H2 has no registered check;
-H5's new `page-authority` check and H7's `performed-presentation` follow-up have no hosted execution evidence yet.
+H5's `page-authority` check and H7's `performed-presentation` follow-up first ran on 2 October 2026.
 Each check narrows its question rather than answering all of
 it; the registry's `claim` says exactly how far. The demo is documentation evidence and is not a
 substitute for any check. [STATUS.md](STATUS.md) records which claims have a
@@ -147,8 +147,7 @@ the same `BROWSERBASE_PAGE_AUTHORITY_URL` variable in its environment; it remain
 this check and has no implicit fixture. The registered ceiling is 180 browser seconds, 30 actions,
 10 capture seconds and zero provider transfers. Typing reports actual trusted DOM events,
 values, one-action cost and the host receipt interval; native outstanding reply counts are not
-observable through this public API and are explicitly reported as unobserved. Registration
-alone establishes no hosted behavior, and evidence remains null until separately authorized execution.
+observable through this public API and are explicitly reported as unobserved.
 
 `performed-presentation` requires `BROWSERBASE_PERFORMED_PRESENTATION_URL`, an operator-owned,
 credential-free HTTPS directory URL without a query or fragment. Before allocation it validates
