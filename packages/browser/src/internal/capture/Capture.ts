@@ -31,6 +31,7 @@ import {
 } from "../browser/Association.ts";
 import type { CaptureSource, NativeFrame } from "../browser/Driver.ts";
 import { jpegGeometry } from "../browser/Images.ts";
+import * as Trace from "../Trace.ts";
 import { FrameBuffer } from "./FrameBuffer.ts";
 import { CaptureDefaults, CaptureLimits } from "./Options.ts";
 
@@ -63,7 +64,7 @@ const Metadata = Schema.Struct({
 const decodeMetadata = Schema.decodeUnknownOption(Metadata);
 
 /** Private seam for deterministic callback/lifetime tests. The public start accepts a real live session. */
-export const startCapture = Effect.fnUntraced(function* (
+const acquireCapture = Effect.fnUntraced(function* (
   parent: PageCaptureParent,
   options: CaptureOptions = {},
 ) {
@@ -102,6 +103,9 @@ export const startCapture = Effect.fnUntraced(function* (
       }),
     ),
   );
+  let interval: Trace.Started | undefined;
+
+  yield* Effect.addFinalizer((exit) => Effect.sync(() => interval?.end(exit)));
   const clock = parent.owner.clock;
   const captureId = yield* parent.newCaptureId;
   const wake = yield* Queue.dropping<void>(1);
@@ -365,7 +369,11 @@ export const startCapture = Effect.fnUntraced(function* (
                   reason: Reasons.Provider.make({}),
                   outcome: "unknown",
                 }),
-            }).pipe(Effect.timeout(2000), Effect.exit),
+            }).pipe(
+              Effect.timeout(2000),
+              Trace.span("Browser.capture.start-settlement"),
+              Effect.exit,
+            ),
           );
         }
         if (source !== undefined) {
@@ -384,7 +392,7 @@ export const startCapture = Effect.fnUntraced(function* (
                   reason: Reasons.Provider.make({}),
                   outcome: "unknown",
                 }),
-            }).pipe(Effect.timeout(3000)),
+            }).pipe(Effect.timeout(3000), Trace.span("Browser.capture.native-stop")),
           ).pipe(Effect.exit);
 
           if (Exit.isSuccess(stopped) && afterStart) {
@@ -395,9 +403,15 @@ export const startCapture = Effect.fnUntraced(function* (
         if (nativeStop === "confirmed") releaseReservation();
         cleanupFinished = true;
         publishCapture("Stopped");
+        interval?.end(error === undefined ? Exit.void : Exit.fail(error), {
+          "browser.capture.reason": reason,
+          "browser.capture.native-stop": nativeStop,
+          "browser.capture.received": received,
+          "browser.capture.discarded": buffer.dropped + rejected + late + duplicates,
+        });
 
         return snapshot();
-      }),
+      }).pipe(Trace.span("Browser.capture.cleanup")),
     ).pipe(Effect.provideService(Clock.Clock, clock)),
   );
 
@@ -666,6 +680,20 @@ export const startCapture = Effect.fnUntraced(function* (
               outcome: "undispatched",
             });
           }
+          yield* Effect.uninterruptible(
+            Trace.start("Browser.capture.interval", {
+              attributes: {
+                "browser.operation": "capture",
+                "browser.capture.lifetime": options.lifetime === "page" ? "page" : "document",
+              },
+            }).pipe(
+              Effect.tap((started) =>
+                Effect.sync(() => {
+                  interval = started;
+                }),
+              ),
+            ),
+          );
           lease = {
             pageId: target.pageId,
             reservedBytes: maxBytes,
@@ -737,7 +765,7 @@ export const startCapture = Effect.fnUntraced(function* (
                 reason: Reasons.Provider.make({}),
                 outcome: "unknown",
               }),
-          });
+          }).pipe(Trace.span("Browser.capture.native-start"));
           publishCapture("Started");
           ticket.check();
         }),
@@ -764,6 +792,11 @@ export const startCapture = Effect.fnUntraced(function* (
     )
     .pipe(
       Effect.provideService(Clock.Clock, clock),
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          if (Exit.isFailure(exit)) interval?.end(exit);
+        }),
+      ),
       Effect.onError(() => (lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid))),
       Effect.onInterrupt(() =>
         lease === undefined ? Effect.void : stopNative.pipe(Effect.asVoid),
@@ -811,7 +844,7 @@ export const startCapture = Effect.fnUntraced(function* (
         Stream.fromEffectRepeat(next).pipe(Stream.ensuring(stopNative.pipe(Effect.asVoid))),
       );
     }),
-  );
+  ).pipe(Trace.stream("Browser.capture.consume"));
 
   return {
     id: captureId,
@@ -832,3 +865,8 @@ export const startCapture = Effect.fnUntraced(function* (
     completed: Deferred.await(completed).pipe(Effect.map(snapshot)),
   } satisfies CaptureInterval;
 });
+
+export const startCapture = (parent: PageCaptureParent, options: CaptureOptions = {}) =>
+  acquireCapture(parent, options).pipe(
+    Trace.span("Browser.capture.start", { attributes: { "browser.operation": "capture-start" } }),
+  );

@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, Effect, Fiber, Option, Redacted, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Fiber, Option, Redacted, Schema, Stream, Tracer } from "effect";
 import { TestClock } from "effect/testing";
 
 import * as Bootstrap from "../src/Bootstrap.ts";
@@ -173,49 +173,84 @@ it.effect("an expired lifetime refuses undispatched under the test clock", () =>
   ),
 );
 
-it.effect("a click held after dispatch times out unknown and is never replayed", () =>
-  Browser.scoped(Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }), (browser) =>
-    Effect.gen(function* () {
-      const gate = yield* browser.control.gate;
-      const page = browser.initialPage;
+/** Records every span the library allocates under one test's tracer. */
+const recordSpans = () => {
+  const spans: Tracer.NativeSpan[] = [];
 
-      yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
-      const attempt = yield* acceptCookies(browser).pipe(Effect.forkScoped);
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
 
-      yield* gate.reached;
-      yield* TestClock.adjust("5 seconds");
-      expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
-        operation: "click",
-        reason: { _tag: "Timeout" },
-        outcome: "unknown",
-        containment: { _tag: "PageClosed", pageId: page.identity.pageId },
-      });
-      expect(yield* browser.status).toMatchObject({
-        phase: "open",
-        reason: null,
-        unresolvedDispatch: false,
-      });
-      expect(yield* page.status).toMatchObject({ phase: "closed" });
-      expect(yield* browser.listPages()).toEqual([]);
-      expect(
-        (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
-      ).toMatchObject([{ pageId: page.identity.pageId, dispatched: true, settled: "completed" }]);
-      // The original page closed, so application retries cannot replay its input.
-      expect(yield* acceptCookies(browser).pipe(Effect.flip)).toMatchObject({
-        reason: { _tag: "Closed" },
-        outcome: "undispatched",
-      });
-      const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
+      spans.push(span);
 
-      expect(clicks).toHaveLength(1);
-      expect(clicks[0]).toMatchObject({ dispatched: true });
-      yield* gate.open;
-    }),
-  ),
-);
+      return span;
+    },
+  });
 
-it.effect("interruption before dispatch leaves the session usable", () =>
-  Browser.scoped(Testing.open(shop), (browser) =>
+  return { spans, tracer };
+};
+
+it.effect("a click held after dispatch times out unknown and is never replayed", () => {
+  const { spans, tracer } = recordSpans();
+
+  return Browser.scoped(
+    Testing.open(shop, { automation: { actionTimeoutMillis: 5_000 } }),
+    (browser) =>
+      Effect.gen(function* () {
+        const gate = yield* browser.control.gate;
+        const page = browser.initialPage;
+
+        yield* browser.control.next("click", { _tag: "Hold", gate, dispatched: true });
+        const attempt = yield* acceptCookies(browser).pipe(Effect.forkScoped);
+
+        yield* gate.reached;
+        yield* TestClock.adjust("5 seconds");
+        expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
+          operation: "click",
+          reason: { _tag: "Timeout" },
+          outcome: "unknown",
+          containment: { _tag: "PageClosed", pageId: page.identity.pageId },
+        });
+        expect(yield* browser.status).toMatchObject({
+          phase: "open",
+          reason: null,
+          unresolvedDispatch: false,
+        });
+        expect(yield* page.status).toMatchObject({ phase: "closed" });
+        expect(yield* browser.listPages()).toEqual([]);
+        expect(
+          (yield* browser.control.calls).filter((call) => call.operation === "close-page"),
+        ).toMatchObject([{ pageId: page.identity.pageId, dispatched: true, settled: "completed" }]);
+        // The original page closed, so application retries cannot replay its input.
+        expect(yield* acceptCookies(browser).pipe(Effect.flip)).toMatchObject({
+          reason: { _tag: "Closed" },
+          outcome: "undispatched",
+        });
+        const clicks = (yield* browser.control.calls).filter((call) => call.operation === "click");
+
+        expect(clicks).toHaveLength(1);
+        expect(clicks[0]).toMatchObject({ dispatched: true });
+        // Unknown mutation settlement and the refused application retry are separate terminal facts.
+        const attempts = spans.filter((span) => span.name === "Browser.click");
+
+        const refusal = spans.find(
+          (span) =>
+            span.name === "Browser.observe" && span.attributes.get("browser.reason") === "Closed",
+        );
+
+        expect(attempts.map((span) => span.attributes.get("browser.outcome"))).toEqual(["unknown"]);
+        expect(attempts.every((span) => span.status._tag === "Ended")).toBe(true);
+        expect(refusal?.attributes.get("browser.outcome")).toBe("undispatched");
+        expect(refusal?.status).toMatchObject({ _tag: "Ended", exit: { _tag: "Failure" } });
+        yield* gate.open;
+      }),
+  ).pipe(Effect.withTracer(tracer));
+});
+
+it.effect("interruption before dispatch leaves the session usable", () => {
+  const { spans, tracer } = recordSpans();
+
+  return Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
       const gate = yield* browser.control.gate;
 
@@ -224,16 +259,25 @@ it.effect("interruption before dispatch leaves the session usable", () =>
 
       yield* gate.reached;
       yield* Fiber.interrupt(attempt);
+      const interrupted = yield* Fiber.await(attempt);
+
+      expect(Exit.isFailure(interrupted) && Cause.hasInterruptsOnly(interrupted.cause)).toBe(true);
       expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
       expect((yield* browser.control.calls)[0]).toMatchObject({
         operation: "observe",
         dispatched: false,
         settled: "failed",
       });
+      for (const name of ["Browser.observe", "Browser.native.observe"]) {
+        const failed = spans.find((span) => span.name === name);
+
+        expect(failed?.attributes.get("browser.status")).toBe("interrupted");
+        expect(failed?.attributes.get("browser.outcome")).toBe("undispatched");
+      }
       expect(yield* acceptCookies(browser)).toBe("accepted");
     }),
-  ),
-);
+  ).pipe(Effect.withTracer(tracer));
+});
 
 it.effect("a dispatched mutation and a replaced document both make earlier nodes stale", () =>
   Browser.scoped(Testing.open(shop), (browser) =>
@@ -1103,8 +1147,10 @@ it.effect(
     ),
 );
 
-it.effect("a page that is not selected also takes an interrupted mutation with it", () =>
-  Browser.scoped(Testing.open(shop), (browser) =>
+it.effect("a page that is not selected also takes an interrupted mutation with it", () => {
+  const { spans, tracer } = recordSpans();
+
+  return Browser.scoped(Testing.open(shop), (browser) =>
     Effect.gen(function* () {
       const { pinned } = yield* background(browser);
       const gate = yield* browser.control.gate;
@@ -1114,12 +1160,24 @@ it.effect("a page that is not selected also takes an interrupted mutation with i
 
       yield* gate.reached;
       yield* Fiber.interrupt(typing);
+      const interrupted = yield* Fiber.await(typing);
+
+      expect(Exit.isFailure(interrupted) && Cause.hasInterruptsOnly(interrupted.cause)).toBe(true);
       expect(yield* browser.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
       expect(yield* browser.listPages()).toHaveLength(1);
+      expect(
+        (yield* browser.control.calls).filter((call) => call.operation === "type"),
+      ).toHaveLength(1);
+      for (const name of ["Browser.type", "Browser.native.type"]) {
+        const failed = spans.find((span) => span.name === name);
+
+        expect(failed?.attributes.get("browser.status")).toBe("interrupted");
+        expect(failed?.attributes.get("browser.outcome")).toBe("unknown");
+      }
       yield* gate.open;
     }),
-  ),
-);
+  ).pipe(Effect.withTracer(tracer));
+});
 
 it.effect(
   "an unknown outcome on the selected page closes that exact page and keeps its peer usable",

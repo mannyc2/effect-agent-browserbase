@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { Effect, Layer, Redacted, Schema, Stream } from "effect";
+import { Effect, Layer, Redacted, Schema, Stream, Tracer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { BrowserbaseClient } from "../../src/Client.ts";
@@ -47,6 +47,22 @@ const metadata = (status = "COMPLETED") =>
   });
 
 const pending = { downloads: [{ pageId: "0", status: "PENDING" }] };
+
+const recorded = () => {
+  const spans: Tracer.NativeSpan[] = [];
+
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+
+      spans.push(span);
+
+      return span;
+    },
+  });
+
+  return { spans, tracer };
+};
 
 const completed = {
   downloads: [
@@ -180,16 +196,20 @@ export const artifactCases = [
     name: "recording wait returns completed and failed pages independently",
     run: Effect.gen(function* () {
       let reads = 0;
+      const { spans, tracer } = recorded();
 
       yield* withRecordings(
         async (input) => {
           if (!new Request(input).url.includes("/recording/")) return metadata();
 
-          return Response.json(
-            ++reads < 2
-              ? pending
-              : { downloads: [...completed.downloads, { pageId: "1", status: "FAILED" }] },
-          );
+          return ++reads < 2
+            ? Response.json(
+                { detail: "PRIVATE-RECORDING-RETRY" },
+                { status: 429, headers: { "retry-after": "60" } },
+              )
+            : Response.json({
+                downloads: [...completed.downloads, { pageId: "1", status: "FAILED" }],
+              });
         },
         (api) =>
           Effect.gen(function* () {
@@ -204,22 +224,45 @@ export const artifactCases = [
               ["COMPLETED", "FAILED"],
             );
           }),
-      );
+      ).pipe(Effect.withTracer(tracer));
+      const wait = spans.find((span) => span.name === "BrowserbaseRecordings.wait");
+
+      assert.equal(wait?.attributes.get("browser.wait.timed-out"), false);
+      assert.equal(wait?.attributes.get("browser.wait.failed-polls"), 1);
+      assert.equal(wait?.attributes.get("browser.wait.last-failure"), "rate-limited");
+      assert.equal(spans.filter((span) => span.name === "BrowserbaseClient.request").length, 0);
+      assert.equal(spans.filter((span) => span.name === "BrowserbaseSessions.retrieve").length, 0);
     }),
   },
   {
     name: "bounded recording polling returns latest partial status, not a fabricated permanent failure",
-    run: withRecordings(
-      async (input) =>
-        new Request(input).url.includes("/recording/") ? Response.json(pending) : metadata(),
-      (api) =>
-        Effect.gen(function* () {
-          const batch = yield* elapse(api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 }), 30);
+    run: Effect.gen(function* () {
+      const { spans, tracer } = recorded();
 
-          assert.equal(batch.timedOut, true);
-          assert.equal(batch.pages[0]?.status, "PENDING");
-        }),
-    ),
+      yield* withRecordings(
+        async (input) =>
+          new Request(input).url.includes("/recording/") ? Response.json(pending) : metadata(),
+        (api) =>
+          Effect.gen(function* () {
+            const batch = yield* elapse(
+              api.wait(ref, { timeoutMillis: 30, intervalMillis: 10 }),
+              30,
+            );
+
+            assert.equal(batch.timedOut, true);
+            assert.equal(batch.pages[0]?.status, "PENDING");
+          }),
+      ).pipe(Effect.withTracer(tracer));
+      const wait = spans.find((span) => span.name === "BrowserbaseRecordings.wait");
+
+      assert.equal(wait?.attributes.get("browser.wait.timed-out"), true);
+      // The final poll reaches the absolute deadline; its typed timeout is absorbed into
+      // this successful partial batch, and must remain visible as a bounded aggregate fact.
+      assert.equal(wait?.attributes.get("browser.wait.failed-polls"), 1);
+      assert.equal(wait?.attributes.get("browser.wait.last-failure"), "timeout");
+      assert.equal(spans.filter((span) => span.name === "BrowserbaseClient.request").length, 0);
+      assert.equal(spans.filter((span) => span.name === "BrowserbaseSessions.retrieve").length, 0);
+    }),
   },
   ...([409, 410, 422, 429] as const).map((status) => ({
     name: `recording API preserves ${status} as a bounded typed state`,

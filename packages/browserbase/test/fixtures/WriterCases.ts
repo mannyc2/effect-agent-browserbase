@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 
 import { NodeCrypto } from "@effect/platform-node";
-import { Context, Deferred, Effect, Fiber, Layer, Redacted, Schema, type Scope } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Redacted,
+  References,
+  Schema,
+  type Scope,
+  Tracer,
+} from "effect";
 import type { BrowserError } from "effect-browser/errors";
 import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -372,17 +385,83 @@ export const writerCases: ReadonlyArray<Case> = [
   test(
     "consumer service and failure survive writer composition",
     Effect.gen(function* () {
-      const error = ApplicationFailure.make({ code: "expected" });
+      const error = ApplicationFailure.make({ code: "PRIVATE-PRIMARY" });
+      const primaryCause = Cause.fail(error);
+      const secondary = ApplicationFailure.make({ code: "PRIVATE-SETTLEMENT" });
+      const ref = reference();
+      const spans: Tracer.NativeSpan[] = [];
+      let acquired = 0;
+      let settled = 0;
+      let settlementDisposition: unknown;
 
-      const result = yield* withWriter(backend([]), reference(), () =>
+      const tracer = Tracer.make({
+        span: (options) => {
+          if (options.name === "BrowserbaseWriter.settle") {
+            settlementDisposition = Context.get(
+              options.annotations,
+              References.TracerSpanAnnotations,
+            )["browser.writer.disposition"];
+          }
+          const span = new Tracer.NativeSpan(options);
+
+          spans.push(span);
+
+          return span;
+        },
+      });
+
+      const lease = {
+        acquire: () =>
+          Effect.sync(() => {
+            acquired++;
+
+            return {
+              settle: () =>
+                Effect.suspend(() => {
+                  settled++;
+
+                  return Effect.fail(secondary);
+                }),
+            };
+          }),
+      };
+
+      const result = yield* withWriter(lease, ref, () =>
         ApplicationService.pipe(Effect.flatMap((service) => service.read)),
       ).pipe(
-        Effect.provideService(ApplicationService, { read: Effect.fail(error) }),
-        Effect.result,
+        Effect.provideService(ApplicationService, { read: Effect.failCause(primaryCause) }),
+        Effect.withTracer(tracer),
+        Effect.exit,
       );
 
       assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure") assert.equal(result.failure, error);
+      if (result._tag === "Failure") assert.equal(result.cause, primaryCause);
+      const refused = yield* expectFailure(withWriter(lease, ref, () => Effect.void));
+
+      assert.equal(refused._tag, "ContextError");
+      if (refused._tag === "ContextError") assert.equal(refused.reason, "active");
+      assert.equal(acquired, 1);
+      assert.equal(settled, 1);
+      assert.equal(settlementDisposition, "quarantine");
+      const settlement = spans.find((span) => span.name === "BrowserbaseWriter.settle");
+
+      assert.equal(settlement?.status._tag, "Ended");
+      if (settlement?.status._tag === "Ended") {
+        assert.equal(Exit.isFailure(settlement.status.exit), true);
+        if (Exit.isFailure(settlement.status.exit))
+          assert.equal(Cause.pretty(settlement.status.exit.cause).includes("PRIVATE-"), false);
+      }
+      assert.equal(
+        JSON.stringify(
+          spans.map((span) => ({
+            attributes: [...span.attributes],
+            events: span.events,
+            status: span.status,
+          })),
+          (_, value: unknown) => (typeof value === "bigint" ? String(value) : value),
+        ).includes("PRIVATE-"),
+        false,
+      );
     }),
   ),
   test(

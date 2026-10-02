@@ -7,6 +7,7 @@ import type { SessionReference } from "../../References.ts";
 import { isTerminalSessionStatus } from "../../SessionData.ts";
 import { BrowserbaseSessions } from "../../Sessions.ts";
 import { connectionAddress } from "../provider/Connection.ts";
+import * as Trace from "../Trace.ts";
 import {
   makeCleanup,
   noLocalConnection,
@@ -31,101 +32,118 @@ const failure = (reason: SessionError["reason"]) =>
  * else: no allocation attempt is made, no release is requested, and no Context-writer
  * authority is claimed. Whoever allocated the session keeps all three.
  */
-export const attachRemote = Effect.fnUntraced(function* (
-  options: AttachmentOptions,
-  local: LocalCleanup = noLocalConnection,
-  limits?: CleanupLimits,
-) {
-  const client = yield* BrowserbaseClient;
-  const sessions = yield* BrowserbaseSessions;
-  const parent = yield* Scope.Scope;
-  const pendingWaitMillis = options.pendingWaitMillis ?? 0;
+export const attachRemote = Effect.fnUntraced(
+  function* (
+    options: AttachmentOptions,
+    local: LocalCleanup = noLocalConnection,
+    limits?: CleanupLimits,
+  ) {
+    const client = yield* BrowserbaseClient;
+    const sessions = yield* BrowserbaseSessions;
+    const parent = yield* Scope.Scope;
+    const pendingWaitMillis = options.pendingWaitMillis ?? 0;
 
-  if (
-    !Number.isSafeInteger(pendingWaitMillis) ||
-    pendingWaitMillis < 0 ||
-    pendingWaitMillis > 600_000
-  )
-    return yield* failure("configuration");
+    if (
+      !Number.isSafeInteger(pendingWaitMillis) ||
+      pendingWaitMillis < 0 ||
+      pendingWaitMillis > 600_000
+    )
+      return yield* failure("configuration");
 
-  // The status read validates project authority before anything is borrowed. A terminal
-  // session needs a fresh allocation from durable state, never a reattachment.
-  const observed = yield* sessions.retrieve(options.reference);
+    // The status read validates project authority before anything is borrowed. A terminal
+    // session needs a fresh allocation from durable state, never a reattachment.
+    const observed = yield* sessions.retrieve(options.reference);
 
-  if (isTerminalSessionStatus(observed.status)) return yield* failure("expired");
-  if (observed.status !== "RUNNING") {
-    if (pendingWaitMillis === 0) return yield* failure("active");
-    yield* sessions.waitUntilRunning(observed.reference, { timeoutMillis: pendingWaitMillis });
-  }
-  const reference = observed.reference;
+    if (isTerminalSessionStatus(observed.status)) return yield* failure("expired");
+    if (observed.status !== "RUNNING") {
+      if (pendingWaitMillis === 0) return yield* failure("active");
+      yield* sessions.waitUntilRunning(observed.reference, { timeoutMillis: pendingWaitMillis });
+    }
+    const reference = observed.reference;
 
-  return yield* Effect.uninterruptible(
-    Effect.gen(function* () {
-      const resourceScope = yield* Scope.make();
-      let closing = false;
-      let cleanup: CleanupResult | undefined;
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const resourceScope = yield* Scope.make();
+        let closing = false;
+        let cleanup: CleanupResult | undefined;
 
-      const terminate = yield* Effect.cached(
-        Effect.uninterruptible(
-          Effect.gen(function* () {
-            closing = true;
+        const terminate = yield* Effect.cached(
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              closing = true;
 
-            const coordinator = yield* makeCleanup(
-              reference,
-              "borrowed",
-              sessions,
-              local,
-              (result) => {
-                cleanup = result;
-              },
-              limits,
-            );
+              const coordinator = yield* makeCleanup(
+                reference,
+                "borrowed",
+                sessions,
+                local,
+                (result) => {
+                  cleanup = result;
+                },
+                limits,
+              );
 
-            yield* coordinator.close;
-            const result = cleanup;
-            const notify = options.onCleanup;
+              yield* coordinator.close;
+              const result = cleanup;
+              const notify = options.onCleanup;
 
-            if (result !== undefined) {
-              yield* reported(Effect.suspend(() => reportCleanup(result)));
-              if (notify !== undefined) yield* reported(Effect.suspend(() => notify(result)));
-            }
-          }),
-        ),
-      );
-
-      const closeScope = yield* Effect.cached(Scope.close(resourceScope, Exit.void));
-
-      // Teardown is registered before the first connection, exactly as an owned scope does.
-      yield* Scope.addFinalizer(resourceScope, terminate);
-      yield* Scope.addFinalizer(parent, closeScope);
-
-      return {
-        reference,
-        status: observed,
-        connection: (timeoutMillis: number) =>
-          Effect.suspend(() =>
-            closing
-              ? Effect.fail(
-                  SessionError.make({
-                    operation: "session-connect",
-                    reason: "expired",
-                    outcome: "undispatched",
-                  }),
-                )
-              : // Credentials are fetched fresh: an expiry can race the caller's own read.
-                connectionAddress(client, sessions, reference, timeoutMillis),
-          ),
-        release: closeScope.pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              cleanup === undefined
-                ? Effect.die(new Error("Borrowed session closed without cleanup evidence"))
-                : Effect.succeed(cleanup),
+              if (result !== undefined) {
+                yield* reported(Effect.suspend(() => reportCleanup(result)));
+                if (notify !== undefined)
+                  yield* reported(
+                    Effect.suspend(() => notify(result)).pipe(
+                      Trace.span("Browserbase.callback.cleanup"),
+                    ),
+                  );
+              }
+            }).pipe(
+              Trace.span("Browserbase.terminate", {
+                attributes: { "browser.ownership": "borrowed" },
+              }),
             ),
           ),
-        ),
-        cleanupResult: Effect.sync(() => Option.fromNullishOr(cleanup)),
-      };
-    }),
-  );
-});
+        );
+
+        const closeScope = yield* Effect.cached(Scope.close(resourceScope, Exit.void));
+
+        // Teardown is registered before the first connection, exactly as an owned scope does.
+        yield* Scope.addFinalizer(resourceScope, terminate);
+        yield* Scope.addFinalizer(parent, closeScope);
+
+        return {
+          reference,
+          status: observed,
+          connection: (timeoutMillis: number) =>
+            Effect.suspend(() =>
+              closing
+                ? Effect.fail(
+                    SessionError.make({
+                      operation: "session-connect",
+                      reason: "expired",
+                      outcome: "undispatched",
+                    }),
+                  )
+                : // Credentials are fetched fresh: an expiry can race the caller's own read.
+                  connectionAddress(client, sessions, reference, timeoutMillis).pipe(
+                    Trace.span("Browserbase.connection", {
+                      attributes: { "browser.ownership": "borrowed" },
+                    }),
+                  ),
+            ),
+          release: closeScope.pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                cleanup === undefined
+                  ? Effect.die(new Error("Borrowed session closed without cleanup evidence"))
+                  : Effect.succeed(cleanup),
+              ),
+            ),
+            Trace.span("Browserbase.release", { attributes: { "browser.ownership": "borrowed" } }),
+          ),
+          cleanupResult: Effect.sync(() => Option.fromNullishOr(cleanup)),
+        };
+      }),
+    );
+  },
+  Trace.span("Browserbase.attachRemote", { attributes: { "browser.ownership": "borrowed" } }),
+);

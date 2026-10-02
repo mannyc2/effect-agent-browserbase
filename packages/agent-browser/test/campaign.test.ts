@@ -8,8 +8,12 @@ import { join } from "node:path";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Cause, ConfigProvider, Effect, Exit, Redacted, Stream } from "effect";
+import { Cause, ConfigProvider, Effect, Exit, Redacted, Schema, Stream } from "effect";
+import * as BrowserTools from "effect-agent-browser/tools";
 import { AgentPolicyError } from "effect-agent/agent-error";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as Browser from "effect-browser/browser";
+import * as Testing from "effect-browser/testing";
 import { Command } from "effect/unstable/cli";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -23,7 +27,14 @@ import {
 } from "./evaluation/Campaign.ts";
 import { orderReference } from "./evaluation/Cases.ts";
 import { cli } from "./evaluation/Cli.ts";
-import { diagnose, Journal, manifest } from "./evaluation/Evidence.ts";
+import {
+  decisionAdmission,
+  diagnose,
+  Journal,
+  json,
+  manifest,
+  Manifest,
+} from "./evaluation/Evidence.ts";
 import { grade } from "./evaluation/Grading.ts";
 import { provenance } from "./evaluation/Provenance.ts";
 import {
@@ -35,8 +46,10 @@ import {
 } from "./evaluation/Provider.ts";
 import { replay } from "./evaluation/Replay.ts";
 import { Ledger } from "./evaluation/Spend.ts";
-import { ownerPolicy, run } from "./evaluation/Tasks.ts";
+import { agent, ownerPolicy, run } from "./evaluation/Tasks.ts";
+import { feedRecorder, gradeUnderstanding } from "./evaluation/Understanding.ts";
 import { anthropicWire, openAiWire, type WireTurn } from "./fixtures/ProviderWire.ts";
+import { feedPosts } from "./fixtures/UnderstandingSite.ts";
 
 const rates = {
   inputUsdPerMillion: 1,
@@ -77,6 +90,29 @@ const spec = {
   trials: 2,
   budget: { perRunUsd: 0.25, campaignUsd: 4, maxRunSeconds: 180 },
   judges: "disabled",
+};
+
+const jev = {
+  id: "jev",
+  provider: "typesafe",
+  gateway: "direct",
+  model: "jev-1.13.0",
+  maxOutputTokens: 0,
+  reasoningEffort: null,
+  decisionThreshold: 0.8,
+  rates: {
+    ...rates,
+    cacheReadUsdPerMillion: 0,
+    cacheWriteUsdPerMillion: 0,
+    outputUsdPerMillion: 0,
+  },
+} as const;
+
+const decisionSpec = {
+  ...spec,
+  models: [jev],
+  tasks: ["navigation"],
+  trials: 1,
 };
 
 const live = {
@@ -130,7 +166,39 @@ it.effect("a real-model plan shows its whole matrix and bounds before anything r
     });
     // Approval binds the exact plan: the same specification has the same digest, any change another.
     expect((yield* plan(spec)).digest).toBe(shown.digest);
+    // Enabling filming must not silently change a previously approved unfilmed plan.
+    expect(shown.digest).toBe("160d0eead644bbdb8640bc6939a30843f5fab54225058a49f09a679bc3d0e3cf");
     expect((yield* plan({ ...spec, trials: 1 })).digest).not.toBe(shown.digest);
+  }),
+);
+
+// Requested filming seam: approval must bind capture bounds, and capture cannot substitute an owner.
+it.effect("filming is explicitly approved and refused for a non-Chromium owner", () =>
+  Effect.gen(function* () {
+    const capture = {
+      format: "jpeg-frames-v1",
+      maxFrames: 1200,
+      maxBytes: 32 * 1024 * 1024,
+      quality: 70,
+    };
+
+    const input = { ...spec, models: [gpt], tasks: ["feed-commentary"], trials: 1 };
+    const plain = yield* plan(input);
+    const filmed = yield* plan({ ...input, capture });
+
+    expect(filmed.digest).not.toBe(plain.digest);
+    expect(filmed).toMatchObject({ capture: { ...capture, maxDurationMillis: 185_000 } });
+    expect(measuredManifest(filmed, filmed.runs[0]!, "unavailable").capture).toEqual(
+      filmed.capture,
+    );
+    expect(measuredManifest(plain, plain.runs[0]!, "unavailable").capture).toBe("off");
+    expect((yield* plan({ ...input, capture: { ...capture, maxFrames: 1000 } })).digest).not.toBe(
+      filmed.digest,
+    );
+    expect(yield* reason(plan({ ...spec, capture }))).toBe("backend");
+    expect(
+      yield* reason(plan({ ...input, capture: { ...capture, maxBytes: 128 * 1024 * 1024 } })),
+    ).toBe("specification");
   }),
 );
 
@@ -182,6 +250,98 @@ it.effect("a real-model plan is refused, not truncated, when it cannot be bounde
         plan({ ...spec, models: [{ ...gpt, rates: { ...rates, inputUsdPerMillion: 0.0000001 } }] }),
       ),
     ).toBe("specification");
+  }),
+);
+
+it.effect("a Jev plan binds the decision policy, its rates and its output provenance", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(decisionSpec);
+    const subject = shown.subjects[0]!;
+    const evidence = measuredManifest(shown, shown.runs[0]!, "unavailable");
+
+    expect(shown.credentials).toEqual(["TYPESAFE_API_KEY"]);
+    expect(shown.runs.map((entry) => entry.backend)).toEqual(["chromium", "chromium"]);
+    expect(subject.settings).toEqual({
+      gateway: "direct",
+      maxOutputTokens: 0,
+      reasoningEffort: null,
+      serviceTier: null,
+      decisionThreshold: 0.8,
+    });
+    expect(shown.budget.admissionBySubject).toEqual({ jev: decisionAdmission });
+    expect(evidence).toMatchObject({
+      version: 5,
+      evaluator: "browser-evaluation-v5",
+      provider: "typesafe",
+      boundary: "typesafe-decisions; host-derived-tool-calls",
+      outputProvenance: "decision-policy",
+      spend: { admission: decisionAdmission },
+    });
+    expect(Schema.is(Manifest)({ ...evidence, version: 4 })).toBe(false);
+    expect(
+      (yield* plan({ ...decisionSpec, models: [{ ...jev, decisionThreshold: 0.9 }] })).digest,
+    ).not.toBe(shown.digest);
+    expect(yield* reason(authorize(decisionSpec, shown.digest).pipe(withEnv(live)))).toBe(
+      "credentials",
+    );
+    expect(
+      (yield* authorize(decisionSpec, shown.digest).pipe(
+        withEnv({ EFFECT_AGENT_BROWSER_EVALUATION_LIVE: "1", TYPESAFE_API_KEY: "test-SECRET" }),
+      )).plan.digest,
+    ).toBe(shown.digest);
+  }),
+);
+
+it.effect("a Jev plan refuses unsupported models, settings, tasks and browser backends", () =>
+  Effect.gen(function* () {
+    for (const model of [
+      { ...jev, model: "jev-latest" },
+      { ...jev, gateway: "openrouter" },
+      { ...jev, maxOutputTokens: 256 },
+      { ...jev, reasoningEffort: "low" },
+      Object.fromEntries(Object.entries(jev).filter(([name]) => name !== "decisionThreshold")),
+      { ...jev, rates: { ...jev.rates, cacheReadUsdPerMillion: 1 } },
+      { ...jev, rates: { ...jev.rates, cacheWriteUsdPerMillion: 1 } },
+      { ...jev, rates: { ...jev.rates, outputUsdPerMillion: 1 } },
+    ])
+      expect(yield* reason(plan({ ...decisionSpec, models: [model] }))).toBe("settings");
+    for (const decisionThreshold of [-0.1, 1.1])
+      expect(
+        yield* reason(plan({ ...decisionSpec, models: [{ ...jev, decisionThreshold }] })),
+      ).toBe("specification");
+    expect(yield* reason(plan({ ...decisionSpec, tasks: ["signup"] }))).toBe("task");
+    expect(yield* reason(plan({ ...decisionSpec, backends: ["browserbase"] }))).toBe("backend");
+    expect(yield* reason(plan({ ...spec, models: [{ ...gpt, decisionThreshold: 0.8 }] }))).toBe(
+      "settings",
+    );
+    expect(yield* reason(plan({ ...spec, models: [{ ...gpt, maxOutputTokens: 0 }] }))).toBe(
+      "settings",
+    );
+  }),
+);
+
+it.effect("Jev reserves the full input allowance and counts free response tokens", () =>
+  Effect.gen(function* () {
+    const shown = yield* plan(decisionSpec);
+    const ledger = new Ledger(shown.budget.campaignMicrousd);
+    const bounded = allowance(ledger, shown, shown.subjects[0]!);
+
+    yield* bounded.admit(65536);
+    expect(bounded.usage()).toMatchObject({ retainedMicrousd: 66560 });
+    expect(
+      bounded.settle({
+        inputTokens: { total: 500, uncached: 500, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 73, text: 73, reasoning: 0 },
+      }),
+    ).toBe(500);
+    expect(bounded.usage()).toMatchObject({
+      inputTokens: 500,
+      outputTokens: 73,
+      costMicrousd: 500,
+      retainedMicrousd: 0,
+      overrun: false,
+    });
+    expect(ledger.closed).toBe(null);
   }),
 );
 
@@ -637,6 +797,139 @@ const measure = (
   });
 
 const readingSpec = { ...spec, tasks: ["reading"], toolkits: ["base"], trials: 1 };
+
+it.effect.each([
+  { id: "gpt", wire: openAiWire },
+  { id: "claude", wire: anthropicWire },
+])("$id commentary pairs retained aliases through the real provider client", ({ id, wire }) =>
+  Effect.gen(function* () {
+    const shown = yield* plan({
+      ...spec,
+      tasks: ["feed-commentary"],
+      toolkits: ["base"],
+      trials: 1,
+    });
+
+    const entry = shown.runs.find((candidate) => candidate.subject === id)!;
+    const chosen = shown.subjects.find((candidate) => candidate.id === id)!;
+    const post = feedPosts[0]!;
+
+    const output = {
+      status: "done",
+      answer: "Delivered commentary for one observed post.",
+    } as const;
+
+    const params = {
+      observationId: "observation-1",
+      postId: post.id,
+      quote: post.text,
+      claim: post.claim,
+      caption: `${post.author}: ${post.text}`,
+    };
+
+    const transport = wire([
+      {
+        call: "browser_inspect",
+        params: { scope: "viewport" },
+        usage: { input: 1200, output: 80 },
+      },
+      { call: "browser_commentary", params, usage: { input: 1500, output: 100 } },
+      { text: JSON.stringify(output), usage: { input: 1800, output: 30 } },
+    ]);
+
+    // Only the native page engine and HTTP replies are scripted; the owner and provider clients run.
+    const journal = new Journal({
+      ...measuredManifest(shown, entry, "b".repeat(40)),
+      backend: "scripted-owner",
+      fixture: "scripted-document-v1",
+    });
+
+    const driver = measured({
+      subject: chosen,
+      allowance: allowance(new Ledger(shown.budget.campaignMicrousd), shown, chosen),
+      apiKey: Redacted.make("key-SECRET"),
+      journal,
+      transport: transport.layer,
+    });
+
+    const given = journal.manifest.goal;
+
+    journal.facts = { ...journal.facts, input: given };
+
+    const result = yield* Browser.scoped(
+      Testing.open(
+        {
+          documents: [
+            {
+              url: "https://fixture.test/feed",
+              text: `Post ${post.id} · ${post.author}\n${post.text}`,
+            },
+          ],
+        },
+        {
+          policy: ownerPolicy(journal.manifest),
+          viewport: journal.manifest.viewport,
+          onCleanup: (receipt) =>
+            Effect.sync(() => {
+              journal.facts = {
+                ...journal.facts,
+                cleanup:
+                  receipt.connection === "closed" && receipt.issues.length === 0
+                    ? "confirmed"
+                    : "unconfirmed",
+                cleanupReceipt: json({ connection: receipt.connection, issues: receipt.issues }),
+              };
+            }),
+        },
+      ),
+      (browser) =>
+        Effect.gen(function* () {
+          const recorder = feedRecorder(journal, browser);
+
+          const host = yield* BrowserTools.makeHost(browser, browser.initialPage, {
+            observe: recorder.observe,
+          });
+
+          return yield* host.run(
+            driver
+              .provide(
+                AgentRuntime.run(agent("base", journal.manifest.bounds, "feed-commentary"), given, {
+                  onHistory: driver.history,
+                  estimateCostMicrousd: driver.estimate,
+                }),
+              )
+              .pipe(Effect.provide(recorder.layer)),
+          );
+        }),
+    );
+
+    journal.facts = {
+      ...journal.facts,
+      terminal: "completed",
+      finishReason: result.finishReason,
+      turns: result.turns,
+      output: json(result.output),
+      outputValid: true,
+      ownerClose: "confirmed",
+      usage: driver.finish(),
+    };
+    const evidence = journal.snapshot();
+
+    expect(gradeUnderstanding(evidence)).toMatchObject({
+      kind: "feed-commentary",
+      passed: false,
+      groundedCoverage: [post.id],
+      wrong: 0,
+      unrecorded: 0,
+      commentary: [{ paired: true, fresh: true, sourceObserved: true, claimCorrect: true }],
+    });
+    expect(grade(evidence)).toMatchObject({ evidence: "complete", cleanup: "confirmed" });
+    expect(evidence.facts.usage).toMatchObject({ admitted: 3, settled: 3, retainedMicrousd: 0 });
+    expect(transport.bodies).toHaveLength(3);
+    expect(JSON.stringify(evidence)).not.toContain("SECRET");
+    expect((yield* replay(evidence)).output).toEqual(output);
+  }),
+);
 
 it.effect("a measured run records sanitized model-boundary evidence and its settled spend", () =>
   Effect.gen(function* () {

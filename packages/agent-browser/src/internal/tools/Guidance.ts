@@ -18,8 +18,8 @@ export const sequentialScheduling = (hook: RunSchedulingHook = {}): RunSchedulin
 });
 
 /**
- * Agent instructions for the Tools a Toolkit declares, or for all of them. They restate the rules
- * the Tools enforce, so a model plans around them instead of learning them from failures. Use
+ * Agent instructions for the Tools a Toolkit declares, or for all of them. They explain the rules
+ * the Tools enforce and suggest how to read and navigate observations. Use
  * them as they are, add to them, or write your own: nothing depends on their wording.
  */
 export const instructions = (toolkit?: { readonly tools: object }): string => {

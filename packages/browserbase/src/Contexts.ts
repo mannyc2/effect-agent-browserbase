@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { BrowserbaseClient } from "./Client.ts";
 import { type ClientError, ContextError } from "./Errors.ts";
 import { isContextWriterBusy } from "./internal/session/ContextWriter.ts";
+import * as Trace from "./internal/Trace.ts";
 import { ContextReference, Identifier } from "./References.ts";
 
 const Timestamp = Schema.String.check(Schema.isMaxLength(64));
@@ -86,9 +87,7 @@ export class BrowserbaseContexts extends Context.Service<
         return ref;
       });
 
-      const create = Effect.fn("BrowserbaseContexts.create")(function* (
-        options: { readonly name?: string } = {},
-      ) {
+      const create = Effect.fnUntraced(function* (options: { readonly name?: string } = {}) {
         const value = yield* Schema.decodeEffect(
           Schema.Struct({ name: Schema.optionalKey(ContextName) }),
         )(options, { onExcessProperty: "error" }).pipe(
@@ -113,11 +112,9 @@ export class BrowserbaseContexts extends Context.Service<
             contextId: created.id,
           }),
         });
-      });
+      }, Trace.span("BrowserbaseContexts.create"));
 
-      const retrieve = Effect.fn("BrowserbaseContexts.retrieve")(function* (
-        reference: ContextReference,
-      ) {
+      const retrieve = Effect.fnUntraced(function* (reference: ContextReference) {
         const ref = yield* validate(reference, "context-retrieve");
 
         const raw = yield* client
@@ -137,11 +134,9 @@ export class BrowserbaseContexts extends Context.Service<
           updatedAt: value.updatedAt,
           ...(value.name === undefined ? {} : { name: value.name }),
         });
-      });
+      }, Trace.span("BrowserbaseContexts.retrieve"));
 
-      const remove = Effect.fn("BrowserbaseContexts.delete")(function* (
-        reference: ContextReference,
-      ) {
+      const remove = Effect.fnUntraced(function* (reference: ContextReference) {
         const ref = yield* validate(reference, "context-delete");
 
         if (isContextWriterBusy(ref))
@@ -153,7 +148,7 @@ export class BrowserbaseContexts extends Context.Service<
         yield* client
           .noContent("DELETE", `/v1/contexts/${encodeURIComponent(ref.contextId)}`)
           .pipe(Effect.mapError((error) => fromClient("context-delete", error)));
-      });
+      }, Trace.span("BrowserbaseContexts.delete"));
 
       return BrowserbaseContexts.of({ create, retrieve, delete: remove });
     }),

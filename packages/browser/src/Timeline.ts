@@ -54,7 +54,7 @@ export const encodeClient = (event: Event) =>
     Effect.mapError(() => new TimelineMalformed({})),
   );
 
-export const decode = (value: unknown) =>
+export const decode = (value: unknown): Effect.Effect<Event, TimelineMalformed> =>
   guardedDecode(EventJson)(value, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() => new TimelineMalformed({})),
   );

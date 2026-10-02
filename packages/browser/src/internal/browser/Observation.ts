@@ -2065,7 +2065,8 @@ export const makeObservation = (
               observed: data.controls.length,
             }),
           );
-        if (keepNodes) {
+        // A reading with no controls names no nodes: skip the empty wrapper's round trips.
+        if (keepNodes && data.controls.length > 0) {
           nodesHandle = await validatedNodes(holder, data.controls.length);
           const ownedNodes = nodesHandle;
 

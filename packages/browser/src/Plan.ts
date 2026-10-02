@@ -94,14 +94,15 @@ export interface PlanOperations {
 }
 
 /** Validate and normalize authored data, including explicit document/Strict defaults. */
-export const make = (value: LivePlanEncoded) =>
+export const make = (value: LivePlanEncoded): Effect.Effect<LivePlan, Schema.SchemaError> =>
   guardedDecode(LivePlan)(value, { onExcessProperty: "error" });
 
 /** Descriptor-only ingress for stored intent; it never decodes a live Ref. */
-export const decode = (value: unknown) => guardedDecode(Plan)(value, { onExcessProperty: "error" });
+export const decode = (value: unknown): Effect.Effect<Plan, Schema.SchemaError> =>
+  guardedDecode(Plan)(value, { onExcessProperty: "error" });
 
 /** The normalized scope and guards are always included in encoded durable intent. */
-export const encode = (value: Plan) =>
+export const encode = (value: Plan): Effect.Effect<PlanEncoded, Schema.SchemaError> =>
   guardedDecode(Plan)(value, { onExcessProperty: "error" }).pipe(
     Effect.flatMap(Schema.encodeEffect(Plan)),
   );

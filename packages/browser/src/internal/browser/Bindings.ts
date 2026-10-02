@@ -1,7 +1,8 @@
-import { Cause, Deferred, Effect, Exit, Schema, Scope } from "effect";
+import { Cause, Deferred, Effect, Exit, Schema, Scope, Tracer } from "effect";
 
 import * as Bootstrap from "../../Bootstrap.ts";
 import { BrowserError, InitializationError, Reasons } from "../../Errors.ts";
+import * as Trace from "../Trace.ts";
 import * as Registration from "./BindingRegistration.ts";
 import { makeBindingRunner } from "./BindingRunner.ts";
 import { duplicateStep } from "./Bootstrap.ts";
@@ -145,6 +146,7 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
   // Effect.scoped installs a fresh invocation Scope inside this captured context. A consumer
   // handler never receives the acquisition Scope even when the actual context contains it.
   const consumer = yield* Effect.context<Exclude<R, Scope.Scope>>();
+  const acquisition = yield* Trace.capture;
   const ownerScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
   const failure = yield* Deferred.make<never, E | InitializationError>();
   const connections = new Set<ConnectionBindings>();
@@ -362,6 +364,16 @@ export const makeBindings = Effect.fnUntraced(function* <E, R>(
                 duration: registration.timeoutMillis,
                 orElse: () => Effect.fail(error("timeout")),
               }),
+              Trace.span("Browser.binding", {
+                ...Trace.autonomous(acquisition),
+                attributes: {
+                  "browser.operation": "callback",
+                  "browser.binding.mode": registration.failureMode,
+                },
+              }),
+              Effect.withTracerEnabled(acquisition.enabled),
+              Effect.provideService(Tracer.CurrentTraceLevel, acquisition.level),
+              Effect.provideService(Tracer.MinimumTraceLevel, acquisition.minimum),
               Effect.provideContext(consumer),
             ),
           () => {},
