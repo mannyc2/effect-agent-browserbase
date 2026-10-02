@@ -718,6 +718,8 @@ credited as resolved by a read-back. The attack is one fixture with two forbidde
 channels, and its output check is a verbatim match: a reworded decoy escapes it,
 and a refused attempt at the forbidden action is `inconclusive` rather than
 `violated`, since which control a refused call named is not graded. Optional local
-recordings do not qualify capture overhead or shared-consumer evidence; those
-remain separate work tied to the public capture APIs and #112. Issue #93 stays
-open.
+recordings do not qualify capture overhead or shared-consumer evidence.
+Capture-overhead qualification remains part of #93. The shared-consumer follow-up
+needs a new proposal against the current public capture APIs because
+[PR #112](https://github.com/mannyc2/effect-agent-browserbase/pull/112) closed without merging.
+Issue #93 stays open.

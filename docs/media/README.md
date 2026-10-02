@@ -22,23 +22,23 @@ products.
 
 ## The committed recording
 
-| | |
-| --- | --- |
-| Source commit | `d5892f2f7e1bdaf06c99f210891af6d7b0750a05` |
-| Session | `1fcd0607-cffb-4c48-918a-bf1d999fd332` |
-| Runtime | Bun 1.4.2, Playwright 1.63.0, effect-agent 0.1.0-beta.102, Effect 4.0.0-rc.115 |
-| Target | `https://github.com/mannyc2/effect-agent-browserbase` |
-| Actions | one navigation, four bounded scrolls, one observation |
-| Capture | 31 received, 31 delivered, 0 dropped, 0 duplicates, `nativeStop: "confirmed"` |
-| Encoded | 27 decoded frames, 27 distinct pixel checksums, 800×450, no audio stream |
-| `hosted-demo.mp4` | `f001be8a52cb899ffb96c8359d44aeec3c268ffd82cb3deb682918ccb4562c3e` |
-| `hosted-demo.gif` | `f9a6368975949e2ddb05d065207dfe0ca9691ffde71a3216f642871fbdda49fd` |
+|                   |                                                                                |
+| ----------------- | ------------------------------------------------------------------------------ |
+| Source commit     | `d5892f2f7e1bdaf06c99f210891af6d7b0750a05`                                     |
+| Session           | `1fcd0607-cffb-4c48-918a-bf1d999fd332`                                         |
+| Runtime           | Bun 1.4.2, Playwright 1.63.0, effect-agent 0.1.0-beta.102, Effect 4.0.0-rc.115 |
+| Target            | `https://github.com/mannyc2/effect-agent-browserbase`                          |
+| Actions           | one navigation, four bounded scrolls, one observation                          |
+| Capture           | 31 received, 31 delivered, 0 dropped, 0 duplicates, `nativeStop: "confirmed"`  |
+| Encoded           | 27 decoded frames, 27 distinct pixel checksums, 800×450, no audio stream       |
+| `hosted-demo.mp4` | `f001be8a52cb899ffb96c8359d44aeec3c268ffd82cb3deb682918ccb4562c3e`             |
+| `hosted-demo.gif` | `f9a6368975949e2ddb05d065207dfe0ca9691ffde71a3216f642871fbdda49fd`             |
 
 This file **deviates from the first rule above** and the deviation is deliberate,
 not an oversight. It was produced by running `examples/hosted-demo.ts` (now the `demo` check)
 directly from the branch head, not by the hosted runner from a commit on `main`,
 because the `Hosted Browserbase` workflow's protected environment and secrets
-are not configured yet, and the wrapper additionally requires a bootstrapped
+were not configured at the time, and the wrapper then required a bootstrapped
 upstream worktree. The GIF was encoded with the exact ladder from that script
 and was accepted on its first rung, 960px at 10fps.
 
@@ -46,8 +46,9 @@ The table is maintainer-reported run provenance; the committed bytes and their
 hashes are independently inspectable. It does not replace retained provider
 responses, nor establish that every original capture callback became a decoded
 frame: the reported counts are 31 delivered callbacks versus 27 decoded frames.
-Re-recording through the workflow once its environment exists should replace
-this file rather than sit beside it; it requires separate hosted authorization.
+Re-recording through the protected workflow should replace this file rather than
+sit beside it; the workflow requires its environment configuration and separate
+hosted authorization.
 
 The committed MP4 is 800×450. Playwright's default screencast sizing fits within
 800×800; this is consistent with the observed geometry, not evidence that the
@@ -68,16 +69,16 @@ the source in the commit that added the file. The page it shows is the example's
 own fictional `StageSite.ts`, served from loopback. No Browserbase session,
 credential or model was involved.
 
-| | |
-| --- | --- |
-| Runtime | Node 24.14.1, Playwright 1.63.0, Chromium 153.0.8010.12, Effect 4.0.0-rc.115 |
-| Seed | `night-rail-atlas` |
-| Actions | one navigation, four native pointer moves, six real keys, three clicks, one click-and-wait |
-| Capture | one page-lifetime interval over two documents, 365 received, 0 dropped, `nativeStop: "confirmed"`; the picture held 17 ms across the navigation |
-| Measured | capture latency p50 5.6 ms against a clock offset of 0.1 ± 1.0 ms; 7 ms per key and 14 ms per pointer move by receipt; loopback, one machine |
-| Encoded | 552 decoded frames, 18.4s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream |
-| `realistic-footage.mp4` | `726e00db42a73f8049881935407581f21917ed171ed72dbb0e6dca0d8c82f1a3` |
-| `realistic-footage.gif` | `0056d6cb21929246694b1d47e62bde25475696af33c9506f27127dfed2783354` |
+|                         |                                                                                                                                                 |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime                 | Node 24.14.1, Playwright 1.63.0, Chromium 153.0.8010.12, Effect 4.0.0-rc.115                                                                    |
+| Seed                    | `night-rail-atlas`                                                                                                                              |
+| Actions                 | one navigation, four native pointer moves, six real keys, three clicks, one click-and-wait                                                      |
+| Capture                 | one page-lifetime interval over two documents, 365 received, 0 dropped, `nativeStop: "confirmed"`; the picture held 17 ms across the navigation |
+| Measured                | capture latency p50 5.6 ms against a clock offset of 0.1 ± 1.0 ms; 7 ms per key and 14 ms per pointer move by receipt; loopback, one machine    |
+| Encoded                 | 552 decoded frames, 18.4s, 1280×720, constant 30 fps, h264 `yuv420p`, no audio stream                                                           |
+| `realistic-footage.mp4` | `726e00db42a73f8049881935407581f21917ed171ed72dbb0e6dca0d8c82f1a3`                                                                              |
+| `realistic-footage.gif` | `0056d6cb21929246694b1d47e62bde25475696af33c9506f27127dfed2783354`                                                                              |
 
 The seed fixes every path and pause, but not the bytes: frame delivery follows
 Chromium's own repaint schedule, so a retake is the same performance with a
@@ -107,15 +108,13 @@ media; do not commit the records themselves.
 
 ## Referencing it
 
-GitHub renders a committed GIF inline from a relative path. Add this to the root
-`README.md` once `hosted-demo.gif` is committed:
+The root `README.md` embeds the committed GIF with a relative path:
 
 ```md
 ![A hosted Browserbase session navigating and scrolling under Effect Agent control](docs/media/hosted-demo.gif)
 ```
 
-Delete the "No recording is committed yet" paragraph in the same section when
-you add it. Keep the alt text descriptive. The MP4 is the higher-quality copy; link it
+Keep the alt text descriptive. The MP4 is the higher-quality copy; link it
 rather than embedding it, because a relative `<video>` source does not play
 reliably in GitHub's README renderer:
 
