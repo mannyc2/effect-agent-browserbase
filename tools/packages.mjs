@@ -158,6 +158,21 @@ export function checkDependencyBoundary(
     "Unexpected peer dependency edge",
   );
   assert.match(manifest.peerDependencies.effect, regularVersion);
+  // Effect prereleases move modules (rc.118 removed every `effect/unstable/*` path), so a range
+  // from a prerelease admits versions that cannot load these packages. Peer on the tested one.
+  if (manifest.peerDependencies.effect.includes("-"))
+    assert.doesNotMatch(
+      manifest.peerDependencies.effect,
+      /^[~^]/,
+      "An Effect prerelease peer must be exact",
+    );
+  if (!built)
+    assert.ok(
+      [manifest.devDependencies?.effect, `^${manifest.devDependencies?.effect}`].includes(
+        manifest.peerDependencies.effect,
+      ),
+      "The Effect peer must admit the version it is developed against",
+    );
   if (item === browser) {
     assert.match(
       manifest.peerDependencies["playwright-core"],
