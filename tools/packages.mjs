@@ -38,7 +38,7 @@ export function consumerPackageSet(profile) {
   return profile === "agent-hosted" ? [...packages] : [browser, provider];
 }
 
-const adapterExports = [".", "./adapter", "./tools"];
+const adapterExports = [".", "./adapter", "./browser-use", "./tools"];
 
 const versionPattern =
   /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(alpha|beta|rc)\.(?:0|[1-9][0-9]*))?$/;
@@ -94,7 +94,7 @@ export function checkExports(exports, name, built = false) {
     assert.deepEqual(
       keys.sort(),
       [...adapterExports].sort(),
-      "Adapter must expose only the canonical root, adapter and tools",
+      "Adapter must expose only the canonical root, adapter, browser-use and tools",
     );
   const targets = new Set();
 

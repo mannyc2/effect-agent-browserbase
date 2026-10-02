@@ -29,7 +29,7 @@ export const prefixWithin = (text: string, maxBytes: number): string => {
 };
 
 /** A cut never leaves half of a surrogate pair behind. */
-const boundary = (text: string, length: number): number => {
+export const boundary = (text: string, length: number): number => {
   if (length <= 0 || length >= text.length) return Math.max(0, Math.min(length, text.length));
   const unit = text.charCodeAt(length - 1);
 
@@ -37,7 +37,7 @@ const boundary = (text: string, length: number): number => {
 };
 
 /** The largest `n` in `[0, high]` for which `fits(n)` holds, given `fits(0)`; `fits` is monotone. */
-const largest = (high: number, fits: (n: number) => boolean): number => {
+export const largest = (high: number, fits: (n: number) => boolean): number => {
   let low = 0;
   let top = high;
 

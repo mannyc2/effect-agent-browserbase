@@ -447,6 +447,7 @@ export const makeOperations = (
     });
 
   return {
+    observe,
     navigate,
     inspect,
     readMore,
