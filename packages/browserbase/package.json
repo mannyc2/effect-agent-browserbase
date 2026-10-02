@@ -65,7 +65,7 @@
     "vite-plus": "0.3.2"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.117",
+    "effect": "4.0.0-rc.117",
     "effect-browser": "workspace:*"
   },
   "engines": {

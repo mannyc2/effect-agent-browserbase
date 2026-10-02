@@ -41,7 +41,7 @@
         "vite-plus": "0.3.2",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.117",
+        "effect": "4.0.0-rc.117",
         "effect-agent": "0.1.0-beta.165",
         "effect-browser": "workspace:*",
       },
@@ -60,7 +60,7 @@
         "vite-plus": "0.3.2",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.117",
+        "effect": "4.0.0-rc.117",
         "playwright-core": "1.63.0",
       },
       "optionalPeers": [
@@ -82,7 +82,7 @@
         "vite-plus": "0.3.2",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.117",
+        "effect": "4.0.0-rc.117",
         "effect-browser": "workspace:*",
       },
     },
