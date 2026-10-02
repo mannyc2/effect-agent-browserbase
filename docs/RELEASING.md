@@ -65,7 +65,7 @@ The integration tests exercise the actual native npm provider and real Git journ
 
 ## Package contents and evidence
 
-`tools/packages.mjs` inventories exactly the shared browser, Browserbase and Agent adapter packages in dependency order. Source manifests own their explicit export maps; the adapter is restricted to `.`, `./adapter`, and `./tools`. The shared browser has no provider/framework dependency; Browserbase has no framework dependency; the Agent adapter has no Browserbase runtime dependency. Public declarations cannot expose Playwright or an undeclared SDK.
+`tools/packages.mjs` inventories exactly the shared browser, Browserbase and Agent adapter packages in dependency order. Source manifests own their explicit export maps; the adapter is restricted to `.`, `./adapter`, `./browser-use`, and `./tools`. The shared browser has no provider/framework dependency; Browserbase has no framework dependency; the Agent adapter has no Browserbase runtime dependency. Public declarations cannot expose Playwright or an undeclared SDK.
 
 `tools/package-release.mjs` is the single staging path. It produces three dist-only archives and **`release-set.json` (schema version 2)**, with one source SHA, coordinated package version, framework version, release channel, and all member identities/hashes. No old `release.json` reader or success fallback remains. Staging refuses existing output or partial-set reuse; an incomplete packing attempt never writes a success receipt. Preserve failed output for diagnosis, then use a fresh output directory.
 
