@@ -10,6 +10,7 @@ import {
   type InputReceipt,
 } from "effect-browser/browser-data";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
+import * as Plan from "effect-browser/plan";
 import { Toolkit } from "effect/ai";
 
 import { Journal } from "../bench/Records.ts";
@@ -41,7 +42,7 @@ it.live(
           );
           const observation = yield* next.observe({ scope: "document" });
 
-          expect(observation.controls.filter((item) => item.label === "Markets")).toHaveLength(2);
+          expect(observation.controls.filter((item) => item.label === "Markets")).toHaveLength(3);
           yield* next.click({ selector: '[data-page="decoy"]' });
           for (
             let attempt = 0;
@@ -59,6 +60,173 @@ it.live(
         }).pipe(Layer.provide(NodeCrypto.layer)),
       ),
     ),
+);
+
+// Requested replay seam: indistinguishable destinations must refuse both actual recording paths.
+it.live.each(["page", "tools"] as const)(
+  "%s recording refuses identical candidates on a fresh Page without visiting the decoy",
+  (path) => {
+    const cleanup: ChromiumCleanupResult[] = [];
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const site = yield* driftSite;
+
+        yield* Browser.scoped(
+          Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 50, maxElapsedMillis: 30000 })),
+          (browser) =>
+            Effect.gen(function* () {
+              site.configure("none", 0, `${path}-baseline`);
+              const baseline = yield* browser.createPage();
+
+              const recorded = yield* Effect.gen(function* () {
+                if (path === "page")
+                  return yield* baseline
+                    .run(
+                      {
+                        version: 1,
+                        steps: [
+                          {
+                            id: "navigate",
+                            action: { _tag: "Navigate", url: `${site.url}/portal` },
+                          },
+                          {
+                            id: "markets",
+                            action: {
+                              _tag: "Click",
+                              target: {
+                                _tag: "Descriptor",
+                                descriptor: { kind: "link", label: "Markets" },
+                              },
+                            },
+                          },
+                        ],
+                      },
+                      { within: 10000 },
+                    )
+                    .pipe(Effect.flatMap(Plan.recorded));
+
+                const host = yield* BrowserTools.makeHost(browser, baseline);
+
+                yield* host.run(
+                  Effect.gen(function* () {
+                    const tools = yield* BrowserTools.toolkit;
+
+                    expect(
+                      yield* Stream.runCollect(
+                        yield* tools.handle("browser_navigate", { url: `${site.url}/portal` }),
+                      ),
+                    ).toMatchObject([{ isFailure: false }]);
+
+                    const observation = yield* baseline.observe({
+                      scope: "document",
+                      match: "Markets",
+                    });
+
+                    expect(observation.controls).toHaveLength(1);
+
+                    const reference = ObservedElement.make({
+                      observationId: observation.observationId,
+                      elementId: observation.controls[0]?.elementId ?? "",
+                    });
+
+                    expect(
+                      yield* Stream.runCollect(yield* tools.handle("browser_click", reference)),
+                    ).toMatchObject([{ isFailure: false }]);
+                  }),
+                );
+                const snapshot = yield* host.receipts;
+
+                expect(snapshot.dropped).toBe(0);
+                expect(snapshot.receipts.map((receipt) => receipt._tag)).toEqual([
+                  "Navigation",
+                  "Run",
+                ]);
+
+                const parts = yield* Effect.forEach(snapshot.receipts, (receipt) =>
+                  receipt._tag === "Navigation"
+                    ? Plan.recordedNavigation(receipt.operation)
+                    : receipt._tag === "Run"
+                      ? receipt.operation.completed.pipe(Effect.flatMap(Plan.recorded))
+                      : Effect.die("Baseline tool unexpectedly refused"),
+                );
+
+                return yield* Plan.decode({
+                  version: 1,
+                  steps: parts
+                    .flatMap((part) => part.steps)
+                    .map((step, index) => ({ ...step, id: `recorded-${index}` })),
+                });
+              });
+
+              const click = recorded.steps[1]?.action;
+
+              expect(click).toMatchObject({
+                _tag: "Click",
+                target: {
+                  _tag: "Descriptor",
+                  descriptor: {
+                    kind: "link",
+                    label: "Markets",
+                    destination: `${site.url}/markets`,
+                  },
+                },
+              });
+              if (click?._tag === "Click") expect(click.target.descriptor.ordinal).toBeUndefined();
+              yield* baseline.close();
+
+              const run = `${path}-identical`;
+
+              site.configure("duplicate", 1, run);
+              const page = yield* browser.createPage();
+              const decoded = yield* Plan.decode(yield* Plan.encode(recorded));
+              const outcome = yield* page.run(decoded, { within: 10000 }).pipe(Effect.result);
+
+              expect(outcome).toMatchObject({
+                _tag: "Failure",
+                failure: {
+                  _tag: "StepFailed",
+                  error: { reason: { _tag: "Ambiguous", count: 2 }, outcome: "undispatched" },
+                },
+              });
+              if (outcome._tag === "Failure") expect(outcome.failure.completed).toHaveLength(1);
+              expect((yield* page.status).phase).toBe("open");
+              const observation = yield* page.observe({ scope: "document", match: "Markets" });
+
+              expect(observation.target.pageId).toBe(page.identity.pageId);
+              expect(observation.url).toBe(`${site.url}/portal`);
+              expect(observation.controls).toHaveLength(3);
+              for (let attempt = 0; attempt < 100 && site.truth(run) === undefined; attempt++)
+                yield* Effect.sleep(10);
+              expect(site.truth(run)).toEqual({
+                page: "portal",
+                tab: "Overview",
+                item: "",
+                query: "",
+              });
+              expect(
+                site
+                  .events()
+                  .filter((event) => event.run === run)
+                  .every((event) => event.truth.page === "portal"),
+              ).toBe(true);
+              expect(site.lost()).toBe(0);
+              yield* page.close();
+            }),
+        ).pipe(
+          Effect.provide(
+            Chromium.layer({
+              launch: { chromiumSandbox: false },
+              onCleanup: (result) => Effect.sync(() => cleanup.push(result)),
+            }).pipe(Layer.provide(NodeCrypto.layer)),
+          ),
+        );
+        expect(cleanup).toMatchObject([
+          { ownership: "owned", connection: "closed", process: "terminated", issues: [] },
+        ]);
+      }),
+    );
+  },
 );
 
 it.live(

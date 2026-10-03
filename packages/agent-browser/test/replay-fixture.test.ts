@@ -7,7 +7,10 @@ it("drift changes matching, layout and structure without changing the intended d
   const baseline = driftMarkup("none", 1, "base");
 
   expect(baseline.match(/data-page="markets"/g)).toHaveLength(1);
-  expect(driftMarkup("duplicate", 1, "duplicate").match(/>Markets<\/a>/g)).toHaveLength(2);
+  expect(driftMarkup("duplicate", 1, "duplicate").match(/>Markets<\/a>/g)).toHaveLength(3);
+  expect(
+    driftMarkup("duplicate", 1, "duplicate").match(/href="\/markets" data-page="markets"/g),
+  ).toHaveLength(2);
   expect(driftMarkup("rename", 1, "rename")).toContain('data-page="markets">Market data');
   expect(driftMarkup("offscreen", 1, "offscreen")).toContain('<div id="spacer"></div><nav>');
   expect(driftMarkup("overlay", 1, "overlay")).toContain('<section id="overlay">');
