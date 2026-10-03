@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import { Clock, Config, Console, Effect, Exit, Option, Schema } from "effect";
+import type { MotionProfile } from "effect-browser/plan-data";
 import { Argument, Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
@@ -11,6 +12,7 @@ import { gameSite } from "../fixtures/GameSite.ts";
 import * as Backends from "./Backends.ts";
 import { Ledger, Sessions } from "./Budget.ts";
 import { CursorSample, renderClip } from "./Clip.ts";
+import { readMotionProfile, validateMotionSelection } from "./ExecutionStyle.ts";
 import { segmentCallCaps } from "./GameSegment.ts";
 import { prepareHostedGames } from "./HostedGames.ts";
 import { prepareHostedReplay } from "./HostedReplay.ts";
@@ -82,6 +84,8 @@ export const validateSelection = (options: {
   readonly matrix: boolean;
   readonly subject?: Subject;
   readonly fixtureTunnels?: string;
+  readonly style?: string;
+  readonly motionProfile?: MotionProfile;
 }) => {
   const narration = understandingScenes.some((scene) => scene === options.scene);
   const game = options.scene === "games-operability" || options.scene === "game-segment";
@@ -120,9 +124,13 @@ export const validateSelection = (options: {
                       ? "This scene selects its driver through the optional model subject."
                       : undefined;
 
-  return message === undefined
-    ? Effect.void
-    : Effect.fail(new BenchError({ operation: "selection", message }));
+  return validateMotionSelection(options).pipe(
+    Effect.andThen(
+      message === undefined
+        ? Effect.void
+        : Effect.fail(new BenchError({ operation: "selection", message })),
+    ),
+  );
 };
 
 export const printedPlan = (options: {
@@ -142,6 +150,7 @@ export const printedPlan = (options: {
   readonly airDelayMillis?: number;
   readonly fixtureTunnels?: string;
   readonly pictureScale?: "half" | "full";
+  readonly motionProfile?: MotionProfile;
 }) => ({
   scene: options.scene,
   backend: options.backend,
@@ -149,6 +158,7 @@ export const printedPlan = (options: {
   durationMillis: options.durationMillis,
   variant: options.variant ?? "created-after",
   style: options.style ?? "plain",
+  motionProfile: options.motionProfile ?? null,
   condition: options.condition ?? "picture",
   pictureScale: options.pictureScale ?? "half",
   maxSpins: options.scene === "game-segment" ? (options.maxSpins ?? 400) : null,
@@ -271,6 +281,10 @@ const settings = {
   driver: Flag.String("driver").pipe(Flag.withDefault("scripted")),
   variant: Flag.Literals("variant", busyVariants).pipe(Flag.withDefault("created-after")),
   style: Flag.Literals("style", ["plain", "performed"]).pipe(Flag.withDefault("plain")),
+  motionProfileFile: Flag.String("motion-profile").pipe(
+    Flag.withDescription("Bounded MotionProfile JSON for performed input experiments"),
+    Flag.optional,
+  ),
   spins: Flag.Int("spins").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
     Flag.withDefault(10),
@@ -365,12 +379,18 @@ const plan = Command.make(
   Effect.fn(function* (rawOptions) {
     const subject = yield* readSubject(rawOptions.subjectFile);
 
+    const motionProfile = yield* Option.match(rawOptions.motionProfileFile, {
+      onNone: () => Effect.void,
+      onSome: readMotionProfile,
+    });
+
     const options = {
       ...rawOptions,
       durationMillis: Option.getOrElse(rawOptions.durationMillis, () =>
         defaultDuration(rawOptions.scene),
       ),
       ...(subject === undefined ? {} : { subject }),
+      ...(motionProfile === undefined ? {} : { motionProfile }),
       fixtureTunnels: Option.getOrUndefined(rawOptions.fixtureTunnels),
     };
 
@@ -388,12 +408,18 @@ const run = Command.make(
   Effect.fn(function* (rawOptions) {
     const subject = yield* readSubject(rawOptions.subjectFile);
 
+    const motionProfile = yield* Option.match(rawOptions.motionProfileFile, {
+      onNone: () => Effect.void,
+      onSome: readMotionProfile,
+    });
+
     const options = {
       ...rawOptions,
       durationMillis: Option.getOrElse(rawOptions.durationMillis, () =>
         defaultDuration(rawOptions.scene),
       ),
       ...(subject === undefined ? {} : { subject }),
+      ...(motionProfile === undefined ? {} : { motionProfile }),
       fixtureTunnels: Option.getOrUndefined(rawOptions.fixtureTunnels),
     };
 
@@ -473,6 +499,8 @@ const run = Command.make(
             durationMillis: options.durationMillis,
             variant: options.variant,
             style: options.style,
+            motionProfile: options.motionProfile ?? null,
+            ...(cell.scene === "game-segment" ? { keyboardExecution: "plain" } : {}),
             spins: options.spins,
             condition: cell.condition,
             moments: options.moments,
@@ -571,6 +599,7 @@ const run = Command.make(
                 durationMillis: options.durationMillis,
                 variant: options.variant,
                 style: options.style,
+                ...(motionProfile === undefined ? {} : { motionProfile }),
                 spins: options.spins,
                 condition: cell.condition,
                 moments: options.moments,

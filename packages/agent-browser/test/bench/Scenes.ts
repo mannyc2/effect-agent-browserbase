@@ -3,6 +3,7 @@ import type * as Browser from "effect-browser/browser";
 
 import type { GameSite } from "../fixtures/GameSite.ts";
 import type { Driver } from "./Drivers.ts";
+import { validateMotionSelection, type StyleOptions } from "./ExecutionStyle.ts";
 import { gamesOperability } from "./Games.ts";
 import { gameSegment } from "./GameSegment.ts";
 import { BenchError, type Journal } from "./Records.ts";
@@ -14,7 +15,6 @@ import {
   stageScenes,
   type BusyVariant,
   type Stage,
-  type Style,
 } from "./StageScenes.ts";
 import { scenes as understandingScenes, understanding, type Condition } from "./Understanding.ts";
 
@@ -43,10 +43,9 @@ export const picture = pictureMetrics;
 export const execute = Effect.fn("Bench.scene")(function* <OwnerError>(
   journal: Journal,
   browser: Browser.BrowserSession<OwnerError>,
-  options: {
+  options: StyleOptions & {
     readonly durationMillis: number;
     readonly variant?: BusyVariant;
-    readonly style?: Style;
     readonly spins?: number;
     readonly stage?: Stage;
     readonly condition?: Condition;
@@ -60,6 +59,13 @@ export const execute = Effect.fn("Bench.scene")(function* <OwnerError>(
     readonly maxSpins?: number;
   },
 ) {
+  yield* validateMotionSelection({
+    scene: journal.manifest.scene,
+    driver: journal.manifest.driver,
+    style: options.style,
+    motionProfile: options.motionProfile,
+  });
+
   if (journal.manifest.scene === "games-operability")
     return yield* gamesOperability(journal, browser, options);
   if (journal.manifest.scene === "replay-drift")

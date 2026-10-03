@@ -11,6 +11,7 @@ import { gameSite, type GameSite } from "../fixtures/GameSite.ts";
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
 import { answer, call, scripted } from "./Drivers.ts";
+import { executionStyle, type StyleOptions } from "./ExecutionStyle.ts";
 import { BenchError, type Journal, json, tagOf } from "./Records.ts";
 
 export const gameDrivers = ["dom-twin", "canvas-keys", "canvas-click", "agent-tools"] as const;
@@ -93,9 +94,8 @@ const topPageAgent = Effect.fn("Bench.games.topPageAgent")(function* <OwnerError
 export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <OwnerError>(
   journal: Journal,
   browser: Browser.BrowserSession<OwnerError>,
-  options: {
+  options: StyleOptions & {
     readonly spins?: number;
-    readonly style?: "plain" | "performed";
     readonly site?: GameSite;
   } = {},
 ) {
@@ -190,7 +190,10 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
           if (options.style === "performed")
             yield* page.run(
               { version: 1, steps: [{ id: `spin-${spin}`, action: { _tag: "PointerClick", at } }] },
-              { style: { seed: journal.manifest.seed + spin }, within: 15000 },
+              {
+                style: yield* executionStyle(options, journal.manifest.seed + spin),
+                within: 15000,
+              },
             );
           else yield* page.pointerClick(at);
         } else yield* frame.press({ key: " ", into: "#game-canvas" });
