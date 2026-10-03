@@ -466,7 +466,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
                   }),
                 ),
               ),
-            ...(driver.estimate === undefined ? {} : { estimateCostMicrousd: driver.estimate }),
+            estimateCostMicrousd: driver.estimate,
             turnAllowance: maxTurns,
             ...(options.driver === undefined
               ? {}
