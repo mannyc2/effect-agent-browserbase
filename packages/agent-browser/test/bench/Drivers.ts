@@ -4,8 +4,7 @@ import * as InMemory from "effect-agent/in-memory";
 import type { RunCostEstimator } from "effect-agent/run-options";
 import { AiError, LanguageModel, Model, Prompt } from "effect/unstable/ai";
 
-import type { Output } from "./Cases.ts";
-import { type Journal, type Usage, json, requestData } from "./Evidence.ts";
+import { type Journal, type Usage, json, requestData } from "./Records.ts";
 
 export type Turn = (request: LanguageModel.ProviderOptions) => ReadonlyArray<ScriptedStreamPart>;
 const usage = { inputTokens: {}, outputTokens: {} };
@@ -26,17 +25,17 @@ const text = (delta: string): ReadonlyArray<ScriptedStreamPart> => [
   { type: "finish", reason: "stop", usage },
 ];
 
-export const answer = (output: Output) => text(JSON.stringify(output));
+export const answer = (output: Schema.Json) => text(JSON.stringify(output));
 
 /** A final turn that ignores the output contract, as a real model did when its turns ran out. */
 export const prose = (delta: string) => text(delta);
 
 const modelError = () =>
   AiError.AiError.make({
-    module: "Evaluation",
+    module: "Bench",
     method: "script",
     reason: AiError.UnknownError.make({
-      description: "Finite evaluation script exhausted or unsupported invocation",
+      description: "Finite bench script exhausted or unsupported invocation",
     }),
   });
 
@@ -92,7 +91,7 @@ export type ModelServices = Layer.Success<ReturnType<typeof model>>;
 
 /**
  * What drives a run's model: its services, the history it records and, for a real model, the
- * estimator that settles each reservation and the spend facts it leaves.
+ * estimator that records reported usage and the spend facts it leaves.
  */
 export interface Driver {
   readonly provide: <A, E, R>(
@@ -100,7 +99,7 @@ export interface Driver {
   ) => Effect.Effect<A, E, Exclude<R, ModelServices>>;
   readonly history: (prompt: Prompt.Prompt) => Effect.Effect<unknown, Schema.SchemaError>;
   readonly estimate: RunCostEstimator | undefined;
-  /** Spend facts once the run ends, retaining any unsettled reservation; null for a script. */
+  /** Spend facts once the run ends, including any unavailable usage; null for a script. */
   readonly finish: () => Usage | null;
 }
 

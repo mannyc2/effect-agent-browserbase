@@ -14,9 +14,9 @@
   },
   "include": ["src", "test", "examples", "vite.config.ts"],
   "exclude": [
-    "test/campaign.test.ts",
-    "test/evaluation/Cli.ts",
-    "test/evaluation/Main.ts",
-    "test/evaluation/Provider.ts"
+    "test/bench.test.ts",
+    "test/bench/Cli.ts",
+    "test/bench/Main.ts",
+    "test/bench/Models.ts"
   ]
 }
