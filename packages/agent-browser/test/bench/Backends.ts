@@ -1,5 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { Effect, Exit, Fiber, Layer, Redacted, Stream } from "effect";
+import type * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
@@ -98,6 +99,7 @@ export const run = <A, E, R>(
     readonly apiKey: Redacted.Redacted<string>;
   },
   hosting?: BrowserbaseBackend,
+  bootstrap?: Bootstrap.Plan<never, never>,
 ) => {
   const policy = BrowserPolicy.unrestricted({
     maxActions: 10000,
@@ -142,10 +144,16 @@ export const run = <A, E, R>(
 
   return hosted === undefined
     ? recordFailure(
-        Browser.scoped(Chromium.launch(policy), complete).pipe(Effect.provide(chromium(journal))),
+        Browser.scoped(
+          Chromium.launch(policy, bootstrap === undefined ? {} : { bootstrap }),
+          complete,
+        ).pipe(Effect.provide(chromium(journal))),
       )
     : recordFailure(
-        Browser.scoped(BrowserbaseBrowser.open(policy), complete).pipe(Effect.provide(hosted)),
+        Browser.scoped(
+          BrowserbaseBrowser.open(policy, bootstrap === undefined ? {} : { bootstrap }),
+          complete,
+        ).pipe(Effect.provide(hosted)),
       );
 };
 
@@ -216,6 +224,11 @@ export const filming = Effect.fnUntraced(function* <A, E, R>(
         Effect.catchCause((cause) =>
           Effect.sync(() => {
             recording.error = tagOf(cause);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            recording.captureEndedAt = journal.elapsedMillis();
           }),
         ),
         Effect.forkScoped,

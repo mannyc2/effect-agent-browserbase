@@ -344,11 +344,18 @@ export const measured = (options: {
         ),
       ),
     estimate: (usage) =>
-      Effect.sync(() => ({
-        costMicrousd: allowance.settle(usage),
-        pricingVersion: `${subject.rates.source} ${subject.rates.retrieved}`,
-        pricingStatus: "estimated" as const,
-      })),
+      Effect.sync(() => {
+        const costMicrousd = allowance.settle(usage);
+
+        return {
+          costMicrousd,
+          pricingVersion: `${subject.rates.source} ${subject.rates.retrieved}`,
+          pricingStatus:
+            allowance.usage().status === "usage-unavailable"
+              ? ("unknown" as const)
+              : ("estimated" as const),
+        };
+      }),
     finish: () => allowance.finish(),
     callLatencies: () => latencies(spans),
   };

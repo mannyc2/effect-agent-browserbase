@@ -57,14 +57,12 @@ for (const driver of gameDrivers) {
           (browser) => gamesOperability(journal, browser, { spins: 1 }),
         ).pipe(Effect.provide(chromium));
         const metrics = yield* Schema.decodeUnknownEffect(Metrics)(journal.metrics);
-        const plays = driver === "dom-twin" || driver === "canvas-keys";
+        const plays = driver !== "agent-tools";
 
         expect(metrics.reachedGame).toBe(true);
         expect(metrics.spinsCompleted).toBe(plays ? 1 : 0);
         expect(metrics.finalBalance).toBe(plays ? 1490 : 1000);
-        expect(metrics.blockedStep).toBe(
-          plays ? null : driver === "canvas-click" ? "pointer-press" : "top-page-observation",
-        );
+        expect(metrics.blockedStep).toBe(plays ? null : "top-page-observation");
         expect(metrics.observedControls).toEqual(
           driver === "dom-twin" ? ["Decrease bet", "Increase bet", "SPIN"] : [],
         );

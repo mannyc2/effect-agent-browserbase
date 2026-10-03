@@ -13,6 +13,7 @@ export const json = (value: unknown): Schema.Json =>
   Schema.decodeUnknownSync(Schema.Json)(structuredClone(value));
 
 export const byteLength = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+export const maxRecordBytes = 128 * 1024 * 1024;
 const Tagged = Schema.Struct({ _tag: Schema.String });
 
 export const tagOf = (cause: Cause.Cause<unknown>) =>
@@ -72,13 +73,21 @@ export const Subject = Schema.Struct({
     source: Schema.NonEmptyString,
     retrieved: Schema.NonEmptyString,
   }),
+  /** Dated provider limits and maximum rates, supplied by the operator for exposure estimates. */
+  exposure: Schema.optionalKey(
+    Schema.Struct({
+      maximumInputTokens: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2000000 })),
+      inputRateCeiling: natural,
+      outputRateCeiling: natural,
+    }),
+  ),
 });
 
 export type Subject = typeof Subject.Type;
 
 export const CaptureProfile = Schema.Struct({
-  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 36000 })),
-  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1024, maximum: 512 * 1024 * 1024 })),
+  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 54000 })),
+  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1024, maximum: 1024 * 1024 * 1024 })),
   quality: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
   maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 900000 })),
 });
@@ -103,6 +112,8 @@ export interface Recording extends CaptureProfile {
   readonly frames: RecordingFrame[];
   readonly startedAt: number;
   endedAt: number;
+  /** Host time at which the actual frame stream ended, even if scene work continued. */
+  captureEndedAt?: number;
   nativeStop: "missing" | "confirmed" | "unconfirmed";
   summary: Schema.Json | null;
   totalBytes: number;
@@ -220,6 +231,9 @@ export class Journal {
           : json({
               startedAt: recording.startedAt,
               endedAt: recording.endedAt,
+              ...(recording.captureEndedAt === undefined
+                ? {}
+                : { captureEndedAt: recording.captureEndedAt }),
               nativeStop: recording.nativeStop,
               summary: recording.summary,
               totalBytes: recording.totalBytes,
@@ -265,6 +279,9 @@ export const requestData = (request: LanguageModel.ProviderOptions) =>
 export const save = Effect.fn("Bench.save")(function* (journal: Journal, directory: string) {
   yield* Effect.tryPromise({
     try: async () => {
+      const text = JSON.stringify(journal.snapshot(), null, 2);
+
+      if (Buffer.byteLength(text) > maxRecordBytes) throw new Error("Record bound exceeded");
       await mkdir(dirname(directory), { recursive: true });
       await mkdir(directory);
       const frames = journal.recording?.frames ?? [];
@@ -276,12 +293,15 @@ export const save = Effect.fn("Bench.save")(function* (journal: Journal, directo
           frame.bytes,
           { flag: "wx" },
         );
-      await writeFile(join(directory, "record.json"), JSON.stringify(journal.snapshot(), null, 2), {
+      await writeFile(join(directory, "record.json"), text, {
         flag: "wx",
       });
     },
     catch: () =>
-      new BenchError({ operation: "save", message: "Run records need a new output directory." }),
+      new BenchError({
+        operation: "save",
+        message: "Cannot save a bounded run record in a new output directory.",
+      }),
   });
 });
 
@@ -290,7 +310,7 @@ export const load = Effect.fn("Bench.load")(function* (directory: string) {
     try: async () => {
       const path = join(directory, "record.json");
 
-      if ((await stat(path)).size > 12 * 1024 * 1024) throw new Error("Record bound exceeded");
+      if ((await stat(path)).size > maxRecordBytes) throw new Error("Record bound exceeded");
 
       return readFile(path, "utf8");
     },

@@ -7,7 +7,7 @@ import { ObservedElement } from "effect-browser/browser-data";
 
 import { type GameKind } from "../fixtures/GameCore.ts";
 import { enterGame, waitForGame } from "../fixtures/GameDriver.ts";
-import { gameSite } from "../fixtures/GameSite.ts";
+import { gameSite, type GameSite } from "../fixtures/GameSite.ts";
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
 import { answer, call, scripted } from "./Drivers.ts";
@@ -93,7 +93,11 @@ const topPageAgent = Effect.fn("Bench.games.topPageAgent")(function* <OwnerError
 export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <OwnerError>(
   journal: Journal,
   browser: Browser.BrowserSession<OwnerError>,
-  options: { readonly spins?: number } = {},
+  options: {
+    readonly spins?: number;
+    readonly style?: "plain" | "performed";
+    readonly site?: GameSite;
+  } = {},
 ) {
   const config = yield* Schema.decodeEffect(Options)({ spins: options.spins ?? 10 });
   const driver = journal.manifest.driver;
@@ -103,13 +107,13 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
       operation: "games driver",
       message: "Choose dom-twin, canvas-keys, canvas-click or agent-tools.",
     });
-  if (journal.manifest.backend !== "chromium")
+  if (journal.manifest.backend !== "chromium" && options.site === undefined)
     return yield* new BenchError({
       operation: "games fixture",
       message: "Cross-site hosted games need two separately reachable fixture origins.",
     });
   const kind: GameKind = driver === "dom-twin" ? "reels-dom" : "reels";
-  const site = yield* gameSite({ seed: journal.manifest.seed });
+  const site = options.site ?? (yield* gameSite({ seed: journal.manifest.seed }));
   const page = browser.initialPage;
 
   const timings: Array<{
@@ -161,17 +165,6 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
 
       observedControls = observation.controls.map((control) => control.label);
       observedText = observation.text;
-      if (driver === "canvas-click") {
-        step = "pointer-move";
-        yield* frame.pointerMove({
-          to: { x: (journal.manifest.viewport.width - 960) / 2 + 815, y: 570 },
-        });
-        blockedStep = "pointer-press";
-        gap =
-          "Canvas-rendered controls cannot be clicked with observed DOM references; this driver has no pointer-press primitive.";
-
-        return;
-      }
       for (let spin = 1; spin <= config.spins; spin++) {
         step = `spin-${spin}`;
         const startedAt = journal.elapsedMillis();
@@ -191,6 +184,15 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
               elementId: button.elementId,
             }),
           );
+        } else if (driver === "canvas-click") {
+          const at = { x: (journal.manifest.viewport.width - 960) / 2 + 815, y: 570 };
+
+          if (options.style === "performed")
+            yield* frame.run(
+              { version: 1, steps: [{ id: `spin-${spin}`, action: { _tag: "PointerClick", at } }] },
+              { style: { seed: journal.manifest.seed + spin }, within: 15000 },
+            );
+          else yield* frame.pointerClick(at);
         } else yield* frame.press({ key: " ", into: "#game-canvas" });
         const actionMillis = journal.elapsedMillis() - startedAt;
 
