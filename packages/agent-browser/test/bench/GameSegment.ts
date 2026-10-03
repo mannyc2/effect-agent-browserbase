@@ -5,7 +5,7 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import type * as Browser from "effect-browser/browser";
-import { Prompt, Toolkit } from "effect/unstable/ai";
+import { Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
 import { waitForGame } from "../fixtures/GameDriver.ts";
 import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite.ts";
@@ -23,6 +23,7 @@ export interface SegmentCaption {
   readonly output: Narration;
   readonly truth: Truth | null;
   readonly grade: ReturnType<typeof grade> | null;
+  readonly resultQualification?: "validated-before-caption" | "no-validated-result-before-caption";
 }
 
 export interface GameSegmentOptions {
@@ -46,6 +47,38 @@ const Options = Schema.Struct({
   airDelayMillis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 60000 })),
   maxSpins: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 400 })),
   pictureScale: Schema.Literals([0.5, 1]),
+});
+
+const pauseToolkit = Toolkit.make(
+  Tool.make("bench_pause", {
+    description:
+      "Wait for the requested number of milliseconds before the next current-screen picture. This wait has no knowledge of game state; choose it from visual evidence.",
+    parameters: Schema.Struct({
+      millis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 5000 })),
+    }),
+    success: Schema.Struct({ waitedMillis: Schema.Int }),
+  }).annotate(Tool.Readonly, true),
+);
+
+const typedInput = Schema.decodeUnknownOption(Schema.Struct({ text: Schema.String }));
+
+const pauseHandlers = pauseToolkit.toLayer({
+  bench_pause: (request) =>
+    Effect.sleep(request.millis).pipe(Effect.as({ waitedMillis: request.millis })),
+});
+
+export const segmentCallCaps = (maxSpins = 400, announceThenSpin = false) => ({
+  lobbyModelCalls: 12,
+  lobbyToolCalls: 10,
+  episodeModelCalls: 6,
+  episodeToolCalls: 5,
+  episodeDurationMillis: 30000,
+  announcementModelCalls: announceThenSpin ? 1 : 0,
+  episodes: maxSpins,
+  inputAttemptsPerEpisode: 1,
+  typedCharactersPerAttempt: 1,
+  actualSpinCap: maxSpins,
+  totalModelCalls: 12 + maxSpins * (6 + (announceThenSpin ? 1 : 0)),
 });
 
 const quantile = (values: ReadonlyArray<number>, fraction: number) => {
@@ -222,6 +255,9 @@ export const segmentMetrics = (input: {
       graded.length === 0
         ? null
         : graded.filter((checked) => checked.anyFalseFact).length / graded.length,
+    unmatchedResultCaptions: input.captions.filter(
+      (caption) => caption.resultQualification === "no-validated-result-before-caption",
+    ).length,
     interstitialSeconds: spanSeconds(input.interstitials),
     interstitialHandling:
       "model tools dismiss cookie and age gates; host waits for the timed result banner",
@@ -231,14 +267,16 @@ export const segmentMetrics = (input: {
   };
 };
 
-const resultTruth = (site: GameSite, spin: number): Truth | undefined => {
+const resultTruth = (site: GameSite, spin: number, window?: Interval): Truth | undefined => {
   const receipt = site
     .events()
     .findLast(
       (candidate) =>
         candidate.kind === "reels" &&
         candidate.event.tag === "result" &&
-        candidate.event.spin === spin,
+        candidate.event.spin === spin &&
+        (window === undefined ||
+          (candidate.receivedAtMillis >= window.start && candidate.receivedAtMillis <= window.end)),
     );
 
   if (receipt?.event.tag !== "result") return undefined;
@@ -295,18 +333,21 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       message: "Hosted segments require two separately reachable fixture origins.",
     });
   const page = browser.initialPage;
+  const callCaps = segmentCallCaps(config.maxSpins, config.announceThenSpin);
   const start = journal.elapsedMillis();
   const deadline = start + config.durationMillis;
   const clockOffset = journal.elapsedMillis() - site.elapsedMillis();
   const captions: SegmentCaption[] = [];
   const interstitials: Interval[] = [];
-  let stopReason: "duration" | "spin-cap" | "failure" = "duration";
+  let stopReason: "duration" | "spin-cap" | "episode-cap" | "failure" = "duration";
   let permittedSpin = 0;
   let pictureCalls = 0;
   let lastSequence = 0n;
   let lastInvocationId: string | null = null;
   let lastSteps: ReadonlyArray<StepDigest.StepFact> = [];
   let segmentEnded = start;
+  let inputAttemptsRemaining = 0;
+  let episodes = 0;
 
   const host = yield* BrowserTools.makeHost(browser, page, {
     execution: {
@@ -314,15 +355,21 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       within: 10000,
     },
     coordinatePolicy: {
-      admit: () =>
-        journal.elapsedMillis() < deadline &&
-        site.state("reels").spin <= permittedSpin &&
-        site.state("reels").spin < config.maxSpins,
+      admit: () => {
+        if (journal.elapsedMillis() >= deadline) return false;
+        if (options.driver === undefined)
+          return (
+            site.state("reels").spin <= permittedSpin && site.state("reels").spin < config.maxSpins
+          );
+
+        return true;
+      },
     },
     lane: { maxOutstanding: 1 },
   });
 
   const playTools = Toolkit.merge(BrowserTools.nativeToolkit, BrowserTools.keyboardToolkit);
+  const episodeTools = Toolkit.merge(playTools, pauseToolkit);
   const lobbyTools = Toolkit.merge(BrowserTools.toolkit, playTools);
   const image = picture(page, { every: "call", scale: config.pictureScale });
 
@@ -330,12 +377,34 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     kind: SegmentCaption["kind"],
     question: string,
     turns: ReadonlyArray<Turn>,
-    truth: Truth | null,
+    truth: Truth | null | ((publishedAt: number) => Truth | undefined),
   ) {
     const driver = options.driver ?? scripted(journal, turns);
-    const toolkit = kind === "lobby" ? lobbyTools : kind === "action" ? playTools : Toolkit.make();
+    const autonomous = kind === "result" && options.driver !== undefined;
+
+    const toolkit =
+      kind === "lobby"
+        ? lobbyTools
+        : kind === "action"
+          ? playTools
+          : autonomous
+            ? episodeTools
+            : Toolkit.make();
+
     // The segment deadline cancels first; a simultaneous agent deadline would misreport failure.
-    const remaining = Math.max(1, Math.min(30000, deadline - journal.elapsedMillis() + 1000));
+    const remaining = Math.max(
+      1,
+      Math.min(callCaps.episodeDurationMillis, deadline - journal.elapsedMillis() + 1000),
+    );
+
+    const maxTurns =
+      kind === "lobby"
+        ? callCaps.lobbyModelCalls
+        : kind === "announce"
+          ? 1
+          : autonomous
+            ? callCaps.episodeModelCalls
+            : 5;
 
     const agent = Agent.make("watched-game-segment", {
       input: Schema.String,
@@ -343,71 +412,127 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       toolkit,
       instructions: `${BrowserTools.instructions(toolkit)} Describe only supplied screen evidence. Captions are text. Facts use exactly the requested keys and demo credits. Start at most one spin per action run. A dispatched input does not prove a game result.`,
       policy: {
-        maxTurns: kind === "lobby" ? 12 : 5,
-        maxToolCalls: kind === "lobby" ? 10 : 4,
+        maxTurns,
+        maxToolCalls:
+          kind === "lobby" ? callCaps.lobbyToolCalls : autonomous ? callCaps.episodeToolCalls : 4,
         maxDuration: remaining,
         onExhaustion: "fail",
       },
     });
 
     const result = yield* host.run(
-      driver.provide(
-        AgentRuntime.run(agent, question, {
-          onHistory: (history) =>
-            driver.history(history).pipe(
-              Effect.asVoid,
-              Effect.mapError(() =>
-                BenchError.make({
-                  operation: "segment history",
-                  message: "Cannot encode agent history.",
-                }),
-              ),
-            ),
-          ...(driver.estimate === undefined ? {} : { costEstimator: driver.estimate }),
-          transientContext: {
-            load: () =>
-              Effect.gen(function* () {
-                const png = yield* image.load();
-
-                pictureCalls++;
-                if (config.condition === "picture") return png;
-                const receipts = yield* host.receipts;
-                const recent = receiptWindow(receipts.receipts, receipts.dropped, lastInvocationId);
-                const projected = yield* StepDigest.fromReceipts(recent);
-
-                if (projected.length > 0) lastSteps = projected;
-
-                const digest = StepDigest.build({
-                  steps: lastSteps,
-                  timeline: yield* page.timeline.snapshot(),
-                  now: yield* page.timeline.now,
-                  page: yield* metadata(browser, page),
-                  sinceSequence: lastSequence,
-                  droppedReceipts: recent.dropped,
-                });
-
-                return Prompt.fromMessages([
-                  ...png.content,
-                  Prompt.makeMessage("user", {
-                    content: [
-                      Prompt.makePart("text", {
-                        text: `Step digest:\n${JSON.stringify({ ...digest, receiptAnchor: recent.anchor })}`,
-                      }),
-                    ],
+      driver
+        .provide(
+          AgentRuntime.run(agent, question, {
+            onHistory: (history) =>
+              driver.history(history).pipe(
+                Effect.asVoid,
+                Effect.mapError(() =>
+                  BenchError.make({
+                    operation: "segment history",
+                    message: "Cannot encode agent history.",
                   }),
-                ]);
-              }),
-          },
-        }),
-      ),
+                ),
+              ),
+            ...(driver.estimate === undefined ? {} : { costEstimator: driver.estimate }),
+            turnAllowance: maxTurns,
+            ...(options.driver === undefined
+              ? {}
+              : {
+                  toolAuthorization: {
+                    authorize: ({ call: requested }) =>
+                      Effect.sync(() => {
+                        const name = requested.toolName;
+
+                        if (
+                          name !== "browser_click_at" &&
+                          name !== "browser_press" &&
+                          name !== "browser_type"
+                        )
+                          return { _tag: "allowed" } as const;
+                        if (journal.elapsedMillis() >= deadline || inputAttemptsRemaining === 0)
+                          return {
+                            _tag: "denied",
+                            reason: "This episode's single input attempt is unavailable.",
+                          } as const;
+                        inputAttemptsRemaining--;
+                        if (name === "browser_type") {
+                          const input = typedInput(requested.parameters);
+
+                          if (Option.isNone(input) || [...input.value.text].length !== 1)
+                            return {
+                              _tag: "denied",
+                              reason: "An episode typing attempt may send only one character.",
+                            } as const;
+                        }
+
+                        return { _tag: "allowed" } as const;
+                      }),
+                  },
+                }),
+            transientContext: {
+              load: () =>
+                Effect.gen(function* () {
+                  const png = yield* image.load();
+
+                  pictureCalls++;
+                  if (config.condition === "picture") return png;
+                  const receipts = yield* host.receipts;
+
+                  const recent = receiptWindow(
+                    receipts.receipts,
+                    receipts.dropped,
+                    lastInvocationId,
+                  );
+
+                  const projected = yield* StepDigest.fromReceipts(recent);
+
+                  if (projected.length > 0) lastSteps = projected;
+
+                  const digest = StepDigest.build({
+                    steps: lastSteps,
+                    timeline: yield* page.timeline.snapshot(),
+                    now: yield* page.timeline.now,
+                    page: yield* metadata(browser, page),
+                    sinceSequence: lastSequence,
+                    droppedReceipts: recent.dropped,
+                  });
+
+                  return Prompt.fromMessages([
+                    ...png.content,
+                    Prompt.makeMessage("user", {
+                      content: [
+                        Prompt.makePart("text", {
+                          text: `Step digest:\n${JSON.stringify({ ...digest, receiptAnchor: recent.anchor })}`,
+                        }),
+                      ],
+                    }),
+                  ]);
+                }),
+            },
+          }),
+        )
+        .pipe(Effect.provide(pauseHandlers)),
     );
+
+    const publishedAt = journal.elapsedMillis();
+    const checkedTruth = typeof truth === "function" ? truth(publishedAt) : truth;
+    const gradeTruth = checkedTruth === undefined ? { facts: {} } : checkedTruth;
 
     const caption: SegmentCaption = {
       kind,
-      atMillis: journal.elapsedMillis(),
+      atMillis: publishedAt,
       output: result.output,
-      truth,
-      grade: truth === null ? null : grade(result.output, truth),
+      truth: gradeTruth,
+      grade: gradeTruth === null ? null : grade(result.output, gradeTruth),
+      ...(typeof truth === "function"
+        ? {
+            resultQualification:
+              checkedTruth === undefined
+                ? "no-validated-result-before-caption"
+                : "validated-before-caption",
+          }
+        : {}),
     };
 
     captions.push(caption);
@@ -447,8 +572,41 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       ],
       null,
     );
-    yield* waitForGame(site, "reels", (state) => state.ready, "segment reached game");
+    if (options.driver === undefined)
+      yield* waitForGame(site, "reels", (state) => state.ready, "segment reached game");
     interstitials.push({ start: lobbyStart, end: journal.elapsedMillis() });
+    if (options.driver !== undefined) {
+      while (journal.elapsedMillis() < deadline && episodes < config.maxSpins) {
+        if (config.announceThenSpin)
+          yield* run(
+            "announce",
+            "Announce the next spin before taking any action. Use empty facts.",
+            [],
+            null,
+          );
+        inputAttemptsRemaining = 1;
+        episodes++;
+        const episodeStart = journal.elapsedMillis();
+
+        yield* run(
+          "result",
+          "Use the current pictures to play exactly one spin. If the game is busy, use bench_pause and inspect the next picture until SPIN is available. Click the rendered SPIN control or press Space once, then choose pauses from the pictures until the reels stop. Finish with a short result caption and facts spin (visible SPIN counter), balance, bet, win (LAST WIN), and notable (ordinary, near-miss, big-win, bonus, or losing-streak). This episode admits one shared point-click or keyboard attempt; typing is limited to one character. An input acknowledgement does not prove a result.",
+          [],
+          (publishedAt) => {
+            const state = site.state("reels");
+
+            return resultTruth(site, state.spin, {
+              start: episodeStart - clockOffset,
+              end: publishedAt - clockOffset,
+            });
+          },
+        );
+        inputAttemptsRemaining = 0;
+      }
+      stopReason = episodes >= config.maxSpins ? "episode-cap" : "duration";
+
+      return;
+    }
     while (journal.elapsedMillis() < deadline && site.state("reels").spin < config.maxSpins) {
       yield* waitForGame(
         site,
@@ -587,7 +745,22 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
           stopReason,
           pictureCalls,
           captions,
-          measured: options.driver === undefined ? "scripted-plumbing" : "model",
+          measured:
+            options.driver === undefined
+              ? "scripted-plumbing"
+              : journal.usage === null
+                ? "supplied-driver-plumbing"
+                : "model",
+          episodes,
+          callCaps,
+          decisionSource:
+            options.driver === undefined
+              ? "fixture-scripted-scheduling"
+              : "model-pictures-and-chosen-pauses",
+          interstitialHandling:
+            options.driver === undefined
+              ? "model tools dismiss gates; fixture script schedules around the timed banner"
+              : "model tools dismiss gates and choose pauses from current pictures",
           durationOverrunMillis: Math.max(0, end - deadline),
           factsQualification:
             "requested result facts; caption prose is retained without semantic grading",

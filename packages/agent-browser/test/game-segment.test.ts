@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 
-import { receiptWindow, segmentMetrics, type SegmentCaption } from "./bench/GameSegment.ts";
+import {
+  receiptWindow,
+  segmentCallCaps,
+  segmentMetrics,
+  type SegmentCaption,
+} from "./bench/GameSegment.ts";
 import type { RecordingFrame } from "./bench/Records.ts";
 import { grade } from "./bench/Understanding.ts";
 import { gameSite, type TruthReceipt } from "./fixtures/GameSite.ts";
@@ -92,6 +97,14 @@ it("digest receipt anchors remain useful after the 32-entry host window starts e
   });
   expect(receiptWindow(receipts, 9, "call-1")).toEqual({ receipts, dropped: 9, anchor: "evicted" });
   expect(receiptWindow([], 0, null)).toEqual({ receipts: [], dropped: 0, anchor: "initial" });
+});
+
+it("autonomous segment call caps include terminal narration and optional announcements", () => {
+  expect(segmentCallCaps().totalModelCalls).toBe(2412);
+  expect(segmentCallCaps(400, true).totalModelCalls).toBe(2812);
+  expect(segmentCallCaps(1, true).totalModelCalls).toBe(19);
+  expect(segmentCallCaps(1).episodeModelCalls).toBe(6);
+  expect(segmentCallCaps(1).episodeToolCalls).toBe(5);
 });
 
 it("segment reaction timing uses host result receipts and structured spin correlation", () => {
