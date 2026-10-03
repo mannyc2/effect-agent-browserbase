@@ -1,9 +1,16 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema, Stream } from "effect";
+import * as BrowserTools from "effect-agent-browser/tools";
 import * as Browser from "effect-browser/browser";
-import { BrowserPolicy } from "effect-browser/browser-data";
-import { Chromium } from "effect-browser/chromium";
+import {
+  BrowserPolicy,
+  Observation,
+  ObservedElement,
+  type InputReceipt,
+} from "effect-browser/browser-data";
+import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
+import { Toolkit } from "effect/ai";
 
 import { Journal } from "../bench/Records.ts";
 import { matrix } from "../bench/Replay.ts";
@@ -223,3 +230,139 @@ it.live(
   },
   60000,
 );
+
+// Fixture list links keep distinct hit areas so a seeded performed hover reaches the intended node.
+it.live("baseline portal permits a seeded exact-node hover without adjacent link overlap", () => {
+  const cleanup: ChromiumCleanupResult[] = [];
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* driftSite;
+      const run = "native-baseline-hover";
+
+      site.configure("none", 0, run);
+      yield* Browser.scoped(
+        Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 50, maxElapsedMillis: 30000 })),
+        (browser) =>
+          Effect.gen(function* () {
+            const page = browser.initialPage;
+
+            yield* page.navigate({ url: `${site.url}/portal` });
+            const inputs: InputReceipt[] = [];
+
+            const host = yield* BrowserTools.makeHost(browser, page, {
+              execution: { style: { seed: 18 }, within: 10000 },
+              onInput: ({ receipt }) => Effect.sync(() => inputs.push(receipt)),
+            });
+
+            const tools = yield* Toolkit.merge(
+              BrowserTools.toolkit,
+              BrowserTools.nativeToolkit,
+            ).pipe(Effect.provide(Layer.merge(host.handlers, host.nativeHandlers)));
+
+            const inspect = Effect.fnUntraced(function* () {
+              const result = yield* Stream.runCollect(yield* tools.handle("browser_inspect", {}));
+
+              return yield* Schema.decodeUnknownEffect(Observation)(result[0]?.result);
+            });
+
+            const reference = (observation: Observation, label: string) => {
+              const matches = observation.controls.filter((control) => control.label === label);
+
+              expect(matches).toHaveLength(1);
+
+              return ObservedElement.make({
+                observationId: observation.observationId,
+                elementId: matches[0]?.elementId ?? "",
+              });
+            };
+
+            const portal = yield* inspect();
+
+            expect(
+              yield* Stream.runCollect(
+                yield* tools.handle("browser_click", reference(portal, "Markets")),
+              ),
+            ).toMatchObject([{ isFailure: false }]);
+            const markets = yield* inspect();
+
+            expect(
+              yield* Stream.runCollect(
+                yield* tools.handle("browser_click", reference(markets, "Prices")),
+              ),
+            ).toMatchObject([{ isFailure: false }]);
+            expect(
+              yield* Stream.runCollect(
+                yield* tools.handle("browser_wheel", {
+                  deltaX: 0,
+                  deltaY: 120,
+                  at: { x: 400, y: 400 },
+                }),
+              ),
+            ).toMatchObject([{ isFailure: false }]);
+            const afterWheel = yield* inspect();
+            const beta = reference(afterWheel, "Beta article");
+            const gamma = reference(afterWheel, "Gamma article");
+            const betaFacts = yield* page.controlFacts(beta);
+            const gammaFacts = yield* page.controlFacts(gamma);
+
+            // The center remains reachable; the performed input must also pass the unchanged exact-node hit check.
+            expect(betaFacts.hitTest).toBe("self");
+
+            const hovered = yield* Stream.runCollect(
+              yield* tools.handle("browser_hover", beta, "baseline-hover"),
+            );
+
+            console.log(
+              "Native baseline hover geometry",
+              JSON.stringify({
+                beta: betaFacts.box,
+                gamma: gammaFacts.box,
+                documentScroll: afterWheel.viewport?.documentScroll,
+                hovered,
+                failures: (yield* host.toolFailures).failures,
+              }),
+            );
+            expect(hovered).toMatchObject([
+              { isFailure: false, encodedResult: { dispatched: true } },
+            ]);
+            expect(betaFacts.box.y + betaFacts.box.height).toBeLessThanOrEqual(gammaFacts.box.y);
+            expect(inputs.filter((input) => input.kind === "hover")).toHaveLength(1);
+            const refreshed = yield* inspect();
+
+            expect(
+              yield* Stream.runCollect(
+                yield* tools.handle("browser_click", reference(refreshed, "Beta article")),
+              ),
+            ).toMatchObject([{ isFailure: false }]);
+            for (let attempt = 0; attempt < 100 && site.truth(run)?.page !== "article"; attempt++)
+              yield* Effect.sleep(10);
+            expect(site.truth(run)).toMatchObject({ page: "article", tab: "Prices", item: "Beta" });
+            expect(site.lost()).toBe(0);
+            expect((yield* host.toolFailures).failures).toEqual([]);
+          }),
+      ).pipe(
+        Effect.provide(
+          Chromium.layer({
+            viewport: { width: 1280, height: 720 },
+            launch: {
+              chromiumSandbox: false,
+              startupTimeoutMillis: 25000,
+              ...(process.env.BROWSERBASE_CHROMIUM === undefined
+                ? {}
+                : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+            },
+            onCleanup: (result) =>
+              Effect.sync(() => {
+                cleanup.push(result);
+                console.log("Native baseline owner cleanup", result);
+              }),
+          }).pipe(Layer.provide(NodeCrypto.layer)),
+        ),
+      );
+      expect(cleanup).toMatchObject([
+        { ownership: "owned", connection: "closed", process: "terminated", issues: [] },
+      ]);
+    }),
+  );
+});
