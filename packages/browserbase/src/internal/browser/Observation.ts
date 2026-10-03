@@ -436,7 +436,9 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
   const source = (capture: CaptureTarget): CaptureSource => {
     let attached: string | undefined;
     let state: Target | undefined;
-    const isDetached = () => state?.detached === true;
+    let sourceRetired = false;
+    const retired = Deferred.makeUnsafe<void>();
+    const isDetached = () => sourceRetired || state?.detached === true;
 
     return {
       start: Effect.fnUntraced(function* (start: CaptureStart) {
@@ -454,7 +456,7 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
             decode(Attachment, value).pipe(
               Effect.map((attachment) => {
                 attached = attachment.sessionId;
-                targets.set(attached, target);
+                if (!sourceRetired) targets.set(attached, target);
               }),
             ),
         );
@@ -486,12 +488,13 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
       stop: Effect.gen(function* () {
         const sessionId = attached;
 
-        if (terminal !== undefined) return yield* close;
-        if (sessionId === undefined || isDetached()) return;
+        if (isDetached()) return;
+        if (terminal !== undefined) return;
+        if (sessionId === undefined) return;
         // Detaching this observation attachment confirms the screencast ended even if the
         // page disappeared between the control owner's close and its observation stop.
         yield* request({ method: "Page.stopScreencast", sessionId }).pipe(Effect.exit);
-        if (terminal !== undefined) return yield* close;
+        if (terminal !== undefined) return;
         if (isDetached()) return;
         if (state !== undefined) state.released = true;
 
@@ -500,11 +503,23 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
           params: { sessionId },
         }).pipe(Effect.exit);
 
+        if (terminal !== undefined) return;
         if (Exit.isFailure(detached) && !isDetached())
           return yield* Effect.failCause(detached.cause);
         retire(sessionId);
-      }),
+      }).pipe(
+        Effect.raceFirst(Deferred.await(retired)),
+        // Per-target retirement may cancel obsolete commands, but cannot interrupt the
+        // lifetime's cached close and leave its checked result permanently interrupted.
+        Effect.andThen(
+          Effect.suspend(() => (sourceRetired || terminal === undefined ? Effect.void : close)),
+        ),
+      ),
       release: () => {
+        // The owner calls this only after confirmed stop or definitive target closure.
+        // Retain that terminal fact even when it arrives before an in-flight stop settles.
+        sourceRetired = true;
+        Deferred.doneUnsafe(retired, Effect.void);
         if (state !== undefined) state.released = true;
         if (attached !== undefined) retire(attached);
       },

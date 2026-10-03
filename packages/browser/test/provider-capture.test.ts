@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Cause, Effect, Redacted, Result, Stream } from "effect";
+import { Cause, Deferred, Effect, Fiber, Redacted, Result, Stream } from "effect";
 
 import { BrowserPolicy } from "../src/BrowserData.ts";
 import * as BrowserRuntime from "../src/BrowserRuntime.ts";
@@ -15,6 +15,7 @@ const fixture = Effect.fnUntraced(function* (
     readonly startFailure?: BrowserError;
     readonly start?: Effect.Effect<void>;
     readonly stopFailure?: BrowserError;
+    readonly stop?: Effect.Effect<void>;
   } = {},
 ) {
   const scripted = yield* Testing.binding({
@@ -68,6 +69,7 @@ const fixture = Effect.fnUntraced(function* (
             stop: Effect.gen(function* () {
               stops++;
               if (options.stopFailure !== undefined) return yield* options.stopFailure;
+              yield* options.stop ?? Effect.void;
             }),
             release: () => {
               releases++;
@@ -264,6 +266,33 @@ it.effect("confirmed control Page closure releases a provider's failed-stop quar
 
         expect((yield* replacement.snapshot).phase).toBe("capturing");
       }
+    }),
+  ),
+);
+
+it.effect("confirmed Page closure releases a provider once while its stop is pending", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const continueStop = yield* Deferred.make<void>();
+
+      const f = yield* fixture({
+        stop: Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(continueStop)),
+        ),
+      });
+
+      const interval = yield* Capture.start(f.session.initialPage);
+      const stopping = yield* interval.stop.pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      expect(f.counts()).toEqual({ stops: 1, releases: 0 });
+      yield* f.session.initialPage.close();
+      expect(f.counts()).toEqual({ stops: 1, releases: 1 });
+      expect((yield* interval.snapshot).phase).toBe("stopping");
+      yield* Deferred.succeed(continueStop, undefined);
+      expect((yield* Fiber.join(stopping)).nativeStop).toBe("confirmed");
+      expect(f.counts()).toEqual({ stops: 1, releases: 1 });
     }),
   ),
 );

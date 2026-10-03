@@ -31,6 +31,7 @@ class ScriptedSocket implements Socket.WebSocketLike {
   readonly attached = new Map<string, string>();
   readonly listeners = new Map<string, Set<(event: Socket.WebSocketEvent) => void>>();
   readonly sent = Deferred.makeUnsafe<void>();
+  readonly closing = Deferred.makeUnsafe<void>();
   confirmClose = true;
   malformedAttachment = false;
   detachOnAttach = false;
@@ -98,6 +99,7 @@ class ScriptedSocket implements Socket.WebSocketLike {
   }
 
   close() {
+    Deferred.doneUnsafe(this.closing, Effect.void);
     if (!this.confirmClose || this.readyState === 3) return;
     this.readyState = 3;
     this.emit("close", { code: 1000 });
@@ -484,6 +486,135 @@ it.effect("an immediate observation detach remains known when attachment setup y
       expect(socket.commands.map((command) => command.method)).not.toContain(
         "Target.detachFromTarget",
       );
+    }),
+  ),
+);
+
+it.effect("definitive target release confirms an in-flight stop without retiring its sibling", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const socket = new ScriptedSocket();
+      const siblingFrames: number[] = [];
+
+      const observation = yield* makeObservation({
+        connection: () => Effect.succeed(Redacted.make("wss://scripted.invalid")),
+        resolve: () => Effect.succeed("wss://scripted.invalid"),
+        constructor: () => socket,
+        deadline: Infinity,
+      });
+
+      const source = observation.source({ pageId: "page", targetId: "target" });
+      const sibling = observation.source({ pageId: "peer", targetId: "peer" });
+
+      const options: CaptureStart = {
+        quality: 70,
+        receive: () => {},
+        invalidate: () => {},
+        fail: () => {},
+      };
+
+      yield* source.start(options);
+      yield* sibling.start({
+        ...options,
+        receive: (frame) => {
+          siblingFrames.push(frame.timestamp);
+        },
+      });
+      socket.held.add("Page.stopScreencast");
+      const stopping = yield* source.stop.pipe(Effect.forkScoped);
+
+      yield* settle(
+        Effect.sync(() =>
+          socket.commands.some((command) => command.method === "Page.stopScreencast"),
+        ),
+        (value) => value,
+      );
+      const stop = socket.commands.find((command) => command.method === "Page.stopScreencast")!;
+
+      // The runtime calls release only after confirmed stop or definitive control target closure.
+      // Observation may learn that its attachment vanished after the owner already closed the Page.
+      source.release?.();
+      socket.rejected.add("Target.detachFromTarget");
+      socket.message({ id: stop.id, error: { code: -32001, message: "Session not found" } });
+      expect((yield* Fiber.join(stopping).pipe(Effect.result))._tag).toBe("Success");
+      expect(socket.readyState).toBe(1);
+      socket.frame("observation-peer", 1);
+      yield* settle(
+        Effect.sync(() => siblingFrames.length),
+        (value) => value > 0,
+      );
+      expect(siblingFrames).toEqual([1000]);
+      socket.held.clear();
+      socket.rejected.clear();
+      expect((yield* sibling.stop.pipe(Effect.result))._tag).toBe("Success");
+    }),
+  ),
+);
+
+it.effect("unconfirmed observation stop stays quarantined until the control Page closes", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* BrowserbaseBrowser.open(policy);
+        const capture = yield* Capture.start(browser.initialPage);
+        const socket = f.sockets[0]!;
+
+        socket.rejected.add("Page.stopScreencast");
+        socket.rejected.add("Target.detachFromTarget");
+        expect((yield* capture.stop).nativeStop).toBe("unconfirmed");
+        expect((yield* Capture.start(browser.initialPage).pipe(Effect.flip)).reason._tag).toBe(
+          "Busy",
+        );
+        expect((yield* browser.initialPage.describe()).targetId).toBeDefined();
+        socket.rejected.clear();
+        yield* browser.initialPage.close();
+        const peer = yield* browser.createPage();
+        const replacement = yield* Capture.start(peer);
+
+        expect((yield* replacement.stop).nativeStop).toBe("confirmed");
+        expect((yield* browser.closeChecked).issues).toEqual([]);
+      }),
+    ).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("target retirement cannot interrupt the session's checked observation close", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const socket = new ScriptedSocket();
+      const failed = yield* Deferred.make<void>();
+
+      const observation = yield* makeObservation({
+        connection: () => Effect.succeed(Redacted.make("wss://scripted.invalid")),
+        resolve: () => Effect.succeed("wss://scripted.invalid"),
+        constructor: () => socket,
+        deadline: Infinity,
+      });
+
+      const source = observation.source({ pageId: "page", targetId: "target" });
+
+      yield* source.start({
+        quality: 70,
+        receive: () => {},
+        invalidate: () => {},
+        fail: () => {
+          Deferred.doneUnsafe(failed, Effect.void);
+        },
+      });
+      socket.confirmClose = false;
+      socket.emit("error", {});
+      yield* Deferred.await(failed);
+      const stopping = yield* source.stop.pipe(Effect.forkScoped);
+
+      yield* Deferred.await(socket.closing);
+      source.release?.();
+      yield* Effect.yieldNow;
+      socket.confirmClose = true;
+      socket.close();
+      expect((yield* Fiber.join(stopping).pipe(Effect.exit))._tag).toBe("Success");
+      expect((yield* observation.close.pipe(Effect.exit))._tag).toBe("Success");
     }),
   ),
 );

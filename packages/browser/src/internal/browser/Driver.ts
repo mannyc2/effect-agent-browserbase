@@ -214,7 +214,10 @@ export type CaptureStart = TransportStart;
 export interface CaptureSource {
   readonly start: (options: CaptureStart) => Promise<void>;
   readonly stop: () => Promise<void>;
-  /** Drops this source's page watcher after stop confirmation or definitive target closure. */
+  /**
+   * Called at most once after post-start stop confirmation or definitive target closure,
+   * including while stop is pending. Retain that fact before dropping this source's watcher.
+   */
   readonly release?: () => void;
 }
 

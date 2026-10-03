@@ -62,7 +62,11 @@ export type {
 export interface CaptureSource {
   readonly start: (options: CaptureStart) => Effect.Effect<void, BrowserError>;
   readonly stop: Effect.Effect<void, BrowserError>;
-  /** Drops event watchers after confirmed stop or definitive target closure. */
+  /**
+   * Called at most once after stop succeeds following start settlement, or after the owner
+   * definitively confirms this exact target closed. It can arrive while stop is pending;
+   * retain that terminal fact before dropping event watchers.
+   */
   readonly release?: () => void;
 }
 
