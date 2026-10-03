@@ -14,7 +14,7 @@ import type { ClientError } from "effect-browserbase/errors";
 import { recipe } from "effect-browserbase/launch";
 import type { AllocationAttempt } from "effect-browserbase/references";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import type { localAgentBrowser } from "../fixtures/AgentBrowser.ts";
 import { type Journal, json, tagOf, type Recording } from "./Records.ts";

@@ -58,7 +58,7 @@ export interface Started {
 /**
  * Library spans export neither successful values nor original causes/stacks. Tracer failures
  * cannot suppress dispatch or alter its result. Sampling metadata is available in annotations
- * at creation: rc.117 applies SpanOptions.attributes only after Tracer.span has returned.
+ * at creation: Effect 4.0.0 applies SpanOptions.attributes only after Tracer.span has returned.
  */
 export const start = Effect.fnUntraced(function* (
   name: string,

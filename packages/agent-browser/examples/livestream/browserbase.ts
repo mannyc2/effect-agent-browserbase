@@ -1,8 +1,8 @@
+import * as InMemory from "@yielded/agent/in-memory";
 // The same livestream on a Browserbase session. BROWSERBASE_PROJECT_ID and BROWSERBASE_API_KEY
 // are read from the ConfigProvider. Live View is not used: its URL controls the browser, so it
 // can be shown to an operator, never to an audience; viewers get the captured frames instead.
 import { Effect, Layer } from "effect";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Account from "effect-browserbase/account";

@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { Cause, Context, Effect, Option, Predicate, Schema } from "effect";
-import { Prompt, Tool, type LanguageModel } from "effect/unstable/ai";
+import { Prompt, Tool, type LanguageModel } from "effect/ai";
 
 export class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
   operation: Schema.String,

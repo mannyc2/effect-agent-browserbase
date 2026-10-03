@@ -3,8 +3,8 @@ import { createServer } from "node:http";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Context, Deferred, Effect, Layer, PubSub, Ref, Stream } from "effect";
 import * as Capture from "effect-browser/capture";
-import * as Sse from "effect/unstable/encoding/Sse";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import * as Sse from "effect/encoding/Sse";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 
 import { viewer } from "./Viewer.ts";
 

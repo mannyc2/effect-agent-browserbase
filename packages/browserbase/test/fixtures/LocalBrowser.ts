@@ -14,7 +14,7 @@ import * as BrowserBinding from "effect-browserbase/browser-binding";
 import { BrowserbaseClient, type ClientOptions } from "effect-browserbase/client";
 import type { LaunchRecipe } from "effect-browserbase/launch";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { type Browser, chromium, type Page } from "playwright-core";
 
 import { installCaptureDiagnostics } from "./NativeCaptureDiagnostics.ts";

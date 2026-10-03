@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { Schema } from "effect";
 import { Observation, ObservedElement } from "effect-browser/browser-data";
-import type { LanguageModel } from "effect/unstable/ai";
+import type { LanguageModel } from "effect/ai";
 
 /** Scripted model turns consume the actual prior inspection, never a guessed reference ID. */
 export const inspectionObservation = (request: LanguageModel.ProviderOptions): Observation => {

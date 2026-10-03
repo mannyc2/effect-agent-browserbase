@@ -1,7 +1,7 @@
 import { Deferred, Effect, Exit, Fiber, FileSystem, Schema, Stream } from "effect";
 import { type AnySession, type Page, checkPage } from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { Broadcast } from "./Broadcast.ts";
 import * as Compositor from "./Compositor.ts";

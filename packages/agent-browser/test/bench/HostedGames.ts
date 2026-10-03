@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 import { Deferred, Effect, Exit, Schema, Scope, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import type { GameSite, PublicOrigins } from "../fixtures/GameSite.ts";
 

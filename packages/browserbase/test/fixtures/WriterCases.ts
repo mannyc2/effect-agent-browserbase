@@ -16,8 +16,8 @@ import {
   Tracer,
 } from "effect";
 import type { BrowserError } from "effect-browser/errors";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import { layer as accountLayer } from "../../src/Account.ts";
 import * as Allocation from "../../src/Allocation.ts";

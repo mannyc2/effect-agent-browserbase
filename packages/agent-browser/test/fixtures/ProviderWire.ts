@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
-import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
 
 /**
  * Provider HTTP replaced by a finite script: the pinned provider packages still serialize each

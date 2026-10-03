@@ -1,6 +1,6 @@
+import { BrowserActions } from "@yielded/agent/browser-use";
+import type { RunSchedulingHook } from "@yielded/agent/run-options";
 import { Effect, Layer } from "effect";
-import { BrowserActions } from "effect-agent/browser-use";
-import type { RunSchedulingHook } from "effect-agent/run-options";
 import {
   checkPage,
   type BrowserSession,

@@ -1,10 +1,10 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
 import { Effect, Schema } from "effect";
 import * as Tools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import type { LanguageModel } from "effect/unstable/ai";
+import type { LanguageModel } from "effect/ai";
 
 import { run } from "../bench/Backends.ts";
 import { answer, call, picture, scripted } from "../bench/Drivers.ts";

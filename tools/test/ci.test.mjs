@@ -108,11 +108,11 @@ test("successful evidence retains exact fixtures/locks and leaves dependency ins
   write(join(out, "consumers/agent/tsconfig.json"), '{"compilerOptions":{"skipLibCheck":false}}\n');
   write(join(out, "consumers/agent/bun.lock"), "pinned fixture lock\n");
   write(join(out, "consumers/agent/.fixture-proof"), "hidden fixture\n");
-  write(join(out, "consumers/agent/node_modules/effect-agent/dist/test.d.mts"), "export {};\n");
+  write(join(out, "consumers/agent/node_modules/@yielded/agent/dist/test.d.mts"), "export {};\n");
   write(join(out, "consumer-agent-declarations.log"), "raw zero\n");
   compactEvidence(out);
   assert.equal(existsSync(join(out, "consumers")), false);
-  assert.ok(existsSync(join(work, "completed-consumer-workspaces/consumers/agent/node_modules/effect-agent/dist/test.d.mts")));
+  assert.ok(existsSync(join(work, "completed-consumer-workspaces/consumers/agent/node_modules/@yielded/agent/dist/test.d.mts")));
   const members = execFileSync("tar", ["-tzf", join(out, "consumer-fixtures.tar.gz")], { encoding: "utf8" });
   assert.match(members, /bun\.lock/); assert.match(members, /\.fixture-proof/); assert.doesNotMatch(members, /node_modules/);
   assert.equal(execFileSync("tar", ["-xOf", join(out, "consumer-fixtures.tar.gz"), "consumers/agent/tsconfig.json"], { encoding: "utf8" }), '{"compilerOptions":{"skipLibCheck":false}}\n');

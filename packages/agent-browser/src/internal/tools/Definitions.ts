@@ -1,12 +1,12 @@
-import { Schema } from "effect";
 import {
   BrowserActionResult,
   BrowserNavigateRequest,
   BrowserNavigationResult,
   BrowserScrollRequest,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
+import { Schema } from "effect";
 import { Observation, PointerClickRequest, PointerMoveRequest } from "effect-browser/browser-data";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import {
   BrowserFormFailure,

@@ -11,7 +11,7 @@ import {
   ProjectError,
   SessionError,
 } from "effect-browserbase/errors";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { BrowserbaseClient } from "../src/Client.ts";
 import { elapse } from "./fixtures/Time.ts";

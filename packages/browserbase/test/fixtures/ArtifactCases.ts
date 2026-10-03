@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { Effect, Layer, Redacted, Schema, Stream, Tracer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { BrowserbaseClient } from "../../src/Client.ts";
 import { BrowserbaseDownloads } from "../../src/Downloads.ts";

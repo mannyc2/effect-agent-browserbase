@@ -85,8 +85,8 @@ function fixture() {
   const version = sources[0].version;
   const tag = `v${version}`;
   // The framework release these sources qualify, as the adapter's exact peer names it.
-  const frameworkVersion = sources[2].peerDependencies["effect-agent"];
-  const versions = { ...Object.fromEntries(packages.map((item) => [item.name, version])), "effect-agent": frameworkVersion };
+  const frameworkVersion = sources[2].peerDependencies["@yielded/agent"];
+  const versions = { ...Object.fromEntries(packages.map((item) => [item.name, version])), "@yielded/agent": frameworkVersion };
   writeJson(join(tree, "package.json"), { devDependencies: {} });
   for (const [index, item] of packages.entries()) {
     const pkg = join(tree, item.directory);

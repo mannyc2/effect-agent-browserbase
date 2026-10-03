@@ -7,7 +7,7 @@ import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/brow
 import { BrowserbaseClient } from "effect-browserbase/client";
 import type { LaunchRecipe } from "effect-browserbase/launch";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const launch: LaunchRecipe = {
   remoteTimeoutSeconds: 60,

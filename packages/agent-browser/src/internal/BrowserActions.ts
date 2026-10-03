@@ -1,11 +1,11 @@
-import { Effect, Schema, Semaphore } from "effect";
 import {
   Action,
   ActionResult,
   BrowserActions,
   BrowserUseError,
   Observation as ModelObservation,
-} from "effect-agent/browser-use";
+} from "@yielded/agent/browser-use";
+import { Effect, Schema, Semaphore } from "effect";
 import type { Frame, Page } from "effect-browser/browser";
 import type { Observation, ObservedControl } from "effect-browser/browser-data";
 

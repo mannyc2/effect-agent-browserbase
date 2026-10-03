@@ -1,14 +1,14 @@
 import { createServer } from "node:http";
 
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Context, Effect, Fiber, Layer, Ref, Schedule } from "effect";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
-import { Model } from "effect/unstable/ai";
+import { Model } from "effect/ai";
 import { chromium } from "playwright-core";
 
 import { type AirEvent, livestream } from "../../examples/livestream/Livestream.ts";

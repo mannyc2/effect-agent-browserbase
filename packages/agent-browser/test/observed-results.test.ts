@@ -3,8 +3,8 @@ import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import * as Tools from "effect-agent-browser/tools";
 import { Observation, Target } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import { Toolkit } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { Toolkit } from "effect/unstable/ai";
 
 import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 

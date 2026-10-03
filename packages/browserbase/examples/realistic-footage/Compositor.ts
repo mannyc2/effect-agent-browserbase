@@ -1,5 +1,5 @@
 import { Effect, Fiber, FileSystem, Path, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { FootageError } from "./FootageError.ts";
 import type { Graphics } from "./Presentation.ts";

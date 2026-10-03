@@ -1,5 +1,5 @@
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Layer } from "effect";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";

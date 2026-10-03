@@ -29,7 +29,7 @@ export function publicationManifest(source, workspaceVersions) {
     }
   }
   manifest.publishConfig = { access: "public", registry: "https://registry.npmjs.org/", tag: distTag(source.version) };
-  checkManifest(manifest, { built: true, browserVersion: workspaceVersions[packages[0].name], frameworkVersion: workspaceVersions["effect-agent"] });
+  checkManifest(manifest, { built: true, browserVersion: workspaceVersions[packages[0].name], frameworkVersion: workspaceVersions["@yielded/agent"] });
   return manifest;
 }
 
@@ -77,10 +77,10 @@ export function releaseSetDigest(directory) {
 export function packageReleaseSet(tree, out, sourceSha) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/, "Expected immutable source commit");
   const sources = readPackageSet(tree);
-  const frameworkVersion = workspacePins(tree)["effect-agent"];
+  const frameworkVersion = workspacePins(tree)["@yielded/agent"];
   distTag(frameworkVersion);
   const version = sources[0].version;
-  const workspaceVersions = { ...Object.fromEntries(sources.map((source) => [source.name, source.version])), "effect-agent": frameworkVersion };
+  const workspaceVersions = { ...Object.fromEntries(sources.map((source) => [source.name, source.version])), "@yielded/agent": frameworkVersion };
   const manifests = sources.map((source) => publicationManifest(source, workspaceVersions));
   const stageRoot = join(out, "packed-stage");
   assert.ok(!existsSync(stageRoot) && !existsSync(join(out, "release-set.json")) && !existsSync(join(out, "release.json")), "Refusing an existing package stage or receipt");

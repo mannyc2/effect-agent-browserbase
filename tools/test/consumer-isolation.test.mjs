@@ -20,7 +20,7 @@ import { consumerPackageSet, packages } from "../packages.mjs";
 import { verifyConsumer } from "../verify-consumer.mjs";
 
 const version = "0.2.0-beta.0";
-const frameworkVersion = "0.1.0-beta.102";
+const frameworkVersion = "0.1.0-beta.166";
 
 const write = (path, content) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -90,7 +90,7 @@ function fixture(
     cpSync(content, join(root, "node_modules", item.name), { recursive: true });
     entries.push({ name: item.name, filename });
   }
-  if (profile.startsWith("agent")) installFramework(join(root, "node_modules/effect-agent"));
+  if (profile.startsWith("agent")) installFramework(join(root, "node_modules/@yielded/agent"));
   json(join(artifacts, "release-set.json"), {
     schemaVersion: 2,
     version,
@@ -131,7 +131,7 @@ function installFramework(
     ["Sandbox", "sandbox"],
   ];
 
-  install(directory, "effect-agent", {
+  install(directory, "@yielded/agent", {
     version,
     exports: {
       ".": "./index.mjs",
@@ -180,6 +180,8 @@ for (const name of [
   "playwright-core",
   "effect-agent",
   "@effect-agent/testing",
+  "@yielded/agent",
+  "@yielded/agent-testing",
   "@browserbasehq/sdk",
 ]) {
   test(`rejects nested ${name} invisible to root resolution`, async (t) => {
@@ -335,17 +337,17 @@ test("duplicate neutral packages fail even when hidden beneath an alias", async 
 });
 
 for (const [profile, parent, alias] of [
-  ["agent", "effect-agent-browser", "effect-agent"],
+  ["agent", "effect-agent-browser", "@yielded/agent"],
   ["agent-hosted", "effect-browserbase", "framework-alias"],
 ]) {
   test(`rejects a second framework beneath ${parent} even with a hidden root export`, async (t) => {
     const f = fixture(t, { profile });
 
-    install(join(f.root, "node_modules", parent, "node_modules", alias), "effect-agent", {
+    install(join(f.root, "node_modules", parent, "node_modules", alias), "@yielded/agent", {
       version: frameworkVersion,
       exports: { "./feature": "./index.mjs" },
     });
-    await assert.rejects(f.verify(), /Multiple installed effect-agent registries/);
+    await assert.rejects(f.verify(), /Multiple installed @yielded\/agent registries/);
   });
 }
 
@@ -359,14 +361,14 @@ test("rejects a duplicate provider receipt issuer hidden beneath an alias", asyn
 for (const store of [".bun", ".pnpm"]) {
   test(`framework ${store} links count physical instances rather than symlink spellings`, async (t) => {
     const f = fixture(t, { profile: "agent" });
-    const canonical = join(f.root, "node_modules/effect-agent");
+    const canonical = join(f.root, "node_modules/@yielded/agent");
 
     const stored = join(
       f.root,
       "node_modules",
       store,
       "framework@qualified",
-      "node_modules/effect-agent",
+      "node_modules/@yielded/agent",
     );
 
     cpSync(canonical, stored, { recursive: true });
@@ -374,37 +376,37 @@ for (const store of [".bun", ".pnpm"]) {
     symlinkSync(stored, canonical, "dir");
     const adapterModules = join(f.root, "node_modules/effect-agent-browser/node_modules");
 
-    mkdirSync(adapterModules);
-    symlinkSync(stored, join(adapterModules, "effect-agent"), "dir");
+    mkdirSync(join(adapterModules, "@yielded"), { recursive: true });
+    symlinkSync(stored, join(adapterModules, "@yielded/agent"), "dir");
     assert.equal((await f.verify()).frameworkVersion, frameworkVersion);
     installFramework(
       join(f.root, "node_modules", store, "framework@duplicate", "node_modules/alias"),
     );
-    await assert.rejects(f.verify(), /Multiple installed effect-agent registries/);
+    await assert.rejects(f.verify(), /Multiple installed @yielded\/agent registries/);
   });
 }
 
 test("an agent consumer requires its own qualified framework peer", async (t) => {
   const f = fixture(t, { profile: "agent" });
 
-  installFramework(join(f.root, "node_modules/effect-agent"), { version: "0.1.0-beta.103" });
+  installFramework(join(f.root, "node_modules/@yielded/agent"), { version: "0.1.0-beta.103" });
   await assert.rejects(f.verify(), /qualified framework version/);
-  rmSync(join(f.root, "node_modules/effect-agent"), { recursive: true });
-  installFramework(join(f.directory, "node_modules/effect-agent"));
+  rmSync(join(f.root, "node_modules/@yielded/agent"), { recursive: true });
+  installFramework(join(f.directory, "node_modules/@yielded/agent"));
   await assert.rejects(f.verify(), /host peer must be installed in this consumer/);
 });
 
 test("framework root and direct browser contracts cannot contain distinct identities", async (t) => {
   const f = fixture(t, { profile: "agent" });
 
-  installFramework(join(f.root, "node_modules/effect-agent"), { duplicate: true });
+  installFramework(join(f.root, "node_modules/@yielded/agent"), { duplicate: true });
   await assert.rejects(f.verify(), /Framework root and interactive-browser duplicate owner/);
 });
 
 test("framework direct-only build aliases do not imply duplicate host contracts", async (t) => {
   const f = fixture(t, { profile: "agent" });
 
-  installFramework(join(f.root, "node_modules/effect-agent"), { directOnlyAlias: true });
+  installFramework(join(f.root, "node_modules/@yielded/agent"), { directOnlyAlias: true });
   assert.equal((await f.verify()).frameworkVersion, frameworkVersion);
 });
 
@@ -453,3 +455,12 @@ test("a type-only public entry remains an empty native module namespace", async 
 
   assert.equal((await f.verify()).profile, "browser");
 });
+
+for (const name of ["effect-agent", "@effect-agent/testing"]) {
+  test(`agent consumers reject retired ${name} beside the canonical framework`, async (t) => {
+    const f = fixture(t, { profile: "agent" });
+
+    install(join(f.generic, "node_modules", "retired-alias"), name);
+    await assert.rejects(f.verify(), /Forbidden installed dependency/);
+  });
+}

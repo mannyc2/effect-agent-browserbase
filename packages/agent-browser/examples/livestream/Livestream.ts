@@ -1,3 +1,6 @@
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import type { RunEvent } from "@yielded/agent/run-event";
 import {
   type Cause,
   Deferred,
@@ -10,9 +13,6 @@ import {
   Stream,
 } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import type { RunEvent } from "effect-agent/run-event";
 import type { BrowserSession, Page } from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
 import { BrowserError, Reasons } from "effect-browser/errors";

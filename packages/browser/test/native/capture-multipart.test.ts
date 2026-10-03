@@ -7,7 +7,7 @@ import { Effect, Layer, PubSub, Redacted, Stream } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium } from "effect-browser/chromium";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { chromium } from "playwright-core";
 
 import { externalChromium } from "../fixtures/StandaloneBrowser.ts";

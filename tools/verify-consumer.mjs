@@ -14,9 +14,11 @@ function checkInstalledDependencies(root, profile) {
   const forbidden = (name) =>
     name === "@browserbasehq/sdk" ||
     name === "effect-agent-browserbase" ||
+    name === "effect-agent" ||
+    name.startsWith("@effect-agent/") ||
     (!profile.startsWith("agent") &&
-      (name === "effect-agent" ||
-        name.startsWith("@effect-agent/") ||
+      (name === "@yielded/agent" ||
+        name === "@yielded/agent-testing" ||
         name === packages[2].name)) ||
     (["browser", "agent"].includes(profile) && name === packages[1].name) ||
     (profile === "resources" &&
@@ -26,7 +28,7 @@ function checkInstalledDependencies(root, profile) {
     seen = new Set();
 
   const identities = new Map(
-    [...packages.map(({ name }) => name), "effect-agent"].map((name) => [name, new Set()]),
+    [...packages.map(({ name }) => name), "@yielded/agent"].map((name) => [name, new Set()]),
   );
 
   let admitted = 0;
@@ -100,19 +102,19 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
 
   const identities = checkInstalledDependencies(root, profile);
   const receipt = JSON.parse(readFileSync(join(artifactDirectory, "release-set.json"), "utf8"));
-  const frameworkDirectory = identities.get("effect-agent").values().next().value;
+  const frameworkDirectory = identities.get("@yielded/agent").values().next().value;
   let frameworkManifest;
 
   if (profile.startsWith("agent")) {
     assert.ok(
       frameworkDirectory,
-      "The qualified effect-agent host peer must be installed in this consumer",
+      "The qualified @yielded/agent host peer must be installed in this consumer",
     );
     frameworkManifest = readJson(join(frameworkDirectory, "package.json"));
     assert.equal(
       frameworkManifest.version,
       receipt.frameworkVersion,
-      "Installed effect-agent differs from the qualified framework version",
+      "Installed @yielded/agent differs from the qualified framework version",
     );
   }
   // Resolution walks the consumer's ancestors, so an unrelated `node_modules` above a
@@ -143,8 +145,10 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
   for (const forbidden of [
     "@browserbasehq/sdk",
     "effect-agent-browserbase",
+    "effect-agent",
+    "@effect-agent/testing",
     ...(!profile.startsWith("agent")
-      ? ["effect-agent", "effect-agent-browser", "@effect-agent/testing"]
+      ? ["@yielded/agent", "effect-agent-browser", "@yielded/agent-testing"]
       : []),
     ...(["browser", "agent"].includes(profile) ? ["effect-browserbase"] : []),
   ])
@@ -235,7 +239,7 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
     // Count physical framework copies above, then check every public host import
     // resolves to that same copy when used by the adapter.
     for (const subpath of Object.keys(frameworkManifest.exports)) {
-      const specifier = "effect-agent" + (subpath === "." ? "" : subpath.slice(1));
+      const specifier = "@yielded/agent" + (subpath === "." ? "" : subpath.slice(1));
       const host = realpathSync(require.resolve(specifier));
 
       assert.ok(
@@ -248,14 +252,14 @@ export async function verifyConsumer(directory, artifactDirectory, profile) {
         `Adapter and consumer do not share the same framework export: ${specifier}`,
       );
     }
-    const frameworkRoot = await import(pathToFileURL(require.resolve("effect-agent")).href);
+    const frameworkRoot = await import(pathToFileURL(require.resolve("@yielded/agent")).href);
 
     for (const [namespace, subpath] of [
       ["InteractiveBrowser", "interactive-browser"],
       ["PageScreenshot", "page-screenshot"],
       ["Sandbox", "sandbox"],
     ]) {
-      const module = await import(pathToFileURL(require.resolve(`effect-agent/${subpath}`)).href);
+      const module = await import(pathToFileURL(require.resolve(`@yielded/agent/${subpath}`)).href);
 
       // Published beta.102 subpaths also expose build aliases. Check each root
       // contract's identity without imposing our packages' export policy upstream.

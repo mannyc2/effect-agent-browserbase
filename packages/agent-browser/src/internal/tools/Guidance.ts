@@ -1,6 +1,6 @@
-import type { AgentPolicyInput } from "effect-agent/agent-policy";
-import type { RunSchedulingHook } from "effect-agent/run-options";
-import { ToolResultBounds } from "effect-agent/tool-result";
+import type { AgentPolicyInput } from "@yielded/agent/agent-policy";
+import type { RunSchedulingHook } from "@yielded/agent/run-options";
+import { ToolResultBounds } from "@yielded/agent/tool-result";
 
 import { isBrowserTool } from "./Definitions.ts";
 

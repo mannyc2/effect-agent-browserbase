@@ -1,9 +1,9 @@
-import { Effect, Schema, type Scope } from "effect";
 import {
   BrowserActionResult,
   type BrowserNavigateRequest,
   BrowserNavigationResult,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
+import { Effect, Schema, type Scope } from "effect";
 import type { Frame, Page } from "effect-browser/browser";
 import {
   ActionResult,

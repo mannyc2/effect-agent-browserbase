@@ -1,12 +1,12 @@
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import { Reasons } from "effect-browser/errors";
-import { Model, Toolkit } from "effect/unstable/ai";
+import { Model, Toolkit } from "effect/ai";
 
 import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 

@@ -61,12 +61,12 @@ export function verifyReleaseSet(directory, sourceSha, tag, expectedDigest) {
       // additionally typechecks this graph with both optional/native/framework absent.
       const declarations = paths.filter((name) => name.endsWith(".d.mts"));
       const text = tar(["-xOf", path, ...declarations]);
-      assert.doesNotMatch(text, /["'](?:effect-agent(?:-browser(?:base)?)?|@effect-agent\/[^/'"]+|playwright(?:-core)?|@browserbasehq\/sdk)(?:[/'"])/, "Generic declaration imports a forbidden dependency");
+      assert.doesNotMatch(text, /["'](?:effect-agent(?:-browser(?:base)?)?|@effect-agent\/[^/'"]+|@yielded\/agent(?:-testing)?|playwright(?:-core)?|@browserbasehq\/sdk)(?:[/'"])/, "Generic declaration imports a forbidden dependency");
       if (index === 0) assert.doesNotMatch(text, /["']effect-browserbase(?:[/'"])/, "Neutral declaration imports Browserbase");
     } else {
       const declarations = paths.filter((name) => name.endsWith(".d.mts"));
       const text = tar(["-xOf", path, ...declarations]);
-      assert.doesNotMatch(text, /["'](?:effect-browserbase|effect-agent-browserbase|@browserbasehq\/sdk)(?:[/'"])/, "Agent declaration imports Browserbase");
+      assert.doesNotMatch(text, /["'](?:effect-browserbase|effect-agent-browserbase|effect-agent|@effect-agent\/[^/'"]+|@browserbasehq\/sdk)(?:[/'"])/, "Agent declaration imports Browserbase");
     }
   }
   return receipt;

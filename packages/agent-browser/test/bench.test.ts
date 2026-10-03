@@ -2,9 +2,9 @@ import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Console, Effect, Schema, Stream } from "effect";
 import { Target } from "effect-browser/browser-data";
-import * as AiResponse from "effect/unstable/ai/Response";
-import { Command } from "effect/unstable/cli";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import * as AiResponse from "effect/ai/Response";
+import { Command } from "effect/cli";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { Ledger, Sessions } from "./bench/Budget.ts";
 import { authorize, cli, printedPlan, validateSelection } from "./bench/Cli.ts";

@@ -1,15 +1,15 @@
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Cause, Effect, Exit, Layer, Schema, Tracer } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { Reasons } from "effect-browser/errors";
 import * as Plan from "effect-browser/plan";
 import * as Testing from "effect-browser/testing";
-import { Model, Toolkit, type LanguageModel } from "effect/unstable/ai";
+import { Model, Toolkit, type LanguageModel } from "effect/ai";
 
 /**
  * A real AgentRuntime turn drives the maintained toolkit over the real browser owner. Only the

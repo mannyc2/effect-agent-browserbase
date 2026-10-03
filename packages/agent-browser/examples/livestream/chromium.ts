@@ -1,7 +1,7 @@
+import * as InMemory from "@yielded/agent/in-memory";
 // The livestream on a self-managed Chromium. The caller provides the agent's and the narrator's
 // `LanguageModel` and the platform's services, for example `NodeServices.layer`.
 import { Effect, Layer } from "effect";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";

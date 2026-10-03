@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
+import { InteractiveBrowser, InteractiveBrowserPolicy } from "@yielded/agent/interactive-browser";
 import { Context, Effect, Exit, Layer, Option, Scope, Tracer } from "effect";
 import { interactiveLayer } from "effect-agent-browser/adapter";
-import { InteractiveBrowser, InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import * as Testing from "effect-browser/testing";
 
 class OpenerValue extends Context.Service<OpenerValue, { readonly value: number }>()(

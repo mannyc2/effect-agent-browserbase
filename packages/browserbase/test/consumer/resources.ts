@@ -25,7 +25,7 @@ import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import * as ScriptedBrowserbase from "effect-browserbase/testing";
 import { RecordingPageReference } from "effect-browserbase/transfers";
 import { BrowserbaseUploads } from "effect-browserbase/uploads";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { extensionArchive } from "../fixtures/Zip.ts";
 

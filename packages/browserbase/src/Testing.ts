@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import type { BrowserError } from "effect-browser/errors";
 import * as BrowserTesting from "effect-browser/testing";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { type Services as AccountServices, layer as accountLayer } from "./Account.ts";
 import { BrowserbaseBrowser, type BrowserOptions } from "./Browser.ts";

@@ -1,6 +1,6 @@
 # Repository guide
 
-This repository owns three packages, `packages/browser` (`effect-browser`), `packages/browserbase` (`effect-browserbase`) and `packages/agent-browser` (`effect-agent-browser`), as one Bun workspace. The adapter builds on Effect Agent, which is an npm dependency like any other: `effect-agent` and `@effect-agent/testing` are pinned exactly and updated through Dependabot. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
+This repository owns three packages, `packages/browser` (`effect-browser`), `packages/browserbase` (`effect-browserbase`) and `packages/agent-browser` (`effect-agent-browser`), as one Bun workspace. The adapter builds on Effect Agent, which is an npm dependency like any other: `@yielded/agent` and `@yielded/agent-testing` are pinned exactly and updated through Dependabot. Read `README.md`, `CONTRIBUTING.md`, the package guide and the neighbouring tests before editing; `docs/STATUS.md` is the current state.
 
 ## Contracts
 
@@ -8,7 +8,7 @@ This repository owns three packages, `packages/browser` (`effect-browser`), `pac
 - Keep the actual Effect, AgentRuntime and Playwright integration. Do not substitute contracts or native engines to satisfy tests.
 - Keep public exports deliberate. Provider credentials and native SDK values are not durable or model-facing values.
 - Never replay an unresolved mutation, and never weaken the unsupported network policies to make them appear supported.
-- Use the coordinated pins in `.node-version`, the root and package `package.json` files, `bun.lock` and `CONTRIBUTING.md`. Every manifest names one exact version of each dependency, and the tooling tests refuse a disagreement. A version upgrade needs source review and fresh acceptance; `agent-browser`'s exact `effect-agent` peer moves with its development version.
+- Use the coordinated pins in `.node-version`, the root and package `package.json` files, `bun.lock` and `CONTRIBUTING.md`. Every manifest names one exact version of each dependency, and the tooling tests refuse a disagreement. A version upgrade needs source review and fresh acceptance; `agent-browser`'s exact `@yielded/agent` peer moves with its development version.
 
 ## Package boundaries
 

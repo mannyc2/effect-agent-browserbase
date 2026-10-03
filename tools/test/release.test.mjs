@@ -38,12 +38,12 @@ import { verifyReleaseSet } from "../verify-release.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const version = "0.2.0-beta.0";
-const frameworkVersion = "0.1.0-beta.165";
+const frameworkVersion = "0.1.0-beta.166";
 const sha = "1234567890abcdef1234567890abcdef12345678";
 
 const versions = {
   ...Object.fromEntries(packages.map((item) => [item.name, version])),
-  "effect-agent": frameworkVersion,
+  "@yielded/agent": frameworkVersion,
 };
 
 const source = (index) => ({
@@ -63,16 +63,16 @@ const source = (index) => ({
           "./tools": "./src/Tools.ts",
         },
   peerDependencies: {
-    effect: "4.0.0-rc.117",
+    effect: "4.0.0",
     ...(index === 0 ? { "playwright-core": "1.63.0" } : { "effect-browser": "workspace:*" }),
-    ...(index === 2 ? { "effect-agent": frameworkVersion } : {}),
+    ...(index === 2 ? { "@yielded/agent": frameworkVersion } : {}),
   },
   ...(index === 0 ? { peerDependenciesMeta: { "playwright-core": { optional: true } } } : {}),
   devDependencies: {
-    effect: "4.0.0-rc.117",
+    effect: "4.0.0",
     typescript: "7.0.2",
     ...(index === 0 ? {} : { "effect-browser": "workspace:*" }),
-    ...(index === 2 ? { "effect-agent": frameworkVersion } : {}),
+    ...(index === 2 ? { "@yielded/agent": frameworkVersion } : {}),
   },
   scripts: { build: "vp pack" },
   files: ["dist", "src"],
@@ -168,18 +168,18 @@ test("normalization strips dev/source/scripts without mutating inputs, and resol
     assert.equal(JSON.stringify(input), original);
   }
   assert.deepEqual(manifest(0).peerDependencies, {
-    effect: "4.0.0-rc.117",
+    effect: "4.0.0",
     "playwright-core": "1.63.0",
   });
   assert.deepEqual(manifest(0).peerDependenciesMeta, { "playwright-core": { optional: true } });
   assert.deepEqual(manifest(1).peerDependencies, {
-    effect: "4.0.0-rc.117",
+    effect: "4.0.0",
     "effect-browser": version,
   });
   assert.deepEqual(manifest(2).peerDependencies, {
-    effect: "4.0.0-rc.117",
+    effect: "4.0.0",
     "effect-browser": version,
-    "effect-agent": frameworkVersion,
+    "@yielded/agent": frameworkVersion,
   });
   assert.equal(manifest(1).peerDependencies["playwright-core"], undefined);
 });
@@ -188,7 +188,7 @@ test("host peers require matching development edges and cannot publish optional 
   for (const [index, name] of [
     [1, "effect-browser"],
     [2, "effect-browser"],
-    [2, "effect-agent"],
+    [2, "@yielded/agent"],
   ]) {
     const input = source(index);
 
@@ -226,10 +226,7 @@ test("host peers require matching development edges and cannot publish optional 
 });
 
 test("framework leakage, native peer on adapter, private packages and unexpected edges are rejected", () => {
-  assert.throws(
-    () => publicationManifest({ ...source(0), private: true }, versions),
-    /private/,
-  );
+  assert.throws(() => publicationManifest({ ...source(0), private: true }, versions), /private/);
   assert.throws(
     () =>
       publicationManifest(
@@ -243,10 +240,7 @@ test("framework leakage, native peer on adapter, private packages and unexpected
   );
   assert.throws(
     () =>
-      publicationManifest(
-        { ...source(0), dependencies: { "effect-agent": version } },
-        versions,
-      ),
+      publicationManifest({ ...source(0), dependencies: { "effect-agent": version } }, versions),
     /regular dependency/,
   );
   assert.throws(
@@ -418,13 +412,13 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
     receipt = packageReleaseSet(tree, out, sha);
 
   const pins = {
-    effect: "4.0.0-rc.117",
+    effect: "4.0.0",
     "@types/node": "26.1.2",
     typescript: "7.0.2",
     "vite-plus": "0.3.2",
     "playwright-core": "1.63.0",
-    "@effect/vitest": "4.0.0-rc.117",
-    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/vitest": "4.0.0",
+    "@effect/platform-node": "4.0.0",
     vitest: "4.1.11",
   };
 
@@ -452,10 +446,10 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
     input.overrides["effect-browser"] = "file:/different-browser.tgz";
   }, /Unexpected candidate substitution/);
   check((input) => {
-    input.dependencies["effect-agent"] = "0.1.0-beta.103";
+    input.dependencies["@yielded/agent"] = "0.1.0-beta.103";
   }, /Direct framework host/);
   check((input) => {
-    input.overrides["effect-agent"] = frameworkVersion;
+    input.overrides["@yielded/agent"] = frameworkVersion;
   }, /framework host must not be overridden/);
 
   // Receipt fields alone cannot prove the requirement inside the actual archive.
@@ -464,7 +458,7 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
 
   for (const [peer, incompatible] of [
     ["effect-browser", "0.2.0-beta.1"],
-    ["effect-agent", "0.1.0-beta.103"],
+    ["@yielded/agent", "0.1.0-beta.103"],
   ]) {
     const conflicting = structuredClone(candidate);
 
@@ -504,7 +498,7 @@ test("actual npm installs direct host peers and rejects incompatible hosts witho
 
   // These tiny host packages test npm's peer resolver, not Effect or framework behavior.
   const host = (name, version) => {
-    const directory = join(out, `${name}-${version}`);
+    const directory = join(out, `${name.replaceAll("/", "-")}-${version}`);
 
     mkdirSync(directory);
     writeFileSync(
@@ -526,21 +520,21 @@ test("actual npm installs direct host peers and rejects incompatible hosts witho
   const incompatibleBrowser = pack(browserMismatch);
 
   const dependencies = {
-    effect: host("effect", "4.0.0-rc.117"),
-    "effect-agent": host("effect-agent", frameworkVersion),
+    effect: host("effect", "4.0.0"),
+    "@yielded/agent": host("@yielded/agent", frameworkVersion),
     ...Object.fromEntries(
       receipt.packages.map((entry) => [entry.name, `file:${join(out, entry.filename)}`]),
     ),
   };
 
-  const incompatibleFramework = host("effect-agent", "0.1.0-beta.103");
+  const incompatibleFramework = host("@yielded/agent", "0.1.0-beta.103");
 
   for (const { name, replacements } of [
     { name: "matching", replacements: {} },
     { name: "effect-browser", replacements: { "effect-browser": incompatibleBrowser } },
-    { name: "effect-agent", replacements: { "effect-agent": incompatibleFramework } },
+    { name: "@yielded/agent", replacements: { "@yielded/agent": incompatibleFramework } },
   ]) {
-    const directory = join(out, `direct-${name}`);
+    const directory = join(out, `direct-${name.replaceAll("/", "-")}`);
 
     mkdirSync(directory);
     writeFileSync(
@@ -587,7 +581,7 @@ test("actual npm installs direct host peers and rejects incompatible hosts witho
       for (const [dependent, peer] of [
         ["effect-browserbase", "effect-browser"],
         ["effect-agent-browser", "effect-browser"],
-        ["effect-agent-browser", "effect-agent"],
+        ["effect-agent-browser", "@yielded/agent"],
       ]) {
         const dependentRequire = createRequire(require.resolve(dependent));
 
@@ -705,13 +699,13 @@ for (const declarationExit of [0, 1]) {
         join(tree, "package.json"),
         JSON.stringify({
           devDependencies: {
-            effect: "4.0.0-rc.117",
+            effect: "4.0.0",
             "@types/node": "26.1.2",
             typescript: "7.0.2",
             "vite-plus": "0.3.2",
             "playwright-core": "1.63.0",
-            "@effect/vitest": "4.0.0-rc.117",
-            "@effect/platform-node": "4.0.0-rc.117",
+            "@effect/vitest": "4.0.0",
+            "@effect/platform-node": "4.0.0",
             vitest: "4.1.11",
           },
         }),
@@ -747,7 +741,7 @@ for (const declarationExit of [0, 1]) {
     });
 
     const diagnostic =
-      "node_modules/effect-agent/dist/capabilities/MemoryNotes.d.mts(330,108): error TS2304: Cannot find name 'S'.\n";
+      "node_modules/@yielded/agent/dist/capabilities/MemoryNotes.d.mts(330,108): error TS2304: Cannot find name 'S'.\n";
 
     // Only the external command boundary is substituted. Real packing, fixture staging,
     // strict configuration and receipt aggregation run; no installs or browsers run here.
@@ -852,6 +846,10 @@ test("generic and Agent boundaries reject provider and framework declaration lea
   for (const [index, dependency, message] of [
     [0, "effect-browserbase", /Neutral declaration imports/],
     [1, "effect-agent", /Generic declaration imports/],
+    [1, "@yielded/agent", /Generic declaration imports/],
+    [1, "@yielded/agent-testing", /Generic declaration imports/],
+    [2, "effect-agent", /Agent declaration imports/],
+    [2, "@effect-agent/testing", /Agent declaration imports/],
     [2, "effect-browserbase", /Agent declaration imports/],
   ]) {
     const { tree, out } = workspace(t, (tree) =>
@@ -864,4 +862,31 @@ test("generic and Agent boundaries reject provider and framework declaration lea
     packageReleaseSet(tree, out, sha);
     assert.throws(() => verifyReleaseSet(out, sha, `v${version}`, releaseSetDigest(out)), message);
   }
+});
+
+test("canonical framework names remain confined to the adapter, with retired identities refused", () => {
+  for (const name of ["@yielded/agent", "@yielded/agent-testing"])
+    assert.throws(
+      () =>
+        publicationManifest(
+          {
+            ...source(0),
+            devDependencies: { ...source(0).devDependencies, [name]: frameworkVersion },
+          },
+          versions,
+        ),
+      /Generic package/,
+    );
+  for (const name of ["effect-agent", "@effect-agent/testing"])
+    assert.throws(
+      () =>
+        publicationManifest(
+          {
+            ...source(2),
+            devDependencies: { ...source(2).devDependencies, [name]: frameworkVersion },
+          },
+          versions,
+        ),
+      /Retired framework/,
+    );
 });

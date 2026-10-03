@@ -1,5 +1,5 @@
 import { Effect, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { BenchError, type RecordingFrame } from "./Records.ts";
 

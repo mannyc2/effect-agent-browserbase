@@ -1,4 +1,7 @@
 import { expect, it } from "@effect/vitest";
+import type { BrowserActions } from "@yielded/agent/browser-use";
+import type { BrowserHandle, InteractiveBrowserError } from "@yielded/agent/interactive-browser";
+import type { RunSchedulingHook } from "@yielded/agent/run-options";
 import { Effect, type Layer, type Scope } from "effect";
 import {
   type AdaptedSession,
@@ -27,9 +30,6 @@ import {
   type ToolHostServices,
   type ToolFailureSnapshot,
 } from "effect-agent-browser/tools";
-import type { BrowserActions } from "effect-agent/browser-use";
-import type { BrowserHandle, InteractiveBrowserError } from "effect-agent/interactive-browser";
-import type { RunSchedulingHook } from "effect-agent/run-options";
 import type { BrowserSession, Frame, Page } from "effect-browser/browser";
 import type { BrowserPolicy } from "effect-browser/browser-data";
 import type { ChromiumSession } from "effect-browser/chromium";

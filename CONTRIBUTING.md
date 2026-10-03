@@ -4,18 +4,18 @@ Open a focused PR against `main`. Explain behavior changes and test evidence in 
 
 ## Toolchain
 
-| Input                  | Pin                                                                |
-| ---------------------- | ------------------------------------------------------------------ |
-| Node                   | 24.14.1 (`.node-version`)                                          |
-| Bun                    | 1.4.2                                                              |
-| Effect family          | 4.0.0-rc.117                                                       |
-| effect-agent / testing | 0.1.0-beta.165                                                     |
-| Playwright             | playwright-core 1.63.0                                             |
-| TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
-| Effect tsgo / Oxlint   | 0.45.0 / 1.82.0                                                    |
-| oxlint-tsgolint        | 7.0.2001                                                           |
+| Input                          | Pin                       |
+| ------------------------------ | ------------------------- |
+| Node                           | 24.14.1 (`.node-version`) |
+| Bun                            | 1.4.2                     |
+| Effect family                  | 4.0.0                     |
+| @yielded/agent / agent-testing | 0.1.0-beta.166            |
+| Playwright                     | playwright-core 1.63.0    |
+| TypeScript / Vite+             | 7.0.2 / 0.3.2             |
+| Effect tsgo / Oxlint           | 0.45.0 / 1.82.0           |
+| oxlint-tsgolint                | 7.0.2001                  |
 
-These are the verified acceptance targets, not a promise that every version allowed by the engine/peer ranges has been tested. Every manifest names one exact version of each dependency, `bun.lock` is committed, and every install is frozen; `tools/test/maintenance.test.mjs` refuses two manifests that disagree. Dependency changes belong in a coordinated manifest/lockfile update, not an unreviewed install-time re-resolution. Dependabot opens one weekly PR for Effect and Effect Agent together (`.github/dependabot.yml`); it is reviewed and fully accepted like any other change, and `agent-browser`'s exact `effect-agent` peer moves with its development version. Other dependencies are updated by hand.
+These are the verified acceptance targets, not a promise that every version allowed by the engine/peer ranges has been tested. Every manifest names one exact version of each dependency, `bun.lock` is committed, and every install is frozen; `tools/test/maintenance.test.mjs` refuses two manifests that disagree. Dependency changes belong in a coordinated manifest/lockfile update, not an unreviewed install-time re-resolution. Dependabot opens one weekly PR for Effect and Effect Agent together (`.github/dependabot.yml`); it is reviewed and fully accepted like any other change, and `agent-browser`'s exact `@yielded/agent` peer moves with its development version. Other dependencies are updated by hand.
 
 ## Working locally
 
@@ -86,11 +86,11 @@ bash tools/run-acceptance.sh full
 
 Every profile rejects dirty source and reused output directories, asserts the same Node/Bun pins, records the source SHA, and retains raw command exits and monotonic stage durations. The profile is written to `acceptance-profile.txt` and the Actions summary. A focused pass is not a full-integration pass.
 
-| Profile   | Required checks                                                                                                                                                                                                                                                                                                                                              | Selection                                                                                                                                  |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `docs`    | Tooling tests, source-bound diff revalidation, whitespace and clean source                                                                                                                                                                                                                                                                                   | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed                                               |
-| `library` | Tooling, frozen workspace install, early canonical format/lint and all three package types, all package unit suites/builds, exports/purity, all three candidate tarballs, all five strict consumers and every generic/Agent native test from those tarballs, release identity and the three-package dry-run                                                          | Owned package, tooling, workflow and media changes                                                                                         |
-| `full`    | All library checks plus the separate source-native suites of all three packages                                                                                                                                                                                                                                                                              | Integration/pin/lockfile changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
+| Profile   | Required checks                                                                                                                                                                                                                                                                                             | Selection                                                                                                                                 |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs`    | Tooling tests, source-bound diff revalidation, whitespace and clean source                                                                                                                                                                                                                                  | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed                                              |
+| `library` | Tooling, frozen workspace install, early canonical format/lint and all three package types, all package unit suites/builds, exports/purity, all three candidate tarballs, all five strict consumers and every generic/Agent native test from those tarballs, release identity and the three-package dry-run | Owned package, tooling, workflow and media changes                                                                                        |
+| `full`    | All library checks plus the separate source-native suites of all three packages                                                                                                                                                                                                                             | Integration/pin/lockfile changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
 
 The library profile runs the **complete native test files** in clean installed-package consumers rather than repeating them against source and packed output on every PR. All maintained examples are still compiled, all public exports are checked, Node and Bun both execute the resource, generic and actual AgentRuntime workflows, and every declaration command must return raw zero with `skipLibCheck:false`. No test is retried or skipped to obtain a pass. Native worker concurrency and assertions are unchanged.
 

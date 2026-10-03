@@ -1,16 +1,16 @@
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { ObservedElement } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import * as PageControl from "effect-browser/page-control";
 import { BrowserbaseBrowser, type BrowserbaseSession } from "effect-browserbase/browser";
-import { Model } from "effect/unstable/ai";
+import { Model } from "effect/ai";
 
 import {
   agentPolicy,

@@ -140,7 +140,7 @@ const fixture = (scenario: Scenario = {}) => {
   return { order, bodies, local, run };
 };
 
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const testTime = <A, E, R>(program: Effect.Effect<A, E, R>) =>
   Effect.scoped(

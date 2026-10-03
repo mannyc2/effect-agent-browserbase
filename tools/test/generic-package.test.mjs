@@ -20,6 +20,8 @@ test("generic installation contracts do not acquire the framework or framework t
       for (const dependency of Object.keys(manifest[section] ?? {})) {
         assert.notEqual(dependency, "effect-agent");
         assert.notEqual(dependency, "@effect-agent/testing");
+        assert.notEqual(dependency, "@yielded/agent");
+        assert.notEqual(dependency, "@yielded/agent-testing");
       }
     }
   }
@@ -53,7 +55,7 @@ for (const [directory, manifest] of [
       if (directory !== "agent-browser")
         assert.doesNotMatch(
           source,
-          /from\s+["'](?:effect-agent|effect-agent-browserbase|@effect-agent\/testing|playwright-core)[/"']/,
+          /from\s+["'](?:effect-agent|effect-agent-browserbase|@effect-agent\/testing|@yielded\/agent(?:-testing)?|playwright-core)[/"']/,
         );
       else
         assert.doesNotMatch(
@@ -151,13 +153,13 @@ test("the lockfile describes the canonical adapter rather than retired reexports
   assert.ok(workspace, "the lockfile contains the adapter workspace inventory");
   assert.equal(workspace.dependencies, undefined);
   assert.equal(workspace.devDependencies["effect-browser"], "workspace:*");
-  assert.match(workspace.devDependencies["effect-agent"], /^0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
+  assert.match(workspace.devDependencies["@yielded/agent"], /^0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
   assert.equal(workspace.peerDependencies["effect-browser"], "workspace:*");
-  assert.equal(workspace.peerDependencies["effect-agent"], workspace.devDependencies["effect-agent"]);
+  assert.equal(workspace.peerDependencies["@yielded/agent"], workspace.devDependencies["@yielded/agent"]);
   assert.equal(workspace.peerDependencies["effect-browserbase"], undefined);
   assert.equal(workspace.peerDependencies["playwright-core"], undefined);
   assert.equal(workspace.optionalPeers, undefined);
   // The framework is a registry release, never a workspace a later install could substitute.
-  assert.match(lock.packages["effect-agent"][0], /^effect-agent@0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
+  assert.match(lock.packages["@yielded/agent"][0], /^@yielded\/agent@0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
   assert.match(read("scripts/verify-package-purity.ts"), /reaches the isolated Chromium process module/);
 });

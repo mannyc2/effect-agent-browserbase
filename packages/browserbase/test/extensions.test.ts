@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import { Effect, Layer, Redacted } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { BrowserbaseClient } from "../src/Client.ts";
 import { BrowserbaseExtensions } from "../src/Extensions.ts";
