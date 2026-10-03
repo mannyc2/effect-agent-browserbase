@@ -58,7 +58,24 @@ export const fromReceipts = (snapshot: ToolCallSnapshot) =>
     }),
   ).pipe(Effect.map((groups) => groups.flat()));
 
-/** All times share the owner's clock; unavailable or foreign-document facts stay null. */
+/** Model-facing addresses omit credentials and fixture/private query and fragment values. */
+const address = (url: string | null) => {
+  if (url === null) return null;
+  try {
+    const parsed = new URL(url);
+
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+
+    return parsed.href;
+  } catch {
+    return null;
+  }
+};
+
+/** All times share the owner's clock; unavailable or foreign-frame facts stay null. */
 export const build = (input: {
   readonly steps: ReadonlyArray<StepFact>;
   readonly timeline: Snapshot;
@@ -74,6 +91,7 @@ export const build = (input: {
       page !== undefined &&
       event.target?.generation === page.identity.generation &&
       event.target.pageId === page.identity.pageId &&
+      event.target.frameId === page.identity.frameId &&
       event.clockId === now.clockId,
   );
 
@@ -114,7 +132,9 @@ export const build = (input: {
         ? {
             sameDocument: navigated.event.sameDocument,
             address:
-              navigated.event.urlQualification === "NativeCached" ? navigated.event.url : null,
+              navigated.event.urlQualification === "NativeCached"
+                ? address(navigated.event.url)
+                : null,
             title: page?.titleQualification === "ObservedCached" ? page.title : null,
           }
         : null,

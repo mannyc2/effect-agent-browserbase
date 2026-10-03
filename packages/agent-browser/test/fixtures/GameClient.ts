@@ -11,19 +11,27 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
   const colors = ["#ffd16a", "#9dbeff", "#8cdfaa", "#75e1e6", "#e6a5ff", "#ff8d9f"];
   let sequence = 0;
   let delivery = Promise.resolve();
+  let deliveryFailures = 0;
 
   const report = (event: TruthEvent) => {
     const body = JSON.stringify({ kind, sequence: ++sequence, event });
 
-    delivery = delivery.then(async () => {
-      const response = await fetch("/truth", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      });
+    delivery = delivery
+      .then(async () => {
+        const response = await fetch("/truth", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(2000),
+        });
 
-      if (!response.ok) throw new Error(`Truth delivery failed: ${response.status}`);
-    });
+        if (!response.ok) throw new Error(`Truth delivery failed: ${response.status}`);
+      })
+      .catch(() => {
+        // This event is never retried: a lost response may have followed an accepted mutation.
+        // Resolve the queue so later, independent reports are still attempted and can expose gaps.
+        deliveryFailures++;
+      });
   };
 
   const flush = () => {
@@ -75,7 +83,9 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
   document.querySelector("#spin")?.addEventListener("click", spin);
   document.querySelector("#bet-up")?.addEventListener("click", () => changeBet(1));
   document.querySelector("#bet-down")?.addEventListener("click", () => changeBet(-1));
-  Object.assign(window, { __fixture: { state: engine.state } });
+  Object.assign(window, {
+    __fixture: { state: engine.state, deliveryFailures: () => deliveryFailures },
+  });
   report({ tag: "ready", spin: 0, atMillis: performance.now() });
   canvas.focus();
 
@@ -83,6 +93,16 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
     engine.advance(time);
     flush();
     const state = engine.state();
+    const status = document.querySelector("#result-status");
+
+    const statusText =
+      state.notable === null
+        ? state.phase === "spinning"
+          ? "Spinning"
+          : "Ready"
+        : `Notable: ${state.notable}`;
+
+    if (status !== null && status.textContent !== statusText) status.textContent = statusText;
 
     context.fillStyle = "#111827";
     context.fillRect(0, 0, 960, 540);
@@ -131,7 +151,11 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
       context.fillRect(700, 440, 230, 75);
       context.fillStyle = "white";
       context.font = "bold 30px sans-serif";
-      context.fillText(state.phase === "idle" ? "SPIN" : "SPINNING", 747, 488);
+      context.fillText(
+        state.phase === "idle" ? "SPIN" : state.phase === "spinning" ? "SPINNING" : "RESULT",
+        747,
+        488,
+      );
     } else {
       for (const [selector, value] of [
         ["#balance", `Balance: ${state.balance} demo credits`],
@@ -141,10 +165,10 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
       ]) {
         const element = document.querySelector(selector ?? "");
 
-        if (element !== null) element.textContent = value ?? "";
+        if (element !== null && element.textContent !== value) element.textContent = value ?? "";
       }
       for (const button of document.querySelectorAll<HTMLButtonElement>("button"))
-        button.disabled = state.phase !== "idle";
+        if (button.disabled !== (state.phase !== "idle")) button.disabled = state.phase !== "idle";
     }
     if (state.banner !== null) {
       context.fillStyle = `rgba(250, 204, 21, ${0.83 + Math.sin(time / 90) * 0.12})`;
@@ -157,9 +181,6 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
         272,
       );
     }
-    // This moving footer exposes continued painting even while the engine is idle.
-    context.fillStyle = "#75e1e6";
-    context.fillRect((time / 10) % 940, 531, 20, 5);
     requestAnimationFrame(paint);
   };
 
