@@ -47,7 +47,7 @@ it.live("real CDP: observation acknowledgements progress beside a large control 
           const session = yield* BrowserbaseBrowser.open(policy);
           const stage = session.initialPage;
 
-          yield* stage.navigate({ url: fixture.url });
+          yield* stage.navigate({ url: `${fixture.url}#initial` });
           const peer = yield* session.createPage();
 
           yield* peer.navigate({ url: `${fixture.url}?peer` });
@@ -60,6 +60,7 @@ it.live("real CDP: observation acknowledgements progress beside a large control 
           });
 
           expect(sockets).toHaveLength(1);
+          expect((yield* capture.snapshot).initialUrl).toBe(`${fixture.url}#initial`);
           expect(
             (yield* settle(capture.snapshot, (value) => value.received >= 3, 5000)).received,
           ).toBeGreaterThanOrEqual(3);
@@ -116,7 +117,7 @@ it.live("real CDP: observation acknowledgements progress beside a large control 
           expect(
             (yield* settle(capture.snapshot, (value) => value.received > before, 5000)).received,
           ).toBeGreaterThan(before);
-          yield* stage.navigate({ url: `${fixture.url}?next` });
+          yield* stage.navigate({ url: `${fixture.url}?next#section` });
 
           const navigated = yield* settle(
             capture.snapshot,
@@ -125,7 +126,7 @@ it.live("real CDP: observation acknowledgements progress beside a large control 
           );
 
           expect(navigated.documentBoundaries.map((boundary) => boundary.url)).toEqual([
-            `${fixture.url}?next`,
+            `${fixture.url}?next#section`,
           ]);
           const stopped = yield* capture.stop;
 

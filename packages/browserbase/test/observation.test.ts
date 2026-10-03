@@ -35,6 +35,7 @@ class ScriptedSocket implements Socket.WebSocketLike {
   confirmClose = true;
   malformedAttachment = false;
   detachOnAttach = false;
+  initialFragment = "";
 
   addEventListener(type: string, listener: (event: Socket.WebSocketEvent) => void) {
     const listeners = this.listeners.get(type) ?? new Set();
@@ -75,7 +76,11 @@ class ScriptedSocket implements Socket.WebSocketLike {
       result = this.malformedAttachment ? { unexpected: sessionId } : { sessionId };
     }
     if (command.method === "Page.getFrameTree")
-      result = { frameTree: { frame: { id: "root", url: "https://capture.test/one" } } };
+      result = {
+        frameTree: {
+          frame: { id: "root", url: "https://capture.test/one", urlFragment: this.initialFragment },
+        },
+      };
     this.message({ id: command.id, result });
     if (command.method === "Target.attachToTarget" && this.detachOnAttach)
       this.message({
@@ -171,6 +176,9 @@ it.effect("scripted provider lazily shares observation and preserves ordered doc
   Effect.gen(function* () {
     const f = yield* fixture();
 
+    f.configure((socket) => {
+      socket.initialFragment = "#initial";
+    });
     yield* Effect.scoped(
       Effect.gen(function* () {
         const browser = yield* BrowserbaseBrowser.open(policy);
@@ -185,7 +193,9 @@ it.effect("scripted provider lazily shares observation and preserves ordered doc
         socket.message({
           sessionId: id,
           method: "Page.frameNavigated",
-          params: { frame: { id: "root", url: "https://capture.test/two" } },
+          params: {
+            frame: { id: "root", url: "https://capture.test/two", urlFragment: "#section" },
+          },
         });
         socket.frame(id, 2);
         socket.message({
@@ -196,9 +206,10 @@ it.effect("scripted provider lazily shares observation and preserves ordered doc
         socket.frame(id, 3);
         const snapshot = yield* settle(capture.snapshot, (value) => value.received === 3);
 
+        expect(snapshot.initialUrl).toBe("https://capture.test/one#initial");
         expect(snapshot.documentBoundaries.map((value) => [value.url, value.sameDocument])).toEqual(
           [
-            ["https://capture.test/two", false],
+            ["https://capture.test/two#section", false],
             ["https://capture.test/two#hash", true],
           ],
         );

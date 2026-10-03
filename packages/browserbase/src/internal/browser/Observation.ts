@@ -26,8 +26,11 @@ const Attachment = Schema.Struct({ sessionId: Schema.NonEmptyString });
 const Frame = Schema.Struct({
   id: Schema.NonEmptyString,
   url: Schema.String,
+  urlFragment: Schema.optionalKey(Schema.String),
   parentId: Schema.optionalKey(Schema.String),
 });
+
+const frameUrl = (frame: typeof Frame.Type): string => frame.url + (frame.urlFragment ?? "");
 
 const FrameTree = Schema.Struct({ frameTree: Schema.Struct({ frame: Frame }) });
 const Navigation = Schema.Struct({ frame: Frame });
@@ -275,7 +278,7 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
         if (frame.parentId !== undefined || !target.opened) return;
         target.frameId = frame.id;
         if (target.options.document === undefined) target.options.invalidate("target-changed");
-        else target.options.document(frame.url, false);
+        else target.options.document(frameUrl(frame), false);
 
         return;
       }
@@ -470,7 +473,7 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
             Effect.map(({ frameTree: { frame } }) => {
               target.frameId = frame.id;
               target.opened = true;
-              start.opened?.(frame.url);
+              start.opened?.(frameUrl(frame));
             }),
           ),
         );
