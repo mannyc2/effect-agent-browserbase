@@ -11,6 +11,7 @@ export class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
 
 export const json = (value: unknown): Schema.Json =>
   Schema.decodeUnknownSync(Schema.Json)(structuredClone(value));
+
 export const byteLength = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 const Tagged = Schema.Struct({ _tag: Schema.String });
 
