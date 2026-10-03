@@ -64,10 +64,12 @@ const runBorrower = (reference: SessionReference, targetId: string) =>
     let closed = false;
 
     lines.on("line", (line) => {
-      console.log(line);
       const decoded = Schema.decodeOption(Borrowed)(line);
 
-      if (decoded._tag === "Some") borrowed = decoded.value.result;
+      if (decoded._tag === "Some") {
+        console.log(line);
+        borrowed = decoded.value.result;
+      }
     });
     child.once("error", () => resume(Effect.fail({ _tag: "BorrowerEnded", code: null })));
     child.once("close", (code) => {

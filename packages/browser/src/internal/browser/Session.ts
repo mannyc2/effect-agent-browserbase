@@ -2133,7 +2133,12 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     return port;
   };
 
-  const makePageControls = (authority: PageRecord, target: DriverTarget, generation: number) => {
+  const makePageControls = (
+    authority: PageRecord,
+    target: DriverTarget,
+    generation: number,
+    kind: "Page" | "Frame",
+  ) => {
     const frameAuthority = authority.frames.get(target.frameId);
 
     // Validation failures keep the operation the caller asked for.
@@ -2141,7 +2146,19 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
       Effect.suspend(() =>
         authority.phase !== "open" || frameAuthority?.detached === true
           ? Effect.fail(unavailable(operation, authority))
-          : checkTarget(operation, target, generation),
+          : checkTarget(operation, target, generation).pipe(
+              Effect.andThen(
+                operation === "pointer-click" && kind === "Frame"
+                  ? Effect.fail(
+                      BrowserError.make({
+                        operation,
+                        reason: Reasons.Unsupported.make({}),
+                        outcome: "undispatched",
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            ),
       );
 
     /** The issued capability every operation on it acts through. */
@@ -2812,7 +2829,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
         record.identity.generation,
         () => record.terminal,
       ),
-      controls: makePageControls(record, target, generation),
+      controls: makePageControls(record, target, generation, "Page"),
       status: Effect.sync((): PageStatus =>
         Object.freeze({
           identity: Object.freeze({ ...record.identity }),
@@ -3043,7 +3060,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
           return {
             identity: Target.make({ generation, ...target }),
             record,
-            controls: makePageControls(page, target, generation),
+            controls: makePageControls(page, target, generation, "Frame"),
           };
         },
         { ...operationOptions, generation },

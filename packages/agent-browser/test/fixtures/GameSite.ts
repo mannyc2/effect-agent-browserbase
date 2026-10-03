@@ -38,6 +38,8 @@ export interface GameSite {
   readonly credits: number;
   readonly playUrl: (kind: GameKind) => string;
   readonly events: () => ReadonlyArray<TruthReceipt>;
+  /** Syntactically decoded arrivals, including rejected transitions; never grading truth. */
+  readonly receivedEvents: () => ReadonlyArray<TruthReceipt>;
   readonly failures: () => ReadonlyArray<string>;
   readonly state: (kind: GameKind) => HostGameState;
   readonly elapsedMillis: () => number;
@@ -103,6 +105,7 @@ const frameMarkup = (
   credits: number,
 ) => `<!doctype html><meta charset="utf-8">
 <title>Estuary reels demo</title>${style}<canvas id="game-canvas" width="960" height="540" tabindex="0"></canvas>
+<output id="result-status" style="position:absolute;left:400px;top:60px;color:#e5e7eb"></output>
 ${
   kind === "reels-dom"
     ? `<div id="controls"><output id="balance"></output><button id="bet-down">Decrease bet</button>
@@ -139,6 +142,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
           config.publicOrigins === undefined ? undefined : checkedOrigins(config.publicOrigins);
 
         const ledger: TruthReceipt[] = [];
+        const received: TruthReceipt[] = [];
         const failures: string[] = [];
         const states = new Map<GameKind, HostGameState>();
         const sequences = new Map<GameKind, number>();
@@ -168,12 +172,16 @@ export const gameSite = Effect.fn("gameSite")(function* (
             });
             request.on("end", () => {
               try {
-                if (size > 16384 || ledger.length >= 4096)
+                if (size > 16384 || received.length >= 4096)
                   throw new Error("Truth ledger bound exceeded");
 
                 const receipt = Schema.decodeUnknownSync(TruthReceipt)(
                   JSON.parse(Buffer.concat(chunks).toString("utf8")),
                 );
+
+                const arrival = { ...receipt, receivedAtMillis: elapsedMillis() };
+
+                received.push(arrival);
 
                 if (receipt.sequence !== (sequences.get(receipt.kind) ?? 0) + 1)
                   throw new Error("Truth sequence mismatch");
@@ -207,6 +215,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
                       balance: event.balanceAfter,
                       lastWin: 0,
                       stoppedReels: 0,
+                      notable: null,
                     };
                     break;
                   case "reelStop":
@@ -232,6 +241,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
                       grid: event.grid,
                       lastWin: event.win,
                       balance: event.balanceAfter,
+                      notable: event.moment,
                     };
                     break;
                   }
@@ -247,7 +257,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
                 }
                 sequences.set(receipt.kind, receipt.sequence);
                 states.set(receipt.kind, state);
-                ledger.push({ ...receipt, receivedAtMillis: elapsedMillis() });
+                ledger.push(arrival);
                 response.writeHead(204);
                 response.end();
               } catch (cause) {
@@ -340,7 +350,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
           setPublicOrigins: (origins: PublicOrigins) =>
             Effect.try({
               try: () => {
-                if (ledger.length > 0)
+                if (received.length > 0)
                   throw new Error("Fixture origins must be prepared before game navigation");
                 const checked = checkedOrigins(origins);
 
@@ -352,6 +362,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
             }),
           playUrl: (kind: GameKind) => `${url}play/${kind}`,
           events: () => structuredClone(ledger),
+          receivedEvents: () => structuredClone(received),
           failures: () => [...failures],
           state: (kind: GameKind) => {
             const state = states.get(kind);

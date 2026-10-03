@@ -31,6 +31,7 @@ import type {
   FormToolHandlers,
   KeyboardToolHandlers,
   NativeToolHandlers,
+  PointToolHandlers,
   ObservedToolHandlers,
   ReadingToolHandlers,
   SelectionToolHandlers,
@@ -143,6 +144,7 @@ export interface ToolHost<OwnerError = never, CallbackError = never> {
   readonly handlers: Layer.Layer<ToolHandlers>;
   readonly readingHandlers: Layer.Layer<ReadingToolHandlers>;
   readonly nativeHandlers: Layer.Layer<NativeToolHandlers>;
+  readonly pointHandlers: Layer.Layer<PointToolHandlers>;
   readonly keyboardHandlers: Layer.Layer<KeyboardToolHandlers>;
   readonly selectionHandlers: Layer.Layer<SelectionToolHandlers>;
   readonly waitHandlers: Layer.Layer<WaitToolHandlers>;
@@ -553,6 +555,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     layers.handlers,
     layers.readingHandlers,
     layers.nativeHandlers,
+    layers.pointHandlers,
     layers.keyboardHandlers,
     layers.selectionHandlers,
     layers.waitHandlers,
@@ -601,6 +604,7 @@ export const makeHost = Effect.fnUntraced(function* <OwnerError, E = never, R = 
     handlers: layers.handlers,
     readingHandlers: layers.readingHandlers,
     nativeHandlers: layers.nativeHandlers,
+    pointHandlers: layers.pointHandlers,
     keyboardHandlers: layers.keyboardHandlers,
     selectionHandlers: layers.selectionHandlers,
     waitHandlers: layers.waitHandlers,

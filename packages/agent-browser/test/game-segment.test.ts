@@ -116,7 +116,10 @@ it("segment reaction timing uses host result receipts and structured spin correl
       resultAtMillis: 3000,
       captionAtMillis: 3500,
       latencyMillis: 500,
-      eligibleToAir: true,
+      resultClock: "host-receipt",
+      withinReceiptAirDelay: true,
+      presentationLatencyMillis: null,
+      eligibleToAir: null,
     },
   ]);
   expect(metrics.spinsPerMinute).toBe(10);
@@ -125,6 +128,8 @@ it("segment reaction timing uses host result receipts and structured spin correl
   expect(metrics.interstitialSeconds).toBe(2.5);
   expect(metrics.usageStatus).toBe("scripted-unmeasured");
   expect(metrics.costMicrousd).toBeNull();
+  expect(metrics.eligibleToAirRate).toBeNull();
+  expect(metrics.withinReceiptAirDelayRate).toBe(1);
 });
 
 it("missing or wrong spin captions do not claim a reaction; false money facts remain wrong", () => {
@@ -132,7 +137,8 @@ it("missing or wrong spin captions do not claim a reaction; false money facts re
   const metrics = measure([caption(3501, wrong)]);
 
   expect(metrics.resultToCaptionMillis.p50).toBeNull();
-  expect(metrics.eligibleToAirRate).toBe(0);
+  expect(metrics.eligibleToAirRate).toBeNull();
+  expect(metrics.withinReceiptAirDelayRate).toBe(0);
   expect(metrics.moneyFactAccuracy).toBeCloseTo(2 / 3);
   expect(metrics.anyFalseFactRate).toBe(1);
 });
@@ -151,8 +157,24 @@ it("a later unmatched claim cannot become an eligible result reaction", () => {
 
   expect(metrics.unmatchedResultCaptions).toBe(1);
   expect(metrics.resultCaptions[0]?.captionAtMillis).toBeNull();
-  expect(metrics.eligibleToAirRate).toBe(0);
+  expect(metrics.eligibleToAirRate).toBeNull();
+  expect(metrics.withinReceiptAirDelayRate).toBe(0);
   expect(metrics.anyFalseFactRate).toBe(1);
+});
+
+it("incomplete truth delivery leaves a caption ungraded rather than claiming a model mistake or reaction", () => {
+  const metrics = measure([
+    {
+      ...caption(3500),
+      grade: null,
+      truth: null,
+      resultQualification: "truth-delivery-incomplete",
+    },
+  ]);
+
+  expect(metrics.resultCaptions[0]?.captionAtMillis).toBeNull();
+  expect(metrics.moneyFactAccuracy).toBeNull();
+  expect(metrics.ungradedResultCaptions).toBe(1);
 });
 
 it("unchanged pictures and silent gaps count as dead air; freezes use spin windows", () => {

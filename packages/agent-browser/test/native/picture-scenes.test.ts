@@ -11,6 +11,12 @@ const Metrics = Schema.Struct({
   frames: Schema.Natural,
   fps: Schema.Finite,
   freezes: Schema.Struct({ count: Schema.Natural }),
+  measurement: Schema.Struct({ status: Schema.Literal("complete") }),
+  pageActivity: Schema.Struct({
+    animationReports: Schema.Natural,
+    reportedTickAdvance: Schema.Natural,
+    qualification: Schema.String,
+  }),
   windows: Schema.Record(
     Schema.String,
     Schema.Struct({
@@ -50,6 +56,10 @@ for (const scene of ["animation", "busy"] as const)
 
       expect(metrics.frames).toBeGreaterThan(0);
       expect(metrics.fps).toBeGreaterThan(0);
+      // fe6e26d dropped page activity reports and called native stop bookkeeping a partial run.
+      expect(metrics.pageActivity.animationReports).toBeGreaterThan(0);
+      expect(metrics.pageActivity.reportedTickAdvance).toBeGreaterThan(0);
+      expect(metrics.pageActivity.qualification).toContain("not proof of painting");
       if (scene === "busy")
         expect(Object.keys(metrics.windows)).toEqual(["before", "during", "after"]);
       expect(journal.cleanup).toBe("confirmed");

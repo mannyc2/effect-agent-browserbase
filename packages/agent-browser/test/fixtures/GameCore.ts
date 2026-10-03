@@ -22,6 +22,7 @@ export const GameState = Schema.Struct({
   lastWin: Schema.Int,
   stoppedReels: Schema.Int,
   banner: Schema.NullOr(GameMoment),
+  notable: Schema.NullOr(GameMoment),
 });
 
 export type GameState = typeof GameState.Type;
@@ -130,6 +131,7 @@ export const createGameEngine = (
     lastWin: 0,
     stoppedReels: 0,
     banner: null,
+    notable: null,
   };
 
   let active: ReelOutcome | undefined;
@@ -151,6 +153,7 @@ export const createGameEngine = (
         lastWin: 0,
         stoppedReels: 0,
         banner: null,
+        notable: null,
       };
       events.push({
         tag: "spinStart",
@@ -191,6 +194,7 @@ export const createGameEngine = (
             lastWin: active.win,
             balance: state.balance + active.win,
             banner: active.win > 0 ? active.moment : null,
+            notable: active.moment,
           };
           events.push({
             tag: "result",

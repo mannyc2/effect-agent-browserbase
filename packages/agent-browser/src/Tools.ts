@@ -14,9 +14,11 @@ export {
   observedFormToolkit,
   observedKeyboardToolkit,
   observedNativeToolkit,
+  observedPointToolkit,
   observedSelectionToolkit,
   observedToolkit,
   readingToolkit,
+  pointToolkit,
   selectionToolkit,
   toolkit,
   toolNames,
@@ -24,6 +26,7 @@ export {
   type FormToolHandlers,
   type KeyboardToolHandlers,
   type NativeToolHandlers,
+  type PointToolHandlers,
   type ObservedToolHandlers,
   type ReadingToolHandlers,
   type SelectionToolHandlers,
@@ -99,6 +102,13 @@ export const nativeHandlers = <E>(
   page: Page | Frame,
   options: HandlerOptions = {},
 ) => Layer.unwrap(Effect.map(unhosted(browser, page, options), (layers) => layers.nativeHandlers));
+
+/** Opt-in coordinate clicks over one issued Page and its separate coordinate admission policy. */
+export const pointHandlers = <E>(
+  browser: BrowserSession<E>,
+  page: Page | Frame,
+  options: HandlerOptions = {},
+) => Layer.unwrap(Effect.map(unhosted(browser, page, options), (layers) => layers.pointHandlers));
 
 /** Opt-in real keyboard tools using exact observed nodes and the same admission policy. */
 export const keyboardHandlers = <E>(

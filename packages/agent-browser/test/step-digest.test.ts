@@ -165,6 +165,37 @@ it("unknown attempts and failures stay unknown even if late native acknowledgeme
   expect(digest.settlement).toBe("not-observed");
 });
 
+it("child navigation cannot replace the parent address or expose fixture parameters", () => {
+  const parent = event(1n, {
+    _tag: "Navigated",
+    sameDocument: false,
+    url: "https://example.test/new?seed=2&credits=1000#private",
+    urlQualification: "NativeCached",
+  });
+
+  const child = Schema.decodeSync(Event)({
+    ...parent,
+    sequence: 2n,
+    target: { ...target, frameId: "child" },
+    event: {
+      _tag: "Navigated",
+      sameDocument: false,
+      url: "https://game.test/frame/reels?seed=2&credits=1000",
+      urlQualification: "NativeCached",
+    },
+  });
+
+  const digest = build({
+    steps: [],
+    timeline: snapshot([parent, child]),
+    now: stamp(3000000n),
+    page,
+  });
+
+  expect(digest.navigation?.address).toBe("https://example.test/new");
+  expect(JSON.stringify(digest)).not.toContain("seed");
+});
+
 it.effect(
   "original ToolHost receipt handles resolve into labelled facts without a model projection",
   () =>

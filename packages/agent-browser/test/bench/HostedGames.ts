@@ -60,7 +60,13 @@ const tunnel = Effect.fnUntraced(function* (
           stdin: "ignore",
           stdout: "ignore",
           stderr: "pipe",
-          extendEnv: true,
+          extendEnv: false,
+          // Tunnel children receive host execution/TLS settings, not provider or model credentials.
+          env: Object.fromEntries(
+            ["PATH", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"].flatMap((key) =>
+              process.env[key] === undefined ? [] : [[key, process.env[key]]],
+            ),
+          ),
           forceKillAfter: "2 seconds",
         },
       ),

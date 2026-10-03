@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,7 +43,10 @@ it.live("smoke captures a moving page and saves cadence with checked cleanup", (
 
     const root =
       process.env.BENCH_OUT_DIR ??
-      (yield* Effect.promise(() => mkdtemp(join(tmpdir(), "browser-bench-"))));
+      (yield* Effect.acquireRelease(
+        Effect.promise(() => mkdtemp(join(tmpdir(), "browser-bench-"))),
+        (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
+      ));
 
     const directory = join(root, `smoke-${yield* Clock.currentTimeMillis}`);
 

@@ -283,7 +283,7 @@ export const understanding = Effect.fn("Bench.understanding")(function* <OwnerEr
             BenchError.make({ operation: "history", message: "Cannot encode narration history." }),
           ),
         ),
-      ...(driver.estimate === undefined ? {} : { costEstimator: driver.estimate }),
+      estimateCostMicrousd: driver.estimate,
       turnAllowance: Math.max(1, Math.floor(4 / maxCaptions)),
       transientContext: {
         load: () =>
@@ -384,8 +384,9 @@ export const understanding = Effect.fn("Bench.understanding")(function* <OwnerEr
       }
       if (config.scene === "read-game") {
         const site = yield* gameSite({ seed: journal.manifest.seed });
-        const frame = yield* enterGame(page, site, "reels");
-        const host = yield* BrowserTools.makeHost(browser, frame);
+
+        yield* enterGame(page, site, "reels");
+        const host = yield* BrowserTools.makeHost(browser, page);
 
         for (let spin = 1; spin <= config.moments; spin++) {
           yield* waitForGame(
@@ -398,7 +399,7 @@ export const understanding = Effect.fn("Bench.understanding")(function* <OwnerEr
 
           yield* host.run(
             Effect.gen(function* () {
-              const tools = yield* BrowserTools.nativeToolkit;
+              const tools = yield* BrowserTools.pointToolkit;
 
               yield* Stream.runCollect(
                 yield* tools.handle(

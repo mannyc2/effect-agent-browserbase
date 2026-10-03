@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,10 +10,15 @@ import { Effect } from "effect";
 
 import { renderClip } from "../bench/Clip.ts";
 
-it.live("FFmpeg renders identical cursor art into a verified silent bounded blind clip", () =>
+it.live("FFmpeg renders shared cursor artwork into a verified silent bounded blind clip", () =>
   Effect.gen(function* () {
     const command = promisify(execFile);
-    const directory = yield* Effect.promise(() => mkdtemp(join(tmpdir(), "bench-clip-test-")));
+
+    const directory = yield* Effect.acquireRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "bench-clip-test-"))),
+      (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
+    );
+
     const source = join(directory, "source.mp4");
 
     yield* Effect.promise(() =>

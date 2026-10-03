@@ -298,6 +298,17 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
             ).pipe(Effect.flatMap((url) => decodeReceipt(ActionResult, { url })));
           }
           case "PointerClick":
+            // Exact-node admission cannot authorize an input with no exact node. A host that
+            // supplies it must separately authorize coordinates before this plan can click them.
+            if (context.policy !== undefined && context.coordinatePolicy === undefined)
+              return Effect.fail(
+                BrowserError.make({
+                  operation: "pointer-click",
+                  reason: Reasons.Denied.make({}),
+                  outcome: "undispatched",
+                }),
+              );
+
             return controls.operations
               .pointerClick(
                 {

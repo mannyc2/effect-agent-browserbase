@@ -141,8 +141,11 @@ The `demo` check needs caller-installed FFmpeg, the same way
 `examples/record-video.ts` does; encoding is deliberately not a package
 dependency.
 
-The four outstanding checks below have no hosted evidence until an operator authorizes and
-runs them through the same runner. Registration and unpaid acceptance do not authorize spending.
+The four registered checks below run through the same runner. Hosted evidence for
+`borrowed-attachment`, `extension-storage` and `platform-services` is retained with
+[PR #152](https://github.com/mannyc2/effect-agent-browserbase/pull/152). `platform-session`
+remains deferred pending approved artifact origins. Each new execution still requires its own
+authorization; registration and unpaid acceptance do not authorize spending.
 
 | Check                 | Run bounds and effects                                                                                                                                                                                                                                                                                         |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

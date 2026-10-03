@@ -12,7 +12,7 @@ import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
 import { answer, call, picture, scripted, type Driver, type Turn } from "./Drivers.ts";
-import { cadence, freezes, measurement, type Interval } from "./Picture.ts";
+import { cadence, freezes, measurement, recordingCutoff, type Interval } from "./Picture.ts";
 import { BenchError, json, type Journal, type RecordingFrame, type Usage } from "./Records.ts";
 import * as StepDigest from "./StepDigest.ts";
 import { grade, Narration, type Truth } from "./Understanding.ts";
@@ -23,7 +23,10 @@ export interface SegmentCaption {
   readonly output: Narration;
   readonly truth: Truth | null;
   readonly grade: ReturnType<typeof grade> | null;
-  readonly resultQualification?: "validated-before-caption" | "no-validated-result-before-caption";
+  readonly resultQualification?:
+    | "validated-before-caption"
+    | "no-validated-result-before-caption"
+    | "truth-delivery-incomplete";
 }
 
 export interface GameSegmentOptions {
@@ -60,8 +63,6 @@ const pauseToolkit = Toolkit.make(
   }).annotate(Tool.Readonly, true),
 );
 
-const typedInput = Schema.decodeUnknownOption(Schema.Struct({ text: Schema.String }));
-
 const pauseHandlers = pauseToolkit.toLayer({
   bench_pause: (request) =>
     Effect.sleep(request.millis).pipe(Effect.as({ waitedMillis: request.millis })),
@@ -76,7 +77,7 @@ export const segmentCallCaps = (maxSpins = 400, announceThenSpin = false) => ({
   announcementModelCalls: announceThenSpin ? 1 : 0,
   episodes: maxSpins,
   inputAttemptsPerEpisode: 1,
-  typedCharactersPerAttempt: 1,
+  inputTool: "browser_click_at",
   actualSpinCap: maxSpins,
   totalModelCalls: 12 + maxSpins * (6 + (announceThenSpin ? 1 : 0)),
 });
@@ -146,6 +147,7 @@ export const segmentMetrics = (input: {
     const caption = input.captions.find(
       (candidate) =>
         candidate.resultQualification !== "no-validated-result-before-caption" &&
+        candidate.resultQualification !== "truth-delivery-incomplete" &&
         candidate.atMillis >= receipt.receivedAtMillis &&
         candidate.output.caption.length > 0 &&
         candidate.output.facts.spin === receipt.event.spin,
@@ -159,7 +161,10 @@ export const segmentMetrics = (input: {
       resultAtMillis: receipt.receivedAtMillis,
       captionAtMillis: caption?.atMillis ?? null,
       latencyMillis,
-      eligibleToAir: latencyMillis !== null && latencyMillis <= input.airDelayMillis,
+      resultClock: "host-receipt",
+      withinReceiptAirDelay: latencyMillis !== null && latencyMillis <= input.airDelayMillis,
+      presentationLatencyMillis: null,
+      eligibleToAir: null,
     };
   });
 
@@ -242,13 +247,16 @@ export const segmentMetrics = (input: {
       p50: quantile(latencies, 0.5),
       p95: quantile(latencies, 0.95),
       qualification:
-        "host-validated result to published caption with matching structured spin fact",
+        "host-validated receipt to published caption with matching structured spin fact; result painting and screen presentation are unmeasured",
     },
     airDelayMillis: input.airDelayMillis,
-    eligibleToAirRate:
+    eligibleToAirRate: null,
+    airEligibilityQualification:
+      "unmeasured; host receipt and browser display clocks have no measured bridge",
+    withinReceiptAirDelayRate:
       results.length === 0
         ? null
-        : reactions.filter((reaction) => reaction.eligibleToAir).length / results.length,
+        : reactions.filter((reaction) => reaction.withinReceiptAirDelay).length / results.length,
     moneyFactAccuracy: moneyTotal === 0 ? null : moneyCorrect / moneyTotal,
     moneyCorrect,
     moneyTotal,
@@ -258,6 +266,9 @@ export const segmentMetrics = (input: {
         : graded.filter((checked) => checked.anyFalseFact).length / graded.length,
     unmatchedResultCaptions: input.captions.filter(
       (caption) => caption.resultQualification === "no-validated-result-before-caption",
+    ).length,
+    ungradedResultCaptions: input.captions.filter(
+      (caption) => caption.resultQualification === "truth-delivery-incomplete",
     ).length,
     interstitialSeconds: spanSeconds(input.interstitials),
     interstitialHandling:
@@ -383,9 +394,15 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     lane: { maxOutstanding: 1 },
   });
 
-  const playTools = Toolkit.merge(BrowserTools.nativeToolkit, BrowserTools.keyboardToolkit);
-  const episodeTools = Toolkit.merge(playTools, pauseToolkit);
-  const lobbyTools = Toolkit.merge(BrowserTools.toolkit, playTools);
+  const playTools = BrowserTools.pointToolkit;
+
+  const episodeTools = Toolkit.merge(
+    playTools,
+    Toolkit.make(BrowserTools.toolkit.tools.browser_inspect),
+    pauseToolkit,
+  );
+
+  const lobbyTools = BrowserTools.toolkit;
   const image = picture(page, { every: "call", scale: config.pictureScale });
 
   const run = Effect.fnUntraced(function* (
@@ -449,7 +466,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
                   }),
                 ),
               ),
-            ...(driver.estimate === undefined ? {} : { costEstimator: driver.estimate }),
+            estimateCostMicrousd: driver.estimate,
             turnAllowance: maxTurns,
             ...(options.driver === undefined
               ? {}
@@ -459,27 +476,13 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
                       Effect.sync(() => {
                         const name = requested.toolName;
 
-                        if (
-                          name !== "browser_click_at" &&
-                          name !== "browser_press" &&
-                          name !== "browser_type"
-                        )
-                          return { _tag: "allowed" } as const;
+                        if (name !== "browser_click_at") return { _tag: "allowed" } as const;
                         if (journal.elapsedMillis() >= deadline || inputAttemptsRemaining === 0)
                           return {
                             _tag: "denied",
                             reason: "This episode's single input attempt is unavailable.",
                           } as const;
                         inputAttemptsRemaining--;
-                        if (name === "browser_type") {
-                          const input = typedInput(requested.parameters);
-
-                          if (Option.isNone(input) || [...input.value.text].length !== 1)
-                            return {
-                              _tag: "denied",
-                              reason: "An episode typing attempt may send only one character.",
-                            } as const;
-                        }
 
                         return { _tag: "allowed" } as const;
                       }),
@@ -531,7 +534,14 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     );
 
     const publishedAt = journal.elapsedMillis();
-    const checkedTruth = typeof truth === "function" ? truth(publishedAt) : truth;
+    const deliveryIncomplete = typeof truth === "function" && site.failures().length > 0;
+
+    const checkedTruth = deliveryIncomplete
+      ? null
+      : typeof truth === "function"
+        ? truth(publishedAt)
+        : truth;
+
     const gradeTruth = checkedTruth === undefined ? { facts: {} } : checkedTruth;
 
     const caption: SegmentCaption = {
@@ -542,8 +552,9 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       grade: gradeTruth === null ? null : grade(result.output, gradeTruth),
       ...(typeof truth === "function"
         ? {
-            resultQualification:
-              checkedTruth === undefined
+            resultQualification: deliveryIncomplete
+              ? "truth-delivery-incomplete"
+              : checkedTruth === undefined
                 ? "no-validated-result-before-caption"
                 : "validated-before-caption",
           }
@@ -605,7 +616,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
 
         yield* run(
           "result",
-          "Use the current pictures to play exactly one spin. If the game is busy, use bench_pause and inspect the next picture until SPIN is available. Click the rendered SPIN control or press Space once, then choose pauses from the pictures until the reels stop. Finish with a short result caption and facts spin (visible SPIN counter), balance, bet, win (LAST WIN), and notable (ordinary, near-miss, big-win, bonus, or losing-streak). This episode admits one shared point-click or keyboard attempt; typing is limited to one character. An input acknowledgement does not prove a result.",
+          "Use the current pictures to play exactly one spin. If the game is busy, use bench_pause and browser_inspect for the next picture until SPIN is available. Click the rendered SPIN control once, then choose pauses from the pictures until the reels stop. Finish with a short result caption and facts spin (visible SPIN counter), balance, bet, win (LAST WIN), and notable (the visible Notable label: ordinary, near-miss, big-win, bonus, or losing-streak). This episode admits one point-click attempt. An input acknowledgement does not prove a result.",
           [],
           (publishedAt) => {
             if (inputAttemptsRemaining !== 0) return undefined;
@@ -737,6 +748,14 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
           events,
           state: site.state("reels"),
           deliveryFailures: site.failures(),
+          receivedEvents: site.receivedEvents().map((receipt) => ({
+            ...receipt,
+            receivedAtMillis: receipt.receivedAtMillis + clockOffset,
+          })),
+          truthQualification:
+            site.failures().length === 0
+              ? "validated receipts only; source delivery completeness is unmeasured"
+              : "incomplete; rejected receipts are not grading truth",
           clock: "journal-monotonic-millis",
           clockOffsetMillis: clockOffset,
           originQualification: site.originQualification,
@@ -750,12 +769,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
             airDelayMillis: config.airDelayMillis,
             interstitials: [...interstitials, ...banners],
             usage: journal.usage,
-            measuredThroughMillis: Math.min(
-              journal.recording?.captureEndedAt ?? end,
-              journal.recording?.limitReached === null || journal.recording === undefined
-                ? end
-                : (journal.recording.frames.at(-1)?.receivedAt ?? start),
-            ),
+            measuredThroughMillis: recordingCutoff(journal.recording, { start, end }),
           }),
           config,
           stopReason,
@@ -778,6 +792,8 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
               ? "model tools dismiss gates; fixture script schedules around the timed banner"
               : "model tools dismiss gates and choose pauses from current pictures",
           durationOverrunMillis: Math.max(0, end - deadline),
+          deadlineQualification:
+            "segment deadline interrupts in-flight work; unavailable usage stops later paid trials",
           factsQualification:
             "requested result facts; caption prose is retained without semantic grading",
           capture: {

@@ -7,11 +7,12 @@ it("drift changes matching, layout and structure without changing the intended d
   const baseline = driftMarkup("none", 1, "base");
 
   expect(baseline.match(/data-page="markets"/g)).toHaveLength(1);
-  expect(driftMarkup("duplicate", 1, "duplicate").match(/data-page="markets"/g)).toHaveLength(2);
+  expect(driftMarkup("duplicate", 1, "duplicate").match(/>Markets<\/a>/g)).toHaveLength(2);
   expect(driftMarkup("rename", 1, "rename")).toContain('data-page="markets">Market data');
   expect(driftMarkup("offscreen", 1, "offscreen")).toContain('<div id="spacer"></div><nav>');
   expect(driftMarkup("overlay", 1, "overlay")).toContain('<section id="overlay">');
   expect(driftMarkup("shift", 1, "shift")).toContain('<div id="banner">');
+  expect(driftMarkup("duplicate", 1, "duplicate")).toContain('data-page="decoy"');
   expect(driftMarkup("variant", 1, "variant")).toContain('class="variant"');
   expect(driftMarkup("reorder", 2, "reorder")).toContain('"items":["Gamma","Beta","Alpha"]');
   const seeded = [1, 2, 3, 4, 5].map((seed) => driftMarkup("reorder", seed, "seeded"));
@@ -37,6 +38,8 @@ it.live(
 
         expect(redirect.status).toBe(301);
         expect(redirect.headers.get("location")).toBe("/new-portal");
+        // fe6e26d let a cached permanent redirect bleed into subsequent drift cells.
+        expect(redirect.headers.get("cache-control")).toBe("no-store");
         expect(site.truth("redirect")).toBeUndefined();
         const truth = { page: "article", tab: "Prices", item: "Beta", query: "" };
 

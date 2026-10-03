@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import * as InMemory from "@yielded/agent/in-memory";
@@ -234,6 +236,20 @@ export const measured = (options: {
 }): Driver => {
   const { subject, allowance, apiKey, journal, transport } = options;
 
+  // Framework pricing identities are bounded to 256 characters; the full dated rates remain in the manifest.
+  const pricingVersion = `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify([
+        subject.rates.input,
+        subject.rates.cacheRead,
+        subject.rates.cacheWrite,
+        subject.rates.output,
+        subject.rates.source,
+        subject.rates.retrieved,
+      ]),
+    )
+    .digest("hex")}`;
+
   const aliases = new Aliases();
   const spans: Tracer.Span[] = [];
   const { gateway, maxOutputTokens, reasoningEffort, serviceTier } = subject.settings;
@@ -349,7 +365,7 @@ export const measured = (options: {
 
         return {
           costMicrousd,
-          pricingVersion: `${subject.rates.source} ${subject.rates.retrieved}`,
+          pricingVersion,
           pricingStatus:
             allowance.usage().status === "usage-unavailable"
               ? ("unknown" as const)

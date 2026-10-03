@@ -185,9 +185,11 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
       const rejected = settled.find((reply) => reply.status === "rejected");
 
       if (rejected?.status === "rejected") throw rejected.reason;
+      // Retain pending dispatch after a scheduling failure so the original owner contains
+      // its unknown outcome once every submitted reply has been joined.
+      if (schedulingFailure !== undefined) throw schedulingFailure.cause;
       if (pending.length > 0)
         ticket.acknowledge?.({ subphase: "pointer-path", logicalComplete: false });
-      if (schedulingFailure !== undefined) throw schedulingFailure.cause;
       const last = schedule.samples.at(-1);
 
       if (last !== undefined) {

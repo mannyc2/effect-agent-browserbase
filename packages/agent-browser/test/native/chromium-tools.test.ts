@@ -654,6 +654,37 @@ it.live("real Chromium: Tools bound to an issued Frame read and act inside that 
 
             expect(observation.controls.map((control) => control.label)).toEqual(["Inner"]);
 
+            const pointTools = yield* BrowserTools.pointToolkit.pipe(
+              Effect.provide(host.pointHandlers),
+            );
+
+            const observedPointTools = yield* BrowserTools.observedPointToolkit.pipe(
+              Effect.provide(host.observedHandlers),
+            );
+
+            const point = yield* Stream.runCollect(
+              yield* pointTools.handle("browser_click_at", { x: 20, y: 15 }),
+            );
+
+            const observedPoint = yield* Stream.runCollect(
+              yield* observedPointTools.handle("browser_click_at_and_inspect", { x: 20, y: 15 }),
+            );
+
+            expect(point).toMatchObject([
+              {
+                isFailure: true,
+                encodedResult: { reason: "unsupported", outcome: "undispatched" },
+              },
+            ]);
+            expect(observedPoint).toMatchObject([
+              {
+                isFailure: true,
+                encodedResult: { reason: "unsupported", outcome: "undispatched" },
+              },
+            ]);
+            expect((yield* page.readText({ selector: "#count" })).text).toBe("0");
+            expect((yield* frame.readText({ selector: "#count" })).text).toBe("0");
+
             const clicked = yield* Stream.runCollect(
               yield* tools.handle("browser_click", {
                 observationId: observation.observationId,
@@ -664,7 +695,16 @@ it.live("real Chromium: Tools bound to an issued Frame read and act inside that 
             expect(clicked).toMatchObject([{ isFailure: false }]);
             expect((yield* frame.readText({ selector: "#count" })).text).toBe("1");
             expect((yield* page.readText({ selector: "#count" })).text).toBe("0");
-            expect((yield* host.toolFailures).failures).toEqual([]);
+            expect((yield* host.toolFailures).failures).toMatchObject([
+              {
+                toolName: "browser_click_at",
+                error: { reason: { _tag: "Unsupported" }, outcome: "undispatched" },
+              },
+              {
+                toolName: "browser_click_at_and_inspect",
+                error: { reason: { _tag: "Unsupported" }, outcome: "undispatched" },
+              },
+            ]);
           }),
       ).pipe(
         Effect.provide(
@@ -684,85 +724,91 @@ it.live("real Chromium: Tools bound to an issued Frame read and act inside that 
   ),
 );
 
-it.live("real AgentRuntime: both point tools reach a cross-site canvas on their bound Frame", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const site = yield* framedSite;
-      const local = yield* Chromium.launch(BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }));
-      const page = local.initialPage;
+it.live(
+  "real AgentRuntime: both opt-in point tools reach a cross-site canvas on their bound Page",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const site = yield* framedSite;
 
-      yield* page.navigate({ url: `${site.url}canvas-lobby` });
+        const local = yield* Chromium.launch(
+          BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
+        );
 
-      const info = yield* page.listFrames().pipe(
-        Effect.map((frames) => frames.find((frame) => frame.url.endsWith("/canvas"))),
-        Effect.filterOrFail(Predicate.isNotUndefined, () => "canvas frame not loaded yet"),
-        Effect.retry({ times: 50, schedule: Schedule.spaced("100 millis") }),
-      );
+        const page = local.initialPage;
 
-      const frame = yield* page.frame(info);
+        yield* page.navigate({ url: `${site.url}canvas-lobby` });
 
-      expect((yield* frame.readText({ selector: "#count" })).text).toBe("0");
-      const toolkit = Toolkit.merge(BrowserTools.nativeToolkit, BrowserTools.observedNativeToolkit);
+        const info = yield* page.listFrames().pipe(
+          Effect.map((frames) => frames.find((frame) => frame.url.endsWith("/canvas"))),
+          Effect.filterOrFail(Predicate.isNotUndefined, () => "canvas frame not loaded yet"),
+          Effect.retry({ times: 50, schedule: Schedule.spaced("100 millis") }),
+        );
 
-      const agent = Agent.make("canvas-point-tools", {
-        input: Schema.String,
-        output: Schema.Struct({ done: Schema.Boolean }),
-        instructions: "Use main-viewport CSS pixels to click the pictured canvas.",
-        toolkit,
-        policy: BrowserTools.policy({ maxTurns: 4, maxToolCalls: 2, maxDuration: "30 seconds" }),
-      });
+        const frame = yield* page.frame(info);
 
-      const host = yield* BrowserTools.makeHost(local, frame, {
-        coordinatePolicy: { admit: (point) => point.x === 120 && point.y === 150 },
-        policy: { admit: () => false },
-        execution: { style: { seed: 3 } },
-      });
+        expect((yield* frame.readText({ selector: "#count" })).text).toBe("0");
+        const toolkit = Toolkit.merge(BrowserTools.pointToolkit, BrowserTools.observedPointToolkit);
 
-      const result = yield* host.run(
-        AgentRuntime.run(agent, "Click twice at x=120, y=150").pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              ScriptedModel.layer([
-                call("plain", "browser_click_at", { x: 120, y: 150 }),
-                call("observed", "browser_click_at_and_inspect", { x: 120, y: 150 }),
-                {
-                  _tag: "Stream",
-                  parts: [
-                    { type: "text-start", id: "answer" },
-                    { type: "text-delta", id: "answer", delta: '{"done":true}' },
-                    { type: "text-end", id: "answer" },
-                    { type: "finish", reason: "stop", usage },
-                  ],
-                  termination: { _tag: "Complete" },
-                  assertRequest: (request) => {
-                    expect(JSON.stringify(request.prompt)).toContain('"dispatched":true');
-                    expect(JSON.stringify(request.prompt)).not.toMatch(/backendNodeId|hitTest/);
+        const agent = Agent.make("canvas-point-tools", {
+          input: Schema.String,
+          output: Schema.Struct({ done: Schema.Boolean }),
+          instructions: "Use main-viewport CSS pixels to click the pictured canvas.",
+          toolkit,
+          policy: BrowserTools.policy({ maxTurns: 4, maxToolCalls: 2, maxDuration: "30 seconds" }),
+        });
+
+        const host = yield* BrowserTools.makeHost(local, page, {
+          coordinatePolicy: { admit: (point) => point.x === 120 && point.y === 150 },
+          policy: { admit: () => false },
+          execution: { style: { seed: 3 } },
+        });
+
+        const result = yield* host.run(
+          AgentRuntime.run(agent, "Click twice at x=120, y=150").pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                ScriptedModel.layer([
+                  call("plain", "browser_click_at", { x: 120, y: 150 }),
+                  call("observed", "browser_click_at_and_inspect", { x: 120, y: 150 }),
+                  {
+                    _tag: "Stream",
+                    parts: [
+                      { type: "text-start", id: "answer" },
+                      { type: "text-delta", id: "answer", delta: '{"done":true}' },
+                      { type: "text-end", id: "answer" },
+                      { type: "finish", reason: "stop", usage },
+                    ],
+                    termination: { _tag: "Complete" },
+                    assertRequest: (request) => {
+                      expect(JSON.stringify(request.prompt)).toContain('"dispatched":true');
+                      expect(JSON.stringify(request.prompt)).not.toMatch(/backendNodeId|hitTest/);
+                    },
                   },
-                },
-              ]),
-              Layer.succeed(Model.ProviderName, "scripted"),
-              Layer.succeed(Model.ModelName, "canvas-tools"),
-              InMemory.layer,
+                ]),
+                Layer.succeed(Model.ProviderName, "scripted"),
+                Layer.succeed(Model.ModelName, "canvas-tools"),
+                InMemory.layer,
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      expect(result.output.done).toBe(true);
-      expect((yield* host.toolFailures).failures).toEqual([]);
-      expect((yield* frame.readText({ selector: "#count" })).text).toBe("2");
-    }).pipe(
-      Effect.provide(
-        Chromium.layer({
-          launch: {
-            chromiumSandbox: false,
-            ...(process.env.BROWSERBASE_CHROMIUM === undefined
-              ? {}
-              : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
-          },
-          viewport: { width: 640, height: 480 },
-        }).pipe(Layer.provide(NodeCrypto.layer)),
+        expect(result.output.done).toBe(true);
+        expect((yield* host.toolFailures).failures).toEqual([]);
+        expect((yield* frame.readText({ selector: "#count" })).text).toBe("2");
+      }).pipe(
+        Effect.provide(
+          Chromium.layer({
+            launch: {
+              chromiumSandbox: false,
+              ...(process.env.BROWSERBASE_CHROMIUM === undefined
+                ? {}
+                : { executablePath: process.env.BROWSERBASE_CHROMIUM }),
+            },
+            viewport: { width: 640, height: 480 },
+          }).pipe(Layer.provide(NodeCrypto.layer)),
+        ),
       ),
     ),
-  ),
 );

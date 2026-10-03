@@ -16,7 +16,14 @@ export const CursorSample = Schema.Struct({
     "checked-intended-aim",
     "intended-schedule",
   ]),
-});
+}).check(
+  Schema.makeFilter(
+    (sample) => sample.kind !== "press" || sample.qualification === "native-input",
+    {
+      title: "click pulses use native input timing",
+    },
+  ),
+);
 
 export type CursorSample = typeof CursorSample.Type;
 
@@ -43,7 +50,7 @@ export const cursorFromInput = (
       : [],
   );
 
-/** The clock bridge is measured by the caller; intended glides remain labelled as intentions. */
+/** The clock bridge is measured; native-call returns locate intentions, never delivered click pulses. */
 export const cursorFromTimeline = (
   events: ReadonlyArray<Event>,
   anchor: {
@@ -86,7 +93,9 @@ export const cursorFromTimeline = (
       if (atMillis !== null && point !== undefined && point !== null)
         samples.push({
           atMillis,
-          kind: event._tag === "Press" ? "press" : "cursor",
+          // A Press interval ends after native completion/settlement. Only a source-time
+          // pointerdown from cursorFromInput can fairly time a pulse across source arms.
+          kind: "cursor",
           point,
           qualification: event.position === null ? "checked-intended-aim" : "commanded-point",
         });

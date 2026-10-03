@@ -16,6 +16,14 @@ export const operators = [
 
 export type DriftOperator = (typeof operators)[number];
 
+/** Seeds for fixed layouts are fresh-page repetitions, not distinct fixture conditions. */
+export const driftCondition = (operator: DriftOperator, seed: number) =>
+  operator === "reorder"
+    ? `${operator}:permutation-${Math.abs(seed - 1) % 5}`
+    : operator === "slow"
+      ? `${operator}:delay-${1000 + (Math.abs(seed * 389) % 2001)}`
+      : operator;
+
 export interface DriftTruth {
   readonly page: string;
   readonly tab: string;
@@ -58,12 +66,13 @@ export const driftMarkup = (operator: DriftOperator | "none", seed: number, run:
 
   const label = operator === "rename" ? "Market data" : "Markets";
   const market = `<a href="/markets" data-page="markets">${label}</a>`;
-  const nav = `<nav>${market}${operator === "duplicate" ? market : ""}<a href="/directory" data-page="directory">Directory</a><a href="/articles" data-page="articles">Articles</a></nav>`;
+  const decoy = '<a href="/decoy" data-page="decoy">Archived markets</a>';
+  const nav = `<nav>${operator === "reorder" || operator === "variant" ? decoy : ""}${market}${operator === "duplicate" ? '<a href="/decoy" data-page="decoy">Markets</a>' : ""}<a href="/directory" data-page="directory">Directory</a><a href="/articles" data-page="articles">Articles</a></nav>`;
   const config = JSON.stringify({ operator, seed, run, items });
 
   return `<!doctype html><meta charset="utf-8"><title>Replay portal</title>
-<style>body{font:18px sans-serif;margin:20px}a,button,input{margin:10px;padding:8px}nav{display:flex;gap:16px}#banner{height:150px;background:#eef}#overlay{position:fixed;inset:0;z-index:99;background:#ddd;padding:80px}table{border-spacing:12px}#spacer{height:1200px}.variant{display:grid;grid-template-columns:1fr 1fr}main{min-height:450px}</style>
-${operator === "shift" ? '<div id="banner">New announcement</div>' : ""}
+<style>body{font:18px sans-serif;margin:20px}a,button,input{margin:10px;padding:8px}li a{display:inline-block}nav{display:flex;gap:16px}#banner{height:150px;background:#eef}#overlay{position:fixed;inset:0;z-index:99;background:#ddd;padding:80px}table{border-spacing:12px}#spacer{height:1200px}.variant{display:grid;grid-template-columns:1fr 1fr}main{min-height:450px}</style>
+${operator === "shift" ? `<div id="banner">New announcement${decoy}</div>` : ""}
 ${operator === "offscreen" ? '<div id="spacer"></div>' : ""}${nav}
 <main ${operator === "variant" ? 'class="variant"' : ""}></main>
 ${operator === "overlay" ? '<section id="overlay"><h2>Newsletter</h2><button id="dismiss">Dismiss newsletter</button></section>' : ""}
@@ -137,7 +146,7 @@ export const driftSite = Effect.acquireRelease(
         const selected = { ...active };
 
         if (selected.operator === "redirect" && url.pathname === "/portal") {
-          response.writeHead(301, { location: "/new-portal" });
+          response.writeHead(301, { location: "/new-portal", "cache-control": "no-store" });
           response.end();
 
           return;

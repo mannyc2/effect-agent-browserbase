@@ -72,12 +72,31 @@ work; they do not promise a frame for every display tick.
 
 Picture metrics use host monotonic delivery time. Capture is change-driven, so a
 still document can send few frames. FPS measures delivered cadence, and does not
-establish transport latency or website audio. Freeze measurements require known
-changing intervals. Blank-frame measurements use bounded local pixel analysis;
+establish transport latency or website audio. Freeze metrics describe delivery
+silence within declared changing intervals and count it once across overlaps.
+Gap distributions include the initial and trailing window waits; separate
+inter-delivery quantiles exclude those edges. Stage and contention metrics also
+retain page-reported animation progress and visibility on the host receipt clock.
+Progress reports inside a delivery gap distinguish observed page callback work
+from missing deliveries. Absent reports leave page progress unverified;
+requestAnimationFrame callbacks do not prove compositor painting, and delayed
+or batched reports do not calibrate transport latency. Normal capture teardown
+bookkeeping is reported separately from the completed scene work window.
+Blank-frame measurements use bounded local pixel analysis;
 overlay intervals also retain fixture truth. If capture ends or retention reaches
 its frame or byte cap, later picture intervals are partial or unmeasured. A held
 last frame after that cutoff is not evidence of a page freeze. Caption and game
 truth can remain measured after picture retention stops.
+
+Replay cells retain the failing step's original dispatch outcome, containment and
+terminal Page phase. Known undispatched or rejected failures are refusals;
+unknown mutations and performed actions with a later failure have separate
+outcomes and are never replayed. A missing truth report is unverified, while a
+completed run with a different reported destination is wrong-place. Controlled
+drifts include independently observable decoy destinations, and redirect responses
+cannot be cached into later cells. Counts distinguish unique walk/path/drift
+conditions from repetitions on fresh Pages; seeds for fixed layouts are repeated
+conditions, not new drift variants.
 
 ## Model input and spend
 
@@ -145,7 +164,10 @@ main-viewport pointer paths.
 `clip` accepts `CursorSample[]`. [Clip.ts](Clip.ts) supplies conversions from
 trusted input logs or a timeline with an explicit clock bridge. Native samples,
 commanded points and intended schedules keep their separate qualifications.
-Intended glides are not measured physical paths. The renderer applies the same
+Intended glides are not measured physical paths. Click pulses for every comparison arm
+come from trusted source-time pointerdown samples; a native-call completion interval
+cannot time a pulse. Movement duration excludes the subsequent pre-click dwell.
+The renderer applies the same
 cursor and press artwork to each arm, strips audio and metadata, and verifies
 geometry, duration and complete decode. Clips are at most fifteen seconds.
 
@@ -162,8 +184,13 @@ Preparation copies bounded clips under anonymous names and records checksums.
 The server shows only anonymous clip URLs and stores person-or-bot guesses and
 naturalness ratings in `ratings.json`; duplicate rater/clip answers are refused.
 The CLI prints the mirrored HTTPS URL returned by `dev-url`. Reports retain
-participating rater counts and intervals over independent rater means. Empty or
+participating rater counts and conservative 95% Hoeffding bounds over independent
+bounded rater means. Agreement in a small panel retains uncertainty, and repeated
+clips do not increase the independent sample count. Empty or
 partial ratings remain identified as such.
+
+`run` checks local FFmpeg and FFprobe before fixture preparation, tunnel startup,
+browser allocation or inference. The printed plan includes the selected picture scale.
 
 ## Human comparison
 

@@ -1,5 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
+import { segmentMetrics } from "./bench/GameSegment.ts";
 import * as Picture from "./bench/Picture.ts";
 import { type RecordingFrame, Journal } from "./bench/Records.ts";
 import { pictureMetrics } from "./bench/StageScenes.ts";
@@ -26,6 +27,30 @@ test("cadence preserves a long delivery gap and both edge waits", () => {
   expect(cadence.gapsOver1000Millis).toBe(1);
   expect(cadence.firstDeliveryMillis).toBe(100);
   expect(cadence.tailWithoutDeliveryMillis).toBe(500);
+});
+
+// fe6e26d omitted window edges from the gap distribution and threshold counts.
+test("delivery gap statistics include a stalled window with no interior gap", () => {
+  const cadence = Picture.cadence([frame(1200)], { start: 0, end: 3000 });
+
+  expect(cadence.gapMillis).toEqual({ p50: 1200, p95: 1800, max: 1800 });
+  expect(cadence.gapsOver1000Millis).toBe(2);
+  expect(Picture.cadence([], { start: 0, end: 3000 }).gapMillis.max).toBe(3000);
+});
+
+// fe6e26d counted the same delivery silence once per overlapping changing interval.
+test("overlapping animation intervals count each delivery silence once", () => {
+  const freeze = Picture.freezes(
+    [frame(0), frame(2000)],
+    [
+      { start: 0, end: 1500 },
+      { start: 500, end: 2000 },
+    ],
+    { start: 0, end: 2000 },
+  );
+
+  expect(freeze.seconds).toBe(2);
+  expect(freeze.count).toBe(1);
 });
 
 test("freezes count expected animation including initial and trailing silence", () => {
@@ -131,5 +156,64 @@ test("a retained capture cutoff leaves later animation time unmeasured", () => {
     cadence: null,
     freezes: null,
     measurement: { status: "unmeasured", measuredDurationMillis: 0, unmeasuredMillis: 3000 },
+  });
+});
+
+test("capture failure leaves the same unmeasured tail in game and stage metrics", () => {
+  const journal = new Journal({
+    version: 1,
+    runId: "failed-capture",
+    scene: "busy",
+    backend: "chromium",
+    driver: "scripted",
+    sourceRevision: "test",
+    sourceDirty: false,
+    trial: 0,
+    seed: 0,
+    viewport: { width: 1280, height: 720 },
+    settings: {},
+    capture: { maxFrames: 2, maxBytes: 1024, quality: 15, maxDurationMillis: 5000 },
+  });
+
+  journal.recording = {
+    ...journal.manifest.capture,
+    frames: [frame(0), frame(100)],
+    startedAt: 0,
+    endedAt: 200,
+    captureEndedAt: 200,
+    nativeStop: "confirmed",
+    summary: null,
+    totalBytes: 0,
+    discardedFrames: 0,
+    limitReached: null,
+    error: "fixture-capture-failure",
+  };
+  const window = { start: 0, end: 200 };
+
+  const game = segmentMetrics({
+    window,
+    frames: journal.recording.frames,
+    events: [],
+    captions: [],
+    airDelayMillis: 1000,
+    interstitials: [],
+    usage: null,
+    measuredThroughMillis: Picture.recordingCutoff(journal.recording, window),
+  });
+
+  const stage = pictureMetrics(journal);
+
+  expect(game.picture.measurement).toMatchObject({
+    status: "partial",
+    measuredDurationMillis: 100,
+    unmeasuredMillis: 100,
+  });
+  expect(game.picture.measurement).toEqual(stage.measurement);
+  expect(game.deadAir.unmeasuredSeconds).toBe(0.1);
+  expect(game.deadAir.seconds).toBe(0);
+  expect(Picture.measurement(window, Picture.recordingCutoff(undefined, window))).toMatchObject({
+    status: "unmeasured",
+    measuredDurationMillis: 0,
+    unmeasuredMillis: 200,
   });
 });

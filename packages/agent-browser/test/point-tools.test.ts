@@ -21,6 +21,23 @@ const script: Testing.Script = {
   ],
 };
 
+it("existing native opt-ins keep their original tool authority", () => {
+  expect(Object.keys(BrowserTools.nativeToolkit.tools).sort()).toEqual([
+    "browser_hover",
+    "browser_pointer_move",
+    "browser_wheel",
+  ]);
+  expect(Object.keys(BrowserTools.observedNativeToolkit.tools).sort()).toEqual([
+    "browser_hover_and_inspect",
+    "browser_pointer_move_and_inspect",
+    "browser_wheel_and_inspect",
+  ]);
+  expect(Object.keys(BrowserTools.pointToolkit.tools)).toEqual(["browser_click_at"]);
+  expect(Object.keys(BrowserTools.observedPointToolkit.tools)).toEqual([
+    "browser_click_at_and_inspect",
+  ]);
+});
+
 it.effect(
   "both point tools use the bound Page and keep native hit-test facts out of model results",
   () =>
@@ -37,9 +54,9 @@ it.effect(
           coordinatePolicy: { admit: (point) => point.x === 40 },
         });
 
-        const tools = yield* BrowserTools.nativeToolkit.pipe(Effect.provide(host.nativeHandlers));
+        const tools = yield* BrowserTools.pointToolkit.pipe(Effect.provide(host.pointHandlers));
 
-        const observed = yield* BrowserTools.observedNativeToolkit.pipe(
+        const observed = yield* BrowserTools.observedPointToolkit.pipe(
           Effect.provide(host.observedHandlers),
         );
 
@@ -81,6 +98,44 @@ it.effect(
           toolCallId: "denied-point",
           error: { operation: "pointer-click", reason: { _tag: "Denied" } },
         });
+      }),
+    ),
+);
+
+it.effect(
+  "a point tool requires explicit coordinate admission when an element policy is bound",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* Testing.open(script);
+        const page = browser.initialPage;
+
+        const host = yield* BrowserTools.makeHost(browser, page, {
+          policy: { admit: () => false },
+        });
+
+        const tools = yield* BrowserTools.pointToolkit.pipe(Effect.provide(host.pointHandlers));
+
+        const result = yield* Stream.runCollect(
+          yield* tools.handle("browser_click_at", { x: 40, y: 50 }),
+        );
+
+        expect(result).toMatchObject([
+          { isFailure: true, encodedResult: { reason: "denied", outcome: "undispatched" } },
+        ]);
+        expect(
+          (yield* page.observe()).controls.find((control) => control.elementId === "button")
+            ?.checked,
+        ).toBe(false);
+        expect((yield* host.toolFailures).failures).toMatchObject([
+          {
+            error: {
+              operation: "pointer-click",
+              reason: { _tag: "Denied" },
+              outcome: "undispatched",
+            },
+          },
+        ]);
       }),
     ),
 );

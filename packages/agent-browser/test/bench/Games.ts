@@ -188,11 +188,11 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
           const at = { x: (journal.manifest.viewport.width - 960) / 2 + 815, y: 570 };
 
           if (options.style === "performed")
-            yield* frame.run(
+            yield* page.run(
               { version: 1, steps: [{ id: `spin-${spin}`, action: { _tag: "PointerClick", at } }] },
               { style: { seed: journal.manifest.seed + spin }, within: 15000 },
             );
-          else yield* frame.pointerClick(at);
+          else yield* page.pointerClick(at);
         } else yield* frame.press({ key: " ", into: "#game-canvas" });
         const actionMillis = journal.elapsedMillis() - startedAt;
 
@@ -260,6 +260,7 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
             events: receipts,
             state,
             deliveryFailures: site.failures(),
+            receivedEvents: site.receivedEvents(),
           });
           journal.metrics = json({
             driver,

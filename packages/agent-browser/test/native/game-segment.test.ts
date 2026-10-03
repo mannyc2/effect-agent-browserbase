@@ -23,7 +23,11 @@ const Metrics = Schema.Struct({
     }),
   ),
   resultCaptions: Schema.Array(
-    Schema.Struct({ latencyMillis: Schema.Finite, eligibleToAir: Schema.Boolean }),
+    Schema.Struct({
+      latencyMillis: Schema.Finite,
+      eligibleToAir: Schema.Null,
+      withinReceiptAirDelay: Schema.Boolean,
+    }),
   ),
   measured: Schema.String,
   costMicrousd: Schema.Null,
@@ -108,7 +112,8 @@ for (const style of ["plain", "performed"] as const) {
             "result",
           ]);
           expect(metrics.resultCaptions).toHaveLength(1);
-          expect(metrics.resultCaptions[0]?.eligibleToAir).toBe(true);
+          expect(metrics.resultCaptions[0]?.eligibleToAir).toBeNull();
+          expect(metrics.resultCaptions[0]?.withinReceiptAirDelay).toBe(true);
           expect(journal.recording?.nativeStop).toBe("confirmed");
           expect(journal.recording?.limitReached).toBeNull();
           expect(journal.cleanup).toBe("confirmed");
@@ -248,7 +253,21 @@ it.live(
         });
 
         const turns: ReadonlyArray<Turn> = [
-          ...lobbyTurns(site.url),
+          (request) => {
+            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_click_at");
+            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_press");
+
+            return call("navigate", "browser_navigate", { url: site.url });
+          },
+          ...lobbyTurns(site.url).slice(1),
+          (request) => {
+            expect(request.tools.map((tool) => tool.name)).toContain("browser_click_at");
+            expect(request.tools.map((tool) => tool.name)).toContain("browser_inspect");
+            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_press");
+            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_type");
+
+            return call("episode-inspect", "browser_inspect", {});
+          },
           () => call("spin", "browser_click_at", { x: 975, y: 570 }),
           () => call("chosen-pause", "bench_pause", { millis: 5000 }),
           () => {
@@ -290,7 +309,8 @@ it.live(
             measured: Schema.String,
             decisionSource: Schema.String,
             resultToCaptionMillis: Schema.Struct({ p50: Schema.Finite }),
-            eligibleToAirRate: Schema.Finite,
+            eligibleToAirRate: Schema.Null,
+            withinReceiptAirDelayRate: Schema.Finite,
           }),
         )(journal.metrics);
 
@@ -302,9 +322,10 @@ it.live(
         expect(metrics.measured).toBe("supplied-driver-plumbing");
         expect(metrics.decisionSource).toBe("model-pictures-and-chosen-pauses");
         expect(metrics.resultToCaptionMillis.p50).toBeGreaterThan(1000);
-        expect(metrics.eligibleToAirRate).toBe(0);
+        expect(metrics.eligibleToAirRate).toBeNull();
+        expect(metrics.withinReceiptAirDelayRate).toBe(0);
         expect(journal.snapshot().events.filter((event) => event.kind === "request")).toHaveLength(
-          11,
+          12,
         );
         expect(site.failures()).toEqual([]);
         expect(journal.ownerClose).toBe("confirmed");
@@ -393,15 +414,14 @@ it.live("real Chromium: autonomous episode refuses model calls beyond its termin
   ).pipe(Effect.provide(NodeServices.layer)),
 );
 
-for (const keyboard of ["press", "typing-batch", "point-then-press"] as const) {
-  it.live(`real Chromium: a ${keyboard} attempt consumes the same allowance as a point click`, () =>
+it.live(
+  "real Chromium: the game AgentRuntime invokes the priced native finish estimator on each model call",
+  () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const site = yield* gameSite({ seed: 2 });
-
         const journal = new Journal({
           version: 1,
-          runId: `segment-keyboard-${keyboard}`,
+          runId: "segment-priced-finishes",
           scene: "game-segment",
           backend: "chromium",
           driver: "scripted-injected",
@@ -410,7 +430,73 @@ for (const keyboard of ["press", "typing-batch", "point-then-press"] as const) {
           trial: 0,
           seed: 2,
           viewport: { width: 1280, height: 720 },
-          settings: { keyboard },
+          settings: { pricedFinishFixture: true },
+          capture: {
+            maxFrames: 1200,
+            maxBytes: 32 * 1024 * 1024,
+            quality: 25,
+            maxDurationMillis: 15000,
+          },
+        });
+
+        let estimates = 0;
+        let costMicrousd = 0;
+
+        const turns: ReadonlyArray<Turn> = [
+          () =>
+            answer({ caption: "Pricing hook fixture.", facts: {} }).map((part) =>
+              part.type === "finish"
+                ? { ...part, usage: { inputTokens: { total: 1000 }, outputTokens: { total: 100 } } }
+                : part,
+            ),
+        ];
+
+        const driver: Driver = {
+          ...scripted(journal, turns),
+          estimate: (usage) =>
+            Effect.sync(() => {
+              expect(usage.inputTokens.total).toBe(1000);
+              expect(usage.outputTokens.total).toBe(100);
+              estimates++;
+              costMicrousd += 25;
+
+              return 25;
+            }),
+          provide: (effect) => scripted(journal, turns).provide(effect),
+        };
+
+        yield* run(journal, (browser) =>
+          gameSegment(journal, browser, { driver, durationMillis: 12000, maxSpins: 1 }),
+        );
+        expect(journal.snapshot().events.filter((event) => event.kind === "request")).toHaveLength(
+          2,
+        );
+        expect(estimates).toBe(2);
+        expect(costMicrousd).toBe(50);
+        expect(journal.cleanup).toBe("confirmed");
+        expect(journal.ownerClose).toBe("confirmed");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+for (const point of ["first-point-refused", "second-point-refused"] as const) {
+  it.live(`real Chromium: ${point} consumes one attempt without replay`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const site = yield* gameSite({ seed: 2 });
+
+        const journal = new Journal({
+          version: 1,
+          runId: `segment-input-${point}`,
+          scene: "game-segment",
+          backend: "chromium",
+          driver: "scripted-injected",
+          sourceRevision: "native-test",
+          sourceDirty: false,
+          trial: 0,
+          seed: 2,
+          viewport: { width: 1280, height: 720 },
+          settings: { point },
           capture: {
             maxFrames: 1200,
             maxBytes: 32 * 1024 * 1024,
@@ -422,28 +508,23 @@ for (const keyboard of ["press", "typing-batch", "point-then-press"] as const) {
         let invocation = 0;
         let finalCallAdmitted = false;
 
-        const reference = { observationId: "missing", elementId: "missing" };
-
         const driver: Driver = {
           ...scripted(journal, []),
           provide: (effect) =>
             scripted(
               journal,
               invocation++ === 0
-                ? keyboard === "point-then-press"
+                ? point === "second-point-refused"
                   ? lobbyTurns(site.url)
                   : [() => answer({ caption: "Input-admission test.", facts: {} })]
-                : keyboard === "point-then-press"
+                : point === "second-point-refused"
                   ? [
                       () => call("point-first", "browser_click_at", { x: 975, y: 570 }),
                       () => call("chosen-pause", "bench_pause", { millis: 5000 }),
-                      () => call("key-after-point", "browser_press", { reference, key: " " }),
+                      () => call("second-point", "browser_click_at", { x: 975, y: 570 }),
                     ]
                   : [
-                      () =>
-                        keyboard === "press"
-                          ? call("key-attempt", "browser_press", { reference, key: " " })
-                          : call("typing-attempt", "browser_type", { reference, text: "  " }),
+                      () => call("refused-point", "browser_click_at", { x: 5000, y: 5000 }),
                       () => call("point-after-key", "browser_click_at", { x: 975, y: 570 }),
                       () => {
                         finalCallAdmitted = true;
@@ -468,8 +549,8 @@ for (const keyboard of ["press", "typing-batch", "point-then-press"] as const) {
         expect(exit._tag).toBe("Failure");
         expect(journal.failure).toBe("AgentToolAuthorizationDenied");
         expect(finalCallAdmitted).toBe(false);
-        expect(metrics.spinsStarted).toBe(keyboard === "point-then-press" ? 1 : 0);
-        expect(metrics.spinsCompleted).toBe(keyboard === "point-then-press" ? 1 : 0);
+        expect(metrics.spinsStarted).toBe(point === "second-point-refused" ? 1 : 0);
+        expect(metrics.spinsCompleted).toBe(point === "second-point-refused" ? 1 : 0);
         expect(site.failures()).toEqual([]);
         expect(journal.ownerClose).toBe("confirmed");
         expect(journal.cleanup).toBe("confirmed");

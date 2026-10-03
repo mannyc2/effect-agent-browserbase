@@ -2411,9 +2411,10 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
           async (record): Promise<NativeInput> => {
             const page = current(target, "pointer-click");
             const point = Object.freeze({ x: request.x, y: request.y });
+            const size = page.viewport ?? viewport;
 
             requireRunning(page, "pointer-click");
-            if (request.x >= viewport.width || request.y >= viewport.height)
+            if (request.x >= size.width || request.y >= size.height)
               throw fail("pointer-click", Reasons.NotVisible.make({}));
             if (policy !== undefined) {
               let admitted = false;

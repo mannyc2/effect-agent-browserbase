@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Schema } from "effect";
+import { Event } from "effect-browser/timeline-data";
 
-import { cursorArtwork, cursorFromInput } from "./bench/Clip.ts";
+import { cursorArtwork, cursorFromInput, cursorFromTimeline } from "./bench/Clip.ts";
 import type { InputEvent } from "./bench/InputLog.ts";
 import { compareMotion, ksDistance, motionStats } from "./bench/Motion.ts";
 
@@ -43,19 +45,30 @@ describe("measured motion", () => {
       {
         startedAt: 1000,
         clickedAt: 1300,
-        durationMillis: 300,
+        durationMillis: 200,
         distancePixels: 100,
         pathLengthPixels: 100,
         straightness: 1,
-        peakVelocityPosition: 1 / 6,
+        peakVelocityPosition: 1 / 4,
         overshoot: false,
         preClickDwellMillis: 100,
         fittsIndex: Math.log2(6),
-        samples: 4,
+        samples: 3,
       },
     ]);
     expect(stats.overshootRate).toBe(0);
     expect(motionStats([event("pointerdown", 0, { x: 100, y: 0 })]).movements).toEqual([]);
+
+    const delayed = motionStats([
+      event("pointermove", 0, { x: 0, y: 0 }),
+      event("pointermove", 100, { x: 50, y: 0 }),
+      event("pointermove", 200, { x: 100, y: 0 }),
+      event("pointerdown", 700, { x: 100, y: 0 }),
+    ]).movements[0];
+
+    expect(delayed?.durationMillis).toBe(200);
+    expect(delayed?.peakVelocityPosition).toBe(1 / 4);
+    expect(delayed?.preClickDwellMillis).toBe(500);
   });
 
   it("records overshoot and independent overlapping key holds, and excludes canvas hitboxes", () => {
@@ -110,6 +123,58 @@ describe("measured motion", () => {
 });
 
 describe("blind cursor artwork", () => {
+  it("refuses a click pulse derived from commanded or intended motion", () => {
+    for (const qualification of [
+      "commanded-point",
+      "checked-intended-aim",
+      "intended-schedule",
+    ] as const)
+      expect(() =>
+        cursorArtwork(
+          [{ kind: "press", atMillis: 100, point: { x: 20, y: 20 }, qualification }],
+          { width: 640, height: 480 },
+          15000,
+        ),
+      ).toThrow(/Expected <filter>/);
+  });
+  it("native pointerdown supplies the click pulse; a later action acknowledgement cannot supply it", () => {
+    const native = cursorFromInput([event("pointerdown", 100, { x: 20, y: 20 })], 1000);
+    const stamp = (offsetNanos: bigint) => ({ clockId: "clock", offsetNanos });
+
+    const timeline = Schema.decodeSync(Event)({
+      version: 1,
+      storeId: "store",
+      clockId: "clock",
+      target: { generation: 0, pageId: "page", frameId: "frame", document: 0 },
+      correlation: null,
+      sequence: 0n,
+      at: stamp(600000000n),
+      event: {
+        _tag: "Press",
+        position: { x: 20, y: 20 },
+        interval: {
+          start: stamp(50000000n),
+          end: stamp(600000000n),
+          qualification: "native-call-interval",
+        },
+      },
+    });
+
+    const intended = cursorFromTimeline([timeline], {
+      clockId: "clock",
+      offsetNanos: 0n,
+      sourceTimeMillis: 1000,
+      clipStartSourceMillis: 1000,
+    });
+
+    expect(native[0]).toMatchObject({
+      kind: "press",
+      atMillis: 100,
+      qualification: "native-input",
+    });
+    expect(intended.some((sample) => sample.kind === "press")).toBe(false);
+  });
+
   it("uses identical cursor and pulse art, with native samples aligned to source frame time", () => {
     const samples = cursorFromInput(
       [event("pointermove", 0, { x: 10, y: 20 }), event("pointerdown", 100, { x: 20, y: 20 })],

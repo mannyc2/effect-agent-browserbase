@@ -54,7 +54,7 @@ export const motionStats = (input: ReadonlyArray<InputEvent>) => {
       event.point !== null &&
       event.coordinateSpace === "main-viewport"
     ) {
-      const samples = [...path, event].filter((sample) => sample.point !== null);
+      const samples = path.filter((sample) => sample.point !== null);
       const first = samples[0];
       let length = 0;
       let peakVelocity = 0;
@@ -81,9 +81,12 @@ export const motionStats = (input: ReadonlyArray<InputEvent>) => {
         }
       }
       if (first !== undefined && first.point !== null && path.length > 0) {
-        const straight = distance(first.point, event.point);
-        const duration = at - first.sourceTimeMillis;
         const lastMove = path.at(-1);
+        const endpoint = lastMove?.point;
+
+        if (endpoint === undefined || endpoint === null) continue;
+        const straight = distance(first.point, endpoint);
+        const duration = (lastMove?.sourceTimeMillis ?? at) - first.sourceTimeMillis;
         const target = event.target?.kind === "dom" ? event.target : null;
         const direction = { x: event.point.x - first.point.x, y: event.point.y - first.point.y };
         const norm = Math.hypot(direction.x, direction.y);
@@ -164,6 +167,8 @@ export const motionStats = (input: ReadonlyArray<InputEvent>) => {
     qualifications: {
       fitts: "DOM element width; canvas control geometry unavailable",
       path: "trusted main-viewport input samples; movement breaks after 500 ms",
+      duration:
+        "first to last delivered pointermove; excludes pre-click dwell and unobserved motion",
       velocity: "sampled peak, not continuous physical velocity",
       dwell: "time from last delivered pointermove to pointerdown",
       idle: "intervals between pointerdown, non-repeat keydown and wheel",

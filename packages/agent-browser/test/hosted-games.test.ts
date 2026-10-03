@@ -33,7 +33,7 @@ const mode = ${JSON.stringify(mode)};
 const counter = join(directory, "counter");
 const index = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
 writeFileSync(counter, String(index));
-appendFileSync(join(directory, "started"), JSON.stringify({ index, pid:process.pid, args:process.argv.slice(2) }) + "\n");
+appendFileSync(join(directory, "started"), JSON.stringify({ index, pid:process.pid, args:process.argv.slice(2), inheritedSecret: process.env.BENCH_TUNNEL_TEST_SECRET !== undefined }) + "\n");
 process.on("SIGTERM", () => {
   appendFileSync(join(directory, "stopped"), String(index) + "\n");
   process.exit(0);
@@ -64,6 +64,7 @@ setInterval(() => {}, 1000);
                 index: Schema.Int,
                 pid: Schema.Int,
                 args: Schema.Array(Schema.String),
+                inheritedSecret: Schema.Boolean,
               }),
             )(JSON.parse(line)),
           ),
@@ -132,6 +133,34 @@ it.live("single-fixture preparation owns one child and forwards the exact loopba
         }),
       );
       expect(yield* script.stopped()).toEqual([1]);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("fixture children do not inherit unrelated host credentials", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const previous = process.env.BENCH_TUNNEL_TEST_SECRET;
+
+          process.env.BENCH_TUNNEL_TEST_SECRET = "synthetic-secret";
+
+          return previous;
+        }),
+        (previous) =>
+          Effect.sync(() => {
+            if (previous === undefined) delete process.env.BENCH_TUNNEL_TEST_SECRET;
+            else process.env.BENCH_TUNNEL_TEST_SECRET = previous;
+          }),
+      );
+      const script = yield* scriptedTunnel("ready");
+
+      yield* prepareFixtureTunnel("http://127.0.0.1:3210", {
+        executable: script.executable,
+        startupTimeoutMillis: 2000,
+      });
+      expect((yield* script.started()).map((child) => child.inheritedSecret)).toEqual([false]);
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

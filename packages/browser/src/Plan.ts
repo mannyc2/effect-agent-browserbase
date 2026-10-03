@@ -33,6 +33,7 @@ export interface RunOptions extends OperationOptions {
   readonly through?: string;
   readonly inputs?: InputBindings;
   readonly policy?: ElementAdmission;
+  /** Required for PointerClick steps when an exact-element policy is also supplied. */
   readonly coordinatePolicy?: CoordinateAdmission;
   readonly checkpoint?: CheckpointOptions;
 }

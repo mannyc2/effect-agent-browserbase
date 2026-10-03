@@ -617,7 +617,13 @@ it.live("real CDP: a long shifted performed Type keeps complete recording eviden
       expect((yield* page.readText({ selector: "#mirror" })).text).toBe(text);
       expect(ran.steps.map((step) => step.recorded._tag)).toEqual(["Complete", "Complete"]);
       expect((yield* Plan.recorded(ran)).steps).toHaveLength(2);
-    }).pipe(Effect.provide(layer)),
+    }).pipe(
+      // The 256 strokes grade recording completeness; the default 10 s action cap is independent
+      // of `within` and can refuse their measured pace early on a cold renderer.
+      Effect.provide(
+        Chromium.layer({ actionTimeoutMillis: 60000 }).pipe(Layer.provide(NodeCrypto.layer)),
+      ),
+    ),
   ),
 );
 
