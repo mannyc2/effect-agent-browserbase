@@ -124,6 +124,10 @@ it.live(
                 maxDurationMillis: 5000,
               });
 
+              // The completed workflow leaves a static viewport. Trigger a visible repaint
+              // through the original owner before requiring a frame from the live screencast.
+              yield* local.initialPage.scroll({ deltaX: 0, deltaY: 80 });
+
               const frames = yield* interval.frames.pipe(Stream.take(1), Stream.runCollect);
 
               expect(frames).toHaveLength(1);
