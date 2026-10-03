@@ -342,7 +342,8 @@ it.live(
 
         yield* peer.navigate({ url: `${fixture.url}canvas` });
         yield* page.navigate({ url: `${fixture.url}canvas?redirect` });
-        yield* page.screenshot({ fullPage: false });
+        // This proof needs document readiness; a background Page may not get a compositor frame.
+        expect((yield* page.readText({ selector: "#count" })).text).toBe("0");
         yield* page.pointerMove({ to: { x: 10, y: 10 } });
 
         const failure = yield* page
