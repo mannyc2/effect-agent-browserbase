@@ -32,13 +32,13 @@
   },
   "devDependencies": {
     "@effect-agent/testing": "0.1.0-beta.165",
-    "@effect/ai-anthropic": "4.0.0-rc.117",
-    "@effect/ai-openai": "4.0.0-rc.117",
-    "@effect/platform-bun": "4.0.0-rc.117",
-    "@effect/platform-node": "4.0.0-rc.117",
-    "@effect/vitest": "4.0.0-rc.117",
+    "@effect/ai-anthropic": "4.0.0-rc.118",
+    "@effect/ai-openai": "4.0.0-rc.118",
+    "@effect/platform-bun": "4.0.0-rc.118",
+    "@effect/platform-node": "4.0.0-rc.118",
+    "@effect/vitest": "4.0.0-rc.118",
     "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0-rc.118",
     "effect-agent": "0.1.0-beta.165",
     "effect-browser": "workspace:*",
     "effect-browserbase": "workspace:*",
@@ -47,7 +47,7 @@
     "vite-plus": "0.3.2"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0-rc.118",
     "effect-agent": "0.1.0-beta.165",
     "effect-browser": "workspace:*"
   },
