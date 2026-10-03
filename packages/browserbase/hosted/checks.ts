@@ -229,6 +229,68 @@ export const checks = {
     operator: false,
     media: false,
   },
+  "borrowed-attachment": {
+    question: "H4",
+    claim:
+      "A keep-alive session allocated by one process, once detached, is borrowed by a separate process from its durable reference and exact target: the borrower drives the same page and closes without requesting release (ownership borrowed, remote not-owned); the allocating process then reconnects, sees the borrower's change on that page and releases it with remote termination confirmed.",
+    evidence: null,
+    budget: { sessions: 1, browserSeconds: 180, actions: 20, captureSeconds: 0, transferBytes: 0 },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
+  "extension-storage": {
+    question: "H3",
+    claim:
+      "A registered MV3 extension's chrome.storage.local value, written by its content script in a persisting session on a fresh context, is read back by the same extension in a later non-persisting session on that context. Worker restart, other storage areas and flush timing stay open.",
+    evidence: null,
+    budget: {
+      sessions: 2,
+      browserSeconds: 120,
+      actions: 10,
+      captureSeconds: 0,
+      transferBytes: 64 * 1024,
+    },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
+  "platform-session": {
+    question: null,
+    claim:
+      "For one logged session: Live View URLs are issued redacted, the Client's project and its usage decode, the project appears in the key's project list, the session's downloads list answers and, when the provider stored the check's own download, provider-side filters find it, its SHA-256 matches the bytes the page offered and deletion removes it (reported as observed); after release, its CDP logs decode with and without payloads, with entry counts and payload size reported.",
+    evidence: null,
+    budget: {
+      sessions: 1,
+      browserSeconds: 120,
+      actions: 10,
+      captureSeconds: 0,
+      transferBytes: 64 * 1024,
+    },
+    env: ["BROWSERBASE_ARTIFACT_ORIGINS"],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
+  "platform-services": {
+    question: null,
+    claim:
+      "Without a browser session: a webhook endpoint is created with a redacted secret, retrieved, listed, updated, given a rotated redacted secret and deleted; a throwaway CA certificate is registered, retrieved, listed and deleted; the Agents and Functions lists decode; and exactly one Search request and one Fetch of https://example.com/ each return a decoded reply. Agent runs and Function invocations stay unexercised.",
+    evidence: null,
+    budget: {
+      sessions: 0,
+      browserSeconds: 0,
+      actions: 0,
+      captureSeconds: 0,
+      transferBytes: 64 * 1024,
+    },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
 } as const satisfies Record<string, Check>;
 
 export type CheckName = keyof typeof checks;
