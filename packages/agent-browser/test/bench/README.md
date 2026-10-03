@@ -29,12 +29,34 @@ vp run bench report ../../.work/bench/runs/RUN
 | `game-segment`                            | Sustained canvas play, captions, picture cadence and result reaction timing                          | Chromium; Browserbase with explicit fixture tunnels   |
 
 `busy` accepts `--variant created-after`, `created-before` or `resume-after`.
-`--style performed` also measures performed replay; the default style is `plain`.
+`--style performed` applies to typing, canvas-click operability, game segments and
+the busy scene's background plan replay. Drift and contention matrices replay in
+plain style. The default style is `plain`.
+
+Performed input experiments can supply `--motion-profile PATH`, a JSON file of at
+most 64 KiB decoded with the public `effect-browser/plan-data` `MotionProfile`
+schema. The printed plan and retained run settings include the decoded policy;
+the original Page or ToolHost applies it without changing the run's seed, action
+allowance or deadlines. Profiles apply only to performed `busy`, `typing`,
+`game-segment`, or `games-operability --driver canvas-click`; other selections are
+refused before credentials, fixtures or browser allocation.
+
+This permits testing a profile chosen from genuine human motion measurements.
+Supplying a policy file does not establish calibration, human likeness or a tuned
+panel result. Keep measurement-derived settings in the ignored experiment files.
 `games-operability` accepts `--driver dom-twin`, `canvas-keys`, `canvas-click` or
 `agent-tools`; its default `scripted` driver selects the HTML twin. Game segments
 accept `--condition picture` or `digest`, `--max-spins`, `--announce-then-spin` and
 `--air-delay-ms`. The delay is a caption eligibility threshold, not an audio or
 video compositor.
+
+Autonomous game episodes offer `browser_click_at` and `bench_game_press` with a
+single shared input attempt. The key tool accepts one space, `ArrowUp` or
+`ArrowDown` on the original child Frame's already focused canvas. It uses the
+public guarded `Frame.press` operation in plain style, including when the
+segment selects performed execution. The printed plan and metrics qualify this
+keyboard path separately; a supplied motion profile does not pace these keys.
+Input acknowledgement never establishes a game result.
 
 Hosted stage scenes install the same controlled markup and truth binding through
 the original owner's bootstrap. They require no separate fixture server or

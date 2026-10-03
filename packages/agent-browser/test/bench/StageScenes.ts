@@ -7,13 +7,13 @@ import * as Plan from "effect-browser/plan";
 import { hostedUrl, injectedSite, publicOrigin } from "../fixtures/InjectedSite.ts";
 import { stageContent, stageSite, type TruthEvent } from "../fixtures/StageSite.ts";
 import { filming } from "./Backends.ts";
+import { executionStyle, type StyleOptions } from "./ExecutionStyle.ts";
 import * as Picture from "./Picture.ts";
 import { BenchError, type Journal, json } from "./Records.ts";
 
 export const stageScenes = ["smoke", "animation", "busy", "typing", "interstitials"] as const;
 export const busyVariants = ["created-after", "created-before", "resume-after"] as const;
 export type BusyVariant = (typeof busyVariants)[number];
-export type Style = "plain" | "performed";
 
 export interface Stage {
   readonly url: (route: string) => string;
@@ -206,10 +206,9 @@ export const pictureMetrics = (
 export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
   journal: Journal,
   browser: Browser.BrowserSession<OwnerError>,
-  options: {
+  options: StyleOptions & {
     readonly durationMillis: number;
     readonly variant?: BusyVariant;
-    readonly style?: Style;
     readonly stage?: Stage;
   },
 ) {
@@ -222,7 +221,7 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
       message: "Prepare the hosted fixture bootstrap before acquiring the owner.",
     });
   const variant = options.variant ?? "created-after";
-  const style = options.style === "performed" ? { seed: journal.manifest.seed } : "plain";
+  const style = yield* executionStyle(options, journal.manifest.seed);
   const operations: Array<{ operation: string; startedAt: number; endedAt: number }> = [];
   const windows: Record<string, Picture.Interval> = {};
   const changing: Picture.Interval[] = [];

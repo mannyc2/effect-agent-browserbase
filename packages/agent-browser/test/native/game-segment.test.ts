@@ -210,209 +210,222 @@ it.live("real Chromium: retained-frame cap qualifies the later game picture as u
   ).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.live(
-  "real Chromium: supplied driver chooses waits, owns one click, and reads host truth only for later grading",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const site = yield* gameSite({ seed: 2 });
-        let gradingAllowed = false;
+for (const { input, style } of [
+  { input: "point", style: "plain" },
+  { input: "key", style: "plain" },
+] as const) {
+  it.live(
+    `real Chromium: supplied driver ${input}/${style} chooses waits, owns one input, and reads host truth only for later grading`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const site = yield* gameSite({ seed: 2 });
+          let gradingAllowed = false;
 
-        const guardedSite = {
-          ...site,
-          state: (kind: Parameters<typeof site.state>[0]) => {
-            if (!gradingAllowed) throw new Error("Game state read before model episode finished");
+          const guardedSite = {
+            ...site,
+            state: (kind: Parameters<typeof site.state>[0]) => {
+              if (!gradingAllowed) throw new Error("Game state read before model episode finished");
 
-            return site.state(kind);
-          },
-          events: () => {
-            if (!gradingAllowed) throw new Error("Game ledger read before model episode finished");
+              return site.state(kind);
+            },
+            events: () => {
+              if (!gradingAllowed)
+                throw new Error("Game ledger read before model episode finished");
 
-            return site.events();
-          },
-        };
+              return site.events();
+            },
+          };
 
-        const journal = new Journal({
-          version: 1,
-          runId: "segment-autonomous",
-          scene: "game-segment",
-          backend: "chromium",
-          driver: "scripted-injected",
-          sourceRevision: "native-test",
-          sourceDirty: false,
-          trial: 0,
-          seed: 2,
-          viewport: { width: 1280, height: 720 },
-          settings: { autonomous: true },
-          capture: {
-            maxFrames: 1200,
-            maxBytes: 32 * 1024 * 1024,
-            quality: 35,
-            maxDurationMillis: 15000,
-          },
-        });
+          const journal = new Journal({
+            version: 1,
+            runId: "segment-autonomous",
+            scene: "game-segment",
+            backend: "chromium",
+            driver: "scripted-injected",
+            sourceRevision: "native-test",
+            sourceDirty: false,
+            trial: 0,
+            seed: 2,
+            viewport: { width: 1280, height: 720 },
+            settings: { autonomous: true },
+            capture: {
+              maxFrames: 1200,
+              maxBytes: 32 * 1024 * 1024,
+              quality: 35,
+              maxDurationMillis: 15000,
+            },
+          });
 
-        const turns: ReadonlyArray<Turn> = [
-          (request) => {
-            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_click_at");
-            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_press");
+          const turns: ReadonlyArray<Turn> = [
+            (request) => {
+              expect(request.tools.map((tool) => tool.name)).not.toContain("browser_click_at");
+              expect(request.tools.map((tool) => tool.name)).not.toContain("browser_press");
 
-            return call("navigate", "browser_navigate", { url: site.url });
-          },
-          ...lobbyTurns(site.url).slice(1),
-          (request) => {
-            expect(request.tools.map((tool) => tool.name)).toContain("browser_click_at");
-            expect(request.tools.map((tool) => tool.name)).toContain("browser_inspect");
-            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_press");
-            expect(request.tools.map((tool) => tool.name)).not.toContain("browser_type");
+              return call("navigate", "browser_navigate", { url: site.url });
+            },
+            ...lobbyTurns(site.url).slice(1),
+            (request) => {
+              expect(request.tools.map((tool) => tool.name)).toContain("browser_click_at");
+              expect(request.tools.map((tool) => tool.name)).toContain("browser_inspect");
+              expect(request.tools.map((tool) => tool.name)).not.toContain("browser_press");
+              expect(request.tools.map((tool) => tool.name)).not.toContain("browser_type");
+              expect(request.tools.map((tool) => tool.name)).toContain("bench_game_press");
 
-            return call("episode-inspect", "browser_inspect", {});
-          },
-          () => call("spin", "browser_click_at", { x: 975, y: 570 }),
-          () => call("chosen-pause", "bench_pause", { millis: 5000 }),
-          () => {
-            gradingAllowed = true;
+              return call("episode-inspect", "browser_inspect", {});
+            },
+            () =>
+              input === "point"
+                ? call("spin", "browser_click_at", { x: 975, y: 570 })
+                : call("spin-key", "bench_game_press", { key: " " }),
+            () => call("chosen-pause", "bench_pause", { millis: 5000 }),
+            () => {
+              gradingAllowed = true;
 
-            return answer({
-              caption: "Spin one won 500 demo credits.",
-              facts: { spin: 1, balance: 1490, bet: 10, win: 500, notable: "big-win" },
-            });
-          },
-        ];
+              return answer({
+                caption: "Spin one won 500 demo credits.",
+                facts: { spin: 1, balance: 1490, bet: 10, win: 500, notable: "big-win" },
+              });
+            },
+          ];
 
-        let invocation = 0;
+          let invocation = 0;
 
-        const driver: Driver = {
-          ...scripted(journal, turns),
-          provide: (effect) =>
-            scripted(journal, invocation++ === 0 ? turns.slice(0, 8) : turns.slice(8)).provide(
-              effect,
-            ),
-        };
+          const driver: Driver = {
+            ...scripted(journal, turns),
+            provide: (effect) =>
+              scripted(journal, invocation++ === 0 ? turns.slice(0, 8) : turns.slice(8)).provide(
+                effect,
+              ),
+          };
 
-        yield* run(journal, (browser) =>
-          gameSegment(journal, browser, {
-            driver,
-            site: guardedSite,
-            durationMillis: 12000,
-            maxSpins: 1,
-          }),
-        );
+          yield* run(journal, (browser) =>
+            gameSegment(journal, browser, {
+              driver,
+              site: guardedSite,
+              durationMillis: 12000,
+              maxSpins: 1,
+              style,
+            }),
+          );
 
-        const metrics = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({
-            spinsStarted: Schema.Int,
-            spinsCompleted: Schema.Int,
-            episodes: Schema.Int,
-            stopReason: Schema.String,
-            moneyFactAccuracy: Schema.Finite,
-            measured: Schema.String,
-            decisionSource: Schema.String,
-            resultToCaptionMillis: Schema.Struct({ p50: Schema.Finite }),
-            eligibleToAirRate: Schema.Null,
-            withinReceiptAirDelayRate: Schema.Finite,
-          }),
-        )(journal.metrics);
+          const metrics = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              spinsStarted: Schema.Int,
+              spinsCompleted: Schema.Int,
+              episodes: Schema.Int,
+              stopReason: Schema.String,
+              moneyFactAccuracy: Schema.Finite,
+              measured: Schema.String,
+              decisionSource: Schema.String,
+              resultToCaptionMillis: Schema.Struct({ p50: Schema.Finite }),
+              eligibleToAirRate: Schema.Null,
+              withinReceiptAirDelayRate: Schema.Finite,
+            }),
+          )(journal.metrics);
 
-        expect(metrics.spinsStarted).toBe(1);
-        expect(metrics.spinsCompleted).toBe(1);
-        expect(metrics.episodes).toBe(1);
-        expect(metrics.stopReason).toBe("episode-cap");
-        expect(metrics.moneyFactAccuracy).toBe(1);
-        expect(metrics.measured).toBe("supplied-driver-plumbing");
-        expect(metrics.decisionSource).toBe("model-pictures-and-chosen-pauses");
-        expect(metrics.resultToCaptionMillis.p50).toBeGreaterThan(1000);
-        expect(metrics.eligibleToAirRate).toBeNull();
-        expect(metrics.withinReceiptAirDelayRate).toBe(0);
-        expect(journal.snapshot().events.filter((event) => event.kind === "request")).toHaveLength(
-          12,
-        );
-        expect(site.failures()).toEqual([]);
-        expect(journal.ownerClose).toBe("confirmed");
-        expect(journal.cleanup).toBe("confirmed");
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-);
-
-it.live("real Chromium: autonomous episode refuses model calls beyond its terminal-call cap", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const journal = new Journal({
-        version: 1,
-        runId: "segment-model-cap",
-        scene: "game-segment",
-        backend: "chromium",
-        driver: "scripted-injected",
-        sourceRevision: "native-test",
-        sourceDirty: false,
-        trial: 0,
-        seed: 2,
-        viewport: { width: 1280, height: 720 },
-        settings: { modelCallCap: 6 },
-        capture: {
-          maxFrames: 600,
-          maxBytes: 16 * 1024 * 1024,
-          quality: 25,
-          maxDurationMillis: 12000,
-        },
-      });
-
-      let invocation = 0;
-      let finalCallAdmitted = false;
-
-      const driver: Driver = {
-        ...scripted(journal, []),
-        provide: (effect) =>
-          scripted(
-            journal,
-            invocation++ === 0
-              ? [
-                  () =>
-                    answer({
-                      caption: "No navigation is needed for this call-cap test.",
-                      facts: {},
-                    }),
-                ]
-              : [
-                  ...Array.from(
-                    { length: 6 },
-                    (_, index): Turn =>
-                      () =>
-                        call(`pause-${index}`, "bench_pause", { millis: 1 }),
-                  ),
-                  () => {
-                    finalCallAdmitted = true;
-
-                    return answer({
-                      caption: "This seventh episode call must not run.",
-                      facts: {},
-                    });
-                  },
-                ],
-          ).provide(effect),
-      };
-
-      const exit = yield* run(journal, (browser) =>
-        gameSegment(journal, browser, {
-          driver,
-          durationMillis: 10000,
-          maxSpins: 1,
+          expect(metrics.spinsStarted).toBe(1);
+          expect(metrics.spinsCompleted).toBe(1);
+          expect(metrics.episodes).toBe(1);
+          expect(metrics.stopReason).toBe("episode-cap");
+          expect(metrics.moneyFactAccuracy).toBe(1);
+          expect(metrics.measured).toBe("supplied-driver-plumbing");
+          expect(metrics.decisionSource).toBe("model-pictures-and-chosen-pauses");
+          expect(metrics.resultToCaptionMillis.p50).toBeGreaterThan(1000);
+          expect(metrics.eligibleToAirRate).toBeNull();
+          expect(metrics.withinReceiptAirDelayRate).toBe(0);
+          expect(
+            journal.snapshot().events.filter((event) => event.kind === "request"),
+          ).toHaveLength(12);
+          expect(site.failures()).toEqual([]);
+          expect(journal.ownerClose).toBe("confirmed");
+          expect(journal.cleanup).toBe("confirmed");
         }),
-      ).pipe(Effect.exit);
+      ).pipe(Effect.provide(NodeServices.layer)),
+  );
 
-      expect(exit._tag).toBe("Failure");
-      expect(journal.failure).toBe("AgentPolicyError");
-      expect(finalCallAdmitted).toBe(false);
-      // One lobby call plus at most six episode calls, including its possible terminal call.
-      expect(
-        journal.snapshot().events.filter((event) => event.kind === "request").length,
-      ).toBeLessThanOrEqual(7);
-      expect(journal.recording?.nativeStop).toBe("confirmed");
-      expect(journal.ownerClose).toBe("confirmed");
-      expect(journal.cleanup).toBe("confirmed");
-    }),
-  ).pipe(Effect.provide(NodeServices.layer)),
-);
+  it.live(
+    "real Chromium: autonomous episode refuses model calls beyond its terminal-call cap",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const journal = new Journal({
+            version: 1,
+            runId: "segment-model-cap",
+            scene: "game-segment",
+            backend: "chromium",
+            driver: "scripted-injected",
+            sourceRevision: "native-test",
+            sourceDirty: false,
+            trial: 0,
+            seed: 2,
+            viewport: { width: 1280, height: 720 },
+            settings: { modelCallCap: 6 },
+            capture: {
+              maxFrames: 600,
+              maxBytes: 16 * 1024 * 1024,
+              quality: 25,
+              maxDurationMillis: 12000,
+            },
+          });
+
+          let invocation = 0;
+          let finalCallAdmitted = false;
+
+          const driver: Driver = {
+            ...scripted(journal, []),
+            provide: (effect) =>
+              scripted(
+                journal,
+                invocation++ === 0
+                  ? [
+                      () =>
+                        answer({
+                          caption: "No navigation is needed for this call-cap test.",
+                          facts: {},
+                        }),
+                    ]
+                  : [
+                      ...Array.from(
+                        { length: 6 },
+                        (_, index): Turn =>
+                          () =>
+                            call(`pause-${index}`, "bench_pause", { millis: 1 }),
+                      ),
+                      () => {
+                        finalCallAdmitted = true;
+
+                        return answer({
+                          caption: "This seventh episode call must not run.",
+                          facts: {},
+                        });
+                      },
+                    ],
+              ).provide(effect),
+          };
+
+          const exit = yield* run(journal, (browser) =>
+            gameSegment(journal, browser, {
+              driver,
+              durationMillis: 10000,
+              maxSpins: 1,
+            }),
+          ).pipe(Effect.exit);
+
+          expect(exit._tag).toBe("Failure");
+          expect(journal.failure).toBe("AgentPolicyError");
+          expect(finalCallAdmitted).toBe(false);
+          // One lobby call plus at most six episode calls, including its possible terminal call.
+          expect(
+            journal.snapshot().events.filter((event) => event.kind === "request").length,
+          ).toBeLessThanOrEqual(7);
+          expect(journal.recording?.nativeStop).toBe("confirmed");
+          expect(journal.ownerClose).toBe("confirmed");
+          expect(journal.cleanup).toBe("confirmed");
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+  );
+}
 
 it.live(
   "real Chromium: the game AgentRuntime invokes the priced native finish estimator on each model call",
@@ -479,7 +492,13 @@ it.live(
     ).pipe(Effect.provide(NodeServices.layer)),
 );
 
-for (const point of ["first-point-refused", "second-point-refused"] as const) {
+for (const point of [
+  "first-point-refused",
+  "second-point-refused",
+  "first-key-refused",
+  "point-after-key-refused",
+  "key-after-point-refused",
+] as const) {
   it.live(`real Chromium: ${point} consumes one attempt without replay`, () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -514,17 +533,26 @@ for (const point of ["first-point-refused", "second-point-refused"] as const) {
             scripted(
               journal,
               invocation++ === 0
-                ? point === "second-point-refused"
+                ? point !== "first-point-refused" && point !== "first-key-refused"
                   ? lobbyTurns(site.url)
                   : [() => answer({ caption: "Input-admission test.", facts: {} })]
-                : point === "second-point-refused"
+                : point !== "first-point-refused" && point !== "first-key-refused"
                   ? [
-                      () => call("point-first", "browser_click_at", { x: 975, y: 570 }),
+                      () =>
+                        point === "point-after-key-refused"
+                          ? call("key-first", "bench_game_press", { key: " " })
+                          : call("point-first", "browser_click_at", { x: 975, y: 570 }),
                       () => call("chosen-pause", "bench_pause", { millis: 5000 }),
-                      () => call("second-point", "browser_click_at", { x: 975, y: 570 }),
+                      () =>
+                        point === "key-after-point-refused"
+                          ? call("second-key", "bench_game_press", { key: " " })
+                          : call("second-point", "browser_click_at", { x: 975, y: 570 }),
                     ]
                   : [
-                      () => call("refused-point", "browser_click_at", { x: 5000, y: 5000 }),
+                      () =>
+                        point === "first-key-refused"
+                          ? call("refused-key", "bench_game_press", { key: " " })
+                          : call("refused-point", "browser_click_at", { x: 5000, y: 5000 }),
                       () => call("point-after-key", "browser_click_at", { x: 975, y: 570 }),
                       () => {
                         finalCallAdmitted = true;
@@ -549,8 +577,12 @@ for (const point of ["first-point-refused", "second-point-refused"] as const) {
         expect(exit._tag).toBe("Failure");
         expect(journal.failure).toBe("AgentToolAuthorizationDenied");
         expect(finalCallAdmitted).toBe(false);
-        expect(metrics.spinsStarted).toBe(point === "second-point-refused" ? 1 : 0);
-        expect(metrics.spinsCompleted).toBe(point === "second-point-refused" ? 1 : 0);
+        expect(metrics.spinsStarted).toBe(
+          point === "first-point-refused" || point === "first-key-refused" ? 0 : 1,
+        );
+        expect(metrics.spinsCompleted).toBe(
+          point === "first-point-refused" || point === "first-key-refused" ? 0 : 1,
+        );
         expect(site.failures()).toEqual([]);
         expect(journal.ownerClose).toBe("confirmed");
         expect(journal.cleanup).toBe("confirmed");

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import * as Agent from "@yielded/agent/agent";
 import * as AgentRuntime from "@yielded/agent/agent-runtime";
-import { Effect, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import type * as Browser from "effect-browser/browser";
 import { Prompt, Tool, Toolkit } from "effect/ai";
@@ -12,6 +12,8 @@ import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
 import { answer, call, picture, scripted, type Driver, type Turn } from "./Drivers.ts";
+import { executionStyle, type StyleOptions } from "./ExecutionStyle.ts";
+import { gameKeyboardToolkit, makeGameKeyboard } from "./GameKeyboard.ts";
 import { cadence, freezes, measurement, recordingCutoff, type Interval } from "./Picture.ts";
 import { BenchError, json, type Journal, type RecordingFrame, type Usage } from "./Records.ts";
 import * as StepDigest from "./StepDigest.ts";
@@ -29,9 +31,8 @@ export interface SegmentCaption {
     | "truth-delivery-incomplete";
 }
 
-export interface GameSegmentOptions {
+export interface GameSegmentOptions extends StyleOptions {
   readonly durationMillis?: number;
-  readonly style?: "plain" | "performed";
   readonly condition?: "picture" | "digest";
   readonly announceThenSpin?: boolean;
   readonly airDelayMillis?: number;
@@ -78,6 +79,9 @@ export const segmentCallCaps = (maxSpins = 400, announceThenSpin = false) => ({
   episodes: maxSpins,
   inputAttemptsPerEpisode: 1,
   inputTool: "browser_click_at",
+  keyboardTool: "bench_game_press",
+  keyboardKeys: [" ", "ArrowUp", "ArrowDown"],
+  keyboardExecution: "plain",
   actualSpinCap: maxSpins,
   totalModelCalls: 12 + maxSpins * (6 + (announceThenSpin ? 1 : 0)),
 });
@@ -370,6 +374,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
   let pictureCalls = 0;
   let lastSequence = 0n;
   let lastInvocationId: string | null = null;
+  let lastKeyboardReceipt = 0;
   let lastSteps: ReadonlyArray<StepDigest.StepFact> = [];
   let segmentEnded = start;
   let inputAttemptsRemaining = 0;
@@ -377,7 +382,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
 
   const host = yield* BrowserTools.makeHost(browser, page, {
     execution: {
-      style: config.style === "plain" ? "plain" : { seed: journal.manifest.seed },
+      style: yield* executionStyle(options, journal.manifest.seed),
       within: 10000,
     },
     coordinatePolicy: {
@@ -394,10 +399,13 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     lane: { maxOutstanding: 1 },
   });
 
+  const keyboard = makeGameKeyboard(journal, page, site, deadline);
+
   const playTools = BrowserTools.pointToolkit;
 
   const episodeTools = Toolkit.merge(
     playTools,
+    gameKeyboardToolkit,
     Toolkit.make(BrowserTools.toolkit.tools.browser_inspect),
     pauseToolkit,
   );
@@ -476,7 +484,8 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
                       Effect.sync(() => {
                         const name = requested.toolName;
 
-                        if (name !== "browser_click_at") return { _tag: "allowed" } as const;
+                        if (name !== "browser_click_at" && name !== "bench_game_press")
+                          return { _tag: "allowed" } as const;
                         if (journal.elapsedMillis() >= deadline || inputAttemptsRemaining === 0)
                           return {
                             _tag: "denied",
@@ -505,7 +514,11 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
 
                   const projected = yield* StepDigest.fromReceipts(recent);
 
-                  if (projected.length > 0) lastSteps = projected;
+                  const keys = keyboard.facts
+                    .slice(lastKeyboardReceipt)
+                    .flatMap((fact) => fact.steps);
+
+                  if (projected.length > 0 || keys.length > 0) lastSteps = [...projected, ...keys];
 
                   const digest = StepDigest.build({
                     steps: lastSteps,
@@ -530,7 +543,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
             },
           }),
         )
-        .pipe(Effect.provide(pauseHandlers)),
+        .pipe(Effect.provide(Layer.merge(pauseHandlers, keyboard.layer))),
     );
 
     const publishedAt = journal.elapsedMillis();
@@ -565,6 +578,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     journal.append({ kind: "host", turn: null, value: json({ caption }) });
     lastSequence = (yield* page.timeline.snapshot()).newest?.sequence ?? lastSequence;
     lastInvocationId = (yield* host.receipts).receipts.at(-1)?.invocationId ?? lastInvocationId;
+    lastKeyboardReceipt = keyboard.facts.length;
 
     return caption;
   });
@@ -616,7 +630,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
 
         yield* run(
           "result",
-          "Use the current pictures to play exactly one spin. If the game is busy, use bench_pause and browser_inspect for the next picture until SPIN is available. Click the rendered SPIN control once, then choose pauses from the pictures until the reels stop. Finish with a short result caption and facts spin (visible SPIN counter), balance, bet, win (LAST WIN), and notable (the visible Notable label: ordinary, near-miss, big-win, bonus, or losing-streak). This episode admits one point-click attempt. An input acknowledgement does not prove a result.",
+          "Use the current pictures to play exactly one spin. If the game is busy, use bench_pause and browser_inspect for the next picture until SPIN is available. Click the rendered SPIN control once or send one space with bench_game_press to the already focused canvas, then choose pauses from the pictures until the reels stop. Keyboard input is plain even in a performed segment. ArrowUp and ArrowDown change the bet and consume the same attempt. Finish with a short result caption and facts spin (visible SPIN counter), balance, bet, win (LAST WIN), and notable (the visible Notable label: ordinary, near-miss, big-win, bonus, or losing-streak). This episode admits one input attempt shared by point-click and keyboard. An input acknowledgement does not prove a result.",
           [],
           (publishedAt) => {
             if (inputAttemptsRemaining !== 0) return undefined;
@@ -783,6 +797,8 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
                 : "model",
           episodes,
           callCaps,
+          keyboardFacts: keyboard.facts,
+          keyboardExecution: "plain",
           decisionSource:
             options.driver === undefined
               ? "fixture-scripted-scheduling"
