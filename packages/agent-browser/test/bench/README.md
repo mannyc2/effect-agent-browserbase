@@ -1,41 +1,185 @@
 # Watched-browsing bench
 
-Unpublished tools for measuring agent browsing shown in livestreams and films.
-The bench uses the actual browser owner and retained capture, with independent
-fixture truth. It starts with a `smoke` scene: a changing page at 1280×720,
-five seconds of capture, delivered/discarded counts, FPS and inter-frame gap
-p50/p95/max from the host's monotonic receipt clock.
+Unpublished tools for measuring browser activity shown in livestreams and films.
+Scenes use the actual scoped browser owner, retained capture and independent
+fixture truth. They measure picture delivery, canvas game operability, durable
+plan replay, narration accuracy and sustained watched sessions. Results belong
+to the exact source revision and backend recorded with each run.
 
-From `packages/agent-browser`, using the pinned workspace:
+From `packages/agent-browser`, using the pinned workspace. Replace `RUN` with a
+recorded run directory in commands that consume an existing recording:
 
 ```sh
 vp run bench scenes
 vp run bench plan smoke --backend chromium --trials 3
 vp run bench run smoke --backend chromium --trials 3 --out ../../.work/bench/runs
-vp run bench report ../../.work/bench/runs/<run>
+vp run bench report ../../.work/bench/runs/RUN
 ```
+
+## Scenes and hosting
+
+| Scenes                                    | Measurement                                                                                          | Backends                                            |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `smoke`, `animation`                      | Changing-page cadence, gaps and capture cleanup                                                      | Chromium; Browserbase with the fixture bootstrap    |
+| `busy`                                    | On-air animation while another page navigates, observes, takes a picture and replays a recorded plan | Chromium; Browserbase with the fixture bootstrap    |
+| `typing`, `interstitials`                 | Ordered typing and holds; overlays, blank intervals and first frames                                 | Chromium; Browserbase with the fixture bootstrap    |
+| `games-operability`                       | Seeded canvas reels and their HTML twin, including cookie and age gates                              | Chromium; Browserbase with explicit fixture tunnels |
+| `replay-drift`, `replay-contention`       | Fresh-page replay after controlled changes, with landing truth and concurrent picture measurement    | Chromium                                            |
+| `read-table`, `read-game`, `narrate-walk` | Narration facts checked against fixture truth                                                        | Chromium                                            |
+| `game-segment`                            | Sustained canvas play, captions, picture cadence and result reaction timing                          | Chromium; Browserbase with explicit fixture tunnels |
+
+`busy` accepts `--variant created-after`, `created-before` or `resume-after`.
+`--style performed` also measures performed replay; the default style is `plain`.
+`games-operability` accepts `--driver dom-twin`, `canvas-keys`, `canvas-click` or
+`agent-tools`; its default `scripted` driver selects the HTML twin. Game segments
+accept `--condition picture` or `digest`, `--max-spins`, `--announce-then-spin` and
+`--air-delay-ms`. The delay is a caption eligibility threshold, not an audio or
+video compositor.
+
+Hosted stage scenes install the same controlled markup and truth binding through
+the original owner's bootstrap. They require no separate fixture server or
+`--fixture-origin` flag. Hosted game scenes require an explicitly supplied
+`--fixture-tunnels /path/to/cloudflared` executable. Preparation starts two scoped
+quick-tunnel children, validates their distinct HTTPS origins and updates the
+original loopback game ledger before acquiring the browser. The frame and lobby
+origins are qualified as configured cross-origin, operator-prepared origins;
+distinct hostnames alone do not prove distinct public-suffix sites. The bench
+does not install the tunnel executable. Use it within the operator's authorized
+scope for exposing public fixtures.
+
+Hosted replay and narration fixtures are currently rejected before allocation.
+Ordinary acceptance runs do not qualify Browserbase behavior. Hosted runs need
+`EFFECT_AGENT_BROWSERBASE_LIVE=1`, `BROWSERBASE_API_KEY` and
+`BROWSERBASE_PROJECT_ID`. Every run closes its original owner; uncertain
+allocation or unconfirmed release stops subsequent sessions.
+
+## Records and measured intervals
 
 Each run owns a new session and output directory. `record.json` records scene,
 backend, settings, HEAD and whether source was dirty, events, truth, metrics,
 reported model usage, capture metadata and checked cleanup. Source JPEGs remain
 in `frames/`. Source state is evidence, rather than an execution prerequisite.
-The bounded journal and frame sink report loss rather than hiding it.
+The bounded journal, input logger and frame sink report loss. Game input logs
+retain their declared origins and `navigation-tail-unverified` completeness.
 
-Browserbase needs a publicly reachable fixture supplied by `--fixture-origin`,
-`EFFECT_AGENT_BROWSERBASE_LIVE=1`, and the account credentials. Its release is
-recorded without provider identifiers; uncertain allocation or unconfirmed
-release stops further sessions.
+`--duration-ms` is bounded to 100–900,000 ms. The default game segment is ten
+minutes; replay scenes allow fifteen minutes. Capture adds a 30-second margin,
+up to fifteen minutes, and remote session lifetime adds another 60 seconds.
+Retention allows at most 54,000 frames and 1 GiB; short runs use a 64 MiB byte
+bound. `--capture-quality` changes retained JPEG quality, and game segments use a
+lower default than other scenes. These caps bound retained evidence as well as
+work; they do not promise a frame for every display tick.
 
-Every paid run requires the owner's approval of its printed plan. Model runs
-also need `EFFECT_AGENT_BROWSER_BENCH_LIVE=1` and a positive `--max-usd` cap.
-The generic model drivers preserve OpenAI Responses, Anthropic and OpenRouter
-vendor pinning. They allow images. The cap checks reported spend before the
-next request, so a final request can overshoot it; `maxOutputTokens` bounds that
-request's output. Missing usage stops further calls. Rates in records are dated
-operator inputs and estimates, rather than invoices. Models remain Luna-priced
-unless the owner authorizes another comparison.
+Picture metrics use host monotonic delivery time. Capture is change-driven, so a
+still document can send few frames. FPS measures delivered cadence, and does not
+establish transport latency or website audio. Freeze measurements require known
+changing intervals. Blank-frame measurements use bounded local pixel analysis;
+overlay intervals also retain fixture truth. If capture ends or retention reaches
+its frame or byte cap, later picture intervals are partial or unmeasured. A held
+last frame after that cutoff is not evidence of a page freeze. Caption and game
+truth can remain measured after picture retention stops.
 
-Capture is change-driven. A still document sends few frames; FPS is a delivered
-cadence metric and does not establish transport latency or website audio.
-Generated records and media stay ignored under `.work/` or in acceptance artifacts.
-The former nine-case evaluation and its pilots remain in Git history at `1ed8259`.
+## Model input and spend
+
+Paid model runs require the owner's approval of their printed plan,
+`EFFECT_AGENT_BROWSER_BENCH_LIVE=1` and a positive `--max-usd` cap. Authorization
+for included browser sessions does not authorize metered model or service calls.
+Supply `--subject` with an ignored JSON specification using the `Subject` schema
+in [Records.ts](Records.ts). It names the provider, model, gateway, output limit,
+reasoning and service tier, plus dated rates in integer micro-dollars per million
+tokens. Optional `exposure` supplies a dated maximum input allowance and rate
+ceilings for the printed final-request estimate. These are operator-stated
+limits, not a token preflight or provider billing guarantee. Keep selected
+models and run proposals under `.work/bench/specs/`.
+
+The narration matrix combines all three narration scenes and their `picture`,
+`text` and `digest` conditions. `--trials N --matrix` selects nine groups of N
+runs. One `--max-usd` ledger covers the whole invocation, including all matrix
+cells; it is not renewed per cell. Separate invocations have separate caps.
+`--matrix` does not expand game segment variants.
+
+Set `APPROVED_CAP_USD` to the approved positive cap before printing a model plan:
+
+```sh
+vp run bench plan read-table --backend chromium --trials 20 --matrix \
+  --subject ../../.work/bench/specs/subject.json --max-usd "$APPROVED_CAP_USD"
+```
+
+The cap checks estimated spend from reported usage before admitting the next
+request. A final request can exceed it; `maxOutputTokens` bounds output including
+reasoning. Missing usage stops further calls. Use rate ceilings that cover the
+selected provider's input classes and long-context pricing when computing a
+conservative proposal. Recorded estimates are not invoices. Candidate models
+stay Luna-priced unless the owner authorizes another comparison.
+
+The drivers preserve OpenAI Responses, Anthropic and OpenRouter vendor pinning.
+They capture a new viewport PNG before every model call, including calls after
+tool execution, and load it as transient context rather than accumulating old
+pictures in history. `--picture-scale half` is the default; `full` preserves the
+viewport image. The context states the conversion to main-viewport CSS pixels.
+Narration `text` includes up to 4,000 UTF-8 bytes of page text; `digest` adds
+host-authored action, outcome and timeline facts. Scripted answers verify the
+plumbing and graders, and do not measure a real model's accuracy or cost.
+
+## Film, motion and blind clips
+
+These commands consume retained files after the browser has closed. They need
+local `ffmpeg` and `ffprobe`; they do not allocate another browser or call a model.
+
+```sh
+vp run bench film ../../.work/bench/runs/RUN
+vp run bench motion ../../.work/bench/candidate-input.json \
+  --human ../../.work/bench/human-input.json
+vp run bench clip ../../.work/bench/runs/RUN/film/raw.mp4 \
+  --samples ../../.work/bench/cursor-samples.json --out ../../.work/bench/clip
+```
+
+`film` creates raw and commentary MP4s, captions and timing metadata from the
+retained JPEG interval. `motion` accepts arrays of `InputEvent`, such as the
+`events` array of an input-log snapshot. It reports sampled movement, dwell,
+keyboard, scroll and idle statistics; `--human` adds empirical KS distances and
+sample counts. DOM target width supports a Fitts index; canvas target width is
+unavailable. Untrusted events and frame-local coordinates do not become measured
+main-viewport pointer paths.
+
+`clip` accepts `CursorSample[]`. [Clip.ts](Clip.ts) supplies conversions from
+trusted input logs or a timeline with an explicit clock bridge. Native samples,
+commanded points and intended schedules keep their separate qualifications.
+Intended glides are not measured physical paths. The renderer applies the same
+cursor and press artwork to each arm, strips audio and metadata, and verifies
+geometry, duration and complete decode. Clips are at most fifteen seconds.
+
+Prepare an ignored panel specification containing `{seed, clips:[{arm,path}]}`,
+where each arm is `human`, `plain`, `performed` or `tuned`:
+
+```sh
+vp run bench panel prepare ../../.work/bench/panel-spec.json --out ../../.work/bench/panel
+vp run bench panel serve ../../.work/bench/panel --port 4112
+vp run bench panel report ../../.work/bench/panel
+```
+
+Preparation copies bounded clips under anonymous names and records checksums.
+The server shows only anonymous clip URLs and stores person-or-bot guesses and
+naturalness ratings in `ratings.json`; duplicate rater/clip answers are refused.
+The CLI prints the mirrored HTTPS URL returned by `dev-url`. Reports retain
+participating rater counts and intervals over independent rater means. Empty or
+partial ratings remain identified as such.
+
+## Human comparison
+
+[HumanReference.ts](HumanReference.ts) supplies a scoped Live View operator
+protocol, not an unattended CLI scene. Only its terminal-side callback receives
+bearer Live View URLs. It requires an explicit operator release message before
+resume; a timeout is a failed protocol, not release.
+
+The current browser handoff stops capture and pauses binding admission before
+operator control. The helper therefore records `humanFootage: "unavailable"`
+and `panelEligible: false`; retained pre-handoff frames and incomplete operator
+input are not a human reference. A supported capture or recording path covering
+operator control is still needed, followed by the user's actual reference
+footage and real panel ratings. Synthetic logs and operator-protocol fixtures
+verify contracts, and do not establish human likeness or justify a tuned profile.
+
+Generated records, specifications, panel data and media stay ignored under
+`.work/` or in acceptance artifacts. The former nine-case evaluation and its
+pilots remain in Git history at `1ed8259`.
