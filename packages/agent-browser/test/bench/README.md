@@ -169,16 +169,28 @@ partial ratings remain identified as such.
 
 [HumanReference.ts](HumanReference.ts) supplies a scoped Live View operator
 protocol, not an unattended CLI scene. Only its terminal-side callback receives
-bearer Live View URLs. It requires an explicit operator release message before
-resume; a timeout is a failed protocol, not release.
+redacted bearer Live View URLs. Both modes require an explicit operator release
+message; a timeout or cancellation closes the original owner and records failure.
 
-The current browser handoff stops capture and pauses binding admission before
-operator control. The helper therefore records `humanFootage: "unavailable"`
-and `panelEligible: false`; retained pre-handoff frames and incomplete operator
-input are not a human reference. A supported capture or recording path covering
-operator control is still needed, followed by the user's actual reference
-footage and real panel ratings. Synthetic logs and operator-protocol fixtures
-verify contracts, and do not establish human likeness or justify a tuned profile.
+The `reference` handoff mode stops capture and pauses binding admission before
+operator control, then resumes with fresh Pages after release. It records
+`humanFootage: "unavailable"` and `panelEligible: false` for that capture gap.
+
+The separate `operatorOnlyReference` mode issues `browser.liveView` while
+capture and the origin-limited input binding remain active on the exact on-air
+Page. The host runs no automation or model calls during operator control and
+closes the original owner after release. This is an operator-only host protocol;
+it does not pause browser admission or grant a handoff token. The optional
+`openOperatorOnlyReference` helper permits only its initial navigation.
+
+Retained operator footage includes the complete captured scene, native input
+samples and cursor timing against the browser-reported shared Unix epoch. Known
+capture or input loss, incomplete capture and protocol failures prevent panel
+eligibility. Upstream frame loss remains unknown, navigation tails are unverified
+and the shared epoch is not an independent clock calibration. Unpaid protocol
+fixtures always remain panel-ineligible. Actual owner-operated Browserbase
+reference tasks, matched agent clips and real panel ratings are still outstanding;
+synthetic logs cannot establish human likeness or justify a tuned profile.
 
 Generated records, specifications, panel data and media stay ignored under
 `.work/` or in acceptance artifacts. The former nine-case evaluation and its

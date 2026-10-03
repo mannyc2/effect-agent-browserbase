@@ -29,6 +29,9 @@ it.live(
             Effect.gen(function* () {
               const frame = yield* enterGame(browser.initialPage, site, "reels");
 
+              // Match model turns: wait for the current on-air PNG before the first native input.
+              yield* browser.initialPage.screenshot({ fullPage: false });
+
               yield* frame.pointerMove({ to: { x: 600, y: 400 } });
               yield* frame.press({ key: " ", into: "#game-canvas" });
               for (let attempt = 0; attempt < 100; attempt++) {

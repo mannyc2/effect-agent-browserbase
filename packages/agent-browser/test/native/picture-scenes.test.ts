@@ -83,9 +83,15 @@ it.live("hosted stage bootstrap reports independent truth through the real provi
 
     const stage = yield* prepareStage(journal, new URL(fixture.url).origin);
 
+    // The bb97eaf fixed 100 ms snapshot misses delayed final input callbacks.
+    const delayedStage = {
+      ...stage,
+      events: () => stage.events().filter((event) => journal.elapsedMillis() - event.at >= 500),
+    };
+
     yield* run(
       journal,
-      (browser) => stageScene(journal, browser, { stage, durationMillis: 1000 }),
+      (browser) => stageScene(journal, browser, { stage: delayedStage, durationMillis: 1000 }),
       undefined,
       localBrowserbase(fixture),
       stage.bootstrap,

@@ -135,6 +135,44 @@ const tunnel = Effect.fnUntraced(function* (
   return { url, handle };
 });
 
+/** Unpublished host helper for one explicitly authorized loopback fixture exposure. */
+export const prepareFixtureTunnel = Effect.fn("Bench.prepareFixtureTunnel")(function* (
+  localUrl: string,
+  options: { readonly executable: string; readonly startupTimeoutMillis?: number },
+) {
+  const config = yield* Schema.decodeEffect(Options)({
+    executable: options.executable,
+    startupTimeoutMillis: options.startupTimeoutMillis ?? 30000,
+  }).pipe(
+    Effect.mapError((cause) => refuse("tunnel options", "Invalid fixture tunnel options.", cause)),
+  );
+
+  const address = yield* Effect.try({
+    try: () => new URL(localUrl),
+    catch: (cause) => refuse("fixture URL", "Invalid loopback fixture URL.", cause),
+  });
+
+  if (
+    address.protocol !== "http:" ||
+    !["127.0.0.1", "localhost"].includes(address.hostname) ||
+    address.username !== "" ||
+    address.password !== "" ||
+    address.pathname !== "/" ||
+    address.search !== "" ||
+    address.hash !== ""
+  )
+    return yield* refuse("fixture URL", "Fixture exposure requires a plain loopback origin.");
+
+  const prepared = yield* tunnel(
+    resolve(config.executable),
+    address.origin,
+    address.host,
+    config.startupTimeoutMillis,
+  );
+
+  return { url: prepared.url };
+});
+
 export interface PreparedHostedGames {
   readonly site: GameSite;
   readonly publicUrls: PublicOrigins;

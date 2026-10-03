@@ -286,13 +286,30 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
         );
         const duration = journal.elapsedMillis() - before;
 
-        yield* Effect.sleep(100);
+        const readKeys = () =>
+          site.events().flatMap((event) => {
+            const decoded = Schema.decodeUnknownExit(key)(event.data);
 
-        const keys = site.events().flatMap((event) => {
-          const decoded = Schema.decodeUnknownExit(key)(event.data);
+            return decoded._tag === "Success" ? [decoded.value] : [];
+          });
 
-          return decoded._tag === "Success" ? [decoded.value] : [];
-        });
+        const confirmationStart = journal.elapsedMillis();
+        let keys = readKeys();
+        let input = keys.findLast((event) => event.kind === "input");
+
+        while (input?.value !== value) {
+          const remaining = 3000 - (journal.elapsedMillis() - confirmationStart);
+
+          if (remaining <= 0) break;
+          yield* Effect.sleep(Math.min(25, remaining));
+          keys = readKeys();
+          input = keys.findLast((event) => event.kind === "input");
+        }
+
+        const confirmation =
+          input === undefined ? "missing" : input.value === value ? "confirmed" : "partial";
+
+        const confirmationWaitMillis = journal.elapsedMillis() - confirmationStart;
 
         const down = new Map<string, number>();
         const holds: number[] = [];
@@ -313,7 +330,11 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
         }
         typing = json({
           characters: value.length,
-          exactValue: keys.filter((event) => event.kind === "input").at(-1)?.value === value,
+          exactValue: confirmation === "confirmed",
+          confirmation,
+          confirmationWaitMillis,
+          reportedCharacters: input?.value.length ?? null,
+          inputEvents: keys.filter((event) => event.kind === "input").length,
           durationMillis: duration,
           charactersPerSecond: (value.length * 1000) / duration,
           within15Seconds: duration <= 15000,
