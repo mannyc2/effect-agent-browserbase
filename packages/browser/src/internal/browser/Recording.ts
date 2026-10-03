@@ -74,6 +74,7 @@ export const actionTargets = (action: Action): ReadonlyArray<ActionTargetPath> =
         ? [{ target: action.mode.target, path: ["mode", "target"], captureInitial: true }]
         : [];
     case "Navigate":
+    case "PointerClick":
     case "PointerMove":
     case "Wheel":
       return [];
@@ -101,6 +102,7 @@ const inputPaths = (action: Action): ReadonlyArray<InputPath> => {
     case "Click":
     case "Hover":
     case "Navigate":
+    case "PointerClick":
     case "PointerMove":
     case "Press":
     case "Scroll":
@@ -340,6 +342,7 @@ export const capture = (
           ? { ...action, mode: { ...action.mode, target: target(["mode", "target"]) } }
           : action;
       case "Navigate":
+      case "PointerClick":
       case "PointerMove":
       case "Wheel":
         return action;

@@ -19,28 +19,31 @@ export const TruthEvent = Schema.Struct({
 
 export type TruthEvent = typeof TruthEvent.Type;
 
+const content = (markup: string, script: string) => ({ markup, script });
+
 const html = (body: string, script: string) =>
   `<!doctype html><meta charset=utf-8><title>Watched browsing stage</title>${body}<script>const report=data=>{void fetch('/truth',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({route:location.pathname,data})});};${script}</script>`;
 
-export const stagePage = (route: string, delayMillis = 500) => {
-  if (route === "/animation" || route === "/smoke") return html(animationMarkup, animationScript);
+export const stageContent = (route: string, delayMillis = 500) => {
+  if (route === "/animation" || route === "/smoke")
+    return { markup: animationMarkup, script: animationScript };
   if (route === "/heavy")
-    return html(
-      `<h1>Reading room</h1><button id="next">Next</button><input id="search" aria-label="Search"><button id="finish">Finish</button>${Array.from({ length: 20000 }, (_, i) => `<p>Entry ${i}: independent background reading.</p>`).join("")}`,
-      `document.querySelector('#next').onclick=()=>report({kind:'next'});document.querySelector('#finish').onclick=()=>report({kind:'finish'});`,
+    return content(
+      `<h1>Reading room</h1><button id="next">Next</button><input id="search" aria-label="Search"><button id="finish">Finish</button><main id="entries"></main>`,
+      `document.querySelector('#entries').innerHTML=Array.from({length:19900},(_,i)=>'<p>Entry '+i+': independent background reading.</p>').join('');document.querySelector('#next').onclick=()=>report({kind:'next'});document.querySelector('#finish').onclick=()=>report({kind:'finish'});`,
     );
   if (route === "/typing")
-    return html(
+    return content(
       '<h1>Search</h1><input id="search" aria-label="Search">',
       `for(const kind of ['keydown','keyup','input'])document.addEventListener(kind,event=>report({kind,key:event.key??'',value:document.querySelector('#search').value,pageAt:performance.now()}));`,
     );
   if (route === "/slow")
-    return html(
+    return content(
       '<style>body{margin:0}</style><main id="content" hidden><h1>Page ready</h1></main>',
       `report({kind:'blank',shown:true});setTimeout(()=>{document.querySelector('#content').hidden=false;report({kind:'blank',shown:false});},${delayMillis});`,
     );
   if (route === "/blocked")
-    return html(
+    return content(
       "<h1>Access unavailable</h1><p>Fixture access wall</p>",
       "report({kind:'blocked',shown:true});",
     );
@@ -52,13 +55,19 @@ export const stagePage = (route: string, delayMillis = 500) => {
           ? "I am 18 or older"
           : "Dismiss newsletter";
 
-    return html(
+    return content(
       `<h1>Page content</h1><section id="overlay" style="position:fixed;inset:0;background:#ddd;padding:80px"><h2>${label}</h2><button id="dismiss">${label}</button></section>`,
       `report({kind:'overlay',shown:true});document.querySelector('#dismiss').onclick=()=>{document.querySelector('#overlay').remove();report({kind:'overlay',shown:false});};`,
     );
   }
 
-  return html("<h1>Stage</h1>", "");
+  return content("<h1>Stage</h1>", "");
+};
+
+export const stagePage = (route: string, delayMillis = 500) => {
+  const page = stageContent(route, delayMillis);
+
+  return html(page.markup, page.script);
 };
 
 /** Loopback truth is host-owned and bounded; pages report only synthetic fixture events. */

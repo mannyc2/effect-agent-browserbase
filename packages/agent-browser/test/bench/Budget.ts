@@ -85,6 +85,18 @@ export class Allowance {
   settle(usage: Pick<Response.Usage, "inputTokens" | "outputTokens">): number {
     this.#inFlight = false;
 
+    const unavailable = () => {
+      this.#unknown = true;
+      this.ledger.halted = true;
+
+      return 0;
+    };
+
+    const counts = [...Object.values(usage.inputTokens), ...Object.values(usage.outputTokens)];
+
+    if (counts.some((count) => count !== undefined && (!Number.isSafeInteger(count) || count < 0)))
+      return unavailable();
+
     const input =
       usage.inputTokens.total ??
       (usage.inputTokens.uncached === undefined
@@ -100,22 +112,42 @@ export class Allowance {
         : usage.outputTokens.text + (usage.outputTokens.reasoning ?? 0));
 
     if (input === undefined || output === undefined) {
-      this.#unknown = true;
-      this.ledger.halted = true;
-
-      return 0;
+      return unavailable();
     }
     const read = usage.inputTokens.cacheRead ?? 0;
     const write = usage.inputTokens.cacheWrite ?? 0;
     const rates = this.options.rates;
+    const prices = [rates.input, rates.cacheRead, rates.cacheWrite, rates.output];
 
-    const cost = Math.ceil(
-      (Math.max(0, input - read - write) * rates.input +
-        read * rates.cacheRead +
-        write * rates.cacheWrite +
-        output * rates.output) /
-        1_000_000,
-    );
+    if (
+      !Number.isSafeInteger(input) ||
+      !Number.isSafeInteger(output) ||
+      read + write > input ||
+      (usage.inputTokens.uncached ?? 0) + read + write > input ||
+      (usage.outputTokens.text ?? 0) + (usage.outputTokens.reasoning ?? 0) > output ||
+      prices.some((price) => !Number.isSafeInteger(price) || price < 0)
+    )
+      return unavailable();
+
+    const priced =
+      BigInt(input - read - write) * BigInt(rates.input) +
+      BigInt(read) * BigInt(rates.cacheRead) +
+      BigInt(write) * BigInt(rates.cacheWrite) +
+      BigInt(output) * BigInt(rates.output);
+
+    const cost = Number((priced + 999999n) / 1000000n);
+
+    if (
+      !Number.isSafeInteger(cost) ||
+      !Number.isSafeInteger(this.#cost + cost) ||
+      !Number.isSafeInteger(this.ledger.spentMicrousd + cost) ||
+      !Number.isSafeInteger(this.#tokens.input + input) ||
+      !Number.isSafeInteger(this.#tokens.cacheRead + read) ||
+      !Number.isSafeInteger(this.#tokens.cacheWrite + write) ||
+      !Number.isSafeInteger(this.#tokens.output + output) ||
+      !Number.isSafeInteger(this.#tokens.reasoning + (usage.outputTokens.reasoning ?? 0))
+    )
+      return unavailable();
 
     this.#settled++;
     this.#cost += cost;

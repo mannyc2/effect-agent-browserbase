@@ -1,9 +1,11 @@
 import type { ScriptedStreamPart } from "@effect-agent/testing/scripted-model";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Schema, Stream, type Tracer } from "effect";
 import * as InMemory from "effect-agent/in-memory";
 import type { RunCostEstimator } from "effect-agent/run-options";
+import type { Page } from "effect-browser/browser";
 import { AiError, LanguageModel, Model, Prompt } from "effect/unstable/ai";
 
+import { resize } from "./Images.ts";
 import { type Journal, type Usage, json, requestData } from "./Records.ts";
 
 export type Turn = (request: LanguageModel.ProviderOptions) => ReadonlyArray<ScriptedStreamPart>;
@@ -40,7 +42,7 @@ const modelError = () =>
   });
 
 /** This is the scripted provider seam, not an HTTP payload or a real-model measurement. */
-export const model = (journal: Journal, turns: ReadonlyArray<Turn>) =>
+export const model = (journal: Journal, turns: ReadonlyArray<Turn>, spans: Tracer.Span[] = []) =>
   Layer.mergeAll(
     InMemory.layer,
     Layer.succeed(Model.ProviderName, "scripted"),
@@ -56,6 +58,8 @@ export const model = (journal: Journal, turns: ReadonlyArray<Turn>) =>
             Stream.unwrap(
               Effect.gen(function* () {
                 const index = turn++;
+
+                if (spans.length < 2000) spans.push(request.span);
 
                 journal.append({ kind: "request", turn: index, value: requestData(request) });
                 const script = turns[index];
@@ -101,11 +105,49 @@ export interface Driver {
   readonly estimate: RunCostEstimator | undefined;
   /** Spend facts once the run ends, including any unavailable usage; null for a script. */
   readonly finish: () => Usage | null;
+  readonly callLatencies?: () => ReadonlyArray<number>;
 }
 
-export const scripted = (journal: Journal, turns: ReadonlyArray<Turn>): Driver => ({
-  provide: (effect) => Effect.provide(effect, model(journal, turns)),
-  history: history(journal),
-  estimate: undefined,
-  finish: () => null,
+/** Host-only span references are projected after completion; no native span enters a record. */
+export const latencies = (spans: ReadonlyArray<Tracer.Span>) =>
+  spans.flatMap((span) =>
+    span.status._tag === "Ended" ? [Number(span.status.endTime - span.status.startTime) / 1e6] : [],
+  );
+
+export const scripted = (journal: Journal, turns: ReadonlyArray<Turn>): Driver => {
+  const spans: Tracer.Span[] = [];
+
+  return {
+    provide: (effect) => Effect.provide(effect, model(journal, turns, spans)),
+    history: history(journal),
+    estimate: undefined,
+    finish: () => null,
+    callLatencies: () => latencies(spans),
+  };
+};
+
+/** Per-turn images are transient references; they never accumulate in conversation history. */
+export const picture = (
+  page: Page,
+  options: { readonly every: "call"; readonly scale: 0.5 | 1 },
+) => ({
+  load: () =>
+    Effect.gen(function* () {
+      const screenshot = yield* page.screenshot({ fullPage: false });
+      const bytes = yield* resize(screenshot.bytes, options.scale);
+
+      return Prompt.make([
+        Prompt.makeMessage("user", {
+          content: [
+            Prompt.makePart("text", {
+              text: `Current viewport PNG at ${options.scale} scale. Multiply pictured coordinates by ${1 / options.scale} to obtain main-viewport CSS pixels.`,
+            }),
+            Prompt.makePart("file", {
+              mediaType: "image/png",
+              data: Buffer.from(bytes).toString("base64"),
+            }),
+          ],
+        }),
+      ]);
+    }),
 });

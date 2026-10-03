@@ -551,6 +551,15 @@ export class PointerMoveRequest extends Schema.Class<PointerMoveRequest>(
   "BrowserPointerMoveRequest",
 )({ to: ViewportPoint }) {}
 
+/** Press at a main-viewport CSS pixel point, without requiring a DOM control there. */
+export class PointerClickRequest extends Schema.Class<PointerClickRequest>(
+  "BrowserPointerClickRequest",
+)({
+  ...ViewportPoint.fields,
+  button: Schema.optionalKey(Schema.Literals(["left", "right"])),
+  clickCount: Schema.optionalKey(Schema.Literals([1, 2])),
+}) {}
+
 /** Moves the pointer onto one exact element where it is. It never scrolls to reach it. */
 export class HoverRequest extends Schema.Class<HoverRequest>("BrowserHoverRequest")({
   selector: Selector,
@@ -667,6 +676,10 @@ export class InputReceipt extends Schema.Class<InputReceipt>("BrowserInputReceip
   target: Target,
   kind: Schema.Literals(["pointer-move", "hover", "wheel", "click", "press", "type"]),
   position: Schema.NullOr(ViewportPoint),
+  /** Host-only native hit-test facts; a sample, never exact-node admission or authority. */
+  hitTest: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ backendNodeId: Schema.Int, frameId: Identifier })),
+  ),
   intended: Schema.optionalKey(
     Schema.Struct({
       position: ViewportPoint,

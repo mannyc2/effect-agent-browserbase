@@ -30,13 +30,13 @@ export type Commentary = typeof Commentary.Type;
 
 const Input = Schema.Struct({
   outputDirectory: Schema.NonEmptyString,
-  frames: Schema.Array(Frame).check(Schema.isMinLength(1), Schema.isMaxLength(36000)),
-  commentary: Schema.Array(Commentary).check(Schema.isMaxLength(64)),
+  frames: Schema.Array(Frame).check(Schema.isMinLength(1), Schema.isMaxLength(54000)),
+  commentary: Schema.Array(Commentary).check(Schema.isMaxLength(2048)),
   startedAt: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   endedAt: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 900_000 })),
-  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 36000 })),
-  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 512 * 1024 * 1024 })),
+  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 54000 })),
+  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1024 * 1024 * 1024 })),
   label: Schema.String.check(Schema.isMaxLength(256)),
 });
 
@@ -132,7 +132,7 @@ const processResult = Effect.fnUntraced(
   },
   Effect.scoped,
   Effect.timeoutOrElse({
-    duration: "90 seconds",
+    duration: "15 minutes",
     orElse: () => Effect.fail(refuse("encoder", "Encoder exceeded its time bound.")),
   }),
 );
@@ -339,7 +339,7 @@ export const encode = Effect.fn("BenchVideo.encode")(function* (
           "first host receipt anchors source intervals; final image held through host run end",
         transportLatency: "unknown",
         audio: "none",
-        selection: "all retained frames and all delivered captions",
+        selection: "all retained frames and delivered captions within that interval",
         rendering:
           "source intervals presented at 25 FPS with repeated still images; this is not native capture FPS",
         sourceBytes: totalBytes,

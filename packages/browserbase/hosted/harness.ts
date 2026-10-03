@@ -10,7 +10,12 @@ import { Effect, Layer, Redacted } from "effect";
 import { type OpenOptions } from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Account from "effect-browserbase/account";
-import { BrowserbaseBrowser, type BrowserOptions } from "effect-browserbase/browser";
+import {
+  BrowserbaseBrowser,
+  type AttachRequest,
+  type BrowserOptions,
+} from "effect-browserbase/browser";
+import type { SessionReference } from "effect-browserbase/references";
 
 import { ceiling, checks, type CheckName } from "./checks.ts";
 
@@ -90,12 +95,14 @@ export const hostedCase = (name: CheckName) => {
     requestTimeoutMillis: 15_000,
   });
 
-  const policy = BrowserPolicy.make({
-    network: { _tag: "Unrestricted" },
-    maxActions: budget.actions,
-    maxElapsedMillis: budget.browserSeconds * 1000,
-    maxReturnedBytes: 2 * 1024 * 1024,
-  });
+  // Built when connecting: a session-less check's zero budgets are not policy bounds.
+  const policy = () =>
+    BrowserPolicy.make({
+      network: { _tag: "Unrestricted" },
+      maxActions: budget.actions,
+      maxElapsedMillis: budget.browserSeconds * 1000,
+      maxReturnedBytes: 2 * 1024 * 1024,
+    });
 
   let opened = 0;
 
@@ -127,9 +134,21 @@ export const hostedCase = (name: CheckName) => {
           return yield* Effect.die(`The ${name} check is budgeted for ${budget.sessions} sessions`);
         }
         opened += 1;
-        const session = yield* (yield* BrowserbaseBrowser).open(policy, options);
+        const session = yield* (yield* BrowserbaseBrowser).open(policy(), options);
 
         yield* report("allocated", session.reference);
+
+        return session;
+      }),
+    /** Borrow another process's allocation through the same account and policy bounds. */
+    borrow: (reference: SessionReference, request: Omit<AttachRequest, "policy"> = {}) =>
+      Effect.gen(function* () {
+        const session = yield* (yield* BrowserbaseBrowser).attach(reference, {
+          ...request,
+          policy: policy(),
+        });
+
+        yield* report("attached", session.reference);
 
         return session;
       }),

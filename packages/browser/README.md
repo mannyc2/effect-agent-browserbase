@@ -372,7 +372,7 @@ settled/containment outcomes and capture references. A dispatch means handoff to
 implementation; acknowledgement means native completion. A performed preparatory or burst reply
 carries `acknowledgement: { subphase, logicalComplete }`; only an acknowledgement without that
 fact, or with `logicalComplete: true`, completed logical input. Later follow-up failure remains
-separate. Key events contain counts and their units, never text. Individual pointer commands
+separate. Key events contain counts and their units, never text. Individual pointer actions
 are `Pointer` events; `Glide` is reserved for an actual bounded intended schedule. Capture IDs,
 interval-local frame sequences and boundary attribution refer to the original capture; no
 frame bytes enter the journal. `FirstFrame` means first accepted received frame after a
@@ -549,6 +549,29 @@ even while another page is selected. IDs are opaque and connection-specific; con
 inspection result rather than predicting serials. Attachment, identity and fresh-state checks at
 dispatch remain necessary even when the last input targeted a different page.
 
+### Input at a viewport point
+
+`page.pointerClick({ x, y, button?, clickCount? }, options)` presses at a point in the
+main viewport, in CSS pixels. `button` defaults to `"left"` and accepts `"right"`;
+`clickCount` defaults to 1 and accepts 2. The same coordinates apply through an issued
+Frame: they are never relative to that Frame. This reaches canvas apps, maps, games
+and editors without requiring an observed DOM control. Points outside the current
+viewport are refused before input, and the browser chooses what is under the point.
+
+The action shares its Page's budget, permit, observation retirement and unresolved
+mutation containment. It moves once, then sends down/up for each click. Its receipt's
+`position` is the actual commanded point. Optional `hitTest` is a host-only sample of
+the native node under it, never a node reference or admission guarantee.
+
+A host can set `coordinatePolicy: { admit(point) }` in the method's options, Plan run
+options or Tool handler options. This synchronous callback receives the frozen raw
+point under the Page's permit; false or a throw refuses input. The exact-node `policy`
+still applies to element actions and does not admit or refuse coordinate actions.
+
+Plan action `{ _tag: "PointerClick", at: { x, y }, button?, clickCount? }` supports plain
+and performed styles and records raw coordinates. Stored coordinates suit fixed
+layouts; replay does not relocate a changed canvas region or resolve a DOM descriptor.
+
 ### Performed plans and absolute starts
 
 `page.run(plan, { style: {} })` uses the named default performed profile; omitted style or
@@ -564,7 +587,10 @@ The pointer timing uses a chosen bounded Shannon-form policy for measured target
 coordinates use a chosen bounded distance policy. The fifth-order progress polynomial gives zero
 endpoint velocity/acceleration; applying it to a curved policy path does not claim globally minimum
 Cartesian jerk. Constants are library policy, not calibrated human guarantees. Scheduled glides are
-output-only compositor metadata: they do not generate hover along the drawn path. Exact native hit
+output-only compositor metadata by default. `motion.sendPath: true` sends their bounded
+intermediate pointer moves at the schedule's offsets, pipelining replies instead of
+waiting for each move; native delivery and replies can still stretch the schedule.
+These moves generate real hover events along the path and can change the page. Exact native hit
 checks and selected node identity remain required immediately before real input. A missing actual
 click position stays null even when an intended aim is retained.
 

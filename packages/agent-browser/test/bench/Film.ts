@@ -2,8 +2,37 @@ import { join, resolve } from "node:path";
 
 import { Effect, FileSystem, Schema } from "effect";
 
-import { BenchError, load } from "./Records.ts";
-import { encode, Frame } from "./Video.ts";
+import { BenchError, load, type Event } from "./Records.ts";
+import { encode, Frame, type Commentary } from "./Video.ts";
+
+const Published = Schema.Struct({
+  output: Schema.Struct({ caption: Schema.String.check(Schema.isMaxLength(1024)) }),
+});
+
+const Segment = Schema.Struct({
+  caption: Schema.Struct({ atMillis: Schema.Finite, kind: Schema.String, ...Published.fields }),
+});
+
+/** Use publication times; captions do not reach backward to their narrated result. */
+export const commentary = (events: ReadonlyArray<Event>): ReadonlyArray<Commentary> =>
+  events.flatMap((event) => {
+    if (event.kind !== "host") return [];
+    const segment = Schema.decodeUnknownExit(Segment)(event.value);
+
+    if (segment._tag === "Success")
+      return [
+        {
+          at: segment.value.caption.atMillis,
+          label: segment.value.caption.kind,
+          caption: segment.value.caption.output.caption,
+        },
+      ];
+    const sample = Schema.decodeUnknownExit(Published)(event.value);
+
+    return sample._tag === "Success"
+      ? [{ at: event.at, label: "narration", caption: sample.value.output.caption }]
+      : [];
+  });
 
 const Metadata = Schema.Struct({
   path: Schema.String.check(Schema.isPattern(/^frames\/frame-\d{6}\.jpg$/)),
@@ -22,8 +51,27 @@ const Metadata = Schema.Struct({
 const Capture = Schema.Struct({
   startedAt: Schema.Finite,
   endedAt: Schema.Finite,
-  frames: Schema.Array(Metadata).check(Schema.isMaxLength(36000)),
+  captureEndedAt: Schema.optionalKey(Schema.Finite),
+  limitReached: Schema.optionalKey(Schema.NullOr(Schema.Literals(["frames", "bytes"]))),
+  frames: Schema.Array(Metadata).check(Schema.isMaxLength(54000)),
 });
+
+export const retainedEnd = (capture: {
+  readonly startedAt: number;
+  readonly endedAt: number;
+  readonly captureEndedAt?: number;
+  readonly limitReached?: "frames" | "bytes" | null;
+  readonly frames: ReadonlyArray<{ readonly receivedAt: number }>;
+}) =>
+  Math.max(
+    capture.startedAt,
+    Math.min(
+      capture.endedAt,
+      capture.limitReached === "frames" || capture.limitReached === "bytes"
+        ? (capture.frames.at(-1)?.receivedAt ?? capture.startedAt)
+        : (capture.captureEndedAt ?? capture.endedAt),
+    ),
+  );
 
 /** Render only the retained interval after its session has closed. Never reacquire a browser. */
 export const film = Effect.fn("Bench.film")(function* (directory: string) {
@@ -32,6 +80,7 @@ export const film = Effect.fn("Bench.film")(function* (directory: string) {
   const fs = yield* FileSystem.FileSystem;
   const frames = [];
   let totalBytes = 0;
+  const endedAt = retainedEnd(capture);
 
   for (const frame of capture.frames) {
     const bytes = yield* fs.readFile(join(directory, frame.path));
@@ -49,8 +98,11 @@ export const film = Effect.fn("Bench.film")(function* (directory: string) {
 
   return yield* encode({
     ...capture,
+    endedAt,
     frames,
-    commentary: [],
+    commentary: commentary(record.events).filter(
+      (entry) => entry.at >= capture.startedAt && entry.at < endedAt && entry.caption.length > 0,
+    ),
     outputDirectory: resolve(directory, "film"),
     ...record.manifest.capture,
     label: `${record.manifest.scene} · ${record.manifest.backend} · retained capture`,

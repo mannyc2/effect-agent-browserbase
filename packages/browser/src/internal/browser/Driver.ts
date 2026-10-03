@@ -1,9 +1,11 @@
+import type { CoordinateAdmission } from "../../Browser.ts";
 import type {
   ControlFacts,
   FormField,
   FrameInfo,
   KeyModifier,
   InputReceipt,
+  PointerClickRequest,
   ObservedControl,
   ObservedElement,
   PageExecutionState,
@@ -425,6 +427,12 @@ export interface Driver {
     ticket: Ticket,
     target: DriverTarget,
   ) => Promise<string>;
+  readonly pointerClick: (
+    request: PointerClickRequest,
+    ticket: Ticket,
+    target: DriverTarget,
+    policy: CoordinateAdmission | undefined,
+  ) => Promise<NativeInput>;
   readonly pointerMove: (
     to: NativePoint,
     ticket: Ticket,

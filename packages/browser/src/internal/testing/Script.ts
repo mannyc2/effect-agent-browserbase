@@ -177,6 +177,7 @@ export const ScriptableOperation = Schema.Literals([
   "select-files",
   "file-chooser",
   "pointer-move",
+  "pointer-click",
   "hover",
   "wheel",
   "press",
