@@ -1,19 +1,19 @@
 import { createServer } from "node:http";
 
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Layer, Predicate, Schedule, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, Observation } from "effect-browser/browser-data";
 import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
-import { Model, Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Model, Toolkit } from "effect/ai";
+import { FetchHttpClient } from "effect/http";
 
 import { inspectionReference } from "../fixtures/Inspection.ts";
 import { toolSite } from "../fixtures/ToolSite.ts";

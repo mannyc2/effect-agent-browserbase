@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { AiError, type Response } from "effect/unstable/ai";
+import { AiError, type Response } from "effect/ai";
 
 import type { Usage } from "./Records.ts";
 

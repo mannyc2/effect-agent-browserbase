@@ -103,6 +103,6 @@ test("every manifest names one version of each registry dependency", async () =>
   // The packages' own contracts, including the exact framework peer and its development edge.
   readPackageSet(root);
   const pins = workspacePins(root);
-  assert.match(pins["effect-agent"], /^0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
-  assert.equal(pins["@effect-agent/testing"], pins["effect-agent"]);
+  assert.match(pins["@yielded/agent"], /^0\.[0-9]+\.[0-9]+-beta\.[0-9]+$/);
+  assert.equal(pins["@yielded/agent-testing"], pins["@yielded/agent"]);
 });

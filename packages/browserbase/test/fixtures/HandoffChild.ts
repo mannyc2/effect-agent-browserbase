@@ -12,7 +12,7 @@ import { BrowserbaseClient } from "effect-browserbase/client";
 import { recipe } from "effect-browserbase/launch";
 import { SessionReference } from "effect-browserbase/references";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 const Handoff = Schema.Struct({
   reference: SessionReference,

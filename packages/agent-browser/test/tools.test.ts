@@ -11,7 +11,7 @@ import {
 import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
 import * as Testing from "effect-browser/testing";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { fixtureScript, scriptedSession } from "./fixtures/ScriptedSession.ts";
 

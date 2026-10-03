@@ -1,9 +1,9 @@
-import type { ScriptedStreamPart } from "@effect-agent/testing/scripted-model";
+import type { ScriptedStreamPart } from "@yielded/agent-testing/scripted-model";
+import * as InMemory from "@yielded/agent/in-memory";
+import type { RunCostEstimator } from "@yielded/agent/run-options";
 import { Effect, Layer, Schema, Stream, type Tracer } from "effect";
-import * as InMemory from "effect-agent/in-memory";
-import type { RunCostEstimator } from "effect-agent/run-options";
 import type { Page } from "effect-browser/browser";
-import { AiError, LanguageModel, Model, Prompt } from "effect/unstable/ai";
+import { AiError, LanguageModel, Model, Prompt } from "effect/ai";
 
 import { resize } from "./Images.ts";
 import { type Journal, type Usage, json, requestData } from "./Records.ts";

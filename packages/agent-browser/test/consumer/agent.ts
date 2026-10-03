@@ -1,9 +1,9 @@
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import * as Capture from "effect-browser/capture";
 import type { InitializationError } from "effect-browser/errors";
@@ -15,7 +15,7 @@ import * as ScriptedBrowser from "effect-browser/testing";
 // drives the fixed browser toolkit over one execution-owned session on a local
 // Chromium process; only the provider control plane is scripted.
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { Model } from "effect/unstable/ai";
+import { Model } from "effect/ai";
 
 import {
   genericAgentPolicy,

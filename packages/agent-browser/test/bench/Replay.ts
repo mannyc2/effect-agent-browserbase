@@ -8,7 +8,7 @@ import type {
   Plan as DurablePlan,
   StepAttempt,
 } from "effect-browser/plan-data";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import {
   driftSite,

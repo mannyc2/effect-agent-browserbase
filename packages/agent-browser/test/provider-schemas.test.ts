@@ -2,9 +2,9 @@ import { expect, it } from "@effect/vitest";
 import { Option, Predicate, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import { TypeRequest } from "effect-browser/browser-data";
-import { Tool, Toolkit } from "effect/unstable/ai";
-import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput";
-import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
+import { Tool, Toolkit } from "effect/ai";
+import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput";
+import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
 
 // Tests run Toolkits through a scripted model, which never converts a Tool's parameters into a
 // provider's JSON Schema. Providers do, before any request is sent, so every Tool is checked

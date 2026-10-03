@@ -23,7 +23,7 @@ const PublishedManifest = Schema.Struct({
 });
 
 /** Installed from npm rather than built beside these packages. */
-const frameworkPackages = ["effect-agent", "@effect-agent/testing"];
+const frameworkPackages = ["@yielded/agent", "@yielded/agent-testing"];
 
 class PackageExportsError extends Schema.TaggedError<PackageExportsError>()("PackageExportsError", {
   message: Schema.String,
@@ -111,9 +111,11 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
       Effect.fn(function* (name) {
         // Bun's isolated installs link a dependency only beside the packages that declare it.
         const candidates = packages.map((pkg) => `packages/${pkg.directory}/node_modules/${name}`);
+
         const installed = yield* Effect.filter(candidates, (candidate) =>
           fs.exists(path.join(root, candidate)),
         );
+
         const file = `${installed[0] ?? `node_modules/${name}`}/package.json`;
 
         const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(PublishedManifest))(
@@ -365,7 +367,11 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
               if (
                 specifier.startsWith("@effect-agent/") ||
                 specifier === "effect-agent" ||
-                specifier.startsWith("effect-agent/")
+                specifier.startsWith("effect-agent/") ||
+                specifier === "@yielded/agent" ||
+                specifier.startsWith("@yielded/agent/") ||
+                specifier === "@yielded/agent-testing" ||
+                specifier.startsWith("@yielded/agent-testing/")
               )
                 report(file, `${specifier} references an unknown framework package`);
               continue;

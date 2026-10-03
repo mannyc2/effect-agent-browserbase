@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 
 import { ByteSize, Effect, FileSystem, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** Bench artifacts only: neither pixels nor captions are sent back to the agent. */
 export const Frame = Schema.Struct({

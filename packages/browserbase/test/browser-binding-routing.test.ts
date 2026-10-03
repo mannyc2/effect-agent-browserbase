@@ -6,7 +6,7 @@ import { Effect, Layer, Redacted, Schema } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons } from "effect-browser/errors";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { BrowserbaseBrowser } from "../src/Browser.ts";
 import * as BrowserBinding from "../src/BrowserBinding.ts";

@@ -1,16 +1,16 @@
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import type { AgentPolicyInput } from "@yielded/agent/agent-policy";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Layer, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import type { AgentPolicyInput } from "effect-agent/agent-policy";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy, type Observation } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
-import { type LanguageModel, Model, Toolkit } from "effect/unstable/ai";
+import { type LanguageModel, Model, Toolkit } from "effect/ai";
 
 import { inspectionObservation } from "../fixtures/Inspection.ts";
 import { toolSite } from "../fixtures/ToolSite.ts";

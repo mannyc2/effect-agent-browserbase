@@ -4,7 +4,7 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import * as Testing from "effect-browser/testing";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 const origin = "https://form.test";
 

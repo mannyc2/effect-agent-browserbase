@@ -1,3 +1,4 @@
+import * as InMemory from "@yielded/agent/in-memory";
 // One execution owns one Browserbase session; every model turn borrows it.
 //
 // The generic package's guide already shows what a session can do. This example shows the three
@@ -13,7 +14,6 @@
 // example `NodeServices.layer`, beside these programs. `test/native/agent.test.ts` runs this same
 // wiring against a local Chromium with a scripted model.
 import { Context, Effect, Layer, Schema } from "effect";
-import * as InMemory from "effect-agent/in-memory";
 import * as Bootstrap from "effect-browser/bootstrap";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";

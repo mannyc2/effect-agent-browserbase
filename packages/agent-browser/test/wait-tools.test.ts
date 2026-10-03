@@ -2,8 +2,8 @@ import { expect, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Scope, Stream } from "effect";
 import * as Tools from "effect-agent-browser/tools";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import { Toolkit } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { Toolkit } from "effect/unstable/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 

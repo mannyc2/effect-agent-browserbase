@@ -85,8 +85,8 @@ export function consumerManifest(mode, receipt, out, pins) {
   if (mode !== "resources")
     devDependencies["@effect/platform-node"] = pins["@effect/platform-node"];
   if (mode.startsWith("agent")) {
-    dependencies["effect-agent"] = receipt.frameworkVersion;
-    devDependencies["@effect-agent/testing"] = receipt.frameworkVersion;
+    dependencies["@yielded/agent"] = receipt.frameworkVersion;
+    devDependencies["@yielded/agent-testing"] = receipt.frameworkVersion;
   }
   for (const [name, value] of Object.entries({ ...dependencies, ...devDependencies }))
     assert.equal(typeof value, "string", `Missing pinned consumer dependency: ${name}`);
@@ -105,9 +105,8 @@ export function consumerManifest(mode, receipt, out, pins) {
       ...(mode === "browser" ? {} : { "effect-browser": dependencies["effect-browser"] }),
       effect: pins.effect,
       ...(mode === "resources" ? {} : { vitest: pins.vitest }),
-      // @effect/platform-node takes any later shared prerelease, and each one needs the Effect
-      // released with it: 4.0.0-rc.118's imports `effect/process/ChildProcess`, which
-      // 4.0.0-rc.117 lacks. The two are released together, at one version.
+      // The platform and its shared package are released together. Keep the installed
+      // consumer on that exact pair rather than admitting a later shared implementation.
       ...(mode === "resources"
         ? {}
         : { "@effect/platform-node-shared": pins["@effect/platform-node"] }),
@@ -153,13 +152,13 @@ export function checkConsumerHostPeers(mode, manifest, receipt, out) {
     candidates.set(item.name, candidate);
   }
   assert.equal(
-    manifest.overrides?.["effect-agent"],
+    manifest.overrides?.["@yielded/agent"],
     undefined,
     "The framework host must not be overridden",
   );
   if (mode.startsWith("agent"))
     assert.equal(
-      direct["effect-agent"],
+      direct["@yielded/agent"],
       receipt.frameworkVersion,
       "Direct framework host differs from the qualified version",
     );
@@ -170,7 +169,7 @@ export function checkConsumerHostPeers(mode, manifest, receipt, out) {
     checkManifest(candidate, {
       built: true,
       browserVersion: candidates.get("effect-browser").version,
-      frameworkVersion: direct["effect-agent"],
+      frameworkVersion: direct["@yielded/agent"],
     });
 }
 

@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { NodeCrypto } from "@effect/platform-node";
+import { InteractiveBrowserPolicy } from "@yielded/agent/interactive-browser";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
@@ -15,7 +15,7 @@ import * as BrowserBinding from "effect-browserbase/browser-binding";
 import { BrowserbaseClient } from "effect-browserbase/client";
 import type { LaunchRecipe } from "effect-browserbase/launch";
 import { BrowserbaseSessions } from "effect-browserbase/sessions";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { chromium } from "playwright-core";
 
 import { renderReady } from "./RenderReady.ts";

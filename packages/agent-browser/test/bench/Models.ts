@@ -1,9 +1,9 @@
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Layer, Redacted, Schema, Stream, type Tracer } from "effect";
-import * as InMemory from "effect-agent/in-memory";
-import { type LanguageModel, Prompt, Telemetry } from "effect/unstable/ai";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { type LanguageModel, Prompt, Telemetry } from "effect/ai";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import type { Allowance } from "./Budget.ts";
 import { latencies, type Driver } from "./Drivers.ts";

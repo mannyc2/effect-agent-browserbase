@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
+import { InteractiveBrowser, InteractiveBrowserPolicy } from "@yielded/agent/interactive-browser";
 import { Context, Effect, Layer } from "effect";
 import { fromSession, interactiveLayer } from "effect-agent-browser/adapter";
-import { InteractiveBrowser, InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";

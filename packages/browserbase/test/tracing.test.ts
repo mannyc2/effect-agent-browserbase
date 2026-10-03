@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Redacted, Tracer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { BrowserbaseClient } from "../src/Client.ts";
 import { BrowserbaseProjects } from "../src/Projects.ts";

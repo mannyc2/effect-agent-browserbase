@@ -31,17 +31,17 @@ test("five clean consumers supply hosts directly and substitute only the browser
     Object.keys(resources.dependencies).sort(),
     [packages[0].name, packages[1].name, "effect"].sort(),
   );
-  assert.equal(resources.devDependencies["@effect-agent/testing"], undefined);
+  assert.equal(resources.devDependencies["@yielded/agent-testing"], undefined);
   assert.equal(resources.dependencies["playwright-core"], undefined);
   const generic = consumerManifest("generic", receipt, "/tmp/artifacts", catalog);
 
   assert.equal(generic.dependencies["playwright-core"], catalog["playwright-core"]);
-  assert.equal(generic.dependencies["effect-agent"], undefined);
+  assert.equal(generic.dependencies["@yielded/agent"], undefined);
   assert.equal(generic.devDependencies["@effect/platform-node"], catalog["@effect/platform-node"]);
   assert.equal(resources.devDependencies["@effect/platform-node"], undefined);
   const agent = consumerManifest("agent", receipt, "/tmp/artifacts", catalog);
 
-  assert.equal(agent.dependencies["effect-agent"], receipt.frameworkVersion);
+  assert.equal(agent.dependencies["@yielded/agent"], receipt.frameworkVersion);
   assert.match(agent.dependencies[packages[0].name], /^file:/);
   assert.match(agent.dependencies[packages[2].name], /^file:/);
   assert.equal(agent.dependencies[packages[1].name], undefined);
@@ -54,7 +54,7 @@ test("five clean consumers supply hosts directly and substitute only the browser
     Object.keys(browser.dependencies).sort(),
     [packages[0].name, "effect", "playwright-core"].sort(),
   );
-  assert.equal(browser.devDependencies["@effect-agent/testing"], undefined);
+  assert.equal(browser.devDependencies["@yielded/agent-testing"], undefined);
   const hosted = consumerManifest("agent-hosted", receipt, "/tmp/artifacts", catalog);
 
   assert.equal(hosted.dependencies[packages[1].name], undefined);
@@ -71,7 +71,7 @@ test("five clean consumers supply hosts directly and substitute only the browser
       manifest.devDependencies["@effect/platform-node"],
       "The platform's shared package must be the one released with it",
     );
-    for (const name of ["effect-browserbase", "effect-agent-browser", "effect-agent"])
+    for (const name of ["effect-browserbase", "effect-agent-browser", "@yielded/agent"])
       assert.equal(
         manifest.overrides[name],
         undefined,

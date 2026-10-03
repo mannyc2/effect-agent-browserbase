@@ -1,6 +1,8 @@
 # Browser tools for Effect Agent
 
-`effect-agent-browser` connects [`effect-browser`](../browser/README.md) to Effect Agent. One adapter, maintained Toolkit and host callback implementation support both self-managed Chromium and Browserbase. The host supplies its required peers explicitly: `effect-browser@0.2.0-beta.9` and `effect-agent@0.1.0-beta.165` for this release. These exact prerelease peers express the qualified combination; supply matching versions and keep one runtime instance across the application and adapter. The Effect peer is exactly `4.0.0-rc.117`, the tested version: later Effect releases moved the `effect/unstable/*` modules this package imports. Releases through `0.2.0-beta.8` declared a caret range; with one of them, install exactly the Effect it was tested with (`4.0.0-rc.117` from `0.2.0-beta.3`, `4.0.0-rc.115` before). The adapter does not install Browserbase or own a Playwright peer.
+`effect-agent-browser` connects [`effect-browser`](../browser/README.md) to Effect Agent. One adapter, maintained Toolkit and host callback implementation support both self-managed Chromium and Browserbase. Current source requires the host to supply `effect-browser` at the coordinated package version and exactly `@yielded/agent@0.1.0-beta.166`. Development pins Effect `4.0.0`, with a stable `^4.0.0` peer range. Keep one runtime instance across the application and adapter. [Upstream renamed the framework](https://yielded.dev/agent/guide/migration/) while preserving its public subpaths and APIs. The adapter does not install Browserbase or own a Playwright peer.
+
+The published `0.2.0-beta.9` package set requires `effect-agent@0.1.0-beta.165` and exactly Effect `4.0.0-rc.117`. Releases through `0.2.0-beta.8` declared an Effect caret range; with one of them, install exactly the tested Effect (`4.0.0-rc.117` from `0.2.0-beta.3`, `4.0.0-rc.115` before).
 
 ## Public entry points
 
@@ -36,7 +38,7 @@ a closed Page fails like any retired target, and nothing retargets the Tools to 
 A complete agent declares the Tools it may use and takes its instructions and policy from them:
 
 ```ts
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 const toolkit = Toolkit.merge(
   BrowserTools.observedToolkit,
@@ -95,11 +97,11 @@ yield * adapted.handle.navigate({ url: "https://example.com" });
 
 ## Effect Agent's BrowserUse Tools
 
-Effect Agent 0.1.0-beta.154 and later ship `effect-agent/browser-use`. `BrowserUse.make({ grounding?, mode? })` returns a `toolkit` with two Tools, `observe` and `act` (click, fill or select on an observed `ref`), and a `layer()` to build once per page or run. The layer requires a `BrowserActions` service that the application supplies; Effect Agent never opens a browser. This package's Tools remain the maintained Page-bound toolkit, with navigation, reading on, native and keyboard input, waits, forms and `_and_inspect` results. `effect-agent-browser/browser-use` only supplies `BrowserActions` over an issued Page, or a Frame one of its Pages issued, so either grounding runs on Chromium or Browserbase. The subpath arrives in `0.2.0-beta.9`, the first release that peers on `effect-agent@0.1.0-beta.165`; `0.2.0-beta.8` peers on `0.1.0-beta.142`, which predates `effect-agent/browser-use`.
+The current framework ships `@yielded/agent/browser-use` (introduced under `effect-agent/browser-use` in 0.1.0-beta.154). `BrowserUse.make({ grounding?, mode? })` returns a `toolkit` with two Tools, `observe` and `act` (click, fill or select on an observed `ref`), and a `layer()` to build once per page or run. The layer requires a `BrowserActions` service that the application supplies; Effect Agent never opens a browser. This package's Tools remain the maintained Page-bound toolkit, with navigation, reading on, native and keyboard input, waits, forms and `_and_inspect` results. `effect-agent-browser/browser-use` only supplies `BrowserActions` over an issued Page, or a Frame one of its Pages issued, so either grounding runs on Chromium or Browserbase. The subpath arrives in `0.2.0-beta.9`, the first release that peers on `effect-agent@0.1.0-beta.165`; `0.2.0-beta.8` peers on `0.1.0-beta.142`, which predates `effect-agent/browser-use`.
 
 ```ts
 import * as BrowserUseActions from "effect-agent-browser/browser-use";
-import * as BrowserUse from "effect-agent/browser-use";
+import * as BrowserUse from "@yielded/agent/browser-use";
 
 const browserUse = BrowserUse.make({ mode: "batched" });
 
@@ -250,7 +252,7 @@ Real-input model results contain only `{ dispatched: true }`. They do not claim 
 Merge `selectionToolkit` when an agent may operate native dropdowns:
 
 ```ts
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 import * as BrowserTools from "effect-agent-browser/tools";
 
 const tools = Toolkit.merge(BrowserTools.toolkit, BrowserTools.selectionToolkit);
@@ -450,7 +452,7 @@ defines.
 The Tools are ordinary Effect AI Tools, so `tool.setNeedsApproval(...)` gates a consequential
 call, such as `browser_fill_form` with a submit, and the maintained handlers still serve it because
 handlers are keyed by name. The host decides through Effect Agent's `approval` run option, for
-example `toRunApprovalHook(...)` from `effect-agent/run-hooks`. Unlike a synchronous `policy`
+example `toRunApprovalHook(...)` from `@yielded/agent/run-hooks`. Unlike a synchronous `policy`
 refusal, an explicit denial fails the run with `AgentApprovalDenied` rather than returning a
 failure to the model.
 
@@ -469,18 +471,18 @@ with its length and the limit.
 
 ## Testing an agent without a browser process
 
-`effect-browser/testing` opens the real session owner over a scripted page, so an Agent composition runs the maintained Toolkit, host supervision and adapter against deterministic pages with no Chromium process, no provider account and no credentials. Observations are numbered `observation-1`, `observation-2`, … and a control's script `id` is its `elementId`, so a `ScriptedModel` turn from `@effect-agent/testing` can name the node it clicks statically instead of parsing a tool result.
+`effect-browser/testing` opens the real session owner over a scripted page, so an Agent composition runs the maintained Toolkit, host supervision and adapter against deterministic pages with no Chromium process, no provider account and no credentials. Observations are numbered `observation-1`, `observation-2`, … and a control's script `id` is its `elementId`, so a `ScriptedModel` turn from `@yielded/agent-testing` can name the node it clicks statically instead of parsing a tool result.
 
 ```ts
-import { ScriptedModel } from "@effect-agent/testing/scripted-model";
+import { ScriptedModel } from "@yielded/agent-testing/scripted-model";
 import { expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import * as Testing from "effect-browser/testing";
-import { Model } from "effect/unstable/ai";
+import { Model } from "effect/ai";
 
 it.effect("the agent clicks the observed control exactly once", () =>
   Browser.scoped(Testing.open(shop), (browser) =>

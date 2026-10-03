@@ -14,8 +14,8 @@ import {
   Schema,
 } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   fetchOperation,

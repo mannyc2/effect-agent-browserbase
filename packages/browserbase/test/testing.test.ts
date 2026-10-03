@@ -3,8 +3,8 @@ import { Effect, Fiber, Layer, Redacted } from "effect";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { sequentialCrypto, type Script } from "effect-browser/testing";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import * as Account from "../src/Account.ts";
 import * as Allocation from "../src/Allocation.ts";

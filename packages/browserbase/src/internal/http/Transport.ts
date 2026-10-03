@@ -4,7 +4,7 @@ import {
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 import type { ClientMethod, ClientOptions, MultipartFile, UploadLimits } from "../../Client.ts";
 import { ClientError } from "../../Errors.ts";

@@ -1,3 +1,4 @@
+import { RunToolScheduling } from "@yielded/agent/run-options";
 import {
   Cause,
   Clock,
@@ -14,7 +15,6 @@ import {
   Semaphore,
   Tracer,
 } from "effect";
-import { RunToolScheduling } from "effect-agent/run-options";
 import {
   checkPage,
   type BrowserSession,

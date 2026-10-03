@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 
 import { ByteSize, Effect, FileSystem, Schema, Stream } from "effect";
 import type { Event } from "effect-browser/timeline-data";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { type InputEvent, Point } from "./InputLog.ts";
 

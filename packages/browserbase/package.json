@@ -54,18 +54,18 @@
     "test:native": "vp test --config vite.native.config.ts --run"
   },
   "devDependencies": {
-    "@effect/platform-bun": "4.0.0-rc.117",
-    "@effect/platform-node": "4.0.0-rc.117",
-    "@effect/vitest": "4.0.0-rc.117",
+    "@effect/platform-bun": "4.0.0",
+    "@effect/platform-node": "4.0.0",
+    "@effect/vitest": "4.0.0",
     "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "effect-browser": "workspace:*",
     "playwright-core": "1.63.0",
     "typescript": "7.0.2",
     "vite-plus": "0.3.2"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.117",
+    "effect": "^4.0.0",
     "effect-browser": "workspace:*"
   },
   "engines": {

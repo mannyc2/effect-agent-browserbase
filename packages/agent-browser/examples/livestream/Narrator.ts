@@ -1,9 +1,9 @@
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import type { ThreadId } from "@yielded/agent/identifiers";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import type { ThreadId } from "effect-agent/identifiers";
-import * as InMemory from "effect-agent/in-memory";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 /** What the host knows about one browser step: facts, never the agent's reasoning or typed values. */
 export const Step = Schema.Struct({

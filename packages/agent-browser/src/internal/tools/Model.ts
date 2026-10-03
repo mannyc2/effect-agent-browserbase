@@ -1,5 +1,5 @@
+import { BrowserActionResult, BrowserNavigationResult } from "@yielded/agent/interactive-browser";
 import { Option, Predicate, Schema, SchemaGetter } from "effect";
-import { BrowserActionResult, BrowserNavigationResult } from "effect-agent/interactive-browser";
 import {
   Identifier,
   KeyModifier,

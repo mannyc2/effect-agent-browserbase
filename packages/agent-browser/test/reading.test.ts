@@ -4,7 +4,7 @@ import * as BrowserTools from "effect-agent-browser/tools";
 import type { BrowserSession } from "effect-browser/browser";
 import { Observation, ObservedControl, Target } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 

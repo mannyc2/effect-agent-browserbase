@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
 import { Effect, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
 import type * as Browser from "effect-browser/browser";
-import { Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import { Prompt, Tool, Toolkit } from "effect/ai";
 
 import { waitForGame } from "../fixtures/GameDriver.ts";
 import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite.ts";

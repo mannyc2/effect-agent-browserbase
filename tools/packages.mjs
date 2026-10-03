@@ -138,7 +138,7 @@ export function checkDependencyBoundary(
   const generic = item !== adapter;
 
   const hostPeers =
-    item === browser ? [] : item === provider ? [browser.name] : [browser.name, "effect-agent"];
+    item === browser ? [] : item === provider ? [browser.name] : [browser.name, "@yielded/agent"];
 
   assert.equal(
     manifest.optionalDependencies,
@@ -237,9 +237,17 @@ export function checkDependencyBoundary(
       );
       if (generic)
         assert.ok(
-          name !== "effect-agent" && name !== adapter.name && !name.startsWith("@effect-agent/"),
+          name !== "effect-agent" &&
+            !name.startsWith("@effect-agent/") &&
+            name !== "@yielded/agent" &&
+            name !== "@yielded/agent-testing" &&
+            name !== adapter.name,
           "Generic package cannot depend on the framework or its testing package",
         );
+      assert.ok(
+        name !== "effect-agent" && !name.startsWith("@effect-agent/"),
+        "Retired framework identities cannot be installed beside @yielded/agent",
+      );
       if (item === browser)
         assert.notEqual(name, provider.name, "Neutral browser cannot depend on Browserbase");
     }
@@ -296,6 +304,7 @@ export function workspacePins(tree) {
       readJson(join(tree, item.directory, "package.json")),
     ]),
   ];
+
   const pins = {};
   const owners = {};
 
@@ -305,7 +314,9 @@ export function workspacePins(tree) {
       for (const [name, value] of Object.entries(manifest[section] ?? {})) {
         if (value === "workspace:*" && packages.some((item) => item.name === name)) continue;
         assert.ok(
-          /^(?:npm:(?:@[a-z0-9-]+\/)?[a-z0-9.-]+@)?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(value),
+          /^(?:npm:(?:@[a-z0-9-]+\/)?[a-z0-9.-]+@)?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$/.test(
+            value,
+          ),
           `${path} must pin ${name} to an exact registry version`,
         );
         assert.ok(
@@ -318,11 +329,11 @@ export function workspacePins(tree) {
     }
   }
   // Each testing release depends on exactly the framework release it was published with.
-  if (pins["@effect-agent/testing"] !== undefined)
+  if (pins["@yielded/agent-testing"] !== undefined)
     assert.equal(
-      pins["@effect-agent/testing"],
-      pins["effect-agent"],
-      "@effect-agent/testing must be the effect-agent release",
+      pins["@yielded/agent-testing"],
+      pins["@yielded/agent"],
+      "@yielded/agent-testing must be the @yielded/agent release",
     );
 
   return pins;

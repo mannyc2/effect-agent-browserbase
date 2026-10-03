@@ -3,8 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import { Clock, Config, Console, Effect, Exit, Option, Schema } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Argument, Command, Flag } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
 
 import { gameSite } from "../fixtures/GameSite.ts";
 import * as Backends from "./Backends.ts";

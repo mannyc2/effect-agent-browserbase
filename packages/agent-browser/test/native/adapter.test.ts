@@ -1,12 +1,12 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Context, Effect, Layer } from "effect";
-import { fromSession, interactiveLayer } from "effect-agent-browser/adapter";
 import {
   BrowserNavigateRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "effect-agent/interactive-browser";
+} from "@yielded/agent/interactive-browser";
+import { Context, Effect, Layer } from "effect";
+import { fromSession, interactiveLayer } from "effect-agent-browser/adapter";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import {

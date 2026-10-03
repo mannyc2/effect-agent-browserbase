@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as InMemory from "@yielded/agent/in-memory";
 import { Effect, Layer, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as InMemory from "effect-agent/in-memory";
 import * as Browser from "effect-browser/browser";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import { Chromium } from "effect-browser/chromium";
 import { BrowserbaseBrowser } from "effect-browserbase/browser";
-import { Model, Toolkit } from "effect/unstable/ai";
+import { Model, Toolkit } from "effect/ai";
 
 import {
   genericAgentPolicy,

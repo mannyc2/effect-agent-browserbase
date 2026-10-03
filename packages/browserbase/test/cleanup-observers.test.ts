@@ -12,8 +12,8 @@ import {
   Redacted,
 } from "effect";
 import { BrowserError, Reasons } from "effect-browser/errors";
+import { FetchHttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import type { CleanupResult } from "../src/Cleanup.ts";
 import { BrowserbaseClient } from "../src/Client.ts";

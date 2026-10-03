@@ -1,4 +1,3 @@
-import { Context, Effect, Layer, Schema, Scope, Tracer } from "effect";
 import {
   BrowserActionResult,
   BrowserNavigationResult,
@@ -14,9 +13,10 @@ import {
   InteractiveBrowserUnsupportedError,
   type BrowserHandle,
   type InteractiveBrowserError,
-} from "effect-agent/interactive-browser";
-import { PageScreenshotResult } from "effect-agent/page-screenshot";
-import { SandboxImplementation } from "effect-agent/sandbox";
+} from "@yielded/agent/interactive-browser";
+import { PageScreenshotResult } from "@yielded/agent/page-screenshot";
+import { SandboxImplementation } from "@yielded/agent/sandbox";
+import { Context, Effect, Layer, Schema, Scope, Tracer } from "effect";
 import {
   checkPage,
   type AnySession,

@@ -1,11 +1,11 @@
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
 import { Effect, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
 import type * as Browser from "effect-browser/browser";
 import * as Plan from "effect-browser/plan";
 import type { RanStep } from "effect-browser/plan-data";
-import { Prompt, Toolkit } from "effect/unstable/ai";
+import { Prompt, Toolkit } from "effect/ai";
 
 import { driftSite } from "../fixtures/DriftSite.ts";
 import { enterGame, waitForGame } from "../fixtures/GameDriver.ts";

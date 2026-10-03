@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { NodeHttpServer } from "@effect/platform-node";
 import { Context, Deferred, Effect, Layer, PubSub, Ref, Schema, Stream } from "effect";
 import * as Capture from "effect-browser/capture";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 
 import type { View } from "./Presentation.ts";
 import { Metrics, Telemetry } from "./Telemetry.ts";

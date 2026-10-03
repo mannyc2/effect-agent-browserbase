@@ -1,10 +1,10 @@
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import type { ThreadId } from "@yielded/agent/identifiers";
 import { Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import type { ThreadId } from "effect-agent/identifiers";
 import type { BrowserSession, Page } from "effect-browser/browser";
-import { Toolkit } from "effect/unstable/ai";
+import { Toolkit } from "effect/ai";
 
 /**
  * Each action returns the page it leaves behind, a form is one call, and text a reading left out

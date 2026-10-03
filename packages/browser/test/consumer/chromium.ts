@@ -8,7 +8,7 @@ import * as Capture from "effect-browser/capture";
 import { Chromium, type ChromiumCleanupResult } from "effect-browser/chromium";
 import * as PageControl from "effect-browser/page-control";
 import * as Plan from "effect-browser/plan";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import { localSite } from "../fixtures/StandaloneBrowser.ts";
 

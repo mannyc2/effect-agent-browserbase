@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { type Crypto, Effect, Layer, Redacted } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import * as Account from "../src/Account.ts";
 import * as Allocation from "../src/Allocation.ts";

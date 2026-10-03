@@ -1,9 +1,9 @@
 import { expect, it } from "@effect/vitest";
+import { RunToolScheduling } from "@yielded/agent/run-options";
 import { Deferred, Effect, Fiber, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
-import { RunToolScheduling } from "effect-agent/run-options";
+import { Toolkit } from "effect/ai";
 import { TestClock } from "effect/testing";
-import { Toolkit } from "effect/unstable/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 

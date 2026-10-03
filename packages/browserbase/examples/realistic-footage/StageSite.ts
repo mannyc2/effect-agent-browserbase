@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 
 import { NodeHttpServer } from "@effect/platform-node";
 import { Context, Effect, Layer } from "effect";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 
 /**
  * A small fictional product to film: a sleeper-train finder with a live

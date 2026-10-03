@@ -29,7 +29,7 @@ Official references: [npm trusted publishers](https://docs.npmjs.com/trusted-pub
 
 ## Prepare a release
 
-Update all three coordinated package versions in one PR, and run `bun install --ignore-scripts` so `bun.lock` records them; a frozen install refuses a lockfile that disagrees. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The three owned packages form their own exact fixed release group, and the adapter's `effect-agent` peer is the exact version its development dependency installs; both are enforced.
+Update all three coordinated package versions in one PR, and run `bun install --ignore-scripts` so `bun.lock` records them; a frozen install refuses a lockfile that disagrees. Keep the accepted Effect/AgentRuntime/Playwright compatibility pins unless the PR is explicitly upgrading them. The three owned packages form their own exact fixed release group, and the adapter's `@yielded/agent` peer is the exact version its development dependency installs; both are enforced.
 
 After that PR is merged and acceptance passes, create an immutable `v<package-version>` tag on its commit. This document describes the maintainer release procedure; neither creating a tag nor publishing is part of automated maintenance work.
 

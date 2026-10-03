@@ -10,7 +10,9 @@ Three packages share one scoped browser owner:
 
 The `0.2.0-beta.9` package set was released from tag `v0.2.0-beta.9` through the [release workflow](docs/RELEASING.md), with provenance, on npm's `beta` dist-tag, after `0.2.0-beta.0` through `0.2.0-beta.8`; `main` may be ahead of any release. Install by exact version or `@beta`: a prerelease never moves `latest`, which still points at a name reservation (`0.0.0-reserved.0`) for `effect-browser` and `effect-agent-browser` and at `0.1.0-beta.102` for `effect-browserbase`. The former two-package graph (`effect-browserbase` and `effect-agent-browserbase`) ended with `0.1.0-beta.104`.
 
-Install the shared host runtimes explicitly. Browserbase requires `effect-browser@0.2.0-beta.9` as a peer; the Agent adapter requires that same browser peer and `effect-agent@0.1.0-beta.165`. Those exact prerelease relationships keep the qualified package set coordinated. The Effect peer is exactly `4.0.0-rc.117`, the tested version. `0.2.0-beta.8` and earlier declared a caret range, which also admits Effect `rc.118` and `4.0.0`; those moved the `effect/unstable/*` modules that `effect-browserbase` and `effect-agent-browser` import. With an earlier release, install exactly the Effect it was tested with: `4.0.0-rc.117` from `0.2.0-beta.3`, `4.0.0-rc.115` before. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. Peer declarations cannot prevent every duplicate bundle or module evaluation: all callers must still use the same live runtime and session identity.
+Current source develops against Effect `4.0.0` and declares its stable `^4.0.0` peer range. The Agent adapter requires the exact `@yielded/agent@0.1.0-beta.166` host peer; its matching testing package is `@yielded/agent-testing`. These replace the frozen `effect-agent` and `@effect-agent/testing` names; [upstream migration](https://yielded.dev/agent/guide/migration/) preserves subpaths and APIs. Install the shared host runtimes explicitly: Browserbase and the adapter require the same coordinated `effect-browser` peer. Playwright stays an optional exact `1.63.0` peer of `effect-browser`. All callers must use the same live runtime and session identity.
+
+The published `0.2.0-beta.9` package set predates this source upgrade and requires `effect-agent@0.1.0-beta.165` and exactly Effect `4.0.0-rc.117`. Releases through `0.2.0-beta.8` declared an Effect caret range that also admits later releases whose module paths moved. With those releases, install exactly the tested Effect: `4.0.0-rc.117` from `0.2.0-beta.3`, `4.0.0-rc.115` before.
 
 ## Start a browser
 
@@ -44,7 +46,7 @@ lifecycle Inventory atomically; `listPages()` remains the fresh native read. See
 
 ```ts
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
 
 // The host acquired browser through Chromium or Browserbase, in the active execution scope.
 const page = browser.initialPage;

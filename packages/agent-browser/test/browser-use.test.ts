@@ -1,23 +1,17 @@
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import { expect, it } from "@effect/vitest";
+import { ScriptedModel, type ScriptedTurnInput } from "@yielded/agent-testing/scripted-model";
+import * as Agent from "@yielded/agent/agent";
+import * as AgentRuntime from "@yielded/agent/agent-runtime";
+import * as BrowserUse from "@yielded/agent/browser-use";
+import * as InMemory from "@yielded/agent/in-memory";
+import { RunToolScheduling } from "@yielded/agent/run-options";
 import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
 import * as BrowserUseActions from "effect-agent-browser/browser-use";
 import * as BrowserTools from "effect-agent-browser/tools";
-import * as Agent from "effect-agent/agent";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import * as BrowserUse from "effect-agent/browser-use";
-import * as InMemory from "effect-agent/in-memory";
-import { RunToolScheduling } from "effect-agent/run-options";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import type { Action } from "effect-browser/plan-data";
 import type * as Testing from "effect-browser/testing";
-import {
-  type Decision,
-  DecisionModel,
-  type LanguageModel,
-  Model,
-  type Toolkit,
-} from "effect/unstable/ai";
+import { type Decision, DecisionModel, type LanguageModel, Model, type Toolkit } from "effect/ai";
 
 import { scriptedSession } from "./fixtures/ScriptedSession.ts";
 
