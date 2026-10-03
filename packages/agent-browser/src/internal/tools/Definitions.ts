@@ -1,11 +1,11 @@
-import type { Schema } from "effect";
+import { Schema } from "effect";
 import {
   BrowserActionResult,
   BrowserNavigateRequest,
   BrowserNavigationResult,
   BrowserScrollRequest,
 } from "effect-agent/interactive-browser";
-import { Observation, PointerMoveRequest } from "effect-browser/browser-data";
+import { Observation, PointerClickRequest, PointerMoveRequest } from "effect-browser/browser-data";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {
@@ -85,6 +85,21 @@ export const Scroll = Tool.make("browser_scroll", {
     "Scroll the host-bound page by signed CSS pixel deltas; positive deltaY scrolls down. Inspect again to see what is on screen before acting on a control.",
   parameters: BrowserScrollRequest,
   success: BrowserActionResult,
+  failure: BrowserToolFailure,
+  failureMode: "return",
+});
+
+export const ClickAt = Tool.make("browser_click_at", {
+  description: `Click once at a point in main-viewport CSS pixels; use the picture you were shown. The browser chooses what is under the point, including canvas content in an iframe. ${oneAction} ${unknownOutcome}`,
+  parameters: Schema.Struct({
+    x: PointerClickRequest.fields.x.annotate({
+      description: "Horizontal main-viewport CSS pixel coordinate.",
+    }),
+    y: PointerClickRequest.fields.y.annotate({
+      description: "Vertical main-viewport CSS pixel coordinate.",
+    }),
+  }),
+  success: NativeInputResult,
   failure: BrowserToolFailure,
   failureMode: "return",
 });
@@ -193,6 +208,12 @@ export const ObservedClick = observed("browser_click_and_inspect", Click, Observ
 export const ObservedFill = observed("browser_fill_and_inspect", Fill, ObservedActionResult);
 export const ObservedScroll = observed("browser_scroll_and_inspect", Scroll, ObservedActionResult);
 
+export const ObservedClickAt = observed(
+  "browser_click_at_and_inspect",
+  ClickAt,
+  ObservedInputResult,
+);
+
 export const ObservedPointerMove = observed(
   "browser_pointer_move_and_inspect",
   PointerMove,
@@ -222,7 +243,7 @@ export const toolkit = Toolkit.make(Navigate, Inspect, Click, Fill, Scroll);
 export const readingToolkit = Toolkit.make(ReadMore);
 
 /** Optional additions, merged with `toolkit` by the host. `browser_scroll` stays scripted. */
-export const nativeToolkit = Toolkit.make(PointerMove, Hover, Wheel);
+export const nativeToolkit = Toolkit.make(PointerMove, ClickAt, Hover, Wheel);
 
 /** Optional real keyboard input. Kept separate so existing native-tool opt-ins do not gain tools. */
 export const keyboardToolkit = Toolkit.make(Press, Type);
@@ -248,6 +269,7 @@ export const observedToolkit = Toolkit.make(
 
 export const observedNativeToolkit = Toolkit.make(
   ObservedPointerMove,
+  ObservedClickAt,
   ObservedHover,
   ObservedWheel,
 );

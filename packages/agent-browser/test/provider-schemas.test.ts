@@ -44,6 +44,7 @@ const samples: Record<string, ReadonlyArray<unknown>> = {
   browser_click: [reference],
   browser_fill: [{ reference, value: "ada@example.test" }],
   browser_scroll: [{ deltaX: 0, deltaY: 400 }],
+  browser_click_at: [{ x: 10, y: 20 }],
   browser_pointer_move: [{ to: { x: 10, y: 20 } }],
   browser_hover: [reference],
   browser_wheel: [

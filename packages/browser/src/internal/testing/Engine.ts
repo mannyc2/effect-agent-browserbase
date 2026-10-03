@@ -2403,6 +2403,49 @@ export const makeScriptedBrowser = (script: Script, timers: EngineTimers): Scrip
             return page.document.url;
           },
         ),
+      pointerClick: (request, ticket, target, policy) =>
+        attempt(
+          "pointer-click",
+          ticket,
+          { pageId: target.pageId },
+          async (record): Promise<NativeInput> => {
+            const page = current(target, "pointer-click");
+            const point = Object.freeze({ x: request.x, y: request.y });
+
+            requireRunning(page, "pointer-click");
+            if (request.x >= viewport.width || request.y >= viewport.height)
+              throw fail("pointer-click", Reasons.NotVisible.make({}));
+            if (policy !== undefined) {
+              let admitted = false;
+
+              try {
+                admitted = policy.admit(point) === true;
+              } catch {
+                admitted = false;
+              }
+              if (!admitted) throw fail("pointer-click", Reasons.Denied.make({}));
+            }
+
+            const hit = [...page.document.controls].reverse().find((node) => {
+              const box = facts(node).box;
+
+              return (
+                node.script.offscreen !== true &&
+                request.x >= box.x &&
+                request.y >= box.y &&
+                request.x < box.x + box.width &&
+                request.y < box.y + box.height
+              );
+            });
+
+            dispatch(ticket, record);
+            place(page.pageId, point);
+            if (hit !== undefined && request.button !== "right" && hit.script.disabled !== true)
+              for (let count = 0; count < (request.clickCount ?? 1); count++) activate(page, hit);
+
+            return { ...receipt(page.pageId), hitTest: null };
+          },
+        ),
       pointerMove: (to, ticket, target) =>
         attempt(
           "pointer-move",

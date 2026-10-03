@@ -17,6 +17,7 @@ import type {
   NavigationResult,
   ObservationOptions,
   ObservedElement,
+  PointerClickRequest,
   PointerMoveRequest,
   PressRequest,
   ReadTextRequest,
@@ -38,6 +39,7 @@ import type {
   PageInfo,
   Target,
   Viewport,
+  ViewportPoint,
 } from "./BrowserData.ts";
 import type { BrowserError, BrowserOperation, Containment, InitializationError } from "./Errors.ts";
 import { resolveTargetControlsForSession } from "./internal/browser/PageRegistry.ts";
@@ -58,6 +60,15 @@ export interface AdmissionOptions {
 export interface OperationOptions {
   readonly timeoutMillis?: number;
   readonly admission?: AdmissionOptions;
+}
+
+/** A host may refuse a raw point; this never substitutes exact-node admission. */
+export interface CoordinateAdmission {
+  readonly admit: (point: ViewportPoint) => boolean;
+}
+
+export interface PointerClickOptions extends OperationOptions {
+  readonly coordinatePolicy?: CoordinateAdmission;
 }
 
 /** Explicit descriptor guard and ordinary host admission; no selector or geometry fallback. */
@@ -127,6 +138,11 @@ export interface PageOperations {
     request: ScrollRequest,
     options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
+  /** Click at a main-viewport point. The browser chooses the node under it, including in Frames. */
+  readonly pointerClick: (
+    request: PointerClickRequest,
+    options?: PointerClickOptions,
+  ) => Effect.Effect<InputReceipt, BrowserError>;
   /** One real pointer move, in main-frame viewport pixels. */
   readonly pointerMove: (
     request: PointerMoveRequest,

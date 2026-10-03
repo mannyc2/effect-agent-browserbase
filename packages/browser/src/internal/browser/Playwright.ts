@@ -375,6 +375,7 @@ export const makePlaywrightDriver = async (
     formSubmit: actions.formSubmit,
     selectOption: actions.selectOption,
     scroll: actions.scroll,
+    pointerClick: pointer.pointerClick,
     pointerMove: pointer.pointerMove,
     hover: pointer.hover,
     wheel: pointer.wheel,
