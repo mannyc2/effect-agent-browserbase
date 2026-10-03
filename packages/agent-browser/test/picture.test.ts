@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import * as Picture from "./bench/Picture.ts";
-import { type RecordingFrame,Journal } from "./bench/Records.ts";
+import { type RecordingFrame, Journal } from "./bench/Records.ts";
 import { pictureMetrics } from "./bench/StageScenes.ts";
 
 const frame = (at: number, document = 0): RecordingFrame => ({
