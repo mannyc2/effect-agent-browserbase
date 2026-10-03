@@ -478,7 +478,7 @@ for (const keyboard of ["press", "typing-batch", "point-then-press"] as const) {
   );
 }
 
-it.live("real Chromium: a caption published while spinning cannot grade as a settled result", () =>
+it.live("real Chromium: early and later unowned captions cannot acquire a settled result", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const site = yield* gameSite({ seed: 2 });
@@ -512,19 +512,28 @@ it.live("real Chromium: a caption published while spinning cannot grade as a set
             journal,
             invocation++ === 0
               ? lobbyTurns(site.url)
-              : [
-                  () => call("spin", "browser_click_at", { x: 975, y: 570 }),
-                  () =>
-                    answer({
-                      caption: "This result was claimed before the reels stopped.",
-                      facts: { spin: 1, balance: 990, bet: 10, win: 0, notable: "ordinary" },
-                    }),
-                ],
+              : invocation === 2
+                ? [
+                    () => call("spin", "browser_click_at", { x: 975, y: 570 }),
+                    () =>
+                      answer({
+                        caption: "This result was claimed before the reels stopped.",
+                        facts: { spin: 1, balance: 990, bet: 10, win: 0, notable: "ordinary" },
+                      }),
+                  ]
+                : [
+                    () => call("chosen-pause", "bench_pause", { millis: 5000 }),
+                    () =>
+                      answer({
+                        caption: "A later caption repeats the previous spin's actual result.",
+                        facts: { spin: 1, balance: 1490, bet: 10, win: 500, notable: "big-win" },
+                      }),
+                  ],
           ).provide(effect),
       };
 
       yield* run(journal, (browser) =>
-        gameSegment(journal, browser, { driver, site, durationMillis: 10000, maxSpins: 1 }),
+        gameSegment(journal, browser, { driver, site, durationMillis: 10000, maxSpins: 2 }),
       );
 
       const metrics = yield* Schema.decodeUnknownEffect(
@@ -541,8 +550,8 @@ it.live("real Chromium: a caption published while spinning cannot grade as a set
       )(journal.metrics);
 
       expect(metrics.spinsStarted).toBe(1);
-      expect(metrics.spinsCompleted).toBe(0);
-      expect(metrics.unmatchedResultCaptions).toBe(1);
+      expect(metrics.spinsCompleted).toBe(1);
+      expect(metrics.unmatchedResultCaptions).toBe(2);
       expect(metrics.anyFalseFactRate).toBe(1);
       expect(metrics.captions.at(-1)?.resultQualification).toBe(
         "no-validated-result-before-caption",

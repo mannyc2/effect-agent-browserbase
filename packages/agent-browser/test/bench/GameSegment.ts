@@ -145,6 +145,7 @@ export const segmentMetrics = (input: {
   const reactions = results.map((receipt) => {
     const caption = input.captions.find(
       (candidate) =>
+        candidate.resultQualification !== "no-validated-result-before-caption" &&
         candidate.atMillis >= receipt.receivedAtMillis &&
         candidate.output.caption.length > 0 &&
         candidate.output.facts.spin === receipt.event.spin,
@@ -280,6 +281,20 @@ const resultTruth = (site: GameSite, spin: number, window?: Interval): Truth | u
     );
 
   if (receipt?.event.tag !== "result") return undefined;
+  if (
+    window !== undefined &&
+    !site
+      .events()
+      .some(
+        (candidate) =>
+          candidate.kind === "reels" &&
+          candidate.event.tag === "spinStart" &&
+          candidate.event.spin === spin &&
+          candidate.receivedAtMillis >= window.start &&
+          candidate.receivedAtMillis <= window.end,
+      )
+  )
+    return undefined;
 
   return {
     facts: {
@@ -593,6 +608,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
           "Use the current pictures to play exactly one spin. If the game is busy, use bench_pause and inspect the next picture until SPIN is available. Click the rendered SPIN control or press Space once, then choose pauses from the pictures until the reels stop. Finish with a short result caption and facts spin (visible SPIN counter), balance, bet, win (LAST WIN), and notable (ordinary, near-miss, big-win, bonus, or losing-streak). This episode admits one shared point-click or keyboard attempt; typing is limited to one character. An input acknowledgement does not prove a result.",
           [],
           (publishedAt) => {
+            if (inputAttemptsRemaining !== 0) return undefined;
             const state = site.state("reels");
 
             return resultTruth(site, state.spin, {

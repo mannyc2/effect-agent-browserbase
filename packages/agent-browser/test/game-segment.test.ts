@@ -137,6 +137,24 @@ it("missing or wrong spin captions do not claim a reaction; false money facts re
   expect(metrics.anyFalseFactRate).toBe(1);
 });
 
+it("a later unmatched claim cannot become an eligible result reaction", () => {
+  const claimed = caption(3500);
+
+  const metrics = measure([
+    {
+      ...claimed,
+      truth: { facts: {} },
+      grade: grade(claimed.output, { facts: {} }),
+      resultQualification: "no-validated-result-before-caption",
+    },
+  ]);
+
+  expect(metrics.unmatchedResultCaptions).toBe(1);
+  expect(metrics.resultCaptions[0]?.captionAtMillis).toBeNull();
+  expect(metrics.eligibleToAirRate).toBe(0);
+  expect(metrics.anyFalseFactRate).toBe(1);
+});
+
 it("unchanged pictures and silent gaps count as dead air; freezes use spin windows", () => {
   const metrics = measure(
     [caption(3500)],
