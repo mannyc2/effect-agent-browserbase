@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Clock, Effect } from "effect";
 
 import { driftMarkup, driftSite, operators } from "./fixtures/DriftSite.ts";
 
@@ -58,4 +58,21 @@ it.live(
         expect(malformed.status).toBe(400);
       }),
     ),
+);
+
+it.live("a seeded slow visit delays its actual first HTML response", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const site = yield* driftSite;
+
+      site.configure("slow", 1, "slow");
+      const started = yield* Clock.monotonicTimeNanos;
+      const markup = yield* Effect.promise(async () => (await fetch(`${site.url}/portal`)).text());
+      const elapsedMillis = Number((yield* Clock.monotonicTimeNanos) - started) / 1e6;
+
+      expect(elapsedMillis).toBeGreaterThanOrEqual(1000);
+      expect(markup).toContain('data-page="markets">Markets');
+      expect(site.events()).toHaveLength(0);
+    }),
+  ),
 );
