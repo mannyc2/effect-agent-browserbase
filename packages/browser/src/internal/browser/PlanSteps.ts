@@ -6,6 +6,7 @@ import {
   FillFormResult,
   InputReceipt,
   type KeyModifier,
+  type PointerClickRequest,
   NavigationResult,
   type WaitForElementRequest,
 } from "../../BrowserData.ts";
@@ -78,6 +79,10 @@ export interface StepControls {
       y: number,
       options: ExecutionOptions,
     ) => Effect.Effect<unknown, BrowserError>;
+    readonly pointerClick: (
+      request: PointerClickRequest,
+      options: ExecutionOptions,
+    ) => Effect.Effect<object, BrowserError>;
     readonly pointerMove: (
       to: NativePoint,
       options: ExecutionOptions,
@@ -184,6 +189,9 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
 
       const planOptions: ExecutionOptions = {
         ...context.options,
+        ...(context.coordinatePolicy === undefined
+          ? {}
+          : { coordinatePolicy: context.coordinatePolicy }),
         ...(context.performance === undefined
           ? {}
           : {
@@ -289,6 +297,19 @@ export const makePlanSteps = ({ target, controls, chargeHostRead }: StepDependen
                 : controls.scrollTo(indexed(mode.target), planOptions)
             ).pipe(Effect.flatMap((url) => decodeReceipt(ActionResult, { url })));
           }
+          case "PointerClick":
+            return controls.operations
+              .pointerClick(
+                {
+                  ...action.at,
+                  ...(action.button === undefined ? {} : { button: action.button }),
+                  ...(action.clickCount === undefined ? {} : { clickCount: action.clickCount }),
+                },
+                planOptions,
+              )
+              .pipe(
+                Effect.flatMap((value) => decodeReceipt(InputReceipt, { ...value, kind: "click" })),
+              );
           case "PointerMove":
             return controls.operations
               .pointerMove(action.to, planOptions)

@@ -168,7 +168,15 @@ const makePayload = <A extends Schema.Struct.Fields>(address: A) => {
 
   /** A preparatory or burst acknowledgement; absent when the reply completed the logical input. */
   const acknowledgement = Schema.Struct({
-    subphase: Schema.Literals(["scroll-into-view", "focus", "key-burst", "scroll-burst"]),
+    subphase: Schema.Literals([
+      "scroll-into-view",
+      "focus",
+      "key-burst",
+      "scroll-burst",
+      "pointer-path",
+      "pointer-place",
+      "pointer-up",
+    ]),
     logicalComplete: Schema.Boolean,
   });
 

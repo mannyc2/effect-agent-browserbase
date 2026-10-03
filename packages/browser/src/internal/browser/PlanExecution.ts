@@ -12,7 +12,7 @@ import {
   type Scope,
 } from "effect";
 
-import type { ElementAdmission } from "../../Browser.ts";
+import type { CoordinateAdmission, ElementAdmission } from "../../Browser.ts";
 import {
   type Checkpoint,
   type CheckpointOptions,
@@ -54,6 +54,7 @@ export interface TargetBinding {
 export interface StepExecution {
   readonly options: ExecutionOptions;
   readonly policy?: ElementAdmission;
+  readonly coordinatePolicy?: CoordinateAdmission;
   readonly checkpoint?: CheckpointOptions;
   readonly phase: (phase: RunPhase, fieldIndex?: number) => void;
   readonly targets: (bindings: ReadonlyArray<TargetBinding>) => void;
@@ -619,6 +620,9 @@ export const makePlanExecution = (configuration: PlanExecutionOptions) => {
             const context: StepExecution = {
               ...(performance === undefined ? {} : { performance }),
               ...(options.policy === undefined ? {} : { policy: options.policy }),
+              ...(options.coordinatePolicy === undefined
+                ? {}
+                : { coordinatePolicy: options.coordinatePolicy }),
               ...(options.checkpoint === undefined
                 ? {}
                 : { checkpoint: freezeData({ ...options.checkpoint }) }),

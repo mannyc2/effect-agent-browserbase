@@ -1,7 +1,8 @@
 import { Result, Schema } from "effect";
 import type { ElementHandle, Page } from "playwright-core";
 
-import type { InputReceipt } from "../../BrowserData.ts";
+import type { CoordinateAdmission } from "../../Browser.ts";
+import { Identifier, type InputReceipt, type PointerClickRequest } from "../../BrowserData.ts";
 import { Reasons } from "../../Errors.ts";
 import type { DriverTarget, ElementTarget } from "./Driver.ts";
 import type { ElementAccess } from "./ElementAccess.ts";
@@ -22,6 +23,7 @@ export interface NativeInput {
   /** The last point this driver commanded on the page, or null if it never placed the pointer. */
   readonly position: NativePoint | null;
   readonly intended?: InputReceipt["intended"];
+  readonly hitTest?: InputReceipt["hitTest"];
 }
 
 const Reach = Schema.Struct({
@@ -120,7 +122,7 @@ const hitPoint = (
 /**
  * Real pointer input to the exact target page. Every command is one the browser would receive from
  * a person, so handlers see trusted events and the browser decides what is under the pointer.
- * Nothing here scrolls, eases or retries: a caller that wants a trajectory sends its points.
+ * Plain input moves directly. Performed input publishes a bounded glide and may send its path.
  */
 export const makePointer = (targets: Targets, elements: ElementAccess) => {
   const { current } = targets;
@@ -145,6 +147,172 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
   };
 
   const glideFrom = (page: Page) => positions.get(page) ?? aims.get(page) ?? null;
+
+  /** Bounded scheduled moves are submitted in order without waiting for preceding replies. */
+  const glide = async (
+    page: Page,
+    ticket: PerformedTicket,
+    schedule: {
+      readonly durationMillis: number;
+      readonly samples: ReadonlyArray<{
+        readonly offsetMillis: number;
+        readonly position: NativePoint;
+      }>;
+    },
+    started: bigint,
+    check: () => void,
+  ): Promise<void> => {
+    const pacing = ownerPacing(ticket);
+
+    if (ticket.performance.plan.profile.sendPath === true && schedule.samples.length >= 2) {
+      const pending: Array<Promise<void>> = [];
+
+      let schedulingFailure: { readonly cause: unknown } | undefined;
+
+      try {
+        for (const sample of schedule.samples) {
+          await pacing.pauseUntil(started + BigInt(Math.round(sample.offsetMillis * 1e6)));
+          check();
+          if (pending.length === 0) ticket.dispatch();
+          // Catch immediately, then join every reply below, so no rejected send escapes ownership.
+          pending.push(page.mouse.move(sample.position.x, sample.position.y));
+          void pending[pending.length - 1]?.catch(() => {});
+        }
+      } catch (cause) {
+        schedulingFailure = { cause };
+      }
+      const settled = await Promise.allSettled(pending);
+      const rejected = settled.find((reply) => reply.status === "rejected");
+
+      if (rejected?.status === "rejected") throw rejected.reason;
+      if (pending.length > 0)
+        ticket.acknowledge?.({ subphase: "pointer-path", logicalComplete: false });
+      if (schedulingFailure !== undefined) throw schedulingFailure.cause;
+      const last = schedule.samples.at(-1);
+
+      if (last !== undefined) {
+        positions.set(page, last.position);
+        aims.set(page, last.position);
+      }
+    } else if (schedule.durationMillis > 0)
+      await pacing.pauseUntil(started + BigInt(Math.round(schedule.durationMillis * 1e6)));
+    check();
+  };
+
+  const pointerClick = (
+    request: PointerClickRequest,
+    ticket: Ticket,
+    target: DriverTarget,
+    policy: CoordinateAdmission | undefined,
+  ) =>
+    sanitize(async () => {
+      const { entry, frame } = current(target);
+      const { page } = entry;
+      const epoch = targets.epochOf(frame);
+      const point = { x: request.x, y: request.y };
+
+      const check = () => {
+        ticket.check();
+        if (current(target).frame !== frame || targets.epochOf(frame) !== epoch)
+          throw failure(Reasons.Stale.make({}), ticket.outcome ?? "undispatched");
+      };
+
+      const viewport = safeDecode(
+        Schema.Struct({
+          width: Schema.Finite,
+          height: Schema.Finite,
+          scrollX: Schema.Finite,
+          scrollY: Schema.Finite,
+        }),
+        await page
+          .mainFrame()
+          .evaluate(() => ({ width: innerWidth, height: innerHeight, scrollX, scrollY })),
+      );
+
+      check();
+      if (point.x >= viewport.width || point.y >= viewport.height)
+        throw failure(Reasons.NotVisible.make({}), "undispatched");
+      if (policy !== undefined) {
+        let admitted = false;
+
+        try {
+          admitted = policy.admit(Object.freeze({ ...point })) === true;
+        } catch {
+          admitted = false;
+        }
+        check();
+        if (!admitted) throw failure(Reasons.Denied.make({}), "undispatched");
+      }
+      if (isPerformed(ticket)) {
+        const pacing = ownerPacing(ticket);
+
+        const planned = moveSchedule(ticket.performance.plan, {
+          from: glideFrom(page),
+          to: point,
+          viewport,
+        });
+
+        if (Result.isFailure(planned)) throw planned.failure;
+        pacing.requireDuration(planned.success.durationMillis);
+        const started = pacing.now();
+
+        if (planned.success.samples.length >= 2)
+          ticket.recordGlide?.({
+            target: { pageId: entry.id, frameId: targets.frameId(frame) },
+            startedMonotonicNanos: started,
+            samples: planned.success.samples,
+          });
+        await glide(page, ticket, planned.success, started, check);
+      }
+      // Sampling the native node under the point is optional host evidence, never admission.
+      let hitTest: NonNullable<NativeInput["hitTest"]> | null = null;
+
+      try {
+        const cdp = await page.context().newCDPSession(page);
+
+        try {
+          check();
+          hitTest = safeDecode(
+            Schema.Struct({ backendNodeId: Schema.Int, frameId: Identifier }),
+            await cdp.send("DOM.getNodeForLocation", {
+              x: Math.round(point.x + viewport.scrollX),
+              y: Math.round(point.y + viewport.scrollY),
+              includeUserAgentShadowDOM: true,
+            }),
+          );
+        } finally {
+          await cdp.detach().catch(() => {});
+        }
+      } catch {
+        check();
+      }
+      check();
+      ticket.dispatch();
+      await moveTo(page, point);
+      ticket.acknowledge?.({ subphase: "pointer-place", logicalComplete: false });
+      check();
+      const count = request.clickCount ?? 1;
+
+      for (let clickCount = 1; clickCount <= count; clickCount++) {
+        ticket.dispatch();
+
+        // Both ordered commands belong to this dispatch. Keep it pending until both reply,
+        // so cancellation cannot leave an acknowledged down with no owned release.
+        const replies = await Promise.allSettled([
+          page.mouse.down({ button: request.button ?? "left", clickCount }),
+          page.mouse.up({ button: request.button ?? "left", clickCount }),
+        ]);
+
+        const rejected = replies.find((reply) => reply.status === "rejected");
+
+        if (rejected?.status === "rejected") throw rejected.reason;
+        ticket.acknowledge?.({ subphase: "pointer-up", logicalComplete: clickCount === count });
+        check();
+      }
+      ticket.followUp?.();
+
+      return { ...receipt(page), hitTest };
+    });
 
   const pointerMove = (point: NativePoint, ticket: Ticket, target: DriverTarget) =>
     sanitize(async () => {
@@ -178,10 +346,11 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
             startedMonotonicNanos: started,
             samples: planned.success.samples,
           });
-        if (planned.success.durationMillis > 0)
-          await pacing.pauseUntil(
-            started + BigInt(Math.round(planned.success.durationMillis * 1e6)),
-          );
+        await glide(page, ticket, planned.success, started, () => {
+          ticket.check();
+          if (current(target).frame !== frame || targets.epochOf(frame) !== epoch)
+            throw failure(Reasons.Stale.make({}), ticket.outcome ?? "undispatched");
+        });
         ticket.check();
         if (current(target).frame !== frame || targets.epochOf(frame) !== epoch)
           throw failure(Reasons.Stale.make({}), "undispatched");
@@ -470,8 +639,7 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
 
     if (schedule.samples.length >= 2)
       ticket.recordGlide?.({ target, startedMonotonicNanos: started, samples: schedule.samples });
-    if (schedule.durationMillis > 0)
-      await pacing.pauseUntil(started + BigInt(Math.round(schedule.durationMillis * 1e6)));
+    await glide(page, ticket, schedule, started, check);
     check();
     const beforeInput = await boxOf();
 
@@ -569,5 +737,5 @@ export const makePointer = (targets: Targets, elements: ElementAccess) => {
       return receipt(page);
     });
 
-  return { pointerMove, hover, wheel, receipt, invalidate, preparePress };
+  return { pointerClick, pointerMove, hover, wheel, receipt, invalidate, preparePress };
 };

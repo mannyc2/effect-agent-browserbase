@@ -13,11 +13,13 @@ import {
   NavigateRequest,
   type NavigationResult,
   ObservedElement,
+  PointerClickRequest,
   PointerMoveRequest,
   ScrollRequest,
   TargetUrl,
   TypeRequest,
   Viewport,
+  ViewportPoint,
   ViewportRect,
   WaitForElementRequest,
   WheelRequest,
@@ -54,6 +56,8 @@ const motionRange = (maximum: number, minimum = 0) =>
 /** Chosen bounded presentation policy; these constants are not scientific calibration. */
 export const MotionProfile = Schema.Struct({
   name: Schema.Literal("default"),
+  /** Send bounded real pointer moves along glides; omission keeps presentation-only paths. */
+  sendPath: Schema.optionalKey(Schema.Boolean),
   pointer: Schema.Struct({
     duration: motionRange(5000),
     aimInset: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 0.49 })),
@@ -309,6 +313,11 @@ const actionSchema = <T extends Schema.Constraint>(target: T) => {
       }).annotate(closed),
     },
     PointerMove: { ...PointerMoveRequest.fields },
+    PointerClick: {
+      at: ViewportPoint,
+      button: PointerClickRequest.fields.button,
+      clickCount: PointerClickRequest.fields.clickCount,
+    },
     Wheel: { ...WheelRequest.fields },
     Wait: {
       mode: Schema.Union([
@@ -436,7 +445,14 @@ export type NativePhase = "Prepared" | "Dispatched" | "Acknowledged" | "FollowUp
 
 /** A preparatory native acknowledgement does not imply completed logical input. */
 export interface AcknowledgementFact {
-  readonly subphase: "scroll-into-view" | "focus" | "key-burst" | "scroll-burst";
+  readonly subphase:
+    | "scroll-into-view"
+    | "focus"
+    | "key-burst"
+    | "scroll-burst"
+    | "pointer-path"
+    | "pointer-place"
+    | "pointer-up";
   readonly logicalComplete: boolean;
 }
 

@@ -139,7 +139,7 @@ export const makeOperations = (
   hooks: Hooks,
   continuation: Continuation,
 ) => {
-  const { policy } = options;
+  const { policy, coordinatePolicy } = options;
   const failure = (call: Call) => failureFrom(hooks, call, page);
   let runs = 0n;
 
@@ -169,7 +169,12 @@ export const makeOperations = (
     const operation = yield* page
       .start(
         { version: 1, steps: [{ id: call.tool, action: intent }] },
-        { ...execution(), inputs, ...(policy === undefined ? {} : { policy }) },
+        {
+          ...execution(),
+          inputs,
+          ...(policy === undefined ? {} : { policy }),
+          ...(coordinatePolicy === undefined ? {} : { coordinatePolicy }),
+        },
       )
       .pipe(
         Effect.tapError((error) => Effect.sync(() => hooks.refused?.(error, call))),
@@ -491,6 +496,8 @@ export const makeOperations = (
         },
         call,
       ),
+    clickAt: (request: Parameters<Frame["pointerClick"]>[0], call: Call) =>
+      input({ _tag: "PointerClick", at: { x: request.x, y: request.y } }, call),
     pointerMove: (request: Parameters<Frame["pointerMove"]>[0], call: Call) =>
       input({ _tag: "PointerMove", ...request }, call),
     hover: (reference: ObservedElement, call: Call) =>
@@ -580,6 +587,8 @@ export const makeLayers = (
         hooks.run(operations.readMore(observationId, call("browser_read_more", context))),
     }),
     nativeHandlers: nativeToolkit.toLayer({
+      browser_click_at: (request, context) =>
+        hooks.run(operations.clickAt(request, call("browser_click_at", context))),
       browser_pointer_move: (request, context) =>
         hooks.run(operations.pointerMove(request, call("browser_pointer_move", context))),
       browser_hover: (reference, context) =>
@@ -641,6 +650,11 @@ export const makeLayers = (
         return hooks.run(
           followed(operations.selectOption(request, current), current, sizes.action),
         );
+      },
+      browser_click_at_and_inspect: (request, context) => {
+        const current = call("browser_click_at_and_inspect", context);
+
+        return hooks.run(followed(operations.clickAt(request, current), current, sizes.input));
       },
       browser_pointer_move_and_inspect: (request, context) => {
         const current = call("browser_pointer_move_and_inspect", context);

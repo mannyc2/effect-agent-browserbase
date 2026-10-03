@@ -141,6 +141,7 @@ export const OperationPolicies = {
   "action-result": boundary,
   // native pointer input
   "pointer-move": onPage({ mutation: true, charge: "action", refuseHeld: true, ready: true }),
+  "pointer-click": onPage({ mutation: true, charge: "action", refuseHeld: true, ready: true }),
   hover: onPage({ mutation: true, charge: "action", refuseHeld: true, ready: true }),
   wheel: onPage({ mutation: true, charge: "action", refuseHeld: true, ready: true }),
   // native key input

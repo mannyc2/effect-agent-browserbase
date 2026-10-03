@@ -26,6 +26,7 @@ import {
   ObservationOptions,
   ObservedElement,
   PageInfo,
+  PointerClickRequest,
   PointerMoveRequest,
   PressRequest,
   ReadTextRequest,
@@ -56,6 +57,7 @@ import type { Bindings } from "./Bindings.ts";
 import { OperationOptionsSchema } from "./OperationOptions.ts";
 import { issueFrame, issuedPageOf, issuePage, issueSession } from "./PageRegistry.ts";
 import {
+  checkedPointerClickOptions,
   checkedDescriptor,
   checkedLivePlan,
   checkedResolveOptions,
@@ -140,6 +142,7 @@ export const decoded =
     );
 
 const action = decoded(ActionResult, "action-result", "performed");
+const pointerClicked = decoded(InputReceipt, "pointer-click", "performed");
 const pointerMoved = decoded(InputReceipt, "pointer-move", "performed");
 const hovered = decoded(InputReceipt, "hover", "performed");
 const wheeled = decoded(InputReceipt, "wheel", "performed");
@@ -171,6 +174,7 @@ const makeTarget = (
   | "click"
   | "fill"
   | "scroll"
+  | "pointerClick"
   | "pointerMove"
   | "hover"
   | "wheel"
@@ -239,6 +243,15 @@ const makeTarget = (
         ),
       ),
       Effect.flatMap((url) => action({ url })),
+    ),
+  pointerClick: (request, options) =>
+    checked(PointerClickRequest, request, "pointer-click").pipe(
+      Effect.flatMap((value) =>
+        checkedPointerClickOptions(options).pipe(
+          Effect.flatMap((options) => bound.pointerClick(value, options)),
+        ),
+      ),
+      Effect.flatMap((input) => pointerClicked({ ...input, kind: "click" })),
     ),
   pointerMove: (request, options) =>
     checked(PointerMoveRequest, request, "pointer-move").pipe(

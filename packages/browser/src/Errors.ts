@@ -54,6 +54,7 @@ export const BrowserOperation = Schema.Literals([
   "action-result",
   // native pointer input
   "pointer-move",
+  "pointer-click",
   "hover",
   "wheel",
   // native key input

@@ -1,6 +1,7 @@
 import { Duration, Effect, Schema } from "effect";
 
 import type {
+  CoordinateAdmission,
   ElementAdmission,
   OperationOptions,
   ResolveOptions,
@@ -162,6 +163,34 @@ const RunData = Schema.Struct({
   checkpoint: Schema.optionalKey(CheckpointOptions),
 });
 
+const CoordinateFunction = Schema.declare<CoordinateAdmission["admit"]>(
+  (value): value is CoordinateAdmission["admit"] => typeof value === "function",
+);
+
+const coordinatePolicy = Effect.fnUntraced(function* (value: unknown, operation: BrowserOperation) {
+  if (value === undefined) return undefined;
+  const fields = yield* hostFields(value, ["admit"], operation);
+
+  const admit = yield* Schema.decodeUnknownEffect(CoordinateFunction)(fields.admit).pipe(
+    Effect.mapError(() => configuration(operation)),
+  );
+
+  return Object.freeze({ admit });
+});
+
+export const checkedPointerClickOptions = Effect.fnUntraced(function* (value: unknown) {
+  const fields = yield* hostFields(
+    value,
+    ["timeoutMillis", "admission", "coordinatePolicy"],
+    "pointer-click",
+  );
+
+  const operation = yield* operationData(fields, "pointer-click");
+  const policy = yield* coordinatePolicy(fields.coordinatePolicy, "pointer-click");
+
+  return { ...operation, ...(policy === undefined ? {} : { coordinatePolicy: policy }) };
+});
+
 const AdmissionFunction = Schema.declare<ElementAdmission["admit"]>(
   (value): value is ElementAdmission["admit"] => typeof value === "function",
 );
@@ -179,6 +208,7 @@ export const checkedRunOptions = (
         "through",
         "inputs",
         "policy",
+        "coordinatePolicy",
         "checkpoint",
         "timeoutMillis",
         "admission",
@@ -204,6 +234,8 @@ export const checkedRunOptions = (
               ),
             ),
           )(fields.startAt).pipe(Effect.mapError(() => configuration("run")));
+
+    const coordinate = yield* coordinatePolicy(fields.coordinatePolicy, "run");
 
     let policy: ElementAdmission | undefined;
 
@@ -267,6 +299,7 @@ export const checkedRunOptions = (
         ? {}
         : { checkpoint: Object.freeze({ ...data.checkpoint }) }),
       ...(policy === undefined ? {} : { policy }),
+      ...(coordinate === undefined ? {} : { coordinatePolicy: coordinate }),
     });
   });
 
