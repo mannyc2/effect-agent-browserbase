@@ -1,12 +1,17 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 
-import { HostedGamesError, prepareHostedGames, quickTunnelUrl } from "./bench/HostedGames.ts";
+import {
+  HostedGamesError,
+  prepareFixtureTunnel,
+  prepareHostedGames,
+  quickTunnelUrl,
+} from "./bench/HostedGames.ts";
 import { gameSite } from "./fixtures/GameSite.ts";
 
 type Mode = "ready" | "second-exit" | "second-timeout" | "same-origin" | "flood";
@@ -97,6 +102,67 @@ it("quick tunnel origins ignore documentation links and malformed or decorated U
   ])
     expect(quickTunnelUrl(url)).toBeUndefined();
 });
+
+it.live("single-fixture preparation owns one child and forwards the exact loopback host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const script = yield* scriptedTunnel("ready");
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const prepared = yield* prepareFixtureTunnel("http://127.0.0.1:3210", {
+            executable: script.executable,
+            startupTimeoutMillis: 2000,
+          });
+
+          expect(prepared.url).toBe("https://lobby-scripted.trycloudflare.com");
+          expect(yield* script.started()).toMatchObject([
+            {
+              args: [
+                "tunnel",
+                "--no-autoupdate",
+                "--url",
+                "http://127.0.0.1:3210",
+                "--http-host-header",
+                "127.0.0.1:3210",
+              ],
+            },
+          ]);
+          expect(yield* script.stopped()).toEqual([]);
+        }),
+      );
+      expect(yield* script.stopped()).toEqual([1]);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("single-fixture preparation refuses decorated or remote URLs before starting a child", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const script = yield* scriptedTunnel("ready");
+      const fs = yield* FileSystem.FileSystem;
+
+      for (const localUrl of [
+        "https://127.0.0.1:3210",
+        "http://example.com",
+        "http://user@localhost:3210",
+        "http://localhost:3210/path",
+        "http://localhost:3210?query=value",
+        "http://localhost:3210#fragment",
+        "malformed",
+      ]) {
+        const result = yield* prepareFixtureTunnel(localUrl, {
+          executable: script.executable,
+        }).pipe(Effect.result);
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(Schema.is(HostedGamesError)(result.failure)).toBe(true);
+      }
+      expect(yield* fs.exists(join(dirname(script.executable), "started"))).toBe(false);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.live(
   "preparation preserves the exact ledger and closes both children while the local server remains owned",
