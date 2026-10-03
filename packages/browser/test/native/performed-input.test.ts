@@ -581,36 +581,45 @@ it.live("real CDP: a performed Press with modifiers sends the same key events as
   ),
 );
 
-it.live("real CDP: a long shifted performed Type keeps complete recording evidence", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const session = yield* open("/shift");
-      const page = session.initialPage;
-      const text = "AZ".repeat(128);
+it.live(
+  "real CDP: a long shifted performed Type keeps complete recording evidence",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const session = yield* open("/shift");
+        const page = session.initialPage;
+        const text = "AZ".repeat(128);
 
-      const ran = yield* page.run(
-        {
-          version: 1,
-          steps: [
-            { id: "focus", action: { _tag: "Click", target: input("Text") } },
-            {
-              id: "text",
-              action: {
-                _tag: "Type",
-                target: input("Text"),
-                text: { _tag: "Literal", value: text },
+        const ran = yield* page.run(
+          {
+            version: 1,
+            steps: [
+              { id: "focus", action: { _tag: "Click", target: input("Text") } },
+              {
+                id: "text",
+                action: {
+                  _tag: "Type",
+                  target: input("Text"),
+                  text: { _tag: "Literal", value: text },
+                },
               },
-            },
-          ],
-        },
-        { style: { seed: 23, motion: instant }, within: "60 seconds" },
-      );
+            ],
+          },
+          { style: { seed: 23, motion: instant }, within: "60 seconds" },
+        );
 
-      expect((yield* page.readText({ selector: "#mirror" })).text).toBe(text);
-      expect(ran.steps.map((step) => step.recorded._tag)).toEqual(["Complete", "Complete"]);
-      expect((yield* Plan.recorded(ran)).steps).toHaveLength(2);
-    }).pipe(Effect.provide(layer)),
-  ),
+        expect((yield* page.readText({ selector: "#mirror" })).text).toBe(text);
+        expect(ran.steps.map((step) => step.recorded._tag)).toEqual(["Complete", "Complete"]);
+        expect((yield* Plan.recorded(ran)).steps).toHaveLength(2);
+      }).pipe(
+        // The recording check's 60 s run bound cannot extend the owner's default 10 s action
+        // deadline. Give this long input the same finite bound, including its measured pace.
+        Effect.provide(
+          Chromium.layer({ actionTimeoutMillis: 60_000 }).pipe(Layer.provide(NodeCrypto.layer)),
+        ),
+      ),
+    ),
+  75_000,
 );
 
 it.live("real CDP: a performed Hover reaches a partly clipped control a plain one reaches", () =>
