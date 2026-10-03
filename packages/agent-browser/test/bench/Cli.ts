@@ -10,6 +10,7 @@ import { gameSite } from "../fixtures/GameSite.ts";
 import * as Backends from "./Backends.ts";
 import { Ledger, Sessions } from "./Budget.ts";
 import { CursorSample, renderClip } from "./Clip.ts";
+import { segmentCallCaps } from "./GameSegment.ts";
 import { prepareHostedGames } from "./HostedGames.ts";
 import { InputEvent, makeInputLog } from "./InputLog.ts";
 import { measured } from "./Models.ts";
@@ -121,6 +122,15 @@ export const printedPlan = (options: {
   style: options.style ?? "plain",
   condition: options.condition ?? "picture",
   maxSpins: options.scene === "game-segment" ? (options.maxSpins ?? 400) : null,
+  gameSegment:
+    options.scene === "game-segment"
+      ? {
+          perRun: segmentCallCaps(options.maxSpins, options.announceThenSpin),
+          modelCallsMaximum:
+            options.trials *
+            segmentCallCaps(options.maxSpins, options.announceThenSpin).totalModelCalls,
+        }
+      : null,
   announceThenSpin: options.announceThenSpin ?? false,
   airDelayMillis: options.airDelayMillis ?? 1000,
   fixtureExposure:

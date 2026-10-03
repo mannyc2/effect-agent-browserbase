@@ -158,12 +158,40 @@ it.effect(
       expect(value).toMatchObject({
         scene: "game-segment",
         maxSpins: 1,
+        gameSegment: {
+          perRun: { episodes: 1, inputAttemptsPerEpisode: 1, totalModelCalls: 18 },
+          modelCallsMaximum: 18,
+        },
         runs: 1,
         matrix: null,
         announceThenSpin: false,
       });
     }).pipe(Effect.provide(NodeServices.layer)),
 );
+it("the printed segment plan bounds model calls across all announced episodes and trials", () => {
+  expect(
+    printedPlan({
+      scene: "game-segment",
+      backend: "chromium",
+      trials: 3,
+      maxUsd: 0.5,
+      durationMillis: 600000,
+      announceThenSpin: true,
+    }),
+  ).toMatchObject({
+    gameSegment: {
+      perRun: {
+        episodeModelCalls: 6,
+        episodeToolCalls: 5,
+        announcementModelCalls: 1,
+        episodes: 400,
+        actualSpinCap: 400,
+        totalModelCalls: 2812,
+      },
+      modelCallsMaximum: 8436,
+    },
+  });
+});
 it.effect(
   "unsupported matrix and hosted selections fail before fixture or session preparation",
   () =>
