@@ -417,6 +417,20 @@ export const makeActions = (
   const readBack = (ticket: Ticket, wanted: number) =>
     Math.min(wanted, Math.max(0, ticket.remainingMillis() - 250));
 
+  const nativeClick = async (
+    element: ElementHandle<Element>,
+    options: Parameters<ElementHandle<Element>["click"]>[0],
+  ): Promise<void> => {
+    try {
+      await element.click(options);
+    } catch (error) {
+      // The native timer can win the shared deadline before the owner's Effect timer.
+      // Its exact error class keeps the same reason; the owner still decides dispatch outcome.
+      if (isTimeoutError(error)) throw failure(Reasons.Timeout.make({}));
+      throw error;
+    }
+  };
+
   const clickElement = (
     page: Page,
     element: ElementHandle<Element>,
@@ -444,7 +458,7 @@ export const makeActions = (
           ticket.dispatch();
           // The click moves the pointer where it aimed; the next glide starts there.
           pointer.invalidate(page, planned.intended.position);
-          await element.click({
+          await nativeClick(element, {
             timeout: timeout(ticket),
             scroll: "none",
             position: planned.intended.relativePosition,
@@ -461,7 +475,7 @@ export const makeActions = (
 
     const dispatch = async () => {
       pointer.invalidate(page);
-      await element.click({ timeout: timeout(ticket) });
+      await nativeClick(element, { timeout: timeout(ticket) });
       ticket.acknowledge?.();
       ticket.followUp?.();
     };

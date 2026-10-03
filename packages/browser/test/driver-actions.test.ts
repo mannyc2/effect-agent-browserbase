@@ -1,9 +1,10 @@
 import { EventEmitter } from "node:events";
 
-import { expect, it } from "@effect/vitest";
+import { expect, it, vi } from "@effect/vitest";
 import { Effect } from "effect";
+import { errors } from "playwright-core";
 
-import { nativeSelection, waitEvent } from "../src/internal/browser/Actions.ts";
+import { makeActions, nativeSelection, waitEvent } from "../src/internal/browser/Actions.ts";
 import { makeKeyboard } from "../src/internal/browser/Keyboard.ts";
 import type { Ticket } from "../src/internal/browser/Owner.ts";
 import { prepare } from "../src/internal/browser/Performance.ts";
@@ -182,6 +183,81 @@ it("an event wait is bounded by the ticket's remaining time", async () => {
   });
   expect(source.listeners.size).toBe(0);
 });
+
+it.each(["plain", "performed"] as const)(
+  "a %s click preserves the installed engine's timeout before the owner timer fires",
+  async (style) => {
+    for (const genuine of [true, false]) {
+      const error = genuine
+        ? new errors.TimeoutError("elementHandle.click: Timeout 1000ms exceeded.")
+        : Object.assign(new Error("elementHandle.click: Timeout 1000ms exceeded."), {
+            name: "TimeoutError",
+          });
+
+      const page = {};
+      const frame = { url: () => "https://fixture.test/" };
+      const click = vi.fn<() => Promise<void>>(() => Promise.reject(error));
+      const dispatch = vi.fn<() => void>();
+      const acknowledge = vi.fn<() => void>();
+
+      const actions = makeActions(
+        {} as never,
+        { current: () => ({ entry: { page }, frame }) } as never,
+        {
+          resolve: async () => ({
+            element: { click, evaluate: async () => null },
+            check: () => {},
+            readmit: async () => {},
+            release: async () => {},
+          }),
+        } as never,
+        (raised) => raised instanceof errors.TimeoutError,
+      );
+
+      // Geometry is already admitted here; this regression controls which deadline fails first.
+      vi.spyOn(actions.pointer, "preparePress").mockResolvedValue({
+        position: null,
+        intended: {
+          position: { x: 5, y: 5 },
+          relativePosition: { x: 5, y: 5 },
+          qualification: "checked-exact-node-sample",
+        },
+        roundTripNanos: 0n,
+      });
+
+      const ticket =
+        style === "performed"
+          ? performedTicket({ at: 0n }, millis(10000))
+          : ticketFor(new AbortController().signal);
+
+      await expect(
+        actions.click(
+          "button",
+          { ...ticket, dispatch, acknowledge },
+          async (send) => {
+            await send();
+
+            return {
+              target: { ...target, generation: 1 },
+              kind: "click",
+              position: null,
+              startedMonotonicNanos: 0n,
+              completedMonotonicNanos: 0n,
+            };
+          },
+          undefined,
+          target,
+        ),
+      ).rejects.toMatchObject({
+        _tag: "NativeFailure",
+        reason: { _tag: genuine ? "Timeout" : "Provider" },
+      });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(acknowledge).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it("plain typing submits ordered balanced input while earlier replies are held, within a finite window", async () => {
   const controller = new AbortController();
