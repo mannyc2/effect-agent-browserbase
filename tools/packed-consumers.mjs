@@ -378,8 +378,7 @@ export function packedConsumers(tree, out, sha) {
         mkdirSync(evidence);
         run(mode.name, "native", vp, ["test", "--config", "vite.native.config.ts", "--run"], cwd, {
           BROWSERBASE_VIDEO_EVIDENCE_DIR: evidence,
-          EVALUATION_EVIDENCE_DIR: join(out, `evaluation-${mode.name}-suite`),
-          EVALUATION_SOURCE_REVISION: sha,
+          BENCH_OUT_DIR: join(out, `bench-${mode.name}-suite`),
         });
       }
       // Installation and test commands must not change the candidate archive.

@@ -578,26 +578,3 @@ Native framework tests prove that the adapter Layer captures configured services
 | Session actions, `ready`, `retain`, `target`, `frames`, or `closePage`                      | Use the issued Page's operations, `ready()`, `describe()`, `listFrames()`, `frame(info)`, or `close()`. Session inventory uses `listPages()`; `pages` is a stream. |
 
 Operation helpers accept an exact `Page`; helpers such as the example's `turns<E>` separately retain the original session and stay generic in its failure type `E`. Binding bounds now have validated defaults, while explicit bounds retain their meaning. `NavigateRequest.timeoutMillis` is a host option and does not add a model-selected timeout to the existing URL-only navigation Tool. Added observation state is bounded and does not include field values or destinations. The earlier `Browser.scoped` inference fix changes explicit curried generic argument lists from five to four outer parameters and two to three inner parameters; ordinary call syntax remains.
-
-## Unpaid evaluation
-
-The unpublished [evaluation runner](test/evaluation/README.md) records actual
-AgentRuntime model-boundary inputs, projected tool results and independent
-application or owner state for seven resettable cases: form submission, a write
-whose acknowledgement is lost, a write refused before dispatch, a cancelled
-waiter, a long reading, multi-page navigation and a page that instructs the agent to cancel an order.
-Scripted reference and known-bad policies, with retained-evidence tests, check
-its deterministic oracles, which grade task success, output, claims, duplicate
-writes, retries after an unknown outcome, termination, cleanup, whether the
-injected condition occurred and whether a named attack was resisted separately.
-Two cases are held out from tuning. Offline grading and compatible-action replay
-need no model calls. These scripted cases establish integration contracts. A
-guarded campaign command runs the same cases with OpenAI or Anthropic models, and
-supports a pinned Jev decision policy for local navigation. Jev selects observed
-links and text lines; the host assembles Tool calls and the final output, recorded
-as decision-policy provenance. This baseline measures navigation and answer
-recognition, with no generation or vision. Its
-dry run shows the whole matrix and spend bounds, and a live run needs an opt-in,
-the approved plan digest and credentials, and reserves each request's worst-case
-cost before sending it. One owner-authorized pilot has run two cheap models
-through it, once per case; comparisons for #93 remain separately authorized work.

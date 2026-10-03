@@ -1,14 +1,14 @@
 {
-  // The real-model evaluation imports the pinned @effect/ai-openai and @effect/ai-anthropic,
+  // The bench model plumbing imports the pinned @effect/ai-openai and @effect/ai-anthropic,
   // whose published declarations fail a library check. This project checks that code, and
   // everything it imports, as strictly as tsconfig.json does; it skips only declaration files.
   "extends": "./tsconfig.json",
   "compilerOptions": { "skipLibCheck": true },
   "include": [
-    "test/campaign.test.ts",
-    "test/evaluation/Cli.ts",
-    "test/evaluation/Main.ts",
-    "test/evaluation/Provider.ts"
+    "test/bench.test.ts",
+    "test/bench/Cli.ts",
+    "test/bench/Main.ts",
+    "test/bench/Models.ts"
   ],
   "exclude": []
 }

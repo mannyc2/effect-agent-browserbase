@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { ByteSize, Effect, FileSystem, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-/** Evaluation artifacts only: neither pixels nor captions are sent back to the agent. */
+/** Bench artifacts only: neither pixels nor captions are sent back to the agent. */
 export const Frame = Schema.Struct({
   bytes: Schema.Uint8Array.check(Schema.isMinLength(4), Schema.isMaxLength(4 * 1024 * 1024)),
   sourceTimeMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
@@ -22,7 +22,7 @@ export type Frame = typeof Frame.Type;
 
 export const Commentary = Schema.Struct({
   at: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  postId: Schema.String.check(Schema.isMaxLength(256)),
+  label: Schema.String.check(Schema.isMaxLength(256)),
   caption: Schema.String.check(Schema.isMaxLength(1024)),
 });
 
@@ -30,19 +30,19 @@ export type Commentary = typeof Commentary.Type;
 
 const Input = Schema.Struct({
   outputDirectory: Schema.NonEmptyString,
-  frames: Schema.Array(Frame).check(Schema.isMinLength(1), Schema.isMaxLength(1800)),
+  frames: Schema.Array(Frame).check(Schema.isMinLength(1), Schema.isMaxLength(36000)),
   commentary: Schema.Array(Commentary).check(Schema.isMaxLength(64)),
   startedAt: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   endedAt: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 305_000 })),
-  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1800 })),
-  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 })),
+  maxDurationMillis: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 900_000 })),
+  maxFrames: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 36000 })),
+  maxBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 512 * 1024 * 1024 })),
   label: Schema.String.check(Schema.isMaxLength(256)),
 });
 
 export type Input = typeof Input.Type;
 
-export class VideoError extends Schema.TaggedError<VideoError>()("EvaluationVideoError", {
+export class VideoError extends Schema.TaggedError<VideoError>()("BenchVideoError", {
   operation: Schema.String,
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
@@ -192,7 +192,7 @@ const Probe = Schema.Struct({
  * host end sets the last-image hold. This bridge cannot measure capture transport latency.
  * The caller retains native capture loss/stop facts separately and checksums this directory.
  */
-export const encode = Effect.fn("EvaluationVideo.encode")(function* (
+export const encode = Effect.fn("BenchVideo.encode")(function* (
   input: Input,
 ): Effect.fn.Return<
   Artifacts,
@@ -316,7 +316,7 @@ export const encode = Effect.fn("EvaluationVideo.encode")(function* (
   const srt = cues
     .map(
       (cue, index) =>
-        `${index + 1}\n${timestamp(cue.startMillis, ",")} --> ${timestamp(cue.endMillis, ",")}\n[${cue.postId}] ${cue.caption}\n`,
+        `${index + 1}\n${timestamp(cue.startMillis, ",")} --> ${timestamp(cue.endMillis, ",")}\n[${cue.label}] ${cue.caption}\n`,
     )
     .join("\n");
 
@@ -431,7 +431,7 @@ export const encode = Effect.fn("EvaluationVideo.encode")(function* (
         captionY + 30,
         ...cues.map(
           (cue) =>
-            wrap(`[${cue.postId}] ${cue.caption}`, captionColumns).length * 22 + captionY + 10,
+            wrap(`[${cue.label}] ${cue.caption}`, captionColumns).length * 22 + captionY + 10,
         ),
       ) / 2,
     ) * 2;
@@ -472,7 +472,7 @@ export const encode = Effect.fn("EvaluationVideo.encode")(function* (
         cue.endMillis,
         "Caption",
         video.height + captionY,
-        `[${cue.postId}] ${cue.caption}`,
+        `[${cue.label}] ${cue.caption}`,
       ),
     ),
   ];

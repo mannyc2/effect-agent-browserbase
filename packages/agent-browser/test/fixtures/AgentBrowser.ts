@@ -18,7 +18,6 @@ import { BrowserbaseSessions } from "effect-browserbase/sessions";
 import { FetchHttpClient } from "effect/unstable/http";
 import { chromium } from "playwright-core";
 
-import type { BrowserbaseBackend } from "../evaluation/Tasks.ts";
 import { renderReady } from "./RenderReady.ts";
 
 /**
@@ -266,48 +265,6 @@ export const openAgentBrowser = Effect.fnUntraced(function* (policy: Interactive
   const fixed = yield* Schema.decodeUnknownEffect(BrowserPolicy)(policy);
 
   return yield* BrowserbaseBrowser.open(fixed);
-});
-
-/** Typed bootstrap acquisition uses this one generic owner. */
-/** The Browserbase adapter over this fixture's local provider, for a hosted evaluation run. */
-export const localBrowserbase = (
-  fixture: Effect.Success<typeof localAgentBrowser>,
-): BrowserbaseBackend => ({
-  origin: undefined,
-  // This fixture's own account and client, built with its local fetch, so no request leaves
-  // the host and nothing is shared with another fixture.
-  layer: ({
-    onCleanup,
-    onAllocationUncertain,
-    actionTimeoutMillis,
-    remoteTimeoutSeconds,
-    viewport,
-  }) =>
-    BrowserbaseBrowser.layer({
-      launch: {
-        ...launch,
-        remoteTimeoutSeconds,
-        viewport: { _tag: "Fixed", width: viewport.width, height: viewport.height },
-      },
-      actionTimeoutMillis,
-      onCleanup,
-      onAllocationUncertain,
-    }).pipe(
-      Layer.provide(NodeCrypto.layer),
-      Layer.provide(
-        BrowserbaseSessions.layer.pipe(
-          Layer.provideMerge(
-            BrowserbaseClient.layer({
-              projectId: "project-1",
-              apiKey: Redacted.make("fixture-key-not-a-credential"),
-              requestTimeoutMillis: allocationBudgetMillis + 5000,
-            }),
-          ),
-          Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fixture.fetch)),
-        ),
-      ),
-      Layer.provide(fixture.binding),
-    ),
 });
 
 export const withGenericAgentBrowser = <A, E, R>(
