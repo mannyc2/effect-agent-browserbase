@@ -78,7 +78,7 @@ it.effect("point recording preserves coordinates and button/count without resolv
 
       const ran = yield* page.run(
         { version: 1, steps: [{ id: "canvas", action }] },
-        { policy: { admit: () => false } },
+        { policy: { admit: () => false }, coordinatePolicy: { admit: () => true } },
       );
 
       const recorded = yield* Plan.recorded(ran);
@@ -92,6 +92,37 @@ it.effect("point recording preserves coordinates and button/count without resolv
       expect(
         (yield* page.observe()).controls.find((control) => control.elementId === "toggle")?.checked,
       ).toBe(false);
+    }),
+  ),
+);
+
+it.effect("an element admission policy does not implicitly authorize coordinate plan input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(script);
+      const page = browser.initialPage;
+
+      const plan = {
+        version: 1 as const,
+        steps: [{ id: "point", action: { _tag: "PointerClick" as const, at: point } }],
+      };
+
+      for (const admit of [() => false, () => true]) {
+        const failure = yield* page.run(plan, { policy: { admit } }).pipe(Effect.flip);
+
+        expect(failure).toMatchObject({
+          error: { reason: { _tag: "Denied" }, outcome: "undispatched" },
+        });
+      }
+      expect(
+        (yield* browser.control.calls).filter((call) => call.operation === "pointer-click"),
+      ).toHaveLength(0);
+      expect((yield* page.observe()).controls[0]?.checked).toBe(false);
+      yield* page.run(plan, {
+        policy: { admit: () => false },
+        coordinatePolicy: { admit: () => true },
+      });
+      expect((yield* page.observe()).controls[0]?.checked).toBe(true);
     }),
   ),
 );

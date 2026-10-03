@@ -34,7 +34,7 @@ for (const type of ['pointermove', 'pointerdown', 'pointerup', 'click', 'dblclic
             const port = typeof address === "object" && address !== null ? address.port : 0;
 
             response.end(
-              `<!doctype html><body style="margin:0"><iframe style="position:absolute;left:80px;top:100px;width:360px;height:220px;border:0" src="http://localhost:${String(port)}/canvas"></iframe>`,
+              `<!doctype html><body style="margin:0"><button id="parent" style="position:absolute;left:500px;top:30px" onclick="parentCount.textContent=String(Number(parentCount.textContent)+1)">Parent action</button><output id="parentCount">0</output><iframe style="position:absolute;left:80px;top:100px;width:360px;height:220px;border:0" src="http://localhost:${String(port)}/canvas"></iframe>`,
             );
           }
         });
@@ -87,7 +87,7 @@ for (const style of ["plain", "performed"] as const)
 
         yield* page.pointerMove({ to: { x: 10, y: 10 } });
         for (let spin = 0; spin < 10; spin++) {
-          const ran = yield* child.run(
+          const ran = yield* page.run(
             { version: 1, steps: [{ id: "spin", action: { _tag: "PointerClick", at } }] },
             style === "plain"
               ? {}
@@ -109,7 +109,7 @@ for (const style of ["plain", "performed"] as const)
           expect(ran.steps[0]?.receipt).toMatchObject({
             kind: "click",
             position: at,
-            target: child.identity,
+            target: page.identity,
             hitTest: { backendNodeId: expect.any(Number), frameId: expect.any(String) },
           });
           expect((yield* Plan.recorded(ran)).steps[0]?.action).toEqual({
@@ -151,6 +151,74 @@ for (const style of ["plain", "performed"] as const)
         );
       }).pipe(Effect.provide(layer)),
     ),
+  );
+
+for (const style of ["plain", "performed"] as const)
+  it.live(
+    `Frame coordinate clicks are unsupported before ${style} native input reaches any document`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* site;
+
+          const browser = yield* Chromium.launch(
+            BrowserPolicy.unrestricted({ maxActions: 1000, maxElapsedMillis: 60000 }),
+          );
+
+          const page = browser.initialPage;
+
+          yield* page.navigate({ url: fixture.url });
+
+          const info = yield* page.listFrames().pipe(
+            Effect.map((frames) => frames.find((frame) => frame.url.endsWith("/canvas"))),
+            Effect.filterOrFail(Predicate.isNotUndefined, () => "canvas frame not loaded yet"),
+            Effect.retry({ times: 50, schedule: Schedule.spaced("100 millis") }),
+          );
+
+          const child = yield* page.frame(info);
+
+          yield* page.screenshot({ fullPage: false });
+          for (const at of [
+            { x: 540, y: 45 },
+            { x: 120, y: 150 },
+          ]) {
+            const failure = yield* child
+              .run(
+                { version: 1, steps: [{ id: "point", action: { _tag: "PointerClick", at } }] },
+                style === "plain" ? {} : { style: { seed: 1, motion: DefaultMotionProfile } },
+              )
+              .pipe(Effect.result);
+
+            expect((yield* page.readText({ selector: "#parentCount" })).text).toBe("0");
+            expect(failure).toMatchObject({
+              _tag: "Failure",
+              failure: { error: { reason: { _tag: "Unsupported" }, outcome: "undispatched" } },
+            });
+          }
+          expect(yield* child.pointerClick({ x: 540, y: 45 }).pipe(Effect.flip)).toMatchObject({
+            reason: { _tag: "Unsupported" },
+            outcome: "undispatched",
+          });
+          expect((yield* page.readText({ selector: "#parentCount" })).text).toBe("0");
+          expect((yield* child.readText({ selector: "#count" })).text).toBe("0");
+          expect((yield* child.readText({ selector: "#events" })).text).toBe("[]");
+          expect(
+            (yield* page.timeline.snapshot()).events.filter(
+              (event) => event.event._tag === "Press" || event.event._tag === "Glide",
+            ),
+          ).toHaveLength(0);
+          const observation = yield* page.observe();
+          const parent = observation.controls.find((control) => control.label === "Parent action");
+
+          expect(parent).toBeDefined();
+          if (parent !== undefined)
+            yield* page.clickElement({
+              observationId: observation.observationId,
+              elementId: parent.elementId,
+            });
+          expect((yield* page.readText({ selector: "#parentCount" })).text).toBe("1");
+        }).pipe(Effect.provide(layer)),
+      ),
   );
 
 it.live("real Chromium: a point press submits down/up before awaiting their acknowledgements", () =>

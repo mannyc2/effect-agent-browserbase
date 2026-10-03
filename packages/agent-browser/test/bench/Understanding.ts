@@ -398,7 +398,7 @@ export const understanding = Effect.fn("Bench.understanding")(function* <OwnerEr
 
           yield* host.run(
             Effect.gen(function* () {
-              const tools = yield* BrowserTools.nativeToolkit;
+              const tools = yield* BrowserTools.pointToolkit;
 
               yield* Stream.runCollect(
                 yield* tools.handle(

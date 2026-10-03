@@ -138,7 +138,7 @@ export interface PageOperations {
     request: ScrollRequest,
     options?: OperationOptions,
   ) => Effect.Effect<ActionResult, BrowserError>;
-  /** Click at a main-viewport point. The browser chooses the node under it, including in Frames. */
+  /** Click through a Page at a main-viewport point, including into iframes. Frame input is Unsupported. */
   readonly pointerClick: (
     request: PointerClickRequest,
     options?: PointerClickOptions,

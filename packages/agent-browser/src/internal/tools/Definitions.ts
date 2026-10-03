@@ -90,7 +90,7 @@ export const Scroll = Tool.make("browser_scroll", {
 });
 
 export const ClickAt = Tool.make("browser_click_at", {
-  description: `Click once at a point in main-viewport CSS pixels; use the picture you were shown. The browser chooses what is under the point, including canvas content in an iframe. ${oneAction} ${unknownOutcome}`,
+  description: `Click once through the host-bound Page at a point in main-viewport CSS pixels; use the picture you were shown. The browser chooses what is under the point, including canvas content in an iframe. A Frame binding refuses this input as unsupported. ${oneAction} ${unknownOutcome}`,
   parameters: Schema.Struct({
     x: PointerClickRequest.fields.x.annotate({
       description: "Horizontal main-viewport CSS pixel coordinate.",
@@ -243,7 +243,10 @@ export const toolkit = Toolkit.make(Navigate, Inspect, Click, Fill, Scroll);
 export const readingToolkit = Toolkit.make(ReadMore);
 
 /** Optional additions, merged with `toolkit` by the host. `browser_scroll` stays scripted. */
-export const nativeToolkit = Toolkit.make(PointerMove, ClickAt, Hover, Wheel);
+export const nativeToolkit = Toolkit.make(PointerMove, Hover, Wheel);
+
+/** Optional physical coordinate clicks. Existing native-tool opt-ins retain their authority. */
+export const pointToolkit = Toolkit.make(ClickAt);
 
 /** Optional real keyboard input. Kept separate so existing native-tool opt-ins do not gain tools. */
 export const keyboardToolkit = Toolkit.make(Press, Type);
@@ -269,10 +272,11 @@ export const observedToolkit = Toolkit.make(
 
 export const observedNativeToolkit = Toolkit.make(
   ObservedPointerMove,
-  ObservedClickAt,
   ObservedHover,
   ObservedWheel,
 );
+
+export const observedPointToolkit = Toolkit.make(ObservedClickAt);
 
 export const observedKeyboardToolkit = Toolkit.make(ObservedPress, ObservedType);
 export const observedSelectionToolkit = Toolkit.make(ObservedSelect);
@@ -281,6 +285,7 @@ export const observedFormToolkit = Toolkit.make(ObservedFillForm);
 export const allObservedTools = Toolkit.merge(
   observedToolkit,
   observedNativeToolkit,
+  observedPointToolkit,
   observedKeyboardToolkit,
   observedSelectionToolkit,
   observedFormToolkit,
@@ -289,6 +294,7 @@ export const allObservedTools = Toolkit.merge(
 export type ToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof toolkit>>;
 export type ReadingToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof readingToolkit>>;
 export type NativeToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof nativeToolkit>>;
+export type PointToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof pointToolkit>>;
 export type KeyboardToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof keyboardToolkit>>;
 export type SelectionToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof selectionToolkit>>;
 export type WaitToolHandlers = Tool.HandlersFor<Toolkit.Tools<typeof waitToolkit>>;
@@ -299,6 +305,7 @@ export type ToolHostServices =
   | ToolHandlers
   | ReadingToolHandlers
   | NativeToolHandlers
+  | PointToolHandlers
   | KeyboardToolHandlers
   | SelectionToolHandlers
   | WaitToolHandlers
@@ -309,6 +316,7 @@ const every = Toolkit.merge(
   toolkit,
   readingToolkit,
   nativeToolkit,
+  pointToolkit,
   keyboardToolkit,
   selectionToolkit,
   waitToolkit,

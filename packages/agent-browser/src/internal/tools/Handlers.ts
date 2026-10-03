@@ -22,6 +22,7 @@ import {
   formToolkit,
   keyboardToolkit,
   nativeToolkit,
+  pointToolkit,
   readingToolkit,
   selectionToolkit,
   toolkit,
@@ -586,9 +587,11 @@ export const makeLayers = (
       browser_read_more: ({ observationId }, context) =>
         hooks.run(operations.readMore(observationId, call("browser_read_more", context))),
     }),
-    nativeHandlers: nativeToolkit.toLayer({
+    pointHandlers: pointToolkit.toLayer({
       browser_click_at: (request, context) =>
         hooks.run(operations.clickAt(request, call("browser_click_at", context))),
+    }),
+    nativeHandlers: nativeToolkit.toLayer({
       browser_pointer_move: (request, context) =>
         hooks.run(operations.pointerMove(request, call("browser_pointer_move", context))),
       browser_hover: (reference, context) =>

@@ -230,14 +230,21 @@ It runs on `effect-browser`'s `fillForm`: every step is the exact-node action it
 
 ## Optional native input
 
-`nativeToolkit` adds `browser_pointer_move`, `browser_click_at`, `browser_hover` and `browser_wheel`. `keyboardToolkit` separately adds `browser_press` and `browser_type`; existing native-tool opt-ins therefore do not silently gain keyboard authority. Merge only the Toolkits the agent should see. `host.layer` can provide every handler service at once because an Effect AI agent can call only Tools declared in its own Toolkit.
+`nativeToolkit` adds `browser_pointer_move`, `browser_hover` and `browser_wheel`.
+`pointToolkit` separately adds `browser_click_at`; `keyboardToolkit` adds
+`browser_press` and `browser_type`. Merge only the Toolkits the agent should see.
+`host.layer` can provide every handler service at once because an Effect AI agent can
+call only Tools declared in its own Toolkit.
 
-`nativeToolkit` includes `browser_click_at { x, y }`, and `observedNativeToolkit`
-includes `browser_click_at_and_inspect`. Coordinates are main-viewport CSS pixels,
-including when the tools are bound to a Frame; use the picture supplied by the host.
+`pointToolkit` includes `browser_click_at { x, y }`, and `observedPointToolkit`
+includes `browser_click_at_and_inspect`. Bind these tools to an issued Page and use
+main-viewport CSS pixels from the picture supplied by the host. Page input can reach
+a canvas inside an iframe. A Frame binding refuses coordinate clicks as
+`unsupported`, before input, because physical point input cannot be confined to it.
 The tools send one left click and return dispatch acknowledgement, with a fresh
-observation in the inspected variant. A host's `coordinatePolicy` can refuse points;
-the element `policy` continues to apply only to exact-node actions. Native hit-test
+observation in the inspected variant. A host's `coordinatePolicy` can refuse points.
+When the host supplies an element `policy`, coordinate clicks require an explicit
+`coordinatePolicy`; the element predicate is used only for exact-node actions. Native hit-test
 facts stay with the host and do not enter tool results. Pictures are supplied by the
 consumer through its model context; these tools do not capture or return an image.
 
@@ -308,7 +315,7 @@ Choose `observedToolkit` in place of the default toolkit when mutation results s
 fresh inspection, which saves a model turn after every action. It contains the unchanged
 `browser_inspect` and separately named `browser_navigate_and_inspect`,
 `browser_click_and_inspect`, `browser_fill_and_inspect` and `browser_scroll_and_inspect`.
-`observedNativeToolkit`, `observedKeyboardToolkit`, `observedSelectionToolkit` and
+`observedNativeToolkit`, `observedPointToolkit`, `observedKeyboardToolkit`, `observedSelectionToolkit` and
 `observedFormToolkit` separately offer the corresponding native, keyboard, select and form
 operations with `_and_inspect` names. Distinct names keep the original Tool success schemas and
 handler identities intact; only the groups explicitly declared by the agent are available.
@@ -351,7 +358,7 @@ formats remain unchanged.
 
 ## Scoped navigation and receipt callbacks
 
-`makeHost(browser, page, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `readingHandlers`, `nativeHandlers`, `keyboardHandlers`, `selectionHandlers`, `waitHandlers`, `formHandlers`, `observedHandlers`, their merged `layer`, `failure`, `toolFailures`, `receipts`, and `run(effect)`. Its `HostOptions<E, R>` adds `lane` and `scheduling` (below) and these optional host callbacks:
+`makeHost(browser, page, options)` acquires a scoped host composition without opening another browser. It returns `handlers`, `readingHandlers`, `nativeHandlers`, `pointHandlers`, `keyboardHandlers`, `selectionHandlers`, `waitHandlers`, `formHandlers`, `observedHandlers`, their merged `layer`, `failure`, `toolFailures`, `receipts`, and `run(effect)`. Its `HostOptions<E, R>` adds `lane` and `scheduling` (below) and these optional host callbacks:
 
 `onNavigation` receives `{ operation: NavigationOperation, toolCallId: string | undefined }`; `onInput` receives `{ receipt: InputReceipt, toolCallId: string | undefined }`. Each returns `Effect<void, E, R | Scope.Scope>`.
 

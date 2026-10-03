@@ -553,9 +553,10 @@ dispatch remain necessary even when the last input targeted a different page.
 
 `page.pointerClick({ x, y, button?, clickCount? }, options)` presses at a point in the
 main viewport, in CSS pixels. `button` defaults to `"left"` and accepts `"right"`;
-`clickCount` defaults to 1 and accepts 2. The same coordinates apply through an issued
-Frame: they are never relative to that Frame. This reaches canvas apps, maps, games
-and editors without requiring an observed DOM control. Points outside the current
+`clickCount` defaults to 1 and accepts 2. An issued Page can reach canvas apps, maps,
+games and editors inside an iframe without requiring an observed DOM control.
+An issued Frame refuses coordinate clicks with `Unsupported` and `undispatched`;
+physical point input cannot guarantee confinement to that Frame. Points outside the current
 viewport are refused before input, and the browser chooses what is under the point.
 
 The action shares its Page's budget, permit, observation retirement and unresolved
@@ -566,7 +567,9 @@ the native node under it, never a node reference or admission guarantee.
 A host can set `coordinatePolicy: { admit(point) }` in the method's options, Plan run
 options or Tool handler options. This synchronous callback receives the frozen raw
 point under the Page's permit; false or a throw refuses input. The exact-node `policy`
-still applies to element actions and does not admit or refuse coordinate actions.
+still applies to element actions. A Plan run with an element `policy` requires an
+explicit `coordinatePolicy` for its `PointerClick` steps; otherwise those steps fail
+with `Denied` and `undispatched` before input.
 
 Plan action `{ _tag: "PointerClick", at: { x, y }, button?, clickCount? }` supports plain
 and performed styles and records raw coordinates. Stored coordinates suit fixed
