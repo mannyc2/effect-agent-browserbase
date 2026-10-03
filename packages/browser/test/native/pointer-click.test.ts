@@ -17,16 +17,24 @@ const site = Effect.acquireRelease(
     () =>
       new Promise<{ readonly url: string; readonly close: () => void }>((resolve) => {
         const server = createServer((request, response) => {
+          const route = new URL(request.url ?? "/", "http://fixture");
+
           response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          if (request.url === "/canvas")
+          if (route.pathname === "/canvas")
             response.end(`<!doctype html><body style="margin:0"><canvas width="300" height="180"></canvas><p id="count">0</p><p id="events">[]</p><script>
 const canvas = document.querySelector('canvas');
 const seen = [];
+let redirecting = false;
 for (const type of ['pointermove', 'pointerdown', 'pointerup', 'click', 'dblclick', 'contextmenu']) canvas.addEventListener(type, event => {
   seen.push({ type, trusted: event.isTrusted, x: event.clientX, y: event.clientY, button: event.button, detail: event.detail });
   events.textContent = JSON.stringify(seen);
   if (type === 'click') count.textContent = String(Number(count.textContent) + 1);
   if (type === 'contextmenu') event.preventDefault();
+  if (${String(route.searchParams.has("redirect"))} && !redirecting && type === 'pointermove' && event.clientX !== 10) {
+    redirecting = true;
+    console.log('trusted-path:' + JSON.stringify({ x: event.clientX, y: event.clientY, trusted: event.isTrusted }));
+    location.replace('/canvas');
+  }
 });
 </script>`);
           else {
@@ -59,6 +67,47 @@ const layer = Chromium.layer({
   },
   viewport: { width: 640, height: 480 },
 }).pipe(Layer.provide(NodeCrypto.layer));
+
+const instrumentedSession = Effect.fn(function* (
+  onConnected: (browser: PlaywrightBrowser) => void,
+) {
+  const host = yield* externalChromium;
+
+  const runtime = yield* BrowserRuntime.make({
+    implementation: "native-pointer-outcome",
+    binding: BrowserRuntime.playwright({
+      onConnected: ({ native }) => onConnected(native as PlaywrightBrowser),
+    }),
+  }).pipe(Effect.provide(NodeCrypto.layer));
+
+  const acquired = yield* runtime.acquire(
+    BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
+    (cleanup) =>
+      Effect.gen(function* () {
+        const release = yield* Effect.cached(
+          cleanup.fence.pipe(
+            Effect.andThen(cleanup.capture),
+            Effect.andThen(cleanup.initialization),
+            Effect.andThen(cleanup.disconnect),
+            Effect.orDie,
+            Effect.asVoid,
+          ),
+        );
+
+        yield* Effect.addFinalizer(() => release);
+
+        return {
+          reference: "native-pointer-outcome",
+          connection: () => Effect.succeed(host.endpoint),
+          release,
+          cleanupResult: Effect.succeedNone,
+          closeChecked: release,
+        };
+      }),
+  );
+
+  return (yield* acquired.connect).session;
+});
 
 for (const style of ["plain", "performed"] as const)
   it.live(`real Chromium: ten ${style} point clicks reach a canvas in a cross-site Frame`, () =>
@@ -225,57 +274,24 @@ it.live("real Chromium: a point press submits down/up before awaiting their ackn
   Effect.scoped(
     Effect.gen(function* () {
       const fixture = yield* site;
-      const host = yield* externalChromium;
       let releaseDown = () => {};
 
       const downReply = new Promise<void>((resolve) => {
         releaseDown = resolve;
       });
 
-      const runtime = yield* BrowserRuntime.make({
-        implementation: "point-press-acknowledgements",
-        binding: BrowserRuntime.playwright({
-          onConnected: ({ native }) => {
-            const page = (native as PlaywrightBrowser).contexts()[0]?.pages()[0];
+      const session = yield* instrumentedSession((browser) => {
+        const page = browser.contexts()[0]?.pages()[0];
 
-            if (page === undefined) throw new Error("No native initial page");
-            const down = page.mouse.down.bind(page.mouse);
-            const up = page.mouse.up.bind(page.mouse);
+        if (page === undefined) throw new Error("No native initial page");
+        const down = page.mouse.down.bind(page.mouse);
+        const up = page.mouse.up.bind(page.mouse);
 
-            // Real input lands in Chromium; only delivery of the down's reply is held.
-            page.mouse.down = (options) => down(options).then(() => downReply);
-            page.mouse.up = (options) => up(options).then(releaseDown);
-          },
-        }),
-      }).pipe(Effect.provide(NodeCrypto.layer));
+        // Real input lands in Chromium; only delivery of the down's reply is held.
+        page.mouse.down = (options) => down(options).then(() => downReply);
+        page.mouse.up = (options) => up(options).then(releaseDown);
+      });
 
-      const acquired = yield* runtime.acquire(
-        BrowserPolicy.unrestricted({ maxElapsedMillis: 60000 }),
-        (cleanup) =>
-          Effect.gen(function* () {
-            const release = yield* Effect.cached(
-              cleanup.fence.pipe(
-                Effect.andThen(cleanup.capture),
-                Effect.andThen(cleanup.initialization),
-                Effect.andThen(cleanup.disconnect),
-                Effect.orDie,
-                Effect.asVoid,
-              ),
-            );
-
-            yield* Effect.addFinalizer(() => release);
-
-            return {
-              reference: "point-press-acknowledgements",
-              connection: () => Effect.succeed(host.endpoint),
-              release,
-              cleanupResult: Effect.succeedNone,
-              closeChecked: release,
-            };
-          }),
-      );
-
-      const { session } = yield* acquired.connect;
       const page = session.initialPage;
 
       yield* page.navigate({ url: `${fixture.url}canvas` });
@@ -284,4 +300,104 @@ it.live("real Chromium: a point press submits down/up before awaiting their ackn
       expect((yield* page.readText({ selector: "#events" })).text).toContain('"type":"pointerup"');
     }),
   ),
+);
+
+it.live(
+  "an unknown sendPath interrupted by page navigation is contained without a press or replay",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* site;
+        let connections = 0;
+        let moves = 0;
+        let presses = 0;
+        let trustedMove: string | undefined;
+
+        const session = yield* instrumentedSession((browser) => {
+          connections++;
+          const page = browser.contexts()[0]?.pages()[0];
+
+          if (page === undefined) throw new Error("No native initial page");
+          const move = page.mouse.move.bind(page.mouse);
+          const down = page.mouse.down.bind(page.mouse);
+
+          page.mouse.move = (x, y, options) => {
+            moves++;
+
+            return move(x, y, options);
+          };
+          page.mouse.down = (options) => {
+            presses++;
+
+            return down(options);
+          };
+          page.on("console", (message) => {
+            if (message.text().startsWith("trusted-path:"))
+              trustedMove = message.text().slice("trusted-path:".length);
+          });
+        });
+
+        const page = session.initialPage;
+        const peer = yield* session.createPage();
+
+        yield* peer.navigate({ url: `${fixture.url}canvas` });
+        yield* page.navigate({ url: `${fixture.url}canvas?redirect` });
+        yield* page.screenshot({ fullPage: false });
+        yield* page.pointerMove({ to: { x: 10, y: 10 } });
+
+        const failure = yield* page
+          .run(
+            {
+              version: 1,
+              steps: [{ id: "point", action: { _tag: "PointerClick", at: { x: 200, y: 150 } } }],
+            },
+            {
+              style: {
+                seed: 7,
+                motion: {
+                  ...DefaultMotionProfile,
+                  sendPath: true,
+                  pointer: {
+                    ...DefaultMotionProfile.pointer,
+                    duration: { minMillis: 800, maxMillis: 800 },
+                  },
+                },
+              },
+              within: "10 seconds",
+            },
+          )
+          .pipe(Effect.flip);
+
+        expect(trustedMove).toBeDefined();
+        if (trustedMove !== undefined)
+          expect(JSON.parse(trustedMove)).toMatchObject({ trusted: true });
+        expect(moves).toBeGreaterThan(1);
+        expect(presses).toBe(0);
+        expect(failure).toMatchObject({
+          error: {
+            reason: { _tag: "Stale" },
+            outcome: "unknown",
+            containment: { _tag: "PageClosed", pageId: page.identity.pageId },
+          },
+          attempt: {
+            outcome: "unknown",
+            containment: { _tag: "PageClosed", pageId: page.identity.pageId },
+          },
+        });
+        expect(yield* page.status).toMatchObject({
+          phase: "closed",
+          containment: { _tag: "PageClosed" },
+        });
+        expect(yield* session.status).toMatchObject({ phase: "open", unresolvedDispatch: false });
+        const submitted = moves;
+
+        expect(yield* page.pointerClick({ x: 40, y: 50 }).pipe(Effect.flip)).toMatchObject({
+          outcome: "undispatched",
+        });
+        expect(moves).toBe(submitted);
+        yield* peer.pointerClick({ x: 40, y: 50 });
+        expect((yield* peer.readText({ selector: "#count" })).text).toBe("1");
+        expect(connections).toBe(1);
+      }),
+    ),
 );

@@ -208,3 +208,37 @@ it.effect("an unresolved point click is contained on its exact Page and never re
     }),
   ),
 );
+
+it.effect("scripted point bounds follow each Page's current resized viewport", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Testing.open(script);
+      const page = browser.initialPage;
+      const peer = yield* browser.createPage();
+
+      yield* page.resizeViewport({ width: 30, height: 40 });
+      expect(yield* page.pointerClick(point).pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "NotVisible" },
+        outcome: "undispatched",
+      });
+      expect((yield* page.observe()).controls[0]?.checked).toBe(false);
+      expect((yield* peer.pointerClick(point)).position).toEqual(point);
+      yield* page.resizeViewport({ width: 2560, height: 1440 });
+      const expanded = { x: 1500, y: 1000 };
+
+      expect((yield* page.pointerClick(expanded)).position).toEqual(expanded);
+      expect(yield* peer.pointerClick(expanded).pipe(Effect.flip)).toMatchObject({
+        reason: { _tag: "NotVisible" },
+        outcome: "undispatched",
+      });
+      for (const edge of [
+        { x: 2560, y: 0 },
+        { x: 0, y: 1440 },
+      ])
+        expect(yield* page.pointerClick(edge).pipe(Effect.flip)).toMatchObject({
+          reason: { _tag: "NotVisible" },
+          outcome: "undispatched",
+        });
+    }),
+  ),
+);
