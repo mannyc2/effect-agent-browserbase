@@ -2,6 +2,10 @@ import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import * as BrowserRuntime from "effect-browser/browser-runtime";
 import { BrowserError, Reasons } from "effect-browser/errors";
 
+import {
+  registerObservationEndpoint,
+  type ObservationEndpoint,
+} from "./internal/browser/ObservationBinding.ts";
 import { validateConnection } from "./internal/provider/Connection.ts";
 
 export type BrowserBinding = BrowserRuntime.BrowserBinding;
@@ -11,27 +15,32 @@ export type PlaywrightOptions = BrowserRuntime.PlaywrightOptions;
 export const playwright = (options: PlaywrightOptions = {}): BrowserBinding => {
   const { resolveEndpoint, onConnected } = options;
 
-  return BrowserRuntime.playwright({
-    resolveEndpoint: ({ url }) =>
-      Effect.gen(function* () {
-        const validated = yield* Effect.try({
-          try: () => validateConnection(Redacted.value(url)),
-          catch: (error) =>
-            Schema.is(BrowserError)(error)
-              ? error
-              : BrowserError.make({
-                  operation: "connect",
-                  reason: Reasons.Malformed.make({}),
-                  outcome: "undispatched",
-                }),
-        });
+  const resolve: ObservationEndpoint = ({ url }) =>
+    Effect.gen(function* () {
+      const validated = yield* Effect.try({
+        try: () => validateConnection(Redacted.value(url)),
+        catch: (error) =>
+          Schema.is(BrowserError)(error)
+            ? error
+            : BrowserError.make({
+                operation: "connect",
+                reason: Reasons.Malformed.make({}),
+                outcome: "undispatched",
+              }),
+      });
 
-        return yield* resolveEndpoint === undefined
-          ? Effect.succeed(validated)
-          : resolveEndpoint({ url: Redacted.make(validated) });
-      }),
-    ...(onConnected === undefined ? {} : { onConnected }),
-  });
+      return yield* resolveEndpoint === undefined
+        ? Effect.succeed(validated)
+        : resolveEndpoint({ url: Redacted.make(validated) });
+    });
+
+  return registerObservationEndpoint(
+    BrowserRuntime.playwright({
+      resolveEndpoint: resolve,
+      ...(onConnected === undefined ? {} : { onConnected }),
+    }),
+    resolve,
+  );
 };
 
 const defaultBinding = playwright();

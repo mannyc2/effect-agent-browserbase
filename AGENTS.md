@@ -6,6 +6,7 @@ This repository owns three packages, `packages/browser` (`effect-browser`), `pac
 
 - Preserve Effect `E`/`R`, scoped resource ownership, bounded work and typed outcomes.
 - Keep the actual Effect, AgentRuntime and Playwright integration. Do not substitute contracts or native engines to satisfy tests.
+- Keep all reads and mutations on the control connection; the observation connection is read-only. Browserbase owns its lazy observation connection for screencast and the captured targets' navigation/lifecycle events, including checked cleanup.
 - Keep public exports deliberate. Provider credentials and native SDK values are not durable or model-facing values.
 - Never replay an unresolved mutation, and never weaken the unsupported network policies to make them appear supported.
 - Use the coordinated pins in `.node-version`, the root and package `package.json` files, `bun.lock` and `CONTRIBUTING.md`. Every manifest names one exact version of each dependency, and the tooling tests refuse a disagreement. A version upgrade needs source review and fresh acceptance; `agent-browser`'s exact `effect-agent` peer moves with its development version.

@@ -1,13 +1,4 @@
-import {
-  Context,
-  Crypto,
-  Effect,
-  Layer,
-  type Option,
-  type Redacted,
-  Schema,
-  type Scope,
-} from "effect";
+import { Context, Crypto, Effect, Layer, Option, type Redacted, Schema, type Scope } from "effect";
 import type { BrowserSession, OpenOptions, OperationOptions, Page } from "effect-browser/browser";
 import type {
   ActionResult,
@@ -23,12 +14,15 @@ import {
   type BrowserOperation,
   type InitializationError,
 } from "effect-browser/errors";
+import { Socket } from "effect/unstable/socket";
 
 import { BrowserbaseBrowserBinding } from "./BrowserBinding.ts";
 import type { CleanupResult } from "./Cleanup.ts";
 import { BrowserbaseClient } from "./Client.ts";
 import type { AllocationError, ContextError, SessionError } from "./Errors.ts";
 import type { LiveView } from "./internal/browser/LiveView.ts";
+import { makeObservation } from "./internal/browser/Observation.ts";
+import { observationEndpoint } from "./internal/browser/ObservationBinding.ts";
 import { isList } from "./internal/List.ts";
 import { borrowedRemote, ownedRemote, type RemoteLease } from "./internal/session/Browser.ts";
 import type { ContextWriterPermit } from "./internal/session/WriterFacts.ts";
@@ -292,6 +286,12 @@ export class BrowserbaseBrowser extends Context.Service<
         const sessions = yield* BrowserbaseSessions;
         const crypto = yield* Crypto.Crypto;
         const binding = yield* BrowserbaseBrowserBinding;
+        const endpoint = observationEndpoint(binding);
+
+        const socketConstructor = Option.getOrElse(
+          yield* Effect.serviceOption(Socket.WebSocketConstructor),
+          () => (url: string) => new globalThis.WebSocket(url),
+        );
 
         if (options.launch.context?.persist === true && options.contextWriter === undefined)
           return yield* BrowserError.make({
@@ -327,7 +327,44 @@ export class BrowserbaseBrowser extends Context.Service<
             >,
           ): BrowserRuntime.Source<L, E> =>
           (cleanup, deadline) =>
-            remote(cleanup, deadline).pipe(
+            Effect.gen(function* () {
+              let lifetime: L | undefined;
+
+              const observation =
+                endpoint === undefined
+                  ? undefined
+                  : yield* makeObservation({
+                      connection: (remainingMillis) =>
+                        Effect.suspend(() =>
+                          lifetime === undefined
+                            ? Effect.fail(
+                                BrowserError.make({
+                                  operation: "capture-start",
+                                  reason: Reasons.Closed.make({}),
+                                  outcome: "undispatched",
+                                }),
+                              )
+                            : lifetime.connection(remainingMillis),
+                        ),
+                      resolve: endpoint,
+                      constructor: socketConstructor,
+                      deadline,
+                    });
+
+              lifetime = yield* remote(
+                observation === undefined
+                  ? cleanup
+                  : {
+                      ...cleanup,
+                      capture: cleanup.capture.pipe(Effect.onExit(() => observation.close)),
+                    },
+                deadline,
+              );
+
+              return observation === undefined
+                ? lifetime
+                : Object.assign(lifetime, { captureSource: observation.source });
+            }).pipe(
               Effect.provideService(BrowserbaseClient, client),
               Effect.provideService(BrowserbaseSessions, sessions),
               Effect.provideService(Crypto.Crypto, crypto),

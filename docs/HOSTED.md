@@ -36,6 +36,7 @@ describes.
 | `performed-presentation` | H7       | performed Page plan timing and logical action costs, trusted document-focus-qualified shifted input, independent journal readers sharing one capture, peer references, and checked release on a controlled animated scene                    |
 | `replay-delivery`        | H7       | the replay playlist validates and a segment downloads; recording delivery is reported as observed                                                                                                                                            |
 | `live-capture`           | —        | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements                                                                                       |
+| `capture-isolation`      | H7       | captured frames keep flowing on hosted sessions while large protocol messages are in flight: at least two frames per fresh-document peer read and overlapping frame gaps bounded at 600 ms, followed by checked release                      |
 | `long-session`           | —        | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
 
 The question codes come from the design research that preceded the checks
@@ -136,6 +137,20 @@ bash tools/hosted-run.sh .work/workspace .work/hosted demo acceptance
 The `demo` check needs caller-installed FFmpeg, the same way
 `examples/record-video.ts` does; encoding is deliberately not a package
 dependency.
+
+`capture-isolation` needs no extra settings. Its approved bootstrap installs an animated
+canvas on `https://example.com/` and a button in each of four fresh documents on a peer Page
+in the same session. The first `observe` with an element in each document exercises the pinned
+Playwright path that uploads its roughly 330 KB injected script on the control connection.
+The check uses the public capture stream and records the idle cadence, each complete read
+window and every inter-frame gap overlapping that window, including the gaps across its
+edges. It requires at least two frames within each read and no overlapping gap above 600 ms.
+The read window includes more than the upload itself; this check does not expose protocol
+messages or claim to measure their byte-level dispatch times. The original capture must stop
+cleanly without buffer overflow, and checked cleanup must confirm provider release. The
+budget is one session, 120 browser seconds, 15 actions, 90 capture seconds and zero transfers.
+Run it serially with other hosted checks so concurrent uploads from this host do not confound
+the measured gap. Registration alone does not authorize execution.
 
 `page-authority` additionally requires `BROWSERBASE_PAGE_AUTHORITY_URL`, an operator-owned,
 credential-free HTTPS directory URL with no query or fragment. Its landing document must be

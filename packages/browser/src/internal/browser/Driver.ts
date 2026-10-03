@@ -15,7 +15,7 @@ import type {
   WaitForElementRequest,
 } from "../../BrowserData.ts";
 import type { CaptureSize } from "../../CaptureData.ts";
-import type { InitializationError } from "../../Errors.ts";
+import type { BrowserError, InitializationError } from "../../Errors.ts";
 import type {
   Descriptor,
   Precondition,
@@ -217,6 +217,8 @@ export interface CaptureStart {
   readonly quality: number;
   readonly size?: CaptureSize;
   readonly invalidate: (reason: CaptureInvalidation) => void;
+  /** Ends only this interval when its capture transport fails. */
+  readonly fail: (error: BrowserError) => void;
   /**
    * The captured frame's address, reported once in the same turn the watch below is installed,
    * so a navigation is either already in it or arrives afterwards as a new document.

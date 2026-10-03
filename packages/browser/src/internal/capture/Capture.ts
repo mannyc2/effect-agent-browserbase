@@ -31,6 +31,7 @@ import {
 } from "../browser/Association.ts";
 import type { CaptureSource, NativeFrame } from "../browser/Driver.ts";
 import { jpegGeometry } from "../browser/Images.ts";
+import { NativeEffectFailure, publicError } from "../browser/NativeCalls.ts";
 import * as Trace from "../Trace.ts";
 import { FrameBuffer } from "./FrameBuffer.ts";
 import { CaptureDefaults, CaptureLimits } from "./Options.ts";
@@ -735,6 +736,7 @@ const acquireCapture = Effect.fnUntraced(function* (
                   receive,
                   quality,
                   invalidate: (why) => lease?.invalidate(why),
+                  fail: (failure) => finish("parent-unavailable", failure),
                   opened: (url) => {
                     initialUrl = documentUrl(url);
                     initialUrlQualification = initialUrl === null ? "Omitted" : "NativeCached";
@@ -759,13 +761,17 @@ const acquireCapture = Effect.fnUntraced(function* (
 
               return startPromise;
             },
-            catch: () =>
-              BrowserError.make({
-                operation: "capture-start",
-                reason: Reasons.Provider.make({}),
-                outcome: "unknown",
-              }),
-          }).pipe(Trace.span("Browser.capture.native-start"));
+            catch: (error) =>
+              Schema.is(NativeEffectFailure)(error)
+                ? error
+                : publicError(error, "capture-start", {
+                    reason: Reasons.Provider.make({}),
+                    outcome: "unknown",
+                  }),
+          }).pipe(
+            Effect.catchTag("NativeEffectFailure", (failure) => Effect.failCause(failure.cause)),
+            Trace.span("Browser.capture.native-start"),
+          );
           publishCapture("Started");
           ticket.check();
         }),
