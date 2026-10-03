@@ -6,7 +6,7 @@ import type { Driver } from "./Drivers.ts";
 import { gamesOperability } from "./Games.ts";
 import { gameSegment } from "./GameSegment.ts";
 import { BenchError, type Journal } from "./Records.ts";
-import { replayDrift } from "./Replay.ts";
+import { replayDrift, type ReplayOptions } from "./Replay.ts";
 import { replayContention } from "./ReplayScenes.ts";
 import {
   pictureMetrics,
@@ -54,6 +54,7 @@ export const execute = Effect.fn("Bench.scene")(function* <OwnerError>(
     readonly moments?: number;
     readonly pictureScale?: 0.5 | 1;
     readonly site?: GameSite;
+    readonly replay?: ReplayOptions;
     readonly announceThenSpin?: boolean;
     readonly airDelayMillis?: number;
     readonly maxSpins?: number;
@@ -61,13 +62,13 @@ export const execute = Effect.fn("Bench.scene")(function* <OwnerError>(
 ) {
   if (journal.manifest.scene === "games-operability")
     return yield* gamesOperability(journal, browser, options);
-  if (journal.manifest.scene === "replay-drift") return yield* replayDrift(journal, browser);
+  if (journal.manifest.scene === "replay-drift")
+    return yield* replayDrift(journal, browser, options.replay);
   if (journal.manifest.scene === "replay-contention")
-    return yield* replayContention(
-      journal,
-      browser,
-      options.stage === undefined ? {} : { stage: options.stage },
-    );
+    return yield* replayContention(journal, browser, {
+      ...options.replay,
+      ...(options.stage === undefined ? {} : { stage: options.stage }),
+    });
   if (journal.manifest.scene === "game-segment") {
     if (options.condition === "text")
       return yield* new BenchError({

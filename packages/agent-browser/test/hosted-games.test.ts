@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Schema } from "effect";
+import { Cause, Effect, FileSystem, Schema } from "effect";
+import * as Browser from "effect-browser/browser";
+import * as Testing from "effect-browser/testing";
 
 import {
   HostedGamesError,
@@ -12,6 +14,11 @@ import {
   prepareHostedGames,
   quickTunnelUrl,
 } from "./bench/HostedGames.ts";
+import { prepareHostedReplay } from "./bench/HostedReplay.ts";
+import { Journal } from "./bench/Records.ts";
+import { replayDrift } from "./bench/Replay.ts";
+import { replayContention } from "./bench/ReplayScenes.ts";
+import { driftSite } from "./fixtures/DriftSite.ts";
 import { gameSite } from "./fixtures/GameSite.ts";
 
 type Mode = "ready" | "second-exit" | "second-timeout" | "same-origin" | "flood";
@@ -297,3 +304,127 @@ for (const mode of ["second-exit", "second-timeout", "same-origin", "flood"] as 
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
+
+// Hosted scenes must not silently acquire a loopback fixture after their owner exists.
+it.effect("hosted replay requires its prepared remote fixture before browser commands", () =>
+  Browser.scoped(
+    Testing.open({ documents: [{ url: "https://empty.test/", text: "empty" }] }),
+    (browser) =>
+      Effect.gen(function* () {
+        const site = yield* driftSite;
+
+        for (const scene of ["replay-drift", "replay-contention"] as const) {
+          const journal = new Journal({
+            version: 1,
+            runId: scene,
+            scene,
+            backend: "browserbase",
+            driver: "scripted",
+            sourceRevision: "fixture",
+            sourceDirty: false,
+            trial: 0,
+            seed: 0,
+            viewport: { width: 1280, height: 720 },
+            capture: { maxFrames: 60, maxBytes: 1048576, maxDurationMillis: 30000, quality: 50 },
+            settings: {},
+          });
+
+          for (const candidate of [
+            undefined,
+            site,
+            { ...site, url: "https://lobby-scripted.trycloudflare.com/path" },
+          ]) {
+            const options = candidate === undefined ? {} : { site: candidate };
+
+            const outcome = yield* (
+              scene === "replay-drift"
+                ? replayDrift(journal, browser, options)
+                : replayContention(journal, browser, options)
+            ).pipe(Effect.exit);
+
+            expect(outcome._tag).toBe("Failure");
+            if (outcome._tag === "Failure")
+              expect(Cause.pretty(outcome.cause)).toContain(
+                "Prepare the hosted replay fixture before acquiring the owner.",
+              );
+          }
+
+          if (scene === "replay-contention") {
+            const outcome = yield* replayContention(journal, browser, {
+              site: { ...site, url: "https://lobby-scripted.trycloudflare.com" },
+            }).pipe(Effect.exit);
+
+            expect(outcome._tag).toBe("Failure");
+            if (outcome._tag === "Failure")
+              expect(Cause.pretty(outcome.cause)).toContain(
+                "Prepare the hosted contention fixture bootstrap before acquiring the owner.",
+              );
+          }
+        }
+        expect(yield* browser.control.calls).toEqual([]);
+      }),
+  ),
+);
+
+it.live(
+  "hosted replay wraps only the URL and owns one child beside the original truth server",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const script = yield* scriptedTunnel("ready");
+        const site = yield* driftSite;
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const prepared = yield* prepareHostedReplay(site, {
+              executable: script.executable,
+              startupTimeoutMillis: 2000,
+            });
+
+            expect(prepared.publicUrl).toBe("https://lobby-scripted.trycloudflare.com");
+            expect(prepared.site.url).toBe(prepared.publicUrl);
+            expect(site.url).toMatch(/^http:\/\/127\.0\.0\.1:/u);
+            for (const key of ["configure", "truth", "events", "lost", "close"] as const)
+              expect(prepared.site[key]).toBe(site[key]);
+            prepared.site.configure("redirect", 1, "hosted-replay");
+
+            const redirect = yield* Effect.promise(() =>
+              fetch(`${site.url}/portal`, { redirect: "manual" }),
+            );
+
+            expect(redirect.status).toBe(301);
+            expect(redirect.headers.get("cache-control")).toBe("no-store");
+            const truth = { page: "article", tab: "Prices", item: "Beta", query: "" };
+
+            const response = yield* Effect.promise(() =>
+              fetch(`${site.url}/truth`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ run: "hosted-replay", truth }),
+              }),
+            );
+
+            expect(response.status).toBe(204);
+            expect(prepared.site.truth("hosted-replay")).toEqual(truth);
+            expect(prepared.site.events()).toEqual(site.events());
+            expect(prepared.site.lost()).toBe(0);
+            expect(yield* script.started()).toMatchObject([
+              {
+                args: [
+                  "tunnel",
+                  "--no-autoupdate",
+                  "--url",
+                  site.url,
+                  "--http-host-header",
+                  new URL(site.url).host,
+                ],
+              },
+            ]);
+            expect(yield* script.stopped()).toEqual([]);
+          }),
+        );
+        expect(yield* script.stopped()).toEqual([1]);
+        expect((yield* Effect.promise(() => fetch(`${site.url}/portal`))).status).toBe(200);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);

@@ -67,7 +67,7 @@ export const driftMarkup = (operator: DriftOperator | "none", seed: number, run:
   const label = operator === "rename" ? "Market data" : "Markets";
   const market = `<a href="/markets" data-page="markets">${label}</a>`;
   const decoy = '<a href="/decoy" data-page="decoy">Archived markets</a>';
-  const nav = `<nav>${operator === "reorder" || operator === "variant" ? decoy : ""}${market}${operator === "duplicate" ? '<a href="/decoy" data-page="decoy">Markets</a>' : ""}<a href="/directory" data-page="directory">Directory</a><a href="/articles" data-page="articles">Articles</a></nav>`;
+  const nav = `<nav>${operator === "reorder" || operator === "variant" ? decoy : ""}${market}${operator === "duplicate" ? `${market}<a href="/decoy" data-page="decoy">Markets</a>` : ""}<a href="/directory" data-page="directory">Directory</a><a href="/articles" data-page="articles">Articles</a></nav>`;
   const config = JSON.stringify({ operator, seed, run, items });
 
   return `<!doctype html><meta charset="utf-8"><title>Replay portal</title>
