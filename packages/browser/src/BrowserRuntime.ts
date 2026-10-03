@@ -24,13 +24,9 @@ import {
 import { bindingImplementation, issueBinding } from "./internal/browser/Binding.ts";
 import { makeBindings, preparePlan } from "./internal/browser/Bindings.ts";
 import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
+import type { CaptureStart, CaptureTarget } from "./internal/browser/CaptureTransport.ts";
 import type { ConnectionCleanup } from "./internal/browser/ConnectionCleanup.ts";
-import type {
-  CaptureStart,
-  CaptureTarget,
-  DriverOptions,
-  NativeFileSelection,
-} from "./internal/browser/Driver.ts";
+import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driver.ts";
 import { fromNativeAttempt } from "./internal/browser/NativeAttempt.ts";
 import { resolvePageControlsForSession } from "./internal/browser/PageRegistry.ts";
 import { connectPlaywrightEndpoint } from "./internal/browser/Playwright.ts";
@@ -54,10 +50,10 @@ export {
 } from "./internal/browser/ConnectionCleanup.ts";
 
 export type {
+  CaptureFrame,
   CaptureStart,
   CaptureTarget,
-  NativeFrame as CaptureFrame,
-} from "./internal/browser/Driver.ts";
+} from "./internal/browser/CaptureTransport.ts";
 
 /**
  * A provider-owned read-only capture transport. Its ordered callbacks carry both frames and
