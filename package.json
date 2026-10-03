@@ -12,11 +12,11 @@
     "verify:package-purity": "bun scripts/verify-package-purity.ts"
   },
   "devDependencies": {
-    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/platform-node": "4.0.0-rc.118",
     "@effect/tsgo": "0.45.0",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0-rc.118",
     "esbuild": "0.28.1",
     "oxfmt": "0.64.0",
     "oxlint": "1.82.0",
