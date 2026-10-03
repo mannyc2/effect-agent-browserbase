@@ -43,7 +43,7 @@ const within = (frames: ReadonlyArray<RecordingFrame>, window: Interval) =>
 export const cadence = (frames: ReadonlyArray<RecordingFrame>, window: Interval) => {
   const selected = within(frames, window);
 
-  const gaps = selected
+  const interior = selected
     .slice(1)
     .map(
       (frame, index) =>
@@ -55,11 +55,22 @@ export const cadence = (frames: ReadonlyArray<RecordingFrame>, window: Interval)
 
   const durationMillis = Math.max(0, window.end - window.start);
 
+  const gaps =
+    selected.length === 0
+      ? [durationMillis]
+      : [
+          (selected[0]?.receivedAt ?? window.start) - window.start,
+          ...interior,
+          window.end - (selected.at(-1)?.receivedAt ?? window.end),
+        ].filter((gap) => gap > 0);
+
   return {
+    basis: "host-received-change-driven-frames",
     frames: selected.length,
     durationMillis,
     fps: durationMillis === 0 ? 0 : (selected.length * 1000) / durationMillis,
     gapMillis: quantiles(gaps),
+    interDeliveryGapMillis: quantiles(interior),
     gapsOver250Millis: gaps.filter((gap) => gap > 250).length,
     gapsOver1000Millis: gaps.filter((gap) => gap > 1000).length,
     firstDeliveryMillis: selected[0] === undefined ? null : selected[0].receivedAt - window.start,
@@ -67,7 +78,25 @@ export const cadence = (frames: ReadonlyArray<RecordingFrame>, window: Interval)
   };
 };
 
-/** Include initial and trailing silence; only caller-proven changing intervals count. */
+const union = (intervals: ReadonlyArray<Interval>) => {
+  const merged: Interval[] = [];
+
+  for (const interval of [...intervals].sort((a, b) => a.start - b.start)) {
+    if (interval.end <= interval.start) continue;
+    const previous = merged.at(-1);
+
+    if (previous !== undefined && interval.start <= previous.end)
+      merged[merged.length - 1] = {
+        start: previous.start,
+        end: Math.max(previous.end, interval.end),
+      };
+    else merged.push(interval);
+  }
+
+  return merged;
+};
+
+/** Delivery silence, including edges, within caller-declared changing intervals; not proof of stopped painting. */
 export const freezes = (
   frames: ReadonlyArray<RecordingFrame>,
   changing: ReadonlyArray<Interval>,
@@ -81,12 +110,13 @@ export const freezes = (
   ];
 
   const intervals: Interval[] = [];
+  const expectedChanging = union(changing);
 
   for (let index = 1; index < points.length; index++) {
     const start = points[index - 1] ?? window.start;
     const end = points[index] ?? start;
 
-    for (const expected of changing) {
+    for (const expected of expectedChanging) {
       const overlap = { start: Math.max(start, expected.start), end: Math.min(end, expected.end) };
 
       if (overlap.end - overlap.start > thresholdMillis) intervals.push(overlap);
@@ -94,6 +124,7 @@ export const freezes = (
   }
 
   return {
+    basis: "delivery-silence-during-caller-declared-changing-intervals",
     intervals,
     count: intervals.length,
     seconds: intervals.reduce(
@@ -101,6 +132,85 @@ export const freezes = (
       0,
     ),
     longestMillis: Math.max(0, ...intervals.map((interval) => interval.end - interval.start)),
+  };
+};
+
+export interface ActivityReport {
+  readonly at: number;
+  readonly kind: "animation" | "visibility";
+  readonly visibility: "visible" | "hidden";
+  readonly ticks: number | null;
+}
+
+/** Page callbacks and delivery receipts can be correlated, but neither proves compositor painting. */
+export const activity = (
+  reports: ReadonlyArray<ActivityReport>,
+  window: Interval,
+  silence: ReadonlyArray<Interval>,
+  lost = 0,
+) => {
+  const ordered = [...reports].sort((a, b) => a.at - b.at);
+
+  const animation = ordered.filter(
+    (report) => report.kind === "animation" && report.at >= window.start && report.at <= window.end,
+  );
+
+  const visibility: Array<Interval & { state: "visible" | "hidden" | "unverified" }> = [];
+  let start = window.start;
+  let state: "visible" | "hidden" | "unverified" = "unverified";
+
+  for (const report of ordered) {
+    if (report.at > window.end) break;
+    if (report.at <= window.start) {
+      state = report.visibility;
+      continue;
+    }
+    if (report.visibility !== state) {
+      visibility.push({ start, end: report.at, state });
+      start = report.at;
+      state = report.visibility;
+    }
+  }
+  if (start < window.end) visibility.push({ start, end: window.end, state });
+
+  const progress = (selected: ReadonlyArray<ActivityReport>) =>
+    selected.slice(1).reduce((total, report, index) => {
+      const previous = selected[index]?.ticks;
+
+      return total + Math.max(0, (report.ticks ?? 0) - (previous ?? report.ticks ?? 0));
+    }, 0);
+
+  const receiptPoints = [window.start, ...animation.map((report) => report.at), window.end];
+
+  return {
+    basis: "fixture-page-reports-on-host-receipt-clock",
+    qualification:
+      "requestAnimationFrame progress and visibility are page-reported, not proof of painting; host receipt can lag or batch page callbacks",
+    completeness: lost > 0 ? "reports-lost" : "report-tail-unverified",
+    lost,
+    animationReports: animation.length,
+    reportedTickAdvance: progress(animation),
+    reportGapMillis: quantiles(
+      receiptPoints.slice(1).map((at, index) => at - (receiptPoints[index] ?? at)),
+    ),
+    visibility,
+    deliverySilence: silence.map((interval) => {
+      const selected = animation.filter(
+        (report) => report.at >= interval.start && report.at <= interval.end,
+      );
+
+      const ticksAdvanced = progress(selected);
+
+      return {
+        ...interval,
+        animationReports: selected.length,
+        reportedTickAdvance: ticksAdvanced,
+        interpretation:
+          ticksAdvanced > 0
+            ? "delivery-gap-with-page-progress-reports"
+            : "delivery-gap-page-progress-unverified",
+      };
+    }),
   };
 };
 

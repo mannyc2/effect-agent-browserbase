@@ -8,6 +8,51 @@ import { Chromium } from "effect-browser/chromium";
 import { Journal } from "../bench/Records.ts";
 import { matrix } from "../bench/Replay.ts";
 import { replayContention } from "../bench/ReplayScenes.ts";
+import { driftSite } from "../fixtures/DriftSite.ts";
+
+// fe6e26d reused a cacheable redirect and had no independently observable decoy destination.
+it.live(
+  "fresh navigation leaves redirect drift and an adversarial decoy has distinct host truth",
+  () =>
+    Browser.scoped(
+      Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 50, maxElapsedMillis: 30000 })),
+      (browser) =>
+        Effect.gen(function* () {
+          const site = yield* driftSite;
+          const first = yield* browser.createPage();
+
+          site.configure("redirect", 1, "redirect-first");
+          expect((yield* first.navigate({ url: `${site.url}/portal` })).url).toBe(
+            `${site.url}/new-portal`,
+          );
+          yield* first.close();
+          site.configure("duplicate", 1, "decoy-next");
+          const next = yield* browser.createPage();
+
+          expect((yield* next.navigate({ url: `${site.url}/portal` })).url).toBe(
+            `${site.url}/portal`,
+          );
+          const observation = yield* next.observe({ scope: "document" });
+
+          expect(observation.controls.filter((item) => item.label === "Markets")).toHaveLength(2);
+          yield* next.click({ selector: '[data-page="decoy"]' });
+          for (
+            let attempt = 0;
+            attempt < 100 && site.truth("decoy-next")?.page !== "decoy";
+            attempt++
+          )
+            yield* Effect.sleep(10);
+          expect(site.truth("decoy-next")).toMatchObject({ page: "decoy" });
+          yield* next.close();
+        }),
+    ).pipe(
+      Effect.provide(
+        Chromium.layer({
+          launch: { chromiumSandbox: false },
+        }).pipe(Layer.provide(NodeCrypto.layer)),
+      ),
+    ),
+);
 
 it.live(
   "fresh-page replay uses actual Page and ToolHost recordings and retains typed drift failures and complete navigation readiness timing",
@@ -24,7 +69,13 @@ it.live(
 
           expect(result.cells).toHaveLength(6);
           for (const cell of result.cells) {
-            if (cell.operator === "overlay") expect(cell.outcome).toBe("failed-typed");
+            if (cell.operator === "overlay")
+              // fe6e26d labelled the uncertain dispatched timeout as a typed refusal.
+              expect(cell).toMatchObject({
+                outcome: "unknown",
+                dispatch: "unknown",
+                pagePhase: "closed",
+              });
             else expect(cell.outcome).toBe("replayed");
             if (cell.operator === "slow")
               expect(

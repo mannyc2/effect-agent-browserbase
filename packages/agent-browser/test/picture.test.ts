@@ -28,6 +28,30 @@ test("cadence preserves a long delivery gap and both edge waits", () => {
   expect(cadence.tailWithoutDeliveryMillis).toBe(500);
 });
 
+// fe6e26d omitted window edges from the gap distribution and threshold counts.
+test("delivery gap statistics include a stalled window with no interior gap", () => {
+  const cadence = Picture.cadence([frame(1200)], { start: 0, end: 3000 });
+
+  expect(cadence.gapMillis).toEqual({ p50: 1200, p95: 1800, max: 1800 });
+  expect(cadence.gapsOver1000Millis).toBe(2);
+  expect(Picture.cadence([], { start: 0, end: 3000 }).gapMillis.max).toBe(3000);
+});
+
+// fe6e26d counted the same delivery silence once per overlapping changing interval.
+test("overlapping animation intervals count each delivery silence once", () => {
+  const freeze = Picture.freezes(
+    [frame(0), frame(2000)],
+    [
+      { start: 0, end: 1500 },
+      { start: 500, end: 2000 },
+    ],
+    { start: 0, end: 2000 },
+  );
+
+  expect(freeze.seconds).toBe(2);
+  expect(freeze.count).toBe(1);
+});
+
 test("freezes count expected animation including initial and trailing silence", () => {
   const window = { start: 0, end: 2000 };
   const freeze = Picture.freezes([frame(400), frame(500)], [window], window);

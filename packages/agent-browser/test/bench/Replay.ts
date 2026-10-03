@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Option, Stream } from "effect";
 import * as Tools from "effect-agent-browser/tools";
 import type * as Browser from "effect-browser/browser";
+import type { BrowserOutcome, Containment } from "effect-browser/errors";
 import * as Plan from "effect-browser/plan";
 import type {
   RecordedActionEncoded as ActionEncoded,
@@ -12,6 +13,7 @@ import { Toolkit } from "effect/ai";
 
 import {
   driftSite,
+  driftCondition,
   operators,
   type DriftOperator,
   type DriftSite,
@@ -121,7 +123,18 @@ export interface ReplayCell {
   readonly path: RecordingPath;
   readonly operator: DriftOperator;
   readonly seed: number;
-  readonly outcome: "replayed" | "failed-typed" | "wrong-place";
+  readonly condition: string;
+  readonly outcome:
+    | "replayed"
+    | "refused"
+    | "unknown"
+    | "performed-failure"
+    | "wrong-place"
+    | "truth-unverified";
+  readonly dispatch: BrowserOutcome;
+  readonly containment: Containment;
+  readonly pagePhase: Browser.PageStatus["phase"];
+  readonly truthAgreement: "matched" | "mismatched" | "unavailable";
   readonly reason: string | null;
   readonly stepId: string | null;
   readonly expected: DriftTruth;
@@ -369,6 +382,15 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
 
     const finished = yield* browser.monotonicTimeNanos;
     const truth = yield* waitTruth(site, run, walk.truth);
+    const status = yield* page.status;
+    const condition = `${walk.id}:${path}:${driftCondition(operator, seed)}`;
+
+    const truthAgreement =
+      truth === undefined
+        ? ("unavailable" as const)
+        : truthMatches(truth, walk.truth)
+          ? ("matched" as const)
+          : ("mismatched" as const);
 
     if (Exit.isSuccess(result))
       return {
@@ -376,7 +398,17 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
         path,
         operator,
         seed,
-        outcome: truthMatches(truth, walk.truth) ? ("replayed" as const) : ("wrong-place" as const),
+        condition,
+        outcome:
+          truth === undefined
+            ? ("truth-unverified" as const)
+            : truthMatches(truth, walk.truth)
+              ? ("replayed" as const)
+              : ("wrong-place" as const),
+        dispatch: "performed" as const,
+        containment: status.containment,
+        pagePhase: status.phase,
+        truthAgreement,
         reason: null,
         stepId: null,
         expected: walk.truth,
@@ -399,7 +431,17 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
       path,
       operator,
       seed,
-      outcome: "failed-typed" as const,
+      condition,
+      outcome:
+        error.error.outcome === "unknown"
+          ? ("unknown" as const)
+          : error.error.outcome === "performed"
+            ? ("performed-failure" as const)
+            : ("refused" as const),
+      dispatch: error.error.outcome,
+      containment: error.error.containment ?? error.attempt?.containment ?? status.containment,
+      pagePhase: status.phase,
+      truthAgreement,
       reason: error.error.reason._tag,
       stepId: error.stepId ?? null,
       expected: walk.truth,
@@ -484,8 +526,12 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
         operator,
         count: group.length,
         replayed: group.filter((cell) => cell.outcome === "replayed").length,
-        failedTyped: group.filter((cell) => cell.outcome === "failed-typed").length,
+        refused: group.filter((cell) => cell.outcome === "refused").length,
+        unknown: group.filter((cell) => cell.outcome === "unknown").length,
+        performedFailure: group.filter((cell) => cell.outcome === "performed-failure").length,
         wrongPlace: group.filter((cell) => cell.outcome === "wrong-place").length,
+        truthUnverified: group.filter((cell) => cell.outcome === "truth-unverified").length,
+        uniqueConditions: new Set(group.map((cell) => cell.condition)).size,
         stepMillis: quantiles(group.flatMap((cell) => [...cell.stepMillis])),
       };
     }),
@@ -502,6 +548,13 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
       stepTiming:
         "owner monotonic time from run request or preceding terminal evidence to attempt terminal evidence",
       withinMillis,
+      cells: cells.length,
+      uniqueConditions: new Set(cells.map((cell) => cell.condition)).size,
+      repeatedConditions: cells.length - new Set(cells.map((cell) => cell.condition)).size,
+      conditionBasis:
+        "walk, recording path and materially distinct drift parameters; fixed-layout seeds are repetitions",
+      wrongPlaceBasis:
+        "completed replay with independently reported different destination; decoys occupy prior positions or duplicate labels",
     },
   };
 });

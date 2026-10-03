@@ -91,28 +91,84 @@ const key = Schema.Struct({
 
 const Boundaries = Schema.Struct({ documentBoundaries: Schema.Array(Picture.Boundary) });
 
+const Animation = Schema.Struct({
+  kind: Schema.Literal("animation"),
+  ticks: Schema.Natural,
+  changing: Schema.Boolean,
+  visibility: Schema.Literals(["visible", "hidden"]),
+});
+
+const Visibility = Schema.Struct({
+  kind: Schema.Literal("visibility"),
+  visibility: Schema.Literals(["visible", "hidden"]),
+});
+
+export const activityReports = (events: ReadonlyArray<TruthEvent>): Picture.ActivityReport[] =>
+  events.flatMap<Picture.ActivityReport>((event) => {
+    if (event.route !== "/animation" && event.route !== "/smoke") return [];
+    const animation = Schema.decodeUnknownExit(Animation)(event.data);
+
+    if (animation._tag === "Success")
+      return [
+        {
+          at: event.at,
+          kind: "animation" as const,
+          visibility: animation.value.visibility,
+          ticks: animation.value.ticks,
+        },
+      ];
+    const visibility = Schema.decodeUnknownExit(Visibility)(event.data);
+
+    return visibility._tag === "Success"
+      ? [
+          {
+            at: event.at,
+            kind: "visibility" as const,
+            visibility: visibility.value.visibility,
+            ticks: null,
+          },
+        ]
+      : [];
+  });
+
 export const pictureMetrics = (
   journal: Journal,
   changing: ReadonlyArray<Picture.Interval> = [],
   windows: Readonly<Record<string, Picture.Interval>> = {},
+  options: {
+    readonly program?: Picture.Interval;
+    readonly reports?: ReadonlyArray<TruthEvent>;
+    readonly lostReports?: number;
+  } = {},
 ) => {
   const recording = journal.recording;
   const frames = recording?.frames ?? [];
-  const programWindow = { start: recording?.startedAt ?? 0, end: recording?.endedAt ?? 0 };
+
+  const programWindow = options.program ?? {
+    start: recording?.startedAt ?? 0,
+    end: recording?.endedAt ?? 0,
+  };
 
   const cutoff =
-    recording?.limitReached !== null && recording?.limitReached !== undefined
+    recording !== undefined && (recording.limitReached !== null || recording.error !== null)
       ? (frames.at(-1)?.receivedAt ?? programWindow.start)
       : (recording?.captureEndedAt ?? programWindow.end);
 
   const measured = Picture.measurement(programWindow, cutoff);
   const window = measured.window;
   const boundaries = Schema.decodeUnknownExit(Boundaries)(recording?.summary);
+  const reports = activityReports(options.reports ?? []);
+  const silence = Picture.freezes(frames, changing, window);
 
   return {
     ...Picture.cadence(frames, window),
     measurement: measured,
-    freezes: Picture.freezes(frames, changing, window),
+    freezes: silence,
+    pageActivity: Picture.activity(reports, window, silence.intervals, options.lostReports),
+    captureTeardownMillis: Math.max(
+      0,
+      (recording?.endedAt ?? 0) - (recording?.captureEndedAt ?? recording?.endedAt ?? 0),
+    ),
     firstFrame: Picture.firstFrame(
       frames,
       boundaries._tag === "Success" ? boundaries.value.documentBoundaries : [],
@@ -134,6 +190,15 @@ export const pictureMetrics = (
                 ? null
                 : Picture.freezes(frames, changing, measured.window),
             measurement: measured,
+            pageActivity:
+              measured.status === "unmeasured"
+                ? null
+                : Picture.activity(
+                    reports,
+                    measured.window,
+                    Picture.freezes(frames, changing, measured.window).intervals,
+                    options.lostReports,
+                  ),
           };
         })(),
       ]),
@@ -167,6 +232,7 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
   let page = browser.initialPage;
   let background: Browser.Page | undefined;
   let typing: Schema.Json = null;
+  let workEndedAt = 0;
 
   const timed = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
@@ -351,10 +417,16 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
           yield* Effect.sleep(200);
         }
       } else return yield* new BenchError({ operation: "scene", message: "Unknown stage scene." });
-    }),
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          workEndedAt = journal.elapsedMillis();
+        }),
+      ),
+    ),
   );
   const recording = journal.recording;
-  const window = { start: recording?.startedAt ?? 0, end: recording?.endedAt ?? 0 };
+  const window = { start: recording?.startedAt ?? 0, end: workEndedAt };
 
   const shownEvents = site.events().flatMap((event) => {
     const data = Schema.decodeUnknownExit(shown)(event.data);
@@ -369,7 +441,11 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
   const pixels =
     scene === "interstitials" ? yield* Picture.lumaSpreads(recording?.frames ?? []) : [];
 
-  const delivery = pictureMetrics(journal, changing, windows);
+  const delivery = pictureMetrics(journal, changing, windows, {
+    program: window,
+    reports: site.events(),
+    lostReports: site.lost(),
+  });
 
   journal.truth = json({ events: site.events(), lost: site.lost() });
   journal.metrics = json({

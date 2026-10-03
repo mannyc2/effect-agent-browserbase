@@ -5,7 +5,7 @@ import { filming } from "./Backends.ts";
 import * as Picture from "./Picture.ts";
 import { BenchError, type Journal, json } from "./Records.ts";
 import { matrix, type ReplayCell, type ReplayOptions } from "./Replay.ts";
-import { prepareStage, type Stage } from "./StageScenes.ts";
+import { activityReports, prepareStage, type Stage } from "./StageScenes.ts";
 
 export interface ContentionOptions extends ReplayOptions {
   readonly stage?: Stage;
@@ -77,11 +77,15 @@ export const replayContention = Effect.fn("Bench.replayContention")(function* <O
 
   const measuredEnd = retentionStopped
     ? (frames.at(-1)?.receivedAt ?? journal.recording?.startedAt ?? 0)
-    : (journal.recording?.endedAt ?? 0);
+    : (journal.recording?.captureEndedAt ?? journal.recording?.endedAt ?? 0);
+
+  const reports = activityReports(stage.events());
 
   const picture = intervals.map(({ phase, start, end }) => {
-    const window = { start: start.millis, end: Math.min(end.millis, measuredEnd) };
-    const measured = window.end > window.start;
+    const measurement = Picture.measurement({ start: start.millis, end: end.millis }, measuredEnd);
+    const window = measurement.window;
+    const measured = measurement.status !== "unmeasured";
+    const silence = measured ? Picture.freezes(frames, [window], window) : null;
 
     return {
       phase,
@@ -89,14 +93,17 @@ export const replayContention = Effect.fn("Bench.replayContention")(function* <O
         startMonotonicNanos: start.monotonicNanos,
         endMonotonicNanos: end.monotonicNanos,
       },
-      measurement: !measured ? "unmeasured" : window.end < end.millis ? "partial" : "complete",
+      measurement: measurement.status,
       cadence: measured ? Picture.cadence(frames, window) : null,
-      freezes: measured ? Picture.freezes(frames, [window], window) : null,
+      freezes: silence,
+      pageActivity: measured
+        ? Picture.activity(reports, window, silence?.intervals ?? [], stage.lost())
+        : null,
       viewerHeldAfterRetentionMillis: retentionStopped
         ? Math.max(0, end.millis - Math.max(start.millis, measuredEnd))
         : 0,
       expectedChangingBasis:
-        "continuous controlled stage animation; host ticks and visibility retained in truth",
+        "authored continuous animation; page callback progress and visibility are qualified host-receipt reports, not proof of painting",
     };
   });
 
