@@ -233,7 +233,7 @@ export const checks = {
     question: "H4",
     claim:
       "A keep-alive session allocated by one process, once detached, is borrowed by a separate process from its durable reference and exact target: the borrower drives the same page and closes without requesting release (ownership borrowed, remote not-owned); the allocating process then reconnects, sees the borrower's change on that page and releases it with remote termination confirmed.",
-    evidence: null,
+    evidence: "docs/STATUS.md#hosted-checks-at-7fab95e-3-october-2026",
     budget: { sessions: 1, browserSeconds: 180, actions: 20, captureSeconds: 0, transferBytes: 0 },
     env: [],
     optionalEnv: [],
@@ -244,7 +244,7 @@ export const checks = {
     question: "H3",
     claim:
       "A registered MV3 extension's chrome.storage.local value, written by its content script in a persisting session on a fresh context, is read back by the same extension in a later non-persisting session on that context. Worker restart, other storage areas and flush timing stay open.",
-    evidence: null,
+    evidence: "docs/STATUS.md#hosted-checks-at-7fab95e-3-october-2026",
     budget: {
       sessions: 2,
       browserSeconds: 120,
@@ -278,7 +278,7 @@ export const checks = {
     question: null,
     claim:
       "Without a browser session: a webhook endpoint is created with a redacted secret, retrieved, listed, updated, given a rotated redacted secret and deleted; a throwaway CA certificate is registered, retrieved, listed and deleted; the Agents and Functions lists decode; and exactly one Search request and one Fetch of https://example.com/ each return a decoded reply. Agent runs and Function invocations stay unexercised.",
-    evidence: null,
+    evidence: "docs/STATUS.md#hosted-checks-at-7fab95e-3-october-2026",
     budget: {
       sessions: 0,
       browserSeconds: 0,
