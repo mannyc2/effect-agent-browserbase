@@ -73,11 +73,13 @@ export const replayContention = Effect.fn("Bench.replayContention")(function* <O
   const frames = journal.recording?.frames ?? [];
 
   const retentionStopped =
-    journal.recording?.limitReached !== null || journal.recording?.error !== null;
+    journal.recording !== undefined &&
+    (journal.recording.limitReached !== null || journal.recording.error !== null);
 
-  const measuredEnd = retentionStopped
-    ? (frames.at(-1)?.receivedAt ?? journal.recording?.startedAt ?? 0)
-    : (journal.recording?.captureEndedAt ?? journal.recording?.endedAt ?? 0);
+  const measuredEnd = Picture.recordingCutoff(journal.recording, {
+    start: sampled.beforeStart.millis,
+    end: sampled.afterEnd.millis,
+  });
 
   const reports = activityReports(stage.events());
 

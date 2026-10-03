@@ -1,12 +1,23 @@
 import { Effect, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { BenchError, type RecordingFrame } from "./Records.ts";
+import { BenchError, type Recording, type RecordingFrame } from "./Records.ts";
 
 export interface Interval {
   readonly start: number;
   readonly end: number;
 }
+
+/** Retention loss or capture failure leaves all time after the last retained frame unmeasured. */
+export const recordingCutoff = (recording: Recording | undefined, program: Interval) =>
+  recording === undefined
+    ? program.start
+    : Math.min(
+        recording.captureEndedAt ?? program.end,
+        recording.limitReached === null && recording.error === null
+          ? program.end
+          : (recording.frames.at(-1)?.receivedAt ?? program.start),
+      );
 
 /** Native capture can end before the scene; the unobserved tail is not a page freeze. */
 export const measurement = (program: Interval, cutoff = program.end) => {

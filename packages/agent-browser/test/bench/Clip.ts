@@ -16,7 +16,14 @@ export const CursorSample = Schema.Struct({
     "checked-intended-aim",
     "intended-schedule",
   ]),
-});
+}).check(
+  Schema.makeFilter(
+    (sample) => sample.kind !== "press" || sample.qualification === "native-input",
+    {
+      title: "click pulses use native input timing",
+    },
+  ),
+);
 
 export type CursorSample = typeof CursorSample.Type;
 

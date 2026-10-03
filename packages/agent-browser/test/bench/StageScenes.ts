@@ -149,10 +149,7 @@ export const pictureMetrics = (
     end: recording?.endedAt ?? 0,
   };
 
-  const cutoff =
-    recording !== undefined && (recording.limitReached !== null || recording.error !== null)
-      ? (frames.at(-1)?.receivedAt ?? programWindow.start)
-      : (recording?.captureEndedAt ?? programWindow.end);
+  const cutoff = Picture.recordingCutoff(recording, programWindow);
 
   const measured = Picture.measurement(programWindow, cutoff);
   const window = measured.window;

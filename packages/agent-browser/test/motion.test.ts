@@ -123,6 +123,20 @@ describe("measured motion", () => {
 });
 
 describe("blind cursor artwork", () => {
+  it("refuses a click pulse derived from commanded or intended motion", () => {
+    for (const qualification of [
+      "commanded-point",
+      "checked-intended-aim",
+      "intended-schedule",
+    ] as const)
+      expect(() =>
+        cursorArtwork(
+          [{ kind: "press", atMillis: 100, point: { x: 20, y: 20 }, qualification }],
+          { width: 640, height: 480 },
+          15000,
+        ),
+      ).toThrow(/Expected <filter>/);
+  });
   it("native pointerdown supplies the click pulse; a later action acknowledgement cannot supply it", () => {
     const native = cursorFromInput([event("pointerdown", 100, { x: 20, y: 20 })], 1000);
     const stamp = (offsetNanos: bigint) => ({ clockId: "clock", offsetNanos });

@@ -12,7 +12,7 @@ import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
 import { answer, call, picture, scripted, type Driver, type Turn } from "./Drivers.ts";
-import { cadence, freezes, measurement, type Interval } from "./Picture.ts";
+import { cadence, freezes, measurement, recordingCutoff, type Interval } from "./Picture.ts";
 import { BenchError, json, type Journal, type RecordingFrame, type Usage } from "./Records.ts";
 import * as StepDigest from "./StepDigest.ts";
 import { grade, Narration, type Truth } from "./Understanding.ts";
@@ -769,12 +769,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
             airDelayMillis: config.airDelayMillis,
             interstitials: [...interstitials, ...banners],
             usage: journal.usage,
-            measuredThroughMillis: Math.min(
-              journal.recording?.captureEndedAt ?? end,
-              journal.recording?.limitReached === null || journal.recording === undefined
-                ? end
-                : (journal.recording.frames.at(-1)?.receivedAt ?? start),
-            ),
+            measuredThroughMillis: recordingCutoff(journal.recording, { start, end }),
           }),
           config,
           stopReason,

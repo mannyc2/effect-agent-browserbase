@@ -384,8 +384,9 @@ export const understanding = Effect.fn("Bench.understanding")(function* <OwnerEr
       }
       if (config.scene === "read-game") {
         const site = yield* gameSite({ seed: journal.manifest.seed });
-        const frame = yield* enterGame(page, site, "reels");
-        const host = yield* BrowserTools.makeHost(browser, frame);
+
+        yield* enterGame(page, site, "reels");
+        const host = yield* BrowserTools.makeHost(browser, page);
 
         for (let spin = 1; spin <= config.moments; spin++) {
           yield* waitForGame(
