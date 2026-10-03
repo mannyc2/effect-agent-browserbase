@@ -124,11 +124,11 @@ Earlier coordinated shape changes are retained in release history. `0.2.0-beta.2
 
 ## Ownership and boundaries
 
-A browser belongs to its Effect Scope, with one connection, action budget and capture/page-control registry. Hosted release/status checks and local process termination are different cleanup facts; both owners provide `closeChecked`, and both retain their full receipts. Borrowed closure disconnects only the borrowed connection.
+A browser belongs to its Effect Scope, with one control connection, action budget and capture/page-control registry. All reads and mutations use the control connection; Browserbase's observation connection is read-only and carries capture and the captured pages' navigation/lifecycle events. Hosted release/status checks and local process termination are different cleanup facts; both owners provide `closeChecked`, and both retain their full receipts. Borrowed closure disconnects the borrowed session's local connections.
 
 Actions retain exact observed-node identity and distinguish `undispatched`, `rejected` and `unknown` outcomes. An uncertain mutation is never replayed. Callback errors and services remain typed. Credentials, endpoints, control facts and native diagnostics stay with the host.
 
-Live capture supplies bounded JPEG frames and metadata from the same owner. `Capture.stream(page)` acquires lazily and releases its interval when consumption finishes, fails or is interrupted. `Capture.start` gives hosts the explicit interval, metadata snapshots and final summary. A caller owns encoding and presentation. Browserbase recording and replay services have independent resource lifetimes. No second debugger connection or raw driver is exposed.
+Live capture supplies bounded JPEG frames and metadata from the same owner. On Browserbase, captured frames keep flowing on hosted sessions while large protocol messages are in flight: a lazy observation connection carries the screencast and its acknowledgements independently of control traffic. Local Chromium keeps the Playwright capture source. `Capture.stream(page)` acquires lazily and releases its interval when consumption finishes, fails or is interrupted. `Capture.start` gives hosts the explicit interval, metadata snapshots and final summary. A caller owns encoding and presentation. Browserbase recording and replay services have independent resource lifetimes. No debugger connection or raw driver is exposed.
 
 The implementation targets trusted Node/Bun hosts and supports only explicit `Unrestricted` network policy. Chromium launch supports Linux/macOS; borrowed attachment currently accepts concrete loopback CDP WebSockets. Native local validation and hosted-provider evidence are distinct; see [Status](docs/STATUS.md).
 

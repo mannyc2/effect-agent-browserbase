@@ -1,6 +1,8 @@
+import { Cause, Clock, Effect, Exit, Result } from "effect";
 import type { Frame } from "playwright-core";
 
-import { Reasons } from "../../Errors.ts";
+import type { CaptureSource as ProviderCaptureSource } from "../../BrowserRuntime.ts";
+import { type BrowserError, Reasons } from "../../Errors.ts";
 import type {
   CaptureBinding,
   CaptureInvalidation,
@@ -8,8 +10,38 @@ import type {
   CaptureTarget,
   NativeFrame,
 } from "./Driver.ts";
-import { failure, sanitize } from "./NativeCalls.ts";
+import { failure, NativeEffectFailure, sanitize } from "./NativeCalls.ts";
 import type { Entry, Targets } from "./Targets.ts";
+
+/**
+ * Existing capture accounting tracks native Promise settlement even after its caller leaves.
+ * Keep that contract for a provider's bounded, lifetime-owned Effect transport, and preserve its
+ * typed error or defect across the boundary. The owner's captured Clock controls its deadlines.
+ */
+export const providerCaptureSource = (
+  source: ProviderCaptureSource,
+  clock: Clock.Clock,
+): CaptureSource => {
+  const run = async (operation: Effect.Effect<void, BrowserError>): Promise<void> => {
+    // oxlint-disable-next-line no-restricted-properties -- capture tracks actual settlement independently of caller interruption; the provider lifetime owns and closes the transport
+    const exit = await Effect.runPromiseExit(
+      operation.pipe(Effect.provideService(Clock.Clock, clock)),
+    );
+
+    if (Exit.isFailure(exit)) {
+      const error = Cause.findError(exit.cause);
+
+      if (Result.isSuccess(error)) throw error.success;
+      throw NativeEffectFailure.make({ cause: error.failure });
+    }
+  };
+
+  return {
+    start: (options) => run(source.start(options)),
+    stop: () => run(source.stop),
+    ...(source.release === undefined ? {} : { release: source.release }),
+  };
+};
 
 interface CaptureWatcher {
   readonly frameId: string;
@@ -91,14 +123,16 @@ export const makeCaptureSources = (targets: Targets) => {
 
       current({ pageId: entry.id, frameId: watchedFrameId });
 
-      // The maintained API is required; older Playwright versions fail explicitly, never silently emulate it.
-      if (page.screencast === undefined) throw failure(Reasons.Unsupported.make({}));
       let watcherSet: Set<CaptureWatcher> | undefined;
       let watcher: CaptureWatcher | undefined;
 
       const source: CaptureSource = {
         start: ({ receive, quality, size, invalidate, opened, document }) =>
           sanitize(async () => {
+            // Only the default source needs Playwright's maintained screencast API. Resolving
+            // target authority must also work when the provider supplies its own source.
+            if (page.screencast === undefined)
+              throw failure(Reasons.Unsupported.make({}), "undispatched");
             watcherSet = captureWatchers.get(entry.id) ?? new Set<CaptureWatcher>();
             captureWatchers.set(entry.id, watcherSet);
             watcher = {
@@ -120,7 +154,7 @@ export const makeCaptureSources = (targets: Targets) => {
         stop: () =>
           sanitize(async () => {
             // A closed target cannot produce more frames; its page channel rejects stop.
-            if (page.isClosed()) return;
+            if (page.isClosed() || page.screencast === undefined) return;
             try {
               await page.screencast.stop();
             } catch (error) {

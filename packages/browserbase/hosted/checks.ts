@@ -201,6 +201,17 @@ export const checks = {
     operator: false,
     media: false,
   },
+  "capture-isolation": {
+    question: "H7",
+    claim:
+      "Captured frames keep flowing on hosted sessions while large protocol messages are in flight: one animated Page receives at least two frames during each of four fresh-document element reads on its peer, with every overlapping inter-frame gap at most 600 ms, then its original capture stops and provider release is confirmed. This qualifies the controlled scene and pinned Playwright read path, not an arbitrary frame-rate guarantee.",
+    evidence: null,
+    budget: { sessions: 1, browserSeconds: 120, actions: 15, captureSeconds: 90, transferBytes: 0 },
+    env: [],
+    optionalEnv: [],
+    operator: false,
+    media: false,
+  },
   "long-session": {
     question: null,
     claim:

@@ -24,6 +24,7 @@ import {
 import { bindingImplementation, issueBinding } from "./internal/browser/Binding.ts";
 import { makeBindings, preparePlan } from "./internal/browser/Bindings.ts";
 import { compileBootstrap } from "./internal/browser/Bootstrap.ts";
+import type { CaptureStart, CaptureTarget } from "./internal/browser/CaptureTransport.ts";
 import type { ConnectionCleanup } from "./internal/browser/ConnectionCleanup.ts";
 import type { DriverOptions, NativeFileSelection } from "./internal/browser/Driver.ts";
 import { fromNativeAttempt } from "./internal/browser/NativeAttempt.ts";
@@ -47,6 +48,27 @@ export {
   type ConnectionCleanup,
   type ConnectionState,
 } from "./internal/browser/ConnectionCleanup.ts";
+
+export type {
+  CaptureFrame,
+  CaptureStart,
+  CaptureTarget,
+} from "./internal/browser/CaptureTransport.ts";
+
+/**
+ * A provider-owned read-only capture transport. Its ordered callbacks carry both frames and
+ * document changes; reads and mutations remain on the runtime's control connection.
+ */
+export interface CaptureSource {
+  readonly start: (options: CaptureStart) => Effect.Effect<void, BrowserError>;
+  readonly stop: Effect.Effect<void, BrowserError>;
+  /**
+   * Called at most once after stop succeeds following start settlement, or after the owner
+   * definitively confirms this exact target closed. It can arrive while stop is pending;
+   * retain that terminal fact before dropping event watchers.
+   */
+  readonly release?: () => void;
+}
 
 /** Opaque engine configuration. Only this constructor's issued values can acquire a runtime. */
 export interface BrowserBinding {
@@ -114,6 +136,11 @@ export interface Lifetime {
   readonly release: Effect.Effect<unknown>;
   readonly cleanupResult: Effect.Effect<Option.Option<unknown>>;
   readonly closeChecked: Effect.Effect<void, BrowserError>;
+  /**
+   * Construct an inert source for this exact target. Opening is lazy in `start`; the lifetime
+   * owns and checks its transport cleanup. Omission uses the control connection's screencast.
+   */
+  readonly captureSource?: (target: CaptureTarget) => CaptureSource;
   /**
    * Memory-only evidence that canonical owned cleanup terminated native browser control.
    * Omission is unknown. Borrowed disconnection alone never establishes this fact.

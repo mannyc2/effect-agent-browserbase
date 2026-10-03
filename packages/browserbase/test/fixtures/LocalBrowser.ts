@@ -309,7 +309,6 @@ export const localBrowser = Effect.acquireRelease(
                 outcome: "undispatched",
               }),
             );
-          connections.push(id);
           endpointSessions.set(session.endpoint, id);
 
           return Effect.succeed(session.endpoint);
@@ -319,6 +318,7 @@ export const localBrowser = Effect.acquireRelease(
         const id = endpointSessions.get(endpoint);
 
         assert.ok(id !== undefined, "A connection reached an endpoint no session resolved");
+        connections.push(id);
         installCaptureDiagnostics(browser, id, connections.length);
         nativePages.set(id, () => browser.contexts().flatMap((context) => context.pages()));
       },
@@ -365,11 +365,14 @@ export const localBrowser = Effect.acquireRelease(
         try {
           const deadline = performance.now() + allocationBudgetMillis;
           let port: string | undefined;
+          let socketPath: string | undefined;
 
-          while (!port && performance.now() < deadline) {
+          while ((!port || !socketPath) && performance.now() < deadline) {
             if (process.exitCode !== null) throw new Error(`Local Chromium exited: ${diagnostic}`);
             try {
-              port = (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0];
+              [port, socketPath] = (
+                await readFile(join(profile, "DevToolsActivePort"), "utf8")
+              ).split("\n");
             } catch {
               await new Promise<void>((resolve) => {
                 setTimeout(resolve, 20);
@@ -377,9 +380,13 @@ export const localBrowser = Effect.acquireRelease(
             }
           }
           if (!port || !/^\d+$/.test(port)) throw new Error(`No local CDP port: ${diagnostic}`);
-          const endpoint = `http://127.0.0.1:${port}`;
+          if (!socketPath?.startsWith("/devtools/browser/"))
+            throw new Error("No local CDP socket path");
+          const endpoint = `ws://127.0.0.1:${port}${socketPath}`;
 
-          await Effect.runPromise(renderReady(endpoint, deadline - performance.now()));
+          await Effect.runPromise(
+            renderReady(`http://127.0.0.1:${port}`, deadline - performance.now()),
+          );
           sessions.set(id, { process, endpoint, status: "RUNNING" });
           // Production configures Browserbase's required relative "downloads"
           // directory through real CDP. cwd keeps those files execution-owned;

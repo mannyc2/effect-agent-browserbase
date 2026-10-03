@@ -58,6 +58,7 @@ import * as Trace from "../Trace.ts";
 import { type CaptureMetadata, type CaptureParent } from "./Association.ts";
 import type { BindingImplementation, ConnectionIdentity } from "./Binding.ts";
 import type { ConnectionBindings } from "./Bindings.ts";
+import { providerCaptureSource } from "./CaptureSource.ts";
 import { cleanupStep, type ConnectionCleanup, type ConnectionState } from "./ConnectionCleanup.ts";
 import type {
   Driver,
@@ -520,6 +521,10 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
     if (page !== undefined && page.phase !== "closing") owner.revokePage(pageId);
     owner.retirePage(pageId);
     pages.closed(pageId);
+    // Provider capture has no control-connection watcher. Positive owner closure still releases
+    // its reservation, including one quarantined after an unconfirmed observation stop.
+    for (const lease of capture.captureLeases.values())
+      if (lease.pageId === pageId) lease.invalidate("target-closed");
   };
 
   const pendingPageFaults = new Map<
@@ -628,7 +633,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
                   : authority.phase,
             containment: authority.containment,
           }),
-          source: binding.source,
+          source:
+            acquired.captureSource === undefined
+              ? binding.source
+              : providerCaptureSource(
+                  acquired.captureSource({ pageId: binding.pageId, targetId: binding.targetId }),
+                  clock,
+                ),
         };
       });
     },
