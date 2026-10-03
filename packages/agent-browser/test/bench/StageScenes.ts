@@ -83,10 +83,12 @@ export const prepareStage = Effect.fn("Bench.stage.prepare")(function* (
 const shown = Schema.Struct({ kind: Schema.String, shown: Schema.Boolean });
 
 const key = Schema.Struct({
-  kind: Schema.String,
+  documentId: Schema.NonEmptyString,
+  sequence: Schema.Natural.check(Schema.isGreaterThan(0)),
+  kind: Schema.Literals(["keydown", "keyup", "input"]),
   key: Schema.String,
   value: Schema.String,
-  pageAt: Schema.Finite,
+  pageAt: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
 });
 
 const Boundaries = Schema.Struct({ documentBoundaries: Schema.Array(Picture.Boundary) });
@@ -348,15 +350,38 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
         );
         const duration = journal.elapsedMillis() - before;
 
-        const readKeys = () =>
-          site.events().flatMap((event) => {
-            const decoded = Schema.decodeUnknownExit(key)(event.data);
+        const readKeys = Effect.fnUntraced(function* () {
+          const reports = site
+            .events()
+            .filter((event) => event.route === "/typing")
+            .flatMap((event) => {
+              const decoded = Schema.decodeUnknownExit(key)(event.data);
 
-            return decoded._tag === "Success" ? [decoded.value] : [];
-          });
+              return decoded._tag === "Success" ? [decoded.value] : [];
+            });
+
+          if (
+            new Set(reports.map((event) => event.documentId)).size > 1 ||
+            new Set(reports.map((event) => event.sequence)).size !== reports.length
+          )
+            return yield* new BenchError({
+              operation: "typing truth",
+              message: "Typing reports must belong to one document with unique event sequences.",
+            });
+
+          reports.sort((a, b) => a.sequence - b.sequence);
+
+          if (reports.some((event, index) => event.pageAt < (reports[index - 1]?.pageAt ?? 0)))
+            return yield* new BenchError({
+              operation: "typing truth",
+              message: "The typing document clock must be nondecreasing.",
+            });
+
+          return reports;
+        });
 
         const confirmationStart = journal.elapsedMillis();
-        let keys = readKeys();
+        let keys = yield* readKeys();
         let input = keys.findLast((event) => event.kind === "input");
 
         while (input?.value !== value) {
@@ -364,7 +389,7 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
 
           if (remaining <= 0) break;
           yield* Effect.sleep(Math.min(25, remaining));
-          keys = readKeys();
+          keys = yield* readKeys();
           input = keys.findLast((event) => event.kind === "input");
         }
 
@@ -377,8 +402,14 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
         const holds: number[] = [];
         const intervals: number[] = [];
         let previous: number | undefined;
+        let previousSequence = 0;
 
         for (const event of keys) {
+          if (event.sequence !== previousSequence + 1) {
+            down.clear();
+            previous = undefined;
+          }
+          previousSequence = event.sequence;
           if (event.kind === "keydown") {
             down.set(event.key, event.pageAt);
             if (previous !== undefined) intervals.push(event.pageAt - previous);
@@ -401,6 +432,11 @@ export const stageScene = Effect.fn("Bench.stage.scene")(function* <OwnerError>(
           charactersPerSecond: (value.length * 1000) / duration,
           within15Seconds: duration <= 15000,
           keyEvents: keys.length,
+          eventOrder: "fixture-document-sequence",
+          missingReceivedSequences: (keys.at(-1)?.sequence ?? 0) - keys.length,
+          deliveryQualification: "received reports only; an unreported tail remains unverified",
+          keyTimingQualification:
+            "received contiguous sequences; samples across known gaps are excluded",
           holdMillis: holds.length === 0 ? null : Picture.quantiles(holds),
           intervalMillis: intervals.length === 0 ? null : Picture.quantiles(intervals),
         });

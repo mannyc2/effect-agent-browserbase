@@ -118,6 +118,13 @@ its frame or byte cap, later picture intervals are partial or unmeasured. A held
 last frame after that cutoff is not evidence of a page freeze. Caption and game
 truth can remain measured after picture retention stops.
 
+Typing reports carry one document identity and increasing event sequences.
+Confirmation and key-hold samples follow that source order; the raw truth ledger
+retains host arrival times. Mixed document identities or duplicate sequences
+refuse the metric. Known gaps in received sequences are reported, while an
+unreported tail remains unverified. Key-hold and interval samples span only
+contiguous received sequences; a regressing document clock refuses the metric.
+
 Replay cells retain the failing step's original dispatch outcome, containment and
 terminal Page phase. Known undispatched or rejected failures are refusals;
 unknown mutations and performed actions with a later failure have separate

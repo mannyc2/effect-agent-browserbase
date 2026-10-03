@@ -35,7 +35,7 @@ export const stageContent = (route: string, delayMillis = 500) => {
   if (route === "/typing")
     return content(
       '<h1>Search</h1><input id="search" aria-label="Search">',
-      `for(const kind of ['keydown','keyup','input'])document.addEventListener(kind,event=>report({kind,key:event.key??'',value:document.querySelector('#search').value,pageAt:performance.now()}));`,
+      `const documentId=crypto.randomUUID();let sequence=0;for(const kind of ['keydown','keyup','input'])document.addEventListener(kind,event=>report({documentId,sequence:++sequence,kind,key:event.key??'',value:document.querySelector('#search').value,pageAt:performance.now()}));`,
     );
   if (route === "/slow")
     return content(
