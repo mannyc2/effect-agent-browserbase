@@ -117,6 +117,7 @@ export const gameClient = (engine: GameEngine, kind: GameKind) => {
       context.fillText(`BALANCE ${state.balance}`, 32, 472);
       context.font = "18px sans-serif";
       context.fillText(`LAST WIN ${state.lastWin}`, 32, 507);
+      context.fillText(`SPIN ${state.spin}`, 720, 425);
       context.fillStyle = "#3a4966";
       context.fillRect(340, 440, 60, 75);
       context.fillRect(490, 440, 60, 75);

@@ -13,6 +13,7 @@ export class GameSiteError extends Schema.TaggedError<GameSiteError>()("GameSite
 const SiteOptions = Schema.Struct({
   seed: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 0xffffffff })),
   credits: Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 1000000 })),
+  publicOrigins: Schema.optionalKey(Schema.Struct({ top: Schema.String, frame: Schema.String })),
 });
 
 const TruthReceipt = Schema.Struct({
@@ -21,7 +22,7 @@ const TruthReceipt = Schema.Struct({
   event: TruthEvent,
 });
 
-export type TruthReceipt = typeof TruthReceipt.Type;
+export type TruthReceipt = typeof TruthReceipt.Type & { readonly receivedAtMillis: number };
 
 export interface HostGameState extends GameState {
   readonly ready: boolean;
@@ -30,6 +31,8 @@ export interface HostGameState extends GameState {
 
 export interface GameSite {
   readonly url: string;
+  readonly localUrl: string;
+  readonly localFrameOrigin: string;
   readonly frameOrigin: string;
   readonly seed: number;
   readonly credits: number;
@@ -37,7 +40,39 @@ export interface GameSite {
   readonly events: () => ReadonlyArray<TruthReceipt>;
   readonly failures: () => ReadonlyArray<string>;
   readonly state: (kind: GameKind) => HostGameState;
+  readonly elapsedMillis: () => number;
+  /** Host preparation only, before browser navigation. Distinct hostnames do not prove PSL sites. */
+  readonly setPublicOrigins: (origins: PublicOrigins) => Effect.Effect<void, GameSiteError>;
+  readonly originQualification:
+    | "loopback-distinct-sites"
+    | "configured-cross-origin-operator-site-prepared";
 }
+
+export interface PublicOrigins {
+  readonly top: string;
+  readonly frame: string;
+}
+
+const checkedOrigins = (origins: PublicOrigins) => {
+  const top = new URL(origins.top);
+  const frame = new URL(origins.frame);
+
+  if (
+    ![top, frame].every(
+      (origin) =>
+        origin.protocol === "https:" &&
+        origin.username === "" &&
+        origin.password === "" &&
+        origin.pathname === "/" &&
+        origin.search === "" &&
+        origin.hash === "",
+    ) ||
+    top.hostname === frame.hostname
+  )
+    throw new Error("Public fixture origins require two distinct HTTPS hostnames");
+
+  return { top: top.origin, frame: frame.origin };
+};
 
 const style = `<style>body{margin:0;background:#0f172a;color:#e5e7eb;font:20px sans-serif}
 main{max-width:960px;margin:24px auto}button{padding:16px 24px;margin:10px;font:inherit;cursor:pointer}
@@ -80,11 +115,16 @@ ${
 
 /** A separate scoped loopback site with a genuinely cross-site localhost child frame. */
 export const gameSite = Effect.fn("gameSite")(function* (
-  options: { readonly seed?: number; readonly credits?: number } = {},
+  options: {
+    readonly seed?: number;
+    readonly credits?: number;
+    readonly publicOrigins?: { readonly top: string; readonly frame: string };
+  } = {},
 ) {
   const config = yield* Schema.decodeEffect(SiteOptions)({
     seed: options.seed ?? 0,
     credits: options.credits ?? 1000,
+    ...(options.publicOrigins === undefined ? {} : { publicOrigins: options.publicOrigins }),
   }).pipe(
     Effect.mapError((cause) => GameSiteError.make({ operation: "game site options", cause })),
   );
@@ -92,6 +132,12 @@ export const gameSite = Effect.fn("gameSite")(function* (
   return yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
+        const started = performance.now();
+        const elapsedMillis = () => performance.now() - started;
+
+        const publicOrigins =
+          config.publicOrigins === undefined ? undefined : checkedOrigins(config.publicOrigins);
+
         const ledger: TruthReceipt[] = [];
         const failures: string[] = [];
         const states = new Map<GameKind, HostGameState>();
@@ -201,7 +247,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
                 }
                 sequences.set(receipt.kind, receipt.sequence);
                 states.set(receipt.kind, state);
-                ledger.push(receipt);
+                ledger.push({ ...receipt, receivedAtMillis: elapsedMillis() });
                 response.writeHead(204);
                 response.end();
               } catch (cause) {
@@ -267,14 +313,43 @@ export const gameSite = Effect.fn("gameSite")(function* (
           server.close();
           throw new Error("No game site port");
         }
-        const url = `http://127.0.0.1:${address.port}/`;
+        const localUrl = `http://127.0.0.1:${address.port}/`;
 
-        frameOrigin = `http://localhost:${address.port}`;
+        const localFrameOrigin = `http://localhost:${address.port}`;
+        let url = publicOrigins === undefined ? localUrl : `${publicOrigins.top}/`;
+
+        frameOrigin = publicOrigins === undefined ? localFrameOrigin : publicOrigins.frame;
 
         return {
-          url,
-          frameOrigin,
-          ...config,
+          get url() {
+            return url;
+          },
+          localUrl,
+          localFrameOrigin,
+          get frameOrigin() {
+            return frameOrigin;
+          },
+          get originQualification(): GameSite["originQualification"] {
+            return url === localUrl
+              ? "loopback-distinct-sites"
+              : "configured-cross-origin-operator-site-prepared";
+          },
+          seed: config.seed,
+          credits: config.credits,
+          elapsedMillis,
+          setPublicOrigins: (origins: PublicOrigins) =>
+            Effect.try({
+              try: () => {
+                if (ledger.length > 0)
+                  throw new Error("Fixture origins must be prepared before game navigation");
+                const checked = checkedOrigins(origins);
+
+                url = `${checked.top}/`;
+                frameOrigin = checked.frame;
+              },
+              catch: (cause) =>
+                GameSiteError.make({ operation: "prepare public fixture origins", cause }),
+            }),
           playUrl: (kind: GameKind) => `${url}play/${kind}`,
           events: () => structuredClone(ledger),
           failures: () => [...failures],
