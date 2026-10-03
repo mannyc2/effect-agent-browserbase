@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Redacted } from "effect";
+import { Deferred, Effect, Fiber, Layer, Redacted, Scheduler } from "effect";
 import { BrowserPolicy } from "effect-browser/browser-data";
 import type { CaptureStart } from "effect-browser/browser-runtime";
 import * as Capture from "effect-browser/capture";
@@ -33,6 +33,7 @@ class ScriptedSocket implements Socket.WebSocketLike {
   readonly sent = Deferred.makeUnsafe<void>();
   confirmClose = true;
   malformedAttachment = false;
+  detachOnAttach = false;
 
   addEventListener(type: string, listener: (event: Socket.WebSocketEvent) => void) {
     const listeners = this.listeners.get(type) ?? new Set();
@@ -75,6 +76,11 @@ class ScriptedSocket implements Socket.WebSocketLike {
     if (command.method === "Page.getFrameTree")
       result = { frameTree: { frame: { id: "root", url: "https://capture.test/one" } } };
     this.message({ id: command.id, result });
+    if (command.method === "Target.attachToTarget" && this.detachOnAttach)
+      this.message({
+        method: "Target.detachedFromTarget",
+        params: { sessionId: this.attached.get(String(command.params?.targetId)) },
+      });
     if (command.method === "Target.detachFromTarget")
       this.message({ method: "Target.detachedFromTarget", params: command.params });
   }
@@ -437,6 +443,47 @@ it.effect("closing during endpoint resolution prevents a late observation connec
       yield* Deferred.succeed(resolved, "wss://scripted.invalid");
       expect((yield* Fiber.join(start).pipe(Effect.flip)).reason._tag).toBe("Closed");
       expect(opened).toBe(0);
+    }),
+  ),
+);
+
+it.effect("an immediate observation detach remains known when attachment setup yields", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const socket = new ScriptedSocket();
+      const failures: string[] = [];
+
+      socket.detachOnAttach = true;
+      socket.rejected.add("Page.enable");
+      socket.rejected.add("Page.stopScreencast");
+      socket.rejected.add("Target.detachFromTarget");
+
+      const observation = yield* makeObservation({
+        connection: () => Effect.succeed(Redacted.make("wss://scripted.invalid")),
+        resolve: () => Effect.succeed("wss://scripted.invalid"),
+        constructor: () => socket,
+        deadline: Infinity,
+      });
+
+      const source = observation.source({ pageId: "page", targetId: "target" });
+
+      const start = yield* source
+        .start({
+          quality: 70,
+          receive: () => {},
+          invalidate: () => {},
+          fail: (error) => {
+            failures.push(error.reason._tag);
+          },
+        })
+        .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 32), Effect.result);
+
+      expect(start._tag).toBe("Failure");
+      expect(failures).toEqual(["Disconnected"]);
+      expect((yield* source.stop.pipe(Effect.result))._tag).toBe("Success");
+      expect(socket.commands.map((command) => command.method)).not.toContain(
+        "Target.detachFromTarget",
+      );
     }),
   ),
 );

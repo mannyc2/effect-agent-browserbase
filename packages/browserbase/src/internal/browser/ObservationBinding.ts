@@ -8,7 +8,7 @@ export type ObservationEndpoint = (connection: {
 
 const endpoints = new WeakMap<BrowserBinding, ObservationEndpoint>();
 
-/** Native bindings share one validated routing decision between control and observation. */
+/** Native bindings validate and route both control and observation endpoints. */
 export const registerObservationEndpoint = (
   binding: BrowserBinding,
   endpoint: ObservationEndpoint,

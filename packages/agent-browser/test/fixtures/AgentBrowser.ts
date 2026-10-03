@@ -86,6 +86,7 @@ export const localAgentBrowser = Effect.acquireRelease(
     const sessions = new Map<string, { process: ChildProcess; endpoint: string; status: string }>();
     const releaseIds: string[] = [];
     const connectionIds: string[] = [];
+    const endpointSessions = new Map<string, string>();
     const createBodies: unknown[] = [];
 
     const server = createServer((_request, response) => {
@@ -126,16 +127,32 @@ export const localAgentBrowser = Effect.acquireRelease(
                 outcome: "undispatched",
               }),
             );
-          connectionIds.push(id);
+          endpointSessions.set(session.endpoint, id);
 
           return Effect.succeed(session.endpoint);
         }),
+      onConnected: ({ endpoint }) => {
+        const id = endpointSessions.get(endpoint);
+
+        assert.ok(id !== undefined, "A control connection reached an unresolved endpoint");
+        connectionIds.push(id);
+      },
     });
 
     const fetch: typeof globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
       const parsed = new URL(request.url);
 
+      // Keep this fixture on Playwright's HTTP discovery path as compatibility coverage.
+      // The observation client discovers that same socket without provider credentials.
+      if (
+        parsed.pathname === "/json/version/" &&
+        [...sessions.values()].some((session) => session.endpoint === parsed.origin)
+      ) {
+        assert.equal(request.headers.has("x-bb-api-key"), false);
+
+        return globalThis.fetch(request);
+      }
       assert.equal(parsed.origin, "https://api.browserbase.com");
       assert.equal(request.headers.get("x-bb-api-key"), "fixture-key-not-a-credential");
       if (parsed.pathname === "/v1/sessions" && request.method === "POST") {

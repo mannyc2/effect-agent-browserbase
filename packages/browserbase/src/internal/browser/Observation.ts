@@ -6,9 +6,11 @@ import type {
   Lifetime,
 } from "effect-browser/browser-runtime";
 import { BrowserError, Reasons, type BrowserReason } from "effect-browser/errors";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { Socket } from "effect/unstable/socket";
 
 import type { ObservationEndpoint } from "./ObservationBinding.ts";
+import { observationWebSocket } from "./ObservationEndpoint.ts";
 
 const Envelope = Schema.Struct({
   id: Schema.optionalKey(Schema.Natural),
@@ -112,7 +114,9 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
 }): Effect.fn.Return<Observation, never, Scope.Scope> {
   const scope = yield* Scope.make();
   const clock = yield* Clock.Clock;
+  const http = yield* HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer));
   const closed = yield* Deferred.make<void>();
+  const closingSignal = yield* Deferred.make<void>();
   const targets = new Map<string, Target>();
   const pending = new Map<number, Pending>();
   let sequence = 0;
@@ -302,11 +306,27 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
 
       if (remaining <= 0) return yield* failure(Reasons.Expired.make({}));
 
-      const url = yield* options
-        .connection(remaining)
-        .pipe(Effect.flatMap((url) => options.resolve({ url })));
+      const url = yield* options.connection(remaining).pipe(
+        Effect.flatMap((url) => options.resolve({ url })),
+        Effect.flatMap((endpoint) => observationWebSocket(http, endpoint)),
+        Effect.timeoutOrElse({
+          duration: Math.min(remaining, 5000),
+          orElse: () => Effect.fail(failure(Reasons.Timeout.make({}))),
+        }),
+        Effect.raceFirst(
+          Deferred.await(closingSignal).pipe(
+            Effect.andThen(Effect.fail(failure(Reasons.Closed.make({})))),
+          ),
+        ),
+      );
 
       if (closing) return yield* failure(Reasons.Closed.make({}));
+
+      const openRemaining = Math.ceil(
+        options.deadline - Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000,
+      );
+
+      if (openRemaining <= 0) return yield* failure(Reasons.Expired.make({}));
 
       const socket = yield* Socket.fromWebSocket(
         Effect.acquireRelease(
@@ -350,7 +370,7 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
               ws.close(1000);
             }),
         ),
-        { openTimeout: Math.min(remaining, 5000), highWaterMark: maxMessageBytes },
+        { openTimeout: Math.min(openRemaining, 5000), highWaterMark: maxMessageBytes },
       );
 
       const pull = yield* Socket.readerString(socket).pipe(
@@ -403,7 +423,10 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
     Effect.suspend(() => {
       closing = true;
 
-      return closeSocket.pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
+      return Deferred.succeed(closingSignal, undefined).pipe(
+        Effect.andThen(closeSocket),
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+      );
     }),
   );
 
@@ -419,20 +442,28 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
       start: Effect.fnUntraced(function* (start: CaptureStart) {
         yield* connect;
 
-        const value = yield* request({
-          method: "Target.attachToTarget",
-          params: { targetId: capture.targetId, flatten: true },
-        });
-
-        const attachment = yield* decode(Attachment, value).pipe(Effect.tapError(terminate));
-
-        attached = attachment.sessionId;
         const target: Target = { options: start, opened: false, detached: false, released: false };
 
         state = target;
-        targets.set(attached, target);
-        yield* request({ method: "Page.enable", sessionId: attached });
-        yield* request({ method: "Page.getFrameTree", sessionId: attached }, (value) =>
+        yield* request(
+          {
+            method: "Target.attachToTarget",
+            params: { targetId: capture.targetId, flatten: true },
+          },
+          (value) =>
+            decode(Attachment, value).pipe(
+              Effect.map((attachment) => {
+                attached = attachment.sessionId;
+                targets.set(attached, target);
+              }),
+            ),
+        );
+        const sessionId = attached;
+
+        if (sessionId === undefined) return yield* failure(Reasons.Malformed.make({}));
+        if (isDetached()) return yield* failure(Reasons.Disconnected.make({}));
+        yield* request({ method: "Page.enable", sessionId });
+        yield* request({ method: "Page.getFrameTree", sessionId }, (value) =>
           decode(FrameTree, value).pipe(
             Effect.map(({ frameTree: { frame } }) => {
               target.frameId = frame.id;
@@ -443,7 +474,7 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
         );
         yield* request({
           method: "Page.startScreencast",
-          sessionId: attached,
+          sessionId,
           params: {
             format: "jpeg",
             quality: start.quality,
