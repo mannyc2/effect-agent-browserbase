@@ -14,6 +14,14 @@ import { externalChromium } from "../fixtures/StandaloneBrowser.ts";
 
 // Each page mirrors what a person would see into the DOM, so assertions read it publicly.
 const pages: Record<string, string> = {
+  "/point-path": `<canvas width="640" height="480" style="position:absolute;left:0;top:0"></canvas><p id="moves">[]</p>
+<script>
+const moves = [];
+document.querySelector('canvas').addEventListener('pointermove', event => {
+  moves.push([event.clientX, event.clientY, performance.now()]);
+  document.getElementById('moves').textContent = JSON.stringify(moves);
+});
+</script>`,
   // Two fields; every key event and the focused field are written to #log and #focus.
   "/keys": `<input aria-label="First" id="first"><input aria-label="Second" id="second">
 <p id="log"></p><p id="focus"></p><p id="values"></p>
@@ -691,6 +699,52 @@ it.live("real CDP: a performed click its deadline cannot fit is refused before a
       expect((yield* page.readText({ selector: "#events" })).text).toBe(
         "pointermove,pointerdown,mousedown,click",
       );
+    }).pipe(Effect.provide(layer)),
+  ),
+);
+
+it.live("real CDP: performed point paths pipeline moves across a delayed connection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const session = yield* open("/point-path", 36);
+      const page = session.initialPage;
+
+      yield* page.pointerMove({ to: { x: 10, y: 10 } });
+      yield* page.run(
+        {
+          version: 1,
+          steps: [{ id: "point", action: { _tag: "PointerClick", at: { x: 400, y: 200 } } }],
+        },
+        {
+          style: {
+            seed: 7,
+            motion: {
+              ...DefaultMotionProfile,
+              sendPath: true,
+              pointer: {
+                ...DefaultMotionProfile.pointer,
+                duration: { minMillis: 300, maxMillis: 300 },
+              },
+            },
+          },
+          within: "30 seconds",
+        },
+      );
+
+      const moves: ReadonlyArray<readonly [number, number, number]> = JSON.parse(
+        (yield* page.readText({ selector: "#moves" })).text,
+      );
+
+      // Exclude the preparatory placement and the final click placement after its hit-test reads.
+      const path = moves.slice(1, -1);
+      const first = path[0];
+      const last = path.at(-1);
+
+      expect(path.length).toBeGreaterThan(10);
+      expect(last?.slice(0, 2)).toEqual([400, 200]);
+      if (first === undefined || last === undefined) return;
+      // Waiting for each 72 ms reply would stretch this bounded path past a second.
+      expect(last[2] - first[2]).toBeLessThan(700);
     }).pipe(Effect.provide(layer)),
   ),
 );

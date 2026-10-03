@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { ElementAdmission, Frame, Page } from "effect-browser/browser";
+import type { CoordinateAdmission, ElementAdmission, Frame, Page } from "effect-browser/browser";
 import { FillFormOptions, type Observation } from "effect-browser/browser-data";
 import { BrowserError, Reasons } from "effect-browser/errors";
 import { checkRunOptions, type RunOptions } from "effect-browser/plan";
@@ -47,6 +47,8 @@ export interface HandlerOptions {
   readonly continuationBytes?: number;
   /** Synchronous, on fresh exact-node facts under the owner's permit. Never a Tool parameter. */
   readonly policy?: ElementAdmission;
+  /** Synchronous, on a frozen main-viewport point under the owner's permit. Never a Tool parameter. */
+  readonly coordinatePolicy?: CoordinateAdmission;
   /**
    * Host-only single-step timing and queue configuration; never a model parameter. A fixed
    * `style.seed` is a base: the nth run these handlers start uses `seed + n - 1`. A host runs
@@ -71,6 +73,7 @@ export interface ResolvedOptions {
   readonly resultMaxBytes: number;
   readonly continuationBytes: number;
   readonly policy: ElementAdmission | undefined;
+  readonly coordinatePolicy: CoordinateAdmission | undefined;
   readonly execution: RunOptions;
   readonly form: FillFormOptions;
   readonly observe: Observe;
@@ -122,6 +125,7 @@ const handlerKeys = {
   resultMaxBytes: true,
   continuationBytes: true,
   policy: true,
+  coordinatePolicy: true,
   execution: true,
   form: true,
   observe: true,
@@ -177,6 +181,8 @@ export const resolveOptions = Effect.fnUntraced(function* (
   if (options.observe !== undefined && typeof options.observe !== "function")
     return yield* configuration("observe");
 
+  const coordinate = yield* checkRunOptions({ coordinatePolicy: options.coordinatePolicy });
+
   const execution = yield* checkRunOptions(
     options.execution === undefined ? {} : options.execution,
   );
@@ -185,6 +191,7 @@ export const resolveOptions = Effect.fnUntraced(function* (
     execution.inputs !== undefined ||
     execution.through !== undefined ||
     execution.policy !== undefined ||
+    execution.coordinatePolicy !== undefined ||
     execution.startAt !== undefined
   )
     return yield* configuration("execution");
@@ -197,6 +204,7 @@ export const resolveOptions = Effect.fnUntraced(function* (
     continuationBytes,
     // A host's later edits to its own object never change an admitted policy.
     policy: options.policy === undefined ? undefined : { admit: options.policy.admit },
+    coordinatePolicy: coordinate.coordinatePolicy,
     execution,
     form,
     observe: options.observe ?? defaultObserve,

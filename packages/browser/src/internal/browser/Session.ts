@@ -14,11 +14,12 @@ import {
   Tracer,
 } from "effect";
 
-import type { OperationOptions, PageStatus } from "../../Browser.ts";
+import { type CoordinateAdmission, type OperationOptions, type PageStatus } from "../../Browser.ts";
 import {
   type FillFormRequest,
   type FrameInfo,
   type InputReceipt,
+  type PointerClickRequest,
   Inventory,
   type KeyModifier,
   Observation,
@@ -114,6 +115,7 @@ export interface FormSettings {
 
 /** Private composite bounds and evidence cannot enter through decoded public options. */
 export interface ExecutionOptions extends OperationOptions {
+  readonly coordinatePolicy?: CoordinateAdmission;
   readonly performance?: PerformanceRequest;
   readonly operationDeadline?: number;
   readonly queueDeadline?: number;
@@ -1522,7 +1524,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
      * the native command alone: admission and readiness are over before the clock is read.
      */
     const input = (
-      operation: "pointer-move" | "hover" | "wheel" | "press" | "type",
+      operation: "pointer-move" | "pointer-click" | "hover" | "wheel" | "press" | "type",
       action: (driver: Driver, ticket: Ticket, target: DriverTarget) => Promise<NativeInput>,
       operationOptions?: ExecutionOptions,
       inputTarget?: (target: DriverTarget) => DriverTarget,
@@ -1541,7 +1543,7 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
           const receipt = {
             ...dispatched,
-            kind: operation,
+            kind: operation === "pointer-click" ? ("click" as const) : operation,
             target,
             startedMonotonicNanos,
             completedMonotonicNanos: clock.monotonicTimeNanosUnsafe(),
@@ -1969,6 +1971,13 @@ export const acquireSession = Effect.fnUntraced(function* <L extends SessionLeas
 
             return result;
           },
+          operationOptions,
+        ),
+      pointerClick: (request: PointerClickRequest, operationOptions?: ExecutionOptions) =>
+        input(
+          "pointer-click",
+          (driver, ticket, browserTarget) =>
+            driver.pointerClick(request, ticket, browserTarget, operationOptions?.coordinatePolicy),
           operationOptions,
         ),
       pointerMove: (to: NativePoint, operationOptions?: ExecutionOptions) =>

@@ -228,7 +228,16 @@ It runs on `effect-browser`'s `fillForm`: every step is the exact-node action it
 
 ## Optional native input
 
-`nativeToolkit` adds `browser_pointer_move`, `browser_hover` and `browser_wheel`. `keyboardToolkit` separately adds `browser_press` and `browser_type`; existing native-tool opt-ins therefore do not silently gain keyboard authority. Merge only the Toolkits the agent should see. `host.layer` can provide every handler service at once because an Effect AI agent can call only Tools declared in its own Toolkit.
+`nativeToolkit` adds `browser_pointer_move`, `browser_click_at`, `browser_hover` and `browser_wheel`. `keyboardToolkit` separately adds `browser_press` and `browser_type`; existing native-tool opt-ins therefore do not silently gain keyboard authority. Merge only the Toolkits the agent should see. `host.layer` can provide every handler service at once because an Effect AI agent can call only Tools declared in its own Toolkit.
+
+`nativeToolkit` includes `browser_click_at { x, y }`, and `observedNativeToolkit`
+includes `browser_click_at_and_inspect`. Coordinates are main-viewport CSS pixels,
+including when the tools are bound to a Frame; use the picture supplied by the host.
+The tools send one left click and return dispatch acknowledgement, with a fresh
+observation in the inspected variant. A host's `coordinatePolicy` can refuse points;
+the element `policy` continues to apply only to exact-node actions. Native hit-test
+facts stay with the host and do not enter tool results. Pictures are supplied by the
+consumer through its model context; these tools do not capture or return an image.
 
 Pointer requests use the generic `PointerMoveRequest` and wheel requests `WheelRequest`'s fields, with a null `at` meaning the current pointer: CSS pixels in the main-frame viewport. Hover takes an `ObservedElement` and applies the same exact-node admission as click/fill. It never scrolls an off-screen element into view. A wheel event reaches the nested container or page the browser hit-tests under the pointer. `browser_scroll` remains an instantaneous scripted scroll with no wheel event.
 

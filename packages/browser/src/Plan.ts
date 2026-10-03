@@ -1,6 +1,11 @@
 import { Data, type Duration, Effect, Schema, type Scope } from "effect";
 
-import type { ElementAdmission, NavigationOperation, OperationOptions } from "./Browser.ts";
+import type {
+  CoordinateAdmission,
+  ElementAdmission,
+  NavigationOperation,
+  OperationOptions,
+} from "./Browser.ts";
 import type { CheckpointOptions } from "./BrowserData.ts";
 import type { BrowserError } from "./Errors.ts";
 import { guardedDecode } from "./internal/browser/PlanInput.ts";
@@ -28,6 +33,7 @@ export interface RunOptions extends OperationOptions {
   readonly through?: string;
   readonly inputs?: InputBindings;
   readonly policy?: ElementAdmission;
+  readonly coordinatePolicy?: CoordinateAdmission;
   readonly checkpoint?: CheckpointOptions;
 }
 
