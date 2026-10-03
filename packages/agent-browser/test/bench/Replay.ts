@@ -113,6 +113,7 @@ export interface ReplayOptions {
   readonly seeds?: ReadonlyArray<number>;
   readonly paths?: ReadonlyArray<RecordingPath>;
   readonly site?: DriftSite;
+  readonly withinMillis?: number;
 }
 
 export interface ReplayCell {
@@ -128,6 +129,7 @@ export interface ReplayCell {
   readonly completed: number;
   readonly total: number;
   readonly stepMillis: ReadonlyArray<number>;
+  readonly phaseMillis: ReadonlyArray<number>;
 }
 
 const quantiles = (values: ReadonlyArray<number>) => {
@@ -145,6 +147,19 @@ const elapsed = (attempt: StepAttempt): number => {
   const last = phases.at(-1)?.atMonotonicNanos;
 
   return first === undefined || last === undefined ? 0 : Number(last - first) / 1e6;
+};
+
+const stepTimes = (attempts: ReadonlyArray<StepAttempt>, started: bigint, finished: bigint) => {
+  let previous = started;
+
+  return attempts.map((attempt) => {
+    const terminal = attempt.phases.at(-1)?.atMonotonicNanos ?? finished;
+    const millis = Number(terminal - previous) / 1e6;
+
+    previous = terminal;
+
+    return millis;
+  });
 };
 
 const targetScope = (action: ActionEncoded, scope: "document" | "viewport"): ActionEncoded =>
@@ -334,6 +349,7 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
   operator: DriftOperator,
   seed: number,
   recorded: DurablePlan,
+  withinMillis: number,
 ) {
   const run = `${walk.id}-${path}-${operator}-${seed}`;
 
@@ -345,10 +361,13 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
     const decoded = yield* Plan.decode(yield* Plan.encode(recorded));
     const inputs = Object.fromEntries(Plan.inputSlots(decoded).map((slot) => [slot.name, "Alpha"]));
 
+    const started = yield* browser.monotonicTimeNanos;
+
     const result = yield* page
-      .run(decoded, { inputs, within: 15000, style: "plain" })
+      .run(decoded, { inputs, within: withinMillis, style: "plain" })
       .pipe(Effect.exit);
 
+    const finished = yield* browser.monotonicTimeNanos;
     const truth = yield* waitTruth(site, run, walk.truth);
 
     if (Exit.isSuccess(result))
@@ -364,7 +383,12 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
         truth: truth ?? null,
         completed: result.value.steps.length,
         total: decoded.steps.length,
-        stepMillis: result.value.steps.map((step) => elapsed(step.attempt)),
+        stepMillis: stepTimes(
+          result.value.steps.map((step) => step.attempt),
+          started,
+          finished,
+        ),
+        phaseMillis: result.value.steps.map((step) => elapsed(step.attempt)),
       };
     const error = Option.getOrUndefined(Cause.findErrorOption(result.cause));
 
@@ -382,7 +406,15 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
       truth: truth ?? null,
       completed: error.completed.length,
       total: decoded.steps.length,
-      stepMillis: [
+      stepMillis: stepTimes(
+        [
+          ...error.completed.map((step) => step.attempt),
+          ...(error.attempt === undefined ? [] : [error.attempt]),
+        ],
+        started,
+        finished,
+      ),
+      phaseMillis: [
         ...error.completed.map((step) => elapsed(step.attempt)),
         ...(error.attempt === undefined ? [] : [elapsed(error.attempt)]),
       ],
@@ -403,8 +435,12 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
   const seeds = options.seeds ?? [1, 2, 3, 4, 5];
   const drifts = options.operators ?? operators;
   const paths = options.paths ?? recordingPaths;
+  const withinMillis = options.withinMillis ?? 5000;
 
   if (
+    !Number.isSafeInteger(withinMillis) ||
+    withinMillis < 1000 ||
+    withinMillis > 15000 ||
     selected.length === 0 ||
     seeds.length === 0 ||
     seeds.length > 5 ||
@@ -434,7 +470,9 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
         });
       for (const operator of drifts)
         for (const seed of seeds)
-          cells.push(yield* replay(browser, site, walk, path, operator, seed, recorded));
+          cells.push(
+            yield* replay(browser, site, walk, path, operator, seed, recorded, withinMillis),
+          );
     }
 
   const groups = paths.flatMap((path) =>
@@ -461,6 +499,9 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
     recording: {
       page: "Plan.recorded",
       tools: "original ToolHost receipts plus one host-authored recorded settled step",
+      stepTiming:
+        "owner monotonic time from run request or preceding terminal evidence to attempt terminal evidence",
+      withinMillis,
     },
   };
 });
