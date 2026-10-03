@@ -129,7 +129,13 @@ const parent = Effect.scoped(
       count: count.text,
       cleanup,
     };
-  }).pipe(Effect.provide(h.browser({ launch: recipe({ keepAlive: true }) }))),
+  }).pipe(
+    Effect.provide(
+      h.browser({
+        launch: recipe({ keepAlive: true, remoteTimeoutSeconds: h.budget.browserSeconds }),
+      }),
+    ),
+  ),
 );
 
 const borrower = Effect.fnUntraced(function* (reference: SessionReference, targetId: string) {

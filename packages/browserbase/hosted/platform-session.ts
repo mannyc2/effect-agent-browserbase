@@ -176,7 +176,12 @@ await h.run(
       return { live, projectListed, download, log, cleanup };
     }).pipe(
       Effect.provide(
-        h.browser({ launch: recipe({ provider: { browserSettings: { logSession: true } } }) }),
+        h.browser({
+          launch: recipe({
+            provider: { browserSettings: { logSession: true } },
+            remoteTimeoutSeconds: h.budget.browserSeconds,
+          }),
+        }),
       ),
     ),
   ),

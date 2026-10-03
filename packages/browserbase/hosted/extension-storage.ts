@@ -108,6 +108,7 @@ await h.run(
                   launch: recipe({
                     context: { reference, persist: true },
                     extension: registered.reference,
+                    remoteTimeoutSeconds: h.budget.browserSeconds,
                   }),
                   contextWriter: permit,
                 }),
@@ -125,6 +126,7 @@ await h.run(
                       launch: recipe({
                         context: { reference, persist: false },
                         extension: registered.reference,
+                        remoteTimeoutSeconds: h.budget.browserSeconds,
                       }),
                     }),
                   ),
