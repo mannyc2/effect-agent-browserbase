@@ -111,7 +111,15 @@ test("every registered check stays inside the ceiling and declares what it suppo
       );
       assert.ok(check.budget[key] <= limit, `${name} exceeds the ${key} ceiling`);
     }
-    assert.ok(check.budget.sessions >= 1, name);
+    // A session-less check must never open a browser and has no browser budgets.
+    if (check.budget.sessions === 0) {
+      assert.doesNotMatch(read(`${hostedDirectory}/${name}.ts`), /h\.(open|borrow|browser)\(/, name);
+      assert.equal(
+        check.budget.browserSeconds + check.budget.actions + check.budget.captureSeconds,
+        0,
+        name,
+      );
+    }
     assert.ok(check.claim.length > 0, name);
     for (const key of check.env) assert.ok(knownSettings.has(key), `${name} requires ${key}`);
     // A recorded claim must point at the run record that established it.
