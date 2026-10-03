@@ -29,13 +29,17 @@ each paid run as described in the [bench guide](../packages/agent-browser/test/b
 | `context-durability`     | H1       | a cookie and localStorage marker survive into a later session on the same context                                                                                                                                                            |
 | `context-crash`          | H1       | the same markers survive when the writer's process is killed without a release, once the provider reports its session terminal                                                                                                               |
 | `keepalive-reconnect`    | H4       | a keep-alive session survives detach, and an init script is ready after reconnect                                                                                                                                                            |
+| `borrowed-attachment`    | H4       | a separate process borrows a detached keep-alive session by reference and target, drives its page and leaves release to the allocating process, which reconnects and releases                                                                |
 | `extension-identity`     | H3       | a registered MV3 extension keeps its identity and its content script runs                                                                                                                                                                    |
+| `extension-storage`      | H3       | an extension's chrome.storage.local value survives into a later session on the same persisted context                                                                                                                                        |
 | `upload-routing`         | H6       | uploaded bytes reach the remote file chooser intact                                                                                                                                                                                          |
 | `page-authority`         | H5       | issued Page/Frame routing, independent references, pictures, trusted typing and focus refusal, exact background containment, and last-page closure distinct from provider termination                                                        |
 | `performed-presentation` | H7       | performed Page plan timing and logical action costs, trusted document-focus-qualified shifted input, independent journal readers sharing one capture, peer references, and checked release on a controlled animated scene                    |
 | `replay-delivery`        | H7       | the replay playlist validates and a segment downloads; recording delivery is reported as observed                                                                                                                                            |
 | `live-capture`           | —        | frame pacing and still-page delivery at real round trips and a viewport reading under a pass-through container with its cost; reported as measurements                                                                                       |
 | `long-session`           | —        | an action allowance above the former 1,000 cap spent to its maximum with live capture running throughout, `status.actions` agreeing with the host, the refusal at the maximum and a clean release; pace and capture reported as measurements |
+| `platform-session`       | —        | Live View issuance, project reads, download filters/identity/deletion and CDP logs for one logged session                                                                                                                                    |
+| `platform-services`      | —        | webhook and certificate administration, Agents/Functions lists, and one Search and one Fetch call, with no browser session                                                                                                                   |
 
 The question codes come from the design research that preceded the checks
 (retired to Git history; see [STATUS.md](STATUS.md#historical-material)): H1
@@ -71,7 +75,8 @@ configured environment controls:
   uses `cancel-in-progress: false`. Manual cancellation, a job timeout, or runner
   loss can still interrupt cleanup; none proves provider termination.
 
-Each check allocates at most its registered `sessions` (never more than two),
+Each check allocates at most its registered `sessions` (never more than two);
+a platform check that needs no browser registers zero and cannot open one,
 and a run allocates at most the sum over the checks it names. No particular
 monetary cost is guaranteed.
 Keep the provider-side budgets and credential scope appropriate to that bound.
@@ -135,6 +140,20 @@ bash tools/hosted-run.sh .work/workspace .work/hosted demo acceptance
 The `demo` check needs caller-installed FFmpeg, the same way
 `examples/record-video.ts` does; encoding is deliberately not a package
 dependency.
+
+The four outstanding checks below have no hosted evidence until an operator authorizes and
+runs them through the same runner. Registration and unpaid acceptance do not authorize spending.
+
+| Check                 | Run bounds and effects                                                                                                                                                                                                                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `borrowed-attachment` | One keep-alive session, at most 180 browser seconds and 20 actions per process; one child process borrows it, closes locally, and the owner reconnects and requests checked release.                                                                                                                           |
+| `extension-storage`   | Two sessions, at most 120 browser seconds and 10 actions each; creates and deletes one extension and one context, with a reported 10-second settle wait before readback.                                                                                                                                       |
+| `platform-session`    | One session, at most 120 browser seconds and 10 actions, logging enabled; one tiny download offered and deleted if the provider stores it, with at most 60 seconds of passive log polling after release. Requires approved artifact origins through the existing download-service gate; streams no file bytes. |
+| `platform-services`   | No browser session; creates and deletes one webhook and one throwaway CA certificate, performs bounded passive lists, then makes exactly one metered Search and one metered Fetch attempt. Requires local OpenSSL; private-key bytes go to `/dev/null`.                                                        |
+
+Authorize each check separately. Browser minutes, Search and Fetch are billed by the account's
+plan; these bounds do not promise a monetary total. `platform-services` never runs an Agent,
+invokes a Function or deploys one. A failed or uncertain mutation is never repeated by the check.
 
 `page-authority` additionally requires `BROWSERBASE_PAGE_AUTHORITY_URL`, an operator-owned,
 credential-free HTTPS directory URL with no query or fragment. Its landing document must be

@@ -1,6 +1,6 @@
 // H3, narrowed: does a registered extension keep its identity, and does selecting it at launch
 // actually load it? A minimal MV3 content script marks the page; reading the mark is the load
-// receipt the provider does not give. Worker restart and extension storage stay open. The
+// receipt the provider does not give. Worker restart stays open; storage has its own check. The
 // extension is deleted afterwards whatever happens.
 import { randomUUID } from "node:crypto";
 
