@@ -193,29 +193,47 @@ it.live(
             }),
         );
 
-        const unsupported = yield* Command.runWith(cli(), { version: "test" })([
-          "run",
-          "replay-drift",
-          "--backend",
-          "browserbase",
-        ]).pipe(Effect.exit);
+        for (const scene of ["replay-drift", "replay-contention"]) {
+          const unsupported = yield* Command.runWith(cli(), { version: "test" })([
+            "run",
+            scene,
+            "--backend",
+            "browserbase",
+          ]).pipe(Effect.exit);
 
-        expect(unsupported._tag).toBe("Failure");
-        if (unsupported._tag === "Failure")
-          expect(Cause.pretty(unsupported.cause)).toContain("supported only by local Chromium");
+          expect(unsupported._tag).toBe("Failure");
+          if (unsupported._tag === "Failure")
+            expect(Cause.pretty(unsupported.cause)).toContain(
+              "Hosted replay requires an explicitly approved --fixture-tunnels executable.",
+            );
+        }
 
-        const exit = yield* Command.runWith(cli(), { version: "test" })([
+        const irrelevant = yield* Command.runWith(cli(), { version: "test" })([
           "run",
-          "game-segment",
+          "smoke",
           "--backend",
           "browserbase",
           "--fixture-tunnels",
           join(directory, "tunnel"),
         ]).pipe(Effect.exit);
 
-        expect(exit._tag).toBe("Failure");
-        if (exit._tag === "Failure")
-          expect(Cause.pretty(exit.cause)).toContain("Cannot run required ffmpeg");
+        expect(irrelevant._tag).toBe("Failure");
+        if (irrelevant._tag === "Failure")
+          expect(Cause.pretty(irrelevant.cause)).toContain("Fixture tunnels apply only");
+        for (const scene of ["game-segment", "replay-drift", "replay-contention"]) {
+          const exit = yield* Command.runWith(cli(), { version: "test" })([
+            "run",
+            scene,
+            "--backend",
+            "browserbase",
+            "--fixture-tunnels",
+            join(directory, "tunnel"),
+          ]).pipe(Effect.exit);
+
+          expect(exit._tag).toBe("Failure");
+          if (exit._tag === "Failure")
+            expect(Cause.pretty(exit.cause)).toContain("Cannot run required ffmpeg");
+        }
         expect(
           yield* Effect.promise(() =>
             readFile(marker).then(
@@ -298,6 +316,9 @@ it.effect(
         { scene: "game-segment", backend: "chromium", condition: "text" },
         { scene: "read-table", backend: "chromium", driver: "canvas-click" },
         { scene: "smoke", backend: "chromium", fixtureTunnels: "/tool" },
+        { scene: "smoke", backend: "browserbase", fixtureTunnels: "/tool" },
+        { scene: "replay-contention", backend: "browserbase" },
+        { scene: "replay-drift", backend: "chromium", fixtureTunnels: "/tool" },
       ] as const;
 
       for (const invalid of cases) {
@@ -348,6 +369,44 @@ it.effect(
       ).toBe("Failure");
     }),
 );
+it.effect(
+  "hosted replay explicitly prepares one tunnel and reports finite work before resources",
+  () =>
+    Effect.gen(function* () {
+      for (const scene of ["replay-drift", "replay-contention"]) {
+        yield* validateSelection({
+          scene,
+          backend: "browserbase",
+          driver: "scripted",
+          condition: "picture",
+          matrix: false,
+          fixtureTunnels: "/approved/cloudflared",
+        });
+        expect(
+          printedPlan({
+            scene,
+            backend: "browserbase",
+            trials: 1,
+            maxUsd: 0,
+            durationMillis: 900000,
+            fixtureTunnels: "/approved/cloudflared",
+          }),
+        ).toMatchObject({
+          sessions: 1,
+          fixtureTunnelsMaximum: 1,
+          maximumConcurrentFixtureTunnels: 1,
+          replay: {
+            maximumCellsPerRun: 540,
+            maximumBaselineRecordsPerRun: 12,
+            replayWithinMillis: 5000,
+            pageRecordingWithinMillis: 15000,
+            ownerMaximumActions: 10000,
+          },
+        });
+      }
+    }),
+);
+
 it("uncertain cleanup prevents another session", () => {
   const sessions = new Sessions(2);
 

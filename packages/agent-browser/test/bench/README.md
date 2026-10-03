@@ -18,15 +18,15 @@ vp run bench report ../../.work/bench/runs/RUN
 
 ## Scenes and hosting
 
-| Scenes                                    | Measurement                                                                                          | Backends                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `smoke`, `animation`                      | Changing-page cadence, gaps and capture cleanup                                                      | Chromium; Browserbase with the fixture bootstrap    |
-| `busy`                                    | On-air animation while another page navigates, observes, takes a picture and replays a recorded plan | Chromium; Browserbase with the fixture bootstrap    |
-| `typing`, `interstitials`                 | Ordered typing and holds; overlays, blank intervals and first frames                                 | Chromium; Browserbase with the fixture bootstrap    |
-| `games-operability`                       | Seeded canvas reels and their HTML twin, including cookie and age gates                              | Chromium; Browserbase with explicit fixture tunnels |
-| `replay-drift`, `replay-contention`       | Fresh-page replay after controlled changes, with landing truth and concurrent picture measurement    | Chromium                                            |
-| `read-table`, `read-game`, `narrate-walk` | Narration facts checked against fixture truth                                                        | Chromium                                            |
-| `game-segment`                            | Sustained canvas play, captions, picture cadence and result reaction timing                          | Chromium; Browserbase with explicit fixture tunnels |
+| Scenes                                    | Measurement                                                                                          | Backends                                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `smoke`, `animation`                      | Changing-page cadence, gaps and capture cleanup                                                      | Chromium; Browserbase with the fixture bootstrap      |
+| `busy`                                    | On-air animation while another page navigates, observes, takes a picture and replays a recorded plan | Chromium; Browserbase with the fixture bootstrap      |
+| `typing`, `interstitials`                 | Ordered typing and holds; overlays, blank intervals and first frames                                 | Chromium; Browserbase with the fixture bootstrap      |
+| `games-operability`                       | Seeded canvas reels and their HTML twin, including cookie and age gates                              | Chromium; Browserbase with explicit fixture tunnels   |
+| `replay-drift`, `replay-contention`       | Fresh-page replay after controlled changes, with landing truth and concurrent picture measurement    | Chromium; Browserbase with an explicit fixture tunnel |
+| `read-table`, `read-game`, `narrate-walk` | Narration facts checked against fixture truth                                                        | Chromium                                              |
+| `game-segment`                            | Sustained canvas play, captions, picture cadence and result reaction timing                          | Chromium; Browserbase with explicit fixture tunnels   |
 
 `busy` accepts `--variant created-after`, `created-before` or `resume-after`.
 `--style performed` also measures performed replay; the default style is `plain`.
@@ -47,7 +47,15 @@ distinct hostnames alone do not prove distinct public-suffix sites. The bench
 does not install the tunnel executable. Use it within the operator's authorized
 scope for exposing public fixtures.
 
-Hosted replay and narration fixtures are currently rejected before allocation.
+Hosted replay scenes use the same explicit `--fixture-tunnels` opt-in and one
+scoped quick-tunnel child. Preparation changes only the controlled drift
+fixture's URL; its original server, configuration, truth ledger and loss counters
+remain owned by the same scope. Hosted contention also prepares the on-air
+animation bootstrap before acquiring the original browser. It captures that
+Page while each replay uses a fresh Page on that same owner. Local replay needs
+no tunnel. Hosted narration fixtures remain unsupported and are rejected before
+allocation; irrelevant tunnel selections are rejected as well.
+
 Ordinary acceptance runs do not qualify Browserbase behavior. Hosted runs need
 `EFFECT_AGENT_BROWSERBASE_LIVE=1`, `BROWSERBASE_API_KEY` and
 `BROWSERBASE_PROJECT_ID`. Every run closes its original owner; uncertain
@@ -97,6 +105,22 @@ drifts include independently observable decoy destinations, and redirect respons
 cannot be cached into later cells. Counts distinguish unique walk/path/drift
 conditions from repetitions on fresh Pages; seeds for fixed layouts are repeated
 conditions, not new drift variants.
+
+The replay plan declares at most six walks, nine drift operators, five seeds and
+two recording paths: 540 replay cells and 12 baseline recordings per run.
+`--trials` repeats that bounded matrix. Replay attempts have a five-second
+deadline, Page baseline recording has a fifteen-second deadline, and ToolHost
+baseline commands use the owner's operation deadline. The owner also bounds
+actions and elapsed work; `--duration-ms` selects its capture and lifetime
+budget, rather than reducing the matrix dimensions. The aggregate owner cap can
+truncate the matrix, so these maxima do not promise completion in one session.
+There is no automatic retry.
+
+The original bounded journal records baseline and cell starts as work begins,
+then independent baseline truth and terminal cell facts as they complete.
+Completed-cell progress survives a later baseline or owner failure, even when
+aggregate truth or metrics are unavailable. Journal loss remains explicit;
+missing terminal events and the unattempted remainder have no fabricated outcome.
 
 ## Model input and spend
 

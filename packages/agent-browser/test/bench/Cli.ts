@@ -6,17 +6,20 @@ import { Clock, Config, Console, Effect, Exit, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 
+import { driftSite, operators as driftOperators } from "../fixtures/DriftSite.ts";
 import { gameSite } from "../fixtures/GameSite.ts";
 import * as Backends from "./Backends.ts";
 import { Ledger, Sessions } from "./Budget.ts";
 import { CursorSample, renderClip } from "./Clip.ts";
 import { segmentCallCaps } from "./GameSegment.ts";
 import { prepareHostedGames } from "./HostedGames.ts";
+import { prepareHostedReplay } from "./HostedReplay.ts";
 import { InputEvent, makeInputLog } from "./InputLog.ts";
 import { measured } from "./Models.ts";
 import { compareMotion, motionStats } from "./Motion.ts";
 import { Arm, loadPanelReport, preparePanel, servePanel } from "./Panel.ts";
 import { BenchError, Journal, load, save, tagOf, Subject, json } from "./Records.ts";
+import { recordingPaths, walks } from "./Replay.ts";
 import { scenes, execute } from "./Scenes.ts";
 import { busyVariants, prepareStage, stageScenes } from "./StageScenes.ts";
 import { conditions, scenes as understandingScenes } from "./Understanding.ts";
@@ -82,31 +85,40 @@ export const validateSelection = (options: {
 }) => {
   const narration = understandingScenes.some((scene) => scene === options.scene);
   const game = options.scene === "games-operability" || options.scene === "game-segment";
+  const replay = options.scene === "replay-drift" || options.scene === "replay-contention";
 
   const message =
     options.matrix && (!narration || options.backend !== "chromium")
       ? "The understanding matrix requires a local understanding scene."
       : options.backend === "browserbase" &&
           !stageScenes.some((scene) => scene === options.scene) &&
-          !game
+          !game &&
+          !replay
         ? "This fixture scene is supported only by local Chromium."
         : options.backend === "browserbase" && game && options.fixtureTunnels === undefined
           ? "Hosted games require an explicitly approved --fixture-tunnels executable."
-          : options.fixtureTunnels !== undefined && (options.backend !== "browserbase" || !game)
-            ? "Fixture tunnels apply only to hosted game scenes."
-            : options.subject !== undefined && !narration && options.scene !== "game-segment"
-              ? "This scripted scene accepts no model subject."
-              : options.scene === "game-segment" && options.condition === "text"
-                ? "Game segments support picture or digest context."
-                : options.scene === "games-operability"
-                  ? ["scripted", "dom-twin", "canvas-keys", "canvas-click", "agent-tools"].includes(
-                      options.driver,
-                    )
-                    ? undefined
-                    : "Unknown game operability driver."
-                  : options.driver !== "scripted"
-                    ? "This scene selects its driver through the optional model subject."
-                    : undefined;
+          : options.backend === "browserbase" && replay && options.fixtureTunnels === undefined
+            ? "Hosted replay requires an explicitly approved --fixture-tunnels executable."
+            : options.fixtureTunnels !== undefined &&
+                (options.backend !== "browserbase" || (!game && !replay))
+              ? "Fixture tunnels apply only to hosted game or replay scenes."
+              : options.subject !== undefined && !narration && options.scene !== "game-segment"
+                ? "This scripted scene accepts no model subject."
+                : options.scene === "game-segment" && options.condition === "text"
+                  ? "Game segments support picture or digest context."
+                  : options.scene === "games-operability"
+                    ? [
+                        "scripted",
+                        "dom-twin",
+                        "canvas-keys",
+                        "canvas-click",
+                        "agent-tools",
+                      ].includes(options.driver)
+                      ? undefined
+                      : "Unknown game operability driver."
+                    : options.driver !== "scripted"
+                      ? "This scene selects its driver through the optional model subject."
+                      : undefined;
 
   return message === undefined
     ? Effect.void
@@ -154,7 +166,35 @@ export const printedPlan = (options: {
   fixtureExposure:
     options.fixtureTunnels === undefined
       ? null
-      : "Two scoped public game fixture tunnels; no deployment.",
+      : options.scene.startsWith("replay-")
+        ? "One scoped public replay fixture tunnel; no deployment. Contention uses the original owner's on-air fixture bootstrap."
+        : "Two scoped public game fixture tunnels; no deployment.",
+  fixtureTunnelsMaximum:
+    options.fixtureTunnels === undefined
+      ? 0
+      : options.trials * (options.scene.startsWith("replay-") ? 1 : 2),
+  maximumConcurrentFixtureTunnels:
+    options.fixtureTunnels === undefined ? 0 : options.scene.startsWith("replay-") ? 1 : 2,
+  replay: options.scene.startsWith("replay-")
+    ? {
+        walks: walks.map((walk) => walk.id),
+        operators: driftOperators,
+        seeds: [1, 2, 3, 4, 5],
+        recordingPaths,
+        maximumCellsPerRun: walks.length * driftOperators.length * 5 * recordingPaths.length,
+        maximumBaselineRecordsPerRun: walks.length * recordingPaths.length,
+        maximumCells:
+          options.trials * walks.length * driftOperators.length * 5 * recordingPaths.length,
+        maximumBaselineRecords: options.trials * walks.length * recordingPaths.length,
+        replayWithinMillis: 5000,
+        pageRecordingWithinMillis: 15000,
+        ownerActionTimeoutMillis: 15000,
+        ownerMaximumActions: 10000,
+        ownerMaximumElapsedMillis: Math.min(900000, options.durationMillis + 30000) + 60000,
+        completion:
+          "Finite matrix maxima, not a promise of completion within the owner deadline. Journal progress records actual started and terminal work; no automatic retry.",
+      }
+    : null,
   runs: options.trials * (options.matrix === true ? 9 : 1),
   matrix:
     options.matrix === true
@@ -474,9 +514,11 @@ const run = Command.make(
 
       const result = yield* Effect.scoped(
         Effect.gen(function* () {
-          const stage = stageScenes.some((candidate) => candidate === cell.scene)
-            ? yield* prepareStage(journal)
-            : undefined;
+          const stage =
+            stageScenes.some((candidate) => candidate === cell.scene) ||
+            (options.backend === "browserbase" && cell.scene === "replay-contention")
+              ? yield* prepareStage(journal)
+              : undefined;
 
           const site =
             cell.scene === "games-operability" || cell.scene === "game-segment"
@@ -495,6 +537,22 @@ const run = Command.make(
               }),
             });
           }
+
+          const replay =
+            options.backend === "browserbase" &&
+            (cell.scene === "replay-drift" || cell.scene === "replay-contention") &&
+            options.fixtureTunnels !== undefined
+              ? yield* prepareHostedReplay(yield* driftSite, {
+                  executable: options.fixtureTunnels,
+                })
+              : undefined;
+
+          if (replay !== undefined)
+            journal.append({
+              kind: "host",
+              turn: null,
+              value: json({ publicUrl: replay.publicUrl, fixtureTunnels: 1 }),
+            });
 
           const inputLog =
             site === undefined
@@ -523,6 +581,7 @@ const run = Command.make(
                 ...(driver === undefined ? {} : { driver }),
                 ...(stage === undefined ? {} : { stage }),
                 ...(site === undefined ? {} : { site }),
+                ...(replay === undefined ? {} : { replay: { site: replay.site } }),
               }),
             credentials,
             undefined,

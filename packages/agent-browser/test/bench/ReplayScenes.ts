@@ -2,6 +2,7 @@ import { Effect, Exit } from "effect";
 import type * as Browser from "effect-browser/browser";
 
 import { filming } from "./Backends.ts";
+import { requireHostedReplayFixture } from "./HostedReplay.ts";
 import * as Picture from "./Picture.ts";
 import { BenchError, type Journal, json } from "./Records.ts";
 import { matrix, type ReplayCell, type ReplayOptions } from "./Replay.ts";
@@ -30,10 +31,11 @@ export const replayContention = Effect.fn("Bench.replayContention")(function* <O
       operation: "replay",
       message: "Contention sampling window exceeds its bound.",
     });
-  if (journal.manifest.backend !== "chromium")
+  yield* requireHostedReplayFixture(journal, options.site);
+  if (journal.manifest.backend === "browserbase" && options.stage?.bootstrap === undefined)
     return yield* new BenchError({
       operation: "replay",
-      message: "Replay drift currently needs the local controlled fixture.",
+      message: "Prepare the hosted contention fixture bootstrap before acquiring the owner.",
     });
   const stage = options.stage ?? (yield* prepareStage(journal));
   const page = browser.initialPage;
@@ -54,7 +56,7 @@ export const replayContention = Effect.fn("Bench.replayContention")(function* <O
 
       yield* Effect.sleep(beforeAfterMillis);
       const replayStart = yield* stamp;
-      const result = yield* matrix(browser, options).pipe(Effect.exit);
+      const result = yield* matrix(browser, options, journal).pipe(Effect.exit);
       const replayEnd = yield* stamp;
 
       yield* Effect.sleep(beforeAfterMillis);

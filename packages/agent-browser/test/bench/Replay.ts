@@ -19,6 +19,7 @@ import {
   type DriftSite,
   type DriftTruth,
 } from "../fixtures/DriftSite.ts";
+import { requireHostedReplayFixture } from "./HostedReplay.ts";
 import { BenchError, type Journal, json } from "./Records.ts";
 
 export const recordingPaths = ["page", "tools"] as const;
@@ -144,6 +145,37 @@ export interface ReplayCell {
   readonly stepMillis: ReadonlyArray<number>;
   readonly phaseMillis: ReadonlyArray<number>;
 }
+
+type ReplayProgress =
+  | {
+      readonly phase: "matrix-started";
+      readonly maximumCells: number;
+      readonly maximumBaselineRecords: number;
+    }
+  | {
+      readonly phase: "baseline-started";
+      readonly walk: WalkId;
+      readonly path: RecordingPath;
+    }
+  | {
+      readonly phase: "baseline-completed";
+      readonly walk: WalkId;
+      readonly path: RecordingPath;
+      readonly truth: DriftTruth;
+    }
+  | {
+      readonly phase: "cell-started";
+      readonly walk: WalkId;
+      readonly path: RecordingPath;
+      readonly operator: DriftOperator;
+      readonly seed: number;
+    }
+  | { readonly phase: "cell-completed"; readonly cell: ReplayCell }
+  | {
+      readonly phase: "matrix-completed";
+      readonly cells: number;
+      readonly baselineRecords: number;
+    };
 
 const quantiles = (values: ReadonlyArray<number>) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -467,6 +499,7 @@ const replay = Effect.fnUntraced(function* <OwnerError>(
 export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
   browser: Browser.BrowserSession<OwnerError>,
   options: ReplayOptions = {},
+  journal?: Journal,
 ) {
   const site = options.site ?? (yield* driftSite);
 
@@ -497,25 +530,54 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
       message: "Replay matrix exceeds fixture bounds.",
     });
   const cells: ReplayCell[] = [];
+  let baselineRecords = 0;
+
+  const progress = (value: ReplayProgress) =>
+    journal?.append({ kind: "host", turn: null, value: json({ replayProgress: value }) });
+
+  progress({
+    phase: "matrix-started",
+    maximumCells: selected.length * paths.length * drifts.length * seeds.length,
+    maximumBaselineRecords: selected.length * paths.length,
+  });
 
   for (const walk of selected)
     for (const path of paths) {
       const baseline = `${walk.id}-${path}-baseline`;
 
+      progress({ phase: "baseline-started", walk: walk.id, path });
       site.configure("none", 0, baseline);
       const recorded = yield* record(browser, site, walk, path);
+      const truth = yield* waitTruth(site, baseline, walk.truth);
 
-      if (!truthMatches(yield* waitTruth(site, baseline, walk.truth), walk.truth))
+      if (truth === undefined || !truthMatches(truth, walk.truth))
         return yield* new BenchError({
           operation: "record",
           message: "Baseline truth did not match its walk.",
         });
+      baselineRecords++;
+      progress({ phase: "baseline-completed", walk: walk.id, path, truth });
       for (const operator of drifts)
-        for (const seed of seeds)
-          cells.push(
-            yield* replay(browser, site, walk, path, operator, seed, recorded, withinMillis),
+        for (const seed of seeds) {
+          progress({ phase: "cell-started", walk: walk.id, path, operator, seed });
+
+          const cell = yield* replay(
+            browser,
+            site,
+            walk,
+            path,
+            operator,
+            seed,
+            recorded,
+            withinMillis,
           );
+
+          cells.push(cell);
+          progress({ phase: "cell-completed", cell });
+        }
     }
+
+  progress({ phase: "matrix-completed", cells: cells.length, baselineRecords });
 
   const groups = paths.flatMap((path) =>
     drifts.map((operator) => {
@@ -549,6 +611,7 @@ export const matrix = Effect.fn("Bench.replayMatrix")(function* <OwnerError>(
         "owner monotonic time from run request or preceding terminal evidence to attempt terminal evidence",
       withinMillis,
       cells: cells.length,
+      baselineRecords,
       uniqueConditions: new Set(cells.map((cell) => cell.condition)).size,
       repeatedConditions: cells.length - new Set(cells.map((cell) => cell.condition)).size,
       conditionBasis:
@@ -564,7 +627,8 @@ export const replayDrift = Effect.fn("Bench.replayDrift")(function* <OwnerError>
   browser: Browser.BrowserSession<OwnerError>,
   options: ReplayOptions = {},
 ) {
-  const result = yield* matrix(browser, options);
+  yield* requireHostedReplayFixture(journal, options.site);
+  const result = yield* matrix(browser, options, journal);
 
   journal.truth = json({
     cells: result.cells,

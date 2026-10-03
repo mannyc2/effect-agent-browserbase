@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Cause, Effect, Layer, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import * as Browser from "effect-browser/browser";
 import {
@@ -14,7 +14,7 @@ import * as Plan from "effect-browser/plan";
 import { Toolkit } from "effect/ai";
 
 import { Journal } from "../bench/Records.ts";
-import { matrix } from "../bench/Replay.ts";
+import { matrix, replayDrift } from "../bench/Replay.ts";
 import { replayContention } from "../bench/ReplayScenes.ts";
 import { driftSite } from "../fixtures/DriftSite.ts";
 
@@ -468,6 +468,21 @@ it.live("baseline portal permits a seeded exact-node hover without adjacent link
                 }),
               ),
             ).toMatchObject([{ isFailure: false }]);
+            yield* page.run(
+              {
+                version: 1,
+                steps: [
+                  {
+                    id: "wheel-settled",
+                    action: {
+                      _tag: "Wait",
+                      mode: { _tag: "Settled", quietMillis: 100, withinMillis: 1000 },
+                    },
+                  },
+                ],
+              },
+              { within: 1000 },
+            );
             const afterWheel = yield* inspect();
             const beta = reference(afterWheel, "Beta article");
             const gamma = reference(afterWheel, "Gamma article");
@@ -534,3 +549,106 @@ it.live("baseline portal permits a seeded exact-node hover without adjacent link
     }),
   );
 });
+
+// A later baseline failure must retain the original owner's already measured terminal cell.
+it.live("replay retains completed-cell evidence when the next baseline fails", () =>
+  Effect.gen(function* () {
+    let cleanup: ChromiumCleanupResult | undefined;
+
+    const journal = new Journal({
+      version: 1,
+      runId: "partial-replay",
+      scene: "replay-drift",
+      backend: "chromium",
+      driver: "scripted",
+      sourceRevision: "fixture",
+      sourceDirty: false,
+      trial: 0,
+      seed: 0,
+      viewport: { width: 1280, height: 720 },
+      capture: { maxFrames: 60, maxBytes: 1048576, maxDurationMillis: 30000, quality: 50 },
+      settings: {},
+    });
+
+    yield* Browser.scoped(
+      Chromium.launch(BrowserPolicy.unrestricted({ maxActions: 80, maxElapsedMillis: 30000 })),
+      (browser) =>
+        Effect.gen(function* () {
+          const site = yield* driftSite;
+
+          const controlled = {
+            ...site,
+            configure: (
+              operator: Parameters<typeof site.configure>[0],
+              seed: number,
+              run: string,
+            ) =>
+              site.configure(
+                run === "research-table-page-baseline" ? "rename" : operator,
+                seed,
+                run,
+              ),
+          };
+
+          const exit = yield* replayDrift(journal, browser, {
+            site: controlled,
+            walkIds: ["overview-article", "research-table"],
+            operators: ["reorder"],
+            seeds: [2],
+            paths: ["page"],
+          }).pipe(Effect.exit);
+
+          expect(exit._tag).toBe("Failure");
+          if (exit._tag === "Failure") expect(Cause.pretty(exit.cause)).toContain("Missing");
+          yield* browser.closeChecked;
+          expect(cleanup).toMatchObject({
+            ownership: "owned",
+            connection: "closed",
+            process: "terminated",
+            issues: [],
+          });
+          const events = journal.snapshot().events.map((event) => event.value);
+
+          expect(events).toContainEqual({
+            replayProgress: {
+              phase: "cell-completed",
+              cell: expect.objectContaining({
+                walk: "overview-article",
+                outcome: "replayed",
+                truthAgreement: "matched",
+              }),
+            },
+          });
+          expect(events).toContainEqual({
+            replayProgress: { phase: "baseline-started", walk: "research-table", path: "page" },
+          });
+          expect(
+            events.filter((event) =>
+              Schema.is(
+                Schema.Struct({
+                  replayProgress: Schema.Struct({ phase: Schema.Literal("cell-completed") }),
+                }),
+              )(event),
+            ),
+          ).toHaveLength(1);
+          expect(journal.snapshot().loss).toEqual({ events: 0, bytes: 0 });
+        }),
+    ).pipe(
+      Effect.provide(
+        Chromium.layer({
+          onCleanup: (receipt) =>
+            Effect.sync(() => {
+              cleanup = receipt;
+            }),
+          launch: { chromiumSandbox: false },
+        }).pipe(Layer.provide(NodeCrypto.layer)),
+      ),
+    );
+    expect(cleanup).toMatchObject({
+      ownership: "owned",
+      connection: "closed",
+      process: "terminated",
+      issues: [],
+    });
+  }),
+);
