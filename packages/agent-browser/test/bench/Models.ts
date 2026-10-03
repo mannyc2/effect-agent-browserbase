@@ -1,15 +1,30 @@
 import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Effect, Layer, Redacted, Schema, Stream } from "effect";
+import { Effect, Layer, Redacted, Schema, Stream, type Tracer } from "effect";
 import * as InMemory from "effect-agent/in-memory";
 import { type LanguageModel, Prompt, Telemetry } from "effect/unstable/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import type { Allowance } from "./Budget.ts";
-import type { Driver } from "./Drivers.ts";
+import { latencies, type Driver } from "./Drivers.ts";
 import { type Subject, type Journal, json, requestData } from "./Records.ts";
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
+/** OpenRouter rejects null cache controls; schema and tool input payloads remain untouched. */
+export const withoutNullCacheControl = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(withoutNullCacheControl)
+    : isRecord(value)
+      ? Object.fromEntries(
+          Object.entries(value)
+            .filter(([key, field]) => !(key === "cache_control" && field === null))
+            .map(([key, field]) => [
+              key,
+              key === "input_schema" || key === "input" ? field : withoutNullCacheControl(field),
+            ]),
+        )
+      : value;
 
 /** Run-local names for provider-issued identifiers, in order of first appearance. */
 class Aliases {
@@ -134,10 +149,15 @@ const isDelta = (value: unknown): value is Delta =>
  * Each request and what came back, recorded as the stream ends, on failure too. A part's
  * streamed deltas are joined into one, so a long reply cannot exhaust the journal's events.
  */
-const recorder = (journal: Journal, aliases: Aliases): Telemetry.SpanTransformer => {
+const recorder = (
+  journal: Journal,
+  aliases: Aliases,
+  spans: Tracer.Span[],
+): Telemetry.SpanTransformer => {
   let turn = 0;
 
   return (options) => {
+    if (spans.length < 2000) spans.push(options.span);
     const index = turn++;
     const parts: Array<Schema.Json> = [];
 
@@ -215,6 +235,7 @@ export const measured = (options: {
   const { subject, allowance, apiKey, journal, transport } = options;
 
   const aliases = new Aliases();
+  const spans: Tracer.Span[] = [];
   const { gateway, maxOutputTokens, reasoningEffort, serviceTier } = subject.settings;
   const apiUrl = endpoints[gateway][subject.provider];
 
@@ -245,6 +266,7 @@ export const measured = (options: {
               OpenAiClient.make({ apiKey, apiUrl, transformClient }).pipe(
                 Effect.map((native) => ({
                   ...native,
+                  createResponse: (payload) => send(native.createResponse(payload)),
                   createResponseStream: (payload) =>
                     send(
                       native.createResponseStream({
@@ -269,6 +291,7 @@ export const measured = (options: {
               AnthropicClient.make({ apiKey, apiUrl, transformClient }).pipe(
                 Effect.map((native) => ({
                   ...native,
+                  createMessage: (request) => send(native.createMessage(request)),
                   createMessageStream: (request) => {
                     const routed =
                       gateway === "openrouter"
@@ -276,6 +299,16 @@ export const measured = (options: {
                             ...request,
                             payload: {
                               ...request.payload,
+                              messages: request.payload.messages.map(
+                                (message) => withoutNullCacheControl(message) as typeof message,
+                              ),
+                              ...(request.payload.system === undefined
+                                ? {}
+                                : {
+                                    system: withoutNullCacheControl(
+                                      request.payload.system,
+                                    ) as typeof request.payload.system,
+                                  }),
                               provider: { only: [subject.provider], allow_fallbacks: false },
                             },
                           }
@@ -294,7 +327,9 @@ export const measured = (options: {
     InMemory.layer,
     model.pipe(
       Layer.provide(transport),
-      Layer.provide(Layer.succeed(Telemetry.CurrentSpanTransformer, recorder(journal, aliases))),
+      Layer.provide(
+        Layer.succeed(Telemetry.CurrentSpanTransformer, recorder(journal, aliases, spans)),
+      ),
     ),
   );
 
@@ -315,5 +350,6 @@ export const measured = (options: {
         pricingStatus: "estimated" as const,
       })),
     finish: () => allowance.finish(),
+    callLatencies: () => latencies(spans),
   };
 };

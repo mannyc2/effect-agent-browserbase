@@ -6,7 +6,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { Ledger, Sessions } from "./bench/Budget.ts";
 import { authorize, printedPlan } from "./bench/Cli.ts";
-import { withoutDone } from "./bench/Models.ts";
+import { withoutDone, withoutNullCacheControl } from "./bench/Models.ts";
 import { diagnose, json } from "./bench/Records.ts";
 
 const rates = { input: 1000000, cacheRead: 500000, cacheWrite: 1000000, output: 2000000 };
@@ -15,6 +15,22 @@ const usage = {
   inputTokens: { total: 100, uncached: 80, cacheRead: 20 },
   outputTokens: { total: 50, text: 40, reasoning: 10 },
 };
+
+it("gateway cache adaptation preserves model-authored input and tool schemas", () => {
+  expect(
+    withoutNullCacheControl({
+      system: [{ type: "text", text: "fixture", cache_control: null }],
+      messages: [
+        { content: [{ type: "tool_use", cache_control: null, input: { cache_control: null } }] },
+      ],
+      tools: [{ input_schema: { properties: { cache_control: { const: null } } } }],
+    }),
+  ).toEqual({
+    system: [{ type: "text", text: "fixture" }],
+    messages: [{ content: [{ type: "tool_use", input: { cache_control: null } }] }],
+    tools: [{ input_schema: { properties: { cache_control: { const: null } } } }],
+  });
+});
 
 it("records copy data-class metadata while refusing non-JSON values", () => {
   const target = Target.make({ generation: 0, pageId: "page", frameId: "frame" });
