@@ -129,6 +129,16 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
       for (const target of targets.values()) if (!target.released) target.options.fail(terminal);
     });
 
+  const retire = (sessionId: string) => {
+    targets.delete(sessionId);
+    for (const [id, item] of pending) {
+      if (item.acknowledgement && item.sessionId === sessionId) {
+        pending.delete(id);
+        Deferred.doneUnsafe(item.reply, Effect.void);
+      }
+    }
+  };
+
   const write = Effect.fnUntraced(function* (command: Command, accept?: Pending["accept"]) {
     if (terminal !== undefined) return yield* terminal;
     if (writer === undefined || closing) return yield* failure(Reasons.Closed.make({}));
@@ -363,6 +373,7 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
                 const error = failure(Reasons.Timeout.make({}));
 
                 Deferred.doneUnsafe(item.reply, Effect.fail(error));
+
                 const target =
                   item.sessionId === undefined ? undefined : targets.get(item.sessionId);
 
@@ -460,11 +471,11 @@ export const makeObservation = Effect.fnUntraced(function* (options: {
 
         if (Exit.isFailure(detached) && !isDetached())
           return yield* Effect.failCause(detached.cause);
-        targets.delete(sessionId);
+        retire(sessionId);
       }),
       release: () => {
         if (state !== undefined) state.released = true;
-        if (attached !== undefined) targets.delete(attached);
+        if (attached !== undefined) retire(attached);
       },
     };
   };

@@ -100,9 +100,11 @@ class ScriptedSocket implements Socket.WebSocketLike {
 
 const fixture = Effect.fnUntraced(function* () {
   const provider = yield* Testing.provider();
+
   const engine = yield* BrowserTesting.binding({
     documents: [{ url: "https://capture.test/one", text: "control remains usable" }],
   });
+
   const sockets: Array<ScriptedSocket> = [];
   const routing: Array<string> = [];
   let configure = (_socket: ScriptedSocket): void => {};
@@ -290,6 +292,7 @@ it.effect("a late rejected acknowledgement for a stopped page cannot stop its si
 
         socket.frame(sessionId(socket), 1);
         yield* settle(capture.snapshot, (value) => value.received === 1);
+
         const acknowledgement = socket.commands.find(
           (command) => command.method === "Page.screencastFrameAck",
         )!;
@@ -423,6 +426,7 @@ it.effect("closing during endpoint resolution prevents a late observation connec
         invalidate: () => {},
         fail: () => {},
       };
+
       const start = yield* observation
         .source({ pageId: "page", targetId: "target" })
         .start(options)
