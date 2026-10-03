@@ -127,28 +127,21 @@ export const preparePanel = Effect.fn("Bench.preparePanel")(function* (input: {
 const mean = (values: ReadonlyArray<number>) =>
   values.reduce((total, value) => total + value, 0) / values.length;
 
-/** Raters, rather than correlated clip answers, are the independent units of the interval. */
+/** Hoeffding's bounded-mean inequality; correlated clip answers stay inside each rater. */
 const interval = (values: ReadonlyArray<number>, minimum: number, maximum: number) => {
   if (values.length < 2) return null;
   const average = mean(values);
 
-  const variance =
-    values.reduce((total, value) => total + (value - average) ** 2, 0) / (values.length - 1);
-
-  const critical =
-    [
-      0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.16,
-      2.145, 2.131, 2.12, 2.11, 2.101, 2.093, 2.086, 2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052,
-      2.048, 2.045, 2.042,
-    ][Math.min(30, values.length - 1)] ?? 2.042;
-
-  const radius = critical * Math.sqrt(variance / values.length);
+  // P(|mean - E mean| >= radius) <= 2 exp(-2 n radius² / range²).
+  const radius = (maximum - minimum) * Math.sqrt(Math.log(2 / 0.05) / (2 * values.length));
 
   return {
     low: Math.max(minimum, average - radius),
     high: Math.min(maximum, average + radius),
     level: 0.95,
-    method: "t interval over independent rater means",
+    method: "Hoeffding bound over independent bounded rater means",
+    qualification:
+      "Conservative for a small panel; assumes independent raters, not independent clips.",
   };
 };
 
@@ -391,9 +384,10 @@ export const servePanel = Effect.fn("Bench.servePanel")(function* (options: {
                 ? {}
                 : { "content-range": `bytes ${start}-${end}/${size.size}` }),
             });
-            createReadStream(file, { start, end })
-              .on("error", () => response.destroy())
-              .pipe(response);
+            const stream = createReadStream(file, { start, end });
+
+            response.once("close", () => stream.destroy());
+            stream.on("error", () => response.destroy()).pipe(response);
 
             return;
           }

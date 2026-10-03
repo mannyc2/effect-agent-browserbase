@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Console, Effect, Schema, Stream } from "effect";
@@ -131,8 +135,98 @@ it("the printed plan counts every run and session with a worst-case spend", () =
       maxUsd: 0,
       durationMillis: 5000,
     }),
-  ).toMatchObject({ runs: 3, sessions: 3, modelWorstCaseUsd: 0 });
+  ).toMatchObject({ runs: 3, sessions: 3, modelWorstCaseUsd: 0, pictureScale: "half" });
+  expect(
+    printedPlan({
+      scene: "read-table",
+      backend: "chromium",
+      trials: 1,
+      maxUsd: 0.5,
+      durationMillis: 10000,
+      pictureScale: "full",
+    }),
+  ).toMatchObject({ pictureScale: "full" });
 });
+
+it.live(
+  "the actual run command refuses missing media tools before source lookup or resource preparation",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const directory = yield* Effect.acquireRelease(
+          Effect.promise(() => mkdtemp(join(tmpdir(), "bench-preflight-test-"))),
+          (path) => Effect.promise(() => rm(path, { recursive: true, force: true })),
+        );
+
+        const marker = join(directory, "unexpected-preparation");
+
+        for (const executable of ["git", "tunnel"]) {
+          yield* Effect.promise(() =>
+            writeFile(
+              join(directory, executable),
+              `#!/bin/sh\nprintf called > '${marker}'\nexit 17\n`,
+              { mode: 0o700 },
+            ),
+          );
+        }
+        yield* Effect.promise(() =>
+          writeFile(join(directory, "ffmpeg"), "#!/bin/sh\nexit 23\n", { mode: 0o700 }),
+        );
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const previous = {
+              path: process.env.PATH,
+              live: process.env.EFFECT_AGENT_BROWSERBASE_LIVE,
+            };
+
+            process.env.PATH = directory;
+            process.env.EFFECT_AGENT_BROWSERBASE_LIVE = "1";
+
+            return previous;
+          }),
+          (previous) =>
+            Effect.sync(() => {
+              if (previous.path === undefined) delete process.env.PATH;
+              else process.env.PATH = previous.path;
+              if (previous.live === undefined) delete process.env.EFFECT_AGENT_BROWSERBASE_LIVE;
+              else process.env.EFFECT_AGENT_BROWSERBASE_LIVE = previous.live;
+            }),
+        );
+
+        const unsupported = yield* Command.runWith(cli(), { version: "test" })([
+          "run",
+          "replay-drift",
+          "--backend",
+          "browserbase",
+        ]).pipe(Effect.exit);
+
+        expect(unsupported._tag).toBe("Failure");
+        if (unsupported._tag === "Failure")
+          expect(Cause.pretty(unsupported.cause)).toContain("supported only by local Chromium");
+
+        const exit = yield* Command.runWith(cli(), { version: "test" })([
+          "run",
+          "game-segment",
+          "--backend",
+          "browserbase",
+          "--fixture-tunnels",
+          join(directory, "tunnel"),
+        ]).pipe(Effect.exit);
+
+        expect(exit._tag).toBe("Failure");
+        if (exit._tag === "Failure")
+          expect(Cause.pretty(exit.cause)).toContain("Cannot run required ffmpeg");
+        expect(
+          yield* Effect.promise(() =>
+            readFile(marker).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        ).toBe(false);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
 it.effect(
   "CLI defaults print a single capped segment without requiring optional boolean flags",
   () =>
@@ -193,7 +287,7 @@ it("the printed segment plan bounds model calls across all announced episodes an
   });
 });
 it.effect(
-  "unsupported matrix and hosted selections fail before fixture or session preparation",
+  "selection validation rejects unsupported combinations and retains approved matrix bounds",
   () =>
     Effect.gen(function* () {
       const cases = [
@@ -207,24 +301,14 @@ it.effect(
       ] as const;
 
       for (const invalid of cases) {
-        let prepared = false;
-
         const exit = yield* validateSelection({
           driver: "scripted",
           condition: "picture",
           matrix: false,
           ...invalid,
-        }).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              prepared = true;
-            }),
-          ),
-          Effect.exit,
-        );
+        }).pipe(Effect.exit);
 
         expect(exit._tag).toBe("Failure");
-        expect(prepared).toBe(false);
       }
       yield* validateSelection({
         scene: "read-table",

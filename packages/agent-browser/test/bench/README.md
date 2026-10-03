@@ -145,7 +145,10 @@ main-viewport pointer paths.
 `clip` accepts `CursorSample[]`. [Clip.ts](Clip.ts) supplies conversions from
 trusted input logs or a timeline with an explicit clock bridge. Native samples,
 commanded points and intended schedules keep their separate qualifications.
-Intended glides are not measured physical paths. The renderer applies the same
+Intended glides are not measured physical paths. Click pulses for every comparison arm
+come from trusted source-time pointerdown samples; a native-call completion interval
+cannot time a pulse. Movement duration excludes the subsequent pre-click dwell.
+The renderer applies the same
 cursor and press artwork to each arm, strips audio and metadata, and verifies
 geometry, duration and complete decode. Clips are at most fifteen seconds.
 
@@ -162,8 +165,13 @@ Preparation copies bounded clips under anonymous names and records checksums.
 The server shows only anonymous clip URLs and stores person-or-bot guesses and
 naturalness ratings in `ratings.json`; duplicate rater/clip answers are refused.
 The CLI prints the mirrored HTTPS URL returned by `dev-url`. Reports retain
-participating rater counts and intervals over independent rater means. Empty or
+participating rater counts and conservative 95% Hoeffding bounds over independent
+bounded rater means. Agreement in a small panel retains uncertainty, and repeated
+clips do not increase the independent sample count. Empty or
 partial ratings remain identified as such.
+
+`run` checks local FFmpeg and FFprobe before fixture preparation, tunnel startup,
+browser allocation or inference. The printed plan includes the selected picture scale.
 
 ## Human comparison
 

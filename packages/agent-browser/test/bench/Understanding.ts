@@ -283,7 +283,7 @@ export const understanding = Effect.fn("Bench.understanding")(function* <OwnerEr
             BenchError.make({ operation: "history", message: "Cannot encode narration history." }),
           ),
         ),
-      ...(driver.estimate === undefined ? {} : { costEstimator: driver.estimate }),
+      estimateCostMicrousd: driver.estimate,
       turnAllowance: Math.max(1, Math.floor(4 / maxCaptions)),
       transientContext: {
         load: () =>

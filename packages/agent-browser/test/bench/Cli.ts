@@ -21,6 +21,22 @@ import { scenes, execute } from "./Scenes.ts";
 import { busyVariants, prepareStage, stageScenes } from "./StageScenes.ts";
 import { conditions, scenes as understandingScenes } from "./Understanding.ts";
 
+/** Refuse missing local media tooling before fixtures, tunnels, browser allocation or inference. */
+export const preflightMedia = Effect.fn("Bench.preflightMedia")(function* () {
+  const call = promisify(execFile);
+
+  for (const executable of ["ffmpeg", "ffprobe"]) {
+    yield* Effect.tryPromise({
+      try: () => call(executable, ["-version"], { timeout: 10000, maxBuffer: 65536 }),
+      catch: () =>
+        new BenchError({
+          operation: "media preflight",
+          message: `Cannot run required ${executable}.`,
+        }),
+    });
+  }
+});
+
 export const authorize = (
   options: {
     readonly backend: "chromium" | "browserbase";
@@ -113,6 +129,7 @@ export const printedPlan = (options: {
   readonly announceThenSpin?: boolean;
   readonly airDelayMillis?: number;
   readonly fixtureTunnels?: string;
+  readonly pictureScale?: "half" | "full";
 }) => ({
   scene: options.scene,
   backend: options.backend,
@@ -121,6 +138,7 @@ export const printedPlan = (options: {
   variant: options.variant ?? "created-after",
   style: options.style ?? "plain",
   condition: options.condition ?? "picture",
+  pictureScale: options.pictureScale ?? "half",
   maxSpins: options.scene === "game-segment" ? (options.maxSpins ?? 400) : null,
   gameSegment:
     options.scene === "game-segment"
@@ -341,6 +359,7 @@ const run = Command.make(
 
     yield* validateSelection(options);
     yield* authorize({ ...options, model: subject !== undefined });
+    yield* preflightMedia();
     yield* Console.log(JSON.stringify(printedPlan(options)));
     const revision = yield* source();
     const ledger = new Ledger(Math.round(options.maxUsd * 1000000));

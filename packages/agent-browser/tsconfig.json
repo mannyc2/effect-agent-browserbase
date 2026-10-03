@@ -17,6 +17,7 @@
     "test/bench.test.ts",
     "test/bench/Cli.ts",
     "test/bench/Main.ts",
-    "test/bench/Models.ts"
+    "test/bench/Models.ts",
+    "test/native/model-budget.test.ts"
   ]
 }
