@@ -140,6 +140,28 @@ it("unchanged pictures and silent gaps count as dead air; freezes use spin windo
   expect(metrics.resultToCaptionMillis.p95).toBe(500);
 });
 
+it("a stopped capture leaves later dead air and spin freezes unmeasured", () => {
+  const metrics = segmentMetrics({
+    window: { start: 0, end: 6000 },
+    events,
+    captions: [caption(3500)],
+    frames: [frame(0, 1), frame(100, 2)],
+    measuredThroughMillis: 100,
+    airDelayMillis: 500,
+    interstitials: [],
+    usage: null,
+  });
+
+  expect(metrics.deadAir.seconds).toBe(0);
+  expect(metrics.deadAir.unmeasuredSeconds).toBe(5.9);
+  expect(metrics.spinFreezes.seconds).toBe(0);
+  expect(metrics.spinFreezes.unmeasuredSeconds).toBe(2);
+  expect(metrics.spinPicture[0]?.measurement.status).toBe("unmeasured");
+  expect(metrics.spinPicture[0]?.measurement.unmeasuredMillis).toBe(2000);
+  expect(metrics.picture.durationMillis).toBe(100);
+  expect(metrics.resultCaptions[0]?.latencyMillis).toBe(500);
+});
+
 it.live("public fixture origins retain one loopback truth owner and reject ambiguous hosts", () =>
   Effect.scoped(
     Effect.gen(function* () {

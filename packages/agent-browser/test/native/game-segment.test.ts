@@ -138,3 +138,45 @@ it.live("real Chromium: segment duration stops new work and retains checked clea
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.live("real Chromium: retained-frame cap qualifies the later game picture as unmeasured", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = new Journal({
+        version: 1,
+        runId: "segment-frame-cap",
+        scene: "game-segment",
+        backend: "chromium",
+        driver: "scripted",
+        sourceRevision: "native-test",
+        sourceDirty: false,
+        trial: 0,
+        seed: 2,
+        viewport: { width: 1280, height: 720 },
+        settings: { maxFrames: 2 },
+        capture: { maxFrames: 2, maxBytes: 8 * 1024 * 1024, quality: 25, maxDurationMillis: 15000 },
+      });
+
+      yield* run(journal, (browser) =>
+        gameSegment(journal, browser, { durationMillis: 12000, maxSpins: 1 }),
+      );
+
+      const metrics = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({
+          deadAir: Schema.Struct({ seconds: Schema.Finite, unmeasuredSeconds: Schema.Finite }),
+          spinFreezes: Schema.Struct({ seconds: Schema.Finite, unmeasuredSeconds: Schema.Finite }),
+          picture: Schema.Struct({ measurement: Schema.Struct({ status: Schema.String }) }),
+        }),
+      )(journal.metrics);
+
+      expect(journal.recording?.limitReached).toBe("frames");
+      expect(metrics.deadAir.seconds).toBe(0);
+      expect(metrics.deadAir.unmeasuredSeconds).toBeGreaterThan(1);
+      expect(metrics.spinFreezes.seconds).toBe(0);
+      expect(metrics.spinFreezes.unmeasuredSeconds).toBeGreaterThan(1);
+      expect(metrics.picture.measurement.status).toBe("partial");
+      expect(journal.cleanup).toBe("confirmed");
+      expect(journal.ownerClose).toBe("confirmed");
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);

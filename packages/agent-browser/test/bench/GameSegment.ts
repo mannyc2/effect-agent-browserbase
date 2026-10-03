@@ -12,7 +12,7 @@ import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
 import { answer, call, picture, scripted, type Driver, type Turn } from "./Drivers.ts";
-import { cadence, freezes, type Interval } from "./Picture.ts";
+import { cadence, freezes, measurement, type Interval } from "./Picture.ts";
 import { BenchError, json, type Journal, type RecordingFrame, type Usage } from "./Records.ts";
 import * as StepDigest from "./StepDigest.ts";
 import { grade, Narration, type Truth } from "./Understanding.ts";
@@ -86,8 +86,19 @@ export const segmentMetrics = (input: {
   readonly airDelayMillis: number;
   readonly interstitials: ReadonlyArray<Interval>;
   readonly usage: Usage | null;
+  readonly measuredThroughMillis?: number;
 }) => {
-  const receipts = input.events.filter((receipt) => receipt.kind === "reels");
+  const coverage = measurement(input.window, input.measuredThroughMillis);
+  const measured = coverage.window;
+  const unmeasuredSeconds = coverage.unmeasuredMillis / 1000;
+
+  const receipts = input.events.filter(
+    (receipt) =>
+      receipt.kind === "reels" &&
+      receipt.receivedAtMillis >= input.window.start &&
+      receipt.receivedAtMillis <= input.window.end,
+  );
+
   const results = receipts.filter((receipt) => receipt.event.tag === "result");
   const starts = receipts.filter((receipt) => receipt.event.tag === "spinStart");
 
@@ -143,10 +154,10 @@ export const segmentMetrics = (input: {
   }
 
   const ordered = [...new Set(activity)]
-    .filter((at) => at >= input.window.start && at <= input.window.end)
+    .filter((at) => at >= measured.start && at <= measured.end)
     .sort((a, b) => a - b);
 
-  const boundaries = [input.window.start, ...ordered, input.window.end];
+  const boundaries = [measured.start, ...ordered, measured.end];
   const gaps: Interval[] = [];
 
   for (let index = 1; index < boundaries.length; index++) {
@@ -166,14 +177,32 @@ export const segmentMetrics = (input: {
       starts[0] === undefined ? null : starts[0].receivedAtMillis - input.window.start,
     deadAir: {
       seconds: spanSeconds(gaps),
+      unmeasuredSeconds,
       intervals: gaps,
       thresholdMillis: 1000,
       qualification:
         "no changed JPEG encoding or published caption; encoding differences are a picture-change proxy",
     },
-    picture: cadence(input.frames, input.window),
-    spinPicture: changing.map((window) => cadence(input.frames, window)),
-    spinFreezes: freezes(input.frames, changing, input.window),
+    picture: {
+      ...cadence(input.frames, measured),
+      measurement: coverage,
+      measuredThroughMillis: measured.end,
+      unmeasuredSeconds,
+    },
+    spinPicture: changing.map((window) => {
+      const observed = measurement(window, measured.end);
+
+      return { ...cadence(input.frames, observed.window), measurement: observed };
+    }),
+    spinFreezes: {
+      ...freezes(input.frames, changing, measured),
+      unmeasuredSeconds: spanSeconds(
+        changing.map((window) => ({
+          start: Math.max(window.start, measured.end),
+          end: Math.min(window.end, input.window.end),
+        })),
+      ),
+    },
     resultCaptions: reactions,
     resultToCaptionMillis: {
       p50: quantile(latencies, 0.5),
@@ -547,6 +576,12 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
             airDelayMillis: config.airDelayMillis,
             interstitials: [...interstitials, ...banners],
             usage: journal.usage,
+            measuredThroughMillis: Math.min(
+              journal.recording?.captureEndedAt ?? end,
+              journal.recording?.limitReached === null || journal.recording === undefined
+                ? end
+                : (journal.recording.frames.at(-1)?.receivedAt ?? start),
+            ),
           }),
           config,
           stopReason,
