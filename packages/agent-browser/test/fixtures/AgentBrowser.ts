@@ -82,10 +82,13 @@ export const genericAgentPolicy = BrowserPolicy.make({
 export const localAgentBrowser = Effect.acquireRelease(
   attempt("start agent fixture", async () => {
     const directory = await mkdtemp(join(tmpdir(), "browserbase-agent-"));
+
     const sessions = new Map<string, { process: ChildProcess; endpoint: string; status: string }>();
+
     const releaseIds: string[] = [];
     const connectionIds: string[] = [];
     const createBodies: unknown[] = [];
+    let nativeConnection: unknown;
 
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -109,6 +112,9 @@ export const localAgentBrowser = Effect.acquireRelease(
     // production address checks first and runs the unmodified Playwright connection and
     // driver; nothing global is replaced.
     const binding = BrowserBinding.playwright({
+      onConnected: ({ native }) => {
+        nativeConnection = native;
+      },
       resolveEndpoint: ({ url }) =>
         Effect.suspend(() => {
           const requested = new URL(Redacted.value(url));
@@ -213,6 +219,8 @@ export const localAgentBrowser = Effect.acquireRelease(
       releaseIds,
       connectionIds,
       createBodies,
+      // Trusted test instrumentation of the existing connection; never a second client.
+      nativeConnection: () => nativeConnection,
       fetch,
       binding: BrowserBinding.layer(binding),
       close: async () => {
