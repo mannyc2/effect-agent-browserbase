@@ -199,7 +199,8 @@ export function packedConsumers(tree, out, sha) {
       cwd,
       encoding: "utf8",
       env: { ...process.env, ...extraEnv },
-      timeout: 240_000,
+      // Match the source adapter's aggregate native budget; per-test limits stay in its config.
+      timeout: name === "native" ? 300_000 : 240_000,
       maxBuffer: 32 * 1024 * 1024,
     });
 
