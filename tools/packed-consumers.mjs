@@ -37,6 +37,11 @@ const chromiumAgentFiles = {
   examples: ["chromium.ts"],
 };
 
+const providerFixtures = [
+  "packages/agent-browser/test/bench/Models.ts",
+  "packages/agent-browser/test/native/game-segment-usage.test.ts",
+];
+
 // Partition only the shared adapter's fixtures. Every remaining maintained file
 // is retained by the hosted composition, including new files added in the future.
 function selectFiles(mode, kind, files) {
@@ -87,6 +92,10 @@ export function consumerManifest(mode, receipt, out, pins) {
   if (mode.startsWith("agent")) {
     dependencies["@yielded/agent"] = receipt.frameworkVersion;
     devDependencies["@yielded/agent-testing"] = receipt.frameworkVersion;
+  }
+  if (mode === "agent-hosted") {
+    devDependencies["@effect/ai-anthropic"] = pins["@effect/ai-anthropic"];
+    devDependencies["@effect/ai-openai"] = pins["@effect/ai-openai"];
   }
   for (const [name, value] of Object.entries({ ...dependencies, ...devDependencies }))
     assert.equal(typeof value, "string", `Missing pinned consumer dependency: ${name}`);
@@ -271,6 +280,10 @@ export function packedConsumers(tree, out, sha) {
       }
       const files = stageConsumer(tree, join(directory, "fixtures"), entries);
 
+      if (mode.name === "agent-hosted")
+        for (const file of providerFixtures)
+          assert.ok(files.includes(file), `Missing installed provider fixture: ${file}`);
+
       writeFileSync(join(directory, "staged-files.json"), JSON.stringify(files, null, 2) + "\n");
 
       const exports = profilePackages.flatMap((item) =>
@@ -303,11 +316,30 @@ export function packedConsumers(tree, out, sha) {
               types: ["node"],
             },
             include: ["exports.mts", "fixtures/**/*.ts", "fixtures/**/*.mts"],
+            ...(mode.name === "agent-hosted"
+              ? { exclude: providerFixtures.map((file) => `fixtures/${file}`) }
+              : {}),
           },
           null,
           2,
         ) + "\n",
       );
+      if (mode.name === "agent-hosted")
+        writeFileSync(
+          join(directory, "tsconfig.providers.json"),
+          JSON.stringify(
+            {
+              // Match the owning provider project: its private fixtures stay strict,
+              // while the pinned SDKs' known declaration diagnostics remain upstream.
+              extends: "./tsconfig.json",
+              compilerOptions: { skipLibCheck: true },
+              include: providerFixtures.map((file) => `fixtures/${file}`),
+              exclude: [],
+            },
+            null,
+            2,
+          ) + "\n",
+        );
       if (!run(mode.name, "install", "bun", ["install", "--ignore-scripts"], directory)) continue;
       const vp = join(directory, "node_modules/.bin/vp");
 
@@ -338,6 +370,20 @@ export function packedConsumers(tree, out, sha) {
         ],
         directory,
       );
+      if (mode.name === "agent-hosted")
+        run(
+          mode.name,
+          "provider-typecheck",
+          vp,
+          [
+            "exec",
+            join(directory, "node_modules/.bin/tsc"),
+            "--noEmit",
+            "--project",
+            join(directory, "tsconfig.providers.json"),
+          ],
+          directory,
+        );
       // TypeScript declaration files can accidentally expose ambient helpers even while
       // strict consumers compile cleanly. Compare the installed declaration namespace to
       // each source entry with the consumer's pinned TypeScript 7 native compiler API.
@@ -396,8 +442,29 @@ export function packedConsumers(tree, out, sha) {
       console.error(record);
     }
   }
+  const inventoryComplete = modes.every((mode) => {
+    const required = [
+      "install",
+      "frozen-install",
+      "declarations",
+      ...(mode.name === "agent-hosted" ? ["provider-typecheck"] : []),
+      "declaration-exports",
+      "node-identity",
+      "node-workflow",
+      "bun-identity",
+      "bun-workflow",
+      ...(mode.native ? ["native"] : []),
+    ];
+
+    return (
+      JSON.stringify(
+        results.filter((result) => result.profile === mode.name).map((result) => result.step),
+      ) === JSON.stringify(required)
+    );
+  });
+
   assert.ok(
-    results.length > 0 && results.every((r) => r.passed),
+    inventoryComplete && results.every((r) => r.passed),
     "One or more canonical consumer gates failed; inspect consumer-statuses.ndjson and logs",
   );
 

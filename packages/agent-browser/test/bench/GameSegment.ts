@@ -773,11 +773,16 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       page,
       Deferred.succeed(filmingStarted, undefined).pipe(
         Effect.andThen(
-          Effect.suspend(() =>
-            Fiber.await(worker).pipe(
-              Effect.timeoutOption(Math.max(1, Math.ceil(deadline - journal.elapsedMillis()))),
-            ),
-          ),
+          Effect.gen(function* () {
+            // Timer delivery can precede the journal's monotonic deadline.
+            while (true) {
+              const result = yield* Fiber.await(worker).pipe(
+                Effect.timeoutOption(Math.max(1, Math.ceil(deadline - journal.elapsedMillis()))),
+              );
+
+              if (Option.isSome(result) || journal.elapsedMillis() >= deadline) return result;
+            }
+          }),
         ),
         Effect.tap((result) =>
           Option.isNone(result) && options.driver?.hasPendingUsage?.() !== true

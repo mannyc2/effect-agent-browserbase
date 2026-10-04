@@ -16,6 +16,8 @@ const catalog = {
   "playwright-core": "1.63.0",
   "@effect/vitest": "4.0.0-rc.115",
   "@effect/platform-node": "4.0.0-rc.115",
+  "@effect/ai-anthropic": "4.0.0",
+  "@effect/ai-openai": "4.0.0",
   vitest: "4.1.11",
 };
 
@@ -61,6 +63,10 @@ test("five clean consumers supply hosts directly and substitute only the browser
   assert.match(hosted.devDependencies[packages[1].name], /^file:/);
   assert.equal(hosted.devDependencies["@effect/platform-node"], catalog["@effect/platform-node"]);
   for (const manifest of [resources, browser, generic, agent, hosted]) {
+    for (const name of ["@effect/ai-anthropic", "@effect/ai-openai"]) {
+      assert.equal(manifest.dependencies[name], undefined);
+      assert.equal(manifest.devDependencies[name], manifest === hosted ? catalog[name] : undefined);
+    }
     assert.equal(
       manifest.overrides["effect-browser"],
       manifest === browser ? undefined : manifest.dependencies["effect-browser"],

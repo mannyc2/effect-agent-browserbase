@@ -270,7 +270,7 @@ for (const mode of ["caption", "late-tool", "missing-usage", "episode-cap", "act
         expect(metrics.pictureCalls).toBe(twoCalls ? 2 : 1);
         expect(metrics.captions).toHaveLength(twoCalls ? 1 : 0);
         expect(metrics.stopReason).toBe("duration");
-        expect(metrics.durationMillis).toBe(1000);
+        expect(metrics.durationMillis).toBeCloseTo(1000, 6);
         const recording = journal.recording;
 
         expect(recording).toBeDefined();

@@ -419,6 +419,8 @@ test("Bun staging checks actual archive peers and direct hosts before applying s
     "playwright-core": "1.63.0",
     "@effect/vitest": "4.0.0",
     "@effect/platform-node": "4.0.0",
+    "@effect/ai-anthropic": "4.0.0",
+    "@effect/ai-openai": "4.0.0",
     vitest: "4.1.11",
   };
 
@@ -692,8 +694,12 @@ test("acceptance retains dependency-ordered lifecycle-free npm dry-runs", (t) =>
   );
 });
 
-for (const declarationExit of [0, 1]) {
-  test(`packed consumer receipts retain the raw declaration exit ${declarationExit}`, (t) => {
+for (const [declarationExit, providerExit] of [
+  [0, 0],
+  [1, 0],
+  [0, 1],
+]) {
+  test(`packed consumers retain declaration exit ${declarationExit} and provider exit ${providerExit}`, (t) => {
     const { tree, out } = workspace(t, (tree) => {
       writeFileSync(
         join(tree, "package.json"),
@@ -706,6 +712,8 @@ for (const declarationExit of [0, 1]) {
             "playwright-core": "1.63.0",
             "@effect/vitest": "4.0.0",
             "@effect/platform-node": "4.0.0",
+            "@effect/ai-anthropic": "4.0.0",
+            "@effect/ai-openai": "4.0.0",
             vitest: "4.1.11",
           },
         }),
@@ -727,6 +735,8 @@ for (const declarationExit of [0, 1]) {
           files.push(
             "test/native/adapter.test.ts",
             "test/native/chromium-tools.test.ts",
+            "test/native/game-segment-usage.test.ts",
+            "test/bench/Models.ts",
             "examples/chromium.ts",
           );
         // Only the generic package carries the hosted checks that the generic consumer compiles.
@@ -735,29 +745,44 @@ for (const declarationExit of [0, 1]) {
           const target = join(pkg, file);
 
           mkdirSync(dirname(target), { recursive: true });
-          writeFileSync(target, "export {};\n");
+          writeFileSync(
+            target,
+            file === "test/native/game-segment-usage.test.ts"
+              ? 'import "../bench/Models.ts";\n'
+              : "export {};\n",
+          );
         }
       }
     });
 
     const diagnostic =
       "node_modules/@yielded/agent/dist/capabilities/MemoryNotes.d.mts(330,108): error TS2304: Cannot find name 'S'.\n";
+    const providerDiagnostic =
+      "fixtures/packages/agent-browser/test/bench/Models.ts(1,1): error TS2322: Type 'string' is not assignable to type 'number'.\n";
 
     // Only the external command boundary is substituted. Real packing, fixture staging,
     // strict configuration and receipt aggregation run; no installs or browsers run here.
     const commands = t.mock.method(childProcess, "spawnSync", (_command, args, options) => {
-      const failing =
+      const declaration =
         options.cwd === join(out, "consumers/agent") &&
         args[0] === "exec" &&
         args[1] === join(options.cwd, "node_modules/.bin/tsc") &&
         args[2] === "--noEmit" &&
         args[3] === "--project" &&
         args[4] === join(options.cwd, "tsconfig.json");
+      const provider =
+        options.cwd === join(out, "consumers/agent-hosted") &&
+        args[0] === "exec" &&
+        args[1] === join(options.cwd, "node_modules/.bin/tsc") &&
+        args[2] === "--noEmit" &&
+        args[3] === "--project" &&
+        args[4] === join(options.cwd, "tsconfig.providers.json");
+      const status = declaration ? declarationExit : provider ? providerExit : 0;
 
       return {
-        status: failing ? declarationExit : 0,
+        status,
         signal: null,
-        stdout: failing && declarationExit !== 0 ? diagnostic : "",
+        stdout: status === 0 ? "" : declaration ? diagnostic : providerDiagnostic,
         stderr: "",
       };
     });
@@ -770,7 +795,7 @@ for (const declarationExit of [0, 1]) {
     t.mock.method(console, "log", () => {});
     t.mock.method(console, "error", () => {});
 
-    if (declarationExit === 0) packedConsumers(tree, out, sha);
+    if (declarationExit === 0 && providerExit === 0) packedConsumers(tree, out, sha);
     else
       assert.throws(
         () => packedConsumers(tree, out, sha),
@@ -821,14 +846,34 @@ for (const declarationExit of [0, 1]) {
       new Set([...nativeAgent, ...hostedAgent]).size,
       nativeAgent.length + hostedAgent.length,
     );
-    assert.equal(nativeAgent.length + hostedAgent.length, 3);
+    assert.equal(nativeAgent.length + hostedAgent.length, 4);
+    assert.ok(
+      hostedAgent.includes("packages/agent-browser/test/native/game-segment-usage.test.ts"),
+    );
+    assert.deepEqual(
+      records.filter((record) => record.step === "provider-typecheck"),
+      [
+        {
+          profile: "agent-hosted",
+          step: "provider-typecheck",
+          exitCode: providerExit,
+          signal: null,
+          passed: providerExit === 0,
+        },
+      ],
+    );
+    assert.equal(records.length, 45);
     assert.equal(
       records.every((record) => record.passed),
-      declarationExit === 0,
+      declarationExit === 0 && providerExit === 0,
     );
     assert.equal(
       readFileSync(join(out, "consumer-agent-declarations.log"), "utf8"),
       declarationExit === 0 ? "" : diagnostic,
+    );
+    assert.equal(
+      readFileSync(join(out, "consumer-agent-hosted-provider-typecheck.log"), "utf8"),
+      providerExit === 0 ? "" : providerDiagnostic,
     );
     assert.equal(records.filter((record) => record.step.endsWith("-workflow")).length, 10);
     for (const profile of consumerProfiles) {
@@ -838,6 +883,21 @@ for (const declarationExit of [0, 1]) {
 
       assert.equal(config.compilerOptions.strict, true);
       assert.equal(config.compilerOptions.skipLibCheck, false);
+      if (profile === "agent-hosted") {
+        const provider = JSON.parse(
+          readFileSync(join(out, "consumers", profile, "tsconfig.providers.json"), "utf8"),
+        );
+
+        assert.equal(provider.extends, "./tsconfig.json");
+        assert.equal(provider.compilerOptions.skipLibCheck, true);
+        assert.deepEqual(provider.include, config.exclude);
+        assert.deepEqual(provider.exclude, []);
+        assert.ok(
+          provider.include.every((file) =>
+            staged(profile).includes(file.slice("fixtures/".length)),
+          ),
+        );
+      } else assert.equal(config.exclude, undefined);
     }
   });
 }

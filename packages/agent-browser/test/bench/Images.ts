@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect";
+import { Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { BenchError } from "./Records.ts";
@@ -7,6 +7,17 @@ import { BenchError } from "./Records.ts";
 export const resize = Effect.fn("Bench.image.resize")(
   function* (bytes: Uint8Array, scale: 0.5 | 1) {
     if (scale === 1) return bytes;
+    if (bytes.byteLength > 4 * 1024 * 1024)
+      return yield* new BenchError({
+        operation: "image",
+        message: "Captured PNG exceeds its input bound.",
+      });
+    const fs = yield* FileSystem.FileSystem;
+
+    // FFmpeg closes before its input is removed when the resize scope is interrupted.
+    const input = yield* fs.makeTempFileScoped({ prefix: "bench-image-", suffix: ".png" });
+
+    yield* fs.writeFile(input, bytes);
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const handle = yield* spawner.spawn(
@@ -20,7 +31,7 @@ export const resize = Effect.fn("Bench.image.resize")(
           "-f",
           "image2pipe",
           "-i",
-          "pipe:0",
+          input,
           "-frames:v",
           "1",
           "-vf",
@@ -32,7 +43,7 @@ export const resize = Effect.fn("Bench.image.resize")(
           "pipe:1",
         ],
         {
-          stdin: Stream.make(bytes),
+          stdin: "ignore",
           stdout: "pipe",
           stderr: "pipe",
           forceKillAfter: "2 seconds",
