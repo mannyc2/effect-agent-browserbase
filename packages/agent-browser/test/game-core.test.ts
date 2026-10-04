@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { createGameEngine, reelOutcome } from "./fixtures/GameCore.ts";
 
 describe("seeded reel outcomes", () => {
-  it("pins all five-by-three grids and moments independently of rendering or timing", () => {
+  it("pins all six-by-five grids and moments independently of rendering or timing", () => {
     const outcomes = Array.from({ length: 10 }, (_, index) => reelOutcome(0, index + 1, 10));
 
     expect(outcomes.map((outcome) => [outcome.moment, outcome.win])).toEqual([
@@ -21,7 +21,7 @@ describe("seeded reel outcomes", () => {
     expect(
       outcomes.every(
         (outcome) =>
-          outcome.grid.length === 5 && outcome.grid.every((column) => column.length === 3),
+          outcome.grid.length === 6 && outcome.grid.every((column) => column.length === 5),
       ),
     ).toBe(true);
     expect(
@@ -31,11 +31,12 @@ describe("seeded reel outcomes", () => {
     expect(reelOutcome(5, 1, 10)).not.toEqual(outcomes[0]);
     expect(reelOutcome(0, 1, 10)).toEqual({
       grid: [
-        [0, 0, 1],
-        [1, 0, 4],
-        [1, 0, 4],
-        [2, 0, 5],
-        [4, 1, 1],
+        [2, 0, 0, 1, 0],
+        [5, 1, 0, 4, 3],
+        [5, 1, 0, 4, 2],
+        [2, 2, 0, 5, 2],
+        [2, 4, 0, 1, 5],
+        [2, 2, 1, 0, 2],
       ],
       win: 0,
       moment: "near-miss",
@@ -53,9 +54,12 @@ describe("clock-driven reel machine", () => {
     expect(engine.startSpin(101)).toBe(false);
     expect(engine.changeBet(1, 102)).toBe(false);
     expect(engine.state()).toMatchObject({ spin: 1, balance: 990, phase: "spinning", bet: 10 });
-    engine.advance(100 + duration - 801);
+    engine.advance(100 + duration - 1001);
     expect(engine.state().stoppedReels).toBe(0);
-    for (let reel = 0; reel < 5; reel++) engine.advance(100 + duration - (4 - reel) * 200);
+    for (let reel = 0; reel < 6; reel++) {
+      engine.advance(100 + duration - (5 - reel) * 200);
+      expect(engine.state().grid[reel]).toEqual(reelOutcome(0, 1, 10).grid[reel]);
+    }
     const events = engine.drainEvents();
 
     expect(events.map((event) => event.tag)).toEqual([
@@ -65,11 +69,12 @@ describe("clock-driven reel machine", () => {
       "reelStop",
       "reelStop",
       "reelStop",
+      "reelStop",
       "result",
       "idle",
     ]);
     expect(events.filter((event) => event.tag === "reelStop").map((event) => event.reel)).toEqual([
-      0, 1, 2, 3, 4,
+      0, 1, 2, 3, 4, 5,
     ]);
     expect(engine.state()).toMatchObject({ phase: "idle", balance: 990, lastWin: 0 });
     const empty = createGameEngine(0, 9, reelOutcome);

@@ -50,6 +50,13 @@ accept `--condition picture` or `digest`, `--max-spins`, `--announce-then-spin` 
 `--air-delay-ms`. The delay is a caption eligibility threshold, not an audio or
 video compositor.
 
+The original Temple of Tides fixture uses a six-column, five-row canvas with
+faceted jewels, animated spins and visible result banners. Each column reveals
+its seeded result when it stops. The HTML twin uses the same grid and outcomes
+with DOM controls. Idle artwork stays static so decoration does not count as
+game activity. Recordings of the earlier five-by-three fixture remain tied to
+their original revision and are not visual evidence for this layout.
+
 Autonomous game episodes offer `browser_click_at` and `bench_game_press` with a
 single shared input attempt. The key tool accepts one space, `ArrowUp` or
 `ArrowDown` on the original child Frame's already focused canvas. It uses the

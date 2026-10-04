@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 
 import { Effect, Schema } from "effect";
 
+import { createGameArtwork } from "./GameArtwork.ts";
 import { gameClient } from "./GameClient.ts";
 import { createGameEngine, GameKind, type GameState, reelOutcome, TruthEvent } from "./GameCore.ts";
 
@@ -76,11 +77,13 @@ const checkedOrigins = (origins: PublicOrigins) => {
   return { top: top.origin, frame: frame.origin };
 };
 
-const style = `<style>body{margin:0;background:#0f172a;color:#e5e7eb;font:20px sans-serif}
-main{max-width:960px;margin:24px auto}button{padding:16px 24px;margin:10px;font:inherit;cursor:pointer}
-iframe{display:block;border:0;width:960px;height:650px}form{display:inline}section{padding:24px;background:#253047}
-canvas{display:block;width:960px;height:540px;outline:none}#controls{display:flex;align-items:center;gap:10px}
-output{font-size:18px}#controls button{padding:12px;margin:4px}</style>`;
+const style = `<style>body{margin:0;background:radial-gradient(ellipse at 50% 0,#342346,#0c101e 75%);color:#eee7da;font:20px sans-serif;min-height:100vh}
+main{max-width:960px;margin:24px auto}h1{font-size:40px;color:#f0d49c}h2{font:28px Georgia;color:#f6d594}
+button{padding:16px 24px;margin:10px;font:inherit;cursor:pointer;color:#302033;background:linear-gradient(#ffe6ab,#c69546);border:1px solid #ffe2a1;border-radius:28px}
+button:focus-visible{outline:3px solid #79e7d5;outline-offset:3px}button:disabled{opacity:.5;cursor:default}
+iframe{display:block;border:0;width:960px;height:650px}form{display:inline}section{padding:24px;background:linear-gradient(130deg,#382644,#1c2235);border:1px solid #77603e;border-radius:16px;margin-bottom:18px}
+canvas{display:block;width:960px;height:540px;outline:none}#controls{display:flex;align-items:center;gap:10px;background:#151326;padding:8px;border:1px solid #79613b}
+output{font-size:18px}#controls button{padding:12px;margin:4px}#result-status{position:absolute;left:787px;top:355px;width:154px;text-align:center;font-size:13px;color:#e8d6ae}</style>`;
 
 const lobby = (cookies: boolean, adult: boolean) => `<!doctype html><meta charset="utf-8">
 <title>Estuary games</title>${style}<main><h1>Estuary demo games</h1>
@@ -104,8 +107,8 @@ const frameMarkup = (
   seed: number,
   credits: number,
 ) => `<!doctype html><meta charset="utf-8">
-<title>Estuary reels demo</title>${style}<canvas id="game-canvas" width="960" height="540" tabindex="0"></canvas>
-<output id="result-status" style="position:absolute;left:400px;top:60px;color:#e5e7eb"></output>
+<title>Temple of Tides · Estuary demo</title>${style}<canvas id="game-canvas" width="960" height="540" tabindex="0"></canvas>
+<output id="result-status"></output>
 ${
   kind === "reels-dom"
     ? `<div id="controls"><output id="balance"></output><button id="bet-down">Decrease bet</button>
@@ -114,7 +117,7 @@ ${
     : ""
 }
 <script>const engine=(${createGameEngine.toString()})(${seed},${credits},(${reelOutcome.toString()}));
-(${gameClient.toString()})(engine,${JSON.stringify(kind)});</script>`;
+(${gameClient.toString()})(engine,${JSON.stringify(kind)},(${createGameArtwork.toString()}));</script>`;
 
 /** A separate scoped loopback site with a genuinely cross-site localhost child frame. */
 export const gameSite = Effect.fn("gameSite")(function* (
@@ -228,7 +231,7 @@ export const gameSite = Effect.fn("gameSite")(function* (
 
                     if (
                       current.phase !== "spinning" ||
-                      current.stoppedReels !== 5 ||
+                      current.stoppedReels !== 6 ||
                       event.win !== expected.win ||
                       event.moment !== expected.moment ||
                       JSON.stringify(event.grid) !== JSON.stringify(expected.grid) ||

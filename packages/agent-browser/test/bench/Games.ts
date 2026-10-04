@@ -1,6 +1,6 @@
 import * as Agent from "@yielded/agent/agent";
 import * as AgentRuntime from "@yielded/agent/agent-runtime";
-import { Cause, Effect, Option, Schema } from "effect";
+import { Cause, Effect, Option, Schedule, Schema } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import type * as Browser from "effect-browser/browser";
 import { ObservedElement } from "effect-browser/browser-data";
@@ -153,6 +153,23 @@ export const gamesOperability = Effect.fn("Bench.gamesOperability")(function* <O
         typedFailures.push(...observation.failures);
         yield* waitForGame(site, kind, (state) => state.ready, "agent reached game");
         reachedGame = true;
+        step = "capture-first-delivery";
+
+        const firstDelivery = yield* Effect.sync(
+          () => (journal.recording?.frames.length ?? 0) > 0,
+        ).pipe(
+          Effect.repeat({
+            while: (delivered) => !delivered,
+            schedule: Schedule.spaced("25 millis"),
+          }),
+          Effect.timeoutOption("2 seconds"),
+        );
+
+        if (Option.isNone(firstDelivery))
+          return yield* new BenchError({
+            operation: "game capture",
+            message: "No frame was retained within the first-delivery wait.",
+          });
         blockedStep = "top-page-observation";
         gap = "Top Page observations do not include the child Frame's controls or text.";
 
