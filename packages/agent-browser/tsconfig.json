@@ -18,6 +18,7 @@
     "test/bench/Cli.ts",
     "test/bench/Main.ts",
     "test/bench/Models.ts",
+    "test/native/game-segment-usage.test.ts",
     "test/model-wire.test.ts"
   ]
 }

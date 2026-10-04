@@ -7,7 +7,7 @@ import { Effect, Layer, Redacted, Schema, Stream, type Tracer } from "effect";
 import { type LanguageModel, Prompt, Telemetry } from "effect/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
-import type { Allowance } from "./Budget.ts";
+import { ModelRequestAdmission, type Allowance } from "./Budget.ts";
 import { latencies, type Driver } from "./Drivers.ts";
 import { type Subject, type Journal, json, requestData } from "./Records.ts";
 
@@ -263,9 +263,13 @@ export const measured = (options: {
       : client;
 
   const send = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    allowance.admit().pipe(
-      Effect.andThen(effect),
-      Effect.onError(() => Effect.sync(() => allowance.release())),
+    Effect.flatMap(ModelRequestAdmission, (admit) => admit).pipe(
+      Effect.andThen(
+        allowance.admit().pipe(
+          Effect.andThen(effect),
+          Effect.onError(() => Effect.sync(() => allowance.release())),
+        ),
+      ),
     );
 
   const model =
@@ -373,6 +377,7 @@ export const measured = (options: {
         };
       }),
     finish: () => allowance.finish(),
+    hasPendingUsage: () => allowance.hasPendingUsage(),
     callLatencies: () => latencies(spans),
   };
 };

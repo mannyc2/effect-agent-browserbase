@@ -105,6 +105,8 @@ export interface Driver {
   readonly estimate: RunCostEstimator | undefined;
   /** Spend facts once the run ends, including any unavailable usage; null for a script. */
   readonly finish: () => Usage | null;
+  /** Only a measured request awaiting terminal usage may survive a segment cutoff. */
+  readonly hasPendingUsage?: () => boolean;
   readonly callLatencies?: () => ReadonlyArray<number>;
 }
 

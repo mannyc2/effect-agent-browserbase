@@ -1,7 +1,13 @@
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 import { AiError, type Response } from "effect/ai";
 
 import type { Usage } from "./Records.ts";
+
+/** Rechecked immediately before each native request; ordinary narration has no deadline. */
+export const ModelRequestAdmission = Context.Reference<Effect.Effect<void, AiError.AiError>>(
+  "Bench/ModelRequestAdmission",
+  { defaultValue: () => Effect.void },
+);
 
 /** Integer micro-dollars per million tokens from the run's dated specification. */
 export interface Prices {
@@ -81,6 +87,9 @@ export class Allowance {
       this.ledger.halted = true;
     }
     this.#inFlight = false;
+  }
+  hasPendingUsage(): boolean {
+    return this.#inFlight;
   }
   settle(usage: Pick<Response.Usage, "inputTokens" | "outputTokens">): number {
     this.#inFlight = false;

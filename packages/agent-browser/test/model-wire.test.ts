@@ -3,10 +3,10 @@ import { expect, it } from "@effect/vitest";
 import * as Agent from "@yielded/agent/agent";
 import * as AgentRuntime from "@yielded/agent/agent-runtime";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { Toolkit } from "effect/ai";
+import { AiError, Prompt, Toolkit } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
-import { Ledger } from "./bench/Budget.ts";
+import { Ledger, ModelRequestAdmission } from "./bench/Budget.ts";
 import { measured } from "./bench/Models.ts";
 import { Journal, type Subject } from "./bench/Records.ts";
 
@@ -152,6 +152,49 @@ for (const source of ["fixture prices", "https://prices.test/" + "version/".repe
               estimateCostMicrousd: driver.estimate,
             }),
           );
+
+        let preparationFinished = false;
+
+        const closedDuringPreparation = yield* driver
+          .provide(
+            AgentRuntime.run(narrator, "Prepare context before admitting the native request.", {
+              beforeTurn: () => Effect.void,
+              transientContext: {
+                load: () =>
+                  Effect.sync(() => {
+                    preparationFinished = true;
+
+                    return Prompt.fromMessages([]);
+                  }),
+              },
+              estimateCostMicrousd: driver.estimate,
+            }),
+          )
+          .pipe(
+            Effect.provideService(
+              ModelRequestAdmission,
+              Effect.suspend(() =>
+                preparationFinished
+                  ? Effect.fail(
+                      AiError.make({
+                        module: "fixture-window",
+                        method: "admit",
+                        reason: new AiError.InvalidRequestError({
+                          description: "Measurement ended during context preparation.",
+                        }),
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            ),
+            Effect.exit,
+          );
+
+        expect(closedDuringPreparation._tag).toBe("Failure");
+        expect(preparationFinished).toBe(true);
+        expect(sent).toBe(0);
+        expect(allowance.usage()).toMatchObject({ admitted: 0, settled: 0, status: "no-calls" });
+        expect(ledger.halted).toBe(false);
 
         for (let index = 0; index < 2; index++) {
           const result = yield* invoke();

@@ -114,6 +114,8 @@ export interface Recording extends CaptureProfile {
   endedAt: number;
   /** Host time at which the actual frame stream ended, even if scene work continued. */
   captureEndedAt?: number;
+  /** Sealed scene window; actual capture stop and raw protocol-tail frames stay factual. */
+  measurementEndedAt?: number;
   nativeStop: "missing" | "confirmed" | "unconfirmed";
   summary: Schema.Json | null;
   totalBytes: number;
@@ -234,6 +236,9 @@ export class Journal {
               ...(recording.captureEndedAt === undefined
                 ? {}
                 : { captureEndedAt: recording.captureEndedAt }),
+              ...(recording.measurementEndedAt === undefined
+                ? {}
+                : { measurementEndedAt: recording.measurementEndedAt }),
               nativeStop: recording.nativeStop,
               summary: recording.summary,
               totalBytes: recording.totalBytes,

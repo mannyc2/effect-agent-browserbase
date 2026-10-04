@@ -295,6 +295,7 @@ it("the printed segment plan bounds model calls across all announced episodes an
       perRun: {
         episodeModelCalls: 6,
         episodeToolCalls: 5,
+        maxSettlementDrainMillis: 30000,
         announcementModelCalls: 1,
         episodes: 400,
         actualSpinCap: 400,
@@ -497,4 +498,6 @@ it("films stop at retained capture instead of holding a cutoff frame through lat
   expect(retainedEnd(capture)).toBe(1500);
   expect(retainedEnd({ ...capture, limitReached: "frames" })).toBe(1000);
   expect(retainedEnd({ ...capture, limitReached: "bytes" })).toBe(1000);
+  expect(retainedEnd({ ...capture, measurementEndedAt: 1200 })).toBe(1200);
+  expect(retainedEnd({ ...capture, measurementEndedAt: 1200, limitReached: "frames" })).toBe(1000);
 });

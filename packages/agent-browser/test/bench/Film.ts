@@ -52,6 +52,7 @@ const Capture = Schema.Struct({
   startedAt: Schema.Finite,
   endedAt: Schema.Finite,
   captureEndedAt: Schema.optionalKey(Schema.Finite),
+  measurementEndedAt: Schema.optionalKey(Schema.Finite),
   limitReached: Schema.optionalKey(Schema.NullOr(Schema.Literals(["frames", "bytes"]))),
   frames: Schema.Array(Metadata).check(Schema.isMaxLength(54000)),
 });
@@ -60,6 +61,7 @@ export const retainedEnd = (capture: {
   readonly startedAt: number;
   readonly endedAt: number;
   readonly captureEndedAt?: number;
+  readonly measurementEndedAt?: number;
   readonly limitReached?: "frames" | "bytes" | null;
   readonly frames: ReadonlyArray<{ readonly receivedAt: number }>;
 }) =>
@@ -67,6 +69,7 @@ export const retainedEnd = (capture: {
     capture.startedAt,
     Math.min(
       capture.endedAt,
+      capture.measurementEndedAt ?? capture.endedAt,
       capture.limitReached === "frames" || capture.limitReached === "bytes"
         ? (capture.frames.at(-1)?.receivedAt ?? capture.startedAt)
         : (capture.captureEndedAt ?? capture.endedAt),
@@ -93,7 +96,8 @@ export const film = Effect.fn("Bench.film")(function* (directory: string) {
       });
     const { path: _path, ...metadata } = frame;
 
-    frames.push({ ...metadata, bytes });
+    if (frame.receivedAt >= capture.startedAt && frame.receivedAt <= endedAt)
+      frames.push({ ...metadata, bytes });
   }
 
   return yield* encode({

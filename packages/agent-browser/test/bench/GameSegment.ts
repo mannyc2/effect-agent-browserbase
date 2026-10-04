@@ -2,15 +2,16 @@ import { createHash } from "node:crypto";
 
 import * as Agent from "@yielded/agent/agent";
 import * as AgentRuntime from "@yielded/agent/agent-runtime";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import * as BrowserTools from "effect-agent-browser/tools";
 import type * as Browser from "effect-browser/browser";
-import { Prompt, Tool, Toolkit } from "effect/ai";
+import { AiError, Prompt, Tool, Toolkit } from "effect/ai";
 
 import { waitForGame } from "../fixtures/GameDriver.ts";
 import { gameSite, type GameSite, type TruthReceipt } from "../fixtures/GameSite.ts";
 import { inspectionObservation, inspectionReference } from "../fixtures/Inspection.ts";
 import { filming } from "./Backends.ts";
+import { ModelRequestAdmission } from "./Budget.ts";
 import { answer, call, picture, scripted, type Driver, type Turn } from "./Drivers.ts";
 import { executionStyle, type StyleOptions } from "./ExecutionStyle.ts";
 import { gameKeyboardToolkit, makeGameKeyboard } from "./GameKeyboard.ts";
@@ -33,6 +34,8 @@ export interface SegmentCaption {
 
 export interface GameSegmentOptions extends StyleOptions {
   readonly durationMillis?: number;
+  /** Settlement only; never extends capture, model admission or browser input. At most 30 s. */
+  readonly settlementDrainMillis?: number;
   readonly condition?: "picture" | "digest";
   readonly announceThenSpin?: boolean;
   readonly airDelayMillis?: number;
@@ -43,8 +46,13 @@ export interface GameSegmentOptions extends StyleOptions {
   readonly site?: GameSite;
 }
 
+const maxSettlementDrainMillis = 30000;
+
 const Options = Schema.Struct({
   durationMillis: Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 900000 })),
+  settlementDrainMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: maxSettlementDrainMillis }),
+  ),
   style: Schema.Literals(["plain", "performed"]),
   condition: Schema.Literals(["picture", "digest"]),
   announceThenSpin: Schema.Boolean,
@@ -52,6 +60,8 @@ const Options = Schema.Struct({
   maxSpins: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 400 })),
   pictureScale: Schema.Literals([0.5, 1]),
 });
+
+class SegmentDeadline extends Schema.TaggedError<SegmentDeadline>()("SegmentDeadline", {}) {}
 
 const pauseToolkit = Toolkit.make(
   Tool.make("bench_pause", {
@@ -75,6 +85,7 @@ export const segmentCallCaps = (maxSpins = 400, announceThenSpin = false) => ({
   episodeModelCalls: 6,
   episodeToolCalls: 5,
   episodeDurationMillis: 30000,
+  maxSettlementDrainMillis,
   announcementModelCalls: announceThenSpin ? 1 : 0,
   episodes: maxSpins,
   inputAttemptsPerEpisode: 1,
@@ -342,6 +353,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
 ) {
   const config = yield* Schema.decodeEffect(Options)({
     durationMillis: options.durationMillis ?? 600000,
+    settlementDrainMillis: options.settlementDrainMillis ?? maxSettlementDrainMillis,
     style: options.style ?? "plain",
     condition: options.condition ?? "picture",
     announceThenSpin: options.announceThenSpin ?? false,
@@ -377,14 +389,32 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
   let lastKeyboardReceipt = 0;
   let lastSteps: ReadonlyArray<StepDigest.StepFact> = [];
   let segmentEnded = start;
+  let settlementEnded = start;
+  let settlementDrain: "not-needed" | "completed" | "timed-out" = "not-needed";
+  let cutoffInterrupted = false;
   let inputAttemptsRemaining = 0;
   let episodes = 0;
+
+  const admit = Effect.suspend(() =>
+    journal.elapsedMillis() < deadline ? Effect.void : Effect.fail(new SegmentDeadline({})),
+  );
+
+  const modelAdmission = admit.pipe(
+    Effect.mapError(() =>
+      AiError.make({
+        module: "BenchSegment",
+        method: "admit",
+        reason: new AiError.InvalidRequestError({ description: "Segment deadline reached." }),
+      }),
+    ),
+  );
 
   const host = yield* BrowserTools.makeHost(browser, page, {
     execution: {
       style: yield* executionStyle(options, journal.manifest.seed),
       within: 10000,
     },
+    policy: { admit: () => journal.elapsedMillis() < deadline },
     coordinatePolicy: {
       admit: () => {
         if (journal.elapsedMillis() >= deadline) return false;
@@ -419,6 +449,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     turns: ReadonlyArray<Turn>,
     truth: Truth | null | ((publishedAt: number) => Truth | undefined),
   ) {
+    yield* admit;
     const driver = options.driver ?? scripted(journal, turns);
     const autonomous = kind === "result" && options.driver !== undefined;
 
@@ -431,10 +462,13 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
             ? episodeTools
             : Toolkit.make();
 
-    // The segment deadline cancels first; a simultaneous agent deadline would misreport failure.
+    // The enclosing drain cancels first; the per-episode rail remains at most 30 seconds.
     const remaining = Math.max(
       1,
-      Math.min(callCaps.episodeDurationMillis, deadline - journal.elapsedMillis() + 1000),
+      Math.min(
+        callCaps.episodeDurationMillis,
+        deadline - journal.elapsedMillis() + config.settlementDrainMillis + 1000,
+      ),
     );
 
     const maxTurns =
@@ -464,6 +498,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       driver
         .provide(
           AgentRuntime.run(agent, question, {
+            beforeTurn: () => admit,
             onHistory: (history) =>
               driver.history(history).pipe(
                 Effect.asVoid,
@@ -476,33 +511,38 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
               ),
             estimateCostMicrousd: driver.estimate,
             turnAllowance: maxTurns,
-            ...(options.driver === undefined
-              ? {}
-              : {
-                  toolAuthorization: {
-                    authorize: ({ call: requested }) =>
-                      Effect.sync(() => {
-                        const name = requested.toolName;
+            toolAuthorization: {
+              authorize: ({ call: requested }) =>
+                admit.pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      const name = requested.toolName;
 
-                        if (name !== "browser_click_at" && name !== "bench_game_press")
-                          return { _tag: "allowed" } as const;
-                        if (journal.elapsedMillis() >= deadline || inputAttemptsRemaining === 0)
-                          return {
-                            _tag: "denied",
-                            reason: "This episode's single input attempt is unavailable.",
-                          } as const;
-                        inputAttemptsRemaining--;
-
+                      if (
+                        options.driver === undefined ||
+                        (name !== "browser_click_at" && name !== "bench_game_press")
+                      )
                         return { _tag: "allowed" } as const;
-                      }),
-                  },
-                }),
+                      if (inputAttemptsRemaining === 0)
+                        return {
+                          _tag: "denied",
+                          reason: "This episode's single input attempt is unavailable.",
+                        } as const;
+                      inputAttemptsRemaining--;
+
+                      return { _tag: "allowed" } as const;
+                    }),
+                  ),
+                ),
+            },
             transientContext: {
               load: () =>
                 Effect.gen(function* () {
+                  yield* admit;
                   const png = yield* image.load();
 
                   pictureCalls++;
+                  yield* admit;
                   if (config.condition === "picture") return png;
                   const receipts = yield* host.receipts;
 
@@ -547,6 +587,8 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     );
 
     const publishedAt = journal.elapsedMillis();
+
+    if (publishedAt >= deadline) return;
     const deliveryIncomplete = typeof truth === "function" && site.failures().length > 0;
 
     const checkedTruth = deliveryIncomplete
@@ -612,6 +654,7 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
       ],
       null,
     );
+    if (journal.elapsedMillis() >= deadline) return;
     if (options.driver === undefined)
       yield* waitForGame(site, "reels", (state) => state.ready, "segment reached game");
     interstitials.push({ start: lobbyStart, end: journal.elapsedMillis() });
@@ -709,33 +752,76 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
     stopReason = site.state("reels").spin >= config.maxSpins ? "spin-cap" : "duration";
   });
 
-  yield* filming(
-    journal,
-    page,
-    Effect.suspend(() =>
-      work.pipe(
-        Effect.timeoutOption(Math.max(1, deadline - journal.elapsedMillis())),
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            if (Option.isNone(result)) stopReason = "duration";
-          }),
+  // The worker belongs to the enclosing browser scope, not Capture's shorter scope.
+  const filmingStarted = yield* Deferred.make<void>();
+
+  const worker = yield* Deferred.await(filmingStarted).pipe(
+    Effect.andThen(work),
+    Effect.catchTag("SegmentDeadline", () => Effect.void),
+    Effect.catchIf(
+      (error) =>
+        AiError.isAiError(error) && error.module === "BenchSegment" && error.method === "admit",
+      () => Effect.void,
+    ),
+    Effect.provideService(ModelRequestAdmission, modelAdmission),
+    Effect.forkScoped,
+  );
+
+  yield* Effect.gen(function* () {
+    const measured = yield* filming(
+      journal,
+      page,
+      Deferred.succeed(filmingStarted, undefined).pipe(
+        Effect.andThen(
+          Effect.suspend(() =>
+            Fiber.await(worker).pipe(
+              Effect.timeoutOption(Math.max(1, Math.ceil(deadline - journal.elapsedMillis()))),
+            ),
+          ),
         ),
-        Effect.onError(() =>
-          Effect.sync(() => {
-            stopReason = "failure";
-          }),
+        Effect.tap((result) =>
+          Option.isNone(result) && options.driver?.hasPendingUsage?.() !== true
+            ? Effect.sync(() => {
+                cutoffInterrupted = true;
+              }).pipe(Effect.andThen(Fiber.interrupt(worker)), Effect.asVoid)
+            : Effect.void,
         ),
         Effect.ensuring(
           Effect.sync(() => {
-            segmentEnded = journal.elapsedMillis();
+            segmentEnded = Math.min(deadline, journal.elapsedMillis());
+            if (journal.recording !== undefined)
+              journal.recording.measurementEndedAt = segmentEnded;
           }),
         ),
       ),
+    );
+
+    if (Option.isSome(measured)) return yield* measured.value;
+    stopReason = "duration";
+    if (cutoffInterrupted) return;
+
+    const settled = yield* Fiber.await(worker).pipe(
+      Effect.timeoutOption(
+        Math.max(1, Math.ceil(deadline + config.settlementDrainMillis - journal.elapsedMillis())),
+      ),
+    );
+
+    settlementDrain = Option.isSome(settled) ? "completed" : "timed-out";
+    if (Option.isSome(settled)) return yield* settled.value;
+    yield* Fiber.interrupt(worker);
+  }).pipe(
+    Effect.onError(() =>
+      Effect.sync(() => {
+        stopReason = "failure";
+      }),
     ),
-  ).pipe(
+    Effect.ensuring(Fiber.interrupt(worker)),
     Effect.ensuring(
       Effect.sync(() => {
+        settlementEnded = journal.elapsedMillis();
         const end = segmentEnded;
+
+        if (end >= deadline && stopReason !== "failure") stopReason = "duration";
 
         const events = site.events().map((receipt) => ({
           ...receipt,
@@ -808,8 +894,14 @@ export const gameSegment = Effect.fn("Bench.gameSegment")(function* <OwnerError>
               ? "model tools dismiss gates; fixture script schedules around the timed banner"
               : "model tools dismiss gates and choose pauses from current pictures",
           durationOverrunMillis: Math.max(0, end - deadline),
+          settlementDrain: {
+            status: settlementDrain,
+            maxDurationMillis: config.settlementDrainMillis,
+            endedAtMillis: settlementEnded,
+            elapsedAfterMeasurementMillis: Math.max(0, settlementEnded - end),
+          },
           deadlineQualification:
-            "segment deadline interrupts in-flight work; unavailable usage stops later paid trials",
+            "segment deadline seals capture and metrics and closes request/tool admission; only admitted work drains for bounded settlement; unavailable usage stops later paid trials",
           factsQualification:
             "requested result facts; caption prose is retained without semantic grading",
           capture: {
