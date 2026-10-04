@@ -76,33 +76,40 @@ export const reelOutcome = (seed: number, spin: number, bet: number): ReelOutcom
   };
 
   const durationMillis = 2000 + (next() % 1501);
-  const grid = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => next() % 6));
+  // Preserve the payout stream while adding symbols around the original center rows.
+  const originalGrid = Array.from({ length: 5 }, () => Array.from({ length: 3 }, () => next() % 6));
+  const symbol = originalGrid[0]?.[1];
+  const ordinaryWin = originalGrid.every((column) => column[1] === symbol);
+  const grid = originalGrid.map((column) => [next() % 6, ...column, next() % 6]);
+
+  grid.push(Array.from({ length: 5 }, () => next() % 6));
   const position = (spin - 1 + (seed >>> 0)) % 10;
   let moment: GameMoment = "ordinary";
   let multiplier = 0;
 
   if (position === 0) {
     moment = "near-miss";
-    for (let reel = 0; reel < 5; reel++) {
+    for (let reel = 0; reel < 6; reel++) {
       const column = grid[reel];
 
-      if (column !== undefined) column[1] = reel === 4 ? 1 : 0;
+      if (column !== undefined) column[2] = reel === 5 ? 1 : 0;
     }
   } else if (position === 2 || position === 4) {
     moment = position === 2 ? "big-win" : "bonus";
     multiplier = position === 2 ? 50 : 12;
-    for (const column of grid) column[1] = position === 2 ? 4 : 5;
+    for (const column of grid) column[2] = position === 2 ? 4 : 5;
   } else if (position >= 6) {
     moment = "losing-streak";
-    for (let reel = 0; reel < 5; reel++) {
+    for (let reel = 0; reel < 6; reel++) {
       const column = grid[reel];
 
-      if (column !== undefined) column[1] = reel % 6;
+      if (column !== undefined) column[2] = reel % 6;
     }
-  } else {
-    const symbol = grid[0]?.[1];
+  } else if (ordinaryWin) {
+    multiplier = 5;
+    const column = grid[5];
 
-    if (grid.every((column) => column[1] === symbol)) multiplier = 5;
+    if (column !== undefined && symbol !== undefined) column[2] = symbol;
   }
 
   return { grid, win: multiplier * bet, moment, durationMillis };
@@ -127,7 +134,9 @@ export const createGameEngine = (
     spin: 0,
     bet: 10,
     balance: credits,
-    grid: Array.from({ length: 5 }, (_, reel) => [reel % 6, (reel + 1) % 6, (reel + 2) % 6]),
+    grid: Array.from({ length: 6 }, (_, reel) =>
+      Array.from({ length: 5 }, (_, row) => (reel + row) % 6),
+    ),
     lastWin: 0,
     stoppedReels: 0,
     banner: null,
@@ -179,13 +188,22 @@ export const createGameEngine = (
     advance: (atMillis) => {
       if (state.phase === "spinning" && active !== undefined) {
         while (
-          state.stoppedReels < 5 &&
-          atMillis >= started + active.durationMillis - (4 - state.stoppedReels) * 200
+          state.stoppedReels < 6 &&
+          atMillis >= started + active.durationMillis - (5 - state.stoppedReels) * 200
         ) {
-          events.push({ tag: "reelStop", spin: state.spin, atMillis, reel: state.stoppedReels });
-          state = { ...state, stoppedReels: state.stoppedReels + 1 };
+          const reel = state.stoppedReels;
+          const symbols = active.grid[reel];
+
+          events.push({ tag: "reelStop", spin: state.spin, atMillis, reel });
+          state = {
+            ...state,
+            stoppedReels: reel + 1,
+            grid: state.grid.map((column, index) =>
+              index === reel && symbols !== undefined ? [...symbols] : column,
+            ),
+          };
         }
-        if (state.stoppedReels === 5) {
+        if (state.stoppedReels === 6) {
           resultAt = atMillis;
           state = {
             ...state,

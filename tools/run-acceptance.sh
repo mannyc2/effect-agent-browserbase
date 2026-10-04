@@ -127,8 +127,9 @@ if [ "$LAST_CODE" = 0 ]; then
   run generic-build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE/packages/agent-browser"
   run unit timeout 180s ../../node_modules/.bin/vp test --run --maxWorkers=1
+  # The complete serial suite needs the same bounded envelope as the other native suites.
   if [ "$PROFILE" = full ]; then
-    run native timeout 300s env BENCH_OUT_DIR="$OUT/bench-agent" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
+    run native timeout 600s env BENCH_OUT_DIR="$OUT/bench-agent" ../../node_modules/.bin/vp test --config vite.native.config.ts --run
   fi
   run build timeout 180s ../../node_modules/.bin/vp pack
   cd "$TREE"

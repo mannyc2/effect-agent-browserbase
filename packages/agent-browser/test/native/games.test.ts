@@ -83,7 +83,7 @@ for (const kind of ["reels", "reels-dom"] as const) {
                   events
                     .filter((receipt) => receipt.event.tag === "reelStop")
                     .map((receipt) => (receipt.event.tag === "reelStop" ? receipt.event.reel : -1)),
-                ).toEqual([0, 1, 2, 3, 4]);
+                ).toEqual([0, 1, 2, 3, 4, 5]);
                 expect(
                   events.find((receipt) => receipt.event.tag === "result")?.event,
                 ).toMatchObject({
