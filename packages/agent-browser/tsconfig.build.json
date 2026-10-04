@@ -1,7 +1,0 @@
-{
-  // Declarations are emitted for the published source only. Examples and tests infer types from
-  // effect-agent's bundled declaration chunks, which have no public name a declaration can use.
-  "extends": "./tsconfig.json",
-  "include": ["src"],
-  "exclude": []
-}

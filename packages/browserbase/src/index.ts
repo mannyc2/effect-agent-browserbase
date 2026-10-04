@@ -1,25 +1,6 @@
-export * as Account from "./Account.ts";
-export * as Agents from "./Agents.ts";
-export * as Allocation from "./Allocation.ts";
-export * as Browser from "./Browser.ts";
-export * as Certificates from "./Certificates.ts";
-export * as Cleanup from "./Cleanup.ts";
-export * as Client from "./Client.ts";
-export * as ContextCoordination from "./ContextCoordination.ts";
-export * as Contexts from "./Contexts.ts";
-export * as Downloads from "./Downloads.ts";
-export * as Errors from "./Errors.ts";
-export * as Extensions from "./Extensions.ts";
-export * as Functions from "./Functions.ts";
-export * as Launch from "./Launch.ts";
-export * as PageFetch from "./PageFetch.ts";
-export * as Projects from "./Projects.ts";
-export * as Recordings from "./Recordings.ts";
-export * as References from "./References.ts";
-export * as Replays from "./Replays.ts";
-export * as Search from "./Search.ts";
-export * as SessionData from "./SessionData.ts";
-export * as Sessions from "./Sessions.ts";
-export * as Transfers from "./Transfers.ts";
-export * as Uploads from "./Uploads.ts";
-export * as Webhooks from "./Webhooks.ts";
+/**
+ * @since 0.3.0
+ */
+export * as Browserbase from "./Browserbase.ts";
+export * as BrowserbaseClient from "./BrowserbaseClient.ts";
+export * as BrowserbaseError from "./BrowserbaseError.ts";

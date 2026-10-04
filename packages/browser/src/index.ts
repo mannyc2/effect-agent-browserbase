@@ -1,12 +1,14 @@
-export * as Bootstrap from "./Bootstrap.ts";
+/**
+ * @since 0.3.0
+ */
+export * as Agent from "./Agent.ts";
 export * as Browser from "./Browser.ts";
-export * as BrowserData from "./BrowserData.ts";
-export * as BrowserRuntime from "./BrowserRuntime.ts";
-export * as Capture from "./Capture.ts";
-export * as CaptureData from "./CaptureData.ts";
-export * as Errors from "./Errors.ts";
-export * as PageControl from "./PageControl.ts";
-export * as Plan from "./Plan.ts";
-export * as PlanData from "./PlanData.ts";
-export * as Timeline from "./Timeline.ts";
-export * as TimelineData from "./TimelineData.ts";
+export * as BrowserError from "./BrowserError.ts";
+export * as BrowserEvent from "./BrowserEvent.ts";
+export * as Cdp from "./Cdp.ts";
+export * as Chromium from "./Chromium.ts";
+export * as Frame from "./Frame.ts";
+export * as Moment from "./Moment.ts";
+export * as Page from "./Page.ts";
+export * as Snapshot from "./Snapshot.ts";
+export * as Tools from "./Tools.ts";
