@@ -101,8 +101,10 @@ const watch = Effect.gen(function* () {
   under that exact point, with its role and accessible name when available.
 - Actions return short receipts. `Agent.run` executes each turn's calls in order, stops at the first
   failure or completion, and answers the remaining calls as not executed. A loop of your own gets
-  the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a click
-  opens a tab, the tools follow it.
+  the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a tab
+  opens, the tools follow it: in the receipt when it registers in time, otherwise when they next
+  look. Until the new tab has been observed, later actions do nothing and say so: the model
+  planned them on the old tab.
 - The model receives one outline and screenshot at the start and after each turn, including failed
   batches. If the browser is gone, the run fails with its `BrowserError` rather than calling the
   model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default

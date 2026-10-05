@@ -1,7 +1,8 @@
 // The agent, its tools and moment descriptions, driven by scripted models: no model is called.
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
 import { LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import type { BrowserContext } from "playwright-core";
 
 import * as Agent from "../src/Agent.ts";
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -38,6 +39,24 @@ const scripted = (turns: ReadonlyArray<Turn>) => {
 
   return { layer: Layer.effect(LanguageModel.LanguageModel, model), prompts };
 };
+
+/** Pages of this context take `delay` more milliseconds to register, as over a remote CDP link. */
+const slowRegistration = (context: BrowserContext, delay: number): BrowserContext =>
+  new Proxy(context, {
+    get(target, property) {
+      if (property === "newCDPSession")
+        return async (page: Parameters<BrowserContext["newCDPSession"]>[0]) => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, delay);
+          });
+
+          return target.newCDPSession(page);
+        };
+      const value: unknown = Reflect.get(target, property, target);
+
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 
 let calls = 0;
 
@@ -1066,6 +1085,114 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("follows a tab that registers after its click's receipt, before acting again", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      assert.isNotNull(native);
+      if (native === null) return;
+
+      const context = yield* Effect.acquireRelease(
+        Effect.promise(() => native.newContext({ viewport: { width: 1280, height: 720 } })),
+        (owned) => Effect.promise(() => owned.close()),
+      );
+
+      // A remote browser's round trips make a new tab register well after a click settles.
+      const browser = yield* makeBrowser(slowRegistration(context, 1000), {
+        id: "slow-registration",
+        provider: "test",
+      });
+
+      yield* Effect.gen(function* () {
+        const page = yield* browser.page;
+
+        yield* page.goto((yield* Site).url("/form"));
+        const tools = yield* Tools.make();
+        const snapshot = yield* tools.handlers.browser_snapshot({});
+        const link = /link "Open in a new tab" \[ref=(e\d+)\]/.exec(snapshot)?.[1] ?? "";
+
+        yield* tools.handlers.browser_click({ ref: link });
+        yield* browser.pages.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(25)),
+            until: (open) => open.length === 2,
+          }),
+          Effect.timeout(Duration.seconds(10)),
+        );
+        yield* Effect.promise(() => page.playwright.locator("#amount").focus());
+
+        const refused = yield* tools.handlers
+          .browser_type({ text: "7", append: true })
+          .pipe(Effect.flip);
+
+        assert.include(refused, "A new tab opened and is now the current tab");
+        assert.notInclude(refused, "may have taken effect");
+        assert.strictEqual(yield* valueOf(page, "#amount"), "10");
+
+        const current = yield* tools.page;
+
+        assert.notStrictEqual(current.id, page.id);
+        assert.include(yield* current.url, "/next");
+        const outline = yield* tools.handlers.browser_snapshot({});
+        const proceed = /button "Continue" \[ref=(e\d+)\]/.exec(outline)?.[1] ?? "";
+
+        assert.include(outline, "The next page");
+        assert.include(yield* tools.handlers.browser_click({ ref: proceed }), "Clicked");
+      }).pipe(Effect.provideService(Browser, browser));
+    }),
+  );
+
+  it.effect("refuses the rest of a batch on a tab that opened in it, until it is observed", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const browser = yield* Browser;
+      const tools = yield* Tools.make();
+      const snapshot = yield* tools.handlers.browser_snapshot({});
+      const submit = /button "Submit" \[ref=(e\d+)\]/.exec(snapshot)?.[1] ?? "";
+      const before = (yield* browser.pages).length;
+
+      // The page opens a tab after the model last looked. Waiting for its registration makes
+      // the batch meet it at its first call, as a tab opened by an earlier call would be met.
+      yield* Effect.promise(() => page.playwright.evaluate(() => void window.open("/next")));
+      yield* browser.pages.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced(Duration.millis(50)),
+          until: (open) => open.length > before,
+        }),
+        Effect.timeout(Duration.seconds(5)),
+      );
+
+      const model = scripted([
+        () => [call("browser_snapshot", {}), call("browser_click", { ref: submit }), finish],
+      ]);
+
+      const response = yield* LanguageModel.generateText({
+        prompt: "Submit the order.",
+        ...(yield* tools.batch),
+      }).pipe(Effect.provide(model.layer));
+
+      const [outline, refused] = response.toolResults;
+
+      // Reading the tab within the batch does not count: the model sees it only afterwards.
+      assert.include(
+        JSON.stringify(outline?.result),
+        "A new tab opened and is now the current tab.",
+      );
+      assert.include(JSON.stringify(outline?.result), "The next page");
+      assert.isTrue(refused?.isFailure);
+      assert.match(JSON.stringify(refused?.result), /^"Not done: A new tab opened/);
+      assert.strictEqual(yield* read(page, "#outcome"), "Not ordered");
+
+      const observed = yield* tools.page;
+      const fresh = yield* tools.handlers.browser_snapshot({});
+      const proceed = /button "Continue" \[ref=(e\d+)\]/.exec(fresh)?.[1] ?? "";
+
+      assert.include(yield* observed.url, "/next");
+      assert.include(yield* tools.handlers.browser_click({ ref: proceed }), "Clicked");
+      yield* observed.close;
+    }),
+  );
+
   it.effect("plays a canvas game by point and follows tabs", () =>
     Effect.gen(function* () {
       const page = yield* start("/slots");
@@ -1092,9 +1219,19 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       const ref = /link "Open in a new tab" \[ref=(e\d+)\]/.exec(snapshot)?.[1] ?? "";
 
-      const opened = yield* tools.handlers.browser_click({ ref });
+      const browser = yield* Browser;
 
-      assert.include(opened, "A new tab opened and is now the current tab.");
+      assert.include(yield* tools.handlers.browser_click({ ref }), "Clicked");
+      // The receipt names the tab only if it registered within the click; the next look follows
+      // it either way.
+      yield* browser.pages.pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced(Duration.millis(50)),
+          until: (open) => open.length > 1,
+        }),
+        Effect.timeout(Duration.seconds(5)),
+      );
+      assert.notStrictEqual((yield* tools.page).id, page.id);
       assert.include(yield* tools.handlers.browser_tabs({ action: "list" }), "2. [current] Next");
       yield* tools.handlers.browser_tabs({ action: "close", index: 2 });
       assert.strictEqual((yield* tools.page).id, page.id);

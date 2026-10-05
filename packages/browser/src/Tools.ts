@@ -309,7 +309,10 @@ export interface Tools {
   readonly handlers: Toolkit.HandlersFrom<BrowserTools>;
   /** A fresh `batch` of the browser tools for one turn, to spread into a `generateText` call. */
   readonly batch: Effect.Effect<Batch<BrowserTools>>;
-  /** The tab the tools act on. */
+  /**
+   * The tab the tools act on, after following any tab that opened since they last looked. Observe
+   * it after each batch: once a tab opens, actions refuse to run until it has been returned here.
+   */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
   /** Drain the requested crops, once per batch, to include beside the observation. */
   readonly takeZooms: Effect.Effect<ReadonlyArray<Page.Zoom>>;
@@ -337,6 +340,12 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   const browser = yield* Browser;
   const snapshotChars = options.snapshotChars ?? 8000;
   let current = Option.none<Page.Page>();
+  // Tabs the tools have looked at. Any other open tab opened since, perhaps after the receipt of
+  // the action that opened it.
+  const seen = new Set((yield* browser.pages).map((tab) => tab.id));
+  // The current tab became a newly opened one that `page`, which observations use, has not
+  // returned since. The model planned its batch on the old tab and sees nothing new until then.
+  let unobserved = false;
   let zooms: Array<Page.Zoom> = [];
   const zoomLock = yield* Semaphore.make(1);
 
@@ -350,16 +359,42 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     }),
   );
 
-  const page: Effect.Effect<Page.Page, BrowserError> = Effect.gen(function* () {
+  /** Make the newest tab opened since the tools last looked the current one; true if one did. */
+  const follow = Effect.gen(function* () {
+    const open = yield* browser.pages;
+    const opened = open.filter((tab) => !seen.has(tab.id)).at(-1);
+
+    for (const tab of open) seen.add(tab.id);
+    if (opened === undefined) return false;
+    current = Option.some(opened);
+    unobserved = true;
+    yield* opened.bringToFront.pipe(Effect.ignore);
+
+    return true;
+  });
+
+  /** The current tab, after following a newly opened one, and whether that just happened. */
+  const resolve = Effect.gen(function* () {
+    const followed = yield* follow;
     const open = yield* browser.pages;
 
-    if (Option.isSome(current) && open.includes(current.value)) return current.value;
+    if (Option.isSome(current) && open.includes(current.value))
+      return { tab: current.value, followed };
     const first = yield* browser.page;
 
+    seen.add(first.id);
     current = Option.some(first);
 
-    return first;
+    return { tab: first, followed };
   });
+
+  const page: Effect.Effect<Page.Page, BrowserError> = Effect.map(resolve, ({ tab }) => {
+    unobserved = false;
+
+    return tab;
+  });
+
+  const switched = "A new tab opened and is now the current tab.";
 
   const describeTab = (tab: Page.Page) =>
     tab.title.pipe(
@@ -375,24 +410,24 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     run: (tab: Page.Page) => Effect.Effect<A, BrowserError | string>,
   ) =>
     Effect.gen(function* () {
-      const tab = yield* page;
-      const before = yield* browser.pages;
+      const { tab } = yield* resolve;
 
+      // The call was planned on the tab the model last saw, so it must not run on a new one.
+      if (unobserved)
+        return yield* Effect.fail(
+          `Not done: ${switched} It is ${yield* describeTab(tab)}. Look at it first.`,
+        );
       const result = yield* run(tab);
       const receipt = typeof done === "string" ? done : done(result);
-      const opened = (yield* browser.pages).filter((other) => !before.includes(other));
-      const newest = opened.at(-1);
 
-      if (newest === undefined) return receipt;
-      current = Option.some(newest);
-      yield* newest.bringToFront.pipe(Effect.ignore);
-
-      return `${receipt}\nA new tab opened and is now the current tab.`;
+      // A tab that registers later is followed when the tools next look; either way, later
+      // actions wait until it is observed.
+      return (yield* follow) ? `${receipt}\n${switched}` : receipt;
     }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message)));
 
   const tabList = Effect.gen(function* () {
     const open = yield* browser.pages;
-    const active = yield* page;
+    const { tab: active } = yield* resolve;
 
     const lines = yield* Effect.forEach(open, (tab, index) =>
       Effect.map(
@@ -412,11 +447,12 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     },
     browser_back: () => act("Went back.", (tab) => tab.back),
     browser_snapshot: ({ full, query }) =>
-      page.pipe(
-        Effect.flatMap((tab) => tab.snapshot({ full, query, maxChars: snapshotChars })),
-        Effect.map((snapshot) => snapshot.rendered),
-        Effect.mapError((error) => error.message),
-      ),
+      Effect.gen(function* () {
+        const { tab, followed } = yield* resolve;
+        const snapshot = yield* tab.snapshot({ full, query, maxChars: snapshotChars });
+
+        return followed ? `${switched}\n${snapshot.rendered}` : snapshot.rendered;
+      }).pipe(Effect.mapError((error) => error.message)),
     browser_zoom: (region) =>
       zoomLock.withPermits(1)(
         Effect.gen(function* () {
@@ -424,12 +460,12 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
             return yield* Effect.fail(
               "At most 8 zoom crops can await an observation; finish the batch first.",
             );
-          const tab = yield* page;
+          const { tab, followed } = yield* resolve;
           const zoom = yield* tab.zoom(region);
 
           zooms.push(zoom);
 
-          return `Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
+          return `${followed ? switched + "\n" : ""}Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
         }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message))),
       ),
     browser_click: (op) =>
@@ -505,12 +541,15 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       ),
     browser_tabs: ({ action, index, url }) =>
       Effect.gen(function* () {
+        // Take in tabs opened since the last look first, so a selection is not overridden later.
+        yield* follow;
         const open = yield* browser.pages;
         const chosen = index === undefined ? undefined : open[index - 1];
 
         if (action === "new") {
           const tab = yield* browser.newPage(url);
 
+          seen.add(tab.id);
           current = Option.some(tab);
           yield* tab.bringToFront;
         } else if (action === "select" || action === "close") {
