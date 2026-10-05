@@ -63,6 +63,42 @@ describe("Clock calibration", () => {
     );
   });
 
+  it.effect("keeps the browser's narrower estimate unless a measurement contradicts it", () =>
+    Effect.gen(function* () {
+      const precise = {
+        offsetMillis: 1000,
+        uncertaintyMillis: 1,
+        roundTripMillis: 2,
+        sampledAt: 0,
+      };
+
+      const mapping = Clock.mapping(Option.some(precise));
+
+      const refresh = (offsetMillis: number, uncertaintyMillis: number) =>
+        mapping.refresh(
+          Effect.succeed({
+            offsetMillis,
+            uncertaintyMillis,
+            roundTripMillis: uncertaintyMillis * 2,
+            sampledAt: 1,
+          }),
+        );
+
+      // A probe delayed behind a busy page agrees with the current estimate but says less.
+      assert.deepStrictEqual(yield* refresh(1060, 75), precise);
+      // A failed probe keeps the estimate the browser already holds.
+      assert.deepStrictEqual(yield* mapping.refresh(Effect.fail("busy")), precise);
+      // A no-worse probe is fresher evidence of the same offset.
+      assert.strictEqual((yield* refresh(1000.5, 1)).offsetMillis, 1000.5);
+      // A measurement that cannot contain the current offset means the clocks moved.
+      assert.strictEqual((yield* refresh(1500, 30)).offsetMillis, 1500);
+      assert.strictEqual(
+        (yield* mapping.current(Effect.die("an estimate exists"))).offsetMillis,
+        1500,
+      );
+    }),
+  );
+
   it("ignores invalid probes and cannot calibrate from backward or nonfinite host intervals", () => {
     const invalid = [
       { hostStart: 20, hostEnd: 10, browserTime: 1000 },

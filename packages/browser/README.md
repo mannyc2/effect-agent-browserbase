@@ -189,7 +189,9 @@ measurement. Transport asymmetry remains in the reported uncertainty.
 Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
 pages. The startup measurement seeds it; otherwise the first page that needs it probes it. Each new
 capture refreshes the mapping and keeps the previous estimate if the page cannot answer in time, so a
-busy page only fails while its browser has no estimate at all; that failure is undispatched.
+busy page only fails while its browser has no estimate at all; that failure is undispatched. A new
+measurement replaces the estimate only if it is no less certain, or if its interval cannot contain
+the current offset (the clocks moved); a probe slowed by one busy tab cannot skew every tab's stamps.
 
 Mouse input and raw text-key events carry the calibrated epoch timestamp. Shortcut chords retain
 Playwright's platform behavior, and Unicode insertion has no timestamp field. Startup probes are

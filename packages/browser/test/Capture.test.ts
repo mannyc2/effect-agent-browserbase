@@ -390,6 +390,52 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("keeps every tab's input stamps when a busy tab's capture measures the clock", () =>
+      Effect.gen(function* () {
+        const browser = yield* busyContext("fresh");
+
+        const quiet = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body style="margin:0;height:100vh"><script>
+  window.deltas = [];
+  addEventListener("mousedown", (event) => deltas.push(performance.now() - event.timeStamp));
+</script></body>`),
+        );
+
+        const deltas = Effect.promise(() =>
+          quiet.playwright.evaluate(() => (window as unknown as { deltas: number[] }).deltas),
+        );
+
+        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
+        const before = (yield* deltas).length;
+
+        // Back-to-back 150 ms tasks with no timer gaps delay every clock probe in that tab.
+        const busy = yield* browser.newPage(
+          "data:text/html," +
+            encodeURIComponent(`<body>busy<script>
+  const channel = new MessageChannel();
+  let turns = 0;
+  channel.port1.onmessage = () => {
+    const end = performance.now() + 150;
+    while (performance.now() < end) {}
+    if (++turns < 200) channel.port2.postMessage(0);
+  };
+  channel.port2.postMessage(0);
+</script></body>`),
+        );
+
+        yield* busy
+          .screencast()
+          .pipe(Stream.take(1), Stream.runDrain, Effect.timeout("15 seconds"));
+        for (let index = 0; index < 3; index++) yield* quiet.click({ x: 50, y: 50 });
+        const after = (yield* deltas).slice(before);
+
+        // Handler time minus the stamped event time: a future stamp would make it negative.
+        assert.strictEqual(after.length, 3);
+        assert.isBelow(Math.max(...after.map(Math.abs)), 50, JSON.stringify(after));
+      }),
+    );
+
     it.effect("fails a busy page's first capture, undispatched, only while no mapping exists", () =>
       Effect.gen(function* () {
         const browser = yield* busyContext("borrowed");

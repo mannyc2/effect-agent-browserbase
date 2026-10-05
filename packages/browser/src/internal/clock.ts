@@ -60,9 +60,23 @@ export const estimate = (probes: ReadonlyArray<Probe>): Option.Option<Estimate> 
 export interface Mapping {
   /** The latest estimate, measured through `measure` only while the browser has none. */
   readonly current: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<Estimate, E>;
-  /** Measure again; a failed measurement keeps the previous estimate when there is one. */
+  /**
+   * Measure again and return the browser's estimate afterwards; a failed measurement keeps the
+   * previous estimate when there is one.
+   */
   readonly refresh: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<Estimate, E>;
 }
+
+/**
+ * Whether a new measurement should replace the current estimate. Each interval contains the true
+ * offset, so overlapping intervals agree and the narrower one is kept: a probe delayed behind a
+ * busy page cannot widen every tab's stamps. A disjoint measurement means the clocks moved (a wall
+ * clock step, or drift between a remote browser and this host), so the newer evidence wins.
+ */
+export const supersedes = (next: Estimate, current: Estimate): boolean =>
+  next.uncertaintyMillis <= current.uncertaintyMillis ||
+  Math.abs(next.offsetMillis - current.offsetMillis) >
+    next.uncertaintyMillis + current.uncertaintyMillis;
 
 /**
  * Every renderer of a browser reads the same host wall clock, so the offset belongs to the
@@ -73,11 +87,11 @@ export const mapping = (seed: Option.Option<Estimate>): Mapping => {
 
   const adopt = <E>(measure: Effect.Effect<Estimate, E>) =>
     measure.pipe(
-      Effect.tap((estimate) =>
-        Effect.sync(() => {
-          latest = estimate;
-        }),
-      ),
+      Effect.map((estimate) => {
+        if (latest === undefined || supersedes(estimate, latest)) latest = estimate;
+
+        return latest;
+      }),
     );
 
   return {
