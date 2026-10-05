@@ -61,8 +61,11 @@ handler and answers as not executed.
 
 `Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action,
 resolved element and inferred `classifications`: `form-submit`, `purchase`, `delete`, `confirm`,
-`cross-origin`, `download` and `upload`. More than one may apply. `point` is present for literal
-pixel targets; a ref's coordinates are resolved after approval so preparation never scrolls.
+`cross-origin`, `download` and `upload`. More than one may apply. They describe what the input
+activates, found as the browser finds it: the submit button around a painted label, an SVG link
+around a shape, an image-map area. Hovering and scrolling activate nothing and carry none. `point`
+is present for literal pixel targets; a ref's coordinates are resolved after approval so
+preparation never scrolls.
 It covers clicks, drags, typing, keys, selection, hover, scroll and navigation, including a new
 tab's destination.
 

@@ -720,16 +720,48 @@ export const install = (): PageApi => {
     return hit;
   };
 
-  const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
-    let link: Element | null = element;
+  const isLabel = (element: Element): element is HTMLLabelElement => element.tagName === "LABEL";
 
-    while (link !== null && (link.tagName !== "A" || !link.hasAttribute("href")))
-      link = parentOf(link);
+  // HTML links, SVG links and image-map areas all navigate; SVG keeps lowercase tag names.
+  const hrefAttribute = (element: Element): string | null =>
+    element.localName === "a" || element.localName === "area"
+      ? (element.getAttribute("href") ??
+        element.getAttributeNS("http://www.w3.org/1999/xlink", "href"))
+      : null;
+
+  const linkOf = (element: Element): Element | undefined => {
+    for (let node: Element | null = element; node !== null; node = parentOf(node))
+      if (hrefAttribute(node) !== null) return node;
+
+    return undefined;
+  };
+
+  /**
+   * The element whose activation behaviour a click or key on `element` runs, as the browser
+   * resolves it along the composed path: a link, button, input, summary or a label's control.
+   */
+  const activationTarget = (element: Element): Element | undefined => {
+    for (let node: Element | null = element; node !== null; node = parentOf(node)) {
+      if (
+        hrefAttribute(node) !== null ||
+        node.tagName === "BUTTON" ||
+        node.tagName === "SUMMARY" ||
+        (isInput(node) && node.type !== "hidden")
+      )
+        return node;
+      if (isLabel(node) && node.control !== null) return node.control;
+    }
+
+    return undefined;
+  };
+
+  const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
+    const link = linkOf(element);
     let href: string | undefined;
 
-    if (link !== null) {
+    if (link !== undefined) {
       try {
-        href = new URL(link.getAttribute("href") ?? "", link.ownerDocument.baseURI).href;
+        href = new URL(hrefAttribute(link) ?? "", link.ownerDocument.baseURI).href;
       } catch {
         href = undefined;
       }
@@ -967,8 +999,8 @@ export const install = (): PageApi => {
 
   const inspectInput = (element: Element, plan: InputPlan) => {
     const metadata = details(element, element, 0, 0);
-    const forwarded = element.closest("label")?.control;
-    const control = forwarded ?? element;
+    // Classify what the input activates, such as the submit button around a painted label.
+    const control = activationTarget(element) ?? element;
 
     const form =
       isInput(control) || isButton(control) || isTextArea(control) || isSelect(control)
@@ -1033,19 +1065,23 @@ export const install = (): PageApi => {
           ? submitter.formTarget
           : form.target;
 
-    let link: Element | null = element;
-
-    while (link !== null && (link.tagName !== "A" || !link.hasAttribute("href")))
-      link = parentOf(link);
-    const destination = submits ? formDestination : metadata.href;
+    const link = linkOf(element);
+    // Only activation follows a link or opens a file chooser; hovering or scrolling over a
+    // control does neither, and names say nothing about where the pointer merely rests.
+    const destination = submits ? formDestination : activation ? metadata.href : undefined;
     const classifications: Array<Classification> = [];
 
+    const names =
+      control === element ? metadata.name : `${metadata.name} ${nameOf(control, roleOf(control))}`;
+
     if (submits) classifications.push("form-submit");
-    if (/\b(?:buy|pay|order|purchase)\b/i.test(metadata.name)) classifications.push("purchase");
-    if (/\bdelete\b/i.test(metadata.name)) classifications.push("delete");
-    if (/\bconfirm\b/i.test(metadata.name)) classifications.push("confirm");
-    if (link?.hasAttribute("download") === true) classifications.push("download");
-    if (isInput(control) && control.type === "file") classifications.push("upload");
+    if (plan.action !== "hover" && plan.action !== "scroll") {
+      if (/\b(?:buy|pay|order|purchase)\b/i.test(names)) classifications.push("purchase");
+      if (/\bdelete\b/i.test(names)) classifications.push("delete");
+      if (/\bconfirm\b/i.test(names)) classifications.push("confirm");
+    }
+    if (activation && link?.hasAttribute("download") === true) classifications.push("download");
+    if (activation && isInput(control) && control.type === "file") classifications.push("upload");
 
     const typingAttributes = [
       control.getAttribute("id"),
@@ -1084,7 +1120,7 @@ export const install = (): PageApi => {
       metadata.role,
       metadata.name,
       metadata.href,
-      forwarded === null || forwarded === undefined ? null : refFor(forwarded),
+      control === element ? null : refFor(control),
       isInput(control) || isButton(control) ? control.type : control.tagName,
       control.matches(":disabled") || isDisabled(control),
       control.getAttribute("readonly"),

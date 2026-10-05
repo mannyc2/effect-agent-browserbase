@@ -184,6 +184,93 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("classifies what a click activates: SVG links, map areas and submitter children", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const { page } = yield* setup({
+        guard: (request) =>
+          Effect.sync(() => requests.push(request)).pipe(
+            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+          ),
+      });
+
+      const external = new URL((yield* Site).url("/next"));
+
+      external.hostname = "localhost";
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<body style="margin:0"><svg width="300" height="100" style="display:block"><a href="' +
+            external.href +
+            '"><rect width="300" height="100" fill="red"></rect></a></svg>' +
+            '<img usemap="#map" width="300" height="100" style="display:block" src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="><map name="map"><area shape="rect" coords="0,0,300,100" href="' +
+            external.href +
+            '" download></map>' +
+            '<form action="' +
+            external.href +
+            '"><input name="q" value="1"><button style="display:block;width:300px;height:60px"><span onclick="void 0" style="display:inline-block;width:280px;height:50px">Continue</span></button></form></body>',
+        ),
+      );
+      const continueAt = yield* Effect.promise(() => page.playwright.locator("span").boundingBox());
+
+      assert.isNotNull(continueAt);
+      if (continueAt === null) return;
+
+      for (const [target, expected] of [
+        [{ x: 150, y: 50 }, ["cross-origin"]],
+        [{ x: 150, y: 150 }, ["cross-origin", "download"]],
+        [
+          { x: continueAt.x + continueAt.width / 2, y: continueAt.y + continueAt.height / 2 },
+          ["cross-origin", "form-submit"],
+        ],
+        [refOf(yield* page.snapshot(), "clickable", "Continue"), ["cross-origin", "form-submit"]],
+      ] as const) {
+        assert.deepStrictEqual(yield* failure(page.click(target)), {
+          tag: "PolicyDenied",
+          dispatched: false,
+        });
+        assert.deepStrictEqual(
+          [...requests.at(-1)!.classifications].sort((left, right) => left.localeCompare(right)),
+          [...expected],
+        );
+        assert.strictEqual(requests.at(-1)!.destination, external.href);
+      }
+    }),
+  );
+
+  it.effect("leaves hover and scroll unclassified over consequential controls", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const { page } = yield* setup({
+        guard: (request) => Effect.sync(() => requests.push(request)),
+      });
+
+      const external = new URL((yield* Site).url("/next"));
+
+      external.hostname = "localhost";
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<body style="margin:0;height:3000px"><a href="' +
+            external.href +
+            '">Docs</a><button style="position:absolute;left:540px;top:330px;width:200px;height:60px">Delete</button></body>',
+        ),
+      );
+      const snapshot = yield* page.snapshot();
+
+      yield* page.hover(refOf(snapshot, "link", "Docs"));
+      yield* page.scroll({ at: refOf(snapshot, "button", "Delete"), dy: 100 });
+
+      assert.deepStrictEqual(
+        requests.map((request) => [request.action, request.classifications, request.destination]),
+        [
+          ["hover", [], undefined],
+          ["scroll", [], undefined],
+        ],
+      );
+    }),
+  );
+
   it.effect("consults one policy for every supported input and navigation", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
