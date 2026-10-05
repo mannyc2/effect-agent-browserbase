@@ -106,6 +106,8 @@ export interface TypeOptions {
   readonly replace?: boolean | undefined;
   /** Press Enter afterwards. */
   readonly submit?: boolean | undefined;
+  /** Allow corrected slips when replacing an explicit eligible prose ref while humanized. Sensitive fields stay exact. */
+  readonly prose?: boolean | undefined;
 }
 
 export interface PressOptions {
@@ -522,8 +524,15 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   interface Approval {
     readonly contextId: number;
-    readonly targets: ReadonlyArray<ResolvedTarget | null>;
+    readonly targets: ReadonlyArray<Script.InspectedTarget | null>;
+    readonly check: (focused?: boolean) => Effect.Effect<void, BrowserError>;
     readonly navigate?: Effect.Effect<void, BrowserError> | undefined;
+  }
+
+  interface InputMarks {
+    readonly sent: Effect.Effect<void>;
+    readonly at: (point: Point) => Effect.Effect<void>;
+    readonly input: Input.Run;
   }
 
   interface PolicyPlan {
@@ -538,14 +547,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     info: { readonly target?: string | undefined; readonly text?: string | undefined },
     timeout: Duration.Duration,
     prepare: Effect.Effect<PolicyPlan, BrowserError>,
-    body: (
-      marks: {
-        readonly sent: Effect.Effect<void>;
-        readonly at: (point: Point) => Effect.Effect<void>;
-        readonly input: Input.Run;
-      },
-      approval: Approval | undefined,
-    ) => Effect.Effect<A, BrowserError>,
+    body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
   ): Effect.Effect<A, BrowserError> =>
     Effect.gen(function* () {
       const startedAt = now();
@@ -601,12 +603,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const guard = settings.guard;
 
       const run =
-        guard === undefined
+        guard === undefined && !settings.humanize
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
               const plan = yield* lock.withPermits(1)(bounded(prepare, settings.actionTimeout));
 
-              yield* guard(plan.request).pipe(
+              yield* (guard === undefined ? Effect.void : guard(plan.request)).pipe(
                 Effect.mapError(
                   (reason) => new BrowserError({ operation: name, reason, dispatched: false }),
                 ),
@@ -674,11 +676,36 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
 
-  const resolve = (operation: string, target: Target) => {
+  const readPoint = (
+    operation: string,
+    target: Target,
+    approval: Approval | undefined,
+    scroll: boolean,
+  ) =>
+    (approval === undefined
+      ? evaluate(operation, scriptCall("point", target, scroll))
+      : mutate(operation, scriptCall("point", target, scroll), approval)
+    ).pipe(Effect.flatMap(decodeWith(operation, Script.PointResultSchema)));
+
+  const pointFailure = (
+    operation: string,
+    target: Target,
+    result: Extract<Script.PointResult, { readonly error: string }>,
+  ) =>
+    failWith(
+      operation,
+      result.error === "stale" && typeof target === "string"
+        ? new StaleRef({ ref: target })
+        : result.error === "outside"
+          ? new InvalidRequest({ detail: result.detail })
+          : new NotActionable({ detail: result.detail }),
+    );
+
+  const resolve = (operation: string, target: Target, approval?: Approval, scroll = true) => {
     if (typeof target === "string" && !/^e\d+$/.test(target))
       return failWith(
         operation,
-        new InvalidRequest({ detail: `"${target}" is not a ref; refs look like e12` }),
+        new InvalidRequest({ detail: target + " is not a ref; refs look like e12" }),
       );
     if (typeof target !== "string" && (!Number.isFinite(target.x) || !Number.isFinite(target.y)))
       return failWith(
@@ -686,18 +713,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         new InvalidRequest({ detail: "point coordinates must be finite" }),
       );
 
-    return evaluate(operation, scriptCall("point", target)).pipe(
-      Effect.flatMap(decodeWith(operation, Script.PointResultSchema)),
+    return readPoint(operation, target, approval, scroll).pipe(
       Effect.flatMap((result) =>
         "error" in result
-          ? failWith(
-              operation,
-              result.error === "stale" && typeof target === "string"
-                ? new StaleRef({ ref: target })
-                : result.error === "outside"
-                  ? new InvalidRequest({ detail: result.detail })
-                  : new NotActionable({ detail: result.detail }),
-            )
+          ? pointFailure(operation, target, result)
           : Effect.succeed(resolvedTarget(result)),
       ),
     );
@@ -782,28 +801,28 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         classifications: prepared.classifications,
       });
 
-      const validate = evaluateIn(
-        action,
-        scriptCall("validateInput", input, prepared),
-        contextId,
-      ).pipe(
-        Effect.catchIf(contextGone, () =>
-          failWith(
-            action,
-            new NotActionable({ detail: "the page changed while input policy was pending" }),
+      const check = (focused = false) =>
+        evaluateIn(action, scriptCall("validateInput", input, prepared, focused), contextId).pipe(
+          Effect.catchIf(contextGone, () =>
+            failWith(
+              action,
+              new NotActionable({ detail: "the page changed while input policy was pending" }),
+            ),
           ),
-        ),
-        Effect.flatMap(decodeWith(action, Script.ValidatedInputResultSchema)),
-        Effect.flatMap((result) =>
-          "error" in result
-            ? failWith(action, new NotActionable({ detail: result.detail }))
-            : Effect.succeed<Approval>({
-                contextId,
-                targets: result.targets.map((value) =>
-                  value === null ? null : resolvedTarget(value),
-                ),
-              }),
-        ),
+          Effect.flatMap(decodeWith(action, Script.ValidatedInputResultSchema)),
+          Effect.flatMap((result) =>
+            "error" in result
+              ? failWith(action, new NotActionable({ detail: result.detail }))
+              : Effect.void,
+          ),
+        );
+
+      const validate = check().pipe(
+        Effect.as<Approval>({
+          contextId,
+          targets: prepared.targets,
+          check,
+        }),
       );
 
       return { request, validate };
@@ -827,22 +846,55 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       ),
     );
 
-  const targetFor = (
+  const targetFor = Effect.fnUntraced(function* (
     operation: string,
     target: Target,
     approval: Approval | undefined,
-    index = 0,
-  ) => {
-    if (approval === undefined) return resolve(operation, target);
-    const ready = approval.targets[index];
+    marks: InputMarks,
+  ) {
+    if (!settings.humanize || typeof target !== "string")
+      return yield* resolve(operation, target, approval);
 
-    return ready === undefined || ready === null
-      ? failWith(
-          operation,
-          new NotActionable({ detail: "the approved target is no longer available" }),
-        )
-      : Effect.succeed(ready);
-  };
+    // Inspection and policy approval happen before this point. Every retry is geometry only;
+    // scrolling never obtains a fresh approval or silently follows a replacement document.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = yield* readPoint(operation, target, approval, false);
+
+      if (!("error" in result)) return resolvedTarget(result);
+      if (result.error !== "offscreen") return yield* pointFailure(operation, target, result);
+
+      const plan = yield* mutate(operation, scriptCall("scrollPlan", target), approval).pipe(
+        Effect.flatMap(decodeWith(operation, Script.ScrollPlanSchema)),
+      );
+
+      if (plan === null) break;
+      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+      const point = { x: plan.x, y: plan.y };
+
+      yield* marks.sent;
+      yield* marks.at(point);
+      yield* moveTo(operation, marks.input, point);
+      yield* wheel(
+        operation,
+        marks.input,
+        point,
+        Math.max(-viewport.width * 0.9, Math.min(viewport.width * 0.9, plan.dx)),
+        Math.max(-viewport.height * 0.9, Math.min(viewport.height * 0.9, plan.dy)),
+      );
+      yield* flush(operation, marks.input);
+      yield* Effect.sleep("150 millis");
+      if (approval !== undefined) yield* approval.check();
+    }
+
+    // Wheels may be prevented or the target may need unsupported nested/frame geometry. One
+    // explicit fallback preserves reachability without a distance-dependent protocol loop.
+    yield* marks.sent;
+    yield* resolve(operation, target, approval);
+    yield* Effect.sleep("150 millis");
+    if (approval !== undefined) yield* approval.check();
+
+    return yield* resolve(operation, target, approval, false);
+  });
 
   const moveTo = (
     operation: string,
@@ -928,13 +980,42 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
     });
 
+  const wheel = Effect.fnUntraced(function* (
+    operation: string,
+    run: Input.Run,
+    point: Point,
+    dx: number,
+    dy: number,
+  ) {
+    const steps = settings.humanize
+      ? Math.max(1, Math.min(8, Math.round(Math.hypot(dx, dy) / 120)))
+      : 1;
+
+    for (let index = 0; index < steps; index++) {
+      if (index > 0) yield* Effect.sleep(Duration.millis(yield* Human.pause("scroll")));
+      yield* sendMouse(operation, run, {
+        type: "mouseWheel",
+        ...point,
+        deltaX: dx / steps,
+        deltaY: dy / steps,
+      });
+    }
+  });
+
+  const presentationPause = (kind: "action" | "focus") =>
+    settings.humanize
+      ? Human.pause(kind).pipe(Effect.flatMap((millis) => Effect.sleep(Duration.millis(millis))))
+      : Effect.void;
+
   // Give a navigation the input started a moment to begin, then wait for its document.
+  // Presentation randomness supplements this floor; it can never shorten readiness.
   const settle = Effect.sleep(Duration.millis(settings.humanize ? 250 : 120)).pipe(
     Effect.andThen(
       Effect.tryPromise(() =>
         playwright.waitForLoadState("domcontentloaded", { timeout: 5_000 }),
       ).pipe(Effect.ignore),
     ),
+    Effect.andThen(presentationPause("action")),
   );
 
   const click = (target: Target, clickOptions: ClickOptions = {}) =>
@@ -956,7 +1037,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               "click",
               new InvalidRequest({ detail: "clickCount must be finite" }),
             );
-          const resolved = yield* targetFor("click", target, approval);
+          const resolved = yield* targetFor("click", target, approval, marks);
           const { point } = resolved;
           const button = clickOptions.button ?? "left";
           const count = Math.max(1, Math.min(3, clickOptions.clickCount ?? 1));
@@ -964,6 +1045,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           yield* marks.at(point);
           yield* marks.sent;
           yield* moveTo("click", marks.input, point, resolved.cursor);
+          if (approval !== undefined) yield* approval.check();
           for (let index = 1; index <= count; index++) {
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
@@ -1000,7 +1082,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       preparePolicy("hover", { target: typeof target === "string" ? target : undefined }, [target]),
       (marks, approval) =>
         Effect.gen(function* () {
-          const resolved = yield* targetFor("hover", target, approval);
+          const resolved = yield* targetFor("hover", target, approval, marks);
           const { point } = resolved;
 
           yield* marks.at(point);
@@ -1018,12 +1100,17 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       preparePolicy("drag", {}, [from, to]),
       (marks, approval) =>
         Effect.gen(function* () {
-          const start = yield* targetFor("drag", from, approval);
-          const end = yield* targetFor("drag", to, approval, 1);
+          yield* targetFor("drag", from, approval, marks);
+          yield* targetFor("drag", to, approval, marks);
+          // Bringing the second endpoint into view may move the first. Both must still be
+          // actionable in the final viewport before the first button press.
+          const start = yield* resolve("drag", from, approval, false);
+          const end = yield* resolve("drag", to, approval, false);
 
           yield* marks.at(end.point);
           yield* marks.sent;
           yield* moveTo("drag", marks.input, start.point, start.cursor);
+          if (approval !== undefined) yield* approval.check();
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
             ...start.point,
@@ -1065,28 +1152,34 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         yield* inputCall(operation, run.up(`playwright:${part}`));
     });
 
-  const typeCharacter = (run: Input.Run, character: string) =>
+  const typeEvent = (
+    run: Input.Run,
+    event: { readonly phase: "down" | "up" | "insert"; readonly key: string },
+  ) =>
     inputCall(
       "type",
       Effect.gen(function* () {
-        const description = Keys.description(character);
-
-        if (description === undefined) {
+        if (event.phase === "insert") {
           yield* run.reserve(1);
           yield* run.send(() => {
-            const event = new TextInserted({ at: now(), page: id, text: character });
-            const response = cdp.send("Input.insertText", { text: character });
+            const track = new TextInserted({ at: now(), page: id, text: event.key });
+            const response = cdp.send("Input.insertText", { text: event.key });
 
-            publish(event);
+            publish(track);
 
             return response;
           });
 
           return;
         }
-        const { key, code, keyCode, text } = description;
-        const held = `raw:${code}`;
 
+        const description = Keys.description(event.key);
+
+        if (description === undefined) return yield* Effect.die("invalid planned key");
+        const { key, code, keyCode, text } = description;
+        const held = "raw:" + code;
+
+        if (event.phase === "up") return yield* run.up(held);
         yield* run.reserve(2);
         yield* run.down(
           held,
@@ -1118,7 +1211,6 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               }),
             ),
         );
-        yield* run.up(held);
       }),
     );
 
@@ -1128,7 +1220,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       { target: typeOptions.into, text },
       Duration.sum(
         settings.actionTimeout,
-        Duration.millis(settings.humanize ? text.length * 160 : 0),
+        Duration.millis(settings.humanize ? Human.typingDuration(text) : 0),
       ),
       preparePolicy("type", { target: typeOptions.into, text }, [typeOptions.into ?? null], {
         submit: typeOptions.submit ?? false,
@@ -1136,6 +1228,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       (marks, approval) =>
         Effect.gen(function* () {
           const replace = typeOptions.replace ?? true;
+          let corrected = false;
 
           if (typeOptions.into !== undefined) {
             const ref = typeOptions.into;
@@ -1145,7 +1238,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 "type",
                 new InvalidRequest({ detail: `"${ref}" is not a ref; refs look like e12` }),
               );
-            const target = yield* targetFor("type", ref, approval);
+            const target = yield* targetFor("type", ref, approval, marks);
 
             yield* marks.at(target.point);
             if (settings.humanize) {
@@ -1178,25 +1271,57 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             if ("error" in focused)
               return yield* failWith("type", new NotActionable({ detail: focused.error }));
           }
+          yield* presentationPause("focus");
+          if (approval !== undefined) yield* approval.check(true);
           yield* marks.sent;
           if (text === "" && replace && typeOptions.into !== undefined)
             yield* keyStroke("type", marks.input, ["Delete"]);
           else {
-            // Absolute deadlines keep reply latency and small scheduling delays out of the
-            // intended cadence. Only the bounded sender can apply backpressure.
-            let due = now();
+            // Separate down/up deadlines permit overlapping holds without adding one hold to
+            // every inter-key gap. The same bounded run owns all releases and interruptions.
+            if (settings.humanize) {
+              const prose =
+                typeOptions.prose === true &&
+                typeOptions.into !== undefined &&
+                replace &&
+                approval?.targets[0]?.prose === true &&
+                !/\d|@|[a-z][a-z\d+.-]*:\/\/|\bwww\.|\b[a-z\d-]+\.[a-z]{2,}\b/i.test(text);
 
-            for (const character of text) {
-              yield* typeCharacter(marks.input, character);
-              if (settings.humanize) {
-                due += yield* Human.keyDelay;
-                yield* Effect.sleep(Duration.millis(Math.max(0, due - now())));
+              const plan = yield* Human.typing(text, { prose });
+
+              corrected = plan.events.some((event) => event.key === "Backspace");
+              const started = now();
+
+              for (const event of plan.events) {
+                yield* Effect.sleep(
+                  Duration.millis(Math.max(0, started + event.afterMillis - now())),
+                );
+                yield* typeEvent(marks.input, event);
+              }
+            } else {
+              for (const character of text) {
+                if (Keys.description(character) === undefined)
+                  yield* typeEvent(marks.input, { phase: "insert", key: character });
+                else {
+                  yield* typeEvent(marks.input, { phase: "down", key: character });
+                  yield* typeEvent(marks.input, { phase: "up", key: character });
+                }
               }
             }
           }
           // Public Playwright keys preserve platform editing commands. Drain the raw text
           // session before Enter uses Playwright's session, so submit cannot overtake typing.
           yield* flush("type", marks.input);
+          if (corrected && typeOptions.into !== undefined) {
+            const checked = yield* mutate(
+              "type",
+              scriptCall("checkText", typeOptions.into, text),
+              approval,
+            ).pipe(Effect.flatMap(decodeWith("type", Script.EditResultSchema)));
+
+            if ("error" in checked)
+              return yield* failWith("type", new NotActionable({ detail: checked.error }));
+          }
           if (typeOptions.submit === true) {
             yield* keyStroke("type", marks.input, ["Enter"]);
             yield* flush("type", marks.input);
@@ -1301,7 +1426,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             const resolved =
               approval === undefined && scrollOptions.at === undefined
                 ? undefined
-                : yield* targetFor("scroll", target, approval);
+                : yield* targetFor("scroll", target, approval, marks);
 
             const point = resolved?.point ?? middle;
 
@@ -1309,21 +1434,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* marks.sent;
             yield* moveTo("scroll", marks.input, point, resolved?.cursor);
 
-            const steps = settings.humanize
-              ? Math.max(1, Math.min(8, Math.round(Math.hypot(dx, dy) / 120)))
-              : 1;
-
-            for (let index = 0; index < steps; index++) {
-              if (index > 0) yield* Effect.sleep(Duration.millis(40));
-              yield* sendMouse("scroll", marks.input, {
-                type: "mouseWheel",
-                ...point,
-                deltaX: dx / steps,
-                deltaY: dy / steps,
-              });
-            }
+            yield* wheel("scroll", marks.input, point, dx, dy);
             yield* flush("scroll", marks.input);
             yield* Effect.sleep(Duration.millis(150));
+            yield* presentationPause("action");
           }),
       );
     });
@@ -1336,7 +1450,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
       (marks, approval) =>
         Effect.gen(function* () {
-          yield* targetFor("select", ref, approval);
+          yield* targetFor("select", ref, approval, marks);
 
           yield* marks.sent;
 

@@ -273,7 +273,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(moves.length, expectedMoves);
           const cursors = events.filter((event) => event._tag === "CursorChanged");
 
-          assert.strictEqual(cursors.length, cursorCount);
+          // Humanized scroll now inspects the wheel origin, so it can report the actual
+          // center hit's cursor instead of carrying the previous button's crosshair forward.
+          assert.deepStrictEqual(
+            cursors.slice(cursorCount).map(({ page, cursor }) => ({ page, cursor })),
+            [{ page: first.id, cursor: "auto" }],
+          );
           assert.isTrue(
             cursors.some((event) => event.page === first.id && event.cursor === "crosshair"),
           );

@@ -11,6 +11,7 @@ import * as Page from "../src/Page.ts";
 interface RecordedKey {
   readonly type: string;
   readonly key: string;
+  readonly code: string;
   readonly at: number;
   readonly trusted: boolean;
   readonly shift: boolean;
@@ -75,6 +76,7 @@ const setup = Effect.fnUntraced(function* (
           recorded.inputEvents.push({
             type: event.type,
             key: event.key,
+            code: event.code,
             at: event.timeStamp,
             trusted: event.isTrusted,
             shift: event.shiftKey,
@@ -191,7 +193,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       Effect.gen(function* () {
         const intervals: Array<number> = [];
         const traces: Array<ReadonlyArray<Dispatch>> = [];
-        const text = "Az09!? hello";
+        const text = "Az09!? letter and cool blue sky";
 
         for (const oneWayMillis of [35, 160]) {
           const relay = yield* setup(oneWayMillis);
@@ -210,20 +212,62 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             downs.map((event) => event.key),
             [...text],
           );
-          assert.deepStrictEqual(
-            ups.map((event) => event.key),
-            [...text],
+          assert.deepStrictEqual(ups.map((event) => event.key).toSorted(), [...text].toSorted());
+          const held = new Set<string>();
+
+          const holds = downs.map((down) => {
+            const up = events.find(
+              (event) => event.type === "keyup" && event.code === down.code && event.at > down.at,
+            );
+
+            if (up === undefined) throw new Error("a typed key was never released");
+
+            return up.at - down.at;
+          });
+
+          for (const event of events) {
+            if (event.type === "keydown") {
+              assert.isFalse(
+                held.has(event.code),
+                "a repeated physical key must be released first",
+              );
+              held.add(event.code);
+            } else assert.isTrue(held.delete(event.code), "every release belongs to one press");
+          }
+          assert.isEmpty(held);
+          const meanHold = holds.reduce((sum, hold) => sum + hold, 0) / holds.length;
+
+          assert.isAbove(meanHold, 75);
+          assert.isBelow(meanHold, 165);
+          assert.isTrue(
+            downs.some((down, index) => {
+              const next = downs[index + 1];
+
+              return (
+                next !== undefined &&
+                next.code !== down.code &&
+                next.at < down.at + (holds[index] ?? 0)
+              );
+            }),
+            "different keys can overlap without waiting for their replies",
           );
           assert.isTrue(events.every((event) => event.trusted));
           assert.strictEqual(raw.length, text.length * 2);
-          assert.strictEqual(relay.dispatches.length, raw.length);
+          assert.strictEqual(
+            relay.dispatches.filter((dispatch) => dispatch.method.startsWith("Input.")).length,
+            raw.length,
+          );
+          assert.isAtMost(
+            relay.dispatches.filter((dispatch) => dispatch.method === "Runtime.evaluate").length,
+            3,
+          );
           assert.isAtMost(relay.maximumOutstanding(), 64);
 
           const gaps = downs.slice(1).map((event, index) => event.at - (downs[index]?.at ?? 0));
           const average = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
 
-          assert.isAbove(average, 30);
-          assert.isBelow(average, 190);
+          assert.isAbove(average, 110);
+          assert.isBelow(average, 235);
           intervals.push(average);
           traces.push(raw);
 
@@ -310,10 +354,16 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           assert.strictEqual(relay.maximumOutstanding(), 64);
           const interrupted = yield* Fiber.interrupt(typing).pipe(Effect.forkChild);
           const later = yield* relay.page.type("z").pipe(Effect.forkChild);
-          const before = relay.dispatches.length;
+
+          const before = relay.dispatches.filter((dispatch) =>
+            dispatch.method.startsWith("Input."),
+          ).length;
 
           yield* Effect.sleep("150 millis");
-          assert.strictEqual(relay.dispatches.length, before);
+          assert.strictEqual(
+            relay.dispatches.filter((dispatch) => dispatch.method.startsWith("Input.")).length,
+            before,
+          );
           relay.releaseReplies();
           yield* Fiber.join(interrupted);
           yield* Fiber.join(later);
@@ -360,6 +410,40 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.strictEqual(downs.length, 2);
         assert.isBelow(downs[1]?.sent ?? Infinity, downs[0]?.settled ?? 0);
+      }),
+    );
+
+    it.effect("releases every scheduled text key once when typing is interrupted", () =>
+      Effect.gen(function* () {
+        const relay = yield* setup(160);
+
+        const typing = yield* relay.page
+          .type("the quick brown fox")
+          .pipe(Random.withSeed("typing-cleanup"), Effect.forkChild);
+
+        yield* Effect.promise(() =>
+          relay.page.playwright.waitForFunction(() =>
+            (window as unknown as RecordedWindow).inputEvents.some(
+              (event) => event.type === "keydown",
+            ),
+          ),
+        );
+        yield* Fiber.interrupt(typing);
+        yield* relay.page.type("z");
+        const observed = yield* keys(relay.page);
+        const held = new Set<string>();
+
+        for (const event of observed) {
+          if (event.type === "keydown") {
+            assert.isFalse(held.has(event.code));
+            held.add(event.code);
+          } else assert.isTrue(held.delete(event.code));
+        }
+        assert.isEmpty(held);
+        assert.strictEqual(observed.at(-2)?.key, "z");
+        assert.strictEqual(observed.at(-1)?.key, "z");
+        assert.isFalse(observed.at(-2)?.shift);
+        assert.isFalse(observed.at(-2)?.control);
       }),
     );
 
