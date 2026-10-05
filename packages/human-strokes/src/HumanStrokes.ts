@@ -4,6 +4,7 @@
 import { readFile } from "node:fs/promises";
 
 import { Effect, Layer, Random, Result } from "effect";
+import type { Browser } from "effect-browser/Browser";
 import * as Motion from "effect-browser/Motion";
 
 import { DataError, index, inflate, retarget, select } from "./internal/strokes.ts";
@@ -39,5 +40,17 @@ const load = Effect.gen(function* () {
   return { plan } satisfies Motion.Service;
 });
 
-/** Replace pointer planning while constructing the browser; loading has no network or path options. */
+/**
+ * Replace pointer planning while constructing the browser; loading has no network or path options.
+ * A browser reads its planner once, when built, so this layer must be provided to the layer that
+ * builds the browser. Merged beside it, the browser silently keeps the default planner.
+ */
 export const layer: Layer.Layer<never, DataError> = Layer.effect(Motion.Motion, load);
+
+/**
+ * Give a browser layer recorded strokes: `HumanStrokes.provideTo(Chromium.layer(options))`.
+ * Only a layer that builds the `Browser` is accepted, the one place the planner is read.
+ */
+export const provideTo = <A, E, R>(
+  browser: Layer.Layer<A, E, R> & (Browser extends A ? unknown : "a layer that builds a Browser"),
+): Layer.Layer<A, E | DataError, R> => Layer.provide(browser, layer);

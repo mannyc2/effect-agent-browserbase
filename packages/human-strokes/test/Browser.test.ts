@@ -1,12 +1,12 @@
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Layer, Random } from "effect";
+import { Duration, Effect, Random } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import * as Motion from "effect-browser/Motion";
 
 import * as HumanStrokes from "../src/index.ts";
 
-const browserLayer = Chromium.layer({ humanize: true }).pipe(Layer.provide(HumanStrokes.layer));
+const browserLayer = HumanStrokes.provideTo(Chromium.layer({ humanize: true }));
 
 layer(browserLayer, { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "human-stroke browser integration",

@@ -93,15 +93,17 @@ the endpoint; invalid plans fail with `InvalidRequest` before their track or inp
 Equal-time samples are retained. Plain pointer movement does not use the service.
 
 For recorded human strokes, install the optional `effect-browser-human-strokes` package and
-provide its ready-made layer:
+provide it to the layer that builds the browser:
 
 ```ts
-import { Layer } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import * as HumanStrokes from "effect-browser-human-strokes";
 
-const browser = Chromium.layer({ humanize: true }).pipe(Layer.provide(HumanStrokes.layer));
+const browser = HumanStrokes.provideTo(Chromium.layer({ humanize: true }));
 ```
+
+Because the planner is read once, at construction, merging `HumanStrokes.layer` beside a browser
+layer instead of providing it to that layer leaves the default planner in place.
 
 That package bundles 32,130 attributed CC BY 4.0 strokes, preserving their original sample times.
 The core package includes no stroke data. Every glide reserves its full bounded schedule before
