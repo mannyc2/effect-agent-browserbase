@@ -384,10 +384,13 @@ describe("understanding evidence", () => {
       const image = pictures(prompt).at(-1);
       const final = history.findLast((frame) => isDeepStrictEqual(frame.data, image?.data));
 
-      if (final === undefined)
-        throw new Error("the final description image is not a captured frame");
       assert.isTrue(history.some((frame) => paintTime(frame) < frameAfter));
-      assert.isAtLeast(paintTime(final), frameAfter);
+      // Delayed delivery can also lose the settling repaint. Either a retained paint after the
+      // barrier is final, or, with none retained, a fresh screenshot taken after the barrier is.
+      if (final === undefined) {
+        assert.include(outcome.detail, "final frame from a fresh screenshot");
+        assert.isTrue(history.every((frame) => paintTime(frame) < frameAfter));
+      } else assert.isAtLeast(paintTime(final), frameAfter);
     }),
   );
 
