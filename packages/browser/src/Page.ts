@@ -2,13 +2,13 @@
  * One browser tab: navigation, snapshots, pictures and input.
  *
  * Input dispatch is serialized across the browser's pages; navigation is serialized only with
- * its own page. A page waits for its own unresolved input replies before joining that queue, and
- * an action's timeout bounds its wait for the locks before a full timeout bounds the action
- * itself. A policy holds outside the input locks while other actions continue; its target is
- * revalidated before dispatch. Element targets are refs from a snapshot; point targets are
- * viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels. Mouse and
- * keyboard input share a bounded pipeline, so pacing does not wait for each protocol reply.
- * Target lookup happens before the input is sent.
+ * its own page. An action waits for its own page (other operations, unresolved input replies)
+ * before joining the browser-wide queue, and its timeout bounds those waits before a full timeout
+ * bounds the action itself. A policy holds outside the input locks while other actions continue;
+ * its target is revalidated before dispatch. Element targets are refs from a snapshot; point
+ * targets are viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels.
+ * Mouse and keyboard input share a bounded pipeline, so pacing does not wait for each protocol
+ * reply. Target lookup happens before the input is sent.
  *
  * @since 0.3.0
  */
@@ -757,8 +757,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
 
       // Admission waits only on this page: its own unresolved replies and, before the browser's
-      // first input, its clock mapping. Neither holds the browser-wide input lock, so a stalled
-      // page cannot delay input on other pages. The run re-checks the replies under the locks.
+      // first input, its clock mapping. It runs under the page lock but before the browser-wide
+      // input lock, so a stalled page cannot delay input on other pages. The run re-checks the
+      // replies under both locks.
       let estimate: BrowserClock.Estimate | undefined;
 
       const admit = input.idle.pipe(
@@ -808,13 +809,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       // Admission and lock waits end at the action's deadline, undispatched. Holding the locks
       // starts a full deadline of its own, so contention never truncates input under way.
+      // Locks are always taken page first, then browser-wide, and the browser-wide one is never
+      // held while waiting for anything on one page: its navigation, zoom, replies or clock.
       const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
         Effect.gen(function* () {
           const held = yield* Deferred.make<void>();
 
-          const locked = Deferred.succeed(held, undefined).pipe(
+          const acquired = Deferred.succeed(held, undefined).pipe(
             Effect.andThen(bounded(action, timeout)),
-            lock.withPermits(1),
           );
 
           const deadline = Effect.sleep(timeout).pipe(
@@ -823,7 +825,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           );
 
           return yield* Effect.raceFirst(
-            admit.pipe(Effect.andThen(sendsInput ? inputLock.withPermits(1)(locked) : locked)),
+            admit.pipe(
+              Effect.andThen(sendsInput ? inputLock.withPermits(1)(acquired) : acquired),
+              lock.withPermits(1),
+            ),
             deadline,
           );
         });
