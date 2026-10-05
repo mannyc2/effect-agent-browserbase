@@ -211,6 +211,11 @@ export interface Page {
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
+  /** The viewport's size in CSS pixels, the space of points, crops and page scrolls. */
+  readonly viewport: Effect.Effect<
+    { readonly width: number; readonly height: number },
+    BrowserError
+  >;
   /** An outline, a picture, or both (the default), taken together. */
   readonly observe: (options?: {
     readonly mode?: ObservationMode;
@@ -675,6 +680,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         ),
       );
 
+  // Playwright knows the viewport only of a context it created; over CDP it reports none, so the
+  // page answers. Pointer bounds, page scrolls and crops all read this one source.
+  const viewportFor = (operation: string) =>
+    Effect.suspend(() => {
+      const known = playwright.viewportSize();
+
+      return known === null
+        ? evaluate(operation, scriptCall("viewport")).pipe(
+            Effect.flatMap(decodeWith(operation, Script.ViewportResultSchema)),
+          )
+        : Effect.succeed(known);
+    });
+
   interface Approval {
     readonly contextId: number;
     readonly check: (options?: Script.ValidationOptions) => Effect.Effect<void, BrowserError>;
@@ -1096,7 +1114,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
 
       if (plan === null) break;
-      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+      const viewport = yield* viewportFor(operation);
       const point = { x: plan.x, y: plan.y };
 
       yield* marks.at(point);
@@ -1131,7 +1149,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     dragging = false,
   ) =>
     Effect.gen(function* () {
-      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+      const viewport = yield* viewportFor(operation);
 
       const previous = Option.getOrElse(yield* Ref.get(pointer), () => ({
         x: Math.round(viewport.width / 2),
@@ -1671,8 +1689,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     );
 
   const scroll = (scrollOptions: ScrollOptions = {}) =>
-    Effect.suspend(() => {
-      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+    Effect.gen(function* () {
+      const viewport = yield* viewportFor("scroll");
 
       const middle = {
         x: Math.round(viewport.width / 2),
@@ -1692,7 +1710,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ? Effect.void
           : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
 
-      return perform(
+      return yield* perform(
         "scroll",
         {
           target:
@@ -1969,11 +1987,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             ),
           );
 
-          const viewport =
-            playwright.viewportSize() ??
-            (yield* evaluate("zoom", scriptCall("viewport")).pipe(
-              Effect.flatMap(decodeWith("zoom", Script.ViewportResultSchema)),
-            ));
+          const viewport = yield* viewportFor("zoom");
 
           if (
             region.x + region.width > viewport.width ||
@@ -2090,6 +2104,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     snapshot,
     screenshot,
     zoom,
+    viewport: viewportFor("viewport"),
     observe,
     hasText,
     click,
