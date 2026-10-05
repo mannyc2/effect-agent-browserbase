@@ -102,6 +102,36 @@ describe("understanding comparison", () => {
         other.pairs.map((pair) => pair.order),
         plan.pairs.map((pair) => pair.order),
       );
+
+      // The default 20 dense pairs and 10 controls are not multiples of six: the manifest reports
+      // the realized positions rather than claiming balance.
+      for (const group of plan.orderBalance) {
+        const pairs = plan.pairs.filter((pair) => pair.task === group.task);
+
+        assert.strictEqual(group.pairs, pairs.length);
+        assert.strictEqual(group.completeBlocks, Math.floor(pairs.length / 6));
+        for (const arm of ["A", "B", "facts"] as const)
+          assert.deepStrictEqual(
+            group.positions[arm],
+            [0, 1, 2].map(
+              (position) => pairs.filter((pair) => pair.order[position] === arm).length,
+            ),
+          );
+      }
+      assert.deepStrictEqual(
+        plan.orderBalance.map((group) => group.completeBlocks),
+        [3, 1],
+      );
+
+      const whole = manifest({ ...settings, hardTrials: 12, controlTrials: 6 }, "fixed");
+
+      for (const group of whole.orderBalance)
+        for (const arm of ["A", "B", "facts"] as const)
+          assert.deepStrictEqual(group.positions[arm], [
+            group.pairs / 3,
+            group.pairs / 3,
+            group.pairs / 3,
+          ]);
       assert.strictEqual(plan.mode, "dry-run");
       assert.include(plan.interpretation, "do not measure model accuracy");
     }),

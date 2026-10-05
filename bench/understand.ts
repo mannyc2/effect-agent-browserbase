@@ -144,7 +144,7 @@ export interface Pair {
   readonly order: ReadonlyArray<Quote.Arm>;
 }
 
-const orders: ReadonlyArray<ReadonlyArray<Quote.Arm>> = [
+const permutations: ReadonlyArray<ReadonlyArray<Quote.Arm>> = [
   ["A", "B", "facts"],
   ["A", "facts", "B"],
   ["B", "A", "facts"],
@@ -154,12 +154,13 @@ const orders: ReadonlyArray<ReadonlyArray<Quote.Arm>> = [
 ];
 
 /**
- * Counterbalanced: each six consecutive pairs of a task use every order once, so each arm runs
- * first, second and third equally often. The base seed rotates the sequence; worker scheduling
- * and provider draws never change it.
+ * Counterbalanced: each complete block of six consecutive pairs of a task uses every order once,
+ * so within it each arm runs first, second and third equally often. The base seed rotates the
+ * sequence; worker scheduling and provider draws never change it.
  */
 const armOrder = (base: number, task: string, index: number): ReadonlyArray<Quote.Arm> =>
-  orders[(index + (trialSeed(base, task, 0) % orders.length)) % orders.length] ?? arms;
+  permutations[(index + (trialSeed(base, task, 0) % permutations.length)) % permutations.length] ??
+  arms;
 
 const prerequisitesForConsideringFacts = {
   baselineMustReproduceBindingMistakes: true,
@@ -172,29 +173,8 @@ const prerequisitesForConsideringFacts = {
     "Pre-registered targets only. Small samples do not establish five-point noninferiority; no automatic API decision.",
 };
 
-export const manifest = (configuration: Options, createdAt: string) => ({
-  version: 1,
-  createdAt,
-  mode: configuration.model === undefined ? ("dry-run" as const) : ("paid" as const),
-  interpretation:
-    configuration.model === undefined
-      ? "Scripted adapter validation only; these results do not measure model accuracy."
-      : "Paired observations; no automatic conclusion about adding a public facts API.",
-  model: configuration.model ?? null,
-  reasoning: "none" as const,
-  browser: "local-chromium" as const,
-  configuration,
-  arms: {
-    A: "Shipping Moment",
-    B: "640x360 JPEG plus first 4000 UTF-8 visible-text bytes",
-    facts:
-      "Identical Moment plus conclusions from every visible quote table, keyed by caption, asset and header",
-  },
-  baselineResize: "chromium-canvas-high",
-  requestTimeoutMillis: 600_000,
-  captureTimeoutMillis: 30_000,
-  prerequisitesForConsideringFacts,
-  pairs: [
+export const manifest = (configuration: Options, createdAt: string) => {
+  const pairs = [
     ...Array.from({ length: configuration.hardTrials }, (_, index): Pair => {
       const seed = trialSeed(configuration.seed, "quote-dense", index + 1);
 
@@ -217,8 +197,55 @@ export const manifest = (configuration: Options, createdAt: string) => ({
         order: armOrder(configuration.seed, "quote-table", index),
       };
     }),
-  ],
-});
+  ];
+
+  return {
+    version: 1,
+    createdAt,
+    mode: configuration.model === undefined ? ("dry-run" as const) : ("paid" as const),
+    interpretation:
+      configuration.model === undefined
+        ? "Scripted adapter validation only; these results do not measure model accuracy."
+        : "Paired observations; no automatic conclusion about adding a public facts API.",
+    model: configuration.model ?? null,
+    reasoning: "none" as const,
+    browser: "local-chromium" as const,
+    configuration,
+    arms: {
+      A: "Shipping Moment",
+      B: "640x360 JPEG plus first 4000 UTF-8 visible-text bytes",
+      facts:
+        "Identical Moment plus conclusions from every visible quote table, keyed by caption, asset and header",
+    },
+    baselineResize: "chromium-canvas-high",
+    requestTimeoutMillis: 600_000,
+    captureTimeoutMillis: 30_000,
+    prerequisitesForConsideringFacts,
+    orderBalance: orderBalance(pairs),
+    pairs,
+  };
+};
+
+/**
+ * How often each arm runs at each position, per task. Only complete blocks of six pairs are
+ * balanced; a task whose pair count is not a multiple of six has an unbalanced remainder.
+ */
+const orderBalance = (pairs: ReadonlyArray<Pair>) =>
+  (["quote-dense", "quote-table"] as const).map((task) => {
+    const orders = pairs.filter((pair) => pair.task === task).map((pair) => pair.order);
+
+    return {
+      task,
+      pairs: orders.length,
+      completeBlocks: Math.floor(orders.length / permutations.length),
+      positions: Object.fromEntries(
+        arms.map((arm) => [
+          arm,
+          [0, 1, 2].map((position) => orders.filter((order) => order[position] === arm).length),
+        ]),
+      ),
+    };
+  });
 
 export type Manifest = ReturnType<typeof manifest>;
 
@@ -650,6 +677,7 @@ export const summarize = (plan: Manifest, records: ReadonlyArray<Record>) => {
     arms: summarizeArms(records, plan.pairs.length),
     paired: summarizePairs(plan.pairs, records),
     byTask: tasks,
+    orderBalance: plan.orderBalance,
     prerequisitesForConsideringFacts: prerequisites(
       plan,
       tasks.find((group) => group.task === "quote-dense"),

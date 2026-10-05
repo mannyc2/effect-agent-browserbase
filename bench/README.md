@@ -170,9 +170,11 @@ bit-for-bit equivalence with the research prototype's Lanczos filter.
 
 The manifest records the source revision and the pinned endpoint before any call. The default
 manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
-90 calls in a paid run. Arm order is counterbalanced: every six consecutive pairs of a task use
-each of the six orders once, so each arm runs first, second and third equally often, and each
-record notes its arm's position. Cases run concurrently, with
+90 calls in a paid run. Arm order is counterbalanced: every complete block of six consecutive pairs
+of a task uses each of the six orders once, so within those blocks each arm runs first, second and
+third equally often. The default 20 dense pairs and 10 controls are not multiples of six, so their
+last partial block is not balanced; the manifest and summary report the realized count of each arm
+at each position per task, and each record notes its arm's position. Cases run concurrently, with
 one browser per case and the same captured evidence for its arms. A shared admission ledger bounds
 all model calls. An infrastructure failure or an unresolved charge stops new admissions; already
 dispatched requests still settle, and every unrun arm receives a record. A graded answer, including
