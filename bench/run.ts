@@ -104,7 +104,7 @@ const listedRates = (model: string) =>
       const pricing = data.find((listed) => listed.id === model)?.pricing;
 
       return pricing === undefined
-        ? refuse(`OpenRouter lists no price for ${model}: pass --rates`)
+        ? refuse(`found no OpenRouter price for ${model}: pass --rates`)
         : Effect.succeed<Rates>({
             input: pricing.prompt,
             cachedInput: pricing.input_cache_read ?? pricing.prompt,
