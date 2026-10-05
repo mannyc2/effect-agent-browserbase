@@ -201,7 +201,9 @@ submission, including cleanup releases. Cursor shape comes from resolved target 
 narrative timeline. Compositing remains the consumer’s job.
 
 The pointer starts at the first active viewport’s center and belongs to the browser across tabs.
-Input actions share ownership of it; a policy hold still leaves that ownership free. Every sent
+Input actions share ownership of it, one at a time across tabs; navigation and a policy hold leave
+that ownership free. A page with unresolved input replies waits for them before queueing, and an
+action's timeout bounds its wait for that queue before a full timeout bounds the action. Every sent
 move updates the position, including a partially cancelled glide. A later viewport clamps the
 starting point to its bounds if necessary.
 

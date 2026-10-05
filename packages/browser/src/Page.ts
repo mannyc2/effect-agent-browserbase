@@ -1,11 +1,14 @@
 /**
  * One browser tab: navigation, snapshots, pictures and input.
  *
- * Input dispatch is serialized across the browser's pages. A policy holds outside the input
- * locks while other actions continue; its target is revalidated before dispatch. Element targets are refs from
- * a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
- * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not
- * wait for each protocol reply. Target lookup happens before the input is sent.
+ * Input dispatch is serialized across the browser's pages; navigation is serialized only with
+ * its own page. A page waits for its own unresolved input replies before joining that queue, and
+ * an action's timeout bounds its wait for the locks before a full timeout bounds the action
+ * itself. A policy holds outside the input locks while other actions continue; its target is
+ * revalidated before dispatch. Element targets are refs from a snapshot; point targets are
+ * viewport coordinates in CSS pixels, the same coordinates as a screenshot's pixels. Mouse and
+ * keyboard input share a bounded pipeline, so pacing does not wait for each protocol reply.
+ * Target lookup happens before the input is sent.
  *
  * @since 0.3.0
  */
@@ -648,13 +651,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   // while a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
     name: string,
-    info: { readonly target?: string | undefined; readonly text?: string | undefined },
+    info: {
+      readonly target?: string | undefined;
+      readonly text?: string | undefined;
+      /** False for navigation, which sends no input and leaves the browser-wide lock free. */
+      readonly input?: boolean | undefined;
+    },
     timeout: Duration.Duration,
     prepare: Effect.Effect<PolicyPlan, BrowserError>,
     body: (marks: InputMarks, approval: Approval | undefined) => Effect.Effect<A, BrowserError>,
   ): Effect.Effect<A, BrowserError> =>
     Effect.gen(function* () {
       const startedAt = now();
+      const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
 
@@ -663,36 +672,51 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         at: (point: Point) => Ref.set(at, Option.some(point)),
       };
 
-      const bounded = <Value>(
-        effect: Effect.Effect<Value, BrowserError>,
-        duration: Duration.Duration,
-      ) =>
-        effect.pipe(
-          Effect.timeoutOrElse({
-            duration,
-            orElse: () =>
-              Effect.fail(
-                new BrowserError({
-                  operation: name,
-                  reason: new Timeout({ millis: Duration.toMillis(duration) }),
-                  dispatched: false,
-                }),
-              ),
+      const timedOut = (duration: Duration.Duration) =>
+        Effect.fail(
+          new BrowserError({
+            operation: name,
+            reason: new Timeout({ millis: Duration.toMillis(duration) }),
+            dispatched: false,
           }),
         );
 
+      const bounded = <Value>(
+        effect: Effect.Effect<Value, BrowserError>,
+        duration: Duration.Duration,
+      ) => effect.pipe(Effect.timeoutOrElse({ duration, orElse: () => timedOut(duration) }));
+
+      // Admission waits only on this page: its own unresolved replies and, before the browser's
+      // first input, its clock mapping. Neither holds the browser-wide input lock, so a stalled
+      // page cannot delay input on other pages. The run re-checks the replies under the locks.
+      let estimate: BrowserClock.Estimate | undefined;
+
+      const admit = input.idle.pipe(
+        Effect.andThen(
+          sendsInput
+            ? mapping.current(calibrateClock).pipe(
+                Effect.tap((current) =>
+                  Effect.sync(() => {
+                    estimate = current;
+                  }),
+                ),
+                Effect.mapError(
+                  (error) =>
+                    new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
+                ),
+              )
+            : Effect.void,
+        ),
+      );
+
       const useInput = <Value>(action: (run: Input.Run) => Effect.Effect<Value, BrowserError>) =>
-        mapping.current(calibrateClock).pipe(
-          Effect.mapError(
-            (error) =>
-              new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
-          ),
+        input.begin.pipe(
           // A capture can recalibrate while input is running. One run, including delayed cleanup
           // releases, keeps one mapping so epoch stamps cannot jump backwards during a stroke.
-          Effect.flatMap((estimate) =>
-            input.begin.pipe(
-              Effect.tap((run) => Effect.sync(() => inputClocks.set(run, estimate))),
-            ),
+          Effect.tap((run) =>
+            Effect.sync(() => {
+              if (estimate !== undefined) inputClocks.set(run, estimate);
+            }),
           ),
           Effect.flatMap((run) =>
             action(run).pipe(
@@ -712,8 +736,27 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ),
         );
 
+      // Admission and lock waits end at the action's deadline, undispatched. Holding the locks
+      // starts a full deadline of its own, so contention never truncates input under way.
       const dispatch = <Value>(action: Effect.Effect<Value, BrowserError>) =>
-        inputLock.withPermits(1)(lock.withPermits(1)(bounded(action, timeout)));
+        Effect.gen(function* () {
+          const held = yield* Deferred.make<void>();
+
+          const locked = Deferred.succeed(held, undefined).pipe(
+            Effect.andThen(bounded(action, timeout)),
+            lock.withPermits(1),
+          );
+
+          const deadline = Effect.sleep(timeout).pipe(
+            Effect.andThen(Deferred.isDone(held)),
+            Effect.flatMap((done) => (done ? Effect.never : timedOut(timeout))),
+          );
+
+          return yield* Effect.raceFirst(
+            admit.pipe(Effect.andThen(sendsInput ? inputLock.withPermits(1)(locked) : locked)),
+            deadline,
+          );
+        });
 
       const guard = settings.guard;
 
@@ -721,7 +764,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         guard === undefined && !settings.humanize
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
-              const plan = yield* lock.withPermits(1)(bounded(prepare, settings.actionTimeout));
+              const plan = yield* bounded(lock.withPermits(1)(prepare), settings.actionTimeout);
 
               yield* (guard === undefined ? Effect.void : guard(plan.request)).pipe(
                 Effect.mapError(
@@ -1611,21 +1654,26 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     url: string,
     prepare = preparePolicy(name, { target: url }, [], { destination: url }),
   ) =>
-    perform(name, { target: url }, settings.navigationTimeout, prepare, (marks, approval) =>
-      marks.sent.pipe(
-        Effect.andThen(approval?.navigate ?? native(name, run)),
-        Effect.mapError((error) =>
-          error.reason._tag === "Failed" &&
-          /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
-            ? new BrowserError({
-                operation: name,
-                reason: new NavigationFailed({ url, detail: error.reason.detail }),
-                dispatched: true,
-              })
-            : error,
+    perform(
+      name,
+      { target: url, input: false },
+      settings.navigationTimeout,
+      prepare,
+      (marks, approval) =>
+        marks.sent.pipe(
+          Effect.andThen(approval?.navigate ?? native(name, run)),
+          Effect.mapError((error) =>
+            error.reason._tag === "Failed" &&
+            /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
+              ? new BrowserError({
+                  operation: name,
+                  reason: new NavigationFailed({ url, detail: error.reason.detail }),
+                  dispatched: true,
+                })
+              : error,
+          ),
+          Effect.asVoid,
         ),
-        Effect.asVoid,
-      ),
     );
 
   const prepareBack = Effect.gen(function* () {
@@ -1819,15 +1867,17 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const image = yield* screenshot({ clip: region });
 
           return new Zoom({ page: id, region, image });
-        }).pipe(
-          Effect.timeoutOrElse({
-            duration: settings.actionTimeout,
-            orElse: () =>
-              failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
-          }),
-        ),
+        }),
       )
-      .pipe(owned);
+      .pipe(
+        // Waiting behind another operation on this page counts against the deadline too.
+        Effect.timeoutOrElse({
+          duration: settings.actionTimeout,
+          orElse: () =>
+            failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+        }),
+        owned,
+      );
 
   const observe = (
     observeOptions: {
