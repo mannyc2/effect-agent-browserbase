@@ -68,7 +68,9 @@ export const make = (options: Options) =>
     const replies = new Set<Promise<void>>();
     let generation: Generation | undefined;
     let closed = false;
-    let teardownFailure: BrowserError | undefined;
+    // The latest stop whose reply has not settled. A new capture waits for it rather than
+    // assuming it was lost; it is never submitted again.
+    let unsettledStop: Promise<void> | undefined;
     let latest = Option.none<Frame>();
     let history: ReadonlyArray<Frame> = [];
     let received = 0;
@@ -100,25 +102,25 @@ export const make = (options: Options) =>
       try {
         response = options.cdp.send("Page.stopScreencast");
       } catch (cause) {
-        const failure = options.error(cause);
-
-        teardownFailure ??= failure;
-        notifyFailure(current, failure);
+        notifyFailure(current, options.error(cause));
 
         return;
       }
 
       // Attach both handlers in the callback turn. Even a caller that leaves immediately never
       // abandons a rejected native reply, and an uncertain stop is never submitted twice.
-      current.stopReply = response.then(
+      const reply = response.then(
         () => undefined,
         (cause: unknown) => {
-          const failure = options.error(cause);
-
-          teardownFailure ??= failure;
-          notifyFailure(current, failure);
+          notifyFailure(current, options.error(cause));
         },
       );
+
+      current.stopReply = reply;
+      unsettledStop = reply;
+      void reply.then(() => {
+        if (unsettledStop === reply) unsettledStop = undefined;
+      });
     };
 
     const fail = (current: Generation, failure: BrowserError) => {
@@ -134,6 +136,8 @@ export const make = (options: Options) =>
       }),
     );
 
+    const stopDeadline = () => options.error(new Error("screencast stop exceeded its deadline"));
+
     const awaitStop = (current: Generation) =>
       Effect.suspend(() =>
         current.stopReply === undefined
@@ -142,18 +146,23 @@ export const make = (options: Options) =>
               Effect.interruptible,
               Effect.timeoutOrElse({
                 duration: deadline,
-                orElse: () =>
-                  Effect.sync(() => {
-                    const failure = options.error(
-                      new Error("screencast stop exceeded its deadline"),
-                    );
-
-                    teardownFailure ??= failure;
-                    notifyFailure(current, failure);
-                  }),
+                orElse: () => Effect.sync(() => notifyFailure(current, stopDeadline())),
               }),
             ),
       ).pipe(Effect.provideService(Clock.Clock, options.clock));
+
+    // A late stop only delays the next capture; once its reply settles, capture can start again.
+    const awaitPreviousStop = Effect.suspend(() =>
+      unsettledStop === undefined
+        ? Effect.void
+        : Effect.promise(() => unsettledStop ?? Promise.resolve()).pipe(
+            Effect.interruptible,
+            Effect.timeoutOrElse({
+              duration: deadline,
+              orElse: () => Effect.fail(stopDeadline()),
+            }),
+          ),
+    ).pipe(Effect.provideService(Clock.Clock, options.clock));
 
     const release = (current: Generation, subscription: Queue.Queue<Envelope>) =>
       lock.withPermits(1)(
@@ -171,11 +180,11 @@ export const make = (options: Options) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
           if (closed) return yield* options.error(new Error("Target page has been closed"));
-          if (teardownFailure !== undefined) return yield* teardownFailure;
           let current = generation;
           const starting = current === undefined;
 
           if (current === undefined) {
+            yield* awaitPreviousStop;
             const calibration = yield* options.calibrate.pipe(Effect.interruptible);
 
             if (closed) return yield* options.error(new Error("Target page has been closed"));

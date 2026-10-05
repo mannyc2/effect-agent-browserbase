@@ -788,7 +788,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
-    it.effect("bounds a stalled stop reply and reports it before another capture can start", () =>
+    it.effect("bounds a stalled stop reply and starts the next capture once it settles", () =>
       Effect.gen(function* () {
         const fixture = yield* setup();
 
@@ -805,7 +805,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         assert.match(error.message, /stop.*deadline/i);
         assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 1);
         assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 1);
+
+        // The late stop succeeds; it delayed capture but must not disable it for the page.
         fixture.releaseReply();
+
+        const frames = yield* fixture.page
+          .screencast()
+          .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+
+        assert.strictEqual(frames.length, 1);
+        assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 2);
+        assert.strictEqual(count(fixture.calls, "Page.stopScreencast"), 2);
       }),
     );
 

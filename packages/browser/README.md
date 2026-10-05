@@ -176,7 +176,9 @@ dropped out of order, observed subscriber losses and paint-time gap totals/minim
 Concurrent readers share one native screencast, each with a bounded 16-frame queue; a slow reader's
 observed sequence gaps add to `subscriberMissed`. Late subscribers do not count earlier history.
 ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
-with a typed error. Frame history remains bounded by `frameHistory`.
+with a typed error. Frame history remains bounded by `frameHistory`. Capture stops when its last
+reader leaves; a stop whose reply is late is never resent, and the next capture waits for it (up
+to 2 s per attempt) rather than disabling capture for the page.
 
 `Browser.events()` streams `RecordedEvent` values: `{ sequence, event }`. The sequence orders
 all browser events and is the replay cursor. Call `browser.events({ after: lastSequence })` to
