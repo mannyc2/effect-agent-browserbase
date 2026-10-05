@@ -83,6 +83,56 @@ any error. Budget-skipped trials have records with zero calls and do not start a
 `uncertainCalls` retain the available accounting facts. The ISO start time is a calendar date;
 elapsed time uses a monotonic clock.
 
+## Paired quote comparison
+
+`bun run understand` runs a free rehearsal through the pinned OpenRouter adapter using an
+in-memory response derived from visible table cells. Its results are marked `dry-run`; they test
+the harness and make no model-accuracy claim.
+
+The comparison prepares one captured moment for each seeded quote fixture and reuses it across
+three arms. A uses the shipping `Moment.describe` prompt, frames, outline and timeline. B uses
+the historical on-air representation: the latest image resized to 640×360 plus the first 4,000
+UTF-8 bytes of visible body text, with no outline or timeline. The `facts` arm uses the identical
+A moment and question, adding conclusions computed from visible table cells through the existing
+instructions option. The library's prompt and API stay unchanged.
+
+A native paint barrier and stable visible evidence bracket the shared capture. All arms identify
+the focused asset from the visible page heading. The question names the desired
+table, without supplying the expected ticker or numeric answers. Fact provenance binds the page,
+URL, observation time, table caption, row ticker and exact column headers to the displayed cells.
+The hidden fixture state is used only for grading. Ambiguous or changed evidence fails before a
+model call; there is no automatic validator retry. Image resizing uses Chromium's high-quality
+canvas filter, so B reproduces the old payload dimensions and text limit rather than claiming
+bit-for-bit equivalence with the research prototype's Lanczos filter.
+
+The default manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
+90 calls in a paid run. Arm order varies deterministically by seed. Cases run concurrently, with
+one browser per case and the same captured evidence for its arms. A shared admission ledger bounds
+all model calls. An infrastructure failure stops new admissions; already dispatched requests still
+settle, and every unrun arm receives a record. A wrong graded answer remains a comparison result.
+
+A paid run requires an explicit model and the existing live opt-in, separately from this free
+rehearsal:
+
+```sh
+EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
+  bun run understand -- --model <openrouter-model-id> --max-usd 1 --concurrency 4 --seed 1
+```
+
+The results distinguish graded mistakes from infrastructure failures and retain paired outcomes,
+latency, token usage and confirmed or unresolved charges, reported separately for dense fixtures
+and easy controls. Each case also saves its shared image, resized baseline and visible evidence
+for inspecting a result without another model call. First establish that B makes binding
+mistakes on the dense fixture, then compare A with `facts`. Beating B alone cannot establish that
+facts improve the shipping implementation; an already-perfect A supplies no evidence to add an
+API. Keep the original quality, cost and latency targets in view and report the limits of this
+small sample. No public facts input is added without a measured benefit.
+
+Both runners retain only closed failure categories and safe response-shape counts for provider
+errors. They omit response text, arbitrary descriptions and provider identifiers. These categories
+separate response conversion from missing text, invalid JSON and a mismatched answer schema while
+preserving charges that arrived before a failure.
+
 ## Tests
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or

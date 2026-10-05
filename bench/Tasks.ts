@@ -11,6 +11,7 @@ import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
 import type { AiError, LanguageModel } from "effect/ai";
 
+import * as QuoteComparison from "./QuoteComparison.ts";
 import {
   CheckoutTruth,
   FrameTruth,
@@ -147,7 +148,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly capture: Moment.CaptureOptions;
   /** A count alone cannot show whether the retained frames cover an earlier state. */
   readonly minimumSpanMillis?: (page: Page) => Effect.Effect<number>;
-  readonly instructions: string | ((expected: A) => string);
+  readonly instructions: string;
   readonly answer: Schema.Codec<A, I>;
   /** What the moment shows, read from the page's truth as it is captured. */
   readonly expected: (page: Page) => Effect.Effect<A>;
@@ -221,8 +222,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
 
         const { value, usage } = yield* Moment.describe(moment, {
           schema: spec.answer,
-          instructions:
-            typeof spec.instructions === "string" ? spec.instructions : spec.instructions(expected),
+          instructions: spec.instructions,
         });
 
         yield* options.onUsage(usage);
@@ -471,15 +471,6 @@ const checkout = operate({
     ),
 });
 
-const QuoteAnswer = Schema.Struct({
-  ticker: Schema.String,
-  price: Schema.Finite,
-  change1h: Schema.Finite,
-  change24h: Schema.Finite,
-  column: Schema.String,
-  table: Schema.String,
-});
-
 const quoteTask = (dense: boolean) =>
   understand({
     name: dense ? "quote-dense" : "quote-table",
@@ -489,9 +480,8 @@ const quoteTask = (dense: boolean) =>
     start: dense ? routes.denseQuotes : routes.quotes,
     setup: () => Effect.void,
     capture: { frames: 1 },
-    instructions: (expected) =>
-      `In the ${expected.table} table, read the ${expected.ticker} row. Report its ticker, price, 1-hour and 24-hour percentage changes as displayed, the exact header of the 24-hour percentage column, and the table name. Do not use another period or another table with the same ticker.`,
-    answer: QuoteAnswer,
+    instructions: QuoteComparison.question,
+    answer: QuoteComparison.Answer,
     expected: (page) =>
       truth(page, QuoteTruth).pipe(
         Effect.map((quotes) => ({
@@ -503,16 +493,7 @@ const quoteTask = (dense: boolean) =>
           table: quotes.table,
         })),
       ),
-    grade: (answer, expected) => ({
-      pass:
-        answer.ticker === expected.ticker &&
-        answer.price === expected.price &&
-        answer.change1h === expected.change1h &&
-        answer.change24h === expected.change24h &&
-        answer.column === expected.column &&
-        answer.table === expected.table,
-      detail: `answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`,
-    }),
+    grade: QuoteComparison.grade,
   });
 
 const tumbleWin = understand({
