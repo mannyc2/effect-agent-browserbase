@@ -7,6 +7,15 @@ import type { Page } from "effect-browser/Page";
 
 export const origin = "https://bench.test";
 
+export const routes = {
+  quotes: "/markets/quotes",
+  denseQuotes: "/markets/quotes/dense",
+  tumble: "/casino/tumble",
+  order: "/markets/btc",
+  navigation: "/casino",
+  navigationDestination: "/casino/reels",
+} as const;
+
 const style = `body{margin:0;font-family:system-ui,sans-serif}button{font:inherit;cursor:pointer}`;
 
 // A lobby behind a cookie wall and an age check, as real casino sites are.
@@ -46,7 +55,11 @@ header{display:flex;justify-content:space-between;padding:16px 24px;background:#
   $("reject").onclick = () => decide("rejected");
   $("adult").onclick = () => { __bench.adult = true; $("gate").remove(); };
   $("minor").onclick = () => { __bench.adult = false; $("gate").querySelector("h2").textContent = "Sorry, you cannot play."; };
-  $("play").onclick = () => { if (__bench.adult) location.href = "/casino/reels"; };
+  $("play").onclick = () => {
+    if (!__bench.adult) return;
+    sessionStorage.setItem("bench-navigation-trigger", "Play");
+    location.href = "/casino/reels";
+  };
 </script></body></html>`;
 
 // Five reels drawn on a canvas with no DOM controls, so only pictures and points can play it.
@@ -58,7 +71,7 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
   const colours = { A: "#e63946", K: "#457b9d", Q: "#2a9d8f", J: "#e9c46a", "10": "#f4a261", "7": "#d00000", "\\u2605": "#ffb703" };
   const wins = { 2: ["7", 3, 20], 4: ["K", 4, 8] };
   const bets = [1, 2, 5, 10, 20, 50];
-  let seed = 7, grid = [[0, 1, 2], [3, 4, 5], [6, 0, 1], [2, 3, 4], [5, 6, 0]].map((c) => c.map((i) => symbols[i]));
+  let seed = 7 + window.__benchSeed, grid = [[0, 1, 2], [3, 4, 5], [6, 0, 1], [2, 3, 4], [5, 6, 0]].map((c) => c.map((i) => symbols[i]));
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
   window.__bench = { credits: 1000, bet: 10, spins: 0, spinning: false, lastWin: 0, results: [] };
   const state = window.__bench;
@@ -102,6 +115,7 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
       state.credits += result.pay; state.lastWin = result.pay;
       draw(now);
     } else if (state.spinning) requestAnimationFrame(draw);
+    else state.frameAfter = performance.timeOrigin + performance.now();
   }
   function spin() {
     if (state.spinning || state.credits < state.bet) return;
@@ -146,7 +160,7 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
   <h2>Orders</h2><table><thead><tr><th>Id</th><th>Side</th><th>Qty</th><th>Price</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table>
 </aside><script>
   const params = new URLSearchParams(location.search), live = params.get("live") === "1";
-  let seed = 3;
+  let seed = 3 + window.__benchSeed;
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
   const candles = [];
   let price = 64000;
@@ -175,6 +189,7 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
     g.fillStyle = "#f0b90b"; g.fillRect(850, y(last) - 11, 110, 22);
     g.fillStyle = "#111"; g.font = "bold 13px sans-serif"; g.fillText(last.toFixed(2), 856, y(last) + 5);
     state.last = Math.round(last * 100) / 100; state.first = shown[0].open; state.trend = last >= shown[0].open ? "up" : "down";
+    state.frameAfter = performance.timeOrigin + performance.now();
   }
   draw();
   if (live) setInterval(() => {
@@ -191,6 +206,7 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
     state.orders.push(order);
     document.getElementById("orders").insertAdjacentHTML("beforeend", "<tr><td>" + order.id + "</td><td>" + side + "</td><td>" + qty + "</td><td>" + order.price.toFixed(2) + "</td><td>Filled</td></tr>");
     note.textContent = "Order " + order.id + " filled.";
+    state.frameAfter = performance.timeOrigin + performance.now();
   };
 </script></body></html>`;
 
@@ -222,15 +238,162 @@ input,select{font:inherit;padding:8px}fieldset{border:1px solid #ccc;border-radi
   };
 </script></body></html>`;
 
+// Every displayed value has one table, asset and period. Distinct magnitudes let the grader
+// distinguish those binding mistakes even when the same ticker appears in three panels.
+const quotes = (
+  dense: boolean,
+) => `<!doctype html><html><head><title>Market overview</title><style>${style}
+body{background:#10151e;color:#d6dfed;padding:16px;font-size:13px}
+header{display:flex;justify-content:space-between;border-bottom:1px solid #344152;padding-bottom:10px}
+h1{font-size:24px;margin:14px 0 4px}p{color:#899bb4;margin:5px 0 12px}
+.tape{padding:8px;background:#1a2330;white-space:nowrap;overflow:hidden;font-size:12px}
+.panels{display:grid;grid-template-columns:${dense ? "repeat(3,minmax(0,1fr))" : "minmax(0,900px)"};gap:12px}
+.panel{background:#17202d;border:1px solid #344152;border-radius:6px;padding:10px;min-width:0}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:${dense ? 11 : 15}px}
+caption{text-align:left;font-size:16px;font-weight:650;padding:2px 0 12px;color:#eef4ff}
+th{color:#91a4c0;font-weight:500;font-size:${dense ? 10 : 12}px;text-align:right;white-space:nowrap}
+td,th{padding:${dense ? "7px 3px" : "9px 8px"};border-bottom:1px solid #283548}td{text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}.focus{background:#223349}.up{color:#48c3a2}.down{color:#f3878a}
+footer{margin-top:16px;background:#251f16;padding:12px;border-left:3px solid #e6ad48;color:#e6c891}
+canvas{width:100%;height:95px;margin:10px 0}
+</style></head><body>
+<header><strong>HARBOR MARKETS</strong><span>Overview · Markets · Watchlists</span></header>
+<h1 id="focus"></h1><p>USD quotes · Market overview · Prices shown in US dollars</p>
+<div class="tape" id="tape"></div><canvas id="spark" width="1200" height="95"></canvas>
+<div class="panels" id="panels"></div><footer id="trending"></footer>
+<script>
+  const trial = window.__benchSeed;
+  let randomState = (trial ^ 0x5a17c9e3) >>> 0;
+  const random = () => { randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0; return randomState / 4294967296; };
+  const shuffle = (values) => {
+    const result = [...values];
+    for (let index = result.length - 1; index > 0; index--) {
+      const other = Math.floor(random() * (index + 1));
+      [result[index], result[other]] = [result[other], result[index]];
+    }
+    return result;
+  };
+  const assets = [
+    ["BTC-USD", 64325.17], ["ETH-USD", 3124.86], ["SOL-USD", 146.28], ["XRP-USD", 0.5284],
+    ["DOGE-USD", 0.1148], ["ADA-USD", 0.3852], ["ETC-USD", 23.51], ["AVAX-USD", 28.63],
+    ["LINK-USD", 14.74], ["DOT-USD", 4.29]
+  ].slice(0, ${dense ? 10 : 6});
+  const focus = assets[trial % assets.length][0];
+  const labels = ${dense ? '["Spot markets", "Perpetual futures", "Evening watchlist"]' : '["Spot markets"]'};
+  const rows = labels.flatMap((table, tableIndex) => assets.map(([ticker, base], assetIndex) => {
+    const change = (period) => {
+      const magnitude = 31 + (trial % 97) * 3 + tableIndex * 401 + assetIndex * 29 + period * 7;
+      return magnitude * ((trial + tableIndex + assetIndex + period) % 3 === 0 ? -1 : 1) / 100;
+    };
+    const precision = base < 1 ? 10000 : 100;
+    const price = Math.round(base * (1 + ((trial % 43) - 21) / 1000 + tableIndex / 80) * precision) / precision;
+    return { ticker, table, price, c1h: change(0), c24h: change(1), c7d: change(2) };
+  }));
+  const money = (value) => "$" + value.toLocaleString("en-US", { minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 });
+  const percent = (value) => (value >= 0 ? "+" : "") + value.toFixed(2) + "%";
+  const panels = document.getElementById("panels");
+  for (const table of shuffle(labels)) {
+    const columns = shuffle([["1h %", "c1h"], ["24h %", "c24h"], ["7d %", "c7d"]]);
+    const data = shuffle(rows.filter((row) => row.table === table));
+    const headers = columns.map(([label]) => "<th scope='col'>" + label + "</th>").join("");
+    const body = data.map((row, index) => "<tr" + (row.ticker === focus ? " class='focus'" : "") + "><td>" + row.ticker + "</td><td>" + money(row.price) + "</td>" +
+      columns.map(([, key]) => "<td class='" + (row[key] >= 0 ? "up" : "down") + "'>" + percent(row[key]) + "</td>").join("") +
+      (${dense} ? "<td>$" + (8.4 + index * 3.7 + labels.indexOf(table)).toFixed(1) + "M</td>" : "") + "</tr>").join("");
+    panels.insertAdjacentHTML("beforeend", "<section class='panel'><table aria-label='" + table + "'><caption>" + table + "</caption><thead><tr><th scope='col'>Asset</th><th scope='col'>Price</th>" + headers + (${dense} ? "<th scope='col'>24h volume</th>" : "") + "</tr></thead><tbody>" + body + "</tbody></table></section>");
+  }
+  document.getElementById("focus").textContent = focus;
+  document.title = focus + " | Harbor Markets";
+  document.getElementById("tape").textContent = "PEPE-USD +18.42%     NEAR-USD -3.19%     APT-USD +5.28%     TRX-USD +0.82%     SHIB-USD -1.74%";
+  document.getElementById("trending").textContent = "Trending now: PEPE-USD +18.42% · Futures turnover $284M · Figures refer to their labelled market and period.";
+  const plot = document.getElementById("spark").getContext("2d");
+  plot.strokeStyle = "#42bba0"; plot.lineWidth = 2; plot.beginPath();
+  let y = 48;
+  for (let x = 0; x <= 1200; x += 8) { y = Math.max(8, Math.min(87, y + (random() - 0.5) * 13)); plot.lineTo(x, y); }
+  plot.stroke();
+  const current = rows.find((row) => row.table === "Spot markets" && row.ticker === focus);
+  window.__bench = { focus, price: current.price, c1h: current.c1h, c24h: current.c24h, c7d: current.c7d, header: "24h %", table: "Spot markets", rows };
+</script></body></html>`;
+
+// The animation is derived from elapsed time rather than a timer chain. A delayed render still
+// applies every completed cascade exactly once, while the retained frames show its visual phases.
+const tumble = `<!doctype html><html><head><title>Olympus Cascade</title><style>${style}
+body{background:#150e26}canvas{display:block}
+</style></head><body><canvas id="game" width="1000" height="680"></canvas><script>
+  const trial = window.__benchSeed;
+  let randomState = (trial ^ 0x2c93157b) >>> 0;
+  const random = () => { randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0; return randomState / 4294967296; };
+  const tumbles = 1 + trial % 4, multiplier = [1, 2, 5, 10][Math.floor(trial / 4) % 4];
+  const cents = Array.from({ length: tumbles }, () => 100 + Math.floor(random() * 1100));
+  const durationMillis = 600 + tumbles * 1800 + 1200;
+  const state = { tumbles, multiplier, totalWin: 0, balance: 1000, done: false, phase: "ready", completedTumbles: 0, durationMillis, pays: cents.map((value) => value / 100) };
+  window.__bench = state;
+  const symbols = ["G", "A", "P", "B", "H", "D", "C"], colours = ["#9261d0", "#39a88d", "#e38fc5", "#d8b443", "#d96075", "#438fd3", "#db9552"];
+  const grid = Array.from({ length: 30 }, () => Math.floor(random() * symbols.length));
+  const canvas = document.getElementById("game"), paint = canvas.getContext("2d");
+  const cash = (value) => value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let started = 0;
+  function draw(now) {
+    const elapsed = state.phase === "ready" ? 0 : Math.max(0, now - started);
+    const totalAt = 600 + tumbles * 1800;
+    const completed = state.phase === "ready" ? 0 : Math.min(tumbles, Math.max(0, Math.floor((elapsed - 1800) / 1800) + 1));
+    state.completedTumbles = completed;
+    const earned = cents.slice(0, completed).reduce((sum, value) => sum + value, 0) / 100;
+    state.totalWin = elapsed >= totalAt ? Math.round(earned * multiplier * 100) / 100 : earned;
+    if (elapsed >= durationMillis && state.phase !== "ready") {
+      state.done = true; state.phase = "complete"; state.balance = Math.round((998 + state.totalWin) * 100) / 100;
+    }
+    paint.fillStyle = "#291b46"; paint.fillRect(0, 0, 1000, 680);
+    paint.fillStyle = "#f6ecd9"; paint.font = "bold 25px sans-serif";
+    paint.fillText("BALANCE " + cash(state.balance), 32, 43);
+    paint.fillText("BET 2.00", 416, 43); paint.fillText("WIN " + cash(state.totalWin), 640, 43);
+    const cycle = Math.min(tumbles - 1, Math.max(0, Math.floor((elapsed - 600) / 1800)));
+    const progress = elapsed - 600 - cycle * 1800;
+    for (let column = 0; column < 6; column++) for (let row = 0; row < 5; row++) {
+      const index = column * 5 + row, marked = (index + trial % 30 + cycle * 7) % 30 < 8;
+      const active = state.phase === "spinning" && elapsed >= 600 && elapsed < totalAt;
+      let scale = 1, offset = 0;
+      if (state.phase === "spinning" && elapsed < 600) offset = -450 * (1 - elapsed / 600);
+      if (active && marked && progress >= 350 && progress < 700) scale = 1 - (progress - 350) / 350;
+      if (active && marked && progress >= 700 && progress < 1200) offset = -250 * (1 - (progress - 700) / 500);
+      const symbol = marked && active && progress < 700 ? cycle % symbols.length : (grid[index] + cycle + (progress >= 700 ? 1 : 0)) % symbols.length;
+      const x = 125 + column * 125 + 60, y = 94 + row * 104 + 50 + offset;
+      paint.beginPath(); paint.arc(x, y, 42 * scale, 0, Math.PI * 2); paint.fillStyle = colours[symbol]; paint.fill();
+      if (active && marked && progress < 350) { paint.lineWidth = 5; paint.strokeStyle = Math.floor(progress / 70) % 2 === 0 ? "#fff6be" : "#d8b443"; paint.stroke(); }
+      if (scale > 0.25) { paint.fillStyle = "#fff"; paint.font = "bold " + Math.round(35 * scale) + "px sans-serif"; paint.textAlign = "center"; paint.fillText(symbols[symbol], x, y + 12 * scale); paint.textAlign = "start"; }
+    }
+    if (multiplier > 1 && completed === tumbles) {
+      paint.beginPath(); paint.arc(916, 135, 40, 0, Math.PI * 2); paint.fillStyle = "#f5cc50"; paint.fill();
+      paint.fillStyle = "#38204d"; paint.font = "bold 28px sans-serif"; paint.textAlign = "center"; paint.fillText("×" + multiplier, 916, 145); paint.textAlign = "start";
+    }
+    if (state.phase === "spinning" && elapsed >= totalAt) {
+      paint.fillStyle = "#130920e8"; paint.fillRect(180, 260, 650, 150); paint.fillStyle = "#f5cc50"; paint.font = "bold 46px sans-serif";
+      paint.textAlign = "center"; paint.fillText("TOTAL WIN " + cash(state.totalWin), 505, 350); paint.textAlign = "start";
+    }
+    paint.fillStyle = state.phase === "ready" ? "#b63557" : "#51455e"; paint.fillRect(430, 625, 140, 46);
+    paint.fillStyle = "#fff"; paint.font = "bold 26px sans-serif"; paint.fillText("SPIN", 466, 657);
+    if (state.phase === "complete") state.frameAfter = performance.timeOrigin + performance.now();
+    if (state.phase === "spinning") requestAnimationFrame(draw);
+  }
+  canvas.addEventListener("click", (event) => {
+    const box = canvas.getBoundingClientRect(), x = event.clientX - box.left, y = event.clientY - box.top;
+    if (state.phase !== "ready" || x < 430 || x > 570 || y < 625 || y > 671) return;
+    state.phase = "spinning"; state.balance = 998; started = performance.now(); requestAnimationFrame(draw);
+  });
+  draw(0);
+</script></body></html>`;
+
 const pages: Readonly<Record<string, string>> = {
   "/casino": lobby,
   "/casino/reels": reels,
   "/markets/btc": markets,
   "/shop/checkout": checkout,
+  [routes.quotes]: quotes(false),
+  [routes.denseQuotes]: quotes(true),
+  [routes.tumble]: tumble,
 };
 
 /** Serve the bench pages to every page of `browser` while the scope is open. */
-export const serve = (browser: Browser.Service) =>
+export const serve = (browser: Browser.Service, seed = 0) =>
   Effect.acquireRelease(
     Effect.promise(() =>
       browser.context.route(`${origin}/**`, (route) => {
@@ -239,7 +402,17 @@ export const serve = (browser: Browser.Service) =>
         return route.fulfill(
           page === undefined
             ? { status: 404, contentType: "text/plain", body: "not found" }
-            : { status: 200, contentType: "text/html; charset=utf-8", body: page },
+            : {
+                status: 200,
+                contentType: "text/html; charset=utf-8",
+                // Seed every document at this boundary so redirects retain the trial's identity.
+                body: page
+                  .replace("<head>", `<head><script>window.__benchSeed = ${seed};</script>`)
+                  .replace(
+                    "</body>",
+                    `<script>Object.assign(window.__bench, { frameAfter: performance.timeOrigin + performance.now(), url: location.href, title: document.title, trigger: sessionStorage.getItem("bench-navigation-trigger") ?? "direct" });</script></body>`,
+                  ),
+              },
         );
       }),
     ),
@@ -260,24 +433,66 @@ export const ReelsTruth = Schema.Struct({
   lastWin: Schema.Finite,
 });
 
+export const OrderTruth = Schema.Struct({
+  id: Schema.String,
+  side: Schema.String,
+  qty: Schema.Finite,
+  type: Schema.String,
+  price: Schema.Finite,
+  status: Schema.String,
+});
+
 export const MarketTruth = Schema.Struct({
   last: Schema.Finite,
   first: Schema.Finite,
   trend: Schema.Literals(["up", "down"]),
   spikeAt: Schema.NullOr(Schema.Finite),
   candles: Schema.Finite,
-  orders: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      side: Schema.String,
-      qty: Schema.Finite,
-      type: Schema.String,
-      price: Schema.Finite,
-    }),
-  ),
+  orders: Schema.Array(OrderTruth),
 });
 
 export const CheckoutTruth = Schema.Struct({
   submitted: Schema.NullOr(Schema.Record(Schema.String, Schema.String)),
   confirmation: Schema.NullOr(Schema.String),
 });
+
+const QuoteRow = Schema.Struct({
+  ticker: Schema.String,
+  table: Schema.String,
+  price: Schema.Finite,
+  c1h: Schema.Finite,
+  c24h: Schema.Finite,
+  c7d: Schema.Finite,
+});
+
+export const QuoteTruth = Schema.Struct({
+  focus: Schema.String,
+  price: Schema.Finite,
+  c1h: Schema.Finite,
+  c24h: Schema.Finite,
+  c7d: Schema.Finite,
+  header: Schema.String,
+  table: Schema.String,
+  rows: Schema.Array(QuoteRow),
+});
+
+export const TumbleTruth = Schema.Struct({
+  tumbles: Schema.Int,
+  multiplier: Schema.Int,
+  totalWin: Schema.Finite,
+  balance: Schema.Finite,
+  done: Schema.Boolean,
+  phase: Schema.Literals(["ready", "spinning", "complete"]),
+  completedTumbles: Schema.Int,
+  durationMillis: Schema.Finite,
+  pays: Schema.Array(Schema.Finite),
+});
+
+export const NavigationTruth = Schema.Struct({
+  url: Schema.String,
+  title: Schema.String,
+  trigger: Schema.String,
+});
+
+/** Browser-epoch boundary after the fixture's last required DOM or canvas change. */
+export const FrameTruth = Schema.Struct({ frameAfter: Schema.Finite });

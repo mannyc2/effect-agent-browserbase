@@ -17,14 +17,15 @@
   arrivals, observations and moments.
 - A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
   events; browser-wide pointer ownership and bounded event replay with explicit expiration.
-- `bench` (private): seven tasks over canvas games, live charts and forms, graded against the
-  pages' own truth. Paid runs are opt-in and capped.
+- `bench` (private): twelve tasks over canvas games, live charts, dense quote tables, orders,
+  navigation and forms, graded against seeded page truth and captured evidence. Trials run with
+  separate browsers and bounded concurrency, task-specific reasoning defaults, elapsed-time metrics
+  and a shared model admission budget. Paid runs remain opt-in.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
-`Chat` with the browser toolkit. The source is about 4,100 lines in 20 files, down from about
-43,500 in 139. The tests were rewritten from scratch: 34 tests in about 1,200 lines replace about
-62,000 lines in 203 files. They run against a real local Chromium, a fake Browserbase API and
-scripted models, and `bun run ready` runs them all.
+`Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API
+and scripted models. `bun run ready` runs all formatting, lint, type, test and build checks without
+paid calls.
 
 ## Not rebuilt yet
 
