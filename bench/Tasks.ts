@@ -249,10 +249,18 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         windowMillis: (spec.capture.windowMillis ?? 5000) + waited,
       });
 
+      // A moment ends with its own fresh screenshot when its newest frame is not demonstrably
+      // current, such as on a page that has been still for a while. One taken after the fixture's
+      // last change was read shows that change.
+      const current = (frame: Frame) =>
+        after(frame, frameAfter) ||
+        (frame.timing._tag === "Screenshot" &&
+          frame.hostTime - frame.timing.uncertaintyMillis >= waiting);
+
       const newest = captured.frames.at(-1);
 
       const moment =
-        shot === undefined || (newest !== undefined && after(newest, frameAfter))
+        shot === undefined || (newest !== undefined && current(newest))
           ? captured
           : new Moment.Moment({
               at: captured.at,
@@ -264,7 +272,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
 
       const last = moment.frames.at(-1);
 
-      if (last === undefined || (last !== shot && !after(last, frameAfter)))
+      if (last === undefined || (last !== shot && !current(last)))
         return yield* new EvidenceIncomplete({
           detail: "the final frame precedes the fixture's last change",
         });
@@ -276,7 +284,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       const minimum =
         spec.minimumSpanMillis === undefined ? 0 : yield* spec.minimumSpanMillis(page);
 
-      const detail = `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events${last === shot ? ", final frame from a fresh screenshot" : ""}`;
+      const detail = `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events${last.timing._tag === "Screenshot" ? ", final frame from a fresh screenshot" : ""}`;
 
       if (moment.frames.length !== wanted || span < minimum)
         return yield* new EvidenceIncomplete({ detail });
