@@ -257,6 +257,85 @@ const delayedCapture = Effect.fnUntraced(function* () {
   return { browser, page, pressed, reusedBefore };
 });
 
+// Chromium's screencast can miss a page's final paint. The relay withholds native frames on
+// request, so the newest delivered frame shows an animation the page has already finished.
+const withheldFinalPaint = Effect.fnUntraced(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  const createSession = context.newCDPSession.bind(context);
+  let withholding = false;
+
+  context.newCDPSession = async (target) => {
+    const cdp = await createSession(target);
+    const emitter = cdp as EmittingSession;
+    const emit = emitter.emit.bind(emitter);
+
+    emitter.emit = (event, ...args) =>
+      event === "Page.screencastFrame" && withholding ? true : emit(event, ...args);
+
+    return cdp;
+  };
+
+  const browser = yield* makeBrowser(context, { id: "final-paint", provider: "test" });
+  const page = yield* browser.newPage();
+
+  yield* page.goto(
+    "data:text/html," +
+      encodeURIComponent(`<body style="margin:0;height:100vh">
+<script>
+  let turn = 0, running = true;
+  (function draw() {
+    if (!running) return;
+    document.body.style.background = "hsl(" + (120 + (turn++ % 60)) + ",80%,40%)";
+    requestAnimationFrame(draw);
+  })();
+  window.finish = () => { running = false; document.body.style.background = "rgb(255,0,0)"; };
+</script></body>`),
+  );
+  yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+  yield* Effect.sleep("400 millis");
+
+  // The centre pixel of an image, decoded by the page itself.
+  const centre = (image: Image) =>
+    Effect.promise(() =>
+      page.playwright.evaluate(async (bytes) => {
+        const bitmap = await createImageBitmap(
+          new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }),
+        );
+
+        const canvas = new OffscreenCanvas(1, 1).getContext("2d");
+
+        if (canvas === null) throw new Error("no 2d canvas");
+        canvas.drawImage(bitmap, bitmap.width / 2, bitmap.height / 2, 1, 1, 0, 0, 1, 1);
+        const [red = 0, green = 0, blue = 0] = canvas.getImageData(0, 0, 1, 1).data;
+
+        return { red, green, blue };
+      }, Array.from(image.data)),
+    );
+
+  const retained = (image: Image) =>
+    page.recentFrames.pipe(
+      Effect.map((frames) => frames.some((frame) => frame.data === image.data)),
+    );
+
+  return {
+    browser,
+    page,
+    centre,
+    retained,
+    withhold: () => {
+      withholding = true;
+    },
+  };
+});
+
 const firstFrame = (page: Page) =>
   page.screencast().pipe(Stream.take(1), Stream.runCollect, Effect.timeout("15 seconds"));
 
@@ -367,6 +446,39 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           [false, true, "interrupted"],
         );
       }),
+    );
+
+    it.effect(
+      "reuses an animating page's newest frame but never a stale one after paint stops",
+      () =>
+        Effect.gen(function* () {
+          const { browser, page, centre, retained, withhold } = yield* withheldFinalPaint();
+
+          // While the page animates, a frame painted moments ago is current.
+          yield* Effect.gen(function* () {
+            const latest = yield* page.latestFrame;
+            const at = yield* browser.now;
+
+            return Option.isSome(latest) && at - latest.value.hostTime < 50;
+          }).pipe(
+            Effect.repeat({ schedule: Schedule.spaced("5 millis"), until: (fresh) => fresh }),
+            Effect.timeout("5 seconds"),
+          );
+          assert.isTrue(yield* retained(yield* page.screenshot()));
+
+          // The final paint never reaches the host; the newest frame still shows the animation.
+          withhold();
+          yield* Effect.promise(() =>
+            page.playwright.evaluate(() => (window as unknown as { finish: () => void }).finish()),
+          );
+          yield* Effect.sleep("400 millis");
+          const image = yield* page.screenshot();
+          const pixel = yield* centre(image);
+
+          assert.isFalse(yield* retained(image));
+          assert.isAbove(pixel.red, 200);
+          assert.isBelow(pixel.green, 60);
+        }),
     );
 
     it.effect("rejects invalid history bounds before taking over a borrowed context", () =>

@@ -200,7 +200,10 @@ export interface Page {
   readonly close: Effect.Effect<void>;
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
-  /** A picture of the viewport: the latest screencast frame when one is current, else a screenshot. */
+  /**
+   * A picture of the viewport: the latest screencast frame when it was painted after the latest
+   * input and within the last 250 ms, else a new screenshot.
+   */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
@@ -326,6 +329,11 @@ type MouseEvent = {
 };
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
+
+// Several 60 Hz frame intervals plus local delivery: an animating page keeps reusing its stream,
+// while a page that stopped changing gets a real capture. A lost final paint can be served for
+// at most this long after the last frame that did arrive.
+const currentPaintMillis = 250;
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const { id, playwright, cdp, settings, motion, clock, mapping, pointer, inputLock, publish } =
@@ -1743,6 +1751,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const since = lastInputAt;
 
       // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
+      // A screencast sends only changes and can miss a page's final paint, so a quiet stream is no
+      // evidence that its newest frame is still current: reuse needs recent paint as well.
       const viewport = playwright.viewportSize();
 
       if (
@@ -1751,6 +1761,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         active &&
         Option.isSome(frame) &&
         frame.value.hostTime - frame.value.timing.uncertaintyMillis > since + 100 &&
+        frame.value.hostTime - frame.value.timing.uncertaintyMillis > now() - currentPaintMillis &&
         frame.value.width === viewport?.width &&
         frame.value.height === viewport.height
       )
