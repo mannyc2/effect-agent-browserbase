@@ -1,10 +1,10 @@
 import { assert, layer } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Option, Schedule, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import * as Chromium from "../src/Chromium.ts";
-import type { Frame } from "../src/Frame.ts";
+import type { Frame, Image } from "../src/Frame.ts";
 import * as Moment from "../src/Moment.ts";
 import type { Page } from "../src/Page.ts";
 
@@ -181,6 +181,82 @@ const busyContext = Effect.fnUntraced(function* (contextOrigin: "fresh" | "borro
   return yield* makeBrowser(context, { id: "busy-capture", provider: "test", contextOrigin });
 });
 
+// Paint keeps changing, but each native frame reaches the host 150 ms after Chromium sent it, as
+// over a remote transport. A press turns the page red.
+const delayedCapture = Effect.fnUntraced(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires local Chromium");
+
+  const context = yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext({ viewport: { width: 800, height: 600 } })),
+    (context) => Effect.promise(() => context.close()),
+  );
+
+  const createSession = context.newCDPSession.bind(context);
+
+  context.newCDPSession = async (target) => {
+    const cdp = await createSession(target);
+    const emitter = cdp as EmittingSession;
+    const emit = emitter.emit.bind(emitter);
+
+    emitter.emit = (event, ...args) => {
+      if (event !== "Page.screencastFrame") return emit(event, ...args);
+      setTimeout(() => emit(event, ...args), 150);
+
+      return true;
+    };
+
+    return cdp;
+  };
+
+  const browser = yield* makeBrowser(context, { id: "delayed-capture", provider: "test" });
+  const page = yield* browser.newPage();
+
+  yield* page.goto(
+    "data:text/html," +
+      encodeURIComponent(`<body style="margin:0;height:100vh;background:rgb(0,0,255)">
+<canvas id="spinner" width="80" height="80"></canvas>
+<script>
+  let turn = 0;
+  (function draw() {
+    const g = spinner.getContext("2d");
+    g.fillStyle = "hsl(" + (turn++ * 15) + ",80%,50%)";
+    g.fillRect(0, 0, 80, 80);
+    requestAnimationFrame(draw);
+  })();
+  addEventListener("mousedown", () => { document.body.style.background = "rgb(255,0,0)"; });
+</script></body>`),
+  );
+  yield* page.screencast().pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
+  // Let frames painted well after navigation arrive, so only the input rule can refuse them.
+  yield* Effect.sleep("600 millis");
+
+  const pressed = browser.recentEvents.pipe(
+    Effect.map((events) => events.find((event) => event._tag === "PointerPressed")?.at),
+    Effect.repeat({
+      schedule: Schedule.spaced("5 millis"),
+      until: (at) => at !== undefined,
+    }),
+    Effect.timeout("5 seconds"),
+    Effect.map((at) => at ?? Infinity),
+  );
+
+  // A reused frame is one of the retained screencast frames, returned by reference.
+  const reusedBefore = (image: Image, input: number) =>
+    page.recentFrames.pipe(
+      Effect.map((frames) =>
+        frames.some(
+          (frame) =>
+            frame.data === image.data &&
+            frame.hostTime - frame.timing.uncertaintyMillis <= input + 100,
+        ),
+      ),
+    );
+
+  return { browser, page, pressed, reusedBefore };
+});
+
 const firstFrame = (page: Page) =>
   page.screencast().pipe(Stream.take(1), Stream.runCollect, Effect.timeout("15 seconds"));
 
@@ -248,6 +324,48 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         if (error._tag !== "BrowserError") return;
         assert.strictEqual(error.operation, "calibrate");
         assert.isFalse(error.dispatched);
+      }),
+    );
+
+    it.effect("never reuses paint from before input submitted by a running action", () =>
+      Effect.gen(function* () {
+        const { page, pressed, reusedBefore } = yield* delayedCapture();
+
+        const clicking = yield* page
+          .click({ x: 400, y: 300 }, { holdMillis: 1500 })
+          .pipe(Effect.forkChild);
+
+        const input = yield* pressed;
+        const image = yield* page.screenshot();
+
+        assert.isFalse(yield* reusedBefore(image, input));
+        yield* Fiber.join(clicking);
+      }),
+    );
+
+    it.effect("never reuses paint from before input of an action the caller interrupted", () =>
+      Effect.gen(function* () {
+        const { browser, page, pressed, reusedBefore } = yield* delayedCapture();
+
+        const clicking = yield* page
+          .click({ x: 400, y: 300 }, { holdMillis: 1500 })
+          .pipe(Effect.forkChild);
+
+        const input = yield* pressed;
+
+        yield* Fiber.interrupt(clicking);
+        const image = yield* page.screenshot();
+
+        assert.isFalse(yield* reusedBefore(image, input));
+
+        const action = (yield* browser.recentEvents).find(
+          (event) => event._tag === "Action" && event.name === "click",
+        );
+
+        assert.deepStrictEqual(
+          action?._tag === "Action" ? [action.ok, action.dispatched, action.error] : undefined,
+          [false, true, "interrupted"],
+        );
       }),
     );
 

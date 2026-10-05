@@ -334,11 +334,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
-  const lastInputAt = yield* Ref.make(0);
+  // The latest input submission, or the moment an operation was about to change the page. Paint
+  // from before it can never be reused as the current viewport, even while an action is running.
+  let lastInputAt = 0;
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
   // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
   const owned = Effect.provideService(Clock.Clock, clock);
+
+  const markInput = () => {
+    lastInputAt = Math.max(lastInputAt, now());
+  };
+
   const input = Input.make();
   const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
 
@@ -402,6 +409,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
     const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
+    markInput();
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
     submitted?.();
@@ -456,7 +464,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const event = new KeyChanged({ at, page: id, key, phase });
     const response = command(at, inputClocks.get(run));
 
+    markInput();
     publish(event);
+
+    return response;
+  };
+
+  const dispatchText = (text: string) => {
+    const track = new TextInserted({ at: now(), page: id, text });
+    const response = cdp.send("Input.insertText", { text });
+
+    markInput();
+    publish(track);
 
     return response;
   };
@@ -632,7 +651,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const at = yield* Ref.make(Option.none<Point>());
 
       const marks = {
-        sent: Ref.set(sent, true),
+        sent: Ref.set(sent, true).pipe(Effect.andThen(Effect.sync(markInput))),
         at: (point: Point) => Ref.set(at, Option.some(point)),
       };
 
@@ -724,41 +743,49 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               );
             });
 
-      const exit = yield* Effect.exit(run);
-      const dispatched = yield* Ref.get(sent);
-      const point = yield* Ref.get(at);
+      // Record the outcome even when the caller interrupts: its input may already be in the page.
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(restore(run));
+          const dispatched = yield* Ref.get(sent);
+          const point = yield* Ref.get(at);
 
-      if (dispatched) yield* Ref.set(lastInputAt, now());
-      const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+          if (dispatched) markInput();
+          const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
-      publish(
-        new Action({
-          at: now(),
-          startedAt,
-          page: id,
-          name,
-          target: info.target,
-          text: info.text === undefined ? undefined : info.text.slice(0, 200),
-          x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
-          y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
-          ok: Exit.isSuccess(exit),
-          dispatched,
-          error: Option.getOrUndefined(Option.map(failure, (error) => error.message)),
+          publish(
+            new Action({
+              at: now(),
+              startedAt,
+              page: id,
+              name,
+              target: info.target,
+              text: info.text === undefined ? undefined : info.text.slice(0, 200),
+              x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
+              y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
+              ok: Exit.isSuccess(exit),
+              dispatched,
+              error: Option.match(failure, {
+                onNone: () => (Exit.hasInterrupts(exit) ? "interrupted" : undefined),
+                onSome: (error) => error.message,
+              }),
+            }),
+          );
+          if (Exit.isSuccess(exit)) return exit.value;
+          if (dispatched)
+            return yield* Exit.mapError(exit, (error) =>
+              error.dispatched
+                ? error
+                : new BrowserError({
+                    operation: error.operation,
+                    reason: error.reason,
+                    dispatched: true,
+                  }),
+            );
+
+          return yield* exit;
         }),
       );
-      if (Exit.isSuccess(exit)) return exit.value;
-      if (dispatched)
-        return yield* Exit.mapError(exit, (error) =>
-          error.dispatched
-            ? error
-            : new BrowserError({
-                operation: error.operation,
-                reason: error.reason,
-                dispatched: true,
-              }),
-        );
-
-      return yield* exit;
     }).pipe(owned);
 
   const failWith = (operation: string, reason: Reason) =>
@@ -1266,14 +1293,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.gen(function* () {
         if (event.phase === "insert") {
           yield* run.reserve(1);
-          yield* run.send(() => {
-            const track = new TextInserted({ at: now(), page: id, text: event.key });
-            const response = cdp.send("Input.insertText", { text: event.key });
-
-            publish(track);
-
-            return response;
-          });
+          yield* run.send(() => dispatchText(event.key));
 
           return;
         }
@@ -1720,7 +1740,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     Effect.gen(function* () {
       const frame = yield* capture.latest;
       const active = yield* capture.active;
-      const since = yield* Ref.get(lastInputAt);
+      const since = lastInputAt;
 
       // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
       const viewport = playwright.viewportSize();
