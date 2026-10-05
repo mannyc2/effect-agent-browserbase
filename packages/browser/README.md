@@ -51,7 +51,9 @@ role, accessible name, cursor and link target. Pixel targeting resolves through 
 keeps the original point; the receipt names the control even when a nested child received the hit.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
-merged last, so the caller's tool wins a name clash, and its calls share the batch's halt behavior.
+merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
+share the batch's halt behavior. `done` and `give_up` end the run and stay the agent's own: a
+toolkit that names either does not type-check.
 A failure of a tool with failure mode `"error"` reaches the model encoded by that tool's failure
 schema and marked as possibly effective; a call whose parameters fail validation never reaches its
 handler and answers as not executed.

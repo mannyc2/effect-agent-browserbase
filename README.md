@@ -142,9 +142,9 @@ const watch = Effect.gen(function* () {
   glide plans, submission receipts, button and key phases, wheel input and cursor shape. Pointer
   position is shared across tabs. Events have sequence cursors for bounded replay; a lagging reader
   gets an explicit history-expired error instead of missing events silently.
-- `additionalTools` accepts an `effect/ai` toolkit, merged after the browser and completion tools.
-  Supply its handlers through their usual layer; on a name clash the added toolkit wins. The same
-  batch halting applies to those tools.
+- `additionalTools` accepts an `effect/ai` toolkit, merged after the browser tools. Supply its
+  handlers through their usual layer; on a name clash with a browser tool the added toolkit wins.
+  `done` and `give_up` stay the agent's own. The same batch halting applies to those tools.
 - `onStep` sees each model call and its tool calls; failing stops the run with that error, which is
   how a caller enforces a budget.
 

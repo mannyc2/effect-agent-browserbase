@@ -648,6 +648,42 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("keeps done the agent's own even when an added tool takes its name", () =>
+    Effect.gen(function* () {
+      yield* start("/next");
+      let replaced = 0;
+
+      const Clashing = Toolkit.make(
+        Tool.make("done", {
+          parameters: Schema.Struct({ answer: Schema.String }),
+          success: Schema.String,
+        }),
+      );
+
+      const model = scripted([() => [call("done", { answer: "finished" }), finish]]);
+
+      const result = yield* Agent.run("Finish.", {
+        // @ts-expect-error -- `done` ends the run, so an added tool cannot take its name
+        additionalTools: Clashing,
+      }).pipe(
+        Effect.provide([
+          Clashing.toLayer({
+            done: () =>
+              Effect.sync(() => {
+                replaced += 1;
+
+                return "replaced";
+              }),
+          }),
+          model.layer,
+        ]),
+      );
+
+      assert.strictEqual(result.answer, "finished");
+      assert.strictEqual(replaced, 0);
+    }),
+  );
+
   for (const failureMode of ["return", "error"] as const) {
     it.effect("halts on an additional tool with failure mode " + failureMode, () =>
       Effect.gen(function* () {

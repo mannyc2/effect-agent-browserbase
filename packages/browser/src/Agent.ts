@@ -73,7 +73,8 @@ export interface Result<A> {
   readonly history: Prompt.Prompt;
 }
 
-type ExtraTools = Record<string, Tool.Any>;
+/** Tools a caller adds. `done` and `give_up` end the run, so they remain the agent's own. */
+type ExtraTools = Record<string, Tool.Any> & { readonly done?: never; readonly give_up?: never };
 
 export interface Options<E = never, Extra extends ExtraTools = {}> {
   /** Model calls before stopping with `StepLimit`. Defaults to 30. */
@@ -84,7 +85,10 @@ export interface Options<E = never, Extra extends ExtraTools = {}> {
   readonly keepPictures?: number | undefined;
   /** What the model sees initially and after each turn. Defaults to both. */
   readonly observation?: ObservationMode | undefined;
-  /** Additional tools; their definitions and handlers take precedence on a name clash. */
+  /**
+   * Additional tools; their definitions and handlers take precedence over a browser tool of the
+   * same name. They cannot be named `done` or `give_up`.
+   */
   readonly additionalTools?: Toolkit.Toolkit<Extra> | undefined;
   readonly tools?: Tools.Options | undefined;
   /** Runs after every model call. Failing stops the run with that error, such as a spent budget. */
@@ -222,8 +226,15 @@ const loop = <E, Extra extends ExtraTools>(
       failureMode: "return",
     });
 
-    const AgentToolkit = Toolkit.merge(Tools.BrowserToolkit, Toolkit.make(Done, GiveUp));
-    const CombinedToolkit = Toolkit.merge(AgentToolkit, options.additionalTools ?? Toolkit.empty);
+    const Completion = Toolkit.make(Done, GiveUp);
+    const AgentToolkit = Toolkit.merge(Tools.BrowserToolkit, Completion);
+
+    // Merged last, completion stays the agent's even when the types are bypassed.
+    const CombinedToolkit = Toolkit.merge(
+      Tools.BrowserToolkit,
+      options.additionalTools ?? Toolkit.empty,
+      Completion,
+    );
 
     const defaults = yield* AgentToolkit.toHandlers({
       ...tools.handlers,
@@ -234,9 +245,11 @@ const loop = <E, Extra extends ExtraTools>(
 
     const supplied = yield* Effect.context<Tool.HandlersFor<Extra>>();
 
-    const overrides = Object.values(options.additionalTools?.tools ?? {}).map((tool) =>
-      Context.Service<Tool.HandlersFor<Extra>>(tool.id),
-    );
+    const completion = new Set([Done.id, GiveUp.id]);
+
+    const overrides = Object.values(options.additionalTools?.tools ?? {})
+      .filter((tool) => !completion.has(tool.id))
+      .map((tool) => Context.Service<Tool.HandlersFor<Extra>>(tool.id));
 
     // Only explicitly added tools override defaults; unrelated ambient handlers must not replace them.
     const toolkit = yield* CombinedToolkit.pipe(
