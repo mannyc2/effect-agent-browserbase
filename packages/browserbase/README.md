@@ -20,6 +20,6 @@ refuses redirects so the key never follows one. Each request attempt has a deadl
 (`requestTimeout`, 60 seconds by default), so a session create that never answers still settles
 and its caller can stop. Only `GET` requests are retried, twice, after a transient failure; a
 create that fails in transit is not resent, because it may have created the session. Connect URLs and the Live View debugger URL are `Redacted`: keep them away from
-models and logs.
+models and logs. A failed connect names only the connect URL's scheme, host and port.
 
 The [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has an example.

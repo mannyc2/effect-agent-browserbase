@@ -1,8 +1,9 @@
 // Failures that come from Playwright itself, as callers and models receive them.
+import { createServer as createHttpServer } from "node:http";
 import { createServer, type Server } from "node:net";
 
 import { assert, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Redacted } from "effect";
 
 import type { BrowserError } from "../src/BrowserError.ts";
 import * as Cdp from "../src/Cdp.ts";
@@ -11,21 +12,38 @@ import * as Chromium from "../src/Chromium.ts";
 const timeoutOf = (error: BrowserError) =>
   error.reason._tag === "Timeout" ? error.reason.millis : error.reason._tag;
 
+const portOf = (server: Server) => {
+  const address = server.address();
+
+  return typeof address === "object" && address !== null ? address.port : 0;
+};
+
+const listening = <S extends Server>(server: S) =>
+  Effect.acquireRelease(
+    Effect.callback<S>((resume) => {
+      server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
+    }),
+    (open) => Effect.sync(() => open.close()),
+  ).pipe(Effect.map(portOf));
+
 /** A loopback port that accepts connections and never answers them. */
-const silentPort = Effect.acquireRelease(
-  Effect.callback<Server>((resume) => {
-    const server = createServer(() => undefined);
+const silentPort = listening(createServer(() => undefined));
 
-    server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
-  }),
-  (server) => Effect.sync(() => server.close()),
-).pipe(
-  Effect.map((server) => {
-    const address = server.address();
+/** A DevTools host that refuses every request and WebSocket upgrade, as with a bad credential. */
+const refusingPort = Effect.suspend(() => {
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(401);
+    response.end();
+  });
 
-    return typeof address === "object" && address !== null ? address.port : 0;
-  }),
-);
+  server.on("upgrade", (_request, socket) => {
+    socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+  });
+
+  return listening(server);
+});
+
+const secret = "sk-0123456789abcdef";
 
 it.live("a connect timeout reports the bound the caller gave", () =>
   Effect.gen(function* () {
@@ -62,5 +80,38 @@ it.live("a screenshot timeout reports the action timeout", () =>
     const error = yield* Effect.flip(page.screenshot({ fresh: true }));
 
     assert.deepStrictEqual([error.operation, timeoutOf(error)], ["screenshot", 1000]);
+  }).pipe(Effect.scoped),
+);
+
+it.live("a failed connect never repeats the endpoint's credential", () =>
+  Effect.gen(function* () {
+    const port = yield* refusingPort;
+    const host = `127.0.0.1:${port}`;
+
+    // Playwright echoes query, userinfo and path for some of these forms, and the raw text for a
+    // malformed endpoint. Each failure must still say where it failed.
+    for (const [endpoint, where] of [
+      [`http://${host}/?signingKey=${secret}`, `http://${host}`],
+      [`http://user:${secret}@${host}/`, `http://${host}`],
+      [`ws://${host}/?signingKey=${secret}`, `ws://${host}`],
+      [`ws://user:${secret}@${host}/`, `ws://${host}`],
+      [`ws://${host}/devtools/browser/${secret}`, `ws://${host}`],
+      [`wss//${host}/?signingKey=${secret}`, "Invalid URL"],
+    ] as const) {
+      const error = yield* Effect.flip(
+        Cdp.open({ endpoint: Redacted.make(endpoint), connectTimeoutMillis: 5000 }),
+      );
+
+      for (const shown of [
+        error.message,
+        JSON.stringify(error),
+        String(error),
+        error.stack ?? "",
+        error.reason._tag === "Failed" ? error.reason.detail : "",
+      ])
+        assert.notInclude(shown, secret, endpoint);
+      assert.deepStrictEqual([error.operation, error.reason._tag], ["connect", "Failed"]);
+      assert.include(error.message, where);
+    }
   }).pipe(Effect.scoped),
 );

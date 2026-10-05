@@ -375,6 +375,31 @@ describe("Browserbase", () => {
     }),
   );
 
+  it.live("keeps the session's connect URL out of a failed connect", () =>
+    Effect.gen(function* () {
+      const { origin } = yield* listen((_request, response) => {
+        response.writeHead(401);
+        response.end();
+      });
+
+      const signingKey = "bb-signing-key-0123456789";
+
+      const api = yield* fakeApi(() => ({
+        status: 200,
+        body: session("s1", `${origin}/?signingKey=${signingKey}`),
+      }));
+
+      const error = yield* Effect.flip(
+        Browserbase.attach("s1").pipe(Effect.scoped, Effect.provide(api.client)),
+      );
+
+      assert.strictEqual(error._tag, "BrowserError");
+      assert.notInclude(error.message, signingKey);
+      assert.notInclude(JSON.stringify(error), signingKey);
+      assert.include(error.message, origin);
+    }),
+  );
+
   it.live("opens a browser on a new session and releases the session when the scope closes", () =>
     Effect.gen(function* () {
       const port = yield* listen(() => undefined).pipe(
