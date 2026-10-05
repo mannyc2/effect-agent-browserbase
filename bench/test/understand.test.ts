@@ -50,6 +50,53 @@ const dryDescribe = (
     );
   });
 
+// One dense pair, and a graded record for any arm of it. A wrong answer reads a neighbour's row
+// with its own ticker and its 7d change: one answer, three faults.
+const singlePair = Effect.gen(function* () {
+  const plan = manifest(
+    yield* configuration(["--hard-trials", "1", "--control-trials", "0"]),
+    "fixed",
+  );
+
+  const pair = plan.pairs[0];
+
+  if (pair === undefined) return yield* Effect.die("the manifest has one dense pair");
+
+  const right = {
+    ticker: true,
+    price: true,
+    change1h: true,
+    change24h: true,
+    column: true,
+    table: true,
+  };
+
+  const clean = { wrongTable: false, wrongRow: false, wrongPeriod: false, unsourced: false };
+
+  const record = (arm: Quote.Arm, wrong: boolean): TrialRecord => ({
+    task: pair.task,
+    trial: pair.trial,
+    seed: pair.seed,
+    arm,
+    position: pair.order.indexOf(arm),
+    mode: plan.mode,
+    status: "graded",
+    reason: "answered",
+    pass: !wrong,
+    matches: wrong ? { ...right, ticker: false, price: false, change24h: false } : right,
+    binding: wrong ? { ...clean, wrongRow: true, wrongPeriod: true } : clean,
+    answer: null,
+    diagnostic: null,
+    lastResponse: null,
+    evidence: null,
+    accounting: emptyAccounting,
+    timing: noTiming,
+    seconds: 1,
+  });
+
+  return { plan, record };
+});
+
 describe("understanding comparison", () => {
   it.effect(
     "requires paid opt-in before the entry point creates a browser or consults a model",
@@ -614,48 +661,7 @@ describe("understanding comparison", () => {
 
   it.effect("counts each answer once against the wrong-ticker-or-period target", () =>
     Effect.gen(function* () {
-      const plan = manifest(
-        yield* configuration(["--hard-trials", "1", "--control-trials", "0"]),
-        "fixed",
-      );
-
-      const pair = plan.pairs[0];
-
-      assert.isDefined(pair);
-      if (pair === undefined) return;
-
-      const right = {
-        ticker: true,
-        price: true,
-        change1h: true,
-        change24h: true,
-        column: true,
-        table: true,
-      };
-
-      const clean = { wrongTable: false, wrongRow: false, wrongPeriod: false, unsourced: false };
-
-      const record = (arm: Quote.Arm, wrong: boolean): TrialRecord => ({
-        task: pair.task,
-        trial: pair.trial,
-        seed: pair.seed,
-        arm,
-        position: pair.order.indexOf(arm),
-        mode: plan.mode,
-        status: "graded",
-        reason: "answered",
-        pass: !wrong,
-        // A neighbour's row reports its own ticker and its 7d change: one answer, three faults.
-        matches: wrong ? { ...right, ticker: false, price: false, change24h: false } : right,
-        binding: wrong ? { ...clean, wrongRow: true, wrongPeriod: true } : clean,
-        answer: null,
-        diagnostic: null,
-        lastResponse: null,
-        evidence: null,
-        accounting: emptyAccounting,
-        timing: noTiming,
-        seconds: 1,
-      });
+      const { plan, record } = yield* singlePair;
 
       const rules = summarize(plan, [
         record("A", false),
@@ -664,6 +670,27 @@ describe("understanding comparison", () => {
       ]).prerequisitesForConsideringFacts;
 
       assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 1, met: false });
+    }),
+  );
+
+  it.effect("reads the pre-registered targets without inventing an improvement threshold", () =>
+    Effect.gen(function* () {
+      const { plan, record } = yield* singlePair;
+
+      const rules = summarize(plan, [
+        record("A", true),
+        record("B", true),
+        record("facts", false),
+      ]).prerequisitesForConsideringFacts;
+
+      // One decisive pair is not a useful improvement by any registered rule.
+      assert.deepStrictEqual(rules.factsImprovesOverA, {
+        observed: { wins: 1, losses: 0, completePairs: 1 },
+        met: null,
+      });
+      assert.deepStrictEqual(rules.baselineReproducesBindingMistakes, { observed: 1, met: true });
+      assert.deepStrictEqual(rules.hardQuoteExact, { target: 0.95, observed: 1, met: true });
+      assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 0, met: true });
     }),
   );
 

@@ -631,10 +631,14 @@ const prerequisites = (plan: Manifest, dense: ReturnType<typeof byTask>[number] 
       observed: b?.bindingErrors ?? null,
       met: b === undefined || b.graded === 0 ? null : b.bindingErrors > 0,
     },
+    // The plan asks for a useful improvement over A but registered no threshold, so the paired
+    // counts are reported for judgement and nothing here claims the rule is met.
     factsImprovesOverA: {
-      observed: versusA === undefined ? null : { wins: versusA.wins, losses: versusA.losses },
-      met:
-        versusA === undefined || versusA.completePairs === 0 ? null : versusA.wins > versusA.losses,
+      observed:
+        versusA === undefined
+          ? null
+          : { wins: versusA.wins, losses: versusA.losses, completePairs: versusA.completePairs },
+      met: null,
     },
     hardQuoteExact: {
       target: targets.hardQuoteExactTarget,

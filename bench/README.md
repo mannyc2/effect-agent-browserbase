@@ -200,7 +200,8 @@ distinct value, so each graded answer's numbers are traced to the cells they wer
 table, or another period (1h, 24h or 7d) of the requested row, reported separately, while a
 number that matches no cell is a misread (`unsourced`) and a wrong ticker, table or header text is
 a label error. The summary evaluates the pre-registered rules on the dense fixtures from these
-counts, with `met: null` where there is no graded evidence. First establish that B makes binding
+counts, with `met: null` where there is no graded evidence. The improvement over A has no
+registered threshold, so it reports its paired wins and losses with `met: null`. First establish that B makes binding
 mistakes on the dense fixture, then compare A with `facts`. Beating B alone cannot establish that
 facts improve the shipping implementation; an already-perfect A supplies no evidence to add an
 API. Keep the original quality, cost and latency targets in view and report the limits of this
