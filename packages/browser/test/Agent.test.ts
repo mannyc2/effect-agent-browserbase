@@ -1394,11 +1394,13 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       const shown = yield* tools.page;
 
       assert.notStrictEqual(shown.id, opener.id);
+      // The tab closes after the click's release has been answered. Closing inside the handler
+      // can end the tab before that answer, and the click then rightly fails as possibly done.
       yield* Effect.promise(() =>
         shown.playwright.evaluate(() => {
           const button = document.querySelector("button");
 
-          if (button !== null) button.onclick = () => window.close();
+          if (button !== null) button.onclick = () => setTimeout(() => window.close());
         }),
       );
 

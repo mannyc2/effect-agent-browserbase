@@ -1106,6 +1106,15 @@ export const install = (): PageApi => {
     );
   };
 
+  // What an approval binds of a URL. A fragment that names a place on the page, which scroll-spy
+  // and feed pages rewrite as they scroll, is left out. A hash route (#/… or #!…) stays: it
+  // selects what the page's controls act on.
+  const boundUrl = (url: string): string => {
+    const hash = url.indexOf("#");
+
+    return hash === -1 || /^#[/!]/.test(url.slice(hash)) ? url : url.slice(0, hash);
+  };
+
   const inspectInput = (element: Element, plan: InputPlan) => {
     const metadata = details(element, element, 0, 0);
     // Classify what the input activates, such as the submit button around a painted label.
@@ -1208,11 +1217,11 @@ export const install = (): PageApi => {
       control.hasAttribute("multiple"),
       link?.getAttribute("download"),
       form === null ? null : refFor(form),
-      form?.action,
+      form === null ? null : boundUrl(form.action),
       form?.method,
       form?.target,
       submitter === undefined ? null : refFor(submitter),
-      formDestination,
+      formDestination === undefined ? undefined : boundUrl(formDestination),
       formMethod,
       formTarget,
       submitter?.formNoValidate,
@@ -1299,7 +1308,7 @@ export const install = (): PageApi => {
     }
 
     return {
-      url: location.href,
+      url: boundUrl(location.href),
       targets,
       classifications: [...classifications],
       ...(destination === undefined ? {} : { destination }),
@@ -1317,7 +1326,9 @@ export const install = (): PageApi => {
       return current.error === "stale" ? current : { error: "changed", detail: current.detail };
     if (
       current.url !== prepared.url ||
-      current.destination !== prepared.destination ||
+      (current.destination === undefined || prepared.destination === undefined
+        ? current.destination !== prepared.destination
+        : boundUrl(current.destination) !== boundUrl(prepared.destination)) ||
       JSON.stringify(current.classifications) !== JSON.stringify(prepared.classifications) ||
       current.targets.length !== prepared.targets.length ||
       current.targets.some((target, index) => {

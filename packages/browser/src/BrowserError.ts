@@ -1,9 +1,10 @@
 /**
  * The one error every browser operation fails with.
  *
- * `reason` says what went wrong and `dispatched` says whether input or a navigation reached the
- * browser first. When `dispatched` is true the action may have taken effect, so it must not be
- * retried blindly: look at the page again first.
+ * `reason` says what went wrong and `dispatched` says whether the action's own input (a press,
+ * key, wheel, selection or hover, not the pointer travelling toward a press) or a navigation
+ * reached the browser first. When `dispatched` is true the action may have taken effect, so it
+ * must not be retried blindly: look at the page again first.
  *
  * @since 0.3.0
  */

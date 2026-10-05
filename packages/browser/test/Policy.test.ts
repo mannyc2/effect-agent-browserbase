@@ -622,9 +622,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
         yield* Effect.promise(() => page.playwright.setContent(hoverTrap));
 
+        // The pointer travelled, but nothing was pressed: the action cannot have taken effect.
         assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
           tag: "NotActionable",
-          dispatched: true,
+          dispatched: false,
         });
         assert.lengthOf(requests, 1);
         assert.deepStrictEqual(
@@ -936,6 +937,131 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           });
         }
       }
+    }),
+  );
+
+  // Scroll-spy documentation and feeds record where the reader is in the URL fragment.
+  const scrollSpy =
+    '<body style="margin:0"><h1>Top</h1><div style="height:2500px"></div>' +
+    '<button id="act" onclick="this.textContent=\'clicked\'">Act</button><div style="height:2500px"></div>' +
+    '<form onsubmit="event.preventDefault(); document.body.dataset.sent = \'yes\'"><input name="q"><button>Send</button></form>' +
+    '<div style="height:2500px"></div>' +
+    '<script>addEventListener("scroll", () => history.replaceState(null, "", "#y" + Math.round(scrollY / 500)))</script></body>';
+
+  for (const [label, options] of [
+    ["unguarded", {}],
+    ["guarded", { guard: () => Effect.void }],
+    ["guarded and humanized", { guard: () => Effect.void, humanize: true }],
+  ] as const) {
+    it.effect("follows a scroll-spy fragment to an off-screen control, " + label, () =>
+      Effect.gen(function* () {
+        const { page } = yield* setup(options);
+
+        yield* Effect.promise(() => page.playwright.setContent(scrollSpy));
+        const snapshot = yield* page.snapshot({ full: true });
+
+        yield* page.click(refOf(snapshot, "button", "Act"));
+        yield* page.click(refOf(snapshot, "button", "Send"));
+        assert.strictEqual(
+          yield* Effect.promise(() => page.playwright.locator("#act").textContent()),
+          "clicked",
+        );
+        assert.strictEqual(
+          yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.sent)),
+          "yes",
+        );
+      }),
+    );
+  }
+
+  it.effect("refuses a held click after its page's hash route changes", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+
+      const { page } = yield* setup({
+        guard: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+      });
+
+      // A hash router's route selects what a persistent control acts on.
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<button onclick="document.body.dataset.removed = location.hash">Remove item</button>' +
+            '<script>history.replaceState(null, "", "#/items/1")</script>',
+        ),
+      );
+
+      const held = yield* failure(
+        page.click(refOf(yield* page.snapshot(), "button", "Remove item")),
+      ).pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+      yield* Effect.promise(() => page.playwright.evaluate(() => (location.hash = "#/items/2")));
+      yield* Deferred.succeed(released, undefined);
+
+      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
+      assert.isUndefined(
+        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.removed)),
+      );
+    }),
+  );
+
+  it.effect("counts a selection dispatched only when its script may have run", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
+
+      for (const guarded of [false, true])
+        for (const [failure, dispatched] of [
+          ["Cannot find context with specified id", false],
+          ["Execution context was destroyed.", true],
+        ] as const) {
+          const context = yield* Effect.acquireRelease(
+            Effect.promise(() => native.newContext()),
+            (context) => Effect.promise(() => context.close()),
+          );
+
+          const createSession = context.newCDPSession.bind(context);
+
+          // The selection script's own evaluation fails as a vanished or destroyed context would.
+          context.newCDPSession = async (target) => {
+            const cdp = await createSession(target);
+            const send = cdp.send.bind(cdp);
+
+            cdp.send = ((method, params) =>
+              method === "Runtime.evaluate" &&
+              (params as { readonly expression?: string } | undefined)?.expression?.startsWith(
+                "globalThis.__effectBrowser.select(",
+              ) === true
+                ? Promise.reject(new Error("Protocol error (Runtime.evaluate): " + failure))
+                : send(method, params)) as typeof cdp.send;
+
+            return cdp;
+          };
+
+          const browser = yield* makeBrowser(
+            context,
+            { id: "select-test", provider: "test" },
+            guarded ? { guard: () => Effect.void } : {},
+          );
+
+          const page = yield* browser.newPage();
+
+          yield* Effect.promise(() =>
+            page.playwright.setContent(
+              '<select aria-label="Coin"><option>Bitcoin</option><option>Ether</option></select>',
+            ),
+          );
+
+          const error = yield* Effect.flip(
+            page.select(refOf(yield* page.snapshot(), "combobox", "Coin"), ["Ether"]),
+          );
+
+          assert.strictEqual(error.reason._tag, "NotActionable");
+          assert.strictEqual(error.dispatched, dispatched, failure);
+        }
     }),
   );
 

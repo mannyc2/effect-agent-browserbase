@@ -91,21 +91,24 @@ const browser = Chromium.layer({
 
 Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
 the action timeout. They do not keep the page locked. After approval, the library verifies the same
-document, target and relevant facts before sending input: a control's name is bound, other page text
-such as a live price is not. Changed targets fail undispatched; the library never retries the action
-or the policy automatically. A pointer press is checked again once the pointer has arrived and the
-page has had a frame to react: the approved control must still receive the press point, so a control
-that appears under the pointer, such as a hover menu, stops the action before the button goes down.
-A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary
-failed receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque
-frames expose their outer element's metadata.
+document, target and relevant facts before sending input: a control's name is bound but other page
+text, such as a live price, is not; the URL is bound without a fragment that only marks a place on
+the page, as scroll-spy and feed pages rewrite while scrolling (a `#/` or `#!` hash route stays
+bound). Changed targets fail undispatched; the library never retries the action or the policy
+automatically. A pointer press is checked again once the pointer has arrived and the page has had a
+frame to react: the approved control must still receive the press point, so a control that appears
+under the pointer, such as a hover menu, stops the action before the button goes down. A policy
+timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
+receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque frames
+expose their outer element's metadata.
 
 With `humanize`, off-screen ref targets are reached with visible wheel input before the pointer
 moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action
 does not scroll. After scrolling, a guarded action checks the original target again; a page handler
-that changes its meaning can therefore stop it after its wheel input but before a click. Drag
-endpoints are resolved together in the final viewport, and checked under the pointer, before the
-button is pressed.
+that changes its meaning can therefore stop it after its wheel input but before a click, and the
+failure is undispatched: travel toward a press is not the action's input. Drag endpoints are
+resolved together in the final viewport, and checked under the pointer, before the button is
+pressed.
 
 Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
 every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination
@@ -139,16 +142,17 @@ stops the unsent suffix and releases held input.
 
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
 uses Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
-link or change a select, so `type` refuses before any input when its `into` ref is not a text
-field or, without `into`, when focus is on such a control; `press` sends keys to those.
-Humanized typing aims for about 75 WPM including slower word starts, with key holds around 110 ms
-that can overlap. The ordered schedule releases a repeated physical key before pressing it again.
-Keys follow that schedule without waiting for each network reply. Pending replies are bounded and
-drained before an action succeeds; interruption stops new input and releases every submitted held
-key. Shortcut chords retain Playwright’s platform-specific editing behavior. Keys never follow a
-navigation: when the page moves to another document mid-action, typing and repeated presses stop
-with a dispatched `NotActionable`. Under a guard, typing's submit Enter and each repeated Enter or
-Space are first checked against the approved element.
+link or change a select, so `type` refuses before any input when its `into` ref is not a text field
+or, without `into`, when focus is on such a control; `press` sends keys to those. Humanized typing
+aims for about 75 WPM including slower word starts, with key holds around 110 ms that can overlap.
+The ordered schedule releases a repeated physical key before pressing it again. Keys follow that
+schedule without waiting for each network reply. Pending replies are bounded and drained before an
+action succeeds; interruption stops new input and releases every submitted held key. Shortcut chords
+retain Playwright’s platform-specific editing behavior. Before each key, typing and repeated presses
+check that the page is still in the document the action began in, and stop with a dispatched
+`NotActionable` once it has moved on. The browser reports a new document as it commits, so a key
+sent within about one protocol round trip of that commit can still reach it. Under a guard, typing's
+submit Enter and each repeated Enter or Space are first checked against the approved element.
 
 `Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
 corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The

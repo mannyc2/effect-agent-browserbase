@@ -239,8 +239,9 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         const error = yield* page.click(refOf(snapshot, "Target")).pipe(Effect.flip);
 
+        // The wheels only approached the target; with nothing pressed, the click had no effect.
         assert.strictEqual(error.reason._tag, "NotActionable");
-        assert.isTrue(error.dispatched);
+        assert.isFalse(error.dispatched);
         assert.isAbove(wheelCalls(calls).length, 0);
         assert.isEmpty(calls.filter((call) => call.input.type === "mousePressed"));
         assert.isEmpty((yield* events(page)).filter((event) => event.type === "click"));
