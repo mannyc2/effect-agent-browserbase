@@ -6,14 +6,16 @@
  * key travels only in the `X-BB-API-Key` header and is redacted from logs and traces. Redirects
  * are refused rather than followed, because following one would send the key wherever it points.
  *
+ * Every request has a deadline, so a provider that never answers cannot hold a caller's scope open.
  * Reads are retried twice on transient failures. Writes are not: a session create that fails in
- * transit may still have created the session, which then ends at its timeout.
+ * transit or misses its deadline may still have created the session, which then ends at its timeout.
  *
  * @since 0.3.0
  */
 import {
   Config,
   Context,
+  Duration,
   Effect,
   flow,
   identity,
@@ -205,6 +207,8 @@ export interface Options {
   readonly apiKey: Redacted.Redacted<string>;
   /** Defaults to `https://api.browserbase.com`. */
   readonly baseUrl?: string | undefined;
+  /** Bound on each request attempt, including reading its answer. Defaults to 60 seconds. */
+  readonly requestTimeout?: Duration.Input | undefined;
 }
 
 const ids = /^[A-Za-z0-9_-]{1,128}$/;
@@ -254,6 +258,8 @@ export const make = Effect.fnUntraced(function* (options: Options) {
   const failure = (operation: string, reason: Reason) =>
     new BrowserbaseError({ operation, reason });
 
+  const requestTimeout = Duration.fromInputUnsafe(options.requestTimeout ?? Duration.seconds(60));
+
   /** Send one request; on a success status, read the answer with `read`. */
   const send = <A>(
     operation: string,
@@ -278,6 +284,20 @@ export const make = Effect.fnUntraced(function* (options: Options) {
               ),
             ),
       ),
+      // The deadline also applies inside a caller's uninterruptible acquisition, such as the
+      // session create in Browserbase.open, so that acquisition always settles.
+      Effect.timeoutOrElse({
+        duration: requestTimeout,
+        orElse: () =>
+          Effect.fail(
+            failure(
+              operation,
+              new Transport({
+                detail: `no answer within ${Duration.format(requestTimeout)}`,
+              }),
+            ),
+          ),
+      }),
       request.method === "GET"
         ? Effect.retry({
             while: isTransient,

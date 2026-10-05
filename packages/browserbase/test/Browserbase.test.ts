@@ -4,9 +4,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Fiber, Layer, Redacted } from "effect";
 import { Browser } from "effect-browser/Browser";
-import { FetchHttpClient } from "effect/http";
+import { FetchHttpClient, HttpClient } from "effect/http";
+import { TestClock } from "effect/testing";
 import { chromium } from "playwright-core";
 
 import * as Browserbase from "../src/Browserbase.ts";
@@ -310,6 +311,44 @@ describe("BrowserbaseClient", () => {
 });
 
 describe("Browserbase", () => {
+  it.effect("settles a session create that never answers, without sending it again", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+
+      const silent = HttpClient.make(() =>
+        Effect.sync(() => {
+          requests += 1;
+        }).pipe(Effect.andThen(Effect.never)),
+      );
+
+      const client = clientLayer({
+        apiKey: Redacted.make("test-key"),
+        baseUrl: "http://127.0.0.1:9",
+      }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, silent)));
+
+      const open = Browserbase.open().pipe(Effect.scoped, Effect.provide(client));
+
+      // Alone, the create fails at its deadline with the reason that says it may exist.
+      const alone = yield* Effect.forkChild(Effect.flip(open));
+
+      yield* TestClock.adjust("60 seconds");
+      const error = yield* Fiber.join(alone);
+
+      assert.deepStrictEqual(
+        [error.operation, error.reason._tag, error.message],
+        ["createSession", "Transport", "Browserbase createSession failed: no answer within 1m"],
+      );
+
+      // A caller that stops waiting, such as a trial timeout, finishes once the create settles.
+      const stopped = yield* Effect.forkChild(open);
+      const stopping = yield* Effect.forkChild(Fiber.interrupt(stopped));
+
+      yield* TestClock.adjust("60 seconds");
+      yield* Fiber.join(stopping);
+      assert.strictEqual(requests, 2);
+    }),
+  );
+
   it.live("opens a browser on a new session and releases the session when the scope closes", () =>
     Effect.gen(function* () {
       const port = yield* listen(() => undefined).pipe(
