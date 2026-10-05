@@ -54,7 +54,7 @@ import {
   TrackPlanned,
   WheelScrolled,
 } from "./BrowserEvent.ts";
-import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import { type CaptureStats, Frame, Image, type ScreencastOptions, Screenshot } from "./Frame.ts";
 import * as Capture from "./internal/capture.ts";
 import * as BrowserClock from "./internal/clock.ts";
 import * as Human from "./internal/human.ts";
@@ -205,10 +205,16 @@ export interface Page {
 
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /**
-   * A picture of the viewport: the latest screencast frame when it was painted after the latest
-   * input and within the last 250 ms, else a new screenshot.
+   * A picture of the viewport: the latest screencast frame when no action is changing the page and
+   * it was painted after the latest input and delivered within the last 250 ms, else a new
+   * screenshot.
    */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
+  /**
+   * The viewport now, with its timing: the newest screencast frame under the same rule as
+   * `screenshot`, else a new screenshot timed by the host interval in which it was taken.
+   */
+  readonly currentFrame: Effect.Effect<Frame, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
   /**
@@ -349,9 +355,10 @@ type MouseEvent = {
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 
-// Several 60 Hz frame intervals plus local delivery: an animating page keeps reusing its stream,
-// while a page that stopped changing gets a real capture. A lost final paint can be served for
-// at most this long after the last frame that did arrive.
+// Several 60 Hz frame intervals: while a page changes, its stream keeps delivering and its newest
+// frame is reused; once the stream goes quiet, a real capture is taken. A lost final paint can be
+// served for at most this long after the last frame that did arrive. Delivery time, not paint
+// time, measures this, so a remote browser's transport delay does not disqualify every frame.
 const currentPaintMillis = 250;
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
@@ -361,17 +368,21 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
-  // The latest input submission, or the moment an operation was about to change the page. Paint
-  // from before it can never be reused as the current viewport, even while an action is running.
-  let lastInputAt = 0;
+  // Actions that have started changing the page and not yet ended, and the latest submitted input
+  // or page change. While an action runs no cached paint is current; afterwards only paint from
+  // after its latest input is. An action ends after its input was handled, so if that input changed
+  // the page, newer paint follows; a lost final paint is bounded by recency instead.
+  let changing = 0;
+  let inputAt = 0;
+
+  const noteInput = () => {
+    inputAt = Math.max(inputAt, now());
+  };
+
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
   // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
   const owned = Effect.provideService(Clock.Clock, clock);
-
-  const markInput = () => {
-    lastInputAt = Math.max(lastInputAt, now());
-  };
 
   const input = Input.make();
   const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
@@ -436,7 +447,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
     const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
-    markInput();
+    noteInput();
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
     submitted?.();
@@ -491,7 +502,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const event = new KeyChanged({ at, page: id, key, phase });
     const response = command(at, inputClocks.get(run));
 
-    markInput();
+    noteInput();
     publish(event);
 
     return response;
@@ -501,7 +512,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const track = new TextInserted({ at: now(), page: id, text });
     const response = cdp.send("Input.insertText", { text });
 
-    markInput();
+    noteInput();
     publish(track);
 
     return response;
@@ -744,14 +755,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const startedAt = now();
       const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
-      const touched = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
 
-      // The page may react to preparatory input, so pictures after it must be fresh, but only
-      // the action's own input can have given it effect.
+      // The page may react to preparatory input, so no cached paint is current while the action
+      // runs, but only the action's own input can have given it effect. `touched` covers both and
+      // changes in one step with `changing`, so an interruption cannot unbalance the count.
+      let touched = false;
+
+      const touch = Effect.sync(() => {
+        if (!touched) changing += 1;
+        touched = true;
+        noteInput();
+      });
+
       const marks = {
-        sent: Ref.set(sent, true).pipe(Effect.andThen(Effect.sync(markInput))),
-        touched: Ref.set(touched, true).pipe(Effect.andThen(Effect.sync(markInput))),
+        sent: Ref.set(sent, true).pipe(Effect.andThen(touch)),
+        touched: touch,
         at: (point: Point) => Ref.set(at, Option.some(point)),
       };
 
@@ -890,7 +909,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
 
-          if (dispatched || (yield* Ref.get(touched))) markInput();
+          if (touched) changing -= 1;
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
           publish(
@@ -1997,28 +2016,30 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       owned,
     );
 
-  const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
-    Effect.gen(function* () {
-      const frame = yield* capture.latest;
-      const active = yield* capture.active;
-      const since = lastInputAt;
+  // The newest screencast frame, only while it demonstrably shows the viewport now. Delivery can
+  // be delayed, so its whole paint interval must follow the latest input, and no action may be
+  // changing the page. A screencast sends only changes and can miss a page's final paint, so a
+  // quiet stream is no evidence that its newest frame is still current: it must also have been
+  // delivered recently, at the viewport's size.
+  const currentPaint = Effect.gen(function* () {
+    const frame = yield* capture.latest;
+    const active = yield* capture.active;
+    const viewport = knownViewport();
 
-      // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
-      // A screencast sends only changes and can miss a page's final paint, so a quiet stream is no
-      // evidence that its newest frame is still current: reuse needs recent paint as well.
-      const viewport = knownViewport();
-
-      if (
-        screenshotOptions.fresh !== true &&
-        screenshotOptions.clip === undefined &&
+    return Option.filter(
+      frame,
+      (latest) =>
         active &&
-        Option.isSome(frame) &&
-        frame.value.hostTime - frame.value.timing.uncertaintyMillis > since + 100 &&
-        frame.value.hostTime - frame.value.timing.uncertaintyMillis > now() - currentPaintMillis &&
-        frame.value.width === viewport?.width &&
-        frame.value.height === viewport.height
-      )
-        return frame.value.image;
+        changing === 0 &&
+        latest.hostTime - latest.timing.uncertaintyMillis > inputAt &&
+        latest.receivedAt > now() - currentPaintMillis &&
+        latest.width === viewport?.width &&
+        latest.height === viewport.height,
+    );
+  });
+
+  const takeScreenshot = (screenshotOptions: ScreenshotOptions) =>
+    Effect.gen(function* () {
       const quality = screenshotOptions.quality ?? 80;
       const timeout = Duration.toMillis(settings.actionTimeout);
 
@@ -2039,6 +2060,40 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       return new Image({ data, mediaType: "image/jpeg", width: size.width, height: size.height });
     });
+
+  const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
+    Effect.gen(function* () {
+      const reusable =
+        screenshotOptions.fresh === true || screenshotOptions.clip !== undefined
+          ? Option.none<Frame>()
+          : yield* currentPaint;
+
+      return Option.isSome(reusable)
+        ? reusable.value.image
+        : yield* takeScreenshot(screenshotOptions);
+    });
+
+  // A new screenshot has no paint time, only the host interval in which it was taken.
+  const currentFrame = Effect.gen(function* () {
+    const reusable = yield* currentPaint;
+
+    if (Option.isSome(reusable)) return reusable.value;
+    const startedAt = now();
+    const image = yield* takeScreenshot({});
+    const finishedAt = now();
+
+    return new Frame({
+      page: id,
+      data: image.data,
+      timing: new Screenshot({
+        hostTime: startedAt + (finishedAt - startedAt) / 2,
+        uncertaintyMillis: (finishedAt - startedAt) / 2,
+      }),
+      receivedAt: finishedAt,
+      width: image.width,
+      height: image.height,
+    });
+  }).pipe(owned);
 
   const zoom = (requested: Region) =>
     lock
@@ -2171,6 +2226,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
     snapshot,
     screenshot,
+    currentFrame,
     zoom,
     viewport: viewportFor("viewport").pipe(
       Effect.timeoutOrElse({

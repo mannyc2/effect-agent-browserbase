@@ -172,10 +172,13 @@ Compare these stamps only within that clock: they are not epoch dates or compara
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
 Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
 Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
-`Page.screenshot({ fresh: true })` bypasses the frame cache. A cached frame is reused only if it
-was painted after the page's latest submitted input, including input of a running or interrupted
-action, and within the last 250 ms: a screencast sends only changes and can miss a final paint, so
-a page that stopped changing gets a new capture. Every operation is recorded as an `Action`, also when its caller interrupts it.
+`Page.screenshot({ fresh: true })` bypasses the frame cache. A cached frame is reused only while no
+action is changing the page, if it was painted after the page's latest submitted input (including
+input of an interrupted action) and delivered within the last 250 ms: a screencast sends only
+changes and can miss a final paint, so a page that stopped changing gets a new capture. `Page.currentFrame` applies the same rule and
+returns the new capture as a `Screenshot`-timed frame. A `Moment`'s last frame comes from it, so a
+stopped capture, a lost final paint or later input never presents older paint as the moment.
+Every operation is recorded as an `Action`, also when its caller interrupts it.
 
 Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
 on a private blank page before user scripts or public pages run. `Browser.captureCalibration`

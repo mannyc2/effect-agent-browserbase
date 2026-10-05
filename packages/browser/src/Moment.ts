@@ -6,7 +6,8 @@
  * and returns a structured account: by default a `Description`, or any schema the caller passes,
  * such as one with a field for a video prompt.
  *
- * Frames come from a running screencast. Without one, `capture` takes a single screenshot.
+ * Frames come from a running screencast. The last frame is the page now: the newest retained frame
+ * only while `Page.currentFrame` holds it current, else a new screenshot timed by its capture.
  *
  * @since 0.3.0
  */
@@ -15,7 +16,7 @@ import { type AiError, LanguageModel, Prompt } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import { BrowserEvent, TrackEvent } from "./BrowserEvent.ts";
-import { Frame, Screenshot } from "./Frame.ts";
+import { Frame } from "./Frame.ts";
 import * as Usage from "./internal/usage.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot } from "./Snapshot.ts";
@@ -109,28 +110,18 @@ export const capture = Effect.fn("Moment.capture")(function* (
     (frame) => frame.hostTime >= since && frame.hostTime <= at,
   );
 
+  // The moment itself must show the page now. A retained frame qualifies only while it is current:
+  // its capture may have stopped, missed a final paint, or been followed by input. Otherwise a new
+  // screenshot, timed by its own capture interval, is the moment. Either way the selection spans
+  // the whole window, so a two-frame moment still begins where the window does.
+  const current = yield* page.currentFrame;
+
+  const frames = spread(
+    recent.at(-1) === current ? recent : [...recent.filter((frame) => frame !== current), current],
+    options.frames ?? 2,
+  );
+
   const snapshot = yield* page.snapshot({ maxChars: options.snapshotChars ?? 4000 });
-  let frames = spread(recent, options.frames ?? 2);
-
-  if (frames.length === 0) {
-    const startedAt = yield* browser.now;
-    const image = yield* page.screenshot({ fresh: true });
-    const finishedAt = yield* browser.now;
-
-    frames = [
-      new Frame({
-        page: page.id,
-        data: image.data,
-        timing: new Screenshot({
-          hostTime: startedAt + (finishedAt - startedAt) / 2,
-          uncertaintyMillis: Math.max(0, (finishedAt - startedAt) / 2),
-        }),
-        receivedAt: finishedAt,
-        width: image.width,
-        height: image.height,
-      }),
-    ];
-  }
 
   const events = (yield* browser.recentEvents).filter(
     (event) =>
