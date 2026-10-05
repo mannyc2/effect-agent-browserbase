@@ -12,7 +12,6 @@ import {
   Context,
   Duration,
   Effect,
-  Layer,
   Option,
   Queue,
   Ref,
@@ -309,19 +308,3 @@ export const make = Effect.fn("Browser.make")(function* (
 
   return Browser.of(service);
 });
-
-/** A Layer over a context a provider acquires in the same scope. */
-export const layer = <E, R>(
-  acquire: Effect.Effect<
-    { readonly context: BrowserContext; readonly id: string; readonly provider: string },
-    E,
-    R
-  >,
-  options?: Options,
-): Layer.Layer<Browser, E | BrowserError, Exclude<R, Scope.Scope>> =>
-  Layer.effect(
-    Browser,
-    Effect.flatMap(acquire, ({ context, id, provider }) =>
-      make(context, { id, provider }, options),
-    ),
-  );
