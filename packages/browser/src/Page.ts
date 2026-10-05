@@ -4,7 +4,7 @@
  * Every operation on a page runs one at a time, in call order. Element targets are refs from a
  * snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
  * screenshot's pixels. Mouse input goes straight to the Chrome DevTools Protocol and is pipelined,
- * so a click costs one round trip even on a remote browser.
+ * so its dispatch costs one round trip even on a remote browser. Targets are resolved first.
  *
  * @since 0.3.0
  */
@@ -49,6 +49,31 @@ export interface Point {
 
 /** A ref from a snapshot, such as `"e12"`, or a viewport point. */
 export type Target = string | Point;
+
+/** An integer rectangle in viewport CSS pixels. */
+export class Region extends Schema.Class<Region>("effect-browser/Region")({
+  x: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  y: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  width: Schema.Int.check(Schema.isGreaterThan(0)),
+  height: Schema.Int.check(Schema.isGreaterThan(0)),
+}) {}
+
+/** A crop and its viewport origin: add that origin to a point read from the crop. */
+export class Zoom extends Schema.Class<Zoom>("effect-browser/Zoom")({
+  page: Schema.String,
+  region: Region,
+  image: Image,
+}) {}
+
+/** The target as it read before input. Point coordinates are never snapped to another position. */
+export class ResolvedTarget extends Schema.Class<ResolvedTarget>("effect-browser/ResolvedTarget")({
+  point: Schema.Struct({ x: Schema.Finite, y: Schema.Finite }),
+  element: Schema.String,
+  role: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  cursor: Schema.String,
+  href: Schema.optional(Schema.String),
+}) {}
 
 export interface ClickOptions {
   readonly button?: "left" | "right" | "middle" | undefined;
@@ -141,6 +166,8 @@ export interface Page {
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /** A picture of the viewport: the latest screencast frame when one is current, else a screenshot. */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
+  /** A full-resolution crop, with the origin needed to keep subsequent input in viewport pixels. */
+  readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
   /** An outline, a picture, or both (the default), taken together. */
   readonly observe: (options?: {
     readonly mode?: ObservationMode;
@@ -149,7 +176,10 @@ export interface Page {
   }) => Effect.Effect<Observation, BrowserError>;
   readonly hasText: (text: string) => Effect.Effect<boolean, BrowserError>;
 
-  readonly click: (target: Target, options?: ClickOptions) => Effect.Effect<void, BrowserError>;
+  readonly click: (
+    target: Target,
+    options?: ClickOptions,
+  ) => Effect.Effect<ResolvedTarget, BrowserError>;
   readonly hover: (target: Target) => Effect.Effect<void, BrowserError>;
   readonly drag: (from: Target, to: Target) => Effect.Effect<void, BrowserError>;
   readonly type: (text: string, options?: TypeOptions) => Effect.Effect<void, BrowserError>;
@@ -449,32 +479,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
 
-  const checkPoint = (operation: string, point: Point) => {
-    const viewport = playwright.viewportSize();
-
-    const inside =
-      Number.isFinite(point.x) &&
-      Number.isFinite(point.y) &&
-      point.x >= 0 &&
-      point.y >= 0 &&
-      (viewport === null || (point.x < viewport.width && point.y < viewport.height));
-
-    return inside
-      ? Effect.succeed({ point, element: undefined as string | undefined })
-      : failWith(
-          operation,
-          new InvalidRequest({
-            detail: `(${point.x}, ${point.y}) is outside the ${viewport === null ? "" : `${viewport.width}x${viewport.height} `}viewport`,
-          }),
-        );
-  };
-
   const resolve = (operation: string, target: Target) => {
-    if (typeof target !== "string") return checkPoint(operation, target);
-    if (!/^e\d+$/.test(target))
+    if (typeof target === "string" && !/^e\d+$/.test(target))
       return failWith(
         operation,
         new InvalidRequest({ detail: `"${target}" is not a ref; refs look like e12` }),
+      );
+    if (typeof target !== "string" && (!Number.isFinite(target.x) || !Number.isFinite(target.y)))
+      return failWith(
+        operation,
+        new InvalidRequest({ detail: "point coordinates must be finite" }),
       );
 
     return evaluate(operation, scriptCall("point", target)).pipe(
@@ -483,11 +497,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         "error" in result
           ? failWith(
               operation,
-              result.error === "stale"
+              result.error === "stale" && typeof target === "string"
                 ? new StaleRef({ ref: target })
-                : new NotActionable({ detail: result.detail }),
+                : result.error === "outside"
+                  ? new InvalidRequest({ detail: result.detail })
+                  : new NotActionable({ detail: result.detail }),
             )
-          : Effect.succeed({ point: { x: result.x, y: result.y }, element: result.element }),
+          : Effect.succeed(
+              new ResolvedTarget({
+                point: { x: result.x, y: result.y },
+                element: result.element,
+                role: result.role,
+                name: result.name,
+                cursor: result.cursor,
+                ...(result.href === undefined ? {} : { href: result.href }),
+              }),
+            ),
       ),
     );
   };
@@ -530,7 +555,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       settings.actionTimeout,
       (marks) =>
         Effect.gen(function* () {
-          const { point, element } = yield* resolve("click", target);
+          const resolved = yield* resolve("click", target);
+          const { point, element } = resolved;
           const button = clickOptions.button ?? "left";
           const count = Math.max(1, Math.min(3, clickOptions.clickCount ?? 1));
 
@@ -561,6 +587,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           }
           yield* flush("click");
           yield* settle;
+
+          return resolved;
         }),
     );
 
@@ -888,6 +916,43 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return new Image({ data, mediaType: "image/jpeg", width: size.width, height: size.height });
     });
 
+  const zoom = (requested: Region) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        const region = yield* Schema.decodeEffect(Region)(requested).pipe(
+          Effect.mapError(
+            (error) =>
+              new BrowserError({
+                operation: "zoom",
+                reason: new InvalidRequest({ detail: error.message }),
+                dispatched: false,
+              }),
+          ),
+        );
+
+        const viewport =
+          playwright.viewportSize() ??
+          (yield* evaluate("zoom", scriptCall("viewport")).pipe(
+            Effect.flatMap(decodeWith("zoom", Script.ViewportResultSchema)),
+          ));
+
+        if (region.x + region.width > viewport.width || region.y + region.height > viewport.height)
+          return yield* failWith(
+            "zoom",
+            new InvalidRequest({ detail: "the crop must fit entirely within the viewport" }),
+          );
+        const image = yield* screenshot({ clip: region });
+
+        return new Zoom({ page: id, region, image });
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: settings.actionTimeout,
+          orElse: () =>
+            failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+        }),
+      ),
+    );
+
   const observe = (
     observeOptions: {
       readonly mode?: ObservationMode;
@@ -1055,6 +1120,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
     snapshot,
     screenshot,
+    zoom,
     observe,
     hasText,
     click,

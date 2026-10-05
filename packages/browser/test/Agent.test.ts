@@ -1,6 +1,6 @@
 // The agent, its tools and moment descriptions, driven by scripted models: no model is called.
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
 import { LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 import * as Agent from "../src/Agent.ts";
@@ -172,7 +172,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
       assert.strictEqual(yield* read(page, "#outcome"), "Ordered 25 btc");
       assert.include(String(steps[0]?.results[0]?.result), 'Typed "25"');
-      assert.match(String(steps[0]?.results[1]?.result), /^Clicked e\d+\.$/);
+      assert.match(String(steps[0]?.results[1]?.result), /^Clicked .*"Submit" at \(\d+, \d+\)\.$/);
       assert.include(textOf(model.prompts[1]!), "text: Ordered 25 btc");
       assert.deepStrictEqual(model.prompts.map(pictures), [1, 2]);
       assert.strictEqual(pictures(result.history), 3);
@@ -694,6 +694,180 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  for (const observationMode of ["both", "outline"] as const) {
+    it.effect(
+      "delivers every new zoom crop once with the " + observationMode + " turn observation",
+      () =>
+        Effect.gen(function* () {
+          const page = yield* start("/chart");
+          const tracked = yield* trackObservations(page);
+
+          const model = scripted([
+            () => [
+              ...Array.from({ length: 8 }, (_, index) =>
+                call("browser_zoom", {
+                  x: index * 10,
+                  y: 0,
+                  width: 100,
+                  height: 60,
+                }),
+              ),
+              finish,
+            ],
+            (prompt) => {
+              const observation = prompt.content
+                .filter((message) => message.role === "user")
+                .at(-1);
+
+              const text =
+                observation?.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n") ?? "";
+
+              assert.strictEqual(
+                observation?.content.filter((part) => part.type === "file").length,
+                observationMode === "both" ? 9 : 8,
+              );
+              assert.strictEqual(resultsIn(prompt).length, 8);
+              assert.isTrue(resultsIn(prompt).every((part) => !part.isFailure));
+              for (let index = 0; index < 8; index++) {
+                assert.include(text, "viewport origin (" + index * 10 + ", 0)");
+              }
+              assert.include(text, "Add this origin to image coordinates");
+
+              return [call("browser_wait", { seconds: 0 }), finish];
+            },
+            (prompt) => {
+              const observation = prompt.content
+                .filter((message) => message.role === "user")
+                .at(-1);
+
+              const text =
+                observation?.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n") ?? "";
+
+              assert.strictEqual(
+                observation?.content.filter((part) => part.type === "file").length,
+                observationMode === "both" ? 1 : 0,
+              );
+              assert.notInclude(text, "Zoom from page");
+              assert.strictEqual(pictures(prompt), 1);
+
+              return [call("done", { answer: "seen" }), finish];
+            },
+          ]);
+
+          const result = yield* Agent.run("Inspect small details.", {
+            keepPictures: 1,
+            observation: observationMode,
+          }).pipe(Effect.provide(model.layer), Effect.provideService(Browser, tracked.browser));
+
+          assert.strictEqual(result.answer, "seen");
+          assert.strictEqual(tracked.observations.length, 4);
+          assert.strictEqual(textOf(result.history).split("Zoom from page").length - 1, 8);
+        }),
+    );
+  }
+
+  it.effect("delivers requested crops in outline mode even when the observation fails", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/chart");
+      const browser = yield* Browser;
+      let observations = 0;
+
+      const observed: Page = {
+        ...page,
+        observe: (options) =>
+          Effect.suspend(() => {
+            observations += 1;
+
+            return observations === 2
+              ? Effect.fail(
+                  new BrowserError({
+                    operation: "observe",
+                    reason: new Failed({ detail: "fixture observation failed" }),
+                    dispatched: false,
+                  }),
+                )
+              : page.observe(options);
+          }),
+      };
+
+      const model = scripted([
+        () => [call("browser_zoom", { x: 10, y: 20, width: 100, height: 60 }), finish],
+        (prompt) => {
+          assert.strictEqual(pictures(prompt), 1);
+          assert.include(textOf(prompt), "could not be observed");
+          assert.include(textOf(prompt), "viewport origin (10, 20)");
+          assert.isFalse(resultsIn(prompt)[0]?.isFailure);
+
+          return [call("done", { answer: "seen" }), finish];
+        },
+      ]);
+
+      const result = yield* Agent.run("Inspect a detail.", { observation: "outline" }).pipe(
+        Effect.provide(model.layer),
+        Effect.provideService(
+          Browser,
+          Browser.of({
+            ...browser,
+            page: Effect.succeed(observed),
+            pages: browser.pages.pipe(
+              Effect.map((pages) => pages.map((open) => (open === page ? observed : open))),
+            ),
+          }),
+        ),
+      );
+
+      assert.strictEqual(pictures(model.prompts[0]!), 0);
+      assert.strictEqual(pictures(result.history), 1);
+      assert.strictEqual(textOf(result.history).split("Zoom from page").length - 1, 1);
+      assert.strictEqual(observations, 3);
+    }),
+  );
+
+  it.effect("bounds concurrent pending zooms before capture and drains them once", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/chart");
+      const tools = yield* Tools.make();
+      const screenshot = page.playwright.screenshot.bind(page.playwright);
+      let captures = 0;
+
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          page.playwright.screenshot = (...args: Parameters<typeof screenshot>) => {
+            captures += 1;
+
+            return screenshot(...args);
+          };
+        }),
+        () =>
+          Effect.sync(() => {
+            page.playwright.screenshot = screenshot;
+          }),
+      );
+
+      const attempts = yield* Effect.forEach(
+        Array.from({ length: 9 }, (_, index) => ({ x: index, y: 0, width: 100, height: 60 })),
+        (region) => tools.handlers.browser_zoom(region).pipe(Effect.exit),
+        { concurrency: 9 },
+      );
+
+      assert.strictEqual(attempts.filter(Exit.isSuccess).length, 8);
+      assert.strictEqual(attempts.filter(Exit.isFailure).length, 1);
+      assert.strictEqual(captures, 8);
+      assert.strictEqual((yield* tools.takeZooms).length, 8);
+      assert.strictEqual((yield* tools.takeZooms).length, 0);
+      yield* tools.handlers.browser_zoom({ x: 10, y: 0, width: 100, height: 60 });
+      assert.strictEqual(captures, 9);
+      assert.strictEqual((yield* tools.takeZooms).length, 1);
+      assert.strictEqual((yield* tools.takeZooms).length, 0);
+    }),
+  );
+
   it.effect("plays a canvas game by point and follows tabs", () =>
     Effect.gen(function* () {
       const page = yield* start("/slots");
@@ -709,7 +883,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ),
       );
 
-      assert.include(spin, "Clicked (300, 320).");
+      assert.include(spin, "<canvas#game>");
+      assert.include(spin, "at (300, 320).");
       assert.include(still, "The screen is still.");
       assert.strictEqual(state, 1);
 

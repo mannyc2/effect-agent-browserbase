@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 
-/** An encoded picture of the viewport, in CSS pixels, so its coordinates are click coordinates. */
+/** An encoded picture with its pixel dimensions. Crops also need their viewport origin. */
 export class Image extends Schema.Class<Image>("effect-browser/Image")({
   data: Schema.Uint8Array,
   mediaType: Schema.Literals(["image/jpeg", "image/png"]),

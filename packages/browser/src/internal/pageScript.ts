@@ -28,10 +28,20 @@ export interface SnapshotResult {
   readonly scrollHeight: number;
 }
 
+export interface ResolvedPoint {
+  readonly x: number;
+  readonly y: number;
+  readonly element: string;
+  readonly role: string | null;
+  readonly name: string;
+  readonly cursor: string;
+  readonly href?: string | undefined;
+}
+
 export type PointResult =
-  | { readonly x: number; readonly y: number; readonly element: string }
+  | ResolvedPoint
   | {
-      readonly error: "stale" | "hidden" | "offscreen" | "disabled" | "covered";
+      readonly error: "stale" | "hidden" | "offscreen" | "disabled" | "covered" | "outside";
       readonly detail: string;
     };
 
@@ -42,7 +52,8 @@ export type EditResult =
 export interface PageApi {
   readonly version: number;
   snapshot(request: SnapshotRequest): SnapshotResult;
-  point(ref: string): PointResult;
+  point(target: string | { readonly x: number; readonly y: number }): PointResult;
+  viewport(): { readonly width: number; readonly height: number };
   focus(ref: string, replace: boolean): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
@@ -56,7 +67,7 @@ declare global {
 export const install = (): PageApi => {
   const installed = globalThis.__effectBrowser;
 
-  if (installed !== undefined && installed.version === 1) return installed;
+  if (installed !== undefined && installed.version === 2) return installed;
 
   const byElement = new WeakMap<Element, string>();
   const byRef = new Map<string, WeakRef<Element>>();
@@ -543,7 +554,7 @@ export const install = (): PageApi => {
 
   const describe = (element: Element): string => {
     const id = element.id === "" ? "" : `#${element.id}`;
-    const name = clean(textOf(element), 40);
+    const name = clean(nameOf(element, roleOf(element)), 40);
 
     return `<${element.tagName.toLowerCase()}${id}>${name === "" ? "" : ` "${name}"`}`;
   };
@@ -551,7 +562,127 @@ export const install = (): PageApi => {
   const isRoot = (node: Node): node is Document | ShadowRoot =>
     node.nodeType === Node.DOCUMENT_NODE || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE;
 
-  const point = (ref: string): PointResult => {
+  const parentOf = (element: Element): Element | null => {
+    const root = element.getRootNode();
+
+    return element.parentElement ?? (isRoot(root) && "host" in root ? root.host : null);
+  };
+
+  // A painted child of a control still activates the control; keep its name without moving the point.
+  const controlOf = (hit: Element): Element => {
+    let element: Element | null = hit;
+
+    while (element !== null) {
+      const role = roleOf(element);
+
+      if (
+        (role !== null && (interactiveRoles.has(role) || role === "canvas" || role === "iframe")) ||
+        element.hasAttribute("onclick")
+      )
+        return element;
+      element = parentOf(element);
+    }
+
+    return hit;
+  };
+
+  // Coordinate subtraction is valid only for an untransformed frame. Report the frame itself
+  // otherwise: the real pixel input still works, and its receipt must not name a guessed child.
+  const untransformed = (frame: HTMLIFrameElement, rect: DOMRect): boolean => {
+    if (rect.width !== frame.offsetWidth || rect.height !== frame.offsetHeight) return false;
+    let ancestor: Element | null = frame;
+
+    while (ancestor !== null) {
+      const view = ancestor.ownerDocument.defaultView ?? window;
+      const style = view.getComputedStyle(ancestor);
+
+      if (
+        style.transform !== "none" ||
+        style.scale !== "none" ||
+        style.rotate !== "none" ||
+        style.perspective !== "none" ||
+        style.zoom !== "1"
+      )
+        return false;
+      ancestor = parentOf(ancestor);
+    }
+
+    return true;
+  };
+
+  const hitAt = (root: Document | ShadowRoot, x: number, y: number): Element | null => {
+    let hit = root.elementFromPoint(x, y);
+
+    while (hit?.shadowRoot !== null && hit?.shadowRoot !== undefined) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+
+      if (inner === null || inner === hit) break;
+      hit = inner;
+    }
+    if (hit !== null && isFrame(hit)) {
+      const document = hit.contentDocument;
+
+      if (document !== null) {
+        const rect = hit.getBoundingClientRect();
+
+        if (untransformed(hit, rect))
+          return (
+            hitAt(document, x - rect.left - hit.clientLeft, y - rect.top - hit.clientTop) ?? hit
+          );
+      }
+    }
+
+    return hit;
+  };
+
+  const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
+    let link: Element | null = element;
+
+    while (link !== null && (link.tagName !== "A" || !link.hasAttribute("href")))
+      link = parentOf(link);
+    let href: string | undefined;
+
+    if (link !== null) {
+      try {
+        href = new URL(link.getAttribute("href") ?? "", link.ownerDocument.baseURI).href;
+      } catch {
+        href = undefined;
+      }
+    }
+    const role = roleOf(element);
+    const view = hit.ownerDocument.defaultView ?? window;
+
+    return {
+      x,
+      y,
+      element: describe(element),
+      role,
+      name: nameOf(element, role),
+      cursor: view.getComputedStyle(hit).cursor,
+      ...(href === undefined ? {} : { href }),
+    };
+  };
+
+  const point = (target: string | { readonly x: number; readonly y: number }): PointResult => {
+    if (typeof target !== "string") {
+      const { x, y } = target;
+
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 0 ||
+        y < 0 ||
+        x >= window.innerWidth ||
+        y >= window.innerHeight
+      )
+        return { error: "outside", detail: `(${x}, ${y}) is outside the viewport` };
+      const hit = hitAt(document, x, y);
+
+      return hit === null
+        ? { error: "offscreen", detail: `nothing is painted at (${x}, ${y})` }
+        : details(controlOf(hit), hit, x, y);
+    }
+    const ref = target;
     const element = lookup(ref);
 
     if (element === undefined)
@@ -597,7 +728,12 @@ export const install = (): PageApi => {
       frame = frame.ownerDocument.defaultView?.frameElement ?? null;
     }
 
-    return { x: Math.round(x + offsetX), y: Math.round(y + offsetY), element: describe(element) };
+    return details(
+      element,
+      isRoot(root) ? (hitAt(root, x, y) ?? element) : element,
+      Math.round(x + offsetX),
+      Math.round(y + offsetY),
+    );
   };
 
   const focus = (ref: string, replace: boolean): EditResult => {
@@ -651,7 +787,15 @@ export const install = (): PageApi => {
   const hasText = (text: string): boolean =>
     (document.body?.innerText ?? "").toLowerCase().includes(text.toLowerCase());
 
-  const api: PageApi = { version: 1, snapshot, point, focus, select, hasText };
+  const api: PageApi = {
+    version: 2,
+    snapshot,
+    point,
+    viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
+    focus,
+    select,
+    hasText,
+  };
 
   globalThis.__effectBrowser = api;
 
@@ -676,12 +820,25 @@ export const SnapshotResultSchema = Schema.Struct({
 });
 
 export const PointResultSchema = Schema.Union([
-  Schema.Struct({ x: Schema.Finite, y: Schema.Finite, element: Schema.String }),
   Schema.Struct({
-    error: Schema.Literals(["stale", "hidden", "offscreen", "disabled", "covered"]),
+    x: Schema.Finite,
+    y: Schema.Finite,
+    element: Schema.String,
+    role: Schema.NullOr(Schema.String),
+    name: Schema.String,
+    cursor: Schema.String,
+    href: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    error: Schema.Literals(["stale", "hidden", "offscreen", "disabled", "covered", "outside"]),
     detail: Schema.String,
   }),
 ]);
+
+export const ViewportResultSchema = Schema.Struct({
+  width: Schema.Finite,
+  height: Schema.Finite,
+});
 
 export const EditResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String }),

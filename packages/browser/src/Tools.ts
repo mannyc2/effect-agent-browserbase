@@ -10,12 +10,12 @@
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Option, Schema } from "effect";
+import { Duration, Effect, Option, Schema, Semaphore } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
-import type * as Page from "./Page.ts";
+import * as Page from "./Page.ts";
 
 const ref = Schema.optional(Schema.String).annotate({
   description: "A ref from the latest snapshot, such as e12",
@@ -59,6 +59,12 @@ export const Snapshot = tool(
       description: "Keep only lines containing this text",
     }),
   },
+);
+
+export const Zoom = tool(
+  "browser_zoom",
+  "Read a small viewport region at full CSS resolution. Its image follows the batch; click coordinates stay in viewport space. At most 8 crops per observation.",
+  Page.Region.fields,
 );
 
 export const Click = tool("browser_click", "Click an element by ref, or a point by x and y.", {
@@ -168,6 +174,7 @@ export const BrowserToolkit = Toolkit.make(
   Navigate,
   Back,
   Snapshot,
+  Zoom,
   Click,
   Hover,
   Type,
@@ -192,6 +199,8 @@ export interface Tools {
   readonly toolkit: Toolkit.WithHandler<BrowserTools>;
   /** The tab the tools act on. */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
+  /** Drain the requested crops, once per batch, to include beside the observation. */
+  readonly takeZooms: Effect.Effect<ReadonlyArray<Page.Zoom>>;
 }
 
 const target = (op: {
@@ -216,6 +225,18 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   const browser = yield* Browser;
   const snapshotChars = options.snapshotChars ?? 8000;
   let current = Option.none<Page.Page>();
+  let zooms: Array<Page.Zoom> = [];
+  const zoomLock = yield* Semaphore.make(1);
+
+  const takeZooms = zoomLock.withPermits(1)(
+    Effect.sync(() => {
+      const captured = zooms;
+
+      zooms = [];
+
+      return captured;
+    }),
+  );
 
   const page: Effect.Effect<Page.Page, BrowserError> = Effect.gen(function* () {
     const open = yield* browser.pages;
@@ -237,23 +258,24 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     );
 
   /** Run an action on the current tab, follow a tab it opens, then answer with a receipt. */
-  const act = (
-    done: string,
-    run: (tab: Page.Page) => Effect.Effect<unknown, BrowserError | string>,
+  const act = <A>(
+    done: string | ((result: A) => string),
+    run: (tab: Page.Page) => Effect.Effect<A, BrowserError | string>,
   ) =>
     Effect.gen(function* () {
       const tab = yield* page;
       const before = yield* browser.pages;
 
-      yield* run(tab);
+      const result = yield* run(tab);
+      const receipt = typeof done === "string" ? done : done(result);
       const opened = (yield* browser.pages).filter((other) => !before.includes(other));
       const newest = opened.at(-1);
 
-      if (newest === undefined) return done;
+      if (newest === undefined) return receipt;
       current = Option.some(newest);
       yield* newest.bringToFront.pipe(Effect.ignore);
 
-      return `${done}\nA new tab opened and is now the current tab.`;
+      return `${receipt}\nA new tab opened and is now the current tab.`;
     }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message)));
 
   const tabList = Effect.gen(function* () {
@@ -283,11 +305,29 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
         Effect.map((snapshot) => snapshot.rendered),
         Effect.mapError((error) => error.message),
       ),
+    browser_zoom: (region) =>
+      zoomLock.withPermits(1)(
+        Effect.gen(function* () {
+          if (zooms.length >= 8)
+            return yield* Effect.fail(
+              "At most 8 zoom crops can await an observation; finish the batch first.",
+            );
+          const tab = yield* page;
+          const zoom = yield* tab.zoom(region);
+
+          zooms.push(zoom);
+
+          return `Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
+        }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message))),
+      ),
     browser_click: (op) =>
-      act(`Clicked ${named(op)}.`, (tab) =>
-        Effect.flatMap(target(op), (to) =>
-          tab.click(to, { button: op.button, clickCount: op.double === true ? 2 : 1 }),
-        ),
+      act(
+        (resolved: Page.ResolvedTarget) =>
+          `Clicked ${resolved.element} at (${resolved.point.x}, ${resolved.point.y}).`,
+        (tab) =>
+          Effect.flatMap(target(op), (to) =>
+            tab.click(to, { button: op.button, clickCount: op.double === true ? 2 : 1 }),
+          ),
       ),
     browser_hover: (op) =>
       act(`Hovered over ${named(op)}.`, (tab) => Effect.flatMap(target(op), tab.hover)),
@@ -380,5 +420,6 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     handlers,
     toolkit,
     page,
+    takeZooms,
   } satisfies Tools;
 });
