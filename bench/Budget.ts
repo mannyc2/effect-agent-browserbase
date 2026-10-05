@@ -1,10 +1,10 @@
 // Paid model calls for both runners: one admission ledger, the budgeted OpenRouter client and the
 // pinned endpoint whose bounds every reservation uses.
-import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
+import { Generated, OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import type * as Agent from "effect-browser/Agent";
 import { AiError, type LanguageModel } from "effect/ai";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import * as Diagnostics from "./Diagnostics.ts";
 
@@ -336,7 +336,32 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
 export type Budget = Effect.Success<ReturnType<typeof ledger>>;
 export type Account = Effect.Success<Budget["account"]>;
 
-/** Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. */
+const unbudgeted = "the bench budgets only non-streaming chat completions";
+
+const refused = (method: string) =>
+  Effect.fail(
+    AiError.make({
+      module: "bench",
+      method,
+      reason: new AiError.InvalidRequestError({ description: unbudgeted }),
+    }),
+  );
+
+// The generated client reaches every paid endpoint; this one fails each request before sending it.
+const refusingClient = Generated.make(
+  HttpClient.make((request) =>
+    Effect.fail(
+      new HttpClientError.HttpClientError({
+        reason: new HttpClientError.TransportError({ request, description: unbudgeted }),
+      }),
+    ),
+  ),
+);
+
+/**
+ * Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding.
+ * Streaming, decisions and the raw generated client have no admission, so they are refused.
+ */
 export const budgetedClient = (
   client: OpenRouterClient.Service,
   account: Account,
@@ -347,7 +372,9 @@ export const budgetedClient = (
     readonly provider?: string;
   },
 ): OpenRouterClient.Service => ({
-  ...client,
+  client: refusingClient,
+  createDecisions: () => refused("createDecisions"),
+  createChatCompletionStream: () => refused("createChatCompletionStream"),
   createChatCompletion: (request) =>
     account
       .run(
@@ -359,7 +386,8 @@ export const budgetedClient = (
           service_tier: "default",
           modalities: ["text"],
           // Omission inherits account defaults. Enforced account plugins still need an external
-          // policy check before live runs, because OpenRouter can prevent request overrides.
+          // policy check before live runs, because OpenRouter can prevent request overrides. The
+          // request schema cannot disable web-fetch or moderation; the README says so.
           plugins: [
             { id: "web", enabled: false },
             { id: "file-parser", enabled: false },

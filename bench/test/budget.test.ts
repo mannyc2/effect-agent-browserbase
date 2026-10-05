@@ -308,6 +308,51 @@ describe("BYOK receipts", () => {
   );
 });
 
+describe("unbudgeted routes", () => {
+  it.effect("refuse streaming, decisions and raw generated requests before sending them", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const account = yield* budget.account;
+      let requests = 0;
+
+      const native = yield* OpenRouterClient.make({}).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.sync(() => {
+              requests++;
+
+              return HttpClientResponse.fromWeb(request, new Response("{}"));
+            }),
+          ),
+        ),
+      );
+
+      const wrapped = budgetedClient(native, account, {
+        rates: { input: 1e-6, output: 2e-6 },
+        maxOutputTokens: 64,
+      });
+
+      const request = { model: "openai/test", messages: [{ role: "user" as const, content: "x" }] };
+      const stream = yield* wrapped.createChatCompletionStream(request).pipe(Effect.flip);
+
+      const decisions = yield* wrapped
+        .createDecisions({ model: "openai/test", state: {}, questions: {} })
+        .pipe(Effect.flip);
+
+      const raw = yield* wrapped.client
+        .sendChatCompletionRequest({ payload: request })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(stream.reason._tag, "InvalidRequestError");
+      assert.strictEqual(decisions.reason._tag, "InvalidRequestError");
+      assert.strictEqual(raw._tag, "HttpClientError");
+      assert.strictEqual(requests, 0);
+      assert.strictEqual((yield* account.snapshot).calls, 0);
+    }),
+  );
+});
+
 describe("trial ownership", () => {
   it.live(
     "keeps concurrent Chromium trials separate and alive through another trial's cleanup",

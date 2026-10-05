@@ -77,8 +77,13 @@ provider price ceilings in USD per million tokens. Trials wait while active call
 (BYOK), OpenRouter's `cost` is only its fee, so a BYOK receipt is charged that fee plus its
 `upstream_inference_cost`, and one without the upstream cost is uncertain. A missing receipt or
 unknown charge keeps its reservation, so another trial cannot spend it again. This can stop a run
-before the nominal budget is used; it never treats an unknown charge as zero. Billable plugins are disabled in each request; the account
-must allow those overrides, since protected account defaults can add fees outside this token budget.
+before the nominal budget is used; it never treats an unknown charge as zero. Each request disables the plugins its schema can
+disable (web search, file parsing, response healing, context compression and the routers); the
+account must allow those overrides. The request schema cannot disable the `web-fetch` or
+`moderation` plugins, so an account default that enables either, or a protected account default,
+can add fees outside this token budget; a receipt whose charge exceeds its reservation still stops
+all further admission. Only non-streaming chat completions are budgeted: the client refuses
+streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
 the task, base and derived fixture seeds, effective reasoning, status and reason, the answer, any
