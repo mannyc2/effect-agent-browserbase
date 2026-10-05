@@ -211,7 +211,10 @@ export interface Page {
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
   /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
-  /** The viewport's size in CSS pixels, the space of points, crops and page scrolls. */
+  /**
+   * The viewport's size in CSS pixels, the space of points, crops and page scrolls. Over CDP the
+   * page reports it, within the action timeout.
+   */
   readonly viewport: Effect.Effect<
     { readonly width: number; readonly height: number },
     BrowserError
@@ -1723,75 +1726,74 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         }),
     );
 
-  const scroll = (scrollOptions: ScrollOptions = {}) =>
-    Effect.gen(function* () {
-      const viewport = yield* viewportFor("scroll");
+  const scroll = (scrollOptions: ScrollOptions = {}) => {
+    const target = scrollOptions.at;
 
-      const middle = {
-        x: Math.round(viewport.width / 2),
-        y: Math.round(viewport.height / 2),
-      };
+    const valid =
+      Number.isFinite(scrollOptions.dx ?? 0) && Number.isFinite(scrollOptions.dy ?? 0)
+        ? Effect.void
+        : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
 
-      const target = scrollOptions.at;
-
-      const dx = scrollOptions.dx ?? 0;
-
-      const dy =
-        scrollOptions.dy ??
-        (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
-
-      const valid =
-        Number.isFinite(dx) && Number.isFinite(dy)
-          ? Effect.void
-          : failWith("scroll", new InvalidRequest({ detail: "scroll deltas must be finite" }));
-
-      return yield* perform(
-        "scroll",
-        {
-          target:
-            scrollOptions.at === undefined
-              ? undefined
-              : typeof scrollOptions.at === "string"
-                ? scrollOptions.at
-                : `${scrollOptions.at.x},${scrollOptions.at.y}`,
-        },
-        settings.actionTimeout,
-        valid.pipe(
-          Effect.andThen(
-            // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
-            preparePolicy(
-              "scroll",
-              { target: typeof target === "string" ? target : undefined },
-              target === undefined ? [] : [target],
-            ),
+    return perform(
+      "scroll",
+      {
+        target:
+          scrollOptions.at === undefined
+            ? undefined
+            : typeof scrollOptions.at === "string"
+              ? scrollOptions.at
+              : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+      },
+      settings.actionTimeout,
+      valid.pipe(
+        Effect.andThen(
+          // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
+          preparePolicy(
+            "scroll",
+            { target: typeof target === "string" ? target : undefined },
+            target === undefined ? [] : [target],
           ),
         ),
-        (marks, approval) =>
-          Effect.gen(function* () {
-            yield* valid;
+      ),
+      (marks, approval) =>
+        Effect.gen(function* () {
+          yield* valid;
+          // Over CDP the page reports its own viewport, so the read shares the action's deadline.
+          const viewport = yield* viewportFor("scroll");
 
-            // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
-            const resolved =
-              target !== undefined
-                ? yield* targetFor("scroll", target, approval, marks)
-                : settings.humanize
-                  ? yield* resolve("scroll", middle, approval).pipe(
-                      Effect.orElseSucceed(() => undefined),
-                    )
-                  : undefined;
+          const middle = {
+            x: Math.round(viewport.width / 2),
+            y: Math.round(viewport.height / 2),
+          };
 
-            const point = resolved?.point ?? middle;
+          const dx = scrollOptions.dx ?? 0;
 
-            yield* marks.at(point);
-            yield* moveTo("scroll", marks, point, resolved?.cursor);
-            yield* marks.sent;
-            yield* wheel("scroll", marks.input, point, dx, dy);
-            yield* flush("scroll", marks.input);
-            yield* Effect.sleep(Duration.millis(150));
-            yield* presentationPause("action");
-          }),
-      );
-    });
+          const dy =
+            scrollOptions.dy ??
+            (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
+
+          // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
+          const resolved =
+            target !== undefined
+              ? yield* targetFor("scroll", target, approval, marks)
+              : settings.humanize
+                ? yield* resolve("scroll", middle, approval).pipe(
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined;
+
+          const point = resolved?.point ?? middle;
+
+          yield* marks.at(point);
+          yield* moveTo("scroll", marks, point, resolved?.cursor);
+          yield* marks.sent;
+          yield* wheel("scroll", marks.input, point, dx, dy);
+          yield* flush("scroll", marks.input);
+          yield* Effect.sleep(Duration.millis(150));
+          yield* presentationPause("action");
+        }),
+    );
+  };
 
   const select = (ref: string, values: ReadonlyArray<string>) =>
     perform(
@@ -2160,7 +2162,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     snapshot,
     screenshot,
     zoom,
-    viewport: viewportFor("viewport"),
+    viewport: viewportFor("viewport").pipe(
+      Effect.timeoutOrElse({
+        duration: settings.actionTimeout,
+        orElse: () =>
+          failWith("viewport", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+      }),
+      owned,
+    ),
     observe,
     hasText,
     click,
