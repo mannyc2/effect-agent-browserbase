@@ -34,6 +34,7 @@ import {
   type Status,
   tally,
   trialSeed,
+  workDeadline,
 } from "./Trial.ts";
 
 const help = `Usage: bun run understand -- [options]
@@ -422,7 +423,10 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
 
             const exit = yield* operations
               .describe(sample, arm, account)
-              .pipe(Effect.timeout(plan.requestTimeoutMillis), Effect.exit);
+              .pipe(
+                Effect.raceFirst(workDeadline(plan.requestTimeoutMillis, account.queued)),
+                Effect.exit,
+              );
 
             const seconds = Number((yield* Clock.monotonicTimeNanos) - started) / 1e9;
             const calls = yield* account.calls;

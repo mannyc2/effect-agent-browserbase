@@ -1,7 +1,7 @@
 // Deterministic free checks of shared admission, raw receipts and real browser ownership.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
-import { ConfigProvider, Deferred, Effect, Fiber, Ref, Schema } from "effect";
+import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Ref, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
@@ -15,7 +15,7 @@ import {
   ListedEndpoint,
   modelRunner,
 } from "../Budget.ts";
-import { isolatedTrial, trialSeed } from "../Trial.ts";
+import { isolatedTrial, trialSeed, workDeadline } from "../Trial.ts";
 
 const receipt = (cost: number) => ({
   prompt_tokens: 100,
@@ -501,6 +501,48 @@ describe("endpoint pinning", () => {
           max_price: { prompt: "0.2", completion: "0.8", request: "0", image: "0", audio: "0" },
         },
       });
+    }),
+  );
+});
+
+describe("work deadline", () => {
+  const receipt = { prompt_tokens: 1, completion_tokens: 1, cost: 0 };
+
+  it.live("does not count time queued for budget admission", () =>
+    Effect.gen(function* () {
+      // One reservation fits, so the second call queues until the first settles at 400 ms.
+      const budget = yield* ledger(0.04, 0.04);
+      const holder = yield* budget.account;
+      const queued = yield* budget.account;
+
+      const held = yield* holder
+        .run(Effect.sleep("400 millis").pipe(Effect.as(receipt)), (value) => value)
+        .pipe(Effect.forkChild);
+
+      yield* Effect.sleep("20 millis");
+      const work = queued.run(Effect.sleep("50 millis").pipe(Effect.as(receipt)), (value) => value);
+
+      const exit = yield* work.pipe(
+        Effect.raceFirst(workDeadline("200 millis", queued.queued)),
+        Effect.exit,
+      );
+
+      yield* Fiber.join(held);
+      assert.strictEqual(exit._tag, "Success");
+      assert.isAtLeast((yield* queued.timing).queueSeconds, 0.3);
+    }),
+  );
+
+  it.live("still ends work that runs past it", () =>
+    Effect.gen(function* () {
+      const unfinished = yield* Deferred.make<void>();
+
+      const exit = yield* Deferred.await(unfinished).pipe(
+        Effect.raceFirst(workDeadline("100 millis", Effect.succeed(0))),
+        Effect.exit,
+      );
+
+      assert.isTrue(Exit.isFailure(exit) && Cause.hasFails(exit.cause));
     }),
   );
 });

@@ -69,8 +69,8 @@ EFFECT_BROWSER_BENCH_HOSTED=1 BROWSERBASE_API_KEY=... \
 
 Model calls and Browserbase sessions cost money, so each needs its environment variable. Trials run
 with bounded concurrency (`--concurrency`, default 4) and separate browsers. Every Browserbase trial gets a
-new 1280×720 session, released when the trial ends; its own 15-minute timeout, longer than the
-10-minute trial deadline, ends a session the bench could not release. A session create that was
+new 1280×720 session, released when the trial ends; its own 30-minute timeout ends a session the
+bench could not release. A session create that was
 sent without a usable answer may have allocated a session, so after one the run requests no
 further hosted session and records the remaining trials as unrun. Browserbase time is not part of
 the model budget.
@@ -119,7 +119,8 @@ status:
   Such output is a graded failure (`reason: "invalid-output"`) and stops nothing else.
 - `infrastructure-failed`: something other than the answer failed: incomplete or stale capture
   evidence, the browser, the hosted session, the provider, a charge above its bound, a deadline or
-  a defect. These are never counted as wrong answers. A request that ends without a decoded
+  a defect. A trial has 10 minutes, and a comparison arm 10 minutes, of work: time queued for
+  budget admission depends on the budget and on other units, so it does not count. These are never counted as wrong answers. A request that ends without a decoded
   response (a transport failure, or a provider answer that does not decode) may still have run
   and been billed, so its trial or arm makes no further model call: an agent loop cannot replay
   it.

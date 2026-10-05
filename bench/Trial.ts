@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { Cause, Effect, Exit, type Layer, Option, Ref, Schema } from "effect";
+import { Cause, Clock, Duration, Effect, Exit, type Layer, Option, Ref, Schema } from "effect";
 import * as Agent from "effect-browser/Agent";
 import type { Browser } from "effect-browser/Browser";
 import { BrowserError } from "effect-browser/BrowserError";
@@ -191,6 +191,26 @@ export const uncertainAllocation = (cause: Cause.Cause<unknown>): boolean =>
       reason.error.operation === "createSession" &&
       (reason.error.reason._tag === "Transport" || reason.error.reason._tag === "Decode"),
   );
+
+/**
+ * Fails with a `TimeoutError` once a unit has worked for `limit`. Time it spent queued for budget
+ * admission depends on the budget and on other units, so it does not count: a deadline hit is
+ * then the unit's own slowness, still infrastructure, never a budget artefact.
+ */
+export const workDeadline = (limit: Duration.Input, queued: Effect.Effect<number>) =>
+  Effect.gen(function* () {
+    const allowed = Duration.toMillis(Duration.fromInputUnsafe(limit));
+    const started = yield* Clock.monotonicTimeNanos;
+
+    while (true) {
+      const elapsed = Number((yield* Clock.monotonicTimeNanos) - started) / 1e6;
+      const worked = elapsed - (yield* queued) * 1000;
+
+      if (worked >= allowed)
+        return yield* new Cause.TimeoutError(`no outcome within ${allowed}ms of work`);
+      yield* Effect.sleep(Duration.millis(allowed - worked));
+    }
+  });
 
 /** Counts that keep graded denominators apart from units that never produced an answer. */
 export const tally = (

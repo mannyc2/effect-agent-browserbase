@@ -222,6 +222,8 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
         const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
         const refusal = yield* Ref.make<Refusal | null>(null);
         const timing = yield* Ref.make(noTiming);
+        // When the call now waiting for admission started waiting, if one is.
+        const waiting = yield* Ref.make<bigint | null>(null);
 
         // Monotonic seconds since `from`, added to one of the account's two clocks.
         const spent = (from: bigint, field: keyof Timing) =>
@@ -237,6 +239,17 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
         return {
           snapshot: Ref.get(account),
           timing: Ref.get(timing),
+          /** Seconds queued for admission so far, including a wait still in progress. */
+          queued: Effect.all({
+            now: Clock.monotonicTimeNanos,
+            since: Ref.get(waiting),
+            recorded: Ref.get(timing),
+          }).pipe(
+            Effect.map(
+              ({ now, since, recorded }) =>
+                recorded.queueSeconds + (since === null ? 0 : Number(now - since) / 1e9),
+            ),
+          ),
           lastResponse: Ref.get(lastResponse),
           calls: Effect.all({
             accounting: Ref.get(account),
@@ -254,6 +267,12 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   return yield* refuse("an earlier request has an unknown outcome; not replaying");
 
                 const entered = yield* Clock.monotonicTimeNanos;
+
+                const waited = Ref.set(waiting, null).pipe(
+                  Effect.andThen(spent(entered, "queueSeconds")),
+                );
+
+                yield* Ref.set(waiting, entered);
 
                 // A pending receipt may release enough capacity. Permanent uncertainty may not.
                 while (true) {
@@ -282,18 +301,19 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   if (admission.fits) break;
                   if (admission.denied) {
                     yield* Ref.set(refusal, "budget");
-                    yield* spent(entered, "queueSeconds");
+                    yield* waited;
 
                     return yield* refuse(`no call fits the remaining $${maxUsd} budget`);
                   }
                   yield* restore(Deferred.await(admission.changed)).pipe(
-                    Effect.onInterrupt(() => spent(entered, "queueSeconds")),
+                    Effect.onInterrupt(() => waited),
                   );
                 }
 
                 // Waiting for budget capacity is not provider latency.
                 const admitted = yield* Clock.monotonicTimeNanos;
 
+                yield* Ref.set(waiting, null);
                 yield* Ref.update(timing, (value) => ({
                   ...value,
                   queueSeconds: value.queueSeconds + Number(admitted - entered) / 1e9,

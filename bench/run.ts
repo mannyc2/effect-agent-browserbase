@@ -47,6 +47,7 @@ import {
   tally,
   trialSeed,
   uncertainAllocation,
+  workDeadline,
 } from "./Trial.ts";
 
 const help = `Usage: bun run bench -- [options]
@@ -69,7 +70,9 @@ const help = `Usage: bun run bench -- [options]
 // A hosted session outlives the trial that owns it only until Browserbase's own timeout, which
 // bounds a session the bench could not release.
 export const trialTimeout = Duration.minutes(10);
-export const hostedSessionSeconds = Duration.toSeconds(trialTimeout) + 5 * 60;
+// The trial deadline excludes time queued for the budget, so a session also allows for queueing;
+// one that outlives even this fails its trial as infrastructure.
+export const hostedSessionSeconds = 30 * 60;
 
 /** Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout. */
 export const hostedBrowser = (humanize: boolean) =>
@@ -325,7 +328,10 @@ const main = Effect.gen(function* () {
         const exit =
           halted || denied
             ? undefined
-            : yield* isolatedTrial(work, browser).pipe(Effect.timeout(trialTimeout), Effect.exit);
+            : yield* isolatedTrial(work, browser).pipe(
+                Effect.raceFirst(workDeadline(trialTimeout, account?.queued ?? Effect.succeed(0))),
+                Effect.exit,
+              );
 
         if (hosted && exit !== undefined && Exit.isFailure(exit) && uncertainAllocation(exit.cause))
           yield* Ref.set(hostedHalt, true);
