@@ -1369,6 +1369,75 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("acts only on the observed tab, however another became current", () =>
+    Effect.gen(function* () {
+      const opener = yield* start("/form");
+      const browser = yield* Browser;
+      const tools = yield* Tools.make();
+
+      // The page opens a tab, which an observation then shows.
+      const popup = Effect.gen(function* () {
+        const before = (yield* browser.pages).length;
+
+        yield* Effect.promise(() => opener.playwright.evaluate(() => void window.open("/next")));
+        yield* browser.pages.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(50)),
+            until: (open) => open.length > before,
+          }),
+          Effect.timeout(Duration.seconds(5)),
+        );
+      });
+
+      yield* Effect.promise(() => opener.playwright.locator("#amount").focus());
+      yield* popup;
+      const shown = yield* tools.page;
+
+      assert.notStrictEqual(shown.id, opener.id);
+      yield* Effect.promise(() =>
+        shown.playwright.evaluate(() => {
+          const button = document.querySelector("button");
+
+          if (button !== null) button.onclick = () => window.close();
+        }),
+      );
+
+      // One batch planned on the popup: its button closes it, then typing would follow.
+      const outline = yield* tools.handlers.browser_snapshot({});
+      const close = /button "Continue" \[ref=(e\d+)\]/.exec(outline)?.[1] ?? "";
+
+      yield* tools.handlers.browser_click({ ref: close });
+      yield* Effect.sleep(Duration.millis(300));
+
+      const refused = yield* tools.handlers
+        .browser_type({ text: "9", append: true })
+        .pipe(Effect.flip);
+
+      assert.include(refused, "Not done: The tab in use closed, and another is now the current");
+      assert.include(refused, "Order — ");
+      assert.strictEqual(yield* valueOf(opener, "#amount"), "10");
+
+      // Choosing a tab is the model's own move: back to the observed tab, actions run there.
+      assert.strictEqual((yield* tools.page).id, opener.id);
+      yield* popup;
+      yield* tools.handlers.browser_snapshot({});
+      yield* tools.handlers.browser_tabs({ action: "select", index: 1 });
+      yield* tools.handlers.browser_type({ text: "5", append: true });
+      assert.include(yield* valueOf(opener, "#amount"), "5");
+
+      // On another tab they wait for it to be observed, without calling it new.
+      yield* tools.handlers.browser_tabs({ action: "select", index: 2 });
+
+      const elsewhere = yield* tools.handlers
+        .browser_type({ text: "7", append: true })
+        .pipe(Effect.flip);
+
+      assert.include(elsewhere, "Not done: browser_tabs made another tab current.");
+      assert.notInclude(elsewhere, "new tab");
+      yield* (yield* tools.page).close;
+    }),
+  );
+
   it.effect("refuses the rest of a batch on a tab that opened in it, until it is observed", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");
