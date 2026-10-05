@@ -349,6 +349,32 @@ describe("Browserbase", () => {
     }),
   );
 
+  it.live("releases a created session whose answer does not decode", () =>
+    Effect.gen(function* () {
+      const api = yield* fakeApi((request) =>
+        request.method === "POST" && request.url === "/v1/sessions"
+          ? { status: 201, body: { id: "s9", status: "RUNNING" } }
+          : { status: 200, body: { ...session("s9"), status: "COMPLETED" } },
+      );
+
+      const error = yield* Browserbase.open().pipe(
+        Effect.scoped,
+        Effect.provide(api.client),
+        Effect.flip,
+      );
+
+      assert.deepStrictEqual([error.operation, error.reason._tag], ["createSession", "Decode"]);
+      assert.include(error.message, "session s9 was released");
+      assert.deepStrictEqual(
+        api.received.map((request) => [request.method, request.url, request.body]),
+        [
+          ["POST", "/v1/sessions", {}],
+          ["POST", "/v1/sessions/s9", { status: "REQUEST_RELEASE" }],
+        ],
+      );
+    }),
+  );
+
   it.live("opens a browser on a new session and releases the session when the scope closes", () =>
     Effect.gen(function* () {
       const port = yield* listen(() => undefined).pipe(
