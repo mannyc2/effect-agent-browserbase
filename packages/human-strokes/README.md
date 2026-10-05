@@ -20,8 +20,10 @@ const program = Effect.gen(function* () {
 
 The layer reads, decompresses and validates its fixed package asset when constructed. Loading
 failures are typed `DataError` values. There is no download, file-path option or configuration
-step. Each plan decodes only its selected stroke. The single Brotli asset is 3,152,464 bytes;
-the validated payload is 10,411,952 bytes. The core browser package does not include this data.
+step. Decompression runs on Node's thread pool rather than the event loop, and the built planner
+keeps only the validated payload. Each plan decodes only its selected stroke. The single Brotli
+asset is 3,152,464 bytes; the validated payload is 10,411,952 bytes. The core browser package
+does not include this data.
 
 Selection draws uniformly among strokes whose endpoint distances differ by less than 0.15 in
 absolute log ratio, or chooses the nearest absolute distance when none qualify. The selected

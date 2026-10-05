@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { brotliDecompressSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Random, Result, Schema } from "effect";
@@ -179,5 +179,18 @@ describe("bundled human strokes", () => {
         { x: 641, y: 360, afterMillis: 0 },
       ]);
     }).pipe(Effect.provide(HumanStrokes.layer)),
+  );
+
+  it.effect("fails with a typed DataError for a corrupt or oversized compressed asset", () =>
+    Effect.gen(function* () {
+      const oversized = brotliCompressSync(new Uint8Array(Strokes.rawBytes + 1));
+
+      for (const asset of [compressed.subarray(0, 4096), Uint8Array.of(255, 255, 255), oversized]) {
+        const failure = yield* Effect.flip(Strokes.inflate(asset));
+
+        assert.isTrue(Schema.is(HumanStrokes.DataError)(failure));
+        assert.strictEqual(failure.reason, "Compression");
+      }
+    }),
   );
 });

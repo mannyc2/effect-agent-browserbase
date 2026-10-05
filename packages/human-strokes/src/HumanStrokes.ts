@@ -2,33 +2,24 @@
 // requiring a caller filesystem service.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFile } from "node:fs/promises";
-import { brotliDecompressSync } from "node:zlib";
 
 import { Effect, Layer, Random, Result } from "effect";
 import * as Motion from "effect-browser/Motion";
 
-import { DataError, index, rawBytes, retarget, select } from "./internal/strokes.ts";
+import { DataError, index, inflate, retarget, select } from "./internal/strokes.ts";
+
+const read = Effect.tryPromise({
+  try: (signal) => readFile(new URL("../data/strokes.bin.br", import.meta.url), { signal }),
+  catch: () =>
+    new DataError({
+      reason: "Read",
+      detail: "The bundled human-stroke asset could not be read.",
+    }),
+});
 
 const load = Effect.gen(function* () {
-  const compressed = yield* Effect.tryPromise({
-    try: (signal) => readFile(new URL("../data/strokes.bin.br", import.meta.url), { signal }),
-    catch: () =>
-      new DataError({
-        reason: "Read",
-        detail: "The bundled human-stroke asset could not be read.",
-      }),
-  });
-
-  const bytes = yield* Effect.try({
-    try: () => brotliDecompressSync(compressed, { maxOutputLength: rawBytes }),
-    catch: () =>
-      new DataError({
-        reason: "Compression",
-        detail: "The bundled human-stroke asset could not be decompressed.",
-      }),
-  });
-
-  const decoded = index(bytes);
+  // No binding here holds the compressed asset, so the planner's closure keeps only the payload.
+  const decoded = index(yield* Effect.flatMap(read, inflate));
 
   if (Result.isFailure(decoded)) return yield* decoded.failure;
   const data = decoded.success;
