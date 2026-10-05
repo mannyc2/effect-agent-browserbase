@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber } from "effect";
+import { Clock, Duration, Effect, Fiber, Random } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
@@ -270,6 +270,94 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           fixture.dispatches.map(({ input }) => ({ x: input.x, y: input.y })),
           expected.map(({ x, y }) => ({ x, y })),
         );
+      }),
+    );
+
+    it.effect("moves the pointer with every default sample except a repeated exact endpoint", () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup(yield* Motion.Motion);
+        const page = yield* fixture.open;
+
+        const record = Effect.promise(() =>
+          page.playwright.evaluate(() => {
+            const moves: Array<{ x: number; y: number; dx: number; dy: number }> = [];
+
+            (window as unknown as { moves: typeof moves }).moves = moves;
+            document.addEventListener("mousemove", (event) =>
+              moves.push({
+                x: event.clientX,
+                y: event.clientY,
+                dx: event.movementX,
+                dy: event.movementY,
+              }),
+            );
+          }),
+        );
+
+        // Rendering may deliver the last mousemove after the native reply; wait for the endpoint.
+        const take = (target: Motion.Point) =>
+          Effect.promise(async () => {
+            await page.playwright.waitForFunction(
+              ([x, y]) => {
+                const moves = (window as unknown as { moves: Array<{ x: number; y: number }> })
+                  .moves;
+
+                return moves.at(-1)?.x === x && moves.at(-1)?.y === y;
+              },
+              [target.x, target.y],
+            );
+
+            return page.playwright.evaluate(() => {
+              const recorded = window as unknown as {
+                moves: Array<{ x: number; y: number; dx: number; dy: number }>;
+              };
+
+              return recorded.moves.splice(0);
+            });
+          });
+
+        yield* record;
+
+        const targets = [
+          { x: 440, y: 310 },
+          { x: 700, y: 500 },
+          { x: 120, y: 80 },
+          { x: 126, y: 84 },
+        ];
+
+        for (const [index, target] of targets.entries()) {
+          const sent = fixture.dispatches.length;
+
+          yield* page.hover(target).pipe(Random.withSeed(`glide ${index}`));
+
+          const plan = (yield* fixture.browser.recentEvents).findLast(
+            (event) => event._tag === "TrackPlanned",
+          );
+
+          assert.ok(plan?._tag === "TrackPlanned");
+          const positions = [plan.from, ...plan.samples.slice(0, -1)];
+
+          // Native input: each move but the exact endpoint reaches a new integer position.
+          const moves = fixture.dispatches.slice(sent).map(({ input }) => input);
+
+          assert.deepStrictEqual(
+            moves.map(({ x, y }) => ({ x, y })),
+            plan.samples.map(({ x, y }) => ({ x, y })),
+          );
+          for (const [step, move] of moves.slice(0, -1).entries())
+            assert.isTrue(move.x !== positions[step]!.x || move.y !== positions[step]!.y);
+          assert.deepStrictEqual({ x: moves.at(-1)?.x, y: moves.at(-1)?.y }, target);
+
+          // Chromium may coalesce moves within a frame, so a stationary DOM event could only come
+          // from a glide that revisits a pixel. These seeded glides do not, which makes the page's
+          // view exact: every mousemove moves the pointer except possibly the final one.
+          const distinct = new Set(positions.map(({ x, y }) => `${x},${y}`));
+
+          assert.strictEqual(distinct.size, positions.length);
+          const dom = yield* take(target);
+
+          for (const event of dom.slice(0, -1)) assert.isTrue(event.dx !== 0 || event.dy !== 0);
+        }
       }),
     );
 

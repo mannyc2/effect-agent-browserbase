@@ -82,13 +82,15 @@ does not scroll. After scrolling, the library checks the original target again; 
 changes its meaning can therefore stop an action after its wheel input but before a click. Drag
 endpoints are resolved together in the final viewport before the button is pressed.
 
-Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. `Motion.Motion` is a
-service reference with that default; the browser captures it once when constructed. A custom
-`plan(from, to)` returns a complete schedule with finite coordinates and nondecreasing absolute
-`afterMillis` offsets, at most 2,048 samples and 5,000 milliseconds, ending at the exact destination.
-The browser decodes it with `Motion.Plan` into its own copy, then checks the endpoint; invalid plans
-fail with `InvalidRequest` before their track or input is sent. Equal-time samples are retained.
-Plain pointer movement does not use the service.
+Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
+every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination
+lands at the model's end time, so only that final move can repeat the position before it.
+`Motion.Motion` is a service reference with that default; the browser captures it once when
+constructed. A custom `plan(from, to)` returns a complete schedule with finite coordinates and
+nondecreasing absolute `afterMillis` offsets, at most 2,048 samples and 5,000 milliseconds, ending
+at the exact destination. The browser decodes it with `Motion.Plan` into its own copy, then checks
+the endpoint; invalid plans fail with `InvalidRequest` before their track or input is sent.
+Equal-time samples are retained. Plain pointer movement does not use the service.
 
 For recorded human strokes, install the optional `effect-browser-human-strokes` package and
 provide its ready-made layer:

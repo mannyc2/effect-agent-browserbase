@@ -133,26 +133,27 @@ const plan: Service["plan"] = Effect.fnUntraced(function* (from, to) {
   );
 
   const samples: Array<Sample> = [];
+  let last: Point = from;
 
   const coordinate = (value: number) =>
     Math.round(Math.max(-Number.MAX_VALUE, Math.min(Number.MAX_VALUE, value * scale)));
 
-  for (let index = 0; index <= count; index++) {
+  for (let index = 0; index < count; index++) {
     const afterMillis = index * sampleMillis;
     const first = cumulative(afterMillis, onset1, mu1, sigma1);
     const second = cumulative(afterMillis, onset2, mu2, sigma2);
     const bend = lateral * Math.sin(Math.PI * first);
+    const x = coordinate(startX + primaryX * first + (deltaX - primaryX) * second - unitY * bend);
+    const y = coordinate(startY + primaryY * first + (deltaY - primaryY) * second + unitX * bend);
 
-    samples.push(
-      index === count
-        ? { ...to, afterMillis }
-        : {
-            x: coordinate(startX + primaryX * first + (deltaX - primaryX) * second - unitY * bend),
-            y: coordinate(startY + primaryY * first + (deltaY - primaryY) * second + unitX * bend),
-            afterMillis,
-          },
-    );
+    // A pointer that stays on its pixel reports nothing; the model's timing is unchanged.
+    if (x === last.x && y === last.y) continue;
+    last = { x, y };
+    samples.push({ x, y, afterMillis });
   }
+
+  // The exact destination always lands at the model's end, even if a dwell precedes it.
+  samples.push({ ...to, afterMillis: count * sampleMillis });
 
   return samples;
 });
