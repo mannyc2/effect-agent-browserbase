@@ -125,7 +125,10 @@ status:
   and been billed, so its trial or arm makes no further model call: an agent loop cannot replay
   it.
 - `denied`: the budget refused admission, before the browser started or at a later call.
-- `unrun`: the unit never reached an outcome, because the run stopped or was interrupted.
+- `unrun`: the unit never reached an outcome, because the run stopped or was interrupted. Once
+  the ledger stops admitting calls (a charge above its bound, or the comparison's stop after an
+  infrastructure failure, an unresolved charge or a broken result sink), it keeps the first
+  reason, and every later unit in both runners is `unrun` with that reason, never `denied`.
 
 An interrupted run (SIGINT, or an interrupted fiber) still records every unit it scheduled: those
 without an outcome are `unrun` with reason `interrupted` and keep what their dispatched calls

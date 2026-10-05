@@ -541,6 +541,47 @@ describe("understanding comparison", () => {
     }),
   );
 
+  it.live("labels every arm after a charge above its bound with that stop", () =>
+    Effect.gen(function* () {
+      const plan = manifest(yield* configuration(["--concurrency", "1"]), "fixed");
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), Chromium.layer());
+      const budget = yield* ledger(1, 0.04);
+
+      const records = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (sample, _arm, account) =>
+          account
+            .run(
+              Effect.succeed({ prompt_tokens: 10, completion_tokens: 2, cost: 0.05 }),
+              (value) => value,
+            )
+            .pipe(
+              Effect.as({
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
+                steps: 1 as const,
+                usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
+              }),
+            ),
+        record: () => Effect.void,
+      });
+
+      assert.strictEqual(records[0]?.reason, "charge-exceeded-bound");
+      assert.isTrue(
+        records
+          .slice(1)
+          .every(
+            (record) => record.status === "unrun" && record.reason === "stopped-after-charge-bound",
+          ),
+      );
+    }),
+  );
+
   it.effect("wakes queued admissions without cancelling the request that already reserved", () =>
     Effect.gen(function* () {
       const budget = yield* ledger(0.04, 0.04);
@@ -569,7 +610,7 @@ describe("understanding comparison", () => {
         .pipe(Effect.flip, Effect.forkChild);
 
       yield* Effect.yieldNow;
-      yield* budget.stop;
+      yield* budget.stop("infrastructure");
       const denied = yield* Fiber.join(second);
 
       assert.include(denied.message, "budget");

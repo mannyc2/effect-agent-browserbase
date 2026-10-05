@@ -39,6 +39,7 @@ import {
   classify,
   isolatedTrial,
   journal,
+  notAdmitted,
   onSigint,
   type Reason,
   revision,
@@ -346,7 +347,7 @@ const main = Effect.gen(function* () {
             ? classify(exit, calls)
             : halted
               ? { status: "unrun", reason: "stopped-after-uncertain-session", pass: null }
-              : { status: "denied", reason: "budget-exhausted", pass: null };
+              : notAdmitted(runner === undefined ? null : yield* runner.halted);
 
         const value = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
 
@@ -365,7 +366,9 @@ const main = Effect.gen(function* () {
               ? (value?.detail ?? "")
               : halted
                 ? "Unrun: an earlier hosted session create had an unknown outcome."
-                : "Denied: the remaining model budget cannot reserve another call.",
+                : outcome.status === "denied"
+                  ? "Denied: the remaining model budget cannot reserve another call."
+                  : "Unrun: model admission had stopped.",
           error: exit !== undefined && Exit.isFailure(exit) ? errorText(exit.cause) : null,
           diagnostic:
             exit !== undefined && Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,

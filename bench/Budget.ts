@@ -145,14 +145,31 @@ export const noTiming: Timing = { queueSeconds: 0, requestSeconds: 0 };
  */
 export type Refusal = "budget" | "bound" | "unresolved";
 
+/**
+ * Why the ledger stopped admitting anything: a charge above its bound, or a runner's stop after
+ * an infrastructure failure, an unresolved charge or a broken result sink.
+ */
+export type Halt =
+  | "charge-exceeded-bound"
+  | "infrastructure"
+  | "uncertain-charge"
+  | "output-failed";
+
 /** What classifying one unit of work needs to know about its calls. */
 export interface Calls {
   readonly accounting: Accounting;
   readonly lastResponse: Diagnostics.LastResponse | null;
   readonly refusal: Refusal | null;
+  /** The ledger's halt when it refused this unit's admission; null for a capacity denial. */
+  readonly halt: Halt | null;
 }
 
-export const noCalls: Calls = { accounting: emptyAccounting, lastResponse: null, refusal: null };
+export const noCalls: Calls = {
+  accounting: emptyAccounting,
+  lastResponse: null,
+  refusal: null,
+  halt: null,
+};
 
 // Integer nanodollars round reservations up and the limit down. Floating subtraction must never
 // admit one extra request at the shared boundary.
@@ -173,7 +190,14 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
       return yield* refuse("the budget and request bounds must be finite non-negative amounts");
 
     const changed = yield* Deferred.make<void>();
-    const state = yield* Ref.make({ known: 0, reserved: 0, active: 0, blocked: false, changed });
+
+    const state = yield* Ref.make<{
+      readonly known: number;
+      readonly reserved: number;
+      readonly active: number;
+      readonly halt: Halt | null;
+      readonly changed: Deferred.Deferred<void>;
+    }>({ known: 0, reserved: 0, active: 0, halt: null, changed });
 
     const settle = (charged: number | undefined) =>
       Effect.gen(function* () {
@@ -185,7 +209,9 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
             known: value.known + (charged ?? 0),
             reserved: value.reserved - (charged === undefined ? 0 : reservation),
             active: value.active - reservation,
-            blocked: value.blocked || (charged !== undefined && charged > reservation),
+            halt:
+              value.halt ??
+              (charged !== undefined && charged > reservation ? "charge-exceeded-bound" : null),
             changed: next,
           },
         ]);
@@ -195,16 +221,19 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
 
     return {
       // Stop only future admission; dispatched calls still own and settle their reservations.
-      stop: Effect.gen(function* () {
-        const next = yield* Deferred.make<void>();
+      // The first reason to stop is the one every later unit reports.
+      stop: (halt: Halt) =>
+        Effect.gen(function* () {
+          const next = yield* Deferred.make<void>();
 
-        const previous = yield* Ref.modify(state, (value) => [
-          value.changed,
-          { ...value, blocked: true, changed: next },
-        ]);
+          const previous = yield* Ref.modify(state, (value) => [
+            value.changed,
+            { ...value, halt: value.halt ?? halt, changed: next },
+          ]);
 
-        yield* Deferred.succeed(previous, undefined);
-      }),
+          yield* Deferred.succeed(previous, undefined);
+        }),
+      halted: Ref.get(state).pipe(Effect.map((value) => value.halt)),
       snapshot: Ref.get(state).pipe(
         Effect.map((value) => ({
           knownUsd: value.known / units,
@@ -214,13 +243,16 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
       exhausted: Ref.get(state).pipe(
         Effect.map(
           (value) =>
-            value.blocked || value.known + value.reserved - value.active + reservation > limit,
+            value.halt !== null ||
+            value.known + value.reserved - value.active + reservation > limit,
         ),
       ),
       account: Effect.gen(function* () {
         const account = yield* Ref.make(emptyAccounting);
         const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
         const refusal = yield* Ref.make<Refusal | null>(null);
+        // Why the ledger had stopped when it refused this account, if it had.
+        const haltedBy = yield* Ref.make<Halt | null>(null);
         const timing = yield* Ref.make(noTiming);
         // When the call now waiting for admission started waiting, if one is.
         const waiting = yield* Ref.make<bigint | null>(null);
@@ -255,6 +287,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
             accounting: Ref.get(account),
             lastResponse: Ref.get(lastResponse),
             refusal: Ref.get(refusal),
+            halt: Ref.get(haltedBy),
           }),
           run: <A, E, R>(
             request: Effect.Effect<A, E, R>,
@@ -278,14 +311,15 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                 while (true) {
                   const admission = yield* Ref.modify(state, (value) => {
                     const fits =
-                      !value.blocked && value.known + value.reserved + reservation <= limit;
+                      value.halt === null && value.known + value.reserved + reservation <= limit;
 
                     return [
                       {
                         fits,
                         denied:
-                          value.blocked ||
+                          value.halt !== null ||
                           value.known + value.reserved - value.active + reservation > limit,
+                        halt: value.halt,
                         changed: value.changed,
                       },
                       fits
@@ -301,6 +335,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   if (admission.fits) break;
                   if (admission.denied) {
                     yield* Ref.set(refusal, "budget");
+                    yield* Ref.set(haltedBy, admission.halt);
                     yield* waited;
 
                     return yield* refuse(`no call fits the remaining $${maxUsd} budget`);

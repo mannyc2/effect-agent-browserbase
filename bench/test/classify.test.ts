@@ -6,7 +6,7 @@ import { BrowserError, Closed } from "effect-browser/BrowserError";
 import { AiError } from "effect/ai";
 
 import { type Calls, emptyAccounting, ledger, noCalls } from "../Budget.ts";
-import { classify, EvidenceIncomplete, tally } from "../Trial.ts";
+import { classify, EvidenceIncomplete, notAdmitted, tally } from "../Trial.ts";
 
 const answered: Calls = {
   accounting: { ...emptyAccounting, calls: 1, knownUsd: 0.01 },
@@ -20,6 +20,7 @@ const answered: Calls = {
     toolCallCount: 0,
   },
   refusal: null,
+  halt: null,
 };
 
 const aiError = (reason: AiError.AiErrorReason) =>
@@ -131,6 +132,41 @@ describe("classify", () => {
       assert.deepStrictEqual(classify(Exit.failCause(Cause.interrupt()), answered), {
         status: "unrun",
         reason: "interrupted",
+        pass: null,
+      });
+    }),
+  );
+
+  it.effect("labels every unit refused after a charge above its bound with that stop", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(1, 0.04);
+      const overcharged = yield* budget.account;
+      const later = yield* budget.account;
+      const receipt = (cost: number) => ({ prompt_tokens: 1, completion_tokens: 1, cost });
+
+      const first = yield* overcharged
+        .run(Effect.succeed(receipt(0.05)), (value) => value)
+        .pipe(Effect.as({ pass: true }), Effect.exit);
+
+      const refused = yield* later
+        .run(Effect.succeed(receipt(0.01)), (value) => value)
+        .pipe(Effect.as({ pass: true }), Effect.exit);
+
+      assert.strictEqual(classify(first, yield* overcharged.calls).reason, "charge-exceeded-bound");
+      assert.deepStrictEqual(classify(refused, yield* later.calls), {
+        status: "unrun",
+        reason: "stopped-after-charge-bound",
+        pass: null,
+      });
+      // A unit the runner never starts gets the same label from the ledger's halt.
+      assert.deepStrictEqual(notAdmitted(yield* budget.halted), {
+        status: "unrun",
+        reason: "stopped-after-charge-bound",
+        pass: null,
+      });
+      assert.deepStrictEqual(notAdmitted(null), {
+        status: "denied",
+        reason: "budget-exhausted",
         pass: null,
       });
     }),

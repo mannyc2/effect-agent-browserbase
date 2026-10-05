@@ -11,7 +11,7 @@ import { BrowserError } from "effect-browser/BrowserError";
 import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
 
-import { type Account, type Calls, type Endpoint, noCalls, noTiming } from "./Budget.ts";
+import { type Account, type Calls, type Endpoint, type Halt, noCalls, noTiming } from "./Budget.ts";
 import { FixtureUnreadable } from "./Sites.ts";
 
 /** The captured evidence cannot support a graded answer, so no model is asked about it. */
@@ -97,6 +97,7 @@ export type Reason =
   | "defect"
   | "other"
   | "budget-exhausted"
+  | "stopped-after-charge-bound"
   | "stopped-after-infrastructure"
   | "stopped-after-uncertain-charge"
   | "stopped-after-output-failure"
@@ -109,6 +110,22 @@ export interface Classification {
   /** Only a graded unit passes or fails. */
   readonly pass: boolean | null;
 }
+
+const stopReasons: { readonly [Cause in Halt]: Reason } = {
+  "charge-exceeded-bound": "stopped-after-charge-bound",
+  infrastructure: "stopped-after-infrastructure",
+  "uncertain-charge": "stopped-after-uncertain-charge",
+  "output-failed": "stopped-after-output-failure",
+};
+
+/**
+ * A unit the ledger did not admit: denied when the budget had no room, unrun with the run's own
+ * stop reason when the ledger had halted. Both runners label it the same way.
+ */
+export const notAdmitted = (halt: Halt | null): Classification =>
+  halt === null
+    ? { status: "denied", reason: "budget-exhausted", pass: null }
+    : { status: "unrun", reason: stopReasons[halt], pass: null };
 
 const infrastructure = (reason: Reason): Classification => ({
   status: "infrastructure-failed",
@@ -145,8 +162,7 @@ export const classify = (
   if (Exit.isSuccess(exit)) return { status: "graded", reason: "answered", pass: exit.value.pass };
   if (Cause.hasInterruptsOnly(exit.cause))
     return { status: "unrun", reason: "interrupted", pass: null };
-  if (calls.refusal === "budget")
-    return { status: "denied", reason: "budget-exhausted", pass: null };
+  if (calls.refusal === "budget") return notAdmitted(calls.halt);
   if (calls.refusal === "bound") return infrastructure("charge-exceeded-bound");
   if (calls.refusal === "unresolved") return infrastructure("provider-failed");
 

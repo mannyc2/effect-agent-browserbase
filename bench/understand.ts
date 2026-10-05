@@ -28,6 +28,7 @@ import {
   classify,
   isolatedTrial,
   journal,
+  notAdmitted,
   onSigint,
   type Reason,
   revision,
@@ -220,13 +221,6 @@ export const manifest = (configuration: Options, createdAt: string) => ({
 });
 
 export type Manifest = ReturnType<typeof manifest>;
-type Stop = "infrastructure" | "uncertain-accounting" | "output-failed";
-
-const stopReason: { readonly [Cause in Stop]: Reason } = {
-  infrastructure: "stopped-after-infrastructure",
-  "uncertain-accounting": "stopped-after-uncertain-charge",
-  "output-failed": "stopped-after-output-failure",
-};
 
 type Matches = { readonly [Field in (typeof fields)[number]]: boolean };
 
@@ -294,11 +288,10 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
   budget: Budget,
   operations: Operations<E, R, E2, R2>,
 ) {
-  const stopped = yield* Ref.make<Stop | null>(null);
   const outputFailure = yield* Ref.make<Cause.Cause<RunError> | null>(null);
 
-  const stop = (reason: Stop) =>
-    Ref.update(stopped, (current) => current ?? reason).pipe(Effect.andThen(budget.stop));
+  // The ledger keeps the first reason to stop, so every unit refused afterwards reports it.
+  const stop = budget.stop;
 
   const save = (record: Record) =>
     operations.record(record).pipe(
@@ -353,8 +346,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
     plan.pairs,
     (pair, index) =>
       Effect.gen(function* () {
-        const halted = yield* Ref.get(stopped);
-        const skipped = halted !== null || (yield* budget.exhausted);
+        const skipped = yield* budget.exhausted;
         const prepared = skipped ? undefined : yield* operations.prepare(pair).pipe(Effect.exit);
 
         if (prepared !== undefined && Exit.isFailure(prepared)) yield* stop("infrastructure");
@@ -404,15 +396,11 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
                 diagnostic: Diagnostics.failure(prepared.cause),
               });
 
-            const halt = yield* Ref.get(stopped);
-
-            if (sample === undefined || halt !== null || (yield* budget.exhausted))
+            if (sample === undefined || (yield* budget.exhausted))
               return yield* settle(index, {
                 ...base,
                 ...unanswered,
-                ...(halt === null
-                  ? { status: "denied", reason: "budget-exhausted" }
-                  : { status: "unrun", reason: stopReason[halt] }),
+                ...notAdmitted(yield* budget.halted),
                 diagnostic: null,
               });
 
@@ -431,22 +419,15 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
             const seconds = Number((yield* Clock.monotonicTimeNanos) - started) / 1e9;
             const calls = yield* account.calls;
             const outcome = classify(exit, calls);
-            const halted = yield* Ref.get(stopped);
 
-            // Another arm's stop closes the ledger; that refusal is not this arm's budget.
-            const settled =
-              outcome.status === "denied" && halted !== null
-                ? { status: "unrun" as const, reason: stopReason[halted], pass: null }
-                : outcome;
-
-            if (settled.status === "infrastructure-failed") yield* stop("infrastructure");
-            if (calls.accounting.uncertainCalls > 0) yield* stop("uncertain-accounting");
+            if (outcome.status === "infrastructure-failed") yield* stop("infrastructure");
+            if (calls.accounting.uncertainCalls > 0) yield* stop("uncertain-charge");
 
             const answer = Exit.isSuccess(exit) ? exit.value.answer : null;
 
             return yield* settle(index, {
               ...base,
-              ...settled,
+              ...outcome,
               matches: answer === null ? null : matches(answer, sample.expected),
               binding: answer === null ? null : Quote.binding(answer, sample.expected, sample.rows),
               answer,
