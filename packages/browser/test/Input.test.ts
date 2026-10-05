@@ -8,8 +8,9 @@ import { Browser } from "../src/Browser.ts";
 import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as BrowserClock from "../src/internal/clock.ts";
+import * as PageImpl from "../src/internal/page.ts";
 import * as Motion from "../src/Motion.ts";
-import * as Page from "../src/Page.ts";
+import type * as Page from "../src/Page.ts";
 
 interface RecordedKey {
   readonly type: string;
@@ -205,7 +206,7 @@ const setup = Effect.fnUntraced(function* (
   playwright.keyboard.up = (key) => invoke("keyboard.up", "keyUp", key, () => originalUp(key));
   yield* Effect.addFinalizer(() => Effect.sync(() => gate?.resolve()));
 
-  const page = yield* Page.make({
+  const page = yield* PageImpl.make({
     id: "input-test",
     playwright,
     cdp,

@@ -11,7 +11,7 @@ import { chromium } from "playwright-core";
 
 import * as Browser from "./Browser.ts";
 import { BrowserError } from "./BrowserError.ts";
-import { reasonOf } from "./Page.ts";
+import { reasonOf } from "./internal/page.ts";
 
 export interface Options extends Browser.Options {
   /** Defaults to true. */
