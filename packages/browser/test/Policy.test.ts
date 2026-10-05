@@ -271,6 +271,41 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("refuses typing into a control before asking, and classifies Enter on toggles", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const { page } = yield* setup({
+        guard: (request) =>
+          Effect.sync(() => requests.push(request)).pipe(
+            Effect.andThen(Effect.fail(new PolicyDenied({ detail: "inspection only" }))),
+          ),
+      });
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<form action="/next"><input name="q" value="1"><input type="checkbox" id="checkbox">' +
+            '<input type="radio" id="radio" name="r"><input type="range" id="range"><button id="go">Go</button></form>',
+        ),
+      );
+      yield* Effect.promise(() => page.playwright.locator("#go").focus());
+      assert.deepStrictEqual(yield* failure(page.type("a b")), {
+        tag: "NotActionable",
+        dispatched: false,
+      });
+      assert.isEmpty(requests);
+
+      for (const id of ["checkbox", "radio", "range"]) {
+        yield* Effect.promise(() => page.playwright.locator("#" + id).focus());
+        assert.deepStrictEqual(yield* failure(page.press("Enter")), {
+          tag: "PolicyDenied",
+          dispatched: false,
+        });
+        assert.include(requests.at(-1)!.classifications, "form-submit");
+      }
+    }),
+  );
+
   it.effect("consults one policy for every supported input and navigation", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];

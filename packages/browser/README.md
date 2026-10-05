@@ -133,7 +133,9 @@ At most 2,112 input commands and reservations are owned at once; ordinary input 
 stops the unsent suffix and releases held input.
 
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
-uses Unicode insertion. Humanized typing aims for about 75 WPM including slower word starts, with
+uses Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
+link or change a select, so `type` refuses before any input when its `into` ref is not a text
+field or, without `into`, when focus is on such a control; `press` sends keys to those. Humanized typing aims for about 75 WPM including slower word starts, with
 key holds around 110 ms that can overlap. The ordered schedule releases a repeated physical key
 before pressing it again. Keys follow that schedule without waiting for each network reply.
 Pending replies are bounded and drained before an action succeeds; interruption stops new input and

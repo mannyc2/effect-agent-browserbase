@@ -107,7 +107,7 @@ export interface ClickOptions {
 }
 
 export interface TypeOptions {
-  /** Type into this field: it is focused first, and its content replaced unless `replace` is false. */
+  /** Type into this text field: it is focused first, and its content replaced unless `replace` is false. */
   readonly into?: string | undefined;
   readonly replace?: boolean | undefined;
   /** Press Enter afterwards. */
@@ -224,6 +224,7 @@ export interface Page {
   ) => Effect.Effect<ResolvedTarget, BrowserError>;
   readonly hover: (target: Target) => Effect.Effect<void, BrowserError>;
   readonly drag: (from: Target, to: Target) => Effect.Effect<void, BrowserError>;
+  /** Type into a text field, or to whatever has focus unless a typed key could activate it. */
   readonly type: (text: string, options?: TypeOptions) => Effect.Effect<void, BrowserError>;
   /** Keys such as `"Enter"`, `"Space"`, `"ArrowLeft"` or `"Control+A"`. */
   readonly press: (keys: string, options?: PressOptions) => Effect.Effect<void, BrowserError>;
@@ -1426,16 +1427,33 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       (marks, approval) =>
         Effect.gen(function* () {
           const replace = typeOptions.replace ?? true;
+          const into = typeOptions.into;
           let corrected = false;
 
-          if (typeOptions.into !== undefined) {
-            const ref = typeOptions.into;
+          if (into !== undefined && !/^e\d+$/.test(into))
+            return yield* failWith(
+              "type",
+              new InvalidRequest({ detail: `"${into}" is not a ref; refs look like e12` }),
+            );
 
-            if (!/^e\d+$/.test(ref))
-              return yield* failWith(
-                "type",
-                new InvalidRequest({ detail: `"${ref}" is not a ref; refs look like e12` }),
-              );
+          // A typed space or letter can press a focused button or change a control. Refuse
+          // those before any input, on every path.
+          const typeable = yield* (
+            approval === undefined
+              ? evaluate("type", scriptCall("typeable", into ?? null))
+              : mutate("type", scriptCall("typeable", into ?? null), approval)
+          ).pipe(Effect.flatMap(decodeWith("type", Script.TypeableResultSchema)));
+
+          if ("error" in typeable)
+            return yield* failWith(
+              "type",
+              typeable.error === "stale" && into !== undefined
+                ? new StaleRef({ ref: into })
+                : new NotActionable({ detail: typeable.detail }),
+            );
+
+          if (into !== undefined) {
+            const ref = into;
             const target = yield* targetFor("type", ref, approval, marks);
 
             yield* marks.at(target.point);

@@ -109,6 +109,10 @@ export type EditResult =
   | { readonly ok: true; readonly detail: string }
   | { readonly error: string };
 
+export type TypeableResult =
+  | { readonly ok: true }
+  | { readonly error: "stale" | "untypeable"; readonly detail: string };
+
 export interface PageApi {
   readonly version: number;
   snapshot(request: SnapshotRequest): SnapshotResult;
@@ -123,6 +127,7 @@ export interface PageApi {
     prepared: PreparedInput,
     options?: ValidationOptions,
   ): ValidatedInputResult | Promise<ValidatedInputResult>;
+  typeable(ref: string | null): TypeableResult;
   focus(ref: string, replace: boolean): EditResult;
   checkText(ref: string, expected: string): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
@@ -755,6 +760,51 @@ export const install = (): PageApi => {
     return undefined;
   };
 
+  const textEntry = (element: Element): boolean =>
+    (isInput(element) &&
+      ![
+        "button",
+        "reset",
+        "submit",
+        "image",
+        "checkbox",
+        "radio",
+        "file",
+        "range",
+        "color",
+        "hidden",
+      ].includes(element.type)) ||
+    isTextArea(element) ||
+    (isHtml(element) && element.isContentEditable);
+
+  const activatingRoles = new Set([
+    "button",
+    "link",
+    "checkbox",
+    "radio",
+    "switch",
+    "tab",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "treeitem",
+  ]);
+
+  // Typed text goes wherever focus is, and a typed space or letter can press a focused button,
+  // toggle a box, follow a link or change a select. Only fields, or elements that are none of
+  // these (a page or a canvas game), may receive text.
+  const typingRefusal = (element: Element, explicit: boolean): string | undefined =>
+    textEntry(element)
+      ? undefined
+      : explicit
+        ? `${describe(element)} is not a text field`
+        : activationTarget(element) !== undefined ||
+            isSelect(element) ||
+            activatingRoles.has(roleOf(element) ?? "")
+          ? `focus is on ${describe(element)}, which typed text could activate or change; type into a text field by ref, or use press for keys`
+          : undefined;
+
   const details = (element: Element, hit: Element, x: number, y: number): ResolvedPoint => {
     const link = linkOf(element);
     let href: string | undefined;
@@ -1013,20 +1063,11 @@ export const install = (): PageApi => {
       plan.action === "click" ||
       (plan.action === "press" && (enter || plan.keys?.split("+").at(-1) === "Space"));
 
+    // Enter submits a form from any input but buttons, file and color pickers, including
+    // checkboxes, radios and ranges.
     const fieldEnter =
       isInput(control) &&
-      ![
-        "button",
-        "reset",
-        "submit",
-        "image",
-        "checkbox",
-        "radio",
-        "file",
-        "range",
-        "color",
-        "hidden",
-      ].includes(control.type) &&
+      !["button", "reset", "submit", "image", "file", "color", "hidden"].includes(control.type) &&
       ((plan.action === "press" && enter) || (plan.action === "type" && plan.submit));
 
     const submits = form !== null && ((activation && isSubmitter(control)) || fieldEnter);
@@ -1195,6 +1236,9 @@ export const install = (): PageApi => {
       }
       if (!inCurrentDocument(element))
         return { error: "stale", detail: "the input target belongs to a replaced document" };
+      const refusal = plan.action === "type" ? typingRefusal(element, target !== null) : undefined;
+
+      if (refusal !== undefined) return { error: "untypeable", detail: refusal };
       const inspected = inspectInput(element, plan);
 
       targets.push(inspected.inspected);
@@ -1323,17 +1367,25 @@ export const install = (): PageApi => {
       : { error: "corrected prose did not match the requested text" };
   };
 
+  const typeable = (ref: string | null): TypeableResult => {
+    const element = ref === null ? activeElement() : lookup(ref);
+
+    if (element === undefined)
+      return {
+        error: "stale",
+        detail: `${ref ?? "the focused element"} is not on the page any more`,
+      };
+    const refusal = element === null ? undefined : typingRefusal(element, ref !== null);
+
+    return refusal === undefined ? { ok: true } : { error: "untypeable", detail: refusal };
+  };
+
   const focus = (ref: string, replace: boolean): EditResult => {
     const element = lookup(ref);
 
     if (element === undefined) return { error: `${ref} is not on the page any more` };
     if (isDisabled(element)) return { error: `${ref} is disabled` };
-    if (
-      !isInput(element) &&
-      !isTextArea(element) &&
-      !(isHtml(element) && element.isContentEditable)
-    )
-      return { error: `${ref} is ${describe(element)}, not a text field` };
+    if (!textEntry(element)) return { error: `${ref} is ${describe(element)}, not a text field` };
     if (isHtml(element)) element.focus();
     if (replace) {
       if (isInput(element) || isTextArea(element)) element.select();
@@ -1382,6 +1434,7 @@ export const install = (): PageApi => {
     viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
     prepareInput,
     validateInput,
+    typeable,
     focus,
     checkText,
     select,
@@ -1471,6 +1524,11 @@ export const ViewportResultSchema = Schema.Struct({
   width: Schema.Finite,
   height: Schema.Finite,
 });
+
+export const TypeableResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true) }),
+  Schema.Struct({ error: Schema.Literals(["stale", "untypeable"]), detail: Schema.String }),
+]);
 
 export const EditResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String }),

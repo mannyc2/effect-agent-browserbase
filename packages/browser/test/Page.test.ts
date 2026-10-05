@@ -119,6 +119,48 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("refuses to type where a space or letter could activate the focused control", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const snapshot = yield* page.snapshot();
+
+      const focus = (selector: string) =>
+        Effect.promise(() => page.playwright.locator(selector).focus());
+
+      yield* focus("#submit");
+      assert.deepStrictEqual(yield* reason(page.type("a b")), {
+        tag: "NotActionable",
+        dispatched: false,
+      });
+      assert.deepStrictEqual(
+        yield* reason(page.type("ok go", { into: refOf(snapshot, "button", "Submit") })),
+        { tag: "NotActionable", dispatched: false },
+      );
+      yield* focus("#agree");
+      assert.deepStrictEqual(yield* reason(page.type(" ")), {
+        tag: "NotActionable",
+        dispatched: false,
+      });
+      assert.strictEqual(yield* text(page, "#outcome"), "Not ordered");
+      assert.isFalse(yield* Effect.promise(() => page.playwright.locator("#agree").isChecked()));
+
+      // A page without a focused control, such as a keyboard game, still receives typed keys.
+      yield* Effect.promise(() =>
+        page.playwright.evaluate(() => {
+          (document.activeElement as HTMLElement | null)?.blur();
+          document.addEventListener("keydown", (event) => {
+            document.body.dataset.keys = (document.body.dataset.keys ?? "") + event.key;
+          });
+        }),
+      );
+      yield* page.type("wasd");
+      assert.strictEqual(
+        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.keys)),
+        "wasd",
+      );
+    }),
+  );
+
   it.effect("drags a slider between points", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");

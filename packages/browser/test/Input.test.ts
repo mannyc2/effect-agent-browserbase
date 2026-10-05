@@ -336,11 +336,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             relay.dispatches.filter((dispatch) => dispatch.method.startsWith("Input.")).length,
             raw.length,
           );
-          // Typing never evaluates per key. A page's first input also maps its clock once: a
-          // world check and three probes, which registration no longer waits for.
+          // Typing never evaluates per key: it checks its target, then inspects, validates and
+          // rechecks focus. A page's first input also maps its clock once: a world check and
+          // three probes, which registration no longer waits for.
           assert.isAtMost(
             relay.dispatches.filter((dispatch) => dispatch.method === "Runtime.evaluate").length,
-            3 + 4,
+            4 + 4,
           );
           assert.isAtMost(relay.maximumOutstanding(), 64);
 
