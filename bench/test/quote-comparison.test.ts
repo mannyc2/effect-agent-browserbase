@@ -184,6 +184,35 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }).pipe(Effect.scoped),
     );
 
+    it.effect("shares the barrier's native frame when the capture starts after reuse expired", () =>
+      Effect.gen(function* () {
+        const browser = yield* Browser;
+
+        // A busy host can stall between the paint barrier and the capture. A static page paints
+        // nothing newer, so by then the moment's own current frame is a fresh screenshot.
+        const stalled = Browser.of({
+          ...browser,
+          newPage: (url) =>
+            browser.newPage(url).pipe(
+              Effect.map((page) => ({
+                ...page,
+                currentFrame: Effect.sleep("1 second").pipe(Effect.andThen(page.currentFrame)),
+              })),
+            ),
+        });
+
+        const captured = yield* Comparison.prepare({ seed: 7, dense: true }).pipe(
+          Effect.provideService(Browser, stalled),
+        );
+
+        const frame = captured.moment.frames[0];
+
+        assert.strictEqual(captured.moment.frames.length, 1);
+        assert.strictEqual(frame?.timing._tag, "BrowserPaint");
+        assert.deepStrictEqual(Comparison.answerFrom(captured.facts), captured.expected);
+      }),
+    );
+
     it.effect(
       "rejects stale identity and wrong table, ticker or period provenance before a call",
       () =>

@@ -4,6 +4,7 @@ import { Effect, Schedule, Schema, Stream } from "effect";
 import type * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
+import type { Frame } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import { type AiError, LanguageModel, Prompt } from "effect/ai";
@@ -467,20 +468,21 @@ export const prepare = (options: {
     );
 
     yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+
+    const barrierPaint = (frame: Frame) =>
+      frame.timing._tag === "BrowserPaint" && frame.timing.timestamp >= paintAfter;
+
     yield* page.recentFrames.pipe(
       Effect.repeat({
         schedule: Schedule.spaced("25 millis"),
-        until: (frames) =>
-          frames.some(
-            (frame) => frame.timing._tag === "BrowserPaint" && frame.timing.timestamp >= paintAfter,
-          ),
+        until: (frames) => frames.some(barrierPaint),
       }),
       Effect.timeoutOrElse({
         duration: "5 seconds",
         orElse: () => fail("The comparison did not capture a native frame"),
       }),
     );
-    const moment = yield* Moment.capture(page, { frames: 1 });
+    const captured = yield* Moment.capture(page, { frames: 1 });
     const after = yield* readDom(page);
 
     const encodeDom = (dom: VisibleDom) =>
@@ -493,17 +495,33 @@ export const prepare = (options: {
 
     // Static quotes let us bracket the capture instead of pretending a DOM read and a frame
     // are atomic. A changed page invalidates the whole triplet before any model admission.
-    if (beforeEncoded !== afterEncoded || after.url !== moment.snapshot.url)
+    if (beforeEncoded !== afterEncoded || after.url !== captured.snapshot.url)
       return yield* fail("The quote evidence changed while the shared moment was captured");
-    const frame = moment.frames[0];
 
-    if (
-      moment.frames.length !== 1 ||
-      frame === undefined ||
-      frame.timing._tag !== "BrowserPaint" ||
-      frame.timing.timestamp < paintAfter
-    )
+    // A quiet static page paints nothing new, so once its newest native frame is older than frame
+    // reuse allows, the moment ends with a fresh screenshot instead. Nothing touched this page and
+    // the bracketing reads match, so the newest native frame after the barrier still shows it.
+    const newest = captured.frames[0];
+
+    const frame =
+      newest !== undefined && barrierPaint(newest)
+        ? newest
+        : (yield* page.recentFrames).findLast(barrierPaint);
+
+    if (captured.frames.length !== 1 || frame === undefined)
       return yield* fail("The comparison requires one native captured frame");
+
+    const moment =
+      frame === newest
+        ? captured
+        : new Moment.Moment({
+            at: captured.at,
+            page: captured.page,
+            frames: [frame],
+            snapshot: captured.snapshot,
+            events: captured.events,
+          });
+
     const observation = { page: moment.page, url: moment.snapshot.url, at: moment.at };
     const facts = yield* validateFacts({ observation, evidence: after.evidence }, observation);
     const baselineImage = yield* resize(page, frame.data);

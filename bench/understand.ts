@@ -51,7 +51,8 @@ const help = `Usage: bun run understand -- [options]
   --help                 Show this help.
 
 Live calls require EFFECT_BROWSER_BENCH_LIVE=1. This experiment uses local Chromium only.
-Each pair shares one capture across A, B and facts, in a counterbalanced order.`;
+Each pair shares one capture across A, B and facts. Arm orders are balanced within each
+complete block of six pairs.`;
 
 export class RunError extends Schema.TaggedError<RunError>()("UnderstandRunError", {
   message: Schema.String,
