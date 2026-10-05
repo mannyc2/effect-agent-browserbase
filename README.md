@@ -103,13 +103,15 @@ const watch = Effect.gen(function* () {
   failure or completion, and answers the remaining calls as not executed. A loop of your own gets
   the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a tab
   opens, the tools follow it: in the receipt when it registers in time, otherwise when they next
-  look. Until the new tab has been observed, later actions do nothing and say so: the model
-  planned them on the old tab.
+  look. Actions run only on the tab last observed, since the model planned them on what it saw
+  there: after a tab opens, the current tab closes or `browser_tabs` switches, later actions do
+  nothing and say so until the new current tab has been observed.
 - The model receives one outline and screenshot at the start and after each turn, including failed
   batches. If the browser is gone, the run fails with its `BrowserError` rather than calling the
   model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
   is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
-  that calls a tool that does not exist: none of its calls run.
+  that calls a tool that does not exist or passes arguments that are not JSON: none of its calls
+  run. A provider reply its client cannot decode ends the run instead.
 - `browser_navigate` and `browser_tabs` open only http and https addresses, `data:` URLs and
   `about:blank`; a model cannot open a local file. An address without a scheme, such as
   `example.com` or `localhost:3000`, opens over HTTPS, or HTTP on loopback; `Page.goto` reads

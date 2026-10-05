@@ -59,7 +59,14 @@ export const Navigate = tool("browser_navigate", "Open a URL in the current tab.
   url: Schema.String,
 });
 
-export const Back = tool("browser_back", "Go back to the previous page in the current tab.", {});
+// Without parameters, not with `Schema.Struct({})`: an empty struct's JSON Schema has no object
+// root, which OpenAI's structured outputs reject for the whole request.
+export const Back = Tool.make("browser_back", {
+  description: "Go back to the previous page in the current tab.",
+  success: Schema.String,
+  failure: Schema.String,
+  failureMode: "return",
+});
 
 export const Snapshot = tool(
   "browser_snapshot",
@@ -312,7 +319,8 @@ export interface Tools {
   readonly batch: Effect.Effect<Batch<BrowserTools>>;
   /**
    * The tab the tools act on, after following any tab that opened since they last looked. Observe
-   * it after each batch: once a tab opens, actions refuse to run until it has been returned here.
+   * it after each batch: actions run only on the tab this last returned, so after a tab opens,
+   * the current one closes or `browser_tabs` switches, they refuse until it is returned here.
    */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
   /** Drain the requested crops, once per batch, to include beside the observation. */
@@ -359,9 +367,11 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   // Tabs the tools have looked at. Any other open tab opened since, perhaps after the receipt of
   // the action that opened it.
   const seen = new Set((yield* browser.pages).map((tab) => tab.id));
-  // The current tab became a newly opened one that `page`, which observations use, has not
-  // returned since. The model planned its batch on the old tab and sees nothing new until then.
-  let unobserved = false;
+  // The tab `page`, which observations use, last returned. The model plans a batch on what it
+  // saw there, so actions run only on that tab; another current tab must be observed first.
+  let observed: string | undefined;
+  // Why the current tab last changed, for that refusal.
+  let changed = "";
   let zooms: Array<Page.Zoom> = [];
   const zoomLock = yield* Semaphore.make(1);
 
@@ -375,42 +385,49 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     }),
   );
 
+  const opened = "A new tab opened and is now the current tab.";
+  const closed = "The tab in use closed, and another is now the current tab.";
+
+  const become = (tab: Page.Page, why: string) => {
+    current = Option.some(tab);
+    changed = why;
+  };
+
   /** Make the newest tab opened since the tools last looked the current one; true if one did. */
   const follow = Effect.gen(function* () {
     const open = yield* browser.pages;
-    const opened = open.filter((tab) => !seen.has(tab.id)).at(-1);
+    const newest = open.filter((tab) => !seen.has(tab.id)).at(-1);
 
     for (const tab of open) seen.add(tab.id);
-    if (opened === undefined) return false;
-    current = Option.some(opened);
-    unobserved = true;
-    yield* opened.bringToFront.pipe(Effect.ignore);
+    if (newest === undefined) return false;
+    become(newest, opened);
+    yield* newest.bringToFront.pipe(Effect.ignore);
 
     return true;
   });
 
-  /** The current tab, after following a newly opened one, and whether that just happened. */
+  /** The current tab, after following a newly opened one, and what this look changed. */
   const resolve = Effect.gen(function* () {
     const followed = yield* follow;
     const open = yield* browser.pages;
+    const kept = Option.filter(current, (tab) => open.includes(tab));
+    const lost = Option.isSome(current) && Option.isNone(kept);
+    const tab = Option.isSome(kept) ? kept.value : yield* browser.page;
 
-    if (Option.isSome(current) && open.includes(current.value))
-      return { tab: current.value, followed };
-    const first = yield* browser.page;
+    seen.add(tab.id);
+    if (lost) become(tab, closed);
+    current = Option.some(tab);
+    // Before the first look nothing was planned on any tab.
+    observed ??= tab.id;
 
-    seen.add(first.id);
-    current = Option.some(first);
-
-    return { tab: first, followed };
+    return { tab, note: lost ? closed : followed ? opened : undefined };
   });
 
   const page: Effect.Effect<Page.Page, BrowserError> = Effect.map(resolve, ({ tab }) => {
-    unobserved = false;
+    observed = tab.id;
 
     return tab;
   });
-
-  const switched = "A new tab opened and is now the current tab.";
 
   const describeTab = (tab: Page.Page) =>
     tab.title.pipe(
@@ -428,17 +445,18 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     Effect.gen(function* () {
       const { tab } = yield* resolve;
 
-      // The call was planned on the tab the model last saw, so it must not run on a new one.
-      if (unobserved)
+      // The call was planned on the tab the model last saw: refs restart on every tab, and
+      // coordinates belong to its picture, so it must not run on another one.
+      if (tab.id !== observed)
         return yield* Effect.fail(
-          `Not done: ${switched} It is ${yield* describeTab(tab)}. Look at it first.`,
+          `Not done: ${changed} It is ${yield* describeTab(tab)}. Look at it first.`,
         );
       const result = yield* run(tab);
       const receipt = typeof done === "string" ? done : done(result);
 
       // A tab that registers later is followed when the tools next look; either way, later
       // actions wait until it is observed.
-      return (yield* follow) ? `${receipt}\n${switched}` : receipt;
+      return (yield* follow) ? `${receipt}\n${opened}` : receipt;
     }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message)));
 
   const tabList = Effect.gen(function* () {
@@ -463,10 +481,10 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
     browser_back: () => act("Went back.", (tab) => tab.back),
     browser_snapshot: ({ full, query }) =>
       Effect.gen(function* () {
-        const { tab, followed } = yield* resolve;
+        const { tab, note } = yield* resolve;
         const snapshot = yield* tab.snapshot({ full, query, maxChars: snapshotChars });
 
-        return followed ? `${switched}\n${snapshot.rendered}` : snapshot.rendered;
+        return note === undefined ? snapshot.rendered : `${note}\n${snapshot.rendered}`;
       }).pipe(Effect.mapError((error) => error.message)),
     browser_zoom: (region) =>
       zoomLock.withPermits(1)(
@@ -475,12 +493,12 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
             return yield* Effect.fail(
               "At most 8 zoom crops can await an observation; finish the batch first.",
             );
-          const { tab, followed } = yield* resolve;
+          const { tab, note } = yield* resolve;
           const zoom = yield* tab.zoom(region);
 
           zooms.push(zoom);
 
-          return `${followed ? switched + "\n" : ""}Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
+          return `${note === undefined ? "" : note + "\n"}Captured a zoom from page ${zoom.page} at viewport (${region.x}, ${region.y}), ${region.width}x${region.height}. The image follows the batch; click coordinates remain in viewport space.`;
         }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message))),
       ),
     browser_click: (op) =>
@@ -567,13 +585,13 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
             : Effect.flatMap(destination(url), (address) => browser.newPage(address));
 
           seen.add(tab.id);
-          current = Option.some(tab);
+          become(tab, "browser_tabs opened a new tab and made it current.");
           yield* tab.bringToFront;
         } else if (action === "select" || action === "close") {
           if (chosen === undefined)
             return yield* Effect.fail(`there is no tab ${index ?? "(no index given)"}`);
           if (action === "select") {
-            current = Option.some(chosen);
+            become(chosen, "browser_tabs made another tab current.");
             yield* chosen.bringToFront;
           } else yield* chosen.close;
         }

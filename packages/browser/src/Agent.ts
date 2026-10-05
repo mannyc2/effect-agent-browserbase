@@ -10,7 +10,7 @@
  *
  * @since 0.3.0
  */
-import { Context, Effect, Option, Ref, Schema } from "effect";
+import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
 import { AiError, Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
@@ -59,8 +59,9 @@ export interface Step {
   }>;
   readonly usage: Usage.Usage;
   /**
-   * Set when `effect/ai` could not read the response, most likely a call to a tool that does not
-   * exist. None of its calls ran, the model is asked to try again, and its usage is not reported.
+   * Set when the model's response could not be read, such as a call to a tool that does not exist
+   * or arguments that are not JSON. None of its calls ran, the model is asked to try again, and
+   * its usage is not reported.
    */
   readonly rejected?: string | undefined;
 }
@@ -155,14 +156,33 @@ const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
 };
 
 /**
- * A response `effect/ai` could not read, most likely for a call to a tool that does not exist. It
- * reads the whole response before running any handler, and the batch answers every handler
- * failure as a result, so nothing in such a response ran. The chat leaves its history unchanged.
+ * Model output that could not be read: `effect/ai`'s decoding of the response, which fails on a
+ * call to a tool that does not exist, or an adapter's parsing of a call's arguments. Both happen
+ * before any handler runs, and the batch answers every handler failure as a result, so nothing
+ * in such a response ran and the chat leaves its history unchanged. A provider client that cannot
+ * decode what its service sent is not the model's to correct: that failure ends the run.
  */
 const isUnreadable = (
   error: unknown,
-): error is AiError.AiError & { readonly reason: AiError.InvalidOutputError } =>
-  AiError.isAiError(error) && error.reason._tag === "InvalidOutputError";
+): error is AiError.AiError & {
+  readonly reason: AiError.InvalidOutputError | AiError.ToolParameterValidationError;
+} =>
+  AiError.isAiError(error) &&
+  ((error.reason._tag === "InvalidOutputError" &&
+    error.module === "LanguageModel" &&
+    error.method === "generateText") ||
+    (error.reason._tag === "ToolParameterValidationError" && error.module !== "Toolkit"));
+
+/** What the model is told about a response that could not be read. */
+const unreadable = (
+  reason: AiError.InvalidOutputError | AiError.ToolParameterValidationError,
+  tools: ReadonlyArray<string>,
+) =>
+  reason._tag === "ToolParameterValidationError"
+    ? `Your call to ${reason.toolName} could not be read, so none of your last response's tool ` +
+      `calls ran: ${reason.description}. Send each call's arguments as one JSON object.`
+    : "Your last response could not be read, so none of its tool calls ran. It most likely " +
+      `called a tool that does not exist. The tools are: ${tools.join(", ")}.`;
 
 const note = (text: string) =>
   Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text })] });
@@ -294,16 +314,17 @@ const loop = <E, R, Extra extends ExtraTools>(
         })
         .pipe(
           Effect.map((turn) => ({ turn })),
-          Effect.catchIf(isUnreadable, (error) =>
-            Effect.succeed({ rejected: error.reason.description }),
-          ),
+          Effect.catchIf(isUnreadable, (error) => Effect.succeed({ rejected: error.reason })),
         );
 
-      const observation = yield* observe;
+      // A browser that is gone ends the run, but only once the paid turn is reported and the
+      // answer it may have given is kept.
+      const observed = yield* Effect.exit(observe);
 
-      yield* Ref.update(chat.history, (history) =>
-        prunePictures(Prompt.concat(history, [observation]), keepPictures),
-      );
+      if (Exit.isSuccess(observed))
+        yield* Ref.update(chat.history, (history) =>
+          prunePictures(Prompt.concat(history, [observed.value]), keepPictures),
+        );
 
       if ("rejected" in response) {
         if (options.onStep !== undefined) {
@@ -313,18 +334,12 @@ const loop = <E, R, Extra extends ExtraTools>(
             calls: [],
             results: [],
             usage: Usage.empty,
-            rejected: response.rejected,
+            rejected: response.rejected.description,
           });
         }
+        if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
         idle = 0;
-        next = [
-          note(
-            "Your last response could not be read, so none of its tool calls ran. It most " +
-              "likely called a tool that does not exist. The tools are: " +
-              Object.keys(toolkit.tools).join(", ") +
-              ".",
-          ),
-        ];
+        next = [note(unreadable(response.rejected, Object.keys(toolkit.tools)))];
         continue;
       }
       const { turn } = response;
@@ -359,6 +374,7 @@ const loop = <E, R, Extra extends ExtraTools>(
 
         return { answer: finished.value.answer, steps: step, usage, history };
       }
+      if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
 
       if (turn.toolCalls.length === 0) {
         idle += 1;

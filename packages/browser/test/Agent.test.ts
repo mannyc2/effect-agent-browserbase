@@ -6,7 +6,9 @@ import { pathToFileURL } from "node:url";
 
 import { assert, expectTypeOf, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
-import { type AiError, LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import { AiError, LanguageModel, Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput";
+import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
 import type { BrowserContext } from "playwright-core";
 
 import * as Agent from "../src/Agent.ts";
@@ -67,6 +69,25 @@ const slowRegistration = (context: BrowserContext, delay: number): BrowserContex
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+
+/** A model that answers each call with the next reply, failures included. */
+const replies = (
+  outcomes: ReadonlyArray<Effect.Effect<Array<Response.PartEncoded>, AiError.AiError>>,
+) => {
+  const prompts: Array<Prompt.Prompt> = [];
+
+  const model = LanguageModel.make({
+    generateText: (options) =>
+      Effect.suspend(() => {
+        prompts.push(options.prompt);
+
+        return outcomes[prompts.length - 1] ?? Effect.die(`no reply ${prompts.length}`);
+      }),
+    streamText: () => Stream.empty,
+  });
+
+  return { model, prompts };
+};
 
 let calls = 0;
 
@@ -310,6 +331,56 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.match(JSON.stringify(steps[0]?.results[2]?.result), /not executed/i);
       assert.strictEqual(tracked.observations.length, 2);
     }),
+  );
+
+  it.effect(
+    "asks again after unreadable arguments, but ends on a provider's unreadable reply",
+    () =>
+      Effect.gen(function* () {
+        yield* start("/next");
+
+        // The failures an adapter raises: its parse of a call's arguments, which is model output,
+        // and its client's decoding of the service's reply, which is not.
+        const unparsable = AiError.make({
+          module: "OpenRouterLanguageModel",
+          method: "makeResponse",
+          reason: new AiError.ToolParameterValidationError({
+            toolName: "browser_snapshot",
+            description: "Failed to securely JSON parse tool parameters: SyntaxError",
+          }),
+        });
+
+        const undecodable = AiError.make({
+          module: "OpenRouterClient",
+          method: "createChatCompletion",
+          reason: new AiError.InvalidOutputError({ description: "Expected a chat completion" }),
+        });
+
+        const corrected = replies([
+          Effect.fail(unparsable),
+          Effect.succeed([call("done", { answer: "read" }), finish]),
+        ]);
+
+        const result = yield* Agent.run("Read the page.").pipe(
+          Effect.provideServiceEffect(LanguageModel.LanguageModel, corrected.model),
+        );
+
+        assert.strictEqual(result.answer, "read");
+        assert.include(
+          textOf(corrected.prompts[1] ?? Prompt.empty),
+          "Your call to browser_snapshot could not be read",
+        );
+
+        const ended = replies([Effect.fail(undecodable)]);
+
+        const failure = yield* Agent.run("Read the page.").pipe(
+          Effect.provideServiceEffect(LanguageModel.LanguageModel, ended.model),
+          Effect.flip,
+        );
+
+        assert.strictEqual(failure, undecodable);
+        assert.strictEqual(ended.prompts.length, 1);
+      }),
   );
 
   it.effect("asks again after a call to an unknown tool, without running any call", () =>
@@ -598,8 +669,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
 
       const model = scripted([() => [call("close_browser", {}), finish]]);
+      const reported: Array<number> = [];
 
-      const failure = yield* Agent.run("Close the browser.", { additionalTools: Closing }).pipe(
+      const failure = yield* Agent.run("Close the browser.", {
+        additionalTools: Closing,
+        onStep: (step) => Effect.sync(() => reported.push(step.usage.inputTokens)),
+      }).pipe(
         Effect.provide([closing, model.layer]),
         Effect.provideService(Browser, browser),
         Effect.flip,
@@ -607,6 +682,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.strictEqual(failure._tag, "BrowserError");
       assert.strictEqual(model.prompts.length, 1);
+      // The paid turn is still reported before the run ends.
+      assert.deepStrictEqual(reported, [100]);
 
       const unused = scripted([]);
 
@@ -618,6 +695,37 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.strictEqual(again._tag, "BrowserError");
       assert.strictEqual(unused.prompts.length, 0);
+    }),
+  );
+
+  it.effect("keeps the answer of the turn in which the browser went away", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      assert.isNotNull(native);
+      if (native === null) return;
+      const context = yield* Effect.promise(() => native.newContext());
+      const browser = yield* makeBrowser(context, { id: "expiring", provider: "test" });
+
+      yield* (yield* browser.page).goto("data:text/html,<title>Task</title>The answer is 42");
+      const reported: Array<number> = [];
+
+      // The model answers while the hosted session expires.
+      const model = replies([
+        Effect.promise(() => context.close()).pipe(
+          Effect.as([call("done", { answer: "42" }), finish]),
+        ),
+      ]);
+
+      const result = yield* Agent.run("Read the answer.", {
+        onStep: (step) => Effect.sync(() => reported.push(step.usage.inputTokens)),
+      }).pipe(
+        Effect.provideServiceEffect(LanguageModel.LanguageModel, model.model),
+        Effect.provideService(Browser, browser),
+      );
+
+      assert.strictEqual(result.answer, "42");
+      assert.deepStrictEqual(reported, [100]);
     }),
   );
 
@@ -773,6 +881,40 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(failure.message, "stopped calling tools");
       assert.strictEqual(model.prompts.length, 3);
       assert.strictEqual(tracked.observations.length, 4);
+    }),
+  );
+
+  it.effect("offers every tool with an object schema under each provider's codec", () =>
+    Effect.gen(function* () {
+      yield* start("/next");
+      const offered: Array<Tool.Any> = [];
+
+      const model = LanguageModel.make({
+        generateText: (options) =>
+          Effect.sync(() => {
+            offered.push(...options.tools);
+
+            return [call("done", { answer: { credits: 1 } }), finish];
+          }),
+        streamText: () => Stream.empty,
+      });
+
+      yield* Agent.run("Count the credits.", {
+        answer: Schema.Struct({ credits: Schema.Finite }),
+      }).pipe(Effect.provideServiceEffect(LanguageModel.LanguageModel, model));
+
+      assert.sameMembers(
+        offered.map((tool) => tool.name),
+        [...Object.keys(Tools.BrowserToolkit.tools), "done", "give_up"],
+      );
+      // A root without `type: "object"` fails the whole request on OpenAI's structured outputs.
+      for (const tool of offered)
+        for (const transformer of [
+          toCodecOpenAI,
+          toCodecAnthropic,
+          LanguageModel.defaultCodecTransformer,
+        ])
+          assert.strictEqual(Tool.getJsonSchema(tool, { transformer }).type, "object", tool.name);
     }),
   );
 
@@ -1224,6 +1366,75 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         assert.include(outline, "The next page");
         assert.include(yield* tools.handlers.browser_click({ ref: proceed }), "Clicked");
       }).pipe(Effect.provideService(Browser, browser));
+    }),
+  );
+
+  it.effect("acts only on the observed tab, however another became current", () =>
+    Effect.gen(function* () {
+      const opener = yield* start("/form");
+      const browser = yield* Browser;
+      const tools = yield* Tools.make();
+
+      // The page opens a tab, which an observation then shows.
+      const popup = Effect.gen(function* () {
+        const before = (yield* browser.pages).length;
+
+        yield* Effect.promise(() => opener.playwright.evaluate(() => void window.open("/next")));
+        yield* browser.pages.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(50)),
+            until: (open) => open.length > before,
+          }),
+          Effect.timeout(Duration.seconds(5)),
+        );
+      });
+
+      yield* Effect.promise(() => opener.playwright.locator("#amount").focus());
+      yield* popup;
+      const shown = yield* tools.page;
+
+      assert.notStrictEqual(shown.id, opener.id);
+      yield* Effect.promise(() =>
+        shown.playwright.evaluate(() => {
+          const button = document.querySelector("button");
+
+          if (button !== null) button.onclick = () => window.close();
+        }),
+      );
+
+      // One batch planned on the popup: its button closes it, then typing would follow.
+      const outline = yield* tools.handlers.browser_snapshot({});
+      const close = /button "Continue" \[ref=(e\d+)\]/.exec(outline)?.[1] ?? "";
+
+      yield* tools.handlers.browser_click({ ref: close });
+      yield* Effect.sleep(Duration.millis(300));
+
+      const refused = yield* tools.handlers
+        .browser_type({ text: "9", append: true })
+        .pipe(Effect.flip);
+
+      assert.include(refused, "Not done: The tab in use closed, and another is now the current");
+      assert.include(refused, "Order — ");
+      assert.strictEqual(yield* valueOf(opener, "#amount"), "10");
+
+      // Choosing a tab is the model's own move: back to the observed tab, actions run there.
+      assert.strictEqual((yield* tools.page).id, opener.id);
+      yield* popup;
+      yield* tools.handlers.browser_snapshot({});
+      yield* tools.handlers.browser_tabs({ action: "select", index: 1 });
+      yield* tools.handlers.browser_type({ text: "5", append: true });
+      assert.include(yield* valueOf(opener, "#amount"), "5");
+
+      // On another tab they wait for it to be observed, without calling it new.
+      yield* tools.handlers.browser_tabs({ action: "select", index: 2 });
+
+      const elsewhere = yield* tools.handlers
+        .browser_type({ text: "7", append: true })
+        .pipe(Effect.flip);
+
+      assert.include(elsewhere, "Not done: browser_tabs made another tab current.");
+      assert.notInclude(elsewhere, "new tab");
+      yield* (yield* tools.page).close;
     }),
   );
 
