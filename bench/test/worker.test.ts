@@ -538,6 +538,77 @@ describe("isolated benchmark workers", () => {
       }).pipe(Effect.scoped),
   );
 
+  // Regression for 6b8faf2: model mistakes must remain graded outcomes; otherwise the
+  // paired parent stops every later admission and removes these failures from its accuracy count.
+  for (const failure of ["give_up", "invalid-answer"] as const) {
+    it.live("keeps " + failure + " in the paired worker's graded denominator", () =>
+      Effect.gen(function* () {
+        let calls = 0;
+
+        const service = yield* server((request, response) => {
+          const index = ++calls;
+
+          request.resume();
+          request.on("end", () => {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                id: "fixture",
+                object: "chat.completion",
+                created: 1,
+                model: "fixture/local",
+                system_fingerprint: null,
+                choices: [
+                  {
+                    index: 0,
+                    finish_reason: failure === "invalid-answer" ? "stop" : "tool_calls",
+                    logprobs: null,
+                    message: {
+                      role: "assistant",
+                      refusal: null,
+                      ...(failure === "invalid-answer"
+                        ? { content: JSON.stringify({ ticker: "WRONG" }) }
+                        : {
+                            content: null,
+                            tool_calls: [
+                              {
+                                id: "turn-" + index,
+                                type: "function",
+                                function: {
+                                  name: "give_up",
+                                  arguments: JSON.stringify({ reason: "I cannot finish." }),
+                                },
+                              },
+                            ],
+                          }),
+                    },
+                  },
+                ],
+                usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
+              }),
+            );
+          });
+        });
+
+        const result = yield* Worker.run(
+          {
+            ...config,
+            task: failure === "invalid-answer" ? "quote-table" : "chart-trade",
+            scripted: false,
+            apiUrl: origin(service) + "/" + capability,
+          },
+          { timeoutMillis: 30_000 },
+        );
+
+        assert.strictEqual(result.process.exitCode, 0);
+        assert.isFalse(result.process.forced);
+        assert.strictEqual(calls, 1);
+        assert.isFalse(result.result.pass);
+        assert.strictEqual(result.result.status, "completed");
+      }).pipe(Effect.scoped),
+    );
+  }
+
   it.live("counts actual parser calls and failures without inventing inference work", () =>
     Effect.gen(function* () {
       let calls = 0;
