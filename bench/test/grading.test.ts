@@ -2,13 +2,14 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Exit, Layer, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
 import { LanguageModel, type Prompt, type Response } from "effect/ai";
 
+import { noCalls } from "../Budget.ts";
 import {
   FrameTruth,
   MarketTruth,
@@ -18,6 +19,7 @@ import {
   truth,
 } from "../Sites.ts";
 import { tasks } from "../Tasks.ts";
+import { classify } from "../Trial.ts";
 
 /** A model that answers every call with the same parts. */
 const answering = (parts: ReadonlyArray<Response.PartEncoded>) =>
@@ -329,29 +331,25 @@ describe("understanding evidence", () => {
     }),
   );
 
-  it.live("does not ask a model to grade incomplete frame evidence", () =>
+  it.live("fails incomplete frame evidence as infrastructure before any model call", () =>
     Effect.gen(function* () {
       let called = false;
 
-      const { outcome, prompts, history } = yield* describeWith(
+      const failure = yield* describeWith(
         "order-filled",
         (page) =>
           Effect.sync(() => {
             called = true;
           }).pipe(Effect.andThen(order(page))),
         { frameHistory: 1 },
-      );
+      ).pipe(Effect.flip);
 
       assert.isFalse(called);
-      assert.isEmpty(prompts);
-      assert.strictEqual(history.length, 1);
-      assert.isFalse(outcome.pass, outcome.detail);
-      assert.strictEqual(outcome.steps, 0);
-      assert.isNull(outcome.answer);
-      assert.deepStrictEqual(outcome.usage, {
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
+      assert.strictEqual(failure._tag, "EvidenceIncomplete");
+      assert.deepStrictEqual(classify(Exit.fail(failure), noCalls), {
+        status: "infrastructure-failed",
+        reason: "evidence-incomplete",
+        pass: null,
       });
     }),
   );

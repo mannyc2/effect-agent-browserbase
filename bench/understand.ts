@@ -11,18 +11,18 @@ import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
-import * as Diagnostics from "./Diagnostics.ts";
-import * as Quote from "./QuoteComparison.ts";
 import {
   type Account,
   type Accounting,
   type Budget,
   budgetedClient,
-  isolatedTrial,
+  emptyAccounting,
   ledger,
   modelRunner,
-  trialSeed,
-} from "./run.ts";
+} from "./Budget.ts";
+import * as Diagnostics from "./Diagnostics.ts";
+import * as Quote from "./QuoteComparison.ts";
+import { classify, isolatedTrial, type Reason, type Status, tally, trialSeed } from "./Trial.ts";
 
 const help = `Usage: bun run understand -- [options]
 
@@ -182,14 +182,13 @@ export const manifest = (configuration: Options, createdAt: string) => ({
 
 export type Manifest = ReturnType<typeof manifest>;
 type Stop = "infrastructure" | "uncertain-accounting" | "output-failed";
-type Reason =
-  | "graded"
-  | "model-failed"
-  | "model-setup-failed"
-  | "preparation-failed"
-  | "budget-exhausted"
-  | "stopped-after-infrastructure"
-  | "accounting-unknown";
+
+const stopReason: { readonly [Cause in Stop]: Reason } = {
+  infrastructure: "stopped-after-infrastructure",
+  "uncertain-accounting": "stopped-after-uncertain-charge",
+  "output-failed": "stopped-after-output-failure",
+};
+
 type Matches = { readonly [Field in (typeof fields)[number]]: boolean };
 
 export interface Record {
@@ -198,8 +197,9 @@ export interface Record {
   readonly seed: number;
   readonly arm: Quote.Arm;
   readonly mode: Manifest["mode"];
-  readonly status: "graded" | "infrastructure-failed" | "unrun";
+  readonly status: Status;
   readonly reason: Reason;
+  /** Null unless the arm was graded. */
   readonly pass: boolean | null;
   readonly matches: Matches | null;
   readonly periodSwap: boolean | null;
@@ -215,14 +215,6 @@ export interface Record {
   readonly accounting: Accounting;
   readonly seconds: number;
 }
-
-const emptyAccounting: Accounting = {
-  calls: 0,
-  usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
-  knownUsd: 0,
-  reservedUsd: 0,
-  uncertainCalls: 0,
-};
 
 const matches = (answer: Quote.Answer, expected: Quote.Answer): Matches => ({
   ticker: answer.ticker === expected.ticker,
@@ -245,7 +237,11 @@ export interface Operations<E, R, E2, R2> {
   readonly record: (record: Record) => Effect.Effect<void, RunError>;
 }
 
-/** Cases run concurrently; their three arms run serially, preserving the global call bound. */
+/**
+ * Cases run concurrently; their three arms run serially, preserving the global call bound. An
+ * infrastructure failure or an unresolved charge stops new admissions; a graded answer, including
+ * malformed model output, never does.
+ */
 export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
   plan: Manifest,
   budget: Budget,
@@ -271,7 +267,8 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
     plan.pairs,
     (pair) =>
       Effect.gen(function* () {
-        const skipped = (yield* Ref.get(stopped)) !== null || (yield* budget.exhausted);
+        const halted = yield* Ref.get(stopped);
+        const skipped = halted !== null || (yield* budget.exhausted);
         const prepared = skipped ? undefined : yield* operations.prepare(pair).pipe(Effect.exit);
 
         if (prepared !== undefined && Exit.isFailure(prepared)) yield* stop("infrastructure");
@@ -300,32 +297,36 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
               evidence,
             };
 
-            const halted = yield* Ref.get(stopped);
-            const exhausted = yield* budget.exhausted;
+            const unanswered = {
+              pass: null,
+              matches: null,
+              periodSwap: null,
+              answer: null,
+              lastResponse: null,
+              accounting: emptyAccounting,
+              seconds: 0,
+            };
 
-            if (sample === undefined || halted !== null || exhausted) {
+            if (prepared !== undefined && Exit.isFailure(prepared))
               return yield* save({
                 ...base,
-                status: "unrun",
-                reason:
-                  prepared !== undefined && Exit.isFailure(prepared)
-                    ? "preparation-failed"
-                    : halted !== null
-                      ? "stopped-after-infrastructure"
-                      : "budget-exhausted",
-                pass: null,
-                matches: null,
-                periodSwap: null,
-                answer: null,
-                diagnostic:
-                  prepared !== undefined && Exit.isFailure(prepared)
-                    ? Diagnostics.failure(prepared.cause)
-                    : null,
-                lastResponse: null,
-                accounting: emptyAccounting,
-                seconds: 0,
+                ...unanswered,
+                status: "infrastructure-failed",
+                reason: "preparation-failed",
+                diagnostic: Diagnostics.failure(prepared.cause),
               });
-            }
+
+            const halt = yield* Ref.get(stopped);
+
+            if (sample === undefined || halt !== null || (yield* budget.exhausted))
+              return yield* save({
+                ...base,
+                ...unanswered,
+                ...(halt === null
+                  ? { status: "denied", reason: "budget-exhausted" }
+                  : { status: "unrun", reason: stopReason[halt] }),
+                diagnostic: null,
+              });
 
             const account = yield* budget.account;
             const started = yield* Clock.monotonicTimeNanos;
@@ -335,45 +336,34 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
               .pipe(Effect.timeout(plan.requestTimeoutMillis), Effect.exit);
 
             const seconds = Number((yield* Clock.monotonicTimeNanos) - started) / 1e9;
-            const accounting = yield* account.snapshot;
-            const lastResponse = yield* account.lastResponse;
-            const nowStopped = yield* Ref.get(stopped);
-            const nowExhausted = yield* budget.exhausted;
+            const calls = yield* account.calls;
+            const outcome = classify(exit, calls);
+            const halted = yield* Ref.get(stopped);
 
-            const denied =
-              Exit.isFailure(exit) &&
-              accounting.calls === 0 &&
-              (nowStopped !== null || nowExhausted);
+            // Another arm's stop closes the ledger; that refusal is not this arm's budget.
+            const settled =
+              outcome.status === "denied" && halted !== null
+                ? { status: "unrun" as const, reason: stopReason[halted], pass: null }
+                : outcome;
 
-            if (Exit.isFailure(exit) && !denied) yield* stop("infrastructure");
-            if (accounting.uncertainCalls > 0) yield* stop("uncertain-accounting");
+            if (settled.status === "infrastructure-failed") yield* stop("infrastructure");
+            if (calls.accounting.uncertainCalls > 0) yield* stop("uncertain-accounting");
 
             const answer = Exit.isSuccess(exit) ? exit.value.answer : null;
-            const grading = answer === null ? null : matches(answer, sample.expected);
 
             return yield* save({
               ...base,
-              status: denied ? "unrun" : Exit.isFailure(exit) ? "infrastructure-failed" : "graded",
-              reason: denied
-                ? nowStopped !== null
-                  ? "stopped-after-infrastructure"
-                  : "budget-exhausted"
-                : Exit.isFailure(exit)
-                  ? "model-failed"
-                  : accounting.uncertainCalls > 0
-                    ? "accounting-unknown"
-                    : "graded",
-              pass: Exit.isSuccess(exit) ? exit.value.pass : null,
-              matches: grading,
+              ...settled,
+              matches: answer === null ? null : matches(answer, sample.expected),
               periodSwap:
                 answer === null
                   ? null
                   : answer.change24h !== sample.expected.change24h &&
                     answer.change24h === sample.expected.change1h,
               answer,
-              diagnostic: Exit.isFailure(exit) && !denied ? Diagnostics.failure(exit.cause) : null,
-              lastResponse,
-              accounting,
+              diagnostic: Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
+              lastResponse: calls.lastResponse,
+              accounting: calls.accounting,
               seconds,
             });
           }),
@@ -404,19 +394,19 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
     const knownUsd = rows.reduce((sum, record) => sum + record.accounting.knownUsd, 0);
     const uncertainCalls = rows.reduce((sum, record) => sum + record.accounting.uncertainCalls, 0);
 
+    const counts = tally(rows);
+
+    // Each record has exactly one status, so these counts add up to `scheduled`.
     return {
       arm,
       scheduled,
-      graded: graded.length,
-      passed: graded.filter((record) => record.pass).length,
-      gradingFailures: graded.filter((record) => !record.pass).length,
-      ungradedInfrastructure: rows.filter(
-        (record) =>
-          record.status === "infrastructure-failed" ||
-          record.reason === "preparation-failed" ||
-          record.reason === "model-setup-failed",
-      ).length,
-      unrun: rows.filter((record) => record.status === "unrun").length,
+      graded: counts.graded,
+      passed: counts.passed,
+      gradingFailures: counts.failed,
+      infrastructureFailed: counts.infrastructureFailed,
+      denied: counts.denied,
+      unrun: counts.unrun,
+      invalidOutputs: graded.filter((record) => record.reason === "invalid-output").length,
       fieldErrors: Object.fromEntries(
         fields.map((field) => [
           field,
@@ -657,7 +647,7 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
         seed: pair.seed,
         arm,
         mode: plan.mode,
-        status: "unrun",
+        status: "infrastructure-failed",
         reason: "model-setup-failed",
         pass: null,
         matches: null,
@@ -738,11 +728,12 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
       " unresolved.",
   );
 
-  return (
-    records.every(
-      (record) => record.status === "graded" && record.accounting.uncertainCalls === 0,
-    ) &&
-    (plan.mode === "paid" || records.every((record) => record.pass))
+  // The same rule as the bench: every arm graded with settled charges, and in a dry run, passed.
+  return records.every(
+    (record) =>
+      record.status === "graded" &&
+      record.accounting.uncertainCalls === 0 &&
+      (plan.mode === "paid" || record.pass === true),
   );
 });
 

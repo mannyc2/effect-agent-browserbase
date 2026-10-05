@@ -5,8 +5,8 @@ import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel, type Prompt } from "effect/ai";
 
 import * as Comparison from "../QuoteComparison.ts";
-import { trialSeed } from "../run.ts";
 import { origin, routes, serve } from "../Sites.ts";
+import { trialSeed } from "../Trial.ts";
 
 const pictures = (prompt: Prompt.Prompt) =>
   prompt.content.flatMap((message) =>

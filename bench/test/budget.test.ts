@@ -8,7 +8,8 @@ import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import type { BrowserContext } from "playwright-core";
 
-import { budgetedClient, isolatedTrial, ledger, trialSeed } from "../run.ts";
+import { budgetedClient, ledger } from "../Budget.ts";
+import { isolatedTrial, trialSeed } from "../Trial.ts";
 
 const receipt = (cost: number) => ({
   prompt_tokens: 100,

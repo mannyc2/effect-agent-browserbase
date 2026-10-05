@@ -1,0 +1,487 @@
+// Paid model calls for both runners: one admission ledger, the budgeted OpenRouter client and the
+// pinned endpoint whose bounds every reservation uses.
+import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
+import { Config, Deferred, Effect, Exit, Layer, Ref, Schema } from "effect";
+import type * as Agent from "effect-browser/Agent";
+import { AiError, type LanguageModel } from "effect/ai";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+
+import * as Diagnostics from "./Diagnostics.ts";
+
+/** A problem with how the bench was asked to run, or a call the budget refused. */
+export class BenchError extends Schema.TaggedError<BenchError>()("BenchError", {
+  message: Schema.String,
+}) {}
+
+export const refuse = (message: string) => Effect.fail(new BenchError({ message }));
+
+export const efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export type Reasoning = (typeof efforts)[number];
+
+/** USD per token, also enforced as provider routing ceilings. */
+export interface Rates {
+  readonly input: number;
+  readonly output: number;
+}
+
+const Prices = Schema.Struct({
+  prompt: Schema.FiniteFromString,
+  completion: Schema.FiniteFromString,
+  input_cache_read: Schema.optional(Schema.FiniteFromString),
+  input_cache_write: Schema.optional(Schema.FiniteFromString),
+  input_cache_write_1h: Schema.optional(Schema.FiniteFromString),
+});
+
+const Endpoints = Schema.Struct({
+  data: Schema.Struct({
+    endpoints: Schema.Array(
+      Schema.Struct({
+        tag: Schema.String,
+        status: Schema.Finite,
+        context_length: Schema.Finite,
+        max_prompt_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
+        max_completion_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
+        supported_parameters: Schema.Array(Schema.String),
+        pricing: Schema.Struct({
+          ...Prices.fields,
+          overrides: Schema.optional(Schema.Array(Prices)),
+        }),
+      }),
+    ),
+  }),
+});
+
+const listedEndpoints = (model: string) =>
+  HttpClient.get(
+    `https://openrouter.ai/api/v1/models/${model.split("/").map(encodeURIComponent).join("/")}/endpoints`,
+  ).pipe(
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(Endpoints)),
+    Effect.mapError(() => new BenchError({ message: "could not read OpenRouter endpoint bounds" })),
+    Effect.map(({ data }) => data.endpoints),
+    Effect.provide(FetchHttpClient.layer),
+  );
+
+const givenRates = (text: string) => {
+  const [input, output, ...rest] = text.split(",").map(Number);
+
+  return input !== undefined &&
+    output !== undefined &&
+    rest.length === 0 &&
+    Number.isFinite(input) &&
+    Number.isFinite(output) &&
+    input >= 0 &&
+    output >= 0
+    ? Effect.succeed<Rates>({ input: input / 1e6, output: output / 1e6 })
+    : refuse("--rates takes two finite non-negative numbers, such as 3,15");
+};
+
+interface RawUsage {
+  readonly prompt_tokens: number;
+  readonly completion_tokens: number;
+  readonly prompt_tokens_details?: { readonly cached_tokens?: number | null } | null;
+  readonly cost?: number | null;
+}
+
+/** Known charges remain distinct from upper bounds for requests whose bill is unknown. */
+export interface Accounting {
+  readonly calls: number;
+  readonly usage: Agent.Usage;
+  readonly knownUsd: number;
+  readonly reservedUsd: number;
+  readonly uncertainCalls: number;
+}
+
+export const emptyAccounting: Accounting = {
+  calls: 0,
+  usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+  knownUsd: 0,
+  reservedUsd: 0,
+  uncertainCalls: 0,
+};
+
+/**
+ * Why the ledger stopped one of an account's calls: `budget` refused admission before dispatch;
+ * `bound` withheld a response whose charge exceeded its reservation.
+ */
+export type Refusal = "budget" | "bound";
+
+/** What classifying one unit of work needs to know about its calls. */
+export interface Calls {
+  readonly accounting: Accounting;
+  readonly lastResponse: Diagnostics.LastResponse | null;
+  readonly refusal: Refusal | null;
+}
+
+export const noCalls: Calls = { accounting: emptyAccounting, lastResponse: null, refusal: null };
+
+// Integer nanodollars round reservations up and the limit down. Floating subtraction must never
+// admit one extra request at the shared boundary.
+const units = 1e9;
+
+/** Admission is atomic; failed, interrupted and unpriced responses keep their reservations. */
+export const ledger = (maxUsd: number, requestUsd: number) =>
+  Effect.gen(function* () {
+    const limit = Math.floor(maxUsd * units);
+    const reservation = Math.ceil(requestUsd * units);
+
+    if (
+      !Number.isSafeInteger(limit) ||
+      !Number.isSafeInteger(reservation) ||
+      limit <= 0 ||
+      reservation < 0
+    )
+      return yield* refuse("the budget and request bounds must be finite non-negative amounts");
+
+    const changed = yield* Deferred.make<void>();
+    const state = yield* Ref.make({ known: 0, reserved: 0, active: 0, blocked: false, changed });
+
+    const settle = (charged: number | undefined) =>
+      Effect.gen(function* () {
+        const next = yield* Deferred.make<void>();
+
+        const previous = yield* Ref.modify(state, (value) => [
+          value.changed,
+          {
+            known: value.known + (charged ?? 0),
+            reserved: value.reserved - (charged === undefined ? 0 : reservation),
+            active: value.active - reservation,
+            blocked: value.blocked || (charged !== undefined && charged > reservation),
+            changed: next,
+          },
+        ]);
+
+        yield* Deferred.succeed(previous, undefined);
+      });
+
+    return {
+      // Stop only future admission; dispatched calls still own and settle their reservations.
+      stop: Effect.gen(function* () {
+        const next = yield* Deferred.make<void>();
+
+        const previous = yield* Ref.modify(state, (value) => [
+          value.changed,
+          { ...value, blocked: true, changed: next },
+        ]);
+
+        yield* Deferred.succeed(previous, undefined);
+      }),
+      snapshot: Ref.get(state).pipe(
+        Effect.map((value) => ({
+          knownUsd: value.known / units,
+          reservedUsd: value.reserved / units,
+        })),
+      ),
+      exhausted: Ref.get(state).pipe(
+        Effect.map(
+          (value) =>
+            value.blocked || value.known + value.reserved - value.active + reservation > limit,
+        ),
+      ),
+      account: Effect.gen(function* () {
+        const account = yield* Ref.make(emptyAccounting);
+        const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
+        const refusal = yield* Ref.make<Refusal | null>(null);
+
+        return {
+          snapshot: Ref.get(account),
+          lastResponse: Ref.get(lastResponse),
+          calls: Effect.all({
+            accounting: Ref.get(account),
+            lastResponse: Ref.get(lastResponse),
+            refusal: Ref.get(refusal),
+          }),
+          run: <A, E, R>(
+            request: Effect.Effect<A, E, R>,
+            usageOf: (response: A) => RawUsage | undefined,
+            receiptOf?: (response: A) => Diagnostics.Receipt,
+          ): Effect.Effect<A, E | BenchError, R> =>
+            Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                // A pending receipt may release enough capacity. Permanent uncertainty may not.
+                while (true) {
+                  const admission = yield* Ref.modify(state, (value) => {
+                    const fits =
+                      !value.blocked && value.known + value.reserved + reservation <= limit;
+
+                    return [
+                      {
+                        fits,
+                        denied:
+                          value.blocked ||
+                          value.known + value.reserved - value.active + reservation > limit,
+                        changed: value.changed,
+                      },
+                      fits
+                        ? {
+                            ...value,
+                            reserved: value.reserved + reservation,
+                            active: value.active + reservation,
+                          }
+                        : value,
+                    ];
+                  });
+
+                  if (admission.fits) break;
+                  if (admission.denied) {
+                    yield* Ref.set(refusal, "budget");
+
+                    return yield* refuse(`no call fits the remaining $${maxUsd} budget`);
+                  }
+                  yield* restore(Deferred.await(admission.changed));
+                }
+
+                const dispatched = yield* Ref.updateAndGet(account, (value) => ({
+                  ...value,
+                  calls: value.calls + 1,
+                  reservedUsd: value.reservedUsd + reservation / units,
+                  uncertainCalls: value.uncertainCalls + 1,
+                }));
+
+                yield* Ref.set(lastResponse, null);
+
+                // Only the provider request is interruptible. Once a receipt arrives, account for
+                // it before any tool, answer decoder, or caller interruption can discard it.
+                const response = yield* restore(request).pipe(
+                  Effect.onExit((exit) => (Exit.isFailure(exit) ? settle(undefined) : Effect.void)),
+                );
+
+                const usage = usageOf(response);
+
+                const remember = () =>
+                  receiptOf === undefined
+                    ? Effect.void
+                    : Ref.set(lastResponse, { call: dispatched.calls, ...receiptOf(response) });
+
+                if (usage === undefined) {
+                  yield* settle(undefined);
+                  yield* remember();
+
+                  return response;
+                }
+
+                yield* Ref.update(account, (value) => ({
+                  ...value,
+                  usage: {
+                    inputTokens: value.usage.inputTokens + usage.prompt_tokens,
+                    outputTokens: value.usage.outputTokens + usage.completion_tokens,
+                    cachedInputTokens:
+                      value.usage.cachedInputTokens +
+                      (usage.prompt_tokens_details?.cached_tokens ?? 0),
+                  },
+                }));
+
+                if (
+                  usage.cost === undefined ||
+                  usage.cost === null ||
+                  !Number.isFinite(usage.cost) ||
+                  usage.cost < 0
+                ) {
+                  yield* settle(undefined);
+                  yield* remember();
+
+                  return response;
+                }
+
+                const charged = Math.ceil(usage.cost * units);
+
+                yield* settle(charged);
+                yield* Ref.update(account, (value) => ({
+                  ...value,
+                  knownUsd: value.knownUsd + charged / units,
+                  reservedUsd: Math.max(0, value.reservedUsd - reservation / units),
+                  uncertainCalls: value.uncertainCalls - 1,
+                }));
+
+                yield* remember();
+
+                if (charged > reservation) {
+                  yield* Ref.set(refusal, "bound");
+
+                  return yield* refuse(
+                    "provider charge exceeded its enforced price/token bounds; stopped",
+                  );
+                }
+
+                return response;
+              }),
+            ),
+        };
+      }),
+    };
+  });
+
+export type Budget = Effect.Success<ReturnType<typeof ledger>>;
+export type Account = Effect.Success<Budget["account"]>;
+
+/** Keep the real OpenRouter LanguageModel path while charging its raw receipt before decoding. */
+export const budgetedClient = (
+  client: OpenRouterClient.Service,
+  account: Account,
+  bounds: {
+    readonly rates: Rates;
+    readonly maxOutputTokens: number;
+    readonly outputParameter?: "max_tokens" | "max_completion_tokens";
+    readonly provider?: string;
+  },
+): OpenRouterClient.Service => ({
+  ...client,
+  createChatCompletion: (request) =>
+    account
+      .run(
+        client.createChatCompletion({
+          ...request,
+          ...(bounds.outputParameter === "max_completion_tokens"
+            ? { max_completion_tokens: bounds.maxOutputTokens }
+            : { max_tokens: bounds.maxOutputTokens }),
+          service_tier: "default",
+          modalities: ["text"],
+          // Omission inherits account defaults. Enforced account plugins still need an external
+          // policy check before live runs, because OpenRouter can prevent request overrides.
+          plugins: [
+            { id: "web", enabled: false },
+            { id: "file-parser", enabled: false },
+            { id: "response-healing", enabled: false },
+            { id: "context-compression", enabled: false },
+            { id: "auto-router", enabled: false },
+            { id: "auto-beta-router", enabled: false },
+            { id: "pareto-router", enabled: false },
+            { id: "fusion", enabled: false },
+          ],
+          provider: {
+            ...(bounds.provider === undefined ? {} : { only: [bounds.provider] }),
+            allow_fallbacks: false,
+            require_parameters: true,
+            max_price: {
+              prompt: String(bounds.rates.input * 1e6),
+              completion: String(bounds.rates.output * 1e6),
+              request: "0",
+              image: "0",
+              audio: "0",
+            },
+          },
+        }),
+        ([response]) => response.usage,
+        Diagnostics.receipt,
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "BenchError"
+            ? AiError.make({
+                module: "bench",
+                method: "createChatCompletion",
+                reason: new AiError.InvalidRequestError({ description: error.message }),
+              })
+            : error,
+        ),
+      ),
+});
+
+export const modelRunner = (options: {
+  readonly model: string;
+  readonly rates: string | undefined;
+  readonly maxUsd: number;
+  readonly maxOutputTokens: number;
+}) =>
+  Effect.gen(function* () {
+    const endpoints = yield* listedEndpoints(options.model);
+    const supplied = options.rates === undefined ? undefined : yield* givenRates(options.rates);
+
+    const eligible = endpoints
+      .flatMap((endpoint) => {
+        const maximum = endpoint.max_completion_tokens;
+        const context = endpoint.max_prompt_tokens ?? endpoint.context_length;
+        const prices = [endpoint.pricing, ...(endpoint.pricing.overrides ?? [])];
+
+        const rates = {
+          input: Math.max(
+            ...prices.flatMap((price) => [
+              price.prompt,
+              price.input_cache_read ?? 0,
+              price.input_cache_write ?? 0,
+              price.input_cache_write_1h ?? 0,
+            ]),
+          ),
+          output: Math.max(...prices.map((price) => price.completion)),
+        };
+
+        const outputParameter = endpoint.supported_parameters.includes("max_completion_tokens")
+          ? ("max_completion_tokens" as const)
+          : endpoint.supported_parameters.includes("max_tokens")
+            ? ("max_tokens" as const)
+            : undefined;
+
+        if (
+          endpoint.status !== 0 ||
+          /\/(flex|fast|priority)$/.test(endpoint.tag) ||
+          !Number.isSafeInteger(context) ||
+          context <= 0 ||
+          rates.input < 0 ||
+          rates.output < 0 ||
+          outputParameter === undefined ||
+          (maximum !== undefined && maximum !== null && options.maxOutputTokens > maximum) ||
+          (supplied !== undefined &&
+            (supplied.input < rates.input || supplied.output < rates.output))
+        )
+          return [];
+
+        // Price tiers and cache writes can exceed base pricing. Pin one endpoint and reserve its
+        // highest published rates across the entire context, including text, tools and screenshots.
+        return [
+          {
+            provider: endpoint.tag,
+            rates,
+            outputParameter,
+            requestUsd: context * rates.input + options.maxOutputTokens * rates.output,
+          },
+        ];
+      })
+      .sort((left, right) => left.requestUsd - right.requestUsd);
+
+    const bounds = eligible[0];
+
+    if (bounds === undefined)
+      return yield* refuse("no available endpoint has supported token/price bounds within --rates");
+
+    const { requestUsd, rates } = bounds;
+    const budget = yield* ledger(options.maxUsd, requestUsd);
+
+    if (yield* budget.exhausted)
+      return yield* refuse(
+        `a call reserves $${requestUsd.toFixed(6)}, above --max-usd ${options.maxUsd}`,
+      );
+
+    const withModel = <A, E, R>(
+      effect: Effect.Effect<A, E, R | LanguageModel.LanguageModel>,
+      reasoning: Reasoning,
+      account: Account,
+    ) => {
+      const client = Layer.effect(
+        OpenRouterClient.OpenRouterClient,
+        Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
+          budgetedClient(native, account, {
+            rates,
+            maxOutputTokens: options.maxOutputTokens,
+            outputParameter: bounds.outputParameter,
+            provider: bounds.provider,
+          }),
+        ),
+      ).pipe(
+        Layer.provide(
+          OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
+        ),
+        Layer.provide(FetchHttpClient.layer),
+      );
+
+      const languageModel = OpenRouterLanguageModel.layer({
+        model: options.model,
+        config: { reasoning: { effort: reasoning } },
+      }).pipe(Layer.provide(client));
+
+      return effect.pipe(Effect.provide(languageModel));
+    };
+
+    return { ...budget, withModel };
+  });
+
+export type ModelRunner = Effect.Success<ReturnType<typeof modelRunner>>;

@@ -7,11 +7,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Ref } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
-import { LanguageModel } from "effect/ai";
+import { AiError, LanguageModel } from "effect/ai";
 import type { BrowserContext } from "playwright-core";
 
+import { ledger } from "../Budget.ts";
 import * as Quote from "../QuoteComparison.ts";
-import { isolatedTrial, ledger } from "../run.ts";
+import { isolatedTrial } from "../Trial.ts";
 import {
   compare,
   main,
@@ -177,8 +178,60 @@ describe("understanding comparison", () => {
       }),
   );
 
+  it.live("grades malformed model output as a wrong answer and keeps admitting other arms", () =>
+    Effect.gen(function* () {
+      const plan = manifest(yield* configuration(), "fixed");
+      const browser = Chromium.layer();
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), browser);
+      const budget = yield* ledger(1, 0.04);
+
+      const records = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (sample, arm, account) =>
+          sample.seed === first.seed
+            ? dryDescribe(sample, arm, account, "malformed-json")
+            : dryDescribe(sample, arm, account),
+        record: () => Effect.void,
+      });
+
+      const malformed = records.filter((record) => record.seed === first.seed);
+
+      assert.lengthOf(records, 9);
+      assert.isTrue(records.every((record) => record.status === "graded"));
+      assert.isTrue(
+        malformed.every(
+          (record) =>
+            record.reason === "invalid-output" &&
+            record.pass === false &&
+            record.diagnostic?.objectDecode === "JsonSyntax" &&
+            record.accounting.calls === 1 &&
+            record.accounting.uncertainCalls === 0,
+        ),
+      );
+      assert.strictEqual(records.filter((record) => record.pass === true).length, 6);
+      assert.isFalse(yield* budget.exhausted);
+
+      const summary = summarize(plan, records);
+
+      assert.isTrue(
+        summary.arms.every(
+          (arm) =>
+            arm.graded === 3 &&
+            arm.gradingFailures === 1 &&
+            arm.invalidOutputs === 1 &&
+            arm.infrastructureFailed === 0,
+        ),
+      );
+    }),
+  );
+
   it.live(
-    "stops future admissions on malformed model output and still accounts a dispatched peer",
+    "stops future admissions on a provider failure and still accounts a dispatched peer",
     () =>
       Effect.gen(function* () {
         const plan = manifest(yield* configuration(), "fixed");
@@ -191,27 +244,33 @@ describe("understanding comparison", () => {
         if (first === undefined || second === undefined) return;
         const prepared = yield* isolatedTrial(Quote.prepare(first), browser);
         const budget = yield* ledger(1, 0.04);
-        const both = yield* Deferred.make<void>();
+        const dispatched = yield* Deferred.make<void>();
         const failed = yield* Deferred.make<void>();
         const entered = yield* Ref.make(0);
+
+        const outage = AiError.make({
+          module: "test",
+          method: "createChatCompletion",
+          reason: new AiError.InternalProviderError({ description: "provider outage" }),
+        });
 
         const records = yield* compare(plan, budget, {
           prepare: (pair) =>
             Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
-          describe: (sample, arm, account) =>
+          describe: (sample, _arm, account) =>
             Effect.gen(function* () {
-              const count = yield* Ref.updateAndGet(entered, (current) => current + 1);
+              yield* Ref.update(entered, (current) => current + 1);
 
-              if (count === 2) yield* Deferred.succeed(both, undefined);
-              yield* Deferred.await(both);
+              // Fail only once the peer's request is dispatched, then settle the peer afterward.
+              if (sample.seed === first.seed)
+                return yield* account.run(
+                  Deferred.await(dispatched).pipe(Effect.andThen(Effect.fail(outage))),
+                  () => undefined,
+                );
 
-              if (sample.seed === first.seed) {
-                return yield* dryDescribe(sample, arm, account, "malformed-json");
-              }
-
-              // Reserve and dispatch before the peer fails, then deliver a known receipt afterward.
               yield* account.run(
-                Deferred.await(failed).pipe(
+                Deferred.succeed(dispatched, undefined).pipe(
+                  Effect.andThen(Deferred.await(failed)),
                   Effect.as({
                     prompt_tokens: 12,
                     completion_tokens: 3,
@@ -236,23 +295,25 @@ describe("understanding comparison", () => {
 
         assert.strictEqual(yield* Ref.get(entered), 2);
         assert.lengthOf(records, 9);
-        assert.strictEqual(
-          records.filter((record) => record.status === "infrastructure-failed").length,
-          1,
-        );
+
+        const failure = records.find((record) => record.status === "infrastructure-failed");
+
+        assert.strictEqual(failure?.reason, "provider-failed");
+        assert.strictEqual(failure?.diagnostic?.reason, "InternalProviderError");
         assert.strictEqual(records.filter((record) => record.status === "graded").length, 1);
+        assert.isTrue(
+          records
+            .filter((record) => record.status === "unrun")
+            .every((record) => record.reason === "stopped-after-infrastructure"),
+        );
         assert.strictEqual(records.filter((record) => record.status === "unrun").length, 7);
         assert.strictEqual(
           records.reduce((sum, record) => sum + record.accounting.calls, 0),
           2,
         );
         assert.closeTo((yield* budget.snapshot).knownUsd, 0.01, 1e-9);
-        assert.strictEqual((yield* budget.snapshot).reservedUsd, 0);
+        assert.strictEqual((yield* budget.snapshot).reservedUsd, 0.04);
         assert.isTrue(yield* budget.exhausted);
-        const failure = records.find((record) => record.status === "infrastructure-failed");
-
-        assert.strictEqual(failure?.diagnostic?.objectDecode, "JsonSyntax");
-        assert.strictEqual(failure?.lastResponse?.contentKind, "text");
         assert.isTrue(summarize(plan, records).paired.every((pair) => pair.completePairs === 0));
       }),
   );
@@ -299,12 +360,19 @@ describe("understanding comparison", () => {
     }),
   );
   for (const scenario of [
-    { name: "unknown model cost", timeout: false, status: "graded", reason: "accounting-unknown" },
+    {
+      name: "unknown model cost",
+      timeout: false,
+      status: "graded",
+      reason: "answered",
+      stopped: "stopped-after-uncertain-charge",
+    },
     {
       name: "a model deadline",
       timeout: true,
       status: "infrastructure-failed",
-      reason: "model-failed",
+      reason: "timed-out",
+      stopped: "stopped-after-infrastructure",
     },
   ] as const) {
     it.live("retains unresolved charges and stops the remaining arms after " + scenario.name, () =>
@@ -357,7 +425,7 @@ describe("understanding comparison", () => {
             .every(
               (record) =>
                 record.status === "unrun" &&
-                record.reason === "stopped-after-infrastructure" &&
+                record.reason === scenario.stopped &&
                 record.accounting.calls === 0,
             ),
         );
@@ -423,7 +491,8 @@ describe("understanding comparison", () => {
       assert.strictEqual(yield* Ref.get(calls), 0);
       assert.isTrue(
         records.every(
-          (record) => record.status === "unrun" && record.reason === "preparation-failed",
+          (record) =>
+            record.status === "infrastructure-failed" && record.reason === "preparation-failed",
         ),
       );
       assert.isTrue(yield* budget.exhausted);

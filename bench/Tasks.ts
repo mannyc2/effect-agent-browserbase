@@ -25,6 +25,7 @@ import {
   truth,
   TumbleTruth,
 } from "./Sites.ts";
+import { EvidenceIncomplete } from "./Trial.ts";
 
 export interface Grade {
   readonly pass: boolean;
@@ -56,10 +57,12 @@ export interface Task {
     options: ModelOptions<E>,
   ) => Effect.Effect<
     Outcome,
-    AiError.AiError | BrowserError | Agent.AgentError | E,
+    AiError.AiError | BrowserError | Agent.AgentError | EvidenceIncomplete | E,
     Browser | LanguageModel.LanguageModel
   >;
-  readonly scripted: (options?: TrialOptions) => Effect.Effect<Outcome, BrowserError, Browser>;
+  readonly scripted: (
+    options?: TrialOptions,
+  ) => Effect.Effect<Outcome, BrowserError | EvidenceIncomplete, Browser>;
 }
 
 const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
@@ -168,8 +171,11 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
           schedule: Schedule.spaced("25 millis"),
           until: (frames) => frames.length > 0,
         }),
-        Effect.timeout("5 seconds"),
-        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(new EvidenceIncomplete({ detail: "no screencast frame arrived" })),
+        }),
       );
       yield* spec.setup(page);
       const { frameAfter } = yield* truth(page, FrameTruth);
@@ -182,8 +188,13 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
           until: (frames) =>
             frames.some((frame) => frame.timestamp !== undefined && frame.timestamp >= frameAfter),
         }),
-        Effect.timeout("5 seconds"),
-        Effect.orDie,
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () =>
+            Effect.fail(
+              new EvidenceIncomplete({ detail: "no frame followed the fixture's last change" }),
+            ),
+        }),
       );
       const moment = yield* Moment.capture(page, spec.capture);
       const wanted = spec.capture.frames ?? 2;
@@ -195,12 +206,12 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       const minimum =
         spec.minimumSpanMillis === undefined ? 0 : yield* spec.minimumSpanMillis(page);
 
-      const evidence = {
-        pass: moment.frames.length === wanted && span >= minimum,
-        detail: `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events`,
-      };
+      const detail = `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events`;
 
-      return { moment, evidence, expected: yield* spec.expected(page) };
+      if (moment.frames.length !== wanted || span < minimum)
+        return yield* new EvidenceIncomplete({ detail });
+
+      return { moment, detail, expected: yield* spec.expected(page) };
     }).pipe(Effect.scoped);
 
   return {
@@ -209,16 +220,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
     summary: spec.summary,
     withModel: (options) =>
       Effect.gen(function* () {
-        const { moment, evidence, expected } = yield* prepare(options);
-
-        if (!evidence.pass)
-          return {
-            pass: false,
-            detail: `capture incomplete: ${evidence.detail}`,
-            answer: null,
-            steps: 0,
-            usage: noUsage,
-          };
+        const { moment, detail, expected } = yield* prepare(options);
 
         const { value, usage } = yield* Moment.describe(moment, {
           schema: spec.answer,
@@ -229,8 +231,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         const grade = spec.grade(value, expected);
 
         return {
-          pass: evidence.pass && grade.pass,
-          detail: `${grade.detail}; ${evidence.detail}`,
+          pass: grade.pass,
+          detail: `${grade.detail}; ${detail}`,
           answer: value,
           steps: 1,
           usage,
@@ -238,11 +240,11 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       }),
     scripted: (options = {}) =>
       Effect.gen(function* () {
-        const { evidence, expected } = yield* prepare(options);
+        const { detail, expected } = yield* prepare(options);
 
         return {
-          ...evidence,
-          detail: `${evidence.detail}; truth ${JSON.stringify(expected)}`,
+          pass: true,
+          detail: `${detail}; truth ${JSON.stringify(expected)}`,
           answer: expected,
           steps: 0,
           usage: noUsage,

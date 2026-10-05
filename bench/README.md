@@ -28,7 +28,7 @@ An operate task gives a model the browser tools (`Agent.run`). An understand tas
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call
 (`Moment.describe`). Capture starts before the scripted setup, and multi-frame tasks check the
 retained time span as well as the frame count. The final frame must follow the fixture's last visual
-change on the browser clock; an incomplete capture fails before any model call. Bench browsers retain up to 1,200 frames for the
+change on the browser clock; an incomplete capture is an infrastructure failure, before any model call. Bench browsers retain up to 1,200 frames for the
 longest fixture; this does not change the library default. The tumble task selects twelve frames
 to cover its paying cascades, rather than asking the model to count transitions absent from the
 pictures. Operate tasks receive an outline and screenshot once per turn; calls within a
@@ -76,12 +76,29 @@ before the nominal budget is used; it never treats an unknown charge as zero. Bi
 must allow those overrides, since protected account defaults can add fees outside this token budget.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
-the task, base and derived fixture seeds, effective reasoning, completion/failure/skip status and reason, the answer, model calls, tokens,
-known dollars, unresolved reservations, elapsed seconds including browser setup and cleanup, and
-any error. Budget-skipped trials have records with zero calls and do not start a browser.
-`usd` is null when a trial's charge is uncertain; `knownUsd`, `reservedUsd` and
-`uncertainCalls` retain the available accounting facts. The ISO start time is a calendar date;
-elapsed time uses a monotonic clock.
+the task, base and derived fixture seeds, effective reasoning, status and reason, the answer, any
+error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
+reservations and uncertain calls) and elapsed seconds including browser setup and cleanup. The ISO
+start time is a calendar date; elapsed time uses a monotonic clock.
+
+## Outcomes
+
+Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one
+status:
+
+- `graded`: the model answered, and `pass` says whether the answer was right. A model that gives
+  up, runs out of steps, or returns output that does not decode as the requested answer (invalid
+  JSON or a mismatched schema, after its receipt was decoded and accounted) has answered wrongly.
+  Such output is a graded failure (`reason: "invalid-output"`) and stops nothing else.
+- `infrastructure-failed`: something other than the answer failed: incomplete or stale capture
+  evidence, the browser, the hosted session, the provider, a charge above its bound, a deadline or
+  a defect. These are never counted as wrong answers.
+- `denied`: the budget refused admission, before the browser started or at a later call.
+- `unrun`: the unit never reached an outcome, because the run stopped or was interrupted.
+
+`pass` is null except for graded units. Summaries report passes over graded units separately from
+infrastructure failures, denials and unrun units. A run exits successfully only when every unit was
+graded with settled charges; a free run also needs every answer to pass.
 
 ## Paired quote comparison
 
@@ -108,8 +125,9 @@ bit-for-bit equivalence with the research prototype's Lanczos filter.
 The default manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
 90 calls in a paid run. Arm order varies deterministically by seed. Cases run concurrently, with
 one browser per case and the same captured evidence for its arms. A shared admission ledger bounds
-all model calls. An infrastructure failure stops new admissions; already dispatched requests still
-settle, and every unrun arm receives a record. A wrong graded answer remains a comparison result.
+all model calls. An infrastructure failure or an unresolved charge stops new admissions; already
+dispatched requests still settle, and every unrun arm receives a record. A graded answer, including
+malformed model output, remains a comparison result and stops nothing.
 
 A paid run requires an explicit model and the existing live opt-in, separately from this free
 rehearsal:
