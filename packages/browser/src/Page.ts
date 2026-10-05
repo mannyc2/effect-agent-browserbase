@@ -506,8 +506,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const flush = (operation: string, run: Input.Run) => inputCall(operation, run.drain);
 
-  // Keys must never follow a navigation into another document. This session counts main-frame
-  // commits as Playwright's does, so a multi-key action can stop before its next key.
+  // A multi-key action stops before its next key once the page has moved to another document.
+  // This session counts main-frame commits as the browser reports them, so a key sent within
+  // about one protocol round trip of a commit can still reach the new document.
   let documents = 0;
   let watchingDocuments = false;
 

@@ -142,16 +142,17 @@ stops the unsent suffix and releases held input.
 
 Typing sends key pairs for printable US characters in both plain and humanized modes; other text
 uses Unicode insertion. A typed space or letter can press a focused button, toggle a box, follow a
-link or change a select, so `type` refuses before any input when its `into` ref is not a text
-field or, without `into`, when focus is on such a control; `press` sends keys to those.
-Humanized typing aims for about 75 WPM including slower word starts, with key holds around 110 ms
-that can overlap. The ordered schedule releases a repeated physical key before pressing it again.
-Keys follow that schedule without waiting for each network reply. Pending replies are bounded and
-drained before an action succeeds; interruption stops new input and releases every submitted held
-key. Shortcut chords retain Playwright’s platform-specific editing behavior. Keys never follow a
-navigation: when the page moves to another document mid-action, typing and repeated presses stop
-with a dispatched `NotActionable`. Under a guard, typing's submit Enter and each repeated Enter or
-Space are first checked against the approved element.
+link or change a select, so `type` refuses before any input when its `into` ref is not a text field
+or, without `into`, when focus is on such a control; `press` sends keys to those. Humanized typing
+aims for about 75 WPM including slower word starts, with key holds around 110 ms that can overlap.
+The ordered schedule releases a repeated physical key before pressing it again. Keys follow that
+schedule without waiting for each network reply. Pending replies are bounded and drained before an
+action succeeds; interruption stops new input and releases every submitted held key. Shortcut chords
+retain Playwright’s platform-specific editing behavior. Before each key, typing and repeated presses
+check that the page is still in the document the action began in, and stop with a dispatched
+`NotActionable` once it has moved on. The browser reports a new document as it commits, so a key
+sent within about one protocol round trip of that commit can still reach it. Under a guard, typing's
+submit Enter and each repeated Enter or Space are first checked against the approved element.
 
 `Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
 corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The
