@@ -1,8 +1,9 @@
 /**
  * What happened in a browser, in order: pages, navigations, actions and pointer motion.
  *
- * Every event carries `at`, epoch milliseconds from the Effect `Clock`: the clock that stamps
- * screencast frames' `receivedAt`, so events and frames line up.
+ * Every event carries `at`, host monotonic milliseconds from the owning browser’s Effect `Clock`.
+ * This clock also stamps screencast frames’ `receivedAt` and moments, so wall-clock corrections
+ * cannot disturb their order. Compare stamps only within the same browser clock, not across hosts.
  *
  * @since 0.3.0
  */

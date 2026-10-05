@@ -13,6 +13,8 @@
   displays whose device pixel ratio differs from one.
 - An input policy over resolved targets and navigation, with typed denials, independently bounded
   holds and validation before held actions resume.
+- Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
+  arrivals, observations and moments.
 - `bench` (private): seven tasks over canvas games, live charts and forms, graded against the
   pages' own truth. Paid runs are opt-in and capped.
 

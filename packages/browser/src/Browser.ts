@@ -55,6 +55,8 @@ export interface Service {
   /** The provider's session id, or a local id. */
   readonly id: string;
   readonly provider: string;
+  /** Host monotonic milliseconds on the clock shared by this browser’s events and frames. */
+  readonly now: Effect.Effect<number>;
   /** The Playwright context, for anything this API does not cover. Never give it to a model. */
   readonly context: BrowserContext;
   /** Open pages in the order they opened. */
@@ -80,7 +82,7 @@ export const make = Effect.fn("Browser.make")(function* (
   options: Options = {},
 ) {
   const clock = yield* Clock.Clock;
-  const now = () => clock.currentTimeMillisUnsafe();
+  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const policyTimeout = Duration.fromInput(options.policyTimeout ?? Duration.minutes(5));
 
   if (
@@ -205,6 +207,7 @@ export const make = Effect.fn("Browser.make")(function* (
   const service: Service = {
     id: info.id,
     provider: info.provider,
+    now: Effect.sync(now),
     context,
     pages,
     page: pages.pipe(

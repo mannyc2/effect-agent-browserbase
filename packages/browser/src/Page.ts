@@ -4,8 +4,8 @@
  * Input dispatch is serialized per page. A policy can hold an action outside that lock while
  * other actions continue; its target is revalidated before dispatch. Element targets are refs from
  * a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
- * screenshot's pixels. Mouse input goes straight to the Chrome DevTools Protocol and is pipelined,
- * so its dispatch costs one round trip even on a remote browser. Targets are resolved first.
+ * screenshot's pixels. Mouse and keyboard input share a bounded pipeline, so pacing does not
+ * wait for each protocol reply. Target lookup happens before the input is sent.
  *
  * @since 0.3.0
  */
@@ -42,6 +42,7 @@ import {
 import { Action, type BrowserEvent, PointerMoved } from "./BrowserEvent.ts";
 import { Frame, Image, type ScreencastOptions } from "./Frame.ts";
 import * as Human from "./internal/human.ts";
+import * as Input from "./internal/input.ts";
 import * as Keys from "./internal/keys.ts";
 import * as Script from "./internal/pageScript.ts";
 import { Snapshot, type SnapshotOptions } from "./Snapshot.ts";
@@ -126,6 +127,7 @@ export type ObservationMode = "outline" | "screenshot" | "both";
 export class Observation extends Schema.Class<Observation>("effect-browser/Observation")({
   snapshot: Schema.optional(Snapshot),
   image: Schema.optional(Image),
+  /** Host monotonic milliseconds from the browser's captured Effect Clock. */
   at: Schema.Finite,
 }) {}
 
@@ -316,7 +318,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   });
 
   const captureLock = yield* Semaphore.make(1);
-  const now = () => clock.currentTimeMillisUnsafe();
+  const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  const input = Input.make();
 
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
@@ -326,18 +329,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       catch: (cause) => new BrowserError({ operation, reason: reasonOf(cause), dispatched: false }),
     });
 
-  // Input events are sent without waiting for each reply, then awaited together. The protocol
-  // keeps their order on the one connection.
-  const pending: Array<Promise<unknown>> = [];
+  const inputCall = <A>(operation: string, effect: Effect.Effect<A, Input.InputFailure>) =>
+    effect.pipe(
+      Effect.mapError(
+        (error) =>
+          new BrowserError({ operation, reason: reasonOf(error.cause), dispatched: false }),
+      ),
+    );
 
-  const sendMouse = (event: MouseEvent) => {
-    const sent = cdp.send("Input.dispatchMouseEvent", event);
+  const sendMouse = (operation: string, run: Input.Run, event: MouseEvent) =>
+    run
+      .reserve(1)
+      .pipe(Effect.andThen(run.send(() => cdp.send("Input.dispatchMouseEvent", event))), (effect) =>
+        inputCall(operation, effect),
+      );
 
-    sent.catch(() => undefined);
-    pending.push(sent);
-  };
-
-  const flush = (operation: string) => native(operation, () => Promise.all(pending.splice(0)));
+  const flush = (operation: string, run: Input.Run) => inputCall(operation, run.drain);
 
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
@@ -446,6 +453,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       marks: {
         readonly sent: Effect.Effect<void>;
         readonly at: (point: Point) => Effect.Effect<void>;
+        readonly input: Input.Run;
       },
       approval: Approval | undefined,
     ) => Effect.Effect<A, BrowserError>,
@@ -478,11 +486,36 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           }),
         );
 
+      const useInput = <Value>(action: (run: Input.Run) => Effect.Effect<Value, BrowserError>) =>
+        input.begin.pipe(
+          Effect.flatMap((run) =>
+            action(run).pipe(
+              Effect.matchEffect({
+                onFailure: (error) =>
+                  run.close.pipe(
+                    Effect.andThen(flush(name, run).pipe(Effect.ignore)),
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+                onSuccess: (value) =>
+                  run.close.pipe(Effect.andThen(flush(name, run)), Effect.as(value)),
+              }),
+              // The finalizer only submits missing releases. It cannot wait forever for a
+              // disconnected peer; the page retains those replies and gates its next action.
+              Effect.ensuring(run.close),
+            ),
+          ),
+        );
+
       const guard = settings.guard;
 
       const run =
         guard === undefined
-          ? lock.withPermits(1)(bounded(body(marks, undefined), timeout))
+          ? lock.withPermits(1)(
+              bounded(
+                useInput((run) => body({ ...marks, input: run }, undefined)),
+                timeout,
+              ),
+            )
           : Effect.gen(function* () {
               const plan = yield* lock.withPermits(1)(bounded(prepare, settings.actionTimeout));
 
@@ -507,7 +540,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
               return yield* lock.withPermits(1)(
                 bounded(
-                  plan.validate.pipe(Effect.flatMap((approval) => body(marks, approval))),
+                  useInput((run) =>
+                    plan.validate.pipe(
+                      Effect.flatMap((approval) => body({ ...marks, input: run }, approval)),
+                    ),
+                  ),
                   timeout,
                 ),
               );
@@ -723,10 +760,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       : Effect.succeed(ready);
   };
 
-  const moveTo = (to: Point) =>
+  const moveTo = (operation: string, run: Input.Run, to: Point) =>
     Effect.gen(function* () {
       if (!settings.humanize) {
-        sendMouse({ type: "mouseMoved", x: to.x, y: to.y, button: "none" });
+        yield* sendMouse(operation, run, { type: "mouseMoved", x: to.x, y: to.y, button: "none" });
         yield* Ref.set(pointer, to);
 
         return;
@@ -736,7 +773,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       for (const step of steps) {
         yield* Effect.sleep(Duration.millis(step.delay));
-        sendMouse({ type: "mouseMoved", x: step.x, y: step.y, button: "none" });
+        yield* sendMouse(operation, run, {
+          type: "mouseMoved",
+          x: step.x,
+          y: step.y,
+          button: "none",
+        });
         publish(new PointerMoved({ at: now(), page: id, x: step.x, y: step.y }));
       }
       yield* Ref.set(pointer, to);
@@ -766,9 +808,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(point);
           yield* marks.sent;
-          yield* moveTo(point);
+          yield* moveTo("click", marks.input, point);
           for (let index = 1; index <= count; index++) {
-            sendMouse({
+            yield* sendMouse("click", marks.input, {
               type: "mousePressed",
               ...point,
               button,
@@ -780,9 +822,15 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               clickOptions.holdMillis ?? (settings.humanize ? yield* Human.pressDelay : 0);
 
             if (hold > 0) yield* Effect.sleep(Duration.millis(hold));
-            sendMouse({ type: "mouseReleased", ...point, button, buttons: 0, clickCount: index });
+            yield* sendMouse("click", marks.input, {
+              type: "mouseReleased",
+              ...point,
+              button,
+              buttons: 0,
+              clickCount: index,
+            });
           }
-          yield* flush("click");
+          yield* flush("click", marks.input);
           yield* settle;
 
           return resolved;
@@ -801,8 +849,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(point);
           yield* marks.sent;
-          yield* moveTo(point);
-          yield* flush("hover");
+          yield* moveTo("hover", marks.input, point);
+          yield* flush("hover", marks.input);
         }),
     );
 
@@ -819,8 +867,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(end.point);
           yield* marks.sent;
-          yield* moveTo(start.point);
-          sendMouse({
+          yield* moveTo("drag", marks.input, start.point);
+          yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
             ...start.point,
             button: "left",
@@ -831,9 +879,15 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           for (const step of steps) {
             yield* Effect.sleep(Duration.millis(settings.humanize ? step.delay : 8));
-            sendMouse({ type: "mouseMoved", x: step.x, y: step.y, button: "left", buttons: 1 });
+            yield* sendMouse("drag", marks.input, {
+              type: "mouseMoved",
+              x: step.x,
+              y: step.y,
+              button: "left",
+              buttons: 1,
+            });
           }
-          sendMouse({
+          yield* sendMouse("drag", marks.input, {
             type: "mouseReleased",
             ...end.point,
             button: "left",
@@ -841,8 +895,76 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             clickCount: 1,
           });
           yield* Ref.set(pointer, end.point);
-          yield* flush("drag");
+          yield* flush("drag", marks.input);
         }),
+    );
+
+  const keyStroke = (
+    operation: string,
+    run: Input.Run,
+    parts: ReadonlyArray<string>,
+    holdMillis = 0,
+  ) =>
+    Effect.gen(function* () {
+      yield* inputCall(operation, run.reserve(parts.length * 2));
+      for (const part of parts)
+        yield* inputCall(
+          operation,
+          run.down(
+            `playwright:${part}`,
+            () => playwright.keyboard.down(part),
+            () => playwright.keyboard.up(part),
+          ),
+        );
+      if (holdMillis > 0) yield* Effect.sleep(Duration.millis(holdMillis));
+      for (const part of parts.toReversed())
+        yield* inputCall(operation, run.up(`playwright:${part}`));
+    });
+
+  const typeCharacter = (run: Input.Run, character: string) =>
+    inputCall(
+      "type",
+      Effect.gen(function* () {
+        const description = Keys.description(character);
+
+        if (description === undefined) {
+          yield* run.reserve(1);
+          yield* run.send(() => cdp.send("Input.insertText", { text: character }));
+
+          return;
+        }
+        const { key, code, keyCode, text } = description;
+        const held = `raw:${code}`;
+
+        yield* run.reserve(2);
+        yield* run.down(
+          held,
+          () =>
+            cdp.send("Input.dispatchKeyEvent", {
+              type: "keyDown",
+              modifiers: 0,
+              windowsVirtualKeyCode: keyCode,
+              code,
+              commands: [],
+              key,
+              text,
+              unmodifiedText: text,
+              autoRepeat: false,
+              location: 0,
+              isKeypad: false,
+            }),
+          () =>
+            cdp.send("Input.dispatchKeyEvent", {
+              type: "keyUp",
+              modifiers: 0,
+              windowsVirtualKeyCode: keyCode,
+              code,
+              key,
+              location: 0,
+            }),
+        );
+        yield* run.up(held);
+      }),
     );
 
   const typeText = (text: string, typeOptions: TypeOptions = {}) =>
@@ -873,22 +995,22 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* marks.at(target.point);
             if (settings.humanize) {
               yield* marks.sent;
-              yield* moveTo(target.point);
-              sendMouse({
+              yield* moveTo("type", marks.input, target.point);
+              yield* sendMouse("type", marks.input, {
                 type: "mousePressed",
                 ...target.point,
                 button: "left",
                 buttons: 1,
                 clickCount: 1,
               });
-              sendMouse({
+              yield* sendMouse("type", marks.input, {
                 type: "mouseReleased",
                 ...target.point,
                 button: "left",
                 buttons: 0,
                 clickCount: 1,
               });
-              yield* flush("type");
+              yield* flush("type", marks.input);
             }
 
             // Focusing can run page handlers, including navigation, before the script returns.
@@ -903,15 +1025,26 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           }
           yield* marks.sent;
           if (text === "" && replace && typeOptions.into !== undefined)
-            yield* native("type", () => playwright.keyboard.press("Delete"));
-          else if (settings.humanize)
+            yield* keyStroke("type", marks.input, ["Delete"]);
+          else {
+            // Absolute deadlines keep reply latency and small scheduling delays out of the
+            // intended cadence. Only the bounded sender can apply backpressure.
+            let due = now();
+
             for (const character of text) {
-              yield* native("type", () => playwright.keyboard.type(character));
-              yield* Effect.sleep(Duration.millis(yield* Human.keyDelay));
+              yield* typeCharacter(marks.input, character);
+              if (settings.humanize) {
+                due += yield* Human.keyDelay;
+                yield* Effect.sleep(Duration.millis(Math.max(0, due - now())));
+              }
             }
-          else yield* native("type", () => playwright.keyboard.insertText(text));
+          }
+          // Public Playwright keys preserve platform editing commands. Drain the raw text
+          // session before Enter uses Playwright's session, so submit cannot overtake typing.
+          yield* flush("type", marks.input);
           if (typeOptions.submit === true) {
-            yield* native("type", () => playwright.keyboard.press("Enter"));
+            yield* keyStroke("type", marks.input, ["Enter"]);
+            yield* flush("type", marks.input);
             yield* settle;
           }
         }),
@@ -936,9 +1069,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       }),
       (marks) =>
         Effect.gen(function* () {
-          const combination = Keys.normalize(keys);
+          const parts = Keys.parts(keys);
 
-          if (combination === undefined)
+          if (parts === undefined)
             return yield* failWith(
               "press",
               new InvalidRequest({
@@ -946,23 +1079,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               }),
             );
           const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
+          const hold = pressOptions.holdMillis ?? 0;
+          let due = now();
 
           yield* marks.sent;
           for (let index = 0; index < times; index++) {
-            if (pressOptions.holdMillis === undefined)
-              yield* native("press", () => playwright.keyboard.press(combination));
-            else {
-              const parts = combination.split("+");
-
-              for (const part of parts)
-                yield* native("press", () => playwright.keyboard.down(part));
-              yield* Effect.sleep(Duration.millis(pressOptions.holdMillis));
-              for (const part of parts.toReversed())
-                yield* native("press", () => playwright.keyboard.up(part));
+            yield* keyStroke("press", marks.input, parts, hold);
+            if (index + 1 < times && settings.humanize) {
+              due += hold + (yield* Human.keyDelay);
+              yield* Effect.sleep(Duration.millis(Math.max(0, due - now())));
             }
-            if (index + 1 < times && settings.humanize)
-              yield* Effect.sleep(Duration.millis(yield* Human.keyDelay));
           }
+          yield* flush("press", marks.input);
           yield* settle;
         }),
     );
@@ -1007,7 +1135,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
             yield* marks.at(point);
             yield* marks.sent;
-            yield* moveTo(point);
+            yield* moveTo("scroll", marks.input, point);
 
             const steps = settings.humanize
               ? Math.max(1, Math.min(8, Math.round(Math.hypot(dx, dy) / 120)))
@@ -1015,9 +1143,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
             for (let index = 0; index < steps; index++) {
               if (index > 0) yield* Effect.sleep(Duration.millis(40));
-              sendMouse({ type: "mouseWheel", ...point, deltaX: dx / steps, deltaY: dy / steps });
+              yield* sendMouse("scroll", marks.input, {
+                type: "mouseWheel",
+                ...point,
+                deltaX: dx / steps,
+                deltaY: dy / steps,
+              });
             }
-            yield* flush("scroll");
+            yield* flush("scroll", marks.input);
             yield* Effect.sleep(Duration.millis(150));
           }),
       );
