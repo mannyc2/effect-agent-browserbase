@@ -135,6 +135,42 @@ describe("parent native Responses transport", () => {
       }),
   );
 
+  // Regression for 6b8faf2: native receipt conversion must retain the BYOK billing
+  // evidence too, or sharing the corrected chat ledger still undercounts this arm.
+  it.effect("settles the full BYOK bill from a native response", () =>
+    Effect.gen(function* () {
+      const { account, sent, send } = yield* fixture(
+        JSON.stringify(
+          body({ ...bill, is_byok: true, cost_details: { upstream_inference_cost: 0.018 } }),
+        ),
+      );
+
+      yield* send(request);
+
+      assert.strictEqual(sent.length, 1);
+      assert.closeTo((yield* account.snapshot).knownUsd, 0.03, 1e-9);
+      assert.strictEqual((yield* account.snapshot).reservedUsd, 0);
+    }),
+  );
+
+  it.effect("withholds native BYOK output when the upstream bill is absent", () =>
+    Effect.gen(function* () {
+      const { account, budget, send, sent } = yield* fixture(
+        JSON.stringify(body({ ...bill, cost: 0, is_byok: true })),
+      );
+
+      assert.strictEqual(code(yield* send(request).pipe(Effect.exit)), "UnpricedResponse");
+      assert.deepInclude(yield* account.snapshot, {
+        knownUsd: 0,
+        reservedUsd: 0.04,
+        uncertainCalls: 1,
+      });
+      assert.isTrue(yield* budget.exhausted);
+      assert.strictEqual(code(yield* send(request).pipe(Effect.exit)), "AdmissionStopped");
+      assert.strictEqual(sent.length, 1);
+    }),
+  );
+
   it.effect(
     "pins model, effort, token ceiling, provider prices and disabled plugins before dispatch",
     () =>

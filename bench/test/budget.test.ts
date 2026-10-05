@@ -230,6 +230,104 @@ describe("ledger", () => {
   );
 });
 
+// Regression for 6b8faf2: BYOK receipts must bound the whole bill, including inference
+// charged outside OpenRouter. Exercise the real receipt decoder before asserting admission.
+describe("BYOK receipts", () => {
+  const callWith = (
+    budget: Effect.Success<ReturnType<typeof ledger>>,
+    usage: Record<string, unknown>,
+    dispatched: Ref.Ref<number>,
+  ) =>
+    Effect.gen(function* () {
+      const account = yield* budget.account;
+
+      const http = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              JSON.stringify({
+                id: "free-test",
+                object: "chat.completion",
+                created: 0,
+                model: "openai/test",
+                system_fingerprint: null,
+                choices: [
+                  {
+                    index: 0,
+                    finish_reason: "stop",
+                    message: { role: "assistant", content: '{"result":1}' },
+                  },
+                ],
+                usage: { ...receipt(0), total_tokens: 120, ...usage },
+              }),
+              { headers: { "content-type": "application/json" } },
+            ),
+          ),
+        ).pipe(Effect.tap(() => Ref.update(dispatched, (count) => count + 1))),
+      );
+
+      const native = yield* OpenRouterClient.make({}).pipe(
+        Effect.provideService(HttpClient.HttpClient, http),
+      );
+
+      const model = yield* OpenRouterLanguageModel.make({ model: "openai/test" }).pipe(
+        Effect.provideService(
+          OpenRouterClient.OpenRouterClient,
+          budgetedClient(native, account, {
+            rates: { input: 1e-6, output: 2e-6 },
+            maxOutputTokens: 64,
+          }),
+        ),
+      );
+
+      return yield* LanguageModel.generateObject({
+        prompt: "Return a number",
+        schema: Schema.Struct({ result: Schema.Finite }),
+      }).pipe(Effect.provideService(LanguageModel.LanguageModel, model), Effect.exit);
+    });
+
+  it.effect("charges the upstream BYOK bill before admitting another request", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+
+      const byok = {
+        cost: 0.0015,
+        is_byok: true,
+        cost_details: {
+          upstream_inference_cost: 0.03,
+          upstream_inference_prompt_cost: 0.025,
+          upstream_inference_completions_cost: 0.005,
+        },
+      };
+
+      const dispatched = yield* Ref.make(0);
+      const exits: Array<"Success" | "Failure"> = [];
+
+      for (let call = 0; call < 4; call++)
+        exits.push((yield* callWith(budget, byok, dispatched))._tag);
+
+      // Two $0.0315 bills leave less than the next $0.04 reservation. Four exceed the $0.10 cap.
+      assert.deepStrictEqual(exits, ["Success", "Success", "Failure", "Failure"]);
+      assert.strictEqual(yield* Ref.get(dispatched), 2);
+      assert.closeTo((yield* budget.snapshot).knownUsd, 0.063, 1e-9);
+      assert.isTrue(yield* budget.exhausted);
+    }),
+  );
+
+  it.effect("retains a BYOK reservation when the upstream charge is absent", () =>
+    Effect.gen(function* () {
+      const budget = yield* ledger(0.1, 0.04);
+      const dispatched = yield* Ref.make(0);
+
+      yield* callWith(budget, { cost: 0, is_byok: true }, dispatched);
+
+      assert.strictEqual(yield* Ref.get(dispatched), 1);
+      assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.04 });
+    }),
+  );
+});
+
 describe("trial ownership", () => {
   it.live(
     "keeps concurrent Chromium trials separate and alive through another trial's cleanup",
