@@ -20,13 +20,66 @@
       "types": "./dist/index.d.mts",
       "default": "./dist/index.mjs"
     },
-    "./*": {
-      "@effect-browser/source": "./src/*.ts",
-      "types": "./dist/*.d.mts",
-      "default": "./dist/*.mjs"
+    "./Agent": {
+      "@effect-browser/source": "./src/Agent.ts",
+      "types": "./dist/Agent.d.mts",
+      "default": "./dist/Agent.mjs"
     },
-    "./internal/*": null,
-    "./index": null
+    "./Browser": {
+      "@effect-browser/source": "./src/Browser.ts",
+      "types": "./dist/Browser.d.mts",
+      "default": "./dist/Browser.mjs"
+    },
+    "./BrowserError": {
+      "@effect-browser/source": "./src/BrowserError.ts",
+      "types": "./dist/BrowserError.d.mts",
+      "default": "./dist/BrowserError.mjs"
+    },
+    "./BrowserEvent": {
+      "@effect-browser/source": "./src/BrowserEvent.ts",
+      "types": "./dist/BrowserEvent.d.mts",
+      "default": "./dist/BrowserEvent.mjs"
+    },
+    "./Cdp": {
+      "@effect-browser/source": "./src/Cdp.ts",
+      "types": "./dist/Cdp.d.mts",
+      "default": "./dist/Cdp.mjs"
+    },
+    "./Chromium": {
+      "@effect-browser/source": "./src/Chromium.ts",
+      "types": "./dist/Chromium.d.mts",
+      "default": "./dist/Chromium.mjs"
+    },
+    "./Frame": {
+      "@effect-browser/source": "./src/Frame.ts",
+      "types": "./dist/Frame.d.mts",
+      "default": "./dist/Frame.mjs"
+    },
+    "./Moment": {
+      "@effect-browser/source": "./src/Moment.ts",
+      "types": "./dist/Moment.d.mts",
+      "default": "./dist/Moment.mjs"
+    },
+    "./Motion": {
+      "@effect-browser/source": "./src/Motion.ts",
+      "types": "./dist/Motion.d.mts",
+      "default": "./dist/Motion.mjs"
+    },
+    "./Page": {
+      "@effect-browser/source": "./src/Page.ts",
+      "types": "./dist/Page.d.mts",
+      "default": "./dist/Page.mjs"
+    },
+    "./Snapshot": {
+      "@effect-browser/source": "./src/Snapshot.ts",
+      "types": "./dist/Snapshot.d.mts",
+      "default": "./dist/Snapshot.mjs"
+    },
+    "./Tools": {
+      "@effect-browser/source": "./src/Tools.ts",
+      "types": "./dist/Tools.d.mts",
+      "default": "./dist/Tools.mjs"
+    }
   },
   "publishConfig": {
     "access": "public"
