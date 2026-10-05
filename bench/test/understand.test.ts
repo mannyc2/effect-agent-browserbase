@@ -318,6 +318,66 @@ describe("understanding comparison", () => {
       }),
   );
 
+  it.live("separates time queued for the budget from provider request time", () =>
+    Effect.gen(function* () {
+      const settings = yield* configuration([
+        "--hard-trials",
+        "4",
+        "--control-trials",
+        "0",
+        "--concurrency",
+        "4",
+      ]);
+
+      const plan = manifest(settings, "fixed");
+      const first = plan.pairs[0];
+
+      assert.isDefined(first);
+      if (first === undefined) return;
+      const prepared = yield* isolatedTrial(Quote.prepare(first), Chromium.layer());
+      // Two $0.45 reservations fit in $1, so four concurrent cases queue for admission.
+      const budget = yield* ledger(1, 0.45);
+
+      const records = yield* compare(plan, budget, {
+        prepare: (pair) =>
+          Effect.succeed({ ...prepared, seed: pair.seed, dense: pair.dense, task: pair.task }),
+        describe: (sample, _arm, account) =>
+          account
+            .run(
+              Effect.sleep("300 millis").pipe(
+                Effect.as({ prompt_tokens: 10, completion_tokens: 2, cost: 0.001 }),
+              ),
+              (value) => value,
+            )
+            .pipe(
+              Effect.as({
+                ...Quote.grade(sample.facts.conclusions, sample.expected),
+                answer: sample.facts.conclusions,
+                steps: 1 as const,
+                usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
+              }),
+            ),
+        record: () => Effect.void,
+      });
+
+      assert.lengthOf(records, 12);
+      assert.isTrue(records.every((record) => record.timing.requestSeconds >= 0.29));
+      assert.isTrue(records.some((record) => record.timing.queueSeconds >= 0.25));
+      assert.isTrue(
+        records.every(
+          (record) =>
+            Math.abs(record.seconds - record.timing.queueSeconds - record.timing.requestSeconds) <
+            0.1,
+        ),
+      );
+
+      const total = Math.max(...records.map((record) => record.seconds));
+
+      for (const arm of summarize(plan, records).arms)
+        assert.isBelow(arm.requestSeconds.p95 ?? Number.POSITIVE_INFINITY, total);
+    }),
+  );
+
   it.effect("wakes queued admissions without cancelling the request that already reserved", () =>
     Effect.gen(function* () {
       const budget = yield* ledger(0.04, 0.04);

@@ -19,6 +19,8 @@ import {
   emptyAccounting,
   ledger,
   modelRunner,
+  noTiming,
+  type Timing,
 } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Quote from "./QuoteComparison.ts";
@@ -221,6 +223,8 @@ export interface Record {
     readonly visibleTextBytes: number;
   } | null;
   readonly accounting: Accounting;
+  /** Admission queueing and provider request time; latency targets use the request time. */
+  readonly timing: Timing;
   readonly seconds: number;
 }
 
@@ -312,6 +316,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
               answer: null,
               lastResponse: null,
               accounting: emptyAccounting,
+              timing: noTiming,
               seconds: 0,
             };
 
@@ -372,6 +377,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
               diagnostic: Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
               lastResponse: calls.lastResponse,
               accounting: calls.accounting,
+              timing: yield* account.timing,
               seconds,
             });
           }),
@@ -398,7 +404,8 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
   arms.map((arm) => {
     const rows = records.filter((record) => record.arm === arm);
     const graded = rows.filter((record) => record.status === "graded");
-    const times = graded.map((record) => record.seconds);
+    const times = graded.map((record) => record.timing.requestSeconds);
+    const queued = graded.map((record) => record.timing.queueSeconds);
     const knownUsd = rows.reduce((sum, record) => sum + record.accounting.knownUsd, 0);
     const uncertainCalls = rows.reduce((sum, record) => sum + record.accounting.uncertainCalls, 0);
 
@@ -429,7 +436,9 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
           record.periodSwap === true,
       ).length,
       periodSwaps: graded.filter((record) => record.periodSwap === true).length,
-      seconds: { p50: percentile(times, 0.5), p95: percentile(times, 0.95) },
+      // Provider latency excludes time spent waiting for budget admission.
+      requestSeconds: { p50: percentile(times, 0.5), p95: percentile(times, 0.95) },
+      queueSeconds: { p50: percentile(queued, 0.5), p95: percentile(queued, 0.95) },
       calls: rows.reduce((sum, record) => sum + record.accounting.calls, 0),
       usage: rows.reduce(
         (sum, record) => ({
@@ -676,6 +685,7 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
         lastResponse: null,
         evidence: null,
         accounting: emptyAccounting,
+        timing: noTiming,
         seconds: 0,
       })),
     );

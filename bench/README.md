@@ -97,7 +97,8 @@ the task, base and derived fixture seeds, the run (source commit and whether the
 model, pinned endpoint with its rates and per-call reservation, browser, humanize, output-token
 limit, budget and concurrency), effective reasoning, status and reason, the answer, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
-reservations and uncertain calls) and elapsed seconds including browser setup and cleanup. The ISO
+reservations and uncertain calls), `timing` (seconds queued for budget admission and seconds in
+provider requests) and elapsed seconds including browser setup and cleanup. The ISO
 start time is a calendar date; elapsed time uses a monotonic clock.
 
 ## Outcomes
@@ -158,7 +159,7 @@ EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
 ```
 
 The results distinguish graded mistakes from infrastructure failures and retain paired outcomes,
-latency, token usage and confirmed or unresolved charges, reported separately for dense fixtures
+provider request latency (reported apart from time queued for budget admission), token usage and confirmed or unresolved charges, reported separately for dense fixtures
 and easy controls. Each case also saves its shared image, resized baseline and visible evidence
 for inspecting a result without another model call. First establish that B makes binding
 mistakes on the dense fixture, then compare A with `facts`. Beating B alone cannot establish that

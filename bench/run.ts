@@ -22,7 +22,16 @@ import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
 import { FetchHttpClient } from "effect/http";
 
-import { type Accounting, BenchError, efforts, modelRunner, noCalls, refuse } from "./Budget.ts";
+import {
+  type Accounting,
+  BenchError,
+  efforts,
+  modelRunner,
+  noCalls,
+  noTiming,
+  refuse,
+  type Timing,
+} from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import { type Task, tasks } from "./Tasks.ts";
 import {
@@ -115,6 +124,8 @@ interface TrialRecord {
   readonly lastResponse: Diagnostics.LastResponse | null;
   readonly answer: unknown;
   readonly accounting: Accounting;
+  /** Admission queueing and provider request time within `seconds`. */
+  readonly timing: Timing;
   readonly seconds: number;
 }
 
@@ -293,6 +304,7 @@ const main = Effect.gen(function* () {
           lastResponse: calls.lastResponse,
           answer: value?.answer ?? null,
           accounting: calls.accounting,
+          timing: account === undefined ? noTiming : yield* account.timing,
           seconds,
         };
 

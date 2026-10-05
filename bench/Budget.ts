@@ -1,7 +1,7 @@
 // Paid model calls for both runners: one admission ledger, the budgeted OpenRouter client and the
 // pinned endpoint whose bounds every reservation uses.
 import { Generated, OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
-import { Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
+import { Clock, Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import type * as Agent from "effect-browser/Agent";
 import { AiError, type LanguageModel } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
@@ -129,6 +129,14 @@ export const emptyAccounting: Accounting = {
   uncertainCalls: 0,
 };
 
+/** Wall time an account's calls spent queued for admission and in their provider requests. */
+export interface Timing {
+  readonly queueSeconds: number;
+  readonly requestSeconds: number;
+}
+
+export const noTiming: Timing = { queueSeconds: 0, requestSeconds: 0 };
+
 /**
  * Why the ledger stopped one of an account's calls: `budget` refused admission before dispatch;
  * `bound` withheld a response whose charge exceeded its reservation.
@@ -211,9 +219,22 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
         const account = yield* Ref.make(emptyAccounting);
         const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
         const refusal = yield* Ref.make<Refusal | null>(null);
+        const timing = yield* Ref.make(noTiming);
+
+        // Monotonic seconds since `from`, added to one of the account's two clocks.
+        const spent = (from: bigint, field: keyof Timing) =>
+          Clock.monotonicTimeNanos.pipe(
+            Effect.flatMap((now) =>
+              Ref.update(timing, (value) => ({
+                ...value,
+                [field]: value[field] + Number(now - from) / 1e9,
+              })),
+            ),
+          );
 
         return {
           snapshot: Ref.get(account),
+          timing: Ref.get(timing),
           lastResponse: Ref.get(lastResponse),
           calls: Effect.all({
             accounting: Ref.get(account),
@@ -227,6 +248,8 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
           ): Effect.Effect<A, E | BenchError, R> =>
             Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
+                const entered = yield* Clock.monotonicTimeNanos;
+
                 // A pending receipt may release enough capacity. Permanent uncertainty may not.
                 while (true) {
                   const admission = yield* Ref.modify(state, (value) => {
@@ -254,11 +277,22 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                   if (admission.fits) break;
                   if (admission.denied) {
                     yield* Ref.set(refusal, "budget");
+                    yield* spent(entered, "queueSeconds");
 
                     return yield* refuse(`no call fits the remaining $${maxUsd} budget`);
                   }
-                  yield* restore(Deferred.await(admission.changed));
+                  yield* restore(Deferred.await(admission.changed)).pipe(
+                    Effect.onInterrupt(() => spent(entered, "queueSeconds")),
+                  );
                 }
+
+                // Waiting for budget capacity is not provider latency.
+                const admitted = yield* Clock.monotonicTimeNanos;
+
+                yield* Ref.update(timing, (value) => ({
+                  ...value,
+                  queueSeconds: value.queueSeconds + Number(admitted - entered) / 1e9,
+                }));
 
                 const dispatched = yield* Ref.updateAndGet(account, (value) => ({
                   ...value,
@@ -272,7 +306,11 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                 // Only the provider request is interruptible. Once a receipt arrives, account for
                 // it before any tool, answer decoder, or caller interruption can discard it.
                 const response = yield* restore(request).pipe(
-                  Effect.onExit((exit) => (Exit.isFailure(exit) ? settle(undefined) : Effect.void)),
+                  Effect.onExit((exit) =>
+                    spent(admitted, "requestSeconds").pipe(
+                      Effect.andThen(Exit.isFailure(exit) ? settle(undefined) : Effect.void),
+                    ),
+                  ),
                 );
 
                 const usage = usageOf(response);
