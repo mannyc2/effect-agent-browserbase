@@ -49,7 +49,7 @@ const help = `Usage: bun run understand -- [options]
   --help                 Show this help.
 
 Live calls require EFFECT_BROWSER_BENCH_LIVE=1. This experiment uses local Chromium only.
-Each pair shares one capture across A, B and facts, in a deterministic shuffled order.`;
+Each pair shares one capture across A, B and facts, in a counterbalanced order.`;
 
 export class RunError extends Schema.TaggedError<RunError>()("UnderstandRunError", {
   message: Schema.String,
@@ -142,9 +142,22 @@ export interface Pair {
   readonly order: ReadonlyArray<Quote.Arm>;
 }
 
-/** The ordering is independent of worker scheduling and of any provider random draw. */
-const armOrder = (seed: number): ReadonlyArray<Quote.Arm> =>
-  [...arms].sort((left, right) => trialSeed(seed, left, 0) - trialSeed(seed, right, 0));
+const orders: ReadonlyArray<ReadonlyArray<Quote.Arm>> = [
+  ["A", "B", "facts"],
+  ["A", "facts", "B"],
+  ["B", "A", "facts"],
+  ["B", "facts", "A"],
+  ["facts", "A", "B"],
+  ["facts", "B", "A"],
+];
+
+/**
+ * Counterbalanced: each six consecutive pairs of a task use every order once, so each arm runs
+ * first, second and third equally often. The base seed rotates the sequence; worker scheduling
+ * and provider draws never change it.
+ */
+const armOrder = (base: number, task: string, index: number): ReadonlyArray<Quote.Arm> =>
+  orders[(index + (trialSeed(base, task, 0) % orders.length)) % orders.length] ?? arms;
 
 const prerequisitesForConsideringFacts = {
   baselineMustReproduceBindingMistakes: true,
@@ -183,12 +196,24 @@ export const manifest = (configuration: Options, createdAt: string) => ({
     ...Array.from({ length: configuration.hardTrials }, (_, index): Pair => {
       const seed = trialSeed(configuration.seed, "quote-dense", index + 1);
 
-      return { task: "quote-dense", dense: true, trial: index + 1, seed, order: armOrder(seed) };
+      return {
+        task: "quote-dense",
+        dense: true,
+        trial: index + 1,
+        seed,
+        order: armOrder(configuration.seed, "quote-dense", index),
+      };
     }),
     ...Array.from({ length: configuration.controlTrials }, (_, index): Pair => {
       const seed = trialSeed(configuration.seed, "quote-table", index + 1);
 
-      return { task: "quote-table", dense: false, trial: index + 1, seed, order: armOrder(seed) };
+      return {
+        task: "quote-table",
+        dense: false,
+        trial: index + 1,
+        seed,
+        order: armOrder(configuration.seed, "quote-table", index),
+      };
     }),
   ],
 });
@@ -209,6 +234,8 @@ export interface Record {
   readonly trial: number;
   readonly seed: number;
   readonly arm: Quote.Arm;
+  /** The arm's place in its case's counterbalanced order, from 0. */
+  readonly position: number;
   readonly mode: Manifest["mode"];
   readonly status: Status;
   readonly reason: Reason;
@@ -301,6 +328,7 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
         trial: pair.trial,
         seed: pair.seed,
         arm,
+        position: pair.order.indexOf(arm),
         mode: plan.mode,
         evidence: null,
         status: "unrun",
@@ -343,13 +371,14 @@ export const compare = Effect.fnUntraced(function* <E, R, E2, R2>(
                 visibleTextBytes: new TextEncoder().encode(sample.baseline.text).length,
               };
 
-        return yield* Effect.forEach(pair.order, (arm) =>
+        return yield* Effect.forEach(pair.order, (arm, position) =>
           Effect.gen(function* () {
             const base = {
               task: pair.task,
               trial: pair.trial,
               seed: pair.seed,
               arm,
+              position,
               mode: plan.mode,
               evidence,
             };
@@ -800,11 +829,12 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
 
   if (setup !== undefined && Exit.isFailure(setup)) {
     const records = plan.pairs.flatMap((pair) =>
-      pair.order.map((arm): Record => ({
+      pair.order.map((arm, position): Record => ({
         task: pair.task,
         trial: pair.trial,
         seed: pair.seed,
         arm,
+        position,
         mode: plan.mode,
         status: "infrastructure-failed",
         reason: "model-setup-failed",

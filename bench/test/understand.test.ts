@@ -81,7 +81,27 @@ describe("understanding comparison", () => {
       assert.strictEqual(plan.pairs.length, 30);
       assert.strictEqual(plan.pairs.filter((pair) => pair.dense).length, 20);
       assert.isTrue(plan.pairs.every((pair) => [...pair.order].sort().join(",") === "A,B,facts"));
-      assert.isAbove(new Set(plan.pairs.map((pair) => pair.order.join(","))).size, 1);
+      // Counterbalanced: every six consecutive pairs of a task use each order once.
+      for (const task of ["quote-dense", "quote-table"] as const) {
+        const orders = plan.pairs
+          .filter((pair) => pair.task === task)
+          .map((pair) => pair.order.join(","));
+
+        assert.strictEqual(new Set(orders.slice(0, 6)).size, 6);
+      }
+      const dense = plan.pairs.filter((pair) => pair.dense).slice(0, 18);
+
+      for (const arm of ["A", "B", "facts"] as const)
+        for (const position of [0, 1, 2])
+          assert.strictEqual(
+            dense.filter((pair) => pair.order[position] === arm).length,
+            6,
+            `${arm} at position ${position}`,
+          );
+      assert.notDeepEqual(
+        other.pairs.map((pair) => pair.order),
+        plan.pairs.map((pair) => pair.order),
+      );
       assert.strictEqual(plan.mode, "dry-run");
       assert.include(plan.interpretation, "do not measure model accuracy");
     }),
