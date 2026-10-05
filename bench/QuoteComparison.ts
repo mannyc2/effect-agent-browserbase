@@ -41,22 +41,25 @@ export type Observation = typeof Observation.Type;
 const Index = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const EvidenceText = Schema.String.check(Schema.isMaxLength(256));
 
-const Cell = Schema.Struct({
-  tableIndex: Index,
+const FactCell = Schema.Struct({ columnIndex: Index, header: EvidenceText, text: EvidenceText });
+
+const FactRow = Schema.Struct({
   rowIndex: Index,
-  columnIndex: Index,
-  table: EvidenceText,
-  row: EvidenceText,
-  header: EvidenceText,
-  text: EvidenceText,
+  ticker: EvidenceText,
+  cells: Schema.Array(FactCell).check(Schema.isMaxLength(16)),
 });
 
+const FactTable = Schema.Struct({
+  tableIndex: Index,
+  caption: EvidenceText,
+  headers: Schema.Array(EvidenceText).check(Schema.isMaxLength(16)),
+  rows: Schema.Array(FactRow).check(Schema.isMaxLength(64)),
+});
+
+/** Every visible quote table, each cell bound to its caption, row asset and exact header. */
 const Evidence = Schema.Struct({
   heading: Schema.Struct({ selector: Schema.Literal("h1"), text: EvidenceText }),
-  caption: Schema.Struct({ tableIndex: Index, text: EvidenceText }),
-  price: Cell,
-  change1h: Cell,
-  change24h: Cell,
+  tables: Schema.Array(FactTable).check(Schema.isMaxLength(8)),
 });
 
 const VisibleDom = Schema.Struct({
@@ -69,7 +72,6 @@ type VisibleDom = typeof VisibleDom.Type;
 
 export const Facts = Schema.Struct({
   observation: Observation,
-  conclusions: Answer,
   evidence: Evidence,
 });
 
@@ -192,8 +194,35 @@ const priceOf = (text: string) =>
 const percentOf = (text: string) =>
   /^[+-]?\d+\.\d{2}%$/.test(text) ? Number(text.slice(0, -1)) : Number.NaN;
 
+const millionsOf = (text: string) =>
+  /^\$\d+\.\dM$/.test(text) ? Number(text.slice(1, -1)) * 1e6 : Number.NaN;
+
+const ticker = /^[A-Z]{1,10}-USD$/;
+
+/** A displayed cell as the number it shows, keyed by its exact header; undefined if unreadable. */
+const valueOf = (header: string, text: string): string | number | undefined => {
+  const value =
+    header === "Asset"
+      ? text
+      : header === "Price"
+        ? priceOf(text)
+        : header === "24h volume"
+          ? millionsOf(text)
+          : /^\d+[hd] %$/.test(header)
+            ? percentOf(text)
+            : Number.NaN;
+
+  return typeof value === "string"
+    ? ticker.test(value)
+      ? value
+      : undefined
+    : Number.isFinite(value)
+      ? value
+      : undefined;
+};
+
 // This is deliberately a fixture-specific reader, not a general page-facts or OCR service.
-// Headers and values must be in the viewport, and a repeated label is an error, not a guess.
+// Every table, header and value must be in the viewport, and a repeated label is an error.
 const readDom = (page: Page): Effect.Effect<VisibleDom, ComparisonError> =>
   native("The visible quote evidence could not be read unambiguously", () =>
     page.playwright.evaluate(() => {
@@ -235,144 +264,135 @@ const readDom = (page: Page): Effect.Effect<VisibleDom, ComparisonError> =>
       const headings = [...document.querySelectorAll("h1")].filter(visible);
       const heading = headings[0]?.textContent?.trim();
 
-      if (headings.length !== 1 || heading === undefined || !/^[A-Z]{1,10}-USD$/.test(heading))
+      if (headings.length !== 1 || heading === undefined)
         throw new Error("The focused asset must have one visible heading");
       const tables = [...document.querySelectorAll("table")];
 
       if (tables.length > 8) throw new Error("The table evidence exceeds the fixture bound");
-
-      const matching = tables.filter((table) => {
-        const caption = table.caption;
-
-        return caption !== null && visible(caption) && caption.innerText.trim() === "Spot markets";
-      });
-
-      const table = matching[0];
-
-      if (matching.length !== 1 || table === undefined || table.caption === null)
-        throw new Error("The requested table must have one visible caption");
-      const tableIndex = tables.indexOf(table);
-      const caption = table.caption.innerText.trim();
-      const headers = [...table.querySelectorAll("thead th")];
-      const rows = [...table.querySelectorAll("tbody tr")];
-
-      if (headers.length > 16 || rows.length > 64)
-        throw new Error("The row evidence exceeds the fixture bound");
-      const names = headers.map((header) => header.textContent?.trim() ?? "");
-      const assetColumn = names.indexOf("Asset");
-
-      if (assetColumn < 0 || names.lastIndexOf("Asset") !== assetColumn)
-        throw new Error("The asset header must be unique");
-
-      const matchingRows = rows.filter(
-        (row) => row.querySelectorAll("td")[assetColumn]?.textContent?.trim() === heading,
-      );
-
-      const row = matchingRows[0];
-
-      if (matchingRows.length !== 1 || row === undefined)
-        throw new Error("The focused asset must have one row in the requested table");
-      const cells = [...row.querySelectorAll("td")];
-      const assetCell = cells[assetColumn];
-      const assetHeader = headers[assetColumn];
-
-      if (
-        cells.length !== headers.length ||
-        assetCell === undefined ||
-        assetHeader === undefined ||
-        !visible(assetCell) ||
-        !visible(assetHeader)
-      )
-        throw new Error("The row and its asset header must be visible and aligned");
-
-      const cell = (header: string) => {
-        const columnIndex = names.indexOf(header);
-        const column = headers[columnIndex];
-        const value = cells[columnIndex];
-
-        if (
-          columnIndex < 0 ||
-          names.lastIndexOf(header) !== columnIndex ||
-          column === undefined ||
-          value === undefined ||
-          !visible(column) ||
-          !visible(value)
-        )
-          throw new Error("The value and its unique header must be visible");
-
-        return {
-          tableIndex,
-          rowIndex: rows.indexOf(row),
-          columnIndex,
-          table: caption,
-          row: heading,
-          header,
-          text: value.textContent?.trim() ?? "",
-        };
-      };
 
       return {
         url: location.href,
         text: document.body.innerText,
         evidence: {
           heading: { selector: "h1" as const, text: heading },
-          caption: { tableIndex, text: caption },
-          price: cell("Price"),
-          change1h: cell("1h %"),
-          change24h: cell("24h %"),
+          tables: tables.map((table, tableIndex) => {
+            const caption = table.caption;
+            const headers = [...table.querySelectorAll("thead th")];
+            const rows = [...table.querySelectorAll("tbody tr")];
+
+            if (caption === null || !visible(caption))
+              throw new Error("Every quote table must have a visible caption");
+            if (headers.length > 16 || rows.length > 64)
+              throw new Error("The row evidence exceeds the fixture bound");
+            if (!headers.every(visible)) throw new Error("Every header must be visible");
+            const names = headers.map((header) => header.textContent?.trim() ?? "");
+            const assetColumn = names.indexOf("Asset");
+
+            return {
+              tableIndex,
+              caption: caption.innerText.trim(),
+              headers: names,
+              rows: rows.map((row, rowIndex) => {
+                const cells = [...row.querySelectorAll("td")];
+
+                if (cells.length !== names.length || !cells.every(visible))
+                  throw new Error("Every row must be visible and aligned with its headers");
+
+                return {
+                  rowIndex,
+                  ticker: cells[assetColumn]?.textContent?.trim() ?? "",
+                  cells: cells.map((cell, columnIndex) => ({
+                    columnIndex,
+                    header: names[columnIndex] ?? "",
+                    text: cell.textContent?.trim() ?? "",
+                  })),
+                };
+              }),
+            };
+          }),
         },
       };
     }),
   ).pipe(Effect.flatMap((value) => decode(VisibleDom, value, "Invalid visible quote evidence")));
 
-const factsOf = (dom: VisibleDom, observation: Observation): Facts => ({
-  observation,
-  conclusions: {
-    ticker: dom.evidence.heading.text,
-    price: priceOf(dom.evidence.price.text),
-    change1h: percentOf(dom.evidence.change1h.text),
-    change24h: percentOf(dom.evidence.change24h.text),
-    column: dom.evidence.change24h.header,
-    table: dom.evidence.caption.text,
-  },
-  evidence: dom.evidence,
-});
+const unique = (values: ReadonlyArray<string>) => new Set(values).size === values.length;
 
-/** Check the bound table/row/header sources, not membership in a bag of numbers. */
+/** Check each value's table, row and header binding, not membership in a bag of numbers. */
 export const validateFacts = (value: unknown, observation: Observation) =>
   Effect.gen(function* () {
     const facts = yield* decode(Facts, value, "Invalid quote facts");
-    const { conclusions, evidence } = facts;
-    const sources = [evidence.price, evidence.change1h, evidence.change24h];
+    const { heading, tables } = facts.evidence;
+
+    const bound = tables.every(
+      (table) =>
+        table.caption.length > 0 &&
+        unique(table.headers) &&
+        table.headers.includes("Asset") &&
+        unique(table.rows.map((row) => row.ticker)) &&
+        table.rows.every(
+          (row) =>
+            row.cells.length === table.headers.length &&
+            row.cells.every(
+              (cell, index) =>
+                cell.columnIndex === index &&
+                cell.header === table.headers[index] &&
+                valueOf(cell.header, cell.text) !== undefined &&
+                (cell.header !== "Asset" || cell.text === row.ticker),
+            ),
+        ),
+    );
 
     if (
       facts.observation.page !== observation.page ||
       facts.observation.url !== observation.url ||
       facts.observation.at !== observation.at ||
-      evidence.caption.text !== "Spot markets" ||
-      conclusions.table !== evidence.caption.text ||
-      conclusions.ticker !== evidence.heading.text ||
-      !/^[A-Z]{1,10}-USD$/.test(evidence.heading.text) ||
-      sources.some(
-        (source) =>
-          source.tableIndex !== evidence.caption.tableIndex ||
-          source.rowIndex !== evidence.price.rowIndex ||
-          source.table !== conclusions.table ||
-          source.row !== conclusions.ticker,
-      ) ||
-      new Set(sources.map((source) => source.columnIndex)).size !== sources.length ||
-      evidence.price.header !== "Price" ||
-      evidence.change1h.header !== "1h %" ||
-      evidence.change24h.header !== "24h %" ||
-      conclusions.column !== evidence.change24h.header ||
-      conclusions.price !== priceOf(evidence.price.text) ||
-      conclusions.change1h !== percentOf(evidence.change1h.text) ||
-      conclusions.change24h !== percentOf(evidence.change24h.text)
+      !ticker.test(heading.text) ||
+      tables.length === 0 ||
+      !unique(tables.map((table) => table.caption)) ||
+      !bound
     )
-      return yield* fail("The quote conclusions do not match this moment's visible provenance");
+      return yield* fail("The quote facts do not match this moment's visible provenance");
 
     return facts;
   });
+
+/** The facts the model reads: every visible row as numbers keyed by its exact column headers. */
+export const conclusionsOf = (facts: Facts) => ({
+  focusedHeading: facts.evidence.heading.text,
+  tables: facts.evidence.tables.map((table) => ({
+    caption: table.caption,
+    rows: table.rows.map((row) =>
+      Object.fromEntries(row.cells.map((cell) => [cell.header, valueOf(cell.header, cell.text)])),
+    ),
+  })),
+});
+
+/**
+ * The answer a reader of these facts gives when it binds the requested table, the heading's row
+ * and the requested periods. Only the free rehearsal and tests use it; no arm receives it.
+ */
+export const answerFrom = (facts: Facts): Answer | undefined => {
+  const table = facts.evidence.tables.find((candidate) => candidate.caption === "Spot markets");
+  const row = table?.rows.find((candidate) => candidate.ticker === facts.evidence.heading.text);
+
+  const read = (header: string) => {
+    const cell = row?.cells.find((candidate) => candidate.header === header);
+
+    return cell === undefined ? undefined : valueOf(header, cell.text);
+  };
+
+  const price = read("Price");
+  const change1h = read("1h %");
+  const change24h = read("24h %");
+
+  return table === undefined ||
+    row === undefined ||
+    typeof price !== "number" ||
+    typeof change1h !== "number" ||
+    typeof change24h !== "number"
+    ? undefined
+    : { ticker: row.ticker, price, change1h, change24h, column: "24h %", table: table.caption };
+};
 
 /** Exposed only in the benchmark so extraction can be tested after deleting grader state. */
 export const readVisibleFacts = (page: Page, at: number) =>
@@ -380,7 +400,7 @@ export const readVisibleFacts = (page: Page, at: number) =>
     const dom = yield* readDom(page);
     const observation = { page: page.id, url: dom.url, at };
 
-    return yield* validateFacts(factsOf(dom, observation), observation);
+    return yield* validateFacts({ observation, evidence: dom.evidence }, observation);
   });
 
 /** Keep a complete UTF-8 prefix; a cut character must not expand into a replacement glyph. */
@@ -485,7 +505,7 @@ export const prepare = (options: {
     )
       return yield* fail("The comparison requires one native captured frame");
     const observation = { page: moment.page, url: moment.snapshot.url, at: moment.at };
-    const facts = yield* validateFacts(factsOf(after, observation), observation);
+    const facts = yield* validateFacts({ observation, evidence: after.evidence }, observation);
     const baselineImage = yield* resize(page, frame.data);
 
     // Only this grader branch reads fixture state. Its values never influence extraction,
@@ -541,14 +561,12 @@ export const describe = (
         at: captured.moment.at,
       });
 
-      const conclusions = yield* Schema.encodeEffect(Schema.fromJsonString(Answer))(
-        facts.conclusions,
-      ).pipe(Effect.mapError(() => fail("The quote conclusions could not be encoded")));
+      const conclusions = JSON.stringify(conclusionsOf(facts));
 
-      if (new TextEncoder().encode(conclusions).length > 1024)
+      if (new TextEncoder().encode(conclusions).length > 8192)
         return yield* fail("The quote conclusions exceed the benchmark facts bound");
       instructions +=
-        "\n\nCaller-computed conclusions from this moment's visible table, bound to its caption, focused row and exact column headers:\n" +
+        "\n\nCaller-computed conclusions from every quote table visible in this moment, each value keyed by its table caption, row asset and exact column header:\n" +
         conclusions;
     }
 

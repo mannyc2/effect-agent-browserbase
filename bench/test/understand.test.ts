@@ -27,11 +27,20 @@ import {
 const configuration = (args: ReadonlyArray<string> = []) =>
   options(["--hard-trials", "2", "--control-trials", "1", "--concurrency", "2", ...args], false);
 
+/** The answer a reader of the case's visible facts gives; the fixtures always provide one. */
+const visible = (sample: Quote.QuoteCase): Quote.Answer => {
+  const answer = Quote.answerFrom(sample.facts);
+
+  if (answer === undefined) throw new Error("the visible facts do not answer the question");
+
+  return answer;
+};
+
 const dryDescribe = (
   sample: Quote.QuoteCase,
   arm: Quote.Arm,
   account: Effect.Success<Effect.Success<ReturnType<typeof ledger>>["account"]>,
-  content = JSON.stringify(sample.facts.conclusions),
+  content = JSON.stringify(visible(sample)),
 ) =>
   Effect.gen(function* () {
     const model = yield* scriptedModel(account, content);
@@ -117,8 +126,8 @@ describe("understanding comparison", () => {
 
               const content = JSON.stringify(
                 !sample.dense && arm === "A"
-                  ? { ...sample.facts.conclusions, ticker: "WRONG" }
-                  : sample.facts.conclusions,
+                  ? { ...visible(sample), ticker: "WRONG" }
+                  : visible(sample),
               );
 
               return yield* dryDescribe(sample, arm, account, content).pipe(
@@ -282,8 +291,8 @@ describe("understanding comparison", () => {
               );
 
               return {
-                ...Quote.grade(sample.facts.conclusions, sample.expected),
-                answer: sample.facts.conclusions,
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
                 steps: 1 as const,
                 usage: { inputTokens: 12, outputTokens: 3, cachedInputTokens: 0 },
               };
@@ -352,8 +361,8 @@ describe("understanding comparison", () => {
             )
             .pipe(
               Effect.as({
-                ...Quote.grade(sample.facts.conclusions, sample.expected),
-                answer: sample.facts.conclusions,
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
                 steps: 1 as const,
                 usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
               }),
@@ -599,8 +608,8 @@ describe("understanding comparison", () => {
               );
 
               return {
-                ...Quote.grade(sample.facts.conclusions, sample.expected),
-                answer: sample.facts.conclusions,
+                ...Quote.grade(visible(sample), sample.expected),
+                answer: visible(sample),
                 steps: 1 as const,
                 usage: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0 },
               };

@@ -49,7 +49,7 @@ describe("quote baseline text", () => {
 layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
   "quote comparison",
   (it) => {
-    it.effect("binds 20 dense native fixtures through visible rows and headers", () =>
+    it.effect("reads every visible quote table of 20 dense native fixtures", () =>
       Effect.gen(function* () {
         const browser = yield* Browser;
         const tablePositions = new Set<number>();
@@ -59,10 +59,17 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         for (let trial = 1; trial <= 20; trial++) {
           const seed = trialSeed(1, "quote-dense", trial);
           const captured = yield* Comparison.prepare({ seed, dense: true });
+          const { tables } = captured.facts.evidence;
+          const answer = Comparison.answerFrom(captured.facts);
 
           // Fixture truth is an independent grader here, never the extraction input.
-          assert.deepStrictEqual(captured.facts.conclusions, captured.expected);
-          assert.isTrue(Comparison.grade(captured.facts.conclusions, captured.expected).pass);
+          assert.deepStrictEqual(answer, captured.expected);
+          assert.deepStrictEqual(tables.map((table) => table.caption).toSorted(), [
+            "Evening watchlist",
+            "Perpetual futures",
+            "Spot markets",
+          ]);
+          assert.isTrue(tables.every((table) => table.rows.length === 10));
           assert.strictEqual(captured.moment.frames.length, 1);
           assert.strictEqual(captured.moment.frames[0]?.timing._tag, "BrowserPaint");
           assert.deepStrictEqual(captured.facts.observation, {
@@ -71,13 +78,16 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             at: captured.moment.at,
           });
           assert.strictEqual(captured.question, Comparison.question);
-          assert.notInclude(captured.question, captured.facts.conclusions.ticker);
+          assert.notInclude(captured.question, captured.expected.ticker);
           assert.isAtMost(new TextEncoder().encode(captured.baseline.text).length, 4000);
           assert.notInclude(captured.baseline.text, "__bench");
           assert.isTrue(Object.isFrozen(captured.moment));
-          tablePositions.add(captured.facts.evidence.caption.tableIndex);
-          periodPositions.add(captured.facts.evidence.change24h.columnIndex);
-          tickers.add(captured.facts.conclusions.ticker);
+
+          const spot = tables.find((table) => table.caption === "Spot markets");
+
+          tablePositions.add(spot?.tableIndex ?? -1);
+          periodPositions.add(spot?.headers.indexOf("24h %") ?? -1);
+          tickers.add(captured.expected.ticker);
         }
         assert.strictEqual(tablePositions.size, 3);
         assert.strictEqual(periodPositions.size, 3);
@@ -181,40 +191,48 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           const captured = yield* Comparison.prepare({ seed: 7, dense: true });
           const facts = captured.facts;
 
+          const [first, ...others] = facts.evidence.tables;
+
+          if (first === undefined) return yield* Effect.die("The dense fixture has tables");
+          const [row, ...rows] = first.rows;
+
+          if (row === undefined) return yield* Effect.die("The dense fixture has rows");
+
+          const withTable = (table: (typeof facts.evidence.tables)[number]): Comparison.Facts => ({
+            ...facts,
+            evidence: { ...facts.evidence, tables: [table, ...others] },
+          });
+
+          const withRow = (changed: typeof row) =>
+            withTable({ ...first, rows: [changed, ...rows] });
+
           const invalid: ReadonlyArray<Comparison.Facts> = [
             { ...facts, observation: { ...facts.observation, page: "another-page" } },
             { ...facts, observation: { ...facts.observation, url: origin + "/other" } },
             { ...facts, observation: { ...facts.observation, at: facts.observation.at + 1 } },
-            { ...facts, conclusions: { ...facts.conclusions, table: "Perpetual futures" } },
-            { ...facts, conclusions: { ...facts.conclusions, ticker: "OTHER-USD" } },
-            {
-              ...facts,
-              evidence: {
-                ...facts.evidence,
-                change24h: { ...facts.evidence.change24h, header: "1h %" },
-              },
-            },
-            {
-              ...facts,
-              evidence: {
-                ...facts.evidence,
-                change24h: { ...facts.evidence.change24h, table: "Perpetual futures" },
-              },
-            },
-            {
-              ...facts,
-              evidence: {
-                ...facts.evidence,
-                change24h: { ...facts.evidence.change24h, row: "OTHER-USD" },
-              },
-            },
-            {
-              ...facts,
-              conclusions: {
-                ...facts.conclusions,
-                change24h: facts.conclusions.change1h,
-              },
-            },
+            // A second table under the same caption makes "Spot markets" ambiguous.
+            withTable({ ...first, caption: others[0]?.caption ?? first.caption }),
+            // A repeated header would let one value answer two periods.
+            withTable({
+              ...first,
+              headers: first.headers.map((header) => (header === "1h %" ? "24h %" : header)),
+            }),
+            // A row must be keyed by its own Asset cell.
+            withRow({ ...row, ticker: "OTHER-USD" }),
+            // A cell keeps the header of its own column.
+            withRow({
+              ...row,
+              cells: row.cells.map((cell) =>
+                cell.header === "24h %" ? { ...cell, header: "1h %" } : cell,
+              ),
+            }),
+            // An unreadable value is not a conclusion.
+            withRow({
+              ...row,
+              cells: row.cells.map((cell) =>
+                cell.header === "Price" ? { ...cell, text: "n/a" } : cell,
+              ),
+            }),
             {
               ...facts,
               evidence: {
@@ -262,8 +280,12 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
           const requests: Array<LanguageModel.ProviderOptions> = [];
 
+          const visible = Comparison.answerFrom(captured.facts);
+
+          if (visible === undefined) return yield* Effect.die("The facts must answer the question");
+
           const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Comparison.Answer))(
-            captured.facts.conclusions,
+            visible,
           );
 
           const model = yield* LanguageModel.make({
@@ -288,7 +310,7 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
               Effect.provideService(LanguageModel.LanguageModel, model),
             );
 
-            assert.deepStrictEqual(outcome.answer, captured.facts.conclusions);
+            assert.deepStrictEqual(outcome.answer, visible);
             assert.isFalse(outcome.pass);
             assert.strictEqual(outcome.steps, 1);
             assert.strictEqual(outcome.usage.inputTokens, 1200);
@@ -319,7 +341,14 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           if (aSystem === undefined || factsSystem === undefined || bSystem === undefined)
             return yield* Effect.die("Each arm requires a system prompt");
           assert.isTrue(factsSystem.content.startsWith(aSystem.content + "\n\n"));
-          assert.include(factsSystem.content, encoded);
+          // Every visible table reaches the model; the requested binding is still its job.
+          assert.include(
+            factsSystem.content,
+            JSON.stringify(Comparison.conclusionsOf(captured.facts)),
+          );
+          for (const caption of ["Spot markets", "Perpetual futures", "Evening watchlist"])
+            assert.include(factsSystem.content, JSON.stringify(caption));
+          assert.notInclude(factsSystem.content, encoded);
           assert.deepStrictEqual(a.prompt.content.slice(1), additive.prompt.content.slice(1));
           assert.strictEqual(pictures(a.prompt)[0]?.data, captured.moment.frames[0]?.data);
           assert.strictEqual(pictures(additive.prompt)[0]?.data, captured.moment.frames[0]?.data);

@@ -172,7 +172,8 @@ export const manifest = (configuration: Options, createdAt: string) => ({
   arms: {
     A: "Shipping Moment",
     B: "640x360 JPEG plus first 4000 UTF-8 visible-text bytes",
-    facts: "Identical Moment plus visible-DOM conclusions with provenance",
+    facts:
+      "Identical Moment plus conclusions from every visible quote table, keyed by caption, asset and header",
   },
   baselineResize: "chromium-canvas-high",
   requestTimeoutMillis: 600_000,
@@ -889,7 +890,11 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
     describe: (sample, arm, account) =>
       liveRunner === undefined
         ? Effect.gen(function* () {
-            const model = yield* scriptedModel(account, JSON.stringify(sample.facts.conclusions));
+            // The rehearsal answers as a reader of the visible facts would, never from grading.
+            const model = yield* scriptedModel(
+              account,
+              JSON.stringify(Quote.answerFrom(sample.facts) ?? null),
+            );
 
             return yield* Quote.describe(sample, arm).pipe(
               Effect.provideService(LanguageModel.LanguageModel, model),

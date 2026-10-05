@@ -130,15 +130,18 @@ graded with settled charges; a free run also needs every answer to pass.
 ## Paired quote comparison
 
 `bun run understand` runs a free rehearsal through the pinned OpenRouter adapter using an
-in-memory response derived from visible table cells. Its results are marked `dry-run`; they test
+in-memory response that reads the requested row from the visible facts. Its results are marked `dry-run`; they test
 the harness and make no model-accuracy claim.
 
 The comparison prepares one captured moment for each seeded quote fixture and reuses it across
 three arms. A uses the shipping `Moment.describe` prompt, frames, outline and timeline. B uses
 the historical on-air representation: the latest image resized to 640×360 plus the first 4,000
 UTF-8 bytes of visible body text, with no outline or timeline. The `facts` arm uses the identical
-A moment and question, adding conclusions computed from visible table cells through the existing
-instructions option. The library's prompt and API stay unchanged.
+A moment and question, adding conclusions computed from every visible quote table through the
+existing instructions option: each row's values as numbers keyed by its table caption, row asset
+and exact column header. The facts do not pick the requested table, row or period; binding them
+remains the model's task, as it would be for a caller who computes page facts without knowing the
+question. The library's prompt and API stay unchanged.
 
 A native paint barrier and stable visible evidence bracket the shared capture. All arms identify
 the focused asset from the visible page heading. The question names the desired
