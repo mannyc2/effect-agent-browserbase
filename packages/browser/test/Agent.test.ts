@@ -283,6 +283,64 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("asks again after a call to an unknown tool, without running any call", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const tracked = yield* trackObservations(page);
+
+      yield* Effect.promise(() => page.playwright.locator("#amount").focus());
+      yield* Effect.promise(() => page.playwright.locator("#amount").press("End"));
+
+      const model = scripted([
+        () => [
+          call("browser_type", { text: "5", append: true }),
+          call("browser_screenshot", {}),
+          finish,
+        ],
+        (prompt) => {
+          const correction = textOf(prompt).split("\n").slice(-2).join("\n");
+
+          assert.include(correction, "none of its tool calls ran");
+          assert.include(correction, "browser_click, ");
+          assert.strictEqual(resultsIn(prompt).length, 0);
+          assert.isFalse(
+            prompt.content.some(
+              (message) =>
+                message.role === "assistant" &&
+                message.content.some((part) => part.type === "tool-call"),
+            ),
+          );
+
+          return [call("done", { answer: "unchanged" }), finish];
+        },
+      ]);
+
+      const steps: Array<Agent.Step> = [];
+
+      const result = yield* Agent.run("Append a digit.", {
+        onStep: (step) => Effect.sync(() => steps.push(step)),
+      }).pipe(Effect.provide(model.layer), Effect.provideService(Browser, tracked.browser));
+
+      assert.strictEqual(yield* valueOf(page, "#amount"), "10");
+      assert.strictEqual(result.answer, "unchanged");
+      assert.strictEqual(result.steps, 2);
+      assert.isString(steps[0]?.rejected);
+      assert.deepStrictEqual(steps[0]?.calls, []);
+      assert.isUndefined(steps[1]?.rejected);
+      assert.strictEqual(tracked.observations.length, 3);
+
+      const limited = yield* Agent.run("Append a digit.", { maxSteps: 1 }).pipe(
+        Effect.provide(scripted([() => [call("browser_screenshot", {}), finish]]).layer),
+        Effect.flip,
+      );
+
+      assert.strictEqual(
+        limited._tag === "AgentError" ? limited.reason._tag : limited._tag,
+        "StepLimit",
+      );
+    }),
+  );
+
   it.effect("returns a malformed done to the model for correction", () =>
     Effect.gen(function* () {
       const page = yield* start("/form");

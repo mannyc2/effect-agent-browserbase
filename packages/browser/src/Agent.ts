@@ -11,7 +11,7 @@
  * @since 0.3.0
  */
 import { Context, Effect, Option, Ref, Schema } from "effect";
-import { Chat, Prompt, Tool, Toolkit } from "effect/ai";
+import { AiError, Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
 import type { Observation, ObservationMode, Zoom } from "./Page.ts";
@@ -58,6 +58,11 @@ export interface Step {
     readonly isFailure: boolean;
   }>;
   readonly usage: Usage.Usage;
+  /**
+   * Set when `effect/ai` could not read the response, most likely a call to a tool that does not
+   * exist. None of its calls ran, the model is asked to try again, and its usage is not reported.
+   */
+  readonly rejected?: string | undefined;
 }
 
 export interface Result<A> {
@@ -141,6 +146,19 @@ const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
     }),
   );
 };
+
+/**
+ * A response `effect/ai` could not read, most likely for a call to a tool that does not exist. It
+ * reads the whole response before running any handler, and the batch answers every handler
+ * failure as a result, so nothing in such a response ran. The chat leaves its history unchanged.
+ */
+const isUnreadable = (
+  error: unknown,
+): error is AiError.AiError & { readonly reason: AiError.InvalidOutputError } =>
+  AiError.isAiError(error) && error.reason._tag === "InvalidOutputError";
+
+const note = (text: string) =>
+  Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text })] });
 
 const observationMessage = (observation: Observation | undefined, zooms: ReadonlyArray<Zoom>) => {
   const content: Array<Prompt.UserMessagePart> = [
@@ -254,10 +272,17 @@ const loop = <E, Extra extends ExtraTools>(
     let idle = 0;
 
     for (let step = 1; step <= maxSteps; step++) {
-      const response = yield* chat.generateText({
-        prompt: Prompt.fromMessages(next),
-        ...(yield* Tools.batch(toolkit, { endsBatch: ["done", "give_up"] })),
-      });
+      const response = yield* chat
+        .generateText({
+          prompt: Prompt.fromMessages(next),
+          ...(yield* Tools.batch(toolkit, { endsBatch: ["done", "give_up"] })),
+        })
+        .pipe(
+          Effect.map((turn) => ({ turn })),
+          Effect.catchIf(isUnreadable, (error) =>
+            Effect.succeed({ rejected: error.reason.description }),
+          ),
+        );
 
       const observation = yield* observe;
 
@@ -265,15 +290,38 @@ const loop = <E, Extra extends ExtraTools>(
         prunePictures(Prompt.concat(history, [observation]), keepPictures),
       );
 
-      const stepUsage = Usage.add(Usage.empty, response.usage);
+      if ("rejected" in response) {
+        if (options.onStep !== undefined) {
+          yield* options.onStep({
+            step,
+            text: "",
+            calls: [],
+            results: [],
+            usage: Usage.empty,
+            rejected: response.rejected,
+          });
+        }
+        idle = 0;
+        next = [
+          note(
+            "Your last response could not be read, so none of its tool calls ran. It most " +
+              "likely called a tool that does not exist. The tools are: " +
+              Object.keys(toolkit.tools).join(", ") +
+              ".",
+          ),
+        ];
+        continue;
+      }
+      const { turn } = response;
+      const stepUsage = Usage.add(Usage.empty, turn.usage);
 
-      usage = Usage.add(usage, response.usage);
+      usage = Usage.add(usage, turn.usage);
       if (options.onStep !== undefined) {
         yield* options.onStep({
           step,
-          text: response.text,
-          calls: response.toolCalls.map((call) => ({ name: call.name, params: call.params })),
-          results: response.toolResults.map((result) => ({
+          text: turn.text,
+          calls: turn.toolCalls.map((call) => ({ name: call.name, params: call.params })),
+          results: turn.toolResults.map((result) => ({
             name: result.name,
             result: result.result,
             isFailure: result.isFailure,
@@ -297,23 +345,15 @@ const loop = <E, Extra extends ExtraTools>(
         return { answer: finished.value.answer, steps: step, usage, history };
       }
 
-      if (response.toolCalls.length === 0) {
+      if (turn.toolCalls.length === 0) {
         idle += 1;
         if (idle >= 3) {
           return yield* new AgentError({
-            reason: new GaveUp({ reason: `stopped calling tools: ${response.text}` }),
+            reason: new GaveUp({ reason: `stopped calling tools: ${turn.text}` }),
             steps: step,
           });
         }
-        next = [
-          Prompt.makeMessage("user", {
-            content: [
-              Prompt.makePart("text", {
-                text: "Continue with the tools, or call done with the answer.",
-              }),
-            ],
-          }),
-        ];
+        next = [note("Continue with the tools, or call done with the answer.")];
         continue;
       }
       idle = 0;

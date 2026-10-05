@@ -26,7 +26,9 @@ npx playwright-core install chromium
 
 `Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
 `done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
-be corrected on the next turn.
+be corrected on the next turn. A response `effect/ai` cannot read, usually one calling a tool that
+does not exist, runs none of its calls: the model is told so and given the tool names, and the
+turn counts as a step. `onStep` reports it with `rejected` set.
 
 The model gets one outline and screenshot at the start and after each turn. `observation` selects
 `"outline"`, `"screenshot"`, or `"both"` (the default). `Page.observe` returns that observation as

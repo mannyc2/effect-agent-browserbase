@@ -105,7 +105,8 @@ const watch = Effect.gen(function* () {
   opens a tab, the tools follow it.
 - The model receives one outline and screenshot at the start and after each turn, including failed
   batches. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
-  is `"both"`. A malformed `done` answer goes back to the model to correct.
+  is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
+  that calls a tool that does not exist: none of its calls run.
 - `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`) and returns its crop beside
   the next observation, including in outline mode. Captions give the source page and viewport
   origin; clicks still use viewport coordinates. A batch can request at most eight crops.
