@@ -73,7 +73,6 @@ export interface InspectedTarget {
   readonly cursor: string;
   readonly href?: string | undefined;
   readonly fingerprint: string;
-  readonly prose: boolean;
 }
 
 export interface PreparedInput {
@@ -109,6 +108,11 @@ export type EditResult =
   | { readonly ok: true; readonly detail: string }
   | { readonly error: string };
 
+/** A focused field, and whether opted-in prose slips may apply to it as it is now. */
+export type FocusResult =
+  | { readonly ok: true; readonly detail: string; readonly prose: boolean }
+  | { readonly error: string };
+
 export type TypeableResult =
   | { readonly ok: true }
   | { readonly error: "stale" | "untypeable"; readonly detail: string };
@@ -128,7 +132,7 @@ export interface PageApi {
     options?: ValidationOptions,
   ): ValidatedInputResult | Promise<ValidatedInputResult>;
   typeable(ref: string | null): TypeableResult;
-  focus(ref: string, replace: boolean): EditResult;
+  focus(ref: string, replace: boolean): FocusResult;
   checkText(ref: string, expected: string): EditResult;
   select(ref: string, values: ReadonlyArray<string>): EditResult;
   hasText(text: string): boolean;
@@ -1047,6 +1051,54 @@ export const install = (): PageApi => {
     return true;
   };
 
+  // form.elements omits image submitters. Walk the whole root in tree order so an Enter
+  // submission uses the real default button, including controls associated from outside the form.
+  const defaultSubmitter = (form: HTMLFormElement) => {
+    const root = form.getRootNode();
+
+    return isRoot(root)
+      ? Array.from(root.querySelectorAll("button,input")).find(
+          (candidate): candidate is HTMLButtonElement | HTMLInputElement =>
+            isSubmitter(candidate) && candidate.form === form,
+        )
+      : undefined;
+  };
+
+  const sensitive =
+    /password|passwd|secret|credential|token|username|user.?name|login|sign.?in|one.?time|otp|security|auth|email|e-mail|url|website|phone|tel(?:ephone)?|account|card|payment|billing|order|trade|quantity|amount|price|postal|zip|address|iban|routing|cc-/i;
+
+  // Attributes that say what a field is for. They bind an approval and decide prose eligibility.
+  const purpose = (control: Element, form: HTMLFormElement | null) => [
+    control.getAttribute("id"),
+    control.getAttribute("name"),
+    control.getAttribute("inputmode"),
+    control.getAttribute("autocomplete"),
+    control.getAttribute("aria-label"),
+    form?.getAttribute("id"),
+    form?.getAttribute("name"),
+    form?.getAttribute("aria-label"),
+  ];
+
+  /** Free prose only: never numbers, addresses, credentials, payment or order fields. */
+  const proseEligible = (control: Element): boolean => {
+    const form = isTextArea(control) ? control.form : null;
+    const submitter = form === null ? undefined : defaultSubmitter(form);
+    const inputMode = control.getAttribute("inputmode");
+
+    return (
+      (isTextArea(control) || (isHtml(control) && control.isContentEditable)) &&
+      !isDisabled(control) &&
+      !control.hasAttribute("readonly") &&
+      control.getAttribute("aria-readonly") !== "true" &&
+      (inputMode === null || inputMode === "" || inputMode === "text") &&
+      ![
+        ...purpose(control, form),
+        nameOf(control, roleOf(control)),
+        submitter === undefined ? null : nameOf(submitter, roleOf(submitter)),
+      ].some((value) => value !== null && value !== undefined && sensitive.test(value))
+    );
+  };
+
   const inspectInput = (element: Element, plan: InputPlan) => {
     const metadata = details(element, element, 0, 0);
     // Classify what the input activates, such as the submit button around a painted label.
@@ -1072,18 +1124,11 @@ export const install = (): PageApi => {
 
     const submits = form !== null && ((activation && isSubmitter(control)) || fieldEnter);
 
-    const formRoot = form?.getRootNode();
-
-    // form.elements omits image submitters. Walk the whole root in tree order so an Enter
-    // submission uses the real default button, including controls associated from outside the form.
     const submitter = isSubmitter(control)
       ? control
-      : formRoot === undefined || !isRoot(formRoot)
+      : form === null
         ? undefined
-        : Array.from(formRoot.querySelectorAll("button,input")).find(
-            (candidate): candidate is HTMLButtonElement | HTMLInputElement =>
-              isSubmitter(candidate) && candidate.form === form,
-          );
+        : defaultSubmitter(form);
 
     const formDestination =
       form === null
@@ -1124,42 +1169,26 @@ export const install = (): PageApi => {
     if (activation && link?.hasAttribute("download") === true) classifications.push("download");
     if (activation && isInput(control) && control.type === "file") classifications.push("upload");
 
-    const typingAttributes = [
-      control.getAttribute("id"),
-      control.getAttribute("name"),
-      control.getAttribute("inputmode"),
-      control.getAttribute("autocomplete"),
-      control.getAttribute("aria-label"),
-      metadata.name,
-      form?.getAttribute("id"),
-      form?.getAttribute("name"),
-      form?.getAttribute("aria-label"),
-      submitter === undefined ? null : nameOf(submitter, roleOf(submitter)),
-    ];
+    // Bind what decides the consequence and the control's identity. Names bind interactive
+    // controls only: other text, such as a live price or a page's own text, may change freely.
+    const role = metadata.role;
 
-    const sensitive =
-      /password|passwd|secret|credential|token|username|user.?name|login|sign.?in|one.?time|otp|security|auth|email|e-mail|url|website|phone|tel(?:ephone)?|account|card|payment|billing|order|trade|quantity|amount|price|postal|zip|address|iban|routing|cc-/i;
-
-    const inputMode = control.getAttribute("inputmode");
-
-    const prose =
-      (isTextArea(control) || (isHtml(control) && control.isContentEditable)) &&
-      !isDisabled(control) &&
-      !control.hasAttribute("readonly") &&
-      control.getAttribute("aria-readonly") !== "true" &&
-      (inputMode === null || inputMode === "" || inputMode === "text") &&
-      !typingAttributes.some(
-        (value) => value !== null && value !== undefined && sensitive.test(value),
-      );
+    const boundName =
+      role !== null &&
+      (interactiveRoles.has(role) || role === "canvas" || role === "iframe") &&
+      !(isHtml(element) && element.isContentEditable)
+        ? metadata.name
+        : null;
 
     // Approval and prose eligibility share the same immutable inspection. A focus or scroll
     // handler changing these attributes must not leave an old permission behind.
     const fingerprint = JSON.stringify([
-      typingAttributes,
-      prose,
-      metadata.element,
-      metadata.role,
-      metadata.name,
+      purpose(control, form),
+      proseEligible(control),
+      element.tagName,
+      element.id,
+      role,
+      boundName,
       metadata.href,
       control === element ? null : refFor(control),
       isInput(control) || isButton(control) ? control.type : control.tagName,
@@ -1191,7 +1220,6 @@ export const install = (): PageApi => {
       cursor: metadata.cursor,
       ...(metadata.href === undefined ? {} : { href: metadata.href }),
       fingerprint,
-      prose,
     };
 
     return { inspected, classifications, destination };
@@ -1380,7 +1408,7 @@ export const install = (): PageApi => {
     return refusal === undefined ? { ok: true } : { error: "untypeable", detail: refusal };
   };
 
-  const focus = (ref: string, replace: boolean): EditResult => {
+  const focus = (ref: string, replace: boolean): FocusResult => {
     const element = lookup(ref);
 
     if (element === undefined) return { error: `${ref} is not on the page any more` };
@@ -1392,7 +1420,8 @@ export const install = (): PageApi => {
       else element.ownerDocument.getSelection()?.selectAllChildren(element);
     }
 
-    return { ok: true, detail: describe(element) };
+    // Decided after focusing: a focus handler can mark the field sensitive.
+    return { ok: true, detail: describe(element), prose: proseEligible(element) };
   };
 
   const select = (ref: string, values: ReadonlyArray<string>): EditResult => {
@@ -1496,7 +1525,6 @@ export const PreparedInputResultSchema = Schema.Union([
           cursor: Schema.String,
           href: Schema.optional(Schema.String),
           fingerprint: Schema.String,
-          prose: Schema.Boolean,
         }),
       ),
     ),
@@ -1528,6 +1556,11 @@ export const ViewportResultSchema = Schema.Struct({
 export const TypeableResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true) }),
   Schema.Struct({ error: Schema.Literals(["stale", "untypeable"]), detail: Schema.String }),
+]);
+
+export const FocusResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String, prose: Schema.Boolean }),
+  Schema.Struct({ error: Schema.String }),
 ]);
 
 export const EditResultSchema = Schema.Union([

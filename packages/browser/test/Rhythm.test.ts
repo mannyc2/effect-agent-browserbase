@@ -443,23 +443,49 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
         }),
     );
 
-    it.effect("rechecks prose eligibility after focus handlers change the field", () =>
+    it.effect("decides prose eligibility after focus handlers change the field", () =>
       Effect.gen(function* () {
-        const { page, snapshot } = yield* setup(
-          '<label>Notes<textarea id="notes" onfocus="this.autocomplete=\'new-password\'"></textarea></label>',
+        const html =
+          '<label>Notes<textarea id="notes" onfocus="this.autocomplete=\'new-password\'"></textarea></label>';
+
+        // Without a guard the field is typed exactly; under one, the changed field is refused.
+        const exact = yield* setup(html);
+
+        yield* exact.page
+          .type("Please bring bread.", { into: refOf(exact.snapshot, "Notes"), prose: true })
+          .pipe(Random.withSeed(0));
+        assert.strictEqual(
+          yield* Effect.promise(() => exact.page.playwright.locator("#notes").inputValue()),
+          "Please bring bread.",
         );
+        assert.isEmpty((yield* events(exact.page)).filter((event) => event.key === "Backspace"));
 
-        const ref = refOf(snapshot, "Notes");
+        const guarded = yield* setup(html, { guard: () => Effect.void });
 
-        const error = yield* page
-          .type("Please bring bread.", { into: ref, prose: true })
+        const error = yield* guarded.page
+          .type("Please bring bread.", { into: refOf(guarded.snapshot, "Notes"), prose: true })
           .pipe(Random.withSeed(0), Effect.flip);
 
         assert.strictEqual(error.reason._tag, "NotActionable");
         assert.isTrue(error.dispatched);
-        assert.isEmpty((yield* events(page)).filter((event) => event.type === "keydown"));
+        assert.isEmpty((yield* events(guarded.page)).filter((event) => event.type === "keydown"));
       }),
     );
+    it.effect("does not revalidate humanized input when no guard is set", () =>
+      Effect.gen(function* () {
+        // Text that changes between any two tasks: there is no approval to invalidate.
+        const { page } = yield* setup(
+          '<p>Live <span id="clock">0</span></p><script>let tick = 0; const channel = new MessageChannel(); channel.port1.onmessage = () => { clock.textContent = String(++tick); channel.port2.postMessage(0); }; channel.port2.postMessage(0);</script>',
+        );
+
+        for (let index = 0; index < 3; index++) yield* page.press("ArrowDown");
+        assert.lengthOf(
+          (yield* events(page)).filter((event) => event.type === "keydown"),
+          3,
+        );
+      }),
+    );
+
     it.effect("keeps functional navigation settling when the presentation pause is short", () =>
       Effect.gen(function* () {
         const { page, snapshot } = yield* setup(

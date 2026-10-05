@@ -306,6 +306,32 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("binds a held approval to controls, not to page text that keeps changing", () =>
+    Effect.gen(function* () {
+      const requests: Array<InputRequest> = [];
+
+      const { page } = yield* setup({
+        guard: (request) =>
+          Effect.sync(() => requests.push(request)).pipe(
+            Effect.andThen(Effect.sleep("300 millis")),
+          ),
+      });
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<body style="margin:0;height:3000px"><p>Updated <span id="clock">0</span></p>' +
+            '<table style="position:absolute;top:300px;left:500px"><tr><td id="price" style="width:300px;height:120px">64,210</td></tr></table>' +
+            "<script>let tick = 0; setInterval(() => { clock.textContent = String(++tick); price.textContent = String(64210 + tick); }, 50)</script></body>",
+        ),
+      );
+
+      yield* page.press("ArrowDown");
+      yield* page.scroll({ dy: 400 });
+      assert.strictEqual(requests.at(-1)?.action, "scroll");
+      assert.isUndefined(requests.at(-1)?.element);
+    }),
+  );
+
   it.effect("consults one policy for every supported input and navigation", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];

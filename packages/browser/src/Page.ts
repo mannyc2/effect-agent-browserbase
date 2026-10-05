@@ -636,7 +636,6 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   interface Approval {
     readonly contextId: number;
-    readonly targets: ReadonlyArray<Script.InspectedTarget | null>;
     readonly check: (options?: Script.ValidationOptions) => Effect.Effect<void, BrowserError>;
     readonly navigate?: Effect.Effect<void, BrowserError> | undefined;
   }
@@ -765,13 +764,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       const guard = settings.guard;
 
+      // Only an approval needs binding: without a guard, input goes straight to the page.
       const run =
-        guard === undefined && !settings.humanize
+        guard === undefined
           ? dispatch(useInput((run) => body({ ...marks, input: run }, undefined)))
           : Effect.gen(function* () {
               const plan = yield* bounded(lock.withPermits(1)(prepare), settings.actionTimeout);
 
-              yield* (guard === undefined ? Effect.void : guard(plan.request)).pipe(
+              yield* guard(plan.request).pipe(
                 Effect.mapError(
                   (reason) => new BrowserError({ operation: name, reason, dispatched: false }),
                 ),
@@ -991,7 +991,6 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const validate = check().pipe(
         Effect.as<Approval>({
           contextId,
-          targets: prepared.targets,
           check,
         }),
       );
@@ -1429,6 +1428,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const replace = typeOptions.replace ?? true;
           const into = typeOptions.into;
           let corrected = false;
+          let eligible = false;
 
           if (into !== undefined && !/^e\d+$/.test(into))
             return yield* failWith(
@@ -1482,11 +1482,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* marks.sent;
 
             const focused = yield* mutate("type", scriptCall("focus", ref, replace), approval).pipe(
-              Effect.flatMap(decodeWith("type", Script.EditResultSchema)),
+              Effect.flatMap(decodeWith("type", Script.FocusResultSchema)),
             );
 
             if ("error" in focused)
               return yield* failWith("type", new NotActionable({ detail: focused.error }));
+            eligible = focused.prose;
           }
           yield* presentationPause("focus");
           if (approval !== undefined) yield* approval.check({ focused: true });
@@ -1501,7 +1502,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 typeOptions.prose === true &&
                 typeOptions.into !== undefined &&
                 replace &&
-                approval?.targets[0]?.prose === true &&
+                eligible &&
                 !/\d|@|[a-z][a-z\d+.-]*:\/\/|\bwww\.|\b[a-z\d-]+\.[a-z]{2,}\b/i.test(text);
 
               const plan = yield* Human.typing(text, { prose });
@@ -1605,7 +1606,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         y: Math.round(viewport.height / 2),
       };
 
-      const target = scrollOptions.at ?? middle;
+      const target = scrollOptions.at;
 
       const dx = scrollOptions.dx ?? 0;
 
@@ -1631,19 +1632,27 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         settings.actionTimeout,
         valid.pipe(
           Effect.andThen(
-            preparePolicy("scroll", { target: typeof target === "string" ? target : undefined }, [
-              target,
-            ]),
+            // Scrolling the page has no target: whatever sits mid-viewport is not what is scrolled.
+            preparePolicy(
+              "scroll",
+              { target: typeof target === "string" ? target : undefined },
+              target === undefined ? [] : [target],
+            ),
           ),
         ),
         (marks, approval) =>
           Effect.gen(function* () {
             yield* valid;
 
+            // A page scroll has no target, but a visible pointer still shows the cursor it lands on.
             const resolved =
-              approval === undefined && scrollOptions.at === undefined
-                ? undefined
-                : yield* targetFor("scroll", target, approval, marks);
+              target !== undefined
+                ? yield* targetFor("scroll", target, approval, marks)
+                : settings.humanize
+                  ? yield* resolve("scroll", middle, approval).pipe(
+                      Effect.orElseSucceed(() => undefined),
+                    )
+                  : undefined;
 
             const point = resolved?.point ?? middle;
 
