@@ -22,7 +22,7 @@ import {
 } from "effect";
 import type { BrowserContext, Page as PlaywrightPage } from "playwright-core";
 
-import { BrowserError, Failed } from "./BrowserError.ts";
+import { BrowserError, Failed, InvalidRequest } from "./BrowserError.ts";
 import {
   type BrowserEvent,
   DialogShown,
@@ -43,8 +43,10 @@ export interface Options {
   readonly frameHistory?: number | undefined;
   /** Events kept for `recentEvents`. Defaults to 512. */
   readonly eventHistory?: number | undefined;
-  /** Checked before every input on every page. */
+  /** Allow, deny or hold each input or navigation before it reaches the page. Defaults to allow. */
   readonly guard?: Page.InputGuard | undefined;
+  /** A separate bound for policy holds, outside action timeouts. Defaults to 5 minutes. */
+  readonly policyTimeout?: Duration.Input | undefined;
   /** Scripts every new document runs before its own, such as a consent-banner remover. */
   readonly initScripts?: ReadonlyArray<string> | undefined;
 }
@@ -79,6 +81,18 @@ export const make = Effect.fn("Browser.make")(function* (
 ) {
   const clock = yield* Clock.Clock;
   const now = () => clock.currentTimeMillisUnsafe();
+  const policyTimeout = Duration.fromInput(options.policyTimeout ?? Duration.minutes(5));
+
+  if (
+    Option.isNone(policyTimeout) ||
+    !Number.isFinite(Duration.toMillis(policyTimeout.value)) ||
+    !Duration.isPositive(policyTimeout.value)
+  )
+    return yield* new BrowserError({
+      operation: "make",
+      reason: new InvalidRequest({ detail: "policyTimeout must be finite and greater than zero" }),
+      dispatched: false,
+    });
 
   const settings: Page.Settings = {
     humanize: options.humanize ?? false,
@@ -86,6 +100,7 @@ export const make = Effect.fn("Browser.make")(function* (
     navigationTimeout: Duration.fromInputUnsafe(options.navigationTimeout ?? Duration.seconds(30)),
     frameHistory: options.frameHistory ?? 60,
     guard: options.guard,
+    policyTimeout: policyTimeout.value,
   };
 
   const eventHistory = options.eventHistory ?? 512;
@@ -181,7 +196,8 @@ export const make = Effect.fn("Browser.make")(function* (
       const playwright = yield* native("newPage", () => context.newPage());
       const page = yield* register(playwright);
 
-      if (url !== undefined) yield* page.goto(url);
+      // A rejected or interrupted navigation must not leave the newly allocated blank tab behind.
+      if (url !== undefined) yield* page.goto(url).pipe(Effect.onError(() => page.close));
 
       return page;
     });

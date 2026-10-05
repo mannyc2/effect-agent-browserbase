@@ -45,5 +45,35 @@ keeps the original point; the receipt names the control even when a nested child
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged last, so the caller's tool wins a name clash, and its calls share the batch's halt behavior.
 
+`Browser.Options.guard` is the input policy. Its `InputRequest` schema contains the action,
+resolved element and inferred `classifications`: `form-submit`, `purchase`, `delete`, `confirm`,
+`cross-origin`, `download` and `upload`. More than one may apply. `point` is present for literal
+pixel targets; a ref's coordinates are resolved after approval so preparation never scrolls.
+It covers clicks, drags, typing, keys, selection, hover, scroll and navigation, including a new
+tab's destination.
+
+The policy's effect succeeds to allow, fails with `PolicyDenied` to refuse, or waits for a signal
+the consumer owns to hold. For example:
+
+```ts
+import { Effect } from "effect";
+import { PolicyDenied } from "effect-browser/BrowserError";
+import * as Chromium from "effect-browser/Chromium";
+
+const browser = Chromium.layer({
+  guard: (request) =>
+    request.classifications.includes("purchase")
+      ? Effect.fail(new PolicyDenied({ detail: "Purchases are disabled." }))
+      : Effect.void,
+});
+```
+
+Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
+the action timeout. They do not keep the page locked. After approval, the library verifies the
+same document, target and relevant facts before sending input. Changed targets fail undispatched;
+the library never retries the action or the policy automatically. A policy timeout is a typed
+`PolicyTimeout`, and tools surface both timeout and denial as ordinary failed receipts. Without a
+guard, actions are allowed. Canvas and opaque frames expose their outer element's metadata.
+
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.

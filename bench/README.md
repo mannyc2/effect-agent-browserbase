@@ -23,7 +23,8 @@ a moment without a model, captures it (`Moment.capture`) and asks a model about 
 (`Moment.describe`). Operate tasks receive an outline and screenshot once per turn; calls within a
 turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
 pixel clicks return the element under the requested point. Runs without a model still use the free
-scripted solutions.
+scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or
+hold classified input and navigation without a user-facing confirmation prompt.
 
 ## Running
 

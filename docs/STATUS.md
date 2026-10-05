@@ -11,6 +11,8 @@
   configurable observations and caller toolkits.
 - Viewport zoom crops and pixel-click receipts with resolved element metadata, including on
   displays whose device pixel ratio differs from one.
+- An input policy over resolved targets and navigation, with typed denials, independently bounded
+  holds and validation before held actions resume.
 - `bench` (private): seven tasks over canvas games, live charts and forms, graded against the
   pages' own truth. Paid runs are opt-in and capped.
 

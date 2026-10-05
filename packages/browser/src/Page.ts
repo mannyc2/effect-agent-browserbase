@@ -1,8 +1,9 @@
 /**
  * One browser tab: navigation, snapshots, pictures and input.
  *
- * Every operation on a page runs one at a time, in call order. Element targets are refs from a
- * snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
+ * Input dispatch is serialized per page. A policy can hold an action outside that lock while
+ * other actions continue; its target is revalidated before dispatch. Element targets are refs from
+ * a snapshot; point targets are viewport coordinates in CSS pixels, the same coordinates as a
  * screenshot's pixels. Mouse input goes straight to the Chrome DevTools Protocol and is pipelined,
  * so its dispatch costs one round trip even on a remote browser. Targets are resolved first.
  *
@@ -10,6 +11,7 @@
  */
 import {
   type Clock,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -21,7 +23,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import type { CDPSession, Page as PlaywrightPage } from "playwright-core";
+import type { CDPSession, Frame as PlaywrightFrame, Page as PlaywrightPage } from "playwright-core";
 
 import {
   BrowserError,
@@ -31,6 +33,8 @@ import {
   NavigationFailed,
   NotActionable,
   NotFound,
+  type PolicyDenied,
+  PolicyTimeout,
   type Reason,
   StaleRef,
   Timeout,
@@ -125,22 +129,33 @@ export class Observation extends Schema.Class<Observation>("effect-browser/Obser
   at: Schema.Finite,
 }) {}
 
-/** What a guard sees before input reaches the page. */
-export interface InputRequest {
-  readonly page: string;
-  readonly action: string;
-  readonly target?: string | undefined;
-  /** How the targeted element read when it was resolved, such as `<button> "Place bet"`. */
-  readonly element?: string | undefined;
-  readonly point?: Point | undefined;
-  readonly text?: string | undefined;
-}
+/** Signals inferred from the target and the action, rather than a guarantee of its consequences. */
+export const Classification = Script.Classification;
 
-/** Checked before every input; failing refuses the input before anything is sent. */
-export type InputGuard = (request: InputRequest) => Effect.Effect<void, BrowserError>;
+export type Classification = typeof Classification.Type;
+
+/** What a guard sees before input reaches the page. Preparation never scrolls or focuses. */
+export class InputRequest extends Schema.Class<InputRequest>("effect-browser/InputRequest")({
+  page: Schema.String,
+  action: Schema.String,
+  target: Schema.optional(Schema.String),
+  element: Schema.optional(Schema.String),
+  /** Literal pixel targets only; ref coordinates are resolved after the policy allows them. */
+  point: Schema.optional(Schema.Struct({ x: Schema.Finite, y: Schema.Finite })),
+  text: Schema.optional(Schema.String),
+  role: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.String),
+  href: Schema.optional(Schema.String),
+  destination: Schema.optional(Schema.String),
+  classifications: Schema.Array(Classification),
+}) {}
+
+/** Succeed to allow, fail to deny, or await an external signal to hold the input. */
+export type InputGuard = (request: InputRequest) => Effect.Effect<void, PolicyDenied>;
 
 export interface Settings {
   readonly actionTimeout: Duration.Duration;
+  readonly policyTimeout: Duration.Duration;
   readonly navigationTimeout: Duration.Duration;
   /** Move the pointer along curved paths and type with human pacing, for watched browsing. */
   readonly humanize: boolean;
@@ -354,32 +369,34 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return created.executionContextId;
     });
 
-  // Evaluate one call of the installed script, recreating the world once if the document changed.
-  const evaluate = (operation: string, call: string) => {
-    const attempt = (contextId: number) =>
-      native(operation, () =>
-        cdp.send("Runtime.evaluate", {
-          contextId,
-          expression: `globalThis.__effectBrowser.${call}`,
-          returnByValue: true,
-        }),
-      ).pipe(
-        Effect.flatMap((result) =>
-          result.exceptionDetails === undefined
-            ? Effect.succeed<unknown>(result.result.value)
-            : Effect.fail(
-                new BrowserError({
-                  operation,
-                  reason: new Failed({
-                    detail:
-                      result.exceptionDetails.exception?.description ??
-                      result.exceptionDetails.text,
-                  }),
-                  dispatched: false,
+  const evaluateIn = (operation: string, call: string, contextId: number) =>
+    native(operation, () =>
+      cdp.send("Runtime.evaluate", {
+        contextId,
+        expression: `globalThis.__effectBrowser.${call}`,
+        returnByValue: true,
+      }),
+    ).pipe(
+      Effect.flatMap((result) =>
+        result.exceptionDetails === undefined
+          ? Effect.succeed<unknown>(result.result.value)
+          : Effect.fail(
+              new BrowserError({
+                operation,
+                reason: new Failed({
+                  detail:
+                    result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
                 }),
-              ),
-        ),
-      );
+                dispatched: false,
+              }),
+            ),
+      ),
+    );
+
+  // Ordinary reads can recreate a document's world. Approval validation deliberately cannot.
+  const evaluateWithContext = (operation: string, call: string) => {
+    const attempt = (contextId: number) =>
+      evaluateIn(operation, call, contextId).pipe(Effect.map((value) => ({ contextId, value })));
 
     return Ref.get(world).pipe(
       Effect.flatMap(
@@ -389,6 +406,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.catchIf(contextGone, () => createWorld(operation).pipe(Effect.flatMap(attempt))),
     );
   };
+
+  const evaluate = (operation: string, call: string) =>
+    evaluateWithContext(operation, call).pipe(Effect.map(({ value }) => value));
 
   const decodeWith =
     <A>(operation: string, schema: Schema.Codec<A, unknown>) =>
@@ -404,77 +424,131 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         ),
       );
 
-  // Run one page operation under the page's lock, bound its time, mark its failures dispatched
-  // once input went out, and record it as an Action event.
+  interface Approval {
+    readonly contextId: number;
+    readonly targets: ReadonlyArray<ResolvedTarget | null>;
+    readonly navigate?: Effect.Effect<void, BrowserError> | undefined;
+  }
+
+  interface PolicyPlan {
+    readonly request: InputRequest;
+    readonly validate: Effect.Effect<Approval, BrowserError>;
+  }
+
+  // Record the whole operation, but never keep the page locked or spend its action timeout
+  // while a policy is waiting. Validation binds approval to the document and targets it saw.
   const perform = <A>(
     name: string,
     info: { readonly target?: string | undefined; readonly text?: string | undefined },
     timeout: Duration.Duration,
-    body: (marks: {
-      readonly sent: Effect.Effect<void>;
-      readonly at: (point: Point) => Effect.Effect<void>;
-    }) => Effect.Effect<A, BrowserError>,
+    prepare: Effect.Effect<PolicyPlan, BrowserError>,
+    body: (
+      marks: {
+        readonly sent: Effect.Effect<void>;
+        readonly at: (point: Point) => Effect.Effect<void>;
+      },
+      approval: Approval | undefined,
+    ) => Effect.Effect<A, BrowserError>,
   ): Effect.Effect<A, BrowserError> =>
-    lock.withPermits(1)(
-      Effect.gen(function* () {
-        const startedAt = now();
-        const sent = yield* Ref.make(false);
-        const at = yield* Ref.make(Option.none<Point>());
+    Effect.gen(function* () {
+      const startedAt = now();
+      const sent = yield* Ref.make(false);
+      const at = yield* Ref.make(Option.none<Point>());
 
-        const exit = yield* body({
-          sent: Ref.set(sent, true),
-          at: (point) => Ref.set(at, Option.some(point)),
-        }).pipe(
+      const marks = {
+        sent: Ref.set(sent, true),
+        at: (point: Point) => Ref.set(at, Option.some(point)),
+      };
+
+      const bounded = <Value>(
+        effect: Effect.Effect<Value, BrowserError>,
+        duration: Duration.Duration,
+      ) =>
+        effect.pipe(
           Effect.timeoutOrElse({
-            duration: timeout,
+            duration,
             orElse: () =>
               Effect.fail(
                 new BrowserError({
                   operation: name,
-                  reason: new Timeout({ millis: Duration.toMillis(timeout) }),
+                  reason: new Timeout({ millis: Duration.toMillis(duration) }),
                   dispatched: false,
                 }),
               ),
           }),
-          Effect.exit,
         );
 
-        const dispatched = yield* Ref.get(sent);
-        const point = yield* Ref.get(at);
+      const guard = settings.guard;
 
-        if (dispatched) yield* Ref.set(lastInputAt, now());
-        const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+      const run =
+        guard === undefined
+          ? lock.withPermits(1)(bounded(body(marks, undefined), timeout))
+          : Effect.gen(function* () {
+              const plan = yield* lock.withPermits(1)(bounded(prepare, settings.actionTimeout));
 
-        publish(
-          new Action({
-            at: now(),
-            startedAt,
-            page: id,
-            name,
-            target: info.target,
-            text: info.text === undefined ? undefined : info.text.slice(0, 200),
-            x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
-            y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
-            ok: Exit.isSuccess(exit),
-            dispatched,
-            error: Option.getOrUndefined(Option.map(failure, (error) => error.message)),
-          }),
-        );
-        if (Exit.isSuccess(exit)) return exit.value;
-        if (dispatched)
-          return yield* Exit.mapError(exit, (error) =>
-            error.dispatched
-              ? error
-              : new BrowserError({
-                  operation: error.operation,
-                  reason: error.reason,
-                  dispatched: true,
+              yield* guard(plan.request).pipe(
+                Effect.mapError(
+                  (reason) => new BrowserError({ operation: name, reason, dispatched: false }),
+                ),
+                Effect.timeoutOrElse({
+                  duration: settings.policyTimeout,
+                  orElse: () =>
+                    Effect.fail(
+                      new BrowserError({
+                        operation: name,
+                        reason: new PolicyTimeout({
+                          millis: Duration.toMillis(settings.policyTimeout),
+                        }),
+                        dispatched: false,
+                      }),
+                    ),
                 }),
-          );
+              );
 
-        return yield* exit;
-      }),
-    );
+              return yield* lock.withPermits(1)(
+                bounded(
+                  plan.validate.pipe(Effect.flatMap((approval) => body(marks, approval))),
+                  timeout,
+                ),
+              );
+            });
+
+      const exit = yield* Effect.exit(run);
+      const dispatched = yield* Ref.get(sent);
+      const point = yield* Ref.get(at);
+
+      if (dispatched) yield* Ref.set(lastInputAt, now());
+      const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
+
+      publish(
+        new Action({
+          at: now(),
+          startedAt,
+          page: id,
+          name,
+          target: info.target,
+          text: info.text === undefined ? undefined : info.text.slice(0, 200),
+          x: Option.getOrUndefined(Option.map(point, (p) => p.x)),
+          y: Option.getOrUndefined(Option.map(point, (p) => p.y)),
+          ok: Exit.isSuccess(exit),
+          dispatched,
+          error: Option.getOrUndefined(Option.map(failure, (error) => error.message)),
+        }),
+      );
+      if (Exit.isSuccess(exit)) return exit.value;
+      if (dispatched)
+        return yield* Exit.mapError(exit, (error) =>
+          error.dispatched
+            ? error
+            : new BrowserError({
+                operation: error.operation,
+                reason: error.reason,
+                dispatched: true,
+              }),
+        );
+
+      return yield* exit;
+    });
 
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
@@ -503,22 +577,151 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                   ? new InvalidRequest({ detail: result.detail })
                   : new NotActionable({ detail: result.detail }),
             )
-          : Effect.succeed(
-              new ResolvedTarget({
-                point: { x: result.x, y: result.y },
-                element: result.element,
-                role: result.role,
-                name: result.name,
-                cursor: result.cursor,
-                ...(result.href === undefined ? {} : { href: result.href }),
-              }),
-            ),
+          : Effect.succeed(resolvedTarget(result)),
       ),
     );
   };
 
-  const guard = (request: InputRequest) =>
-    settings.guard === undefined ? Effect.void : settings.guard(request);
+  const resolvedTarget = (result: Script.ResolvedPoint): ResolvedTarget =>
+    new ResolvedTarget({
+      point: { x: result.x, y: result.y },
+      element: result.element,
+      role: result.role,
+      name: result.name,
+      cursor: result.cursor,
+      ...(result.href === undefined ? {} : { href: result.href }),
+    });
+
+  const preparePolicy = (
+    action: string,
+    info: { readonly target?: string | undefined; readonly text?: string | undefined },
+    targets: Script.InputPlan["targets"],
+    flags: {
+      readonly submit?: boolean;
+      readonly keys?: string;
+      readonly destination?: string;
+    } = {},
+  ): Effect.Effect<PolicyPlan, BrowserError> =>
+    Effect.gen(function* () {
+      for (const target of targets) {
+        if (typeof target === "string" && !/^e\d+$/.test(target))
+          return yield* failWith(
+            action,
+            new InvalidRequest({ detail: `"${target}" is not a ref; refs look like e12` }),
+          );
+        if (
+          target !== null &&
+          typeof target !== "string" &&
+          (!Number.isFinite(target.x) || !Number.isFinite(target.y))
+        )
+          return yield* failWith(
+            action,
+            new InvalidRequest({ detail: "point coordinates must be finite" }),
+          );
+      }
+
+      const input: Script.InputPlan = {
+        action,
+        targets,
+        submit: flags.submit ?? false,
+        keys: flags.keys ?? null,
+        destination: flags.destination ?? null,
+      };
+
+      const { contextId, value } = yield* evaluateWithContext(
+        action,
+        scriptCall("prepareInput", input),
+      );
+
+      const prepared = yield* decodeWith(action, Script.PreparedInputResultSchema)(value);
+
+      if ("error" in prepared)
+        return yield* failWith(
+          action,
+          prepared.error === "outside"
+            ? new InvalidRequest({ detail: prepared.detail })
+            : prepared.error === "stale" && typeof targets[0] === "string"
+              ? new StaleRef({ ref: targets[0] })
+              : new NotActionable({ detail: prepared.detail }),
+        );
+      const first = prepared.targets[0];
+      const target = targets[0];
+
+      const request = new InputRequest({
+        page: id,
+        action,
+        target: info.target,
+        text: info.text,
+        element: first?.element,
+        role: first?.role,
+        name: first?.name,
+        href: first?.href,
+        point: target !== null && typeof target === "object" ? target : undefined,
+        destination: prepared.destination,
+        classifications: prepared.classifications,
+      });
+
+      const validate = evaluateIn(
+        action,
+        scriptCall("validateInput", input, prepared),
+        contextId,
+      ).pipe(
+        Effect.catchIf(contextGone, () =>
+          failWith(
+            action,
+            new NotActionable({ detail: "the page changed while input policy was pending" }),
+          ),
+        ),
+        Effect.flatMap(decodeWith(action, Script.ValidatedInputResultSchema)),
+        Effect.flatMap((result) =>
+          "error" in result
+            ? failWith(action, new NotActionable({ detail: result.detail }))
+            : Effect.succeed<Approval>({
+                contextId,
+                targets: result.targets.map((value) =>
+                  value === null ? null : resolvedTarget(value),
+                ),
+              }),
+        ),
+      );
+
+      return { request, validate };
+    });
+
+  const mutate = (operation: string, call: string, approval: Approval | undefined) =>
+    (approval === undefined
+      ? Ref.get(world).pipe(
+          Effect.flatMap(
+            Option.match({ onNone: () => createWorld(operation), onSome: Effect.succeed }),
+          ),
+          Effect.flatMap((contextId) => evaluateIn(operation, call, contextId)),
+        )
+      : evaluateIn(operation, call, approval.contextId)
+    ).pipe(
+      Effect.catchIf(contextGone, () =>
+        failWith(
+          operation,
+          new NotActionable({ detail: "the page changed before the approved input could run" }),
+        ),
+      ),
+    );
+
+  const targetFor = (
+    operation: string,
+    target: Target,
+    approval: Approval | undefined,
+    index = 0,
+  ) => {
+    if (approval === undefined) return resolve(operation, target);
+    const ready = approval.targets[index];
+
+    return ready === undefined || ready === null
+      ? failWith(
+          operation,
+          new NotActionable({ detail: "the approved target is no longer available" }),
+        )
+      : Effect.succeed(ready);
+  };
 
   const moveTo = (to: Point) =>
     Effect.gen(function* () {
@@ -553,20 +756,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       "click",
       { target: typeof target === "string" ? target : `${target.x},${target.y}` },
       settings.actionTimeout,
-      (marks) =>
+      preparePolicy("click", { target: typeof target === "string" ? target : undefined }, [target]),
+      (marks, approval) =>
         Effect.gen(function* () {
-          const resolved = yield* resolve("click", target);
-          const { point, element } = resolved;
+          const resolved = yield* targetFor("click", target, approval);
+          const { point } = resolved;
           const button = clickOptions.button ?? "left";
           const count = Math.max(1, Math.min(3, clickOptions.clickCount ?? 1));
 
-          yield* guard({
-            page: id,
-            action: "click",
-            target: typeof target === "string" ? target : undefined,
-            element,
-            point,
-          });
           yield* marks.at(point);
           yield* marks.sent;
           yield* moveTo(point);
@@ -597,9 +794,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       "hover",
       { target: typeof target === "string" ? target : `${target.x},${target.y}` },
       settings.actionTimeout,
-      (marks) =>
+      preparePolicy("hover", { target: typeof target === "string" ? target : undefined }, [target]),
+      (marks, approval) =>
         Effect.gen(function* () {
-          const { point } = yield* resolve("hover", target);
+          const { point } = yield* targetFor("hover", target, approval);
 
           yield* marks.at(point);
           yield* marks.sent;
@@ -613,12 +811,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       "drag",
       { target: `${JSON.stringify(from)} -> ${JSON.stringify(to)}` },
       settings.actionTimeout,
-      (marks) =>
+      preparePolicy("drag", {}, [from, to]),
+      (marks, approval) =>
         Effect.gen(function* () {
-          const start = yield* resolve("drag", from);
-          const end = yield* resolve("drag", to);
+          const start = yield* targetFor("drag", from, approval);
+          const end = yield* targetFor("drag", to, approval, 1);
 
-          yield* guard({ page: id, action: "drag", element: start.element, point: start.point });
           yield* marks.at(end.point);
           yield* marks.sent;
           yield* moveTo(start.point);
@@ -655,7 +853,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         settings.actionTimeout,
         Duration.millis(settings.humanize ? text.length * 160 : 0),
       ),
-      (marks) =>
+      preparePolicy("type", { target: typeOptions.into, text }, [typeOptions.into ?? null], {
+        submit: typeOptions.submit ?? false,
+      }),
+      (marks, approval) =>
         Effect.gen(function* () {
           const replace = typeOptions.replace ?? true;
 
@@ -667,16 +868,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 "type",
                 new InvalidRequest({ detail: `"${ref}" is not a ref; refs look like e12` }),
               );
-            const target = yield* resolve("type", ref);
+            const target = yield* targetFor("type", ref, approval);
 
-            yield* guard({
-              page: id,
-              action: "type",
-              target: ref,
-              element: target.element,
-              point: target.point,
-              text,
-            });
             yield* marks.at(target.point);
             if (settings.humanize) {
               yield* marks.sent;
@@ -698,13 +891,16 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               yield* flush("type");
             }
 
-            const focused = yield* evaluate("type", scriptCall("focus", ref, replace)).pipe(
+            // Focusing can run page handlers, including navigation, before the script returns.
+            yield* marks.sent;
+
+            const focused = yield* mutate("type", scriptCall("focus", ref, replace), approval).pipe(
               Effect.flatMap(decodeWith("type", Script.EditResultSchema)),
             );
 
             if ("error" in focused)
               return yield* failWith("type", new NotActionable({ detail: focused.error }));
-          } else yield* guard({ page: id, action: "type", text });
+          }
           yield* marks.sent;
           if (text === "" && replace && typeOptions.into !== undefined)
             yield* native("type", () => playwright.keyboard.press("Delete"));
@@ -722,104 +918,142 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     );
 
   const press = (keys: string, pressOptions: PressOptions = {}) =>
-    perform("press", { target: keys }, settings.actionTimeout, (marks) =>
-      Effect.gen(function* () {
+    perform(
+      "press",
+      { target: keys },
+      settings.actionTimeout,
+      Effect.suspend(() => {
         const combination = Keys.normalize(keys);
 
-        if (combination === undefined)
-          return yield* failWith(
-            "press",
-            new InvalidRequest({
-              detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
-            }),
-          );
-        const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
-
-        yield* guard({ page: id, action: "press", text: combination });
-        yield* marks.sent;
-        for (let index = 0; index < times; index++) {
-          if (pressOptions.holdMillis === undefined)
-            yield* native("press", () => playwright.keyboard.press(combination));
-          else {
-            const parts = combination.split("+");
-
-            for (const part of parts) yield* native("press", () => playwright.keyboard.down(part));
-            yield* Effect.sleep(Duration.millis(pressOptions.holdMillis));
-            for (const part of parts.toReversed())
-              yield* native("press", () => playwright.keyboard.up(part));
-          }
-          if (index + 1 < times && settings.humanize)
-            yield* Effect.sleep(Duration.millis(yield* Human.keyDelay));
-        }
-        yield* settle;
+        return combination === undefined
+          ? failWith(
+              "press",
+              new InvalidRequest({
+                detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
+              }),
+            )
+          : preparePolicy("press", { text: combination }, [null], { keys: combination });
       }),
-    );
-
-  const scroll = (scrollOptions: ScrollOptions = {}) =>
-    perform(
-      "scroll",
-      { target: scrollOptions.at === undefined ? undefined : JSON.stringify(scrollOptions.at) },
-      settings.actionTimeout,
       (marks) =>
         Effect.gen(function* () {
-          const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+          const combination = Keys.normalize(keys);
 
-          const point =
-            scrollOptions.at === undefined
-              ? { x: Math.round(viewport.width / 2), y: Math.round(viewport.height / 2) }
-              : (yield* resolve("scroll", scrollOptions.at)).point;
+          if (combination === undefined)
+            return yield* failWith(
+              "press",
+              new InvalidRequest({
+                detail: `"${keys}" is not a key; try Enter, Space, ArrowLeft or Control+A`,
+              }),
+            );
+          const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
 
-          const dx = scrollOptions.dx ?? 0;
-
-          const dy =
-            scrollOptions.dy ??
-            (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
-
-          yield* marks.at(point);
           yield* marks.sent;
-          yield* moveTo(point);
+          for (let index = 0; index < times; index++) {
+            if (pressOptions.holdMillis === undefined)
+              yield* native("press", () => playwright.keyboard.press(combination));
+            else {
+              const parts = combination.split("+");
 
-          const steps = settings.humanize
-            ? Math.max(1, Math.min(8, Math.round(Math.hypot(dx, dy) / 120)))
-            : 1;
-
-          for (let index = 0; index < steps; index++) {
-            if (index > 0) yield* Effect.sleep(Duration.millis(40));
-            sendMouse({ type: "mouseWheel", ...point, deltaX: dx / steps, deltaY: dy / steps });
+              for (const part of parts)
+                yield* native("press", () => playwright.keyboard.down(part));
+              yield* Effect.sleep(Duration.millis(pressOptions.holdMillis));
+              for (const part of parts.toReversed())
+                yield* native("press", () => playwright.keyboard.up(part));
+            }
+            if (index + 1 < times && settings.humanize)
+              yield* Effect.sleep(Duration.millis(yield* Human.keyDelay));
           }
-          yield* flush("scroll");
-          yield* Effect.sleep(Duration.millis(150));
+          yield* settle;
         }),
     );
 
+  const scroll = (scrollOptions: ScrollOptions = {}) =>
+    Effect.suspend(() => {
+      const viewport = playwright.viewportSize() ?? { width: 1280, height: 720 };
+
+      const middle = {
+        x: Math.round(viewport.width / 2),
+        y: Math.round(viewport.height / 2),
+      };
+
+      const target = scrollOptions.at ?? middle;
+
+      const dx = scrollOptions.dx ?? 0;
+
+      const dy =
+        scrollOptions.dy ??
+        (scrollOptions.dx === undefined ? Math.round(viewport.height * 0.8) : 0);
+
+      return perform(
+        "scroll",
+        {
+          target:
+            scrollOptions.at === undefined
+              ? undefined
+              : typeof scrollOptions.at === "string"
+                ? scrollOptions.at
+                : `${scrollOptions.at.x},${scrollOptions.at.y}`,
+        },
+        settings.actionTimeout,
+        preparePolicy("scroll", { target: typeof target === "string" ? target : undefined }, [
+          target,
+        ]),
+        (marks, approval) =>
+          Effect.gen(function* () {
+            const point =
+              approval === undefined && scrollOptions.at === undefined
+                ? middle
+                : (yield* targetFor("scroll", target, approval)).point;
+
+            yield* marks.at(point);
+            yield* marks.sent;
+            yield* moveTo(point);
+
+            const steps = settings.humanize
+              ? Math.max(1, Math.min(8, Math.round(Math.hypot(dx, dy) / 120)))
+              : 1;
+
+            for (let index = 0; index < steps; index++) {
+              if (index > 0) yield* Effect.sleep(Duration.millis(40));
+              sendMouse({ type: "mouseWheel", ...point, deltaX: dx / steps, deltaY: dy / steps });
+            }
+            yield* flush("scroll");
+            yield* Effect.sleep(Duration.millis(150));
+          }),
+      );
+    });
+
   const select = (ref: string, values: ReadonlyArray<string>) =>
-    perform("select", { target: ref, text: values.join(", ") }, settings.actionTimeout, (marks) =>
-      Effect.gen(function* () {
-        const target = yield* resolve("select", ref);
+    perform(
+      "select",
+      { target: ref, text: values.join(", ") },
+      settings.actionTimeout,
+      preparePolicy("select", { target: ref, text: values.join(", ") }, [ref]),
+      (marks, approval) =>
+        Effect.gen(function* () {
+          yield* targetFor("select", ref, approval);
 
-        yield* guard({
-          page: id,
-          action: "select",
-          target: ref,
-          element: target.element,
-          text: values.join(", "),
-        });
-        yield* marks.sent;
+          yield* marks.sent;
 
-        const result = yield* evaluate("select", scriptCall("select", ref, values)).pipe(
-          Effect.flatMap(decodeWith("select", Script.EditResultSchema)),
-        );
+          const result = yield* mutate("select", scriptCall("select", ref, values), approval).pipe(
+            Effect.flatMap(decodeWith("select", Script.EditResultSchema)),
+          );
 
-        return "error" in result
-          ? yield* failWith("select", new NotActionable({ detail: result.error }))
-          : result.detail;
-      }),
+          return "error" in result
+            ? yield* failWith("select", new NotActionable({ detail: result.error }))
+            : result.detail;
+        }),
     );
 
-  const navigation = (name: string, run: () => Promise<unknown>, url: string) =>
-    perform(name, { target: url }, settings.navigationTimeout, (marks) =>
+  const navigation = (
+    name: string,
+    run: () => Promise<unknown>,
+    url: string,
+    prepare = preparePolicy(name, { target: url }, [], { destination: url }),
+  ) =>
+    perform(name, { target: url }, settings.navigationTimeout, prepare, (marks, approval) =>
       marks.sent.pipe(
-        Effect.andThen(native(name, run)),
+        Effect.andThen(approval?.navigate ?? native(name, run)),
         Effect.mapError((error) =>
           error.reason._tag === "Failed" &&
           /net::|NS_ERROR|Cannot navigate/i.test(error.reason.detail)
@@ -833,6 +1067,72 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         Effect.asVoid,
       ),
     );
+
+  const prepareBack = Effect.gen(function* () {
+    const history = yield* native("back", () => cdp.send("Page.getNavigationHistory"));
+    const current = history.entries[history.currentIndex];
+    const previous = history.entries[history.currentIndex - 1];
+
+    const plan = yield* preparePolicy(
+      "back",
+      {},
+      [],
+      previous === undefined ? {} : { destination: previous.url },
+    );
+
+    return {
+      request: plan.request,
+      validate: Effect.gen(function* () {
+        const approval = yield* plan.validate;
+        const latestHistory = yield* native("back", () => cdp.send("Page.getNavigationHistory"));
+
+        if (
+          latestHistory.currentIndex !== history.currentIndex ||
+          latestHistory.entries[latestHistory.currentIndex]?.id !== current?.id ||
+          latestHistory.entries[latestHistory.currentIndex - 1]?.id !== previous?.id ||
+          latestHistory.entries[latestHistory.currentIndex - 1]?.url !== previous?.url
+        )
+          return yield* failWith(
+            "back",
+            new NotActionable({
+              detail: "the navigation history changed while input policy was pending",
+            }),
+          );
+
+        const navigate =
+          previous === undefined
+            ? Effect.void
+            : Effect.gen(function* () {
+                const committed = yield* Deferred.make<void>();
+
+                const onNavigation = (frame: PlaywrightFrame) => {
+                  if (frame === playwright.mainFrame()) Deferred.doneUnsafe(committed, Effect.void);
+                };
+
+                // A history traversal can keep the URL unchanged. Subscribe before dispatch instead
+                // of treating an already-matching URL as evidence that the traversal finished.
+                yield* Effect.acquireUseRelease(
+                  Effect.sync(() => playwright.on("framenavigated", onNavigation)),
+                  () =>
+                    native("back", () =>
+                      cdp.send("Page.navigateToHistoryEntry", { entryId: previous.id }),
+                    ).pipe(
+                      Effect.andThen(Deferred.await(committed)),
+                      Effect.andThen(
+                        native("back", () =>
+                          playwright.waitForLoadState("domcontentloaded", { timeout: 0 }),
+                        ),
+                      ),
+                      Effect.asVoid,
+                    ),
+                  () => Effect.sync(() => playwright.off("framenavigated", onNavigation)),
+                );
+              });
+
+        return { ...approval, navigate };
+      }),
+    };
+  });
 
   const goto = (url: string) => {
     const parsed = URL.parse(url) ?? URL.parse(`https://${url}`);
@@ -1110,11 +1410,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       "back",
       () => playwright.goBack({ waitUntil: "domcontentloaded", timeout: 0 }),
       "back",
+      prepareBack,
     ),
-    reload: navigation(
-      "reload",
-      () => playwright.reload({ waitUntil: "domcontentloaded", timeout: 0 }),
-      "reload",
+    reload: Effect.suspend(() =>
+      navigation(
+        "reload",
+        () => playwright.reload({ waitUntil: "domcontentloaded", timeout: 0 }),
+        playwright.url(),
+      ),
     ),
     bringToFront: native("bringToFront", () => playwright.bringToFront()),
     close: Effect.tryPromise(() => playwright.close()).pipe(Effect.ignore),
