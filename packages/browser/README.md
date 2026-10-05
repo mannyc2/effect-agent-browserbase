@@ -34,7 +34,8 @@ provider's client cannot decode is not the model's to correct and ends the run w
 The model gets one outline and screenshot at the start and after each turn. `observation` selects
 `"outline"`, `"screenshot"`, or `"both"` (the default). When the current page cannot be observed,
 the model is told why and the run goes on; when no page can be had at all, as after the browser
-closed, the run fails with that `BrowserError` instead of calling the model again. `Page.observe` returns that observation as
+closed, the run fails with that `BrowserError` instead of calling the model again. The turn
+before it is still reported to `onStep`, and an answer it gave with `done` is still returned. `Page.observe` returns that observation as
 a schema value. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
 `yield* tools.batch` into each `generateText` call: it carries the toolkit with the same ordered,
 halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.

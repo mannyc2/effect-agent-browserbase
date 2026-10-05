@@ -10,7 +10,7 @@
  *
  * @since 0.3.0
  */
-import { Context, Effect, Option, Ref, Schema } from "effect";
+import { Context, Effect, Exit, Option, Ref, Schema } from "effect";
 import { AiError, Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
@@ -317,11 +317,14 @@ const loop = <E, R, Extra extends ExtraTools>(
           Effect.catchIf(isUnreadable, (error) => Effect.succeed({ rejected: error.reason })),
         );
 
-      const observation = yield* observe;
+      // A browser that is gone ends the run, but only once the paid turn is reported and the
+      // answer it may have given is kept.
+      const observed = yield* Effect.exit(observe);
 
-      yield* Ref.update(chat.history, (history) =>
-        prunePictures(Prompt.concat(history, [observation]), keepPictures),
-      );
+      if (Exit.isSuccess(observed))
+        yield* Ref.update(chat.history, (history) =>
+          prunePictures(Prompt.concat(history, [observed.value]), keepPictures),
+        );
 
       if ("rejected" in response) {
         if (options.onStep !== undefined) {
@@ -334,6 +337,7 @@ const loop = <E, R, Extra extends ExtraTools>(
             rejected: response.rejected.description,
           });
         }
+        if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
         idle = 0;
         next = [note(unreadable(response.rejected, Object.keys(toolkit.tools)))];
         continue;
@@ -370,6 +374,7 @@ const loop = <E, R, Extra extends ExtraTools>(
 
         return { answer: finished.value.answer, steps: step, usage, history };
       }
+      if (Exit.isFailure(observed)) return yield* Effect.failCause(observed.cause);
 
       if (turn.toolCalls.length === 0) {
         idle += 1;

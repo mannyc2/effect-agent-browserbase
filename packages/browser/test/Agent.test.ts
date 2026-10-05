@@ -669,8 +669,12 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       });
 
       const model = scripted([() => [call("close_browser", {}), finish]]);
+      const reported: Array<number> = [];
 
-      const failure = yield* Agent.run("Close the browser.", { additionalTools: Closing }).pipe(
+      const failure = yield* Agent.run("Close the browser.", {
+        additionalTools: Closing,
+        onStep: (step) => Effect.sync(() => reported.push(step.usage.inputTokens)),
+      }).pipe(
         Effect.provide([closing, model.layer]),
         Effect.provideService(Browser, browser),
         Effect.flip,
@@ -678,6 +682,8 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.strictEqual(failure._tag, "BrowserError");
       assert.strictEqual(model.prompts.length, 1);
+      // The paid turn is still reported before the run ends.
+      assert.deepStrictEqual(reported, [100]);
 
       const unused = scripted([]);
 
@@ -689,6 +695,37 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
       assert.strictEqual(again._tag, "BrowserError");
       assert.strictEqual(unused.prompts.length, 0);
+    }),
+  );
+
+  it.effect("keeps the answer of the turn in which the browser went away", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      assert.isNotNull(native);
+      if (native === null) return;
+      const context = yield* Effect.promise(() => native.newContext());
+      const browser = yield* makeBrowser(context, { id: "expiring", provider: "test" });
+
+      yield* (yield* browser.page).goto("data:text/html,<title>Task</title>The answer is 42");
+      const reported: Array<number> = [];
+
+      // The model answers while the hosted session expires.
+      const model = replies([
+        Effect.promise(() => context.close()).pipe(
+          Effect.as([call("done", { answer: "42" }), finish]),
+        ),
+      ]);
+
+      const result = yield* Agent.run("Read the answer.", {
+        onStep: (step) => Effect.sync(() => reported.push(step.usage.inputTokens)),
+      }).pipe(
+        Effect.provideServiceEffect(LanguageModel.LanguageModel, model.model),
+        Effect.provideService(Browser, browser),
+      );
+
+      assert.strictEqual(result.answer, "42");
+      assert.deepStrictEqual(reported, [100]);
     }),
   );
 
