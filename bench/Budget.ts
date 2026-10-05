@@ -31,25 +31,29 @@ const Prices = Schema.Struct({
   input_cache_read: Schema.optional(Schema.FiniteFromString),
   input_cache_write: Schema.optional(Schema.FiniteFromString),
   input_cache_write_1h: Schema.optional(Schema.FiniteFromString),
+  internal_reasoning: Schema.optional(Schema.FiniteFromString),
+  request: Schema.optional(Schema.FiniteFromString),
+  image: Schema.optional(Schema.FiniteFromString),
+  audio: Schema.optional(Schema.FiniteFromString),
 });
 
-const Endpoints = Schema.Struct({
-  data: Schema.Struct({
-    endpoints: Schema.Array(
-      Schema.Struct({
-        tag: Schema.String,
-        status: Schema.Finite,
-        context_length: Schema.Finite,
-        max_prompt_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
-        max_completion_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
-        supported_parameters: Schema.Array(Schema.String),
-        pricing: Schema.Struct({
-          ...Prices.fields,
-          overrides: Schema.optional(Schema.Array(Prices)),
-        }),
-      }),
-    ),
+export const ListedEndpoint = Schema.Struct({
+  tag: Schema.String,
+  status: Schema.Finite,
+  context_length: Schema.Finite,
+  max_prompt_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
+  max_completion_tokens: Schema.optional(Schema.NullOr(Schema.Finite)),
+  supported_parameters: Schema.Array(Schema.String),
+  pricing: Schema.Struct({
+    ...Prices.fields,
+    overrides: Schema.optional(Schema.Array(Prices)),
   }),
+});
+
+export type ListedEndpoint = typeof ListedEndpoint.Type;
+
+const Endpoints = Schema.Struct({
+  data: Schema.Struct({ endpoints: Schema.Array(ListedEndpoint) }),
 });
 
 const listedEndpoints = (model: string) =>
@@ -336,6 +340,10 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
 export type Budget = Effect.Success<ReturnType<typeof ledger>>;
 export type Account = Effect.Success<Budget["account"]>;
 
+// Listed prices are decimal strings; 0.0000002 * 1e6 is 0.19999999999999998, a ceiling below the
+// listed $0.20 that would exclude the pinned endpoint. Fifteen digits recover the decimal.
+const perMillion = (perToken: number) => String(Number((perToken * 1e6).toPrecision(15)));
+
 const unbudgeted = "the bench budgets only non-streaming chat completions";
 
 const refused = (method: string) =>
@@ -403,8 +411,8 @@ export const budgetedClient = (
             allow_fallbacks: false,
             require_parameters: true,
             max_price: {
-              prompt: String(bounds.rates.input * 1e6),
-              completion: String(bounds.rates.output * 1e6),
+              prompt: perMillion(bounds.rates.input),
+              completion: perMillion(bounds.rates.output),
               request: "0",
               image: "0",
               audio: "0",
@@ -427,78 +435,140 @@ export const budgetedClient = (
       ),
 });
 
+/** What a run's requests need from the pinned endpoint. */
+export interface Needs {
+  /** Operate tasks send tools and a tool choice. */
+  readonly tools: boolean;
+  /** Understand tasks send a JSON schema response format. */
+  readonly structuredOutput: boolean;
+}
+
+/** The pinned endpoint and the bounds each call reserves, recorded with every result. */
+export interface Endpoint {
+  readonly tag: string;
+  readonly contextTokens: number;
+  readonly outputParameter: "max_tokens" | "max_completion_tokens";
+  /** USD per million tokens: the reservation's rates and the request's price ceilings. */
+  readonly inputPerMillion: number;
+  readonly outputPerMillion: number;
+  readonly requestUsd: number;
+}
+
+/**
+ * Endpoints that can serve every parameter a request sends, under its price ceilings, cheapest
+ * reservation first. `require_parameters` and a pinned endpoint make OpenRouter refuse any
+ * other, after a reservation was already taken for it.
+ */
+export const eligibleEndpoints = (
+  endpoints: ReadonlyArray<ListedEndpoint>,
+  options: {
+    readonly maxOutputTokens: number;
+    readonly needs: Needs;
+    readonly supplied?: Rates | undefined;
+  },
+): ReadonlyArray<Endpoint> => {
+  // Every request carries a reasoning effort, even `none`.
+  const required = [
+    "reasoning",
+    ...(options.needs.tools ? ["tools", "tool_choice"] : []),
+    ...(options.needs.structuredOutput ? ["response_format", "structured_outputs"] : []),
+  ];
+
+  return endpoints
+    .flatMap((endpoint): ReadonlyArray<Endpoint> => {
+      const maximum = endpoint.max_completion_tokens;
+      const context = endpoint.max_prompt_tokens ?? endpoint.context_length;
+      const prices = [endpoint.pricing, ...(endpoint.pricing.overrides ?? [])];
+
+      const rates = {
+        input: Math.max(
+          ...prices.flatMap((price) => [
+            price.prompt,
+            price.input_cache_read ?? 0,
+            price.input_cache_write ?? 0,
+            price.input_cache_write_1h ?? 0,
+          ]),
+        ),
+        output: Math.max(
+          ...prices.flatMap((price) => [price.completion, price.internal_reasoning ?? 0]),
+        ),
+      };
+
+      const outputParameter = endpoint.supported_parameters.includes("max_completion_tokens")
+        ? ("max_completion_tokens" as const)
+        : endpoint.supported_parameters.includes("max_tokens")
+          ? ("max_tokens" as const)
+          : undefined;
+
+      // The request's max_price allows no per-request, image or audio charge.
+      const unbounded = prices.some(
+        (price) => (price.request ?? 0) > 0 || (price.image ?? 0) > 0 || (price.audio ?? 0) > 0,
+      );
+
+      if (
+        endpoint.status !== 0 ||
+        /\/(flex|fast|priority)$/.test(endpoint.tag) ||
+        !Number.isSafeInteger(context) ||
+        context <= 0 ||
+        rates.input < 0 ||
+        rates.output < 0 ||
+        unbounded ||
+        outputParameter === undefined ||
+        !required.every((parameter) => endpoint.supported_parameters.includes(parameter)) ||
+        (maximum !== undefined && maximum !== null && options.maxOutputTokens > maximum) ||
+        (options.supplied !== undefined &&
+          (options.supplied.input < rates.input || options.supplied.output < rates.output))
+      )
+        return [];
+
+      // Price tiers and cache writes can exceed base pricing. Pin one endpoint and reserve its
+      // highest published rates across the entire context, including text, tools and screenshots.
+      return [
+        {
+          tag: endpoint.tag,
+          contextTokens: context,
+          outputParameter,
+          inputPerMillion: Number(perMillion(rates.input)),
+          outputPerMillion: Number(perMillion(rates.output)),
+          requestUsd: context * rates.input + options.maxOutputTokens * rates.output,
+        },
+      ];
+    })
+    .toSorted((left, right) => left.requestUsd - right.requestUsd);
+};
+
 export const modelRunner = (options: {
   readonly model: string;
   readonly rates: string | undefined;
   readonly maxUsd: number;
   readonly maxOutputTokens: number;
+  readonly needs: Needs;
 }) =>
   Effect.gen(function* () {
     const endpoints = yield* listedEndpoints(options.model);
     const supplied = options.rates === undefined ? undefined : yield* givenRates(options.rates);
 
-    const eligible = endpoints
-      .flatMap((endpoint) => {
-        const maximum = endpoint.max_completion_tokens;
-        const context = endpoint.max_prompt_tokens ?? endpoint.context_length;
-        const prices = [endpoint.pricing, ...(endpoint.pricing.overrides ?? [])];
+    const endpoint = eligibleEndpoints(endpoints, {
+      maxOutputTokens: options.maxOutputTokens,
+      needs: options.needs,
+      supplied,
+    })[0];
 
-        const rates = {
-          input: Math.max(
-            ...prices.flatMap((price) => [
-              price.prompt,
-              price.input_cache_read ?? 0,
-              price.input_cache_write ?? 0,
-              price.input_cache_write_1h ?? 0,
-            ]),
-          ),
-          output: Math.max(...prices.map((price) => price.completion)),
-        };
+    if (endpoint === undefined)
+      return yield* refuse(
+        "no available endpoint supports every request parameter within its token/price bounds",
+      );
 
-        const outputParameter = endpoint.supported_parameters.includes("max_completion_tokens")
-          ? ("max_completion_tokens" as const)
-          : endpoint.supported_parameters.includes("max_tokens")
-            ? ("max_tokens" as const)
-            : undefined;
+    const rates: Rates = {
+      input: endpoint.inputPerMillion / 1e6,
+      output: endpoint.outputPerMillion / 1e6,
+    };
 
-        if (
-          endpoint.status !== 0 ||
-          /\/(flex|fast|priority)$/.test(endpoint.tag) ||
-          !Number.isSafeInteger(context) ||
-          context <= 0 ||
-          rates.input < 0 ||
-          rates.output < 0 ||
-          outputParameter === undefined ||
-          (maximum !== undefined && maximum !== null && options.maxOutputTokens > maximum) ||
-          (supplied !== undefined &&
-            (supplied.input < rates.input || supplied.output < rates.output))
-        )
-          return [];
-
-        // Price tiers and cache writes can exceed base pricing. Pin one endpoint and reserve its
-        // highest published rates across the entire context, including text, tools and screenshots.
-        return [
-          {
-            provider: endpoint.tag,
-            rates,
-            outputParameter,
-            requestUsd: context * rates.input + options.maxOutputTokens * rates.output,
-          },
-        ];
-      })
-      .sort((left, right) => left.requestUsd - right.requestUsd);
-
-    const bounds = eligible[0];
-
-    if (bounds === undefined)
-      return yield* refuse("no available endpoint has supported token/price bounds within --rates");
-
-    const { requestUsd, rates } = bounds;
-    const budget = yield* ledger(options.maxUsd, requestUsd);
+    const budget = yield* ledger(options.maxUsd, endpoint.requestUsd);
 
     if (yield* budget.exhausted)
       return yield* refuse(
-        `a call reserves $${requestUsd.toFixed(6)}, above --max-usd ${options.maxUsd}`,
+        `a call reserves $${endpoint.requestUsd.toFixed(6)}, above --max-usd ${options.maxUsd}`,
       );
 
     const withModel = <A, E, R>(
@@ -512,8 +582,8 @@ export const modelRunner = (options: {
           budgetedClient(native, account, {
             rates,
             maxOutputTokens: options.maxOutputTokens,
-            outputParameter: bounds.outputParameter,
-            provider: bounds.provider,
+            outputParameter: endpoint.outputParameter,
+            provider: endpoint.tag,
           }),
         ),
       ).pipe(
@@ -531,7 +601,7 @@ export const modelRunner = (options: {
       return effect.pipe(Effect.provide(languageModel));
     };
 
-    return { ...budget, withModel };
+    return { ...budget, endpoint, withModel };
   });
 
 export type ModelRunner = Effect.Success<ReturnType<typeof modelRunner>>;

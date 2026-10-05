@@ -1,6 +1,9 @@
 // What both runners share about one scheduled unit of work: its seed, its own browser, and how its
 // exit becomes a durable status. A wrong answer is a result; a broken capture, provider or browser
 // is not, and a refused or unstarted unit is neither.
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
 import { Cause, Effect, Exit, type Layer, Option, Schema } from "effect";
 import * as Agent from "effect-browser/Agent";
 import type { Browser } from "effect-browser/Browser";
@@ -8,7 +11,7 @@ import { BrowserError } from "effect-browser/BrowserError";
 import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
 
-import type { Calls } from "./Budget.ts";
+import type { Calls, Endpoint } from "./Budget.ts";
 
 /** The captured evidence cannot support a graded answer, so no model is asked about it. */
 export class EvidenceIncomplete extends Schema.TaggedError<EvidenceIncomplete>()(
@@ -18,6 +21,38 @@ export class EvidenceIncomplete extends Schema.TaggedError<EvidenceIncomplete>()
   override get message() {
     return `capture incomplete: ${this.detail}`;
   }
+}
+
+/** The checkout a result came from; null where git cannot say. */
+export interface Revision {
+  readonly commit: string | null;
+  /** Uncommitted changes make a result unreproducible from `commit` alone. */
+  readonly dirty: boolean | null;
+}
+
+const git = (...args: ReadonlyArray<string>) =>
+  execFileSync("git", args, {
+    cwd: fileURLToPath(new URL(".", import.meta.url)),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+
+export const revision: Effect.Effect<Revision> = Effect.try(() => ({
+  commit: git("rev-parse", "HEAD"),
+  dirty: git("status", "--porcelain").length > 0,
+})).pipe(Effect.orElseSucceed(() => ({ commit: null, dirty: null })));
+
+/** The configuration a result depends on, recorded with it. */
+export interface RunInfo {
+  readonly revision: Revision;
+  readonly model: string | null;
+  /** The pinned OpenRouter endpoint and its per-call reservation; null without a model. */
+  readonly endpoint: Endpoint | null;
+  readonly browser: string;
+  readonly humanize: boolean;
+  readonly maxOutputTokens: number;
+  readonly maxUsd: number;
+  readonly concurrency: number;
 }
 
 /** Derivation depends on task identity, never dispatch order or provider random draws. */

@@ -71,8 +71,11 @@ The model remains a caller choice. For the research runs, use `openai/gpt-6-luna
 to `medium` for operate tasks and `none` for understand tasks. `--reasoning` overrides both.
 
 Before each model call, the runner reserves a conservative upper bound against the shared
-`--max-usd` budget (default $2). It pins a compatible provider endpoint and uses its prompt-token limit, the highest
-listed tier/cache-write rates and `--max-output-tokens` (default 4,096). `--rates in,out` supplies
+`--max-usd` budget (default $2). It pins one provider endpoint that lists every parameter the run's
+requests send (a reasoning effort, the output-token limit, and tools or a JSON schema response
+format as the selected tasks need) and no per-request, image or audio price, since the request's
+price ceilings allow none. The reservation uses that endpoint's prompt-token limit, its highest
+listed tier, cache-write and reasoning rates, and `--max-output-tokens` (default 4,096). `--rates in,out` supplies
 provider price ceilings in USD per million tokens. Trials wait while active calls can release capacity. An actual billed receipt releases the unused reservation. With the caller's own provider key
 (BYOK), OpenRouter's `cost` is only its fee, so a BYOK receipt is charged that fee plus its
 `upstream_inference_cost`, and one without the upstream cost is uncertain. A missing receipt or
@@ -86,7 +89,9 @@ all further admission. Only non-streaming chat completions are budgeted: the cli
 streaming, decisions and raw generated requests before sending them.
 
 Each trial is one line of a JSON Lines file in `.work/bench/` at the repository root (ignored by git):
-the task, base and derived fixture seeds, effective reasoning, status and reason, the answer, any
+the task, base and derived fixture seeds, the run (source commit and whether the checkout was dirty,
+model, pinned endpoint with its rates and per-call reservation, browser, humanize, output-token
+limit, budget and concurrency), effective reasoning, status and reason, the answer, any
 error with its closed diagnostic, the call `accounting` (calls, tokens, known dollars, unresolved
 reservations and uncertain calls) and elapsed seconds including browser setup and cleanup. The ISO
 start time is a calendar date; elapsed time uses a monotonic clock.
@@ -132,7 +137,8 @@ model call; there is no automatic validator retry. Image resizing uses Chromium'
 canvas filter, so B reproduces the old payload dimensions and text limit rather than claiming
 bit-for-bit equivalence with the research prototype's Lanczos filter.
 
-The default manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
+The manifest records the source revision and the pinned endpoint before any call. The default
+manifest has 20 dense fixtures and 10 easy controls, with all three arms per case:
 90 calls in a paid run. Arm order varies deterministically by seed. Cases run concurrently, with
 one browser per case and the same captured evidence for its arms. A shared admission ledger bounds
 all model calls. An infrastructure failure or an unresolved charge stops new admissions; already

@@ -1,14 +1,20 @@
 // Deterministic free checks of shared admission, raw receipts and real browser ownership.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Ref, Schema } from "effect";
+import { ConfigProvider, Deferred, Effect, Fiber, Ref, Schema } from "effect";
 import { Browser } from "effect-browser/Browser";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import type { BrowserContext } from "playwright-core";
 
-import { budgetedClient, ledger } from "../Budget.ts";
+import {
+  budgetedClient,
+  eligibleEndpoints,
+  ledger,
+  ListedEndpoint,
+  modelRunner,
+} from "../Budget.ts";
 import { isolatedTrial, trialSeed } from "../Trial.ts";
 
 const receipt = (cost: number) => ({
@@ -349,6 +355,152 @@ describe("unbudgeted routes", () => {
       assert.strictEqual(raw._tag, "HttpClientError");
       assert.strictEqual(requests, 0);
       assert.strictEqual((yield* account.snapshot).calls, 0);
+    }),
+  );
+});
+
+const listed = (
+  tag: string,
+  supported: ReadonlyArray<string>,
+  pricing: Record<string, string>,
+): Record<string, unknown> => ({
+  tag,
+  status: 0,
+  context_length: 1000,
+  supported_parameters: supported,
+  pricing,
+});
+
+const everything = [
+  "max_tokens",
+  "reasoning",
+  "tools",
+  "tool_choice",
+  "response_format",
+  "structured_outputs",
+];
+
+const listing = [
+  listed("cheap/fp8", ["max_tokens"], { prompt: "0.0000001", completion: "0.0000001" }),
+  listed("fee", everything, { prompt: "0.0000001", completion: "0.0000001", request: "0.01" }),
+  listed("image", everything, { prompt: "0.0000001", completion: "0.0000001", image: "0.001" }),
+  listed("objects", ["max_tokens", "reasoning", "response_format", "structured_outputs"], {
+    prompt: "0.0000001",
+    completion: "0.0000002",
+  }),
+  listed("capable", everything, { prompt: "0.0000002", completion: "0.0000008" }),
+  listed("pricey", everything, { prompt: "0.000002", completion: "0.000008" }),
+];
+
+describe("endpoint pinning", () => {
+  it.effect("keeps only endpoints that serve every sent parameter under the price ceilings", () =>
+    Effect.gen(function* () {
+      const endpoints = yield* Schema.decodeUnknownEffect(Schema.Array(ListedEndpoint))(listing);
+
+      const operate = eligibleEndpoints(endpoints, {
+        maxOutputTokens: 100,
+        needs: { tools: true, structuredOutput: true },
+      });
+
+      const understand = eligibleEndpoints(endpoints, {
+        maxOutputTokens: 100,
+        needs: { tools: false, structuredOutput: true },
+      });
+
+      assert.deepStrictEqual(
+        operate.map((endpoint) => endpoint.tag),
+        ["capable", "pricey"],
+      );
+      assert.deepStrictEqual(
+        understand.map((endpoint) => endpoint.tag),
+        ["objects", "capable", "pricey"],
+      );
+      assert.deepStrictEqual(operate[0], {
+        tag: "capable",
+        contextTokens: 1000,
+        outputParameter: "max_tokens",
+        inputPerMillion: 0.2,
+        outputPerMillion: 0.8,
+        requestUsd: 1000 * 0.0000002 + 100 * 0.0000008,
+      });
+    }),
+  );
+
+  it.effect("records the pinned endpoint and sends its exact listed price ceilings", () =>
+    Effect.gen(function* () {
+      const sent: Array<unknown> = [];
+
+      const stub: typeof globalThis.fetch = async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+
+        if (url === "https://openrouter.ai/api/v1/models/openai/probe/endpoints")
+          return new Response(JSON.stringify({ data: { endpoints: listing } }), {
+            headers: { "content-type": "application/json" },
+          });
+        if (url !== "https://openrouter.ai/api/v1/chat/completions")
+          throw new Error("the test refuses " + url);
+        sent.push(JSON.parse(await new Response(init?.body).text()));
+
+        return new Response(
+          JSON.stringify({
+            id: "free-test",
+            object: "chat.completion",
+            created: 0,
+            model: "openai/probe",
+            system_fingerprint: null,
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: { role: "assistant", content: '{"result":1}' },
+              },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, cost: 0 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      };
+
+      const result = yield* Effect.gen(function* () {
+        const runner = yield* modelRunner({
+          model: "openai/probe",
+          rates: undefined,
+          maxUsd: 1,
+          maxOutputTokens: 100,
+          needs: { tools: true, structuredOutput: true },
+        });
+
+        const account = yield* runner.account;
+
+        yield* runner.withModel(
+          LanguageModel.generateObject({
+            prompt: "x",
+            schema: Schema.Struct({ result: Schema.Finite }),
+          }),
+          "none",
+          account,
+        );
+
+        return runner.endpoint;
+      }).pipe(
+        Effect.provideService(FetchHttpClient.Fetch, stub),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ OPENROUTER_API_KEY: "test-not-a-key" }),
+        ),
+      );
+
+      assert.strictEqual(result.tag, "capable");
+      assert.lengthOf(sent, 1);
+      assert.deepInclude(sent[0], {
+        provider: {
+          only: ["capable"],
+          allow_fallbacks: false,
+          require_parameters: true,
+          max_price: { prompt: "0.2", completion: "0.8", request: "0", image: "0", audio: "0" },
+        },
+      });
     }),
   );
 });

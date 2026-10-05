@@ -22,7 +22,15 @@ import {
 } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import * as Quote from "./QuoteComparison.ts";
-import { classify, isolatedTrial, type Reason, type Status, tally, trialSeed } from "./Trial.ts";
+import {
+  classify,
+  isolatedTrial,
+  type Reason,
+  revision,
+  type Status,
+  tally,
+  trialSeed,
+} from "./Trial.ts";
 
 const help = `Usage: bun run understand -- [options]
 
@@ -620,12 +628,9 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
       new URL("../.work/understand/" + createdAt.replace(/[:.]/g, "-") + "/", import.meta.url),
     );
 
-  // Exclusive creation makes an existing paid manifest immutable and prevents accidental replay.
+  // Exclusive creation makes an existing paid run directory immutable and prevents replay.
   yield* write(() => {
     mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, "manifest.json"), JSON.stringify(plan, null, 2) + "\n", {
-      flag: "wx",
-    });
     writeFileSync(join(directory, "results.jsonl"), "", { flag: "wx" });
   });
 
@@ -637,7 +642,21 @@ export const main = Effect.fnUntraced(function* (args: ReadonlyArray<string>, li
           rates: undefined,
           maxUsd: configuration.maxUsd,
           maxOutputTokens: configuration.maxOutputTokens,
+          needs: { tools: false, structuredOutput: true },
         }).pipe(Effect.exit);
+
+  // The pinned endpoint and the source revision are part of the plan, written before any call.
+  const recorded = {
+    ...plan,
+    revision: yield* revision,
+    endpoint: setup !== undefined && Exit.isSuccess(setup) ? setup.value.endpoint : null,
+  };
+
+  yield* write(() =>
+    writeFileSync(join(directory, "manifest.json"), JSON.stringify(recorded, null, 2) + "\n", {
+      flag: "wx",
+    }),
+  );
 
   if (setup !== undefined && Exit.isFailure(setup)) {
     const records = plan.pairs.flatMap((pair) =>

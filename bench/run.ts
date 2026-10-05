@@ -14,7 +14,16 @@ import { FetchHttpClient } from "effect/http";
 import { type Accounting, BenchError, efforts, modelRunner, noCalls, refuse } from "./Budget.ts";
 import * as Diagnostics from "./Diagnostics.ts";
 import { type Task, tasks } from "./Tasks.ts";
-import { classify, isolatedTrial, type Reason, type Status, tally, trialSeed } from "./Trial.ts";
+import {
+  classify,
+  isolatedTrial,
+  type Reason,
+  revision,
+  type RunInfo,
+  type Status,
+  tally,
+  trialSeed,
+} from "./Trial.ts";
 
 const help = `Usage: bun run bench -- [options]
 
@@ -65,9 +74,8 @@ interface TrialRecord {
   readonly baseSeed: number;
   readonly seed: number;
   readonly startedAt: string;
-  readonly model: string | null;
+  readonly run: RunInfo;
   readonly reasoning: string | null;
-  readonly browser: string;
   readonly status: Status;
   readonly reason: Reason;
   /** Null unless the trial was graded. */
@@ -150,19 +158,41 @@ const main = Effect.gen(function* () {
         )
       : Chromium.layer({ humanize: options.humanize, frameHistory: 1200 });
 
+  const selected = tasks.filter((candidate) => names.includes(candidate.name));
+
   const runner =
     model === undefined
       ? undefined
-      : yield* modelRunner({ model, rates: options.rates, maxUsd, maxOutputTokens });
+      : yield* modelRunner({
+          model,
+          rates: options.rates,
+          maxUsd,
+          maxOutputTokens,
+          needs: {
+            tools: selected.some((task) => task.kind === "operate"),
+            structuredOutput: selected.some((task) => task.kind === "understand"),
+          },
+        });
+
+  const run: RunInfo = {
+    revision: yield* revision,
+    model: model ?? null,
+    endpoint: runner?.endpoint ?? null,
+    browser: options.browser,
+    humanize: options.humanize,
+    maxOutputTokens,
+    maxUsd,
+    concurrency,
+  };
 
   const label = model?.replace(/[^\w.-]+/g, "_") ?? "scripted";
   const stamp = DateTime.formatIso(yield* DateTime.now).replace(/[:.]/g, "-");
   const directory = options.out ?? fileURLToPath(new URL("../.work/bench/", import.meta.url));
   const file = join(directory, `${stamp}-${label}.jsonl`);
 
-  const jobs = tasks
-    .filter((candidate) => names.includes(candidate.name))
-    .flatMap((task) => Array.from({ length: trials }, (_, index) => ({ task, trial: index + 1 })));
+  const jobs = selected.flatMap((task) =>
+    Array.from({ length: trials }, (_, index) => ({ task, trial: index + 1 })),
+  );
 
   yield* write(() => mkdirSync(directory, { recursive: true }));
 
@@ -211,9 +241,8 @@ const main = Effect.gen(function* () {
           baseSeed,
           seed,
           startedAt: DateTime.formatIso(started),
-          model: model ?? null,
+          run,
           reasoning: model === undefined ? null : effectiveReasoning,
-          browser: options.browser,
           ...outcome,
           detail:
             exit === undefined
