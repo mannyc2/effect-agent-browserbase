@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # Materialize the pinned Node and Bun on a host that ships different versions.
-# workspace.sh and run-acceptance.sh both assert these exact versions before doing
-# anything, so a session without them cannot install, format or run acceptance.
 # Print a PATH prefix on stdout; everything else goes to stderr so callers can use
 # toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env".
 set -euo pipefail

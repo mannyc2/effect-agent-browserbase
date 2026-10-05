@@ -1,115 +1,45 @@
 # Contributing
 
-Open a focused PR against `main`. Explain behavior changes and test evidence in the PR; preserve the established ownership, error, security and dependency-direction contracts. Do not bundle runtime refactors into packaging or CI maintenance.
+Open a focused PR against `main` that explains the change and how it was checked. CI runs
+`bun run ready` on every PR.
 
 ## Toolchain
 
-| Input                  | Pin                                                                |
-| ---------------------- | ------------------------------------------------------------------ |
-| Node                   | 24.14.1 (`.node-version`)                                          |
-| Bun                    | 1.4.2                                                              |
-| Effect family          | 4.0.0-rc.117                                                       |
-| effect-agent / testing | 0.1.0-beta.165                                                     |
-| Playwright             | playwright-core 1.63.0                                             |
-| TypeScript / Vite+     | 7.0.2 / 0.3.2                                                      |
-| Effect tsgo / Oxlint   | 0.45.0 / 1.82.0                                                    |
-| oxlint-tsgolint        | 7.0.2001                                                           |
+| Input                | Pin                          |
+| -------------------- | ---------------------------- |
+| Node                 | 24.14.1 (`.node-version`)    |
+| Bun                  | 1.4.2                        |
+| Effect               | 4.0.0                        |
+| Playwright           | playwright-core 1.63.0       |
+| TypeScript / Vite+   | 7.0.2 / 0.3.2                |
+| Effect tsgo / Oxlint | 0.45.0 / 1.82.0              |
 
-These are the verified acceptance targets, not a promise that every version allowed by the engine/peer ranges has been tested. Every manifest names one exact version of each dependency, `bun.lock` is committed, and every install is frozen; `tools/test/maintenance.test.mjs` refuses two manifests that disagree. Dependency changes belong in a coordinated manifest/lockfile update, not an unreviewed install-time re-resolution. Dependabot opens one weekly PR for Effect and Effect Agent together (`.github/dependabot.yml`); it is reviewed and fully accepted like any other change, and `agent-browser`'s exact `effect-agent` peer moves with its development version. Other dependencies are updated by hand.
+Every manifest names exact versions and `bun.lock` is committed. On a host with a different Node or
+Bun, `toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"` installs the
+pinned ones into `.work/toolchain` (linux-x64, checked against pinned digests).
 
-## Working locally
-
-The root `package.json` is private and prevents accidental root publication. It declares the Bun workspace (`packages/*`) and the root tooling: Vite+, Oxfmt, Oxlint, the patched TypeScript and the two package checks in `scripts/`.
-
-Release tooling is separately pinned in `tools/release/package.json` and `bun.lock`: ts-release core/npm 0.4.1 and Effect 4.0.0-rc.115. From that directory run `bun install --frozen-lockfile --ignore-scripts`, `bun run check`, `bun test`, and `bun run build`. The package separates `src/`, `test/`, and build-only `scripts/`. Its TypeScript application uses Effect schemas for configuration, named operations, and scoped Git resources; the shipped ts-release CLI owns execution, interruption, reports, and exit codes. Native Bundle and Plan data are the retained authority, with no parallel metadata document. The tests use synthetic registry responses and local Git repositories; they need no credentials and do not publish. `Native release recovery` also extracts the packaged host and checks its imports and native CLI with Node 22.22.2, independently of the library's Node 24.14.1 pin. Keep release dependencies out of all three public packages and the root workspace.
-
-The workspace installer and every acceptance profile assert the pinned Node and Bun. On a host that ships different versions, install them first:
+## Working
 
 ```sh
-toolchain_env="$(bash tools/pinned-toolchain.sh)" && eval "$toolchain_env"
-```
-
-The assignment preserves installer failure; do not wrap the command substitution directly in `eval`, which would hide a failed download. Publisher access is required for a first install.
-
-It verifies each published release against a pinned digest, installs into the ignored `.work/toolchain`, and reuses an existing install that already reports the pinned version.
-
-```sh
-# Fast repository-tooling checks; no third-party installs or network required.
-npm_config_offline=true node --test tools/test/*.test.mjs
-
-# Install this checkout from the frozen lockfile, with lifecycle scripts disabled.
 bun install --frozen-lockfile --ignore-scripts
-./node_modules/.bin/vp run patch:tsgo
+bun run patch:tsgo                  # Effect diagnostics in tsc and oxlint
+./node_modules/.bin/playwright-core install chromium
 
-./node_modules/.bin/vp run -F effect-agent-browser check
-cd packages/agent-browser
-# Canonical formatting, from the Oxfmt that Vite+ carries. `check` enforces it;
-# hand-formatting to satisfy that gate does not reproduce this output.
-../../node_modules/.bin/vp fmt
-../../node_modules/.bin/vp test --run
-../../node_modules/.bin/vp run install:test-browser
-../../node_modules/.bin/vp run test:native
-../../node_modules/.bin/vp pack
+bun run ready                       # fmt check, lint, typecheck, test, build
 ```
 
-`node tools/verify-launch-contract.mjs` re-derives the committed session-create inventory from both authorities `Contract.ts` cites: the pinned SDK revision, checked against the digest that records the bytes it was read from, and the published OpenAPI specification, which is unpinned so that a field Browserbase adds fails the check instead of passing as a silent gap. It also reports whether a newer SDK release exists; `--require-current` turns a stale pin into a failure. It needs network access and is therefore run deliberately rather than from acceptance, which stays offline. The offline tooling tests cover its parsing rules against synthetic sources.
+- `bun run fmt` formats. `oxlint -c lint/.oxlintrc.json --fix <files>` fixes the stylistic rules
+  that `fmt` leaves alone. Fix a lint finding or Effect diagnostic rather than suppress it.
+- Read `node_modules/effect/AGENTS.md` before writing Effect code.
+- Tests live in each package's `test/` and run against a real local Chromium with pages served by
+  the test itself. Scripted models stand in for real ones: no test calls a model or a hosted browser.
+- The bench (`bench/`) is the place for evidence about models; its README says how to run it.
 
-Native video tests need caller-installed FFmpeg/ffprobe. They use real local Chromium and loopback fixtures, not Browserbase sessions. They require no API keys or paid inference. Production imports remain lazy and browser-artifact-only consumers do not need Playwright.
+## Layout
 
-`bash tools/workspace.sh <new directory>` installs the committed HEAD into a fresh directory, as acceptance and the hosted workflow do. Only tracked files enter it, so ignored downloads, credentials and build products cannot, and an existing destination is refused rather than silently mixed with new source.
-
-Owned code is held to a strict lint and compiler policy. `lint/.oxlintrc.json` is that policy: an Oxlint config that extends `@effect/tsgo`'s recommended preset and adds rules grouped by the failure each prevents. Library code gets every rule, except the async, Promise and timer rules in the Promise-based Playwright driver and scripted engine; tests, fixtures, hosted checks and examples skip most Effect-native rules, since they drive the platform itself. Acceptance runs Oxlint with this file alone over the owned paths and denies warnings, so the preset's warnings block too. It restates the rules Effect Agent's root config enforced on these packages while they lived in its workspace, and loads that project's stylistic and export plugins, adapted into `lint/plugins/` under the MIT License (`LICENSE-effect-agent`). The root `vite.config.ts` carries only the matching Oxfmt defaults. The `effecttsgo` rules exist only because `patch:tsgo` patches Oxlint and tsgolint as well as `tsc` (`effect-tsgo patch --typescript --oxlint`), so Oxlint and `oxlint-tsgolint` are pinned to versions `@effect/tsgo` supports. The owned tsconfigs turn the Effect language service's diagnostics off, so the patched `tsc` only typechecks and Oxlint reports each Effect diagnostic once. They add matching strict compiler checks, and `tools/test/lint-policy.test.mjs` keeps the four projects and the config aligned. Fix a finding, an Effect diagnostic included, rather than suppress it. A genuine exception names its reason in the directive, `// oxlint-disable-next-line <rule> -- <reason>`, or in a comment directly above `@effect-diagnostics-next-line`, which Oxlint honours for Effect's rules. Acceptance rejects an Oxlint directive that no longer suppresses anything.
-
-## Source and package integration
-
-The owned packages share one coordinated version, released on the `beta` dist-tag. `effect-agent-browser` peers on exactly the Effect Agent release it was accepted with. Shared runtime changes require both Chromium and Browserbase composition checks; adapter changes exercise the same tools with each source.
-
-Every test belongs to the package whose code it tests. Owner regressions in `packages/browser/test` run the real session owner over the scripted engine, and that package's `test/fixtures/ScriptedOwner.ts` replaces native behaviour only where a test scripts it. Provider regressions in `packages/browserbase/test` compose the real account and browser Layers through `effect-browserbase/testing`. A package's tests reach another package only through its public exports, so a regression that needs both sides uses the public testing entries rather than either package's internals. `effect-browser` and `effect-browserbase` compile with `erasableSyntaxOnly`, so their source stays runnable under Node's type stripping and Bun without a transform.
-
-Installed consumers are `resources` (provider resources and both scripted testing entry points, no Playwright/framework), `browser` (Chromium, no Browserbase/framework), `generic` (hosted browser integration), `agent` (Chromium plus the common Agent adapter, no Browserbase), and `agent-hosted` (Browserbase plus the same adapter). Each checks actual tarballs on Node and Bun; every native suite belongs to exactly one native consumer profile. Source tests are never substituted for installed-package validation.
-
-`scripts/verify-package-exports.ts` and `scripts/verify-package-purity.ts`, adapted from Effect Agent, run as the `exports` and `purity` stages. The first checks each export map against its source, pack entries and root barrel, and that every import of another package, Effect Agent included, names a public export and a declared dependency. The second bundles every production entry point and refuses test-only code, the Chromium process module outside `effect-browser/chromium`, Browserbase in the provider-independent packages, and Effect Agent in the generic ones.
-
-Each consumer uses its pinned TypeScript compiler to check the installed declarations and compare their exported names with the source entry points. This catches both missing public types and private declaration helpers accidentally exposed by the build. Runtime checks separately verify that root namespaces and subpath imports share the same exports and browser owner.
-
-## Acceptance profiles
-
-Commit the candidate before running acceptance in Ubuntu 24.04:
-
-```sh
-# Routine package feedback; all owned native tests run against the actual tarballs.
-bash tools/run-acceptance.sh library
-
-# Library plus the in-source native suites, also the default with no argument.
-bash tools/run-acceptance.sh full
-```
-
-Every profile rejects dirty source and reused output directories, asserts the same Node/Bun pins, records the source SHA, and retains raw command exits and monotonic stage durations. The profile is written to `acceptance-profile.txt` and the Actions summary. A focused pass is not a full-integration pass.
-
-| Profile   | Required checks                                                                                                                                                                                                                                                                                                                                              | Selection                                                                                                                                  |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `docs`    | Tooling tests, source-bound diff revalidation, whitespace and clean source                                                                                                                                                                                                                                                                                   | Only regular root documentation and `docs/**/*.md`; no package/runtime validation is claimed                                               |
-| `library` | Tooling, frozen workspace install, early canonical format/lint and all three package types, all package unit suites/builds, exports/purity, all three candidate tarballs, all five strict consumers and every generic/Agent native test from those tarballs, release identity and the three-package dry-run                                                          | Owned package, tooling, workflow and media changes                                                                                         |
-| `full`    | All library checks plus the separate source-native suites of all three packages                                                                                                                                                                                                                                                                              | Integration/pin/lockfile changes, unknown paths, unavailable/empty diff, scheduled integration, default manual and reusable release calls |
-
-The library profile runs the **complete native test files** in clean installed-package consumers rather than repeating them against source and packed output on every PR. All maintained examples are still compiled, all public exports are checked, Node and Bun both execute the resource, generic and actual AgentRuntime workflows, and every declaration command must return raw zero with `skipLibCheck:false`. No test is retried or skipped to obtain a pass. Native worker concurrency and assertions are unchanged.
-
-Format/lint/types are checked before browser installation. Focused profiles stop after prerequisite failures while retaining partial evidence; full acceptance continues independent checks as before. Browser installation explicitly disables task-result caching because an old success cannot restore an external browser installation. FFmpeg/ffprobe are installed only when absent and their versions are always recorded. These scripts install Linux native dependencies, not a portable macOS/Windows toolchain.
-
-`tools/ci-plan.mjs` classifies the complete local Git diff, not a truncated API filename list. PRs compare against the merge base; pushes and merge groups use their event's base. Renames include both old and new paths. Mode changes, unknown paths and unavailable bases fail toward more validation. The docs profile additionally recomputes its recorded diff and exact source SHA before accepting it.
-
-## CI feedback, evidence and release
-
-`Library CI` reports the same **Unpaid acceptance** check for every PR, including stacked PRs and documentation-only changes. It also runs on `main`, merge groups, manual requests and daily full integration. There is no workflow-level path filter that leaves a required check pending. Superseded PR/main runs are cancelled; release calls and deliberate full runs are not cancelled by a different event's feedback run. No repository settings are changed by the workflow.
-
-Routine library feedback targets a few minutes. Use `timings.tsv` and the job summary to measure actual stage cost; distinguish queue delay, runner setup, verification and artifact upload. Long full integration is explicitly separate, not labelled a fast PR test. Manual callers can choose `library` or `full`; the CLI and reusable release validation default to `full`. Only successful **full** runs emit the reusable `artifact_id` and `release_set_sha256`, after checking the exact required stage inventory and raw exits. Focused artifacts cannot authorize the publisher.
-
-Successful evidence retains the three immutable tarballs, candidate and package-source archives, the workspace lockfile, logs, video, receipts, checksums, consumer configs and exact lockfiles. Tested consumer fixtures are archived with their modes; installed `node_modules` are left outside the upload instead of repeatedly transferring hundreds of megabytes of reproducible inputs. Failed or interrupted runs retain their complete installed consumer workspaces, including broken dependency declarations. No existing failure artifacts are pruned. Artifact compression is low, and all files named by the checksum inventory, including hidden diagnostic files, are retained.
-
-Results, downloaded videos, build directories and archives remain ignored and belong in Actions artifacts, not commits. The exception is declared-budget demo media under `docs/media/`, checked by the tooling suite.
-
-This design avoids parallel browser workers and never caches browser binaries: Playwright [does not generally recommend it](https://playwright.dev/docs/ci#caching-browsers), and an old success cannot restore an external installation. Removing unrelated work and duplicate executions came first.
-
-Repository settings are separate from files in this PR. Require PRs and the acceptance check on `main`, prevent force pushes/deletion, and protect `v*` tags from unauthorized creation or updates. Set review requirements appropriate to your maintainer team; CODEOWNERS alone does not enforce reviews. Dependency-update PRs are review-only and not auto-merged.
-
-Publishing and hosted checks require separate authorization. Hosted runs have their own manual, default-off workflow and protected environment; see [hosted runs](docs/HOSTED.md), [releasing](docs/RELEASING.md) and [security](SECURITY.md). Do not add a hosted credential to `Library CI` or to any trigger a pull request can reach.
+- `packages/browser` (`effect-browser`): the browser, pages, snapshots, frames, events, tools, the
+  agent and moments. It depends on `effect` and `playwright-core` only.
+- `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
+  `Browser`. It depends on `effect-browser` through its public entry points.
+- `bench`: private graded tasks, depending on both.
+- `tools/`: release tooling and the pinned-toolchain installer.
