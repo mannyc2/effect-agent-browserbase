@@ -17,6 +17,7 @@ import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
 import { BrowserEvent } from "./BrowserEvent.ts";
 import { Frame } from "./Frame.ts";
+import * as Usage from "./internal/usage.ts";
 import type * as Page from "./Page.ts";
 import { Snapshot } from "./Snapshot.ts";
 
@@ -192,17 +193,23 @@ const prompt = (moment: Moment, instructions: string | undefined): Prompt.Prompt
   ]);
 };
 
+/** A model's account of a moment, and what the call cost. */
+export interface Described<A> {
+  readonly value: A;
+  readonly usage: Usage.Usage;
+}
+
 /** Describe a moment as a `Description`. */
 export function describe(
   moment: Moment,
   options?: DescribeOptions,
-): Effect.Effect<Description, AiError.AiError, LanguageModel.LanguageModel>;
+): Effect.Effect<Described<Description>, AiError.AiError, LanguageModel.LanguageModel>;
 
 /** Describe a moment in the shape of `schema`. */
 export function describe<A, I extends Record<string, unknown>>(
   moment: Moment,
   options: DescribeOptions & { readonly schema: Schema.Codec<A, I> },
-): Effect.Effect<A, AiError.AiError, LanguageModel.LanguageModel>;
+): Effect.Effect<Described<A>, AiError.AiError, LanguageModel.LanguageModel>;
 
 export function describe(
   moment: Moment,
@@ -215,7 +222,10 @@ export function describe(
     schema: options.schema ?? Description,
     objectName: "moment",
   }).pipe(
-    Effect.map((response) => response.value),
+    Effect.map((response) => ({
+      value: response.value,
+      usage: Usage.add(Usage.empty, response.usage),
+    })),
     Effect.withSpan("Moment.describe"),
   );
 }
@@ -225,7 +235,7 @@ export const describeNow = (
   page: Page.Page,
   options: CaptureOptions & DescribeOptions = {},
 ): Effect.Effect<
-  Description,
+  Described<Description>,
   AiError.AiError | BrowserError,
   Browser | LanguageModel.LanguageModel
 > => capture(page, options).pipe(Effect.flatMap((moment) => describe(moment, options)));

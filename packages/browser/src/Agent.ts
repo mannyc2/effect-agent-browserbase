@@ -14,7 +14,10 @@ import { type AiError, Chat, type LanguageModel, Prompt, Tool, Toolkit } from "e
 
 import type { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
+import * as Usage from "./internal/usage.ts";
 import * as Tools from "./Tools.ts";
+
+export type { Usage } from "./internal/usage.ts";
 
 /** The model used every step it was given without finishing. */
 export class StepLimit extends Schema.TaggedError<StepLimit>()("StepLimit", {
@@ -43,13 +46,6 @@ export class AgentError extends Schema.TaggedError<AgentError>()("AgentError", {
   }
 }
 
-export interface Usage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  /** Input tokens the provider read from its prompt cache, included in `inputTokens`. */
-  readonly cachedInputTokens: number;
-}
-
 /** One model call and the tool calls it made, for logging, narration or a live view. */
 export interface Step {
   readonly step: number;
@@ -61,18 +57,18 @@ export interface Step {
     readonly result: unknown;
     readonly isFailure: boolean;
   }>;
-  readonly usage: Usage;
+  readonly usage: Usage.Usage;
 }
 
 export interface Result<A> {
   readonly answer: A;
   readonly steps: number;
-  readonly usage: Usage;
+  readonly usage: Usage.Usage;
   /** The whole conversation, for logs and for picking a run up later. */
   readonly history: Prompt.Prompt;
 }
 
-export interface Options {
+export interface Options<E = never> {
   /** Model calls before stopping with `StepLimit`. Defaults to 30. */
   readonly maxSteps?: number | undefined;
   /** More guidance for the system prompt, such as a site's rules or what matters in the task. */
@@ -82,8 +78,8 @@ export interface Options {
   /** Show the model a picture of the page at the start, as well as a snapshot. Defaults to false. */
   readonly startWithScreenshot?: boolean | undefined;
   readonly tools?: Tools.Options | undefined;
-  /** Runs after every model call. */
-  readonly onStep?: ((step: Step) => Effect.Effect<void>) | undefined;
+  /** Runs after every model call. Failing stops the run with that error, such as a spent budget. */
+  readonly onStep?: ((step: Step) => Effect.Effect<void, E>) | undefined;
 }
 
 const system = (instructions: string | undefined) =>
@@ -142,28 +138,13 @@ const picturesMessage = (pictures: ReadonlyArray<Tools.Picture>) =>
     ]),
   });
 
-const addUsage = (
-  total: Usage,
-  usage: {
-    readonly inputTokens: {
-      readonly total?: number | undefined;
-      readonly cacheRead?: number | undefined;
-    };
-    readonly outputTokens: { readonly total?: number | undefined };
-  },
-): Usage => ({
-  inputTokens: total.inputTokens + (usage.inputTokens.total ?? 0),
-  outputTokens: total.outputTokens + (usage.outputTokens.total ?? 0),
-  cachedInputTokens: total.cachedInputTokens + (usage.inputTokens.cacheRead ?? 0),
-});
-
-const loop = (
+const loop = <E>(
   answerSchema: Schema.Codec<unknown, unknown>,
   task: string,
-  options: Options,
+  options: Options<E>,
 ): Effect.Effect<
   Result<unknown>,
-  AgentError | AiError.AiError | BrowserError,
+  AgentError | AiError.AiError | BrowserError | E,
   Browser | LanguageModel.LanguageModel
 > =>
   Effect.gen(function* () {
@@ -213,7 +194,7 @@ const loop = (
     ]);
 
     let next: Array<Prompt.Message> = [];
-    let usage: Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+    let usage = Usage.empty;
     let idle = 0;
 
     if (options.startWithScreenshot === true) {
@@ -235,12 +216,9 @@ const loop = (
         concurrency: 1,
       });
 
-      const stepUsage = addUsage(
-        { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
-        response.usage,
-      );
+      const stepUsage = Usage.add(Usage.empty, response.usage);
 
-      usage = addUsage(usage, response.usage);
+      usage = Usage.add(usage, response.usage);
       if (options.onStep !== undefined) {
         yield* options.onStep({
           step,
@@ -300,28 +278,28 @@ const loop = (
   });
 
 /** Run a task to its end. The answer is a string. */
-export function run(
+export function run<E = never>(
   task: string,
-  options?: Options,
+  options?: Options<E>,
 ): Effect.Effect<
   Result<string>,
-  AgentError | AiError.AiError | BrowserError,
+  AgentError | AiError.AiError | BrowserError | E,
   Browser | LanguageModel.LanguageModel
 >;
 
 /** Run a task to its end, with an answer of the given shape. */
-export function run<A, I>(
+export function run<A, I, E = never>(
   task: string,
-  options: Options & { readonly answer: Schema.Codec<A, I> },
+  options: Options<E> & { readonly answer: Schema.Codec<A, I> },
 ): Effect.Effect<
   Result<A>,
-  AgentError | AiError.AiError | BrowserError,
+  AgentError | AiError.AiError | BrowserError | E,
   Browser | LanguageModel.LanguageModel
 >;
 
-export function run(
+export function run<E>(
   task: string,
-  options: Options & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
+  options: Options<E> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
   return loop(options.answer ?? Schema.String, task, options).pipe(Effect.withSpan("Agent.run"));
 }

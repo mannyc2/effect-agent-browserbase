@@ -3,14 +3,15 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "bench"
   ],
   "packageManager": "bun@1.4.2",
   "scripts": {
     "patch:tsgo": "effect-tsgo patch --typescript --oxlint",
-    "fmt": "vp fmt packages lint vite.config.ts",
-    "fmt:check": "vp fmt --check packages lint vite.config.ts",
-    "lint": "oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages",
+    "fmt": "vp fmt packages bench lint vite.config.ts",
+    "fmt:check": "vp fmt --check packages bench lint vite.config.ts",
+    "lint": "oxlint -c lint/.oxlintrc.json --deny-warnings --report-unused-disable-directives-severity=error packages bench",
     "check": "bun run --filter '*' check",
     "test": "bun run --filter '*' test",
     "build": "bun run --filter '*' build",

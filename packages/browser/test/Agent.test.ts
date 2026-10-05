@@ -13,6 +13,8 @@ import { Site, SiteLayer } from "./fixtures.ts";
 
 type Turn = (prompt: Prompt.Prompt) => ReadonlyArray<Response.PartEncoded>;
 
+class Spent extends Schema.TaggedError<Spent>()("Spent", {}) {}
+
 /** A model that answers each call with the next turn, and keeps the prompts it was given. */
 const scripted = (turns: ReadonlyArray<Turn>) => {
   const prompts: Array<Prompt.Prompt> = [];
@@ -200,6 +202,21 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("stops with the error onStep fails with, before calling the model again", () =>
+    Effect.gen(function* () {
+      yield* start("/next");
+      const wait = () => [call("browser_wait", { seconds: 0 }), finish];
+      const model = scripted([wait, wait, wait]);
+
+      const stopped = yield* Agent.run("Wait.", {
+        onStep: (step) => (step.step === 2 ? Effect.fail(new Spent()) : Effect.void),
+      }).pipe(Effect.provide(model.layer), Effect.flip);
+
+      assert.strictEqual(stopped._tag, "Spent");
+      assert.strictEqual(model.prompts.length, 2);
+    }),
+  );
+
   it.effect("plays a canvas game by point and follows tabs", () =>
     Effect.gen(function* () {
       const page = yield* start("/slots");
@@ -269,13 +286,16 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         },
       ]);
 
-      const description = yield* Moment.describe(moment).pipe(Effect.provide(model.layer));
+      const { value: description, usage } = yield* Moment.describe(moment).pipe(
+        Effect.provide(model.layer),
+      );
 
       assert.strictEqual(moment.frames.length, 2);
       assert.isTrue(
         moment.events.some((event) => event._tag === "Action" && event.name === "click"),
       );
       assert.strictEqual(description.activity, "spinning the reels");
+      assert.deepStrictEqual(usage, { inputTokens: 100, outputTokens: 10, cachedInputTokens: 40 });
     }),
   );
 });
