@@ -109,7 +109,8 @@ const watch = Effect.gen(function* () {
   batches. If the browser is gone, the run fails with its `BrowserError` rather than calling the
   model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
   is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
-  that calls a tool that does not exist: none of its calls run.
+  that calls a tool that does not exist or passes arguments that are not JSON: none of its calls
+  run. A provider reply its client cannot decode ends the run instead.
 - `browser_navigate` and `browser_tabs` open only http and https addresses, `data:` URLs and
   `about:blank`; a model cannot open a local file. An address without a scheme, such as
   `example.com` or `localhost:3000`, opens over HTTPS, or HTTP on loopback; `Page.goto` reads

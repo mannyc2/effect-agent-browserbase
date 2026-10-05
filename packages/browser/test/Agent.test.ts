@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { assert, expectTypeOf, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
-import { type AiError, LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import { AiError, LanguageModel, Prompt, type Response, Tool, Toolkit } from "effect/ai";
 import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput";
 import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
 import type { BrowserContext } from "playwright-core";
@@ -69,6 +69,25 @@ const slowRegistration = (context: BrowserContext, delay: number): BrowserContex
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+
+/** A model that answers each call with the next reply, failures included. */
+const replies = (
+  outcomes: ReadonlyArray<Effect.Effect<Array<Response.PartEncoded>, AiError.AiError>>,
+) => {
+  const prompts: Array<Prompt.Prompt> = [];
+
+  const model = LanguageModel.make({
+    generateText: (options) =>
+      Effect.suspend(() => {
+        prompts.push(options.prompt);
+
+        return outcomes[prompts.length - 1] ?? Effect.die(`no reply ${prompts.length}`);
+      }),
+    streamText: () => Stream.empty,
+  });
+
+  return { model, prompts };
+};
 
 let calls = 0;
 
@@ -312,6 +331,56 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.match(JSON.stringify(steps[0]?.results[2]?.result), /not executed/i);
       assert.strictEqual(tracked.observations.length, 2);
     }),
+  );
+
+  it.effect(
+    "asks again after unreadable arguments, but ends on a provider's unreadable reply",
+    () =>
+      Effect.gen(function* () {
+        yield* start("/next");
+
+        // The failures an adapter raises: its parse of a call's arguments, which is model output,
+        // and its client's decoding of the service's reply, which is not.
+        const unparsable = AiError.make({
+          module: "OpenRouterLanguageModel",
+          method: "makeResponse",
+          reason: new AiError.ToolParameterValidationError({
+            toolName: "browser_snapshot",
+            description: "Failed to securely JSON parse tool parameters: SyntaxError",
+          }),
+        });
+
+        const undecodable = AiError.make({
+          module: "OpenRouterClient",
+          method: "createChatCompletion",
+          reason: new AiError.InvalidOutputError({ description: "Expected a chat completion" }),
+        });
+
+        const corrected = replies([
+          Effect.fail(unparsable),
+          Effect.succeed([call("done", { answer: "read" }), finish]),
+        ]);
+
+        const result = yield* Agent.run("Read the page.").pipe(
+          Effect.provideServiceEffect(LanguageModel.LanguageModel, corrected.model),
+        );
+
+        assert.strictEqual(result.answer, "read");
+        assert.include(
+          textOf(corrected.prompts[1] ?? Prompt.empty),
+          "Your call to browser_snapshot could not be read",
+        );
+
+        const ended = replies([Effect.fail(undecodable)]);
+
+        const failure = yield* Agent.run("Read the page.").pipe(
+          Effect.provideServiceEffect(LanguageModel.LanguageModel, ended.model),
+          Effect.flip,
+        );
+
+        assert.strictEqual(failure, undecodable);
+        assert.strictEqual(ended.prompts.length, 1);
+      }),
   );
 
   it.effect("asks again after a call to an unknown tool, without running any call", () =>
