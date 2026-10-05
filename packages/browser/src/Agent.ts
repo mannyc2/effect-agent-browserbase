@@ -3,18 +3,18 @@
  * an answer with `done` or stops with `give_up`.
  *
  * Any `effect/ai` `LanguageModel` drives it. Tool calls run one at a time, in the order the model
- * made them. Pictures the tools take go to the model in a user message after the tool results.
- * Only the latest few stay in the conversation: older ones are replaced by a note, several at a
- * time, so a provider's prompt cache keeps most of the conversation between steps.
+ * made them, halting on failure or completion. One observation follows each turn; pictures travel
+ * in a user message after the tool results. Only the latest few stay in the conversation: older
+ * ones are replaced by a note, several at a time, so a provider's prompt cache keeps most of the
+ * conversation between steps.
  *
  * @since 0.3.0
  */
-import { Effect, Option, Ref, Schema } from "effect";
-import { type AiError, Chat, type LanguageModel, Prompt, Tool, Toolkit } from "effect/ai";
+import { Context, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
-import type { Browser } from "./Browser.ts";
-import type { BrowserError } from "./BrowserError.ts";
 import * as Usage from "./internal/usage.ts";
+import type { Observation, ObservationMode } from "./Page.ts";
 import * as Tools from "./Tools.ts";
 
 export type { Usage } from "./internal/usage.ts";
@@ -68,15 +68,19 @@ export interface Result<A> {
   readonly history: Prompt.Prompt;
 }
 
-export interface Options<E = never> {
+type ExtraTools = Record<string, Tool.Any>;
+
+export interface Options<E = never, Extra extends ExtraTools = {}> {
   /** Model calls before stopping with `StepLimit`. Defaults to 30. */
   readonly maxSteps?: number | undefined;
   /** More guidance for the system prompt, such as a site's rules or what matters in the task. */
   readonly instructions?: string | undefined;
   /** Pictures kept in the conversation. Defaults to 3. */
   readonly keepPictures?: number | undefined;
-  /** Show the model a picture of the page at the start, as well as a snapshot. Defaults to false. */
-  readonly startWithScreenshot?: boolean | undefined;
+  /** What the model sees initially and after each turn. Defaults to both. */
+  readonly observation?: ObservationMode | undefined;
+  /** Additional tools; their definitions and handlers take precedence on a name clash. */
+  readonly additionalTools?: Toolkit.Toolkit<Extra> | undefined;
   readonly tools?: Tools.Options | undefined;
   /** Runs after every model call. Failing stops the run with that error, such as a spent budget. */
   readonly onStep?: ((step: Step) => Effect.Effect<void, E>) | undefined;
@@ -88,11 +92,12 @@ const system = (instructions: string | undefined) =>
     "",
     "Seeing the page:",
     "- browser_snapshot gives a text outline of the viewport. Controls carry refs such as e12 for the other tools. Refs from an old snapshot can be stale.",
-    "- browser_screenshot shows the viewport as a picture in the next message. Its pixel coordinates are viewport coordinates: use them as x and y for anything without a ref, such as a canvas game, a chart or a video.",
-    "- Every action answers with what it did and a fresh snapshot of the viewport.",
+    "- The observation after each turn shows the viewport as an outline, a picture, or both. Picture coordinates are viewport coordinates: use x and y for anything without a ref, such as a canvas game, a chart or a video.",
+    "- Tool calls return receipts. One fresh observation follows the whole batch.",
     "",
     "Acting:",
-    "- Prefer refs. Use x and y for what the snapshot cannot show.",
+    "- Prefer refs when an outline is available. Use x and y for what the outline cannot show.",
+    "- Batch two or more predictable steps in one turn. Calls run in order and stop at the first failure; remaining calls are not executed. Coordinates in a batch refer to the observation before it.",
     "- If an action fails and says it may have taken effect, look at the page before you repeat it.",
     "- Work on your own. Do not ask the user anything; if something blocks you, try another way.",
     "- When the task is done, call done with the answer. If it cannot be done, call give_up with the reason.",
@@ -130,23 +135,93 @@ const prunePictures = (prompt: Prompt.Prompt, keep: number): Prompt.Prompt => {
   );
 };
 
-const picturesMessage = (pictures: ReadonlyArray<Tools.Picture>) =>
-  Prompt.makeMessage("user", {
-    content: pictures.flatMap((picture) => [
-      Prompt.makePart("text", { text: picture.caption }),
-      Prompt.makePart("file", { mediaType: picture.image.mediaType, data: picture.image.data }),
-    ]),
-  });
+const observationMessage = (observation: Observation) => {
+  const content: Array<Prompt.UserMessagePart> = [
+    Prompt.makePart("text", {
+      text: observation.snapshot?.rendered ?? "Observation of the current viewport.",
+    }),
+  ];
 
-const loop = <E>(
+  if (observation.image !== undefined) {
+    content.push(
+      Prompt.makePart("text", {
+        text: `Screenshot: ${observation.image.width}x${observation.image.height}. Its pixel coordinates are viewport coordinates.`,
+      }),
+      Prompt.makePart("file", {
+        mediaType: observation.image.mediaType,
+        data: observation.image.data,
+      }),
+    );
+  }
+
+  return Prompt.makeMessage("user", { content });
+};
+
+// Normal resolution recovers individual validation failures; disabling it rejects the whole response.
+// With concurrency 1, each call sees whether the previous result halted the batch.
+function batchToolkit<Extra extends ExtraTools>(
+  toolkit: Toolkit.WithHandler<Extra>,
+): Toolkit.WithHandler<Extra>;
+function batchToolkit<Extra extends ExtraTools>(toolkit: Toolkit.WithHandler<Extra>) {
+  let halted: string | undefined;
+
+  return {
+    tools: toolkit.tools,
+    handle: <Name extends keyof Extra>(
+      name: Name,
+      params: Tool.ParametersEncoded<Extra[Name]>,
+      id?: string,
+    ) => {
+      if (halted !== undefined) {
+        const result: typeof Tool.ExecutionFailure.Type = {
+          type: "execution-interrupted",
+          reason: "Not executed: " + halted,
+        };
+
+        return Effect.succeed(
+          Stream.succeed({ result, encodedResult: result, isFailure: true, preliminary: false }),
+        );
+      }
+
+      return Effect.succeed(
+        toolkit.handle(name, params, id).pipe(
+          Stream.unwrap,
+          Stream.catch((error) => {
+            const result: typeof Tool.ExecutionFailure.Type = {
+              type: "execution-interrupted",
+              reason: "The call failed and may have taken effect: " + String(error),
+            };
+
+            return Stream.succeed({
+              result,
+              encodedResult: result,
+              isFailure: true,
+              preliminary: false,
+            });
+          }),
+          Stream.tap((result) =>
+            Effect.sync(() => {
+              if (
+                !result.preliminary &&
+                (result.isFailure || name === "done" || name === "give_up")
+              ) {
+                halted = result.isFailure
+                  ? String(name) + " failed."
+                  : String(name) + " ended the batch.";
+              }
+            }),
+          ),
+        ),
+      );
+    },
+  };
+}
+
+const loop = <E, Extra extends ExtraTools>(
   answerSchema: Schema.Codec<unknown, unknown>,
   task: string,
-  options: Options<E>,
-): Effect.Effect<
-  Result<unknown>,
-  AgentError | AiError.AiError | BrowserError | E,
-  Browser | LanguageModel.LanguageModel
-> =>
+  options: Options<E, Extra>,
+) =>
   Effect.gen(function* () {
     const tools = yield* Tools.make(options.tools);
     const maxSteps = options.maxSteps ?? 30;
@@ -160,61 +235,78 @@ const loop = <E>(
       description: "Finish the task and report the answer.",
       parameters: Schema.Struct({ answer: answerSchema }),
       success: Schema.String,
+      failureMode: "return",
     });
 
     const GiveUp = Tool.make("give_up", {
       description: "Stop because the task cannot be done, and say why.",
       parameters: Schema.Struct({ reason: Schema.String }),
       success: Schema.String,
+      failureMode: "return",
     });
 
     const AgentToolkit = Toolkit.merge(Tools.BrowserToolkit, Toolkit.make(Done, GiveUp));
+    const CombinedToolkit = Toolkit.merge(AgentToolkit, options.additionalTools ?? Toolkit.empty);
 
-    const toolkit = yield* AgentToolkit.pipe(
-      Effect.provide(
-        AgentToolkit.toLayer({
-          ...tools.handlers,
-          done: ({ answer }) => Ref.set(outcome, Option.some({ answer })).pipe(Effect.as("Done.")),
-          give_up: ({ reason }) =>
-            Ref.set(outcome, Option.some({ reason })).pipe(Effect.as("Stopped.")),
+    const defaults = yield* AgentToolkit.toHandlers({
+      ...tools.handlers,
+      done: ({ answer }) => Ref.set(outcome, Option.some({ answer })).pipe(Effect.as("Done.")),
+      give_up: ({ reason }) =>
+        Ref.set(outcome, Option.some({ reason })).pipe(Effect.as("Stopped.")),
+    });
+
+    const supplied = yield* Effect.context<Tool.HandlersFor<Extra>>();
+
+    const overrides = Object.values(options.additionalTools?.tools ?? {}).map((tool) =>
+      Context.Service<Tool.HandlersFor<Extra>>(tool.id),
+    );
+
+    // Only explicitly added tools override defaults; unrelated ambient handlers must not replace them.
+    const toolkit = yield* CombinedToolkit.pipe(
+      Effect.provideContext(Context.merge(supplied, Context.omit(...overrides)(defaults))),
+    );
+
+    const observe = tools.page.pipe(
+      Effect.flatMap((page) =>
+        page.observe({
+          mode: options.observation ?? "both",
+          maxChars: options.tools?.snapshotChars ?? 8000,
+        }),
+      ),
+      Effect.map(observationMessage),
+      Effect.orElseSucceed(() =>
+        Prompt.makeMessage("user", {
+          content: [Prompt.makePart("text", { text: "(the page could not be observed)" })],
         }),
       ),
     );
 
-    const tab = yield* tools.page;
-
-    const opening = yield* tab.snapshot({ maxChars: options.tools?.snapshotChars ?? 8000 }).pipe(
-      Effect.map((snapshot) => snapshot.rendered),
-      Effect.orElseSucceed(() => "(the page could not be read)"),
-    );
+    const opening = yield* observe;
 
     const chat = yield* Chat.fromPrompt([
       { role: "system", content: system(options.instructions) },
-      { role: "user", content: `${task}\n\nThe browser is on this page:\n${opening}` },
+      { role: "user", content: task },
+      opening,
     ]);
 
     let next: Array<Prompt.Message> = [];
     let usage = Usage.empty;
     let idle = 0;
 
-    if (options.startWithScreenshot === true) {
-      const image = yield* tab.screenshot().pipe(Effect.option);
-
-      if (Option.isSome(image)) {
-        next = [
-          picturesMessage([
-            { image: image.value, caption: "Screenshot of the page at the start." },
-          ]),
-        ];
-      }
-    }
-
     for (let step = 1; step <= maxSteps; step++) {
+      const batch = batchToolkit(toolkit);
+
       const response = yield* chat.generateText({
         prompt: Prompt.fromMessages(next),
-        toolkit,
+        toolkit: batch,
         concurrency: 1,
       });
+
+      const observation = yield* observe;
+
+      yield* Ref.update(chat.history, (history) =>
+        prunePictures(Prompt.concat(history, [observation]), keepPictures),
+      );
 
       const stepUsage = Usage.add(Usage.empty, response.usage);
 
@@ -268,38 +360,35 @@ const loop = <E>(
         continue;
       }
       idle = 0;
-      const pictures = yield* tools.takePictures;
-
-      next = pictures.length === 0 ? [] : [picturesMessage(pictures)];
-      yield* Ref.update(chat.history, (history) => prunePictures(history, keepPictures));
+      next = [];
     }
 
     return yield* new AgentError({ reason: new StepLimit({ steps: maxSteps }), steps: maxSteps });
   });
 
 /** Run a task to its end. The answer is a string. */
-export function run<E = never>(
+export function run<E = never, Extra extends ExtraTools = {}>(
   task: string,
-  options?: Options<E>,
+  options?: Options<E, Extra>,
 ): Effect.Effect<
   Result<string>,
-  AgentError | AiError.AiError | BrowserError | E,
-  Browser | LanguageModel.LanguageModel
+  Effect.Error<ReturnType<typeof loop<E, Extra>>>,
+  Effect.Services<ReturnType<typeof loop<E, Extra>>>
 >;
 
 /** Run a task to its end, with an answer of the given shape. */
-export function run<A, I, E = never>(
+export function run<A, I, E = never, Extra extends ExtraTools = {}>(
   task: string,
-  options: Options<E> & { readonly answer: Schema.Codec<A, I> },
+  options: Options<E, Extra> & { readonly answer: Schema.Codec<A, I> },
 ): Effect.Effect<
   Result<A>,
-  AgentError | AiError.AiError | BrowserError | E,
-  Browser | LanguageModel.LanguageModel
+  Effect.Error<ReturnType<typeof loop<E, Extra>>>,
+  Effect.Services<ReturnType<typeof loop<E, Extra>>>
 >;
 
-export function run<E>(
+export function run<E, Extra extends ExtraTools>(
   task: string,
-  options: Options<E> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
+  options: Options<E, Extra> & { readonly answer?: Schema.Codec<unknown, unknown> } = {},
 ) {
   return loop(options.answer ?? Schema.String, task, options).pipe(Effect.withSpan("Agent.run"));
 }

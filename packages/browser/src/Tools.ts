@@ -4,12 +4,9 @@
  * The model reads a page two ways. A snapshot is a text outline whose controls carry refs such as
  * `e12`. A screenshot is a picture whose pixel coordinates are viewport coordinates. It acts by
  * ref when a control has one, and by point when it does not, as on a canvas game or a chart.
- * Every action answers with a short receipt and, by default, a fresh snapshot of the viewport, so
- * the model sees the result without another call.
- *
- * Effect AI tool results are text, so a picture cannot travel in one. Tools that take pictures
- * leave them with `takePictures`, for the caller to send in the next user message, as `Agent`
- * does.
+ * Actions answer with short receipts. `Agent` runs them in batches, halts on the first failure
+ * and appends one observation of the current tab after each turn. Callers composing their own
+ * loop can observe `page` once their batch ends.
  *
  * @since 0.3.0
  */
@@ -18,7 +15,6 @@ import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
 import type { BrowserError } from "./BrowserError.ts";
-import type { Image } from "./Frame.ts";
 import type * as Page from "./Page.ts";
 
 const ref = Schema.optional(Schema.String).annotate({
@@ -63,12 +59,6 @@ export const Snapshot = tool(
       description: "Keep only lines containing this text",
     }),
   },
-);
-
-export const Screenshot = tool(
-  "browser_screenshot",
-  "Look at the viewport. The picture arrives with the next message, and its pixel coordinates are click coordinates. Use it for canvases, charts, games, video and anything else the snapshot cannot describe.",
-  {},
 );
 
 export const Click = tool("browser_click", "Click an element by ref, or a point by x and y.", {
@@ -178,7 +168,6 @@ export const BrowserToolkit = Toolkit.make(
   Navigate,
   Back,
   Snapshot,
-  Screenshot,
   Click,
   Hover,
   Type,
@@ -192,18 +181,7 @@ export const BrowserToolkit = Toolkit.make(
 
 export type BrowserTools = typeof BrowserToolkit.tools;
 
-/** A picture a tool took, waiting to be shown to the model. */
-export interface Picture {
-  readonly image: Image;
-  /** What the picture shows, for the text that goes with it. */
-  readonly caption: string;
-}
-
 export interface Options {
-  /** Answer every action with a snapshot of the viewport. Defaults to true. */
-  readonly snapshotAfterAction?: boolean | undefined;
-  /** Also take a picture after every action, for pages drawn on canvases. Defaults to false. */
-  readonly screenshotAfterAction?: boolean | undefined;
   /** Bound on each snapshot. Defaults to 8,000 characters. */
   readonly snapshotChars?: number | undefined;
 }
@@ -212,8 +190,6 @@ export interface Tools {
   readonly handlers: Toolkit.HandlersFrom<BrowserTools>;
   /** The toolkit with its handlers, for `LanguageModel.generateText` or `Chat`. */
   readonly toolkit: Toolkit.WithHandler<BrowserTools>;
-  /** Pictures taken since the last call, oldest first. */
-  readonly takePictures: Effect.Effect<ReadonlyArray<Picture>>;
   /** The tab the tools act on. */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
 }
@@ -238,10 +214,8 @@ const named = (op: {
 /** Build the tools over the `Browser` in context, acting on its first tab to begin with. */
 export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   const browser = yield* Browser;
-  const snapshotAfterAction = options.snapshotAfterAction ?? true;
   const snapshotChars = options.snapshotChars ?? 8000;
   let current = Option.none<Page.Page>();
-  let pictures: Array<Picture> = [];
 
   const page: Effect.Effect<Page.Page, BrowserError> = Effect.gen(function* () {
     const open = yield* browser.pages;
@@ -262,37 +236,6 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       ),
     );
 
-  const takePicture = (tab: Page.Page, why: string) =>
-    Effect.gen(function* () {
-      const image = yield* tab.screenshot();
-      const where = yield* describeTab(tab);
-
-      pictures.push({
-        image,
-        caption: `Screenshot ${why}: ${where}, ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
-      });
-    });
-
-  /** The page as the model should next see it, after `done` happened. */
-  const receipt = (done: string, notes: ReadonlyArray<string> = []) =>
-    Effect.gen(function* () {
-      const tab = yield* page;
-
-      const view = snapshotAfterAction
-        ? yield* tab
-            .snapshot({ maxChars: snapshotChars })
-            .pipe(Effect.map((snapshot) => snapshot.rendered))
-        : `Page: ${yield* describeTab(tab)}`;
-
-      if (options.screenshotAfterAction === true) yield* takePicture(tab, `after ${done}`);
-
-      return [done, ...notes, view].join("\n");
-    }).pipe(
-      Effect.catch((error: BrowserError) =>
-        Effect.succeed(`${done}\n(could not read the page: ${error.message})`),
-      ),
-    );
-
   /** Run an action on the current tab, follow a tab it opens, then answer with a receipt. */
   const act = (
     done: string,
@@ -306,11 +249,11 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       const opened = (yield* browser.pages).filter((other) => !before.includes(other));
       const newest = opened.at(-1);
 
-      if (newest === undefined) return yield* receipt(done);
+      if (newest === undefined) return done;
       current = Option.some(newest);
       yield* newest.bringToFront.pipe(Effect.ignore);
 
-      return yield* receipt(done, ["A new tab opened and is now the current tab."]);
+      return `${done}\nA new tab opened and is now the current tab.`;
     }).pipe(Effect.mapError((error) => (typeof error === "string" ? error : error.message)));
 
   const tabList = Effect.gen(function* () {
@@ -338,12 +281,6 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
       page.pipe(
         Effect.flatMap((tab) => tab.snapshot({ full, query, maxChars: snapshotChars })),
         Effect.map((snapshot) => snapshot.rendered),
-        Effect.mapError((error) => error.message),
-      ),
-    browser_screenshot: () =>
-      page.pipe(
-        Effect.flatMap((tab) => takePicture(tab, "of the current tab")),
-        Effect.as("Took a screenshot; it follows in the next message."),
         Effect.mapError((error) => error.message),
       ),
     browser_click: (op) =>
@@ -442,13 +379,6 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
   return {
     handlers,
     toolkit,
-    takePictures: Effect.sync(() => {
-      const taken = pictures;
-
-      pictures = [];
-
-      return taken;
-    }),
     page,
   } satisfies Tools;
 });

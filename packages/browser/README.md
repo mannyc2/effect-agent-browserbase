@@ -23,5 +23,17 @@ npx playwright-core install chromium
 | `Agent`        | A model with the tools, in a loop, until it reports an answer of the shape you asked |
 | `Moment`       | Capture what a page showed around a point in time, and describe it in one model call |
 
+`Agent.run` batches each turn's tool calls in order, halting on the first failure or a completed
+`done` / `give_up`. Skipped calls receive a not-executed result. A malformed `done` answer can
+be corrected on the next turn.
+
+The model gets one outline and screenshot at the start and after each turn. `observation` selects
+`"outline"`, `"screenshot"`, or `"both"` (the default). `Page.observe` returns that observation as
+a schema value. `Tools.make` returns receipts; a caller writing its own loop observes the current
+`tools.page` after the batch.
+
+Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
+merged last, so the caller's tool wins a name clash, and its calls share the batch's halt behavior.
+
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.
