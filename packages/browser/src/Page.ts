@@ -699,7 +699,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   }
 
   interface InputMarks {
+    /** The action's own input, such as a press, key or wheel, has reached the page. */
     readonly sent: Effect.Effect<void>;
+    /** Preparatory input, such as the pointer travelling to a target, has reached the page. */
+    readonly touched: Effect.Effect<void>;
     readonly at: (point: Point) => Effect.Effect<void>;
     readonly input: Input.Run;
   }
@@ -727,10 +730,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       const startedAt = now();
       const sendsInput = info.input ?? true;
       const sent = yield* Ref.make(false);
+      const touched = yield* Ref.make(false);
       const at = yield* Ref.make(Option.none<Point>());
 
+      // The page may react to preparatory input, so pictures after it must be fresh, but only
+      // the action's own input can have given it effect.
       const marks = {
         sent: Ref.set(sent, true).pipe(Effect.andThen(Effect.sync(markInput))),
+        touched: Ref.set(touched, true).pipe(Effect.andThen(Effect.sync(markInput))),
         at: (point: Point) => Ref.set(at, Option.some(point)),
       };
 
@@ -864,7 +871,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const dispatched = yield* Ref.get(sent);
           const point = yield* Ref.get(at);
 
-          if (dispatched) markInput();
+          if (dispatched || (yield* Ref.get(touched))) markInput();
           const failure = Exit.isFailure(exit) ? Exit.findErrorOption(exit) : Option.none();
 
           publish(
@@ -1133,7 +1140,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
     // Wheels may be prevented or the target may need unsupported nested/frame geometry. One
     // explicit fallback preserves reachability without a distance-dependent protocol loop.
-    yield* marks.sent;
+    yield* marks.touched;
     yield* resolve(operation, target, approval);
     yield* Effect.sleep("150 millis");
     if (approval !== undefined) yield* approval.check();
@@ -1141,14 +1148,17 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     return yield* resolve(operation, target, approval, false);
   });
 
+  // Travel toward a press only prepares the action; a hover is its travel, and a drag holds the
+  // button it has already pressed.
   const moveTo = (
     operation: string,
     marks: InputMarks,
     to: Point,
     cursor?: string,
-    dragging = false,
+    travel: "approach" | "hover" | "drag" = "approach",
   ) =>
     Effect.gen(function* () {
+      const dragging = travel === "drag";
       const viewport = yield* viewportFor(operation);
 
       const previous = Option.getOrElse(yield* Ref.get(pointer), () => ({
@@ -1206,7 +1216,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               const remaining = at + sample.afterMillis - now();
 
               if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
-              yield* marks.sent;
+              yield* travel === "approach" ? marks.touched : marks.sent;
               yield* inputCall(
                 operation,
                 run.send(() =>
@@ -1311,6 +1321,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           yield* marks.at(point);
           yield* moveTo("click", marks, point, resolved.cursor);
           if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
+          yield* marks.sent;
           for (let index = 1; index <= count; index++) {
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
@@ -1351,7 +1362,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           const { point } = resolved;
 
           yield* marks.at(point);
-          yield* moveTo("hover", marks, point, resolved.cursor);
+          yield* moveTo("hover", marks, point, resolved.cursor, "hover");
           yield* flush("hover", marks.input);
         }),
     );
@@ -1382,6 +1393,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 { index: 1, ...end.point },
               ],
             });
+          yield* marks.sent;
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
             ...start.point,
@@ -1389,7 +1401,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             buttons: 1,
             clickCount: 1,
           });
-          yield* moveTo("drag", marks, end.point, end.cursor, true);
+          yield* moveTo("drag", marks, end.point, end.cursor, "drag");
           yield* sendMouse("drag", marks.input, {
             type: "mouseReleased",
             ...end.point,
@@ -1539,6 +1551,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               yield* moveTo("type", marks, target.point, target.cursor);
               if (approval !== undefined)
                 yield* approval.check({ presses: [{ index: 0, ...target.point }] });
+              yield* marks.sent;
               yield* sendMouse("type", marks.input, {
                 type: "mousePressed",
                 ...target.point,
@@ -1749,7 +1762,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
             yield* marks.at(point);
             yield* moveTo("scroll", marks, point, resolved?.cursor);
-
+            yield* marks.sent;
             yield* wheel("scroll", marks.input, point, dx, dy);
             yield* flush("scroll", marks.input);
             yield* Effect.sleep(Duration.millis(150));

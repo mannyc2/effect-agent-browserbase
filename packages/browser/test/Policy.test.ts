@@ -622,9 +622,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
 
         yield* Effect.promise(() => page.playwright.setContent(hoverTrap));
 
+        // The pointer travelled, but nothing was pressed: the action cannot have taken effect.
         assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
           tag: "NotActionable",
-          dispatched: true,
+          dispatched: false,
         });
         assert.lengthOf(requests, 1);
         assert.deepStrictEqual(

@@ -105,9 +105,10 @@ expose their outer element's metadata.
 With `humanize`, off-screen ref targets are reached with visible wheel input before the pointer
 moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action
 does not scroll. After scrolling, a guarded action checks the original target again; a page handler
-that changes its meaning can therefore stop it after its wheel input but before a click. Drag
-endpoints are resolved together in the final viewport, and checked under the pointer, before the
-button is pressed.
+that changes its meaning can therefore stop it after its wheel input but before a click, and the
+failure is undispatched: travel toward a press is not the action's input. Drag endpoints are
+resolved together in the final viewport, and checked under the pointer, before the button is
+pressed.
 
 Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
 every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination
