@@ -98,6 +98,7 @@ export type Reason =
   | "stopped-after-infrastructure"
   | "stopped-after-uncertain-charge"
   | "stopped-after-output-failure"
+  | "stopped-after-uncertain-session"
   | "interrupted";
 
 export interface Classification {
@@ -161,6 +162,19 @@ export const classify = (
 
   return infrastructure("other");
 };
+
+/**
+ * A session create that may have allocated a hosted browser nobody can release: it was sent but
+ * no usable answer came back. Retrying it, or creating more, could replay that allocation.
+ */
+export const uncertainAllocation = (cause: Cause.Cause<unknown>): boolean =>
+  cause.reasons.some(
+    (reason) =>
+      Cause.isFailReason(reason) &&
+      isBrowserbaseError(reason.error) &&
+      reason.error.operation === "createSession" &&
+      (reason.error.reason._tag === "Transport" || reason.error.reason._tag === "Decode"),
+  );
 
 /** Counts that keep graded denominators apart from units that never produced an answer. */
 export const tally = (

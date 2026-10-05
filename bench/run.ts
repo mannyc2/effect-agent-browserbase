@@ -5,7 +5,18 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { Cause, Clock, Console, DateTime, Duration, Effect, Exit, Layer, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Console,
+  DateTime,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Ref,
+  Schema,
+} from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import * as Browserbase from "effect-browserbase/Browserbase";
 import * as BrowserbaseClient from "effect-browserbase/BrowserbaseClient";
@@ -15,6 +26,7 @@ import { type Accounting, BenchError, efforts, modelRunner, noCalls, refuse } fr
 import * as Diagnostics from "./Diagnostics.ts";
 import { type Task, tasks } from "./Tasks.ts";
 import {
+  type Classification,
   classify,
   isolatedTrial,
   type Reason,
@@ -23,6 +35,7 @@ import {
   type Status,
   tally,
   trialSeed,
+  uncertainAllocation,
 } from "./Trial.ts";
 
 const help = `Usage: bun run bench -- [options]
@@ -41,6 +54,22 @@ const help = `Usage: bun run bench -- [options]
   --browser <name>      chromium (default) or browserbase.
   --humanize           Move the pointer and type at a human pace.
   --out <dir>          Results directory. Defaults to .work/bench in the repository.`;
+
+// A hosted session outlives the trial that owns it only until Browserbase's own timeout, which
+// bounds a session the bench could not release.
+export const trialTimeout = Duration.minutes(10);
+export const hostedSessionSeconds = Duration.toSeconds(trialTimeout) + 5 * 60;
+
+/** Each hosted trial's browser: a new 1280×720 session that ends at least by its own timeout. */
+export const hostedBrowser = (humanize: boolean) =>
+  Browserbase.layer({
+    humanize,
+    frameHistory: 1200,
+    session: {
+      timeout: hostedSessionSeconds,
+      browserSettings: { viewport: { width: 1280, height: 720 } },
+    },
+  });
 
 const flags = Effect.try({
   try: () =>
@@ -146,17 +175,17 @@ const main = Effect.gen(function* () {
   if (options.browser === "browserbase" && process.env.EFFECT_BROWSER_BENCH_HOSTED !== "1")
     return yield* refuse("Browserbase sessions cost money: set EFFECT_BROWSER_BENCH_HOSTED=1");
 
-  const browser =
-    options.browser === "browserbase"
-      ? Browserbase.layer({
-          humanize: options.humanize,
-          frameHistory: 1200,
-          session: { browserSettings: { viewport: { width: 1280, height: 720 } } },
-        }).pipe(
-          Layer.provide(BrowserbaseClient.layerConfig()),
-          Layer.provide(FetchHttpClient.layer),
-        )
-      : Chromium.layer({ humanize: options.humanize, frameHistory: 1200 });
+  const hosted = options.browser === "browserbase";
+
+  const browser = hosted
+    ? hostedBrowser(options.humanize).pipe(
+        Layer.provide(BrowserbaseClient.layerConfig()),
+        Layer.provide(FetchHttpClient.layer),
+      )
+    : Chromium.layer({ humanize: options.humanize, frameHistory: 1200 });
+
+  // After a create whose outcome is unknown, no further hosted session is requested.
+  const hostedHalt = yield* Ref.make(false);
 
   const selected = tasks.filter((candidate) => names.includes(candidate.name));
 
@@ -200,13 +229,16 @@ const main = Effect.gen(function* () {
     jobs,
     ({ task, trial }) =>
       Effect.gen(function* () {
-        // A denied trial is a durable result too, but must not provision another browser.
-        const denied = runner !== undefined && (yield* runner.exhausted);
+        // A denied or unstarted trial is a durable result too, but must not provision a browser.
+        const halted = hosted && (yield* Ref.get(hostedHalt));
+        const denied = !halted && runner !== undefined && (yield* runner.exhausted);
         const seed = trialSeed(baseSeed, task.name, trial);
         const effectiveReasoning = reasoning ?? (task.kind === "operate" ? "medium" : "none");
         const started = yield* DateTime.now;
         const startedNanos = yield* Clock.monotonicTimeNanos;
-        const account = denied || runner === undefined ? undefined : yield* runner.account;
+
+        const account =
+          halted || denied || runner === undefined ? undefined : yield* runner.account;
 
         const work =
           runner !== undefined && account !== undefined
@@ -217,20 +249,25 @@ const main = Effect.gen(function* () {
               )
             : task.scripted({ seed });
 
-        const exit = denied
-          ? undefined
-          : yield* isolatedTrial(work, browser).pipe(
-              Effect.timeout(Duration.minutes(10)),
-              Effect.exit,
-            );
+        const exit =
+          halted || denied
+            ? undefined
+            : yield* isolatedTrial(work, browser).pipe(Effect.timeout(trialTimeout), Effect.exit);
 
-        const seconds = denied ? 0 : Number((yield* Clock.monotonicTimeNanos) - startedNanos) / 1e9;
+        if (hosted && exit !== undefined && Exit.isFailure(exit) && uncertainAllocation(exit.cause))
+          yield* Ref.set(hostedHalt, true);
+
+        const seconds =
+          exit === undefined ? 0 : Number((yield* Clock.monotonicTimeNanos) - startedNanos) / 1e9;
+
         const calls = account === undefined ? noCalls : yield* account.calls;
 
-        const outcome =
-          exit === undefined
-            ? { status: "denied" as const, reason: "budget-exhausted" as const, pass: null }
-            : classify(exit, calls);
+        const outcome: Classification =
+          exit !== undefined
+            ? classify(exit, calls)
+            : halted
+              ? { status: "unrun", reason: "stopped-after-uncertain-session", pass: null }
+              : { status: "denied", reason: "budget-exhausted", pass: null };
 
         const value = exit !== undefined && Exit.isSuccess(exit) ? exit.value : undefined;
 
@@ -245,9 +282,11 @@ const main = Effect.gen(function* () {
           reasoning: model === undefined ? null : effectiveReasoning,
           ...outcome,
           detail:
-            exit === undefined
-              ? "Denied: the remaining model budget cannot reserve another call."
-              : (value?.detail ?? ""),
+            exit !== undefined
+              ? (value?.detail ?? "")
+              : halted
+                ? "Unrun: an earlier hosted session create had an unknown outcome."
+                : "Denied: the remaining model budget cannot reserve another call.",
           error: exit !== undefined && Exit.isFailure(exit) ? errorText(exit.cause) : null,
           diagnostic:
             exit !== undefined && Exit.isFailure(exit) ? Diagnostics.failure(exit.cause) : null,
