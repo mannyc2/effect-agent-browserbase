@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 import { assert, expectTypeOf, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Exit, Layer, Schedule, Schema, Stream } from "effect";
 import { type AiError, LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
+import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput";
+import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput";
 import type { BrowserContext } from "playwright-core";
 
 import * as Agent from "../src/Agent.ts";
@@ -773,6 +775,40 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       assert.include(failure.message, "stopped calling tools");
       assert.strictEqual(model.prompts.length, 3);
       assert.strictEqual(tracked.observations.length, 4);
+    }),
+  );
+
+  it.effect("offers every tool with an object schema under each provider's codec", () =>
+    Effect.gen(function* () {
+      yield* start("/next");
+      const offered: Array<Tool.Any> = [];
+
+      const model = LanguageModel.make({
+        generateText: (options) =>
+          Effect.sync(() => {
+            offered.push(...options.tools);
+
+            return [call("done", { answer: { credits: 1 } }), finish];
+          }),
+        streamText: () => Stream.empty,
+      });
+
+      yield* Agent.run("Count the credits.", {
+        answer: Schema.Struct({ credits: Schema.Finite }),
+      }).pipe(Effect.provideServiceEffect(LanguageModel.LanguageModel, model));
+
+      assert.sameMembers(
+        offered.map((tool) => tool.name),
+        [...Object.keys(Tools.BrowserToolkit.tools), "done", "give_up"],
+      );
+      // A root without `type: "object"` fails the whole request on OpenAI's structured outputs.
+      for (const tool of offered)
+        for (const transformer of [
+          toCodecOpenAI,
+          toCodecAnthropic,
+          LanguageModel.defaultCodecTransformer,
+        ])
+          assert.strictEqual(Tool.getJsonSchema(tool, { transformer }).type, "object", tool.name);
     }),
   );
 

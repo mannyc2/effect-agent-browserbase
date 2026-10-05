@@ -59,7 +59,14 @@ export const Navigate = tool("browser_navigate", "Open a URL in the current tab.
   url: Schema.String,
 });
 
-export const Back = tool("browser_back", "Go back to the previous page in the current tab.", {});
+// Without parameters, not with `Schema.Struct({})`: an empty struct's JSON Schema has no object
+// root, which OpenAI's structured outputs reject for the whole request.
+export const Back = Tool.make("browser_back", {
+  description: "Go back to the previous page in the current tab.",
+  success: Schema.String,
+  failure: Schema.String,
+  failureMode: "return",
+});
 
 export const Snapshot = tool(
   "browser_snapshot",
