@@ -1007,6 +1007,64 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("counts a selection dispatched only when its script may have run", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
+
+      for (const guarded of [false, true])
+        for (const [failure, dispatched] of [
+          ["Cannot find context with specified id", false],
+          ["Execution context was destroyed.", true],
+        ] as const) {
+          const context = yield* Effect.acquireRelease(
+            Effect.promise(() => native.newContext()),
+            (context) => Effect.promise(() => context.close()),
+          );
+
+          const createSession = context.newCDPSession.bind(context);
+
+          // The selection script's own evaluation fails as a vanished or destroyed context would.
+          context.newCDPSession = async (target) => {
+            const cdp = await createSession(target);
+            const send = cdp.send.bind(cdp);
+
+            cdp.send = ((method, params) =>
+              method === "Runtime.evaluate" &&
+              (params as { readonly expression?: string } | undefined)?.expression?.startsWith(
+                "globalThis.__effectBrowser.select(",
+              ) === true
+                ? Promise.reject(new Error("Protocol error (Runtime.evaluate): " + failure))
+                : send(method, params)) as typeof cdp.send;
+
+            return cdp;
+          };
+
+          const browser = yield* makeBrowser(
+            context,
+            { id: "select-test", provider: "test" },
+            guarded ? { guard: () => Effect.void } : {},
+          );
+
+          const page = yield* browser.newPage();
+
+          yield* Effect.promise(() =>
+            page.playwright.setContent(
+              '<select aria-label="Coin"><option>Bitcoin</option><option>Ether</option></select>',
+            ),
+          );
+
+          const error = yield* Effect.flip(
+            page.select(refOf(yield* page.snapshot(), "combobox", "Coin"), ["Ether"]),
+          );
+
+          assert.strictEqual(error.reason._tag, "NotActionable");
+          assert.strictEqual(error.dispatched, dispatched, failure);
+        }
+    }),
+  );
+
   it.effect("finishes allowed back navigation between entries with the same URL", () =>
     Effect.gen(function* () {
       const { page } = yield* setup({ guard: () => Effect.void });

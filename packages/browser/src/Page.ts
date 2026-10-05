@@ -1081,16 +1081,32 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return { request, validate };
     });
 
-  const mutate = (operation: string, call: string, approval: Approval | undefined) =>
+  // `mayHaveRun` hears of a failure the script may have started before: without its context or
+  // the library's API in it, the call never ran.
+  const mutate = (
+    operation: string,
+    call: string,
+    approval: Approval | undefined,
+    mayHaveRun: Effect.Effect<void> = Effect.void,
+  ) =>
     (approval === undefined
       ? Ref.get(world).pipe(
           Effect.flatMap(
             Option.match({ onNone: () => createWorld(operation), onSome: Effect.succeed }),
           ),
-          Effect.flatMap((contextId) => evaluateIn(operation, call, contextId)),
         )
-      : evaluateIn(operation, call, approval.contextId)
+      : Effect.succeed(approval.contextId)
     ).pipe(
+      Effect.flatMap((contextId) =>
+        evaluateIn(operation, call, contextId).pipe(
+          Effect.tapError((error) =>
+            error.reason._tag === "Failed" &&
+            /Cannot find context|__effectBrowser/i.test(error.reason.detail)
+              ? Effect.void
+              : mayHaveRun,
+          ),
+        ),
+      ),
       Effect.catchIf(contextGone, () =>
         failWith(
           operation,
@@ -1781,11 +1797,20 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         Effect.gen(function* () {
           yield* targetFor("select", ref, approval, marks);
 
-          // The script refuses before it changes anything. Only a choice it made, or an answer
-          // that never arrived intact, may have reached the page.
-          const result = yield* mutate("select", scriptCall("select", ref, values), approval).pipe(
-            Effect.flatMap(decodeWith("select", Script.EditResultSchema)),
-            Effect.tapError(() => marks.sent),
+          // The script refuses before it changes anything. Only a choice it made, or a script
+          // that may have run without an intact answer, may have reached the page.
+          const result = yield* mutate(
+            "select",
+            scriptCall("select", ref, values),
+            approval,
+            marks.sent,
+          ).pipe(
+            Effect.flatMap((value) =>
+              decodeWith(
+                "select",
+                Script.EditResultSchema,
+              )(value).pipe(Effect.tapError(() => marks.sent)),
+            ),
           );
 
           if ("error" in result) return yield* editFailure("select", ref, result);
