@@ -3,7 +3,7 @@
 // grades against the page's own truth, and has a scripted solution that uses the library alone, to
 // show the task can be done and graded without a model.
 import { Duration, Effect, Schedule, Schema, Stream } from "effect";
-import * as Agent from "effect-browser/Agent";
+import type * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
 import * as Moment from "effect-browser/Moment";
@@ -11,6 +11,7 @@ import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
 import type { AiError, LanguageModel } from "effect/ai";
 
+import * as Arms from "./Arms.ts";
 import * as QuoteComparison from "./QuoteComparison.ts";
 import {
   CheckoutTruth,
@@ -46,6 +47,7 @@ export interface TrialOptions {
 export interface ModelOptions<E> extends TrialOptions {
   /** Runs after every model call with that call's usage. Failing stops the task, as a spent budget does. */
   readonly onUsage: (usage: Agent.Usage) => Effect.Effect<void, E>;
+  readonly onPhase?: (phase: "prepare" | "run" | "grade") => Effect.Effect<void, E>;
 }
 
 export interface Task {
@@ -58,6 +60,14 @@ export interface Task {
     Outcome,
     AiError.AiError | BrowserError | Agent.AgentError | E,
     Browser | LanguageModel.LanguageModel
+  >;
+  readonly withStrategy: <E, R, HookE>(
+    strategy: Arms.Strategy<E, R>,
+    options: ModelOptions<HookE>,
+  ) => Effect.Effect<
+    Outcome,
+    AiError.AiError | BrowserError | Agent.AgentError | E | HookE,
+    Browser | LanguageModel.LanguageModel | R
   >;
   readonly scripted: (options?: TrialOptions) => Effect.Effect<Outcome, BrowserError, Browser>;
 }
@@ -109,33 +119,44 @@ const operate = <A, I>(spec: {
   readonly maxSteps: number;
   readonly solve: (page: Page) => Effect.Effect<A, BrowserError>;
   readonly grade: (answer: A, page: Page) => Effect.Effect<Grade>;
-}): Task => ({
-  name: spec.name,
-  kind: "operate",
-  summary: spec.summary,
-  withModel: (options) =>
+}): Task => {
+  const withStrategy: Task["withStrategy"] = (strategy, options) =>
     Effect.gen(function* () {
+      if (options.onPhase !== undefined) yield* options.onPhase("prepare");
       const page = yield* open(spec.start, options.seed);
 
-      const result = yield* Agent.run(spec.prompt, {
-        answer: spec.answer,
+      if (options.onPhase !== undefined) yield* options.onPhase("run");
+
+      const result = yield* strategy.operate({
+        page,
+        prompt: spec.prompt,
+        schema: spec.answer,
         maxSteps: spec.maxSteps,
-        onStep: (step) => options.onUsage(step.usage),
+        onUsage: options.onUsage,
       });
 
+      if (options.onPhase !== undefined) yield* options.onPhase("grade");
       const grade = yield* spec.grade(result.answer, page);
 
       return { ...grade, answer: result.answer, steps: result.steps, usage: result.usage };
-    }).pipe(Effect.scoped),
-  scripted: (options = {}) =>
-    Effect.gen(function* () {
-      const page = yield* open(spec.start, options.seed);
-      const answer = yield* spec.solve(page);
-      const grade = yield* spec.grade(answer, page);
+    }).pipe(Effect.scoped);
 
-      return { ...grade, answer, steps: 0, usage: noUsage };
-    }).pipe(Effect.scoped),
-});
+  return {
+    name: spec.name,
+    kind: "operate",
+    summary: spec.summary,
+    withStrategy,
+    withModel: (options) => withStrategy(Arms.current, options),
+    scripted: (options = {}) =>
+      Effect.gen(function* () {
+        const page = yield* open(spec.start, options.seed);
+        const answer = yield* spec.solve(page);
+        const grade = yield* spec.grade(answer, page);
+
+        return { ...grade, answer, steps: 0, usage: noUsage };
+      }).pipe(Effect.scoped),
+  };
+};
 
 const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly name: string;
@@ -203,39 +224,46 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       return { moment, evidence, expected: yield* spec.expected(page) };
     }).pipe(Effect.scoped);
 
+  const withStrategy: Task["withStrategy"] = (strategy, options) =>
+    Effect.gen(function* () {
+      if (options.onPhase !== undefined) yield* options.onPhase("prepare");
+      const { moment, evidence, expected } = yield* prepare(options);
+
+      if (!evidence.pass)
+        return {
+          pass: false,
+          detail: `capture incomplete: ${evidence.detail}`,
+          answer: null,
+          steps: 0,
+          usage: noUsage,
+        };
+      if (options.onPhase !== undefined) yield* options.onPhase("run");
+
+      const result = yield* strategy.understand({
+        moment,
+        instructions: spec.instructions,
+        schema: spec.answer,
+        onUsage: options.onUsage,
+      });
+
+      if (options.onPhase !== undefined) yield* options.onPhase("grade");
+      const grade = spec.grade(result.answer, expected);
+
+      return {
+        pass: evidence.pass && grade.pass,
+        detail: `${grade.detail}; ${evidence.detail}`,
+        answer: result.answer,
+        steps: result.steps,
+        usage: result.usage,
+      };
+    });
+
   return {
     name: spec.name,
     kind: "understand",
     summary: spec.summary,
-    withModel: (options) =>
-      Effect.gen(function* () {
-        const { moment, evidence, expected } = yield* prepare(options);
-
-        if (!evidence.pass)
-          return {
-            pass: false,
-            detail: `capture incomplete: ${evidence.detail}`,
-            answer: null,
-            steps: 0,
-            usage: noUsage,
-          };
-
-        const { value, usage } = yield* Moment.describe(moment, {
-          schema: spec.answer,
-          instructions: spec.instructions,
-        });
-
-        yield* options.onUsage(usage);
-        const grade = spec.grade(value, expected);
-
-        return {
-          pass: evidence.pass && grade.pass,
-          detail: `${grade.detail}; ${evidence.detail}`,
-          answer: value,
-          steps: 1,
-          usage,
-        };
-      }),
+    withStrategy,
+    withModel: (options) => withStrategy(Arms.current, options),
     scripted: (options = {}) =>
       Effect.gen(function* () {
         const { evidence, expected } = yield* prepare(options);

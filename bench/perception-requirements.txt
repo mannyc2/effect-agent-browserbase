@@ -1,0 +1,15 @@
+# Parser runtime; use an isolated Python 3.12 venv. A system-site-packages venv may
+# reuse these exact installed Torch/Pillow versions without modifying the host.
+# OCR executable: Tesseract 5.3.4 with Debian tesseract-ocr-eng 1:4.1.0-2.
+# Explicit prepare verifies and copies eng.traineddata by SHA-256 into the model root.
+# Ground mode uses a separate environment with transformers==5.9.0 instead.
+torch==2.11.0
+torchvision==0.26.0
+numpy==2.2.6
+Pillow==11.3.0
+transformers==4.49.0
+huggingface-hub==0.36.0
+tokenizers==0.21.4
+timm==1.0.22
+einops==0.8.2
+safetensors==0.7.0

@@ -151,6 +151,8 @@ shared model budget. A paired quote comparison reuses one capture across the shi
 the historical on-air representation and visible-DOM facts. Scripted runs remain free; model and
 hosted runs require explicit opt-in.
 
+The private [paired browser experiment](bench/README.md#paired-browser-experiment) has a free manifest preview, isolated trial workers and explicit model/hosted opt-ins. It keeps unavailable arms and incomplete pairs visible; its local perception services are benchmark-only.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md). `bun run ready` formats, lints, typechecks, tests against a
 real local Chromium and builds. No test calls a model or a hosted browser.
 [docs/STATUS.md](docs/STATUS.md) is the current state.

@@ -105,14 +105,29 @@ describe("ledger", () => {
         .pipe(Effect.forkChild);
 
       yield* Deferred.await(entered);
+      const unpricedEntered = yield* Deferred.make<void>();
+
+      const unpricedReply = yield* Deferred.make<{
+        readonly prompt_tokens: number;
+        readonly completion_tokens: number;
+      }>();
+
+      const pending = yield* unpriced
+        .run(
+          Deferred.succeed(unpricedEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(unpricedReply)),
+          ),
+          (value) => value,
+        )
+        .pipe(Effect.forkChild);
+
+      yield* Deferred.await(unpricedEntered);
       yield* Fiber.interrupt(fiber);
-      yield* unpriced.run(
-        Effect.succeed({
-          prompt_tokens: 70,
-          completion_tokens: 3,
-        }),
-        (value) => value,
-      );
+      yield* Deferred.succeed(unpricedReply, {
+        prompt_tokens: 70,
+        completion_tokens: 3,
+      });
+      yield* Fiber.join(pending);
 
       assert.deepStrictEqual(yield* budget.snapshot, { knownUsd: 0, reservedUsd: 0.08 });
       assert.strictEqual((yield* interrupted.snapshot).uncertainCalls, 1);

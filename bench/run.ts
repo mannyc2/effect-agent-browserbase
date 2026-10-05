@@ -146,7 +146,11 @@ const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputToken
 interface RawUsage {
   readonly prompt_tokens: number;
   readonly completion_tokens: number;
-  readonly prompt_tokens_details?: { readonly cached_tokens?: number | null } | null;
+  readonly prompt_tokens_details?: {
+    readonly cached_tokens?: number | null;
+    readonly image_tokens?: unknown;
+  } | null;
+  readonly completion_tokens_details?: { readonly reasoning_tokens?: number | null } | null;
   readonly cost?: number | null;
 }
 
@@ -187,6 +191,7 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
 
     const changed = yield* Deferred.make<void>();
     const state = yield* Ref.make({ known: 0, reserved: 0, active: 0, blocked: false, changed });
+    const count = Schema.is(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)));
 
     const settle = (charged: number | undefined) =>
       Effect.gen(function* () {
@@ -198,12 +203,45 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
             known: value.known + (charged ?? 0),
             reserved: value.reserved - (charged === undefined ? 0 : reservation),
             active: value.active - reservation,
-            blocked: value.blocked || (charged !== undefined && charged > reservation),
+            blocked: value.blocked || charged === undefined || charged > reservation,
             changed: next,
           },
         ]);
 
         yield* Deferred.succeed(previous, undefined);
+      });
+
+    // Callers protect the transition from successful admission to ownership. Only waiting for
+    // another receipt is interruptible; cancellation cannot strand an unused reservation.
+    const admit = (restore: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        while (true) {
+          const admission = yield* Ref.modify(state, (value) => {
+            const fits = !value.blocked && value.known + value.reserved + reservation <= limit;
+
+            return [
+              {
+                fits,
+                denied:
+                  value.blocked ||
+                  value.known + value.reserved - value.active + reservation > limit,
+                changed: value.changed,
+              },
+              fits
+                ? {
+                    ...value,
+                    reserved: value.reserved + reservation,
+                    active: value.active + reservation,
+                  }
+                : value,
+            ];
+          });
+
+          if (admission.fits) return;
+          if (admission.denied)
+            return yield* refuse(`no call fits the remaining $${maxUsd} budget`);
+          yield* restore(Deferred.await(admission.changed));
+        }
       });
 
     return {
@@ -233,10 +271,50 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
       account: Effect.gen(function* () {
         const account = yield* Ref.make(emptyAccounting);
         const lastResponse = yield* Ref.make<Diagnostics.LastResponse | null>(null);
+        const held = yield* Ref.make<"none" | "waiting" | "held">("none");
+
+        const tokens = yield* Ref.make<{
+          readonly image: number | null;
+          readonly reasoning: number | null;
+        }>({ image: 0, reasoning: 0 });
+
+        const release = Effect.uninterruptible(
+          Ref.modify(held, (value) => [value === "held", value === "held" ? "none" : value]).pipe(
+            Effect.flatMap((reserved) => (reserved ? settle(0) : Effect.void)),
+          ),
+        );
+
+        // A hosted trial can hold its first model admission before allocating a browser. The
+        // hold is not a call and has no uncertain charge until the request is dispatched.
+        // Keep finalizer installation inside the mask; only admission's wait restores cancellation.
+        const reserve = Effect.uninterruptibleMask((restore) =>
+          Effect.acquireRelease(
+            Effect.gen(function* () {
+              const accepted = yield* Ref.modify(held, (value) => [
+                value === "none",
+                value === "none" ? "waiting" : value,
+              ]);
+
+              if (!accepted)
+                return yield* refuse(
+                  "this account already holds or awaits its first model admission",
+                );
+              yield* admit(restore).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit) ? Ref.set(held, "none") : Effect.void,
+                ),
+              );
+              yield* Ref.set(held, "held");
+            }),
+            () => release,
+          ),
+        );
 
         return {
           snapshot: Ref.get(account),
           lastResponse: Ref.get(lastResponse),
+          tokens: Ref.get(tokens),
+          reserve,
           run: <A, E, R>(
             request: Effect.Effect<A, E, R>,
             usageOf: (response: A) => RawUsage | undefined,
@@ -244,34 +322,21 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
           ): Effect.Effect<A, E | BenchError, R> =>
             Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
-                // A pending receipt may release enough capacity. Permanent uncertainty may not.
-                while (true) {
-                  const admission = yield* Ref.modify(state, (value) => {
-                    const fits =
-                      !value.blocked && value.known + value.reserved + reservation <= limit;
+                const reserved = yield* Ref.modify(held, (value) => [
+                  value,
+                  value === "held" ? "none" : value,
+                ]);
 
-                    return [
-                      {
-                        fits,
-                        denied:
-                          value.blocked ||
-                          value.known + value.reserved - value.active + reservation > limit,
-                        changed: value.changed,
-                      },
-                      fits
-                        ? {
-                            ...value,
-                            reserved: value.reserved + reservation,
-                            active: value.active + reservation,
-                          }
-                        : value,
-                    ];
-                  });
+                if (reserved === "waiting")
+                  return yield* refuse("model request arrived before its reservation was ready");
+                if (reserved === "held") {
+                  if ((yield* Ref.get(state)).blocked) {
+                    yield* settle(0);
 
-                  if (admission.fits) break;
-                  if (admission.denied)
-                    return yield* refuse(`no call fits the remaining $${maxUsd} budget`);
-                  yield* restore(Deferred.await(admission.changed));
+                    return yield* refuse("model admission stopped before dispatch");
+                  }
+                } else {
+                  yield* admit(restore);
                 }
 
                 const dispatched = yield* Ref.updateAndGet(account, (value) => ({
@@ -286,10 +351,26 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
                 // Only the provider request is interruptible. Once a receipt arrives, account for
                 // it before any tool, answer decoder, or caller interruption can discard it.
                 const response = yield* restore(request).pipe(
-                  Effect.onExit((exit) => (Exit.isFailure(exit) ? settle(undefined) : Effect.void)),
+                  Effect.onExit((exit) =>
+                    Exit.isFailure(exit)
+                      ? Ref.set(tokens, { image: null, reasoning: null }).pipe(
+                          Effect.andThen(settle(undefined)),
+                        )
+                      : Effect.void,
+                  ),
                 );
 
                 const usage = usageOf(response);
+                const image = usage?.prompt_tokens_details?.image_tokens;
+                const reasoning = usage?.completion_tokens_details?.reasoning_tokens;
+
+                yield* Ref.update(tokens, (current) => ({
+                  image: current.image !== null && count(image) ? current.image + image : null,
+                  reasoning:
+                    current.reasoning !== null && count(reasoning)
+                      ? current.reasoning + reasoning
+                      : null,
+                }));
 
                 const remember = () =>
                   receiptOf === undefined
@@ -491,38 +572,40 @@ export const modelRunner = (options: {
         `a call reserves $${requestUsd.toFixed(6)}, above --max-usd ${options.maxUsd}`,
       );
 
+    const client = (account: Account) =>
+      Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
+        budgetedClient(native, account, {
+          rates,
+          maxOutputTokens: options.maxOutputTokens,
+          outputParameter: bounds.outputParameter,
+          provider: bounds.provider,
+        }),
+      ).pipe(
+        Effect.provide(
+          OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }).pipe(
+            Layer.provide(FetchHttpClient.layer),
+          ),
+        ),
+      );
+
     const withModel = <A, E, R>(
       effect: Effect.Effect<A, E, R | LanguageModel.LanguageModel>,
       reasoning: Reasoning,
       account: Account,
     ) => {
-      const client = Layer.effect(
-        OpenRouterClient.OpenRouterClient,
-        Effect.map(OpenRouterClient.OpenRouterClient, (native) =>
-          budgetedClient(native, account, {
-            rates,
-            maxOutputTokens: options.maxOutputTokens,
-            outputParameter: bounds.outputParameter,
-            provider: bounds.provider,
-          }),
-        ),
-      ).pipe(
-        Layer.provide(
-          OpenRouterClient.layerConfig({ apiKey: Config.Redacted("OPENROUTER_API_KEY") }),
-        ),
-        Layer.provide(FetchHttpClient.layer),
-      );
-
       const languageModel = OpenRouterLanguageModel.layer({
         model: options.model,
         config: { reasoning: { effort: reasoning } },
-      }).pipe(Layer.provide(client));
+      }).pipe(Layer.provide(Layer.effect(OpenRouterClient.OpenRouterClient, client(account))));
 
       return effect.pipe(Effect.provide(languageModel));
     };
 
     return {
       ...budget,
+      client,
+      requestUsd,
+      bounds,
       withModel,
       run: (task: Task, seed: number, reasoning: Reasoning, account: Account) =>
         withModel(task.withModel({ seed, onUsage: () => Effect.void }), reasoning, account),

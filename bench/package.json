@@ -6,6 +6,7 @@
   "scripts": {
     "bench": "node --conditions=@effect-browser/source run.ts",
     "understand": "node --conditions=@effect-browser/source understand.ts",
+    "paired": "node --conditions=@effect-browser/source paired.ts",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test --run"
   },

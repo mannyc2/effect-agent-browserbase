@@ -133,6 +133,119 @@ errors. They omit response text, arbitrary descriptions and provider identifiers
 separate response conversion from missing text, invalid JSON and a mismatched answer schema while
 preserving charges that arrived before a failure.
 
+## Paired browser experiment
+
+`bun run paired` writes a free preview manifest and one unrun row for every planned trial.
+The full matrix contains 330 local runs and 132 hosted runs: six local arms and four hosted
+arms over seven primary tasks and four separate understanding extensions. The same task/trial
+seed is used across arms and providers; arm order is shuffled deterministically. `quote-dense`
+belongs to the separate quote comparison.
+
+| Arm | Operating representation                                       | Understanding representation                                          |
+| --- | -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 1   | Per-action outline, explicit screenshots                       | Shipping Moment                                                       |
+| 2   | Screenshots, pixel actions and zoom; no outline or refs        | Timed frames and timeline, no outline                                 |
+| 3   | Numbered OCR and icon descriptions, text only                  | A parsed list for every retained frame                                |
+| 4   | Outline and images, with a local description-to-click grounder | Shipping Moment                                                       |
+| 5   | Shipping batched Agent                                         | Shipping Moment                                                       |
+| 6   | Native Responses computer actions                              | Original timed images and timeline, no actions on historical evidence |
+
+Arm 1 uses the current public toolkit with current guard and halt behavior. It is a same-runtime
+control, not a replay of the old commit; its comparison with arm 5 also includes automatic pictures.
+Understanding arms 1, 4 and 5 deliberately have identical representations. Their repeated rows
+are controls, and cannot establish an understanding benefit from batching or grounding.
+The first approved native probe returned no usable computer contract. Arm 6 stays explicitly
+prerequisite-blocked unless the exact route is independently confirmed with `--native-confirmed`.
+This flag is an operator assertion, not an automatic provider capability test.
+
+Free fixture verification uses real isolated browser processes, without a model or hosted session:
+
+```sh
+bun run paired -- --provider local --scripted --local-trials 1 --arms 5
+```
+
+Scripted rows validate fixtures and transport measurements only. They are not arm-performance
+results. Paid runs require a clean committed checkout, an explicit model and live opt-in. A new
+output directory is required, either ignored inside this checkout or outside it; the runner
+never resumes or replays an uncertain trial.
+
+```sh
+EFFECT_BROWSER_BENCH_LIVE=1 OPENROUTER_API_KEY=... \
+  bun run paired -- --provider local --model <openrouter-model-id> --max-usd 8
+```
+
+For hosted runs, also provide `EFFECT_BROWSER_BENCH_HOSTED=1`, the Browserbase key,
+`--hosted-concurrency` and `--browser-hourly-usd`. Verify the account's available concurrency,
+included hours and maximum overage rate first. The hourly value is a positive ceiling, not a
+guess that remaining included time makes the rate zero. Hosted admission reserves a full
+600-second session before creation against both `--max-browser-hours` (default 5) and
+`--max-browser-usd` (default 1). Release acknowledgments are followed by bounded read-only terminal-state checks. Confirmed
+termination settles conservative elapsed bounds; unknown create or release outcomes retain the
+full lifetime reservation and stop admissions.
+These bounds and terminal confirmations are not billing invoices.
+
+One parent owns the model budget, provider keys and session lifetimes. Trial workers receive
+only temporary loopback model capabilities and, for hosted trials, a private CDP endpoint.
+Workers block external HTTP, WebSockets and service workers; fixture routing cannot remove that
+boundary. An unused model reservation is held before hosted allocation; chat requests use the pinned OpenRouter SDK and native requests use the parent-owned Responses
+transport. Both settle through the same admission account before a reply reaches the worker. Unknown charges keep
+their reservation and stop later calls. Interruptions close owned workers and browsers and
+settle active requests; no automatic retry is made. Default model caps for a separately approved
+combined research run can be allocated as $1 for quote comparison, $1 for Moment confirmation
+and $8 for this paired experiment. Separate invocations do not share a persistent ledger.
+
+Local trials precede hosted trials. Workers run with bounded concurrency; a single permit
+serializes trials that use local perception. Missing parser or grounder prerequisites produce
+unrun rows before a model call or browser allocation. Arm 4's understanding control needs no
+grounder. Grade failures continue the experiment; infrastructure failures stop later admissions.
+
+Each record keeps model calls, reported tokens (image and reasoning counts stay null when
+unreported), admitted image bytes and dimensions, action attempts approved by the guard,
+perception calls and elapsed time, and worker/process outcomes. Resource wall time starts at
+model-budget admission and includes browser setup and release; admission wait and total wall
+time are separate. Worker phase timings separate preparation, the task and grading.
+
+Native Playwright protocol output is reduced in memory to counts, serialized JSON bytes and
+command/reply durations. Payloads, URLs and provider identifiers are never saved. These are
+observed protocol exchanges, not wire bytes or the number of awaited round trips. The pinned
+Playwright logger omits one shutdown command; that gap, unmatched traffic, overflow and other
+measurement limits are explicit. Summaries separate primary/extension and operate/understand
+strata, retain failed and unrun denominators, and show incomplete pairs. The small sample cannot
+establish five-point noninferiority.
+
+### Local perception
+
+`Perception.ts` calls an explicitly started loopback service. `perception.py` runs real
+Tesseract OCR, the MIT `icon_detect_v3` detector and Florence icon captioner, or the
+Apache-2.0 Holo2-4B grounder. Model, processor, code and OCR-data revisions are pinned and included
+in response provenance. Grounded coordinates are mapped back through the actual resize; stale
+page/image identities, malformed points and unsupported output are rejected.
+
+Use an isolated Python 3.12 environment with `perception-requirements.txt` for parsing.
+The grounder requires the versions checked by the service (Transformers 5.9 and Torch 2.11).
+Preparation explicitly downloads weights; serving is offline and does not install or fetch
+anything. Keep weights and environments outside tracked source. Use separate model roots if
+both services run together; each root has an exclusive owner.
+
+```sh
+python bench/perception.py prepare --models-root /tmp/browser-parse-models --mode parse
+python bench/perception.py serve --models-root /tmp/browser-parse-models --mode parse --device cuda --port 8789
+
+python bench/perception.py prepare --models-root /tmp/browser-ground-models --mode ground
+python bench/perception.py serve --models-root /tmp/browser-ground-models --mode ground --device cuda --port 8790
+```
+
+Add `--preflight-only` to a serve command to inspect readiness without loading models.
+Pass `--parse-origin http://127.0.0.1:8789` and/or `--ground-origin http://127.0.0.1:8790`
+to the paired runner. CPU parsing is an explicit `--device cpu` alternative and its provenance
+must remain distinct from GPU results. Grounding has no CPU or substitute-model fallback.
+The service refuses insufficient GPU capacity; it never evicts another process.
+
+Run the dependency-free Python contract tests with
+`python -m unittest discover -s bench/test -p 'perception_test.py'`.
+The TypeScript suite validates real Chromium, the real SDK over local HTTP fixtures, protocol
+aggregation, model/session admission and cancellation without paid services.
+
 ## Tests
 
 `bun run test` runs every scripted solution, grades answers from models scripted to be wrong or

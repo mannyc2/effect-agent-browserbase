@@ -34,7 +34,10 @@
   and a shared model admission budget. Paid runs remain opt-in. A separate quote comparison
   reuses captured evidence across shipping Moment, the historical on-air representation and
   visible-DOM conclusions, with paired grading and safe provider diagnostics. Facts remain a
-  bench experiment until measured evidence supports a public input.
+  bench experiment until measured evidence supports a public input. The private paired runner
+  compares six declared strategies with immutable seeds, isolated workers, shared model and
+  hosted-time admission, native protocol aggregates and explicit prerequisite failures. Local
+  OCR/icon parsing and grounding remain optional benchmark services, not library dependencies.
 
 `effect-agent-browser` and the Effect Agent dependency are gone: the agent loop is `effect/ai`'s
 `Chat` with the browser toolkit. The tests run against real local Chromium, a fake Browserbase API

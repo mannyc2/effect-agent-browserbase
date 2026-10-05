@@ -4,6 +4,7 @@
 import { Effect, Schema } from "effect";
 import type * as Browser from "effect-browser/Browser";
 import type { Page } from "effect-browser/Page";
+import type { Route } from "playwright-core";
 
 export const origin = "https://bench.test";
 
@@ -393,31 +394,36 @@ const pages: Readonly<Record<string, string>> = {
 };
 
 /** Serve the bench pages to every page of `browser` while the scope is open. */
-export const serve = (browser: Browser.Service, seed = 0) =>
-  Effect.acquireRelease(
-    Effect.promise(() =>
-      browser.context.route(`${origin}/**`, (route) => {
-        const page = pages[new URL(route.request().url()).pathname];
+export const serve = (browser: Browser.Service, seed = 0) => {
+  const pattern = `${origin}/**`;
 
-        return route.fulfill(
-          page === undefined
-            ? { status: 404, contentType: "text/plain", body: "not found" }
-            : {
-                status: 200,
-                contentType: "text/html; charset=utf-8",
-                // Seed every document at this boundary so redirects retain the trial's identity.
-                body: page
-                  .replace("<head>", `<head><script>window.__benchSeed = ${seed};</script>`)
-                  .replace(
-                    "</body>",
-                    `<script>Object.assign(window.__bench, { frameAfter: performance.timeOrigin + performance.now(), url: location.href, title: document.title, trigger: sessionStorage.getItem("bench-navigation-trigger") ?? "direct" });</script></body>`,
-                  ),
-              },
-        );
-      }),
-    ),
-    () => Effect.promise(() => browser.context.unrouteAll({ behavior: "ignoreErrors" })),
+  const handler = (route: Route) => {
+    const page = pages[new URL(route.request().url()).pathname];
+
+    return route.fulfill(
+      page === undefined
+        ? { status: 404, contentType: "text/plain", body: "not found" }
+        : {
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            // Seed every document at this boundary so redirects retain the trial's identity.
+            body: page
+              .replace("<head>", `<head><script>window.__benchSeed = ${seed};</script>`)
+              .replace(
+                "</body>",
+                `<script>Object.assign(window.__bench, { frameAfter: performance.timeOrigin + performance.now(), url: location.href, title: document.title, trigger: sessionStorage.getItem("bench-navigation-trigger") ?? "direct" });</script></body>`,
+              ),
+          },
+    );
+  };
+
+  return Effect.acquireRelease(
+    Effect.promise(() => browser.context.route(pattern, handler)),
+    // Other route owners, including the worker's deny-by-default network boundary, outlive this
+    // fixture scope. Removing all context routes would briefly restore external network access.
+    () => Effect.promise(() => browser.context.unroute(pattern, handler)),
   );
+};
 
 /** A page's ground truth, decoded with `schema`. */
 export const truth = <A, I>(page: Page, schema: Schema.Codec<A, I>) =>
