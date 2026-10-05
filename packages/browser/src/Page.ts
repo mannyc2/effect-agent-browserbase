@@ -497,6 +497,43 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const flush = (operation: string, run: Input.Run) => inputCall(operation, run.drain);
 
+  // Keys must never follow a navigation into another document. This session counts main-frame
+  // commits as Playwright's does, so a multi-key action can stop before its next key.
+  let documents = 0;
+  let watchingDocuments = false;
+
+  cdp.on("Page.frameNavigated", ({ frame }) => {
+    if (frame.parentId === undefined) documents++;
+  });
+
+  const currentDocument = (operation: string) =>
+    Effect.suspend(() =>
+      watchingDocuments
+        ? Effect.void
+        : native(operation, () => cdp.send("Page.enable")).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                watchingDocuments = true;
+              }),
+            ),
+          ),
+    ).pipe(Effect.map(() => documents));
+
+  const sameDocument = (operation: string, since: number) =>
+    Effect.suspend(() =>
+      documents === since
+        ? Effect.void
+        : Effect.fail(
+            new BrowserError({
+              operation,
+              reason: new NotActionable({
+                detail: "the page moved to another document, so the remaining keys were not sent",
+              }),
+              dispatched: false,
+            }),
+          ),
+    );
+
   const createWorld = (operation: string) =>
     Effect.gen(function* () {
       const tree = yield* native(operation, () => cdp.send("Page.getFrameTree"));
@@ -1452,6 +1489,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 : new NotActionable({ detail: typeable.detail }),
             );
 
+          const since = yield* currentDocument("type");
+
           if (into !== undefined) {
             const ref = into;
             const target = yield* targetFor("type", ref, approval, marks);
@@ -1492,9 +1531,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           yield* presentationPause("focus");
           if (approval !== undefined) yield* approval.check({ focused: true });
           yield* marks.sent;
-          if (text === "" && replace && typeOptions.into !== undefined)
+          if (text === "" && replace && typeOptions.into !== undefined) {
+            yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Delete"]);
-          else {
+          } else {
             // Separate down/up deadlines permit overlapping holds without adding one hold to
             // every inter-key gap. The same bounded run owns all releases and interruptions.
             if (settings.humanize) {
@@ -1514,10 +1554,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 yield* Effect.sleep(
                   Duration.millis(Math.max(0, started + event.afterMillis - now())),
                 );
+                if (event.phase !== "up") yield* sameDocument("type", since);
                 yield* typeEvent(marks.input, event);
               }
             } else {
               for (const character of text) {
+                yield* sameDocument("type", since);
                 if (Keys.description(character) === undefined)
                   yield* typeEvent(marks.input, { phase: "insert", key: character });
                 else {
@@ -1541,6 +1583,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               return yield* failWith("type", new NotActionable({ detail: checked.error }));
           }
           if (typeOptions.submit === true) {
+            // Typing can move focus or change the form; Enter goes only to the approved field.
+            if (approval !== undefined) yield* approval.check({ focused: true });
+            yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Enter"]);
             yield* flush("type", marks.input);
             yield* settle;
@@ -1567,7 +1612,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             )
           : preparePolicy("press", { text: combination }, [null], { keys: combination });
       }),
-      (marks) =>
+      (marks, approval) =>
         Effect.gen(function* () {
           if (!Number.isFinite(pressOptions.times ?? 1))
             return yield* failWith("press", new InvalidRequest({ detail: "times must be finite" }));
@@ -1582,10 +1627,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             );
           const times = Math.max(1, Math.min(50, pressOptions.times ?? 1));
           const hold = pressOptions.holdMillis ?? 0;
+          const activates = parts.at(-1) === "Enter" || parts.at(-1) === "Space";
+          const since = yield* currentDocument("press");
           let due = now();
 
           yield* marks.sent;
           for (let index = 0; index < times; index++) {
+            // A repeated key stays in the document it began in. Under a guard, a repeated Enter
+            // or Space must also reach the approved element after the previous press settled.
+            if (index > 0 && approval !== undefined && activates) {
+              yield* flush("press", marks.input);
+              yield* approval.check({ focused: true });
+            }
+            yield* sameDocument("press", since);
             yield* keyStroke("press", marks.input, parts, hold);
             if (index + 1 < times && settings.humanize) {
               due += hold + (yield* Human.keyDelay);

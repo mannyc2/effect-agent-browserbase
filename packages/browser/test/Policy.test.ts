@@ -332,6 +332,32 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("submits only to the approved field after typing moved focus", () =>
+    Effect.gen(function* () {
+      const { page } = yield* setup({ guard: () => Effect.void });
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<input id="query" aria-label="Search"><button id="remove" onclick="document.body.dataset.removed=\'yes\'">Remove all</button>' +
+            '<script>query.addEventListener("input", () => { if (query.value.length >= 3) remove.focus(); });</script>',
+        ),
+      );
+
+      assert.deepStrictEqual(
+        yield* failure(
+          page.type("abc", {
+            into: refOf(yield* page.snapshot(), "textbox", "Search"),
+            submit: true,
+          }),
+        ),
+        { tag: "NotActionable", dispatched: true },
+      );
+      assert.isUndefined(
+        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.removed)),
+      );
+    }),
+  );
+
   it.effect("consults one policy for every supported input and navigation", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];

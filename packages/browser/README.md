@@ -141,7 +141,10 @@ Humanized typing aims for about 75 WPM including slower word starts, with key ho
 that can overlap. The ordered schedule releases a repeated physical key before pressing it again.
 Keys follow that schedule without waiting for each network reply. Pending replies are bounded and
 drained before an action succeeds; interruption stops new input and releases every submitted held
-key. Shortcut chords retain Playwright’s platform-specific editing behavior.
+key. Shortcut chords retain Playwright’s platform-specific editing behavior. Keys never follow a
+navigation: when the page moves to another document mid-action, typing and repeated presses stop
+with a dispatched `NotActionable`. Under a guard, typing's submit Enter and each repeated Enter or
+Space are first checked against the approved element.
 
 `Page.type(text, { prose: true })` opts eligible textarea or contenteditable prose into occasional
 corrected slips when humanized, with an explicit `into` ref and whole-field replacement. The

@@ -1338,7 +1338,7 @@ export const install = (): PageApi => {
         expected === undefined ||
         refFor(active) !== expected.ref
       )
-        return { error: "changed", detail: "focus moved away from the approved text field" };
+        return { error: "changed", detail: "focus moved away from the approved element" };
     }
 
     for (const press of options.presses ?? []) {

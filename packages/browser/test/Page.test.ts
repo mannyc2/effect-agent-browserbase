@@ -161,6 +161,33 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("stops repeated keys at a navigation instead of pressing on the next page", () =>
+    Effect.gen(function* () {
+      const page = yield* open("/form");
+      const armed = (yield* Site).url("/armed");
+
+      // The next page focuses a destructive control on load, where a second Enter would land.
+      yield* Effect.promise(() =>
+        page.playwright.route(armed, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: "<title>Armed</title><button autofocus onclick=\"document.title='Deleted'\">Delete account</button>",
+          }),
+        ),
+      );
+      yield* Effect.promise(() =>
+        page.playwright.setContent('<a id="next" href="' + armed + '">Next</a>'),
+      );
+      yield* Effect.promise(() => page.playwright.locator("#next").focus());
+
+      assert.deepStrictEqual(yield* reason(page.press("Enter", { times: 2, holdMillis: 600 })), {
+        tag: "NotActionable",
+        dispatched: true,
+      });
+      assert.strictEqual(yield* page.title, "Armed");
+    }),
+  );
+
   it.effect("drags a slider between points", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");

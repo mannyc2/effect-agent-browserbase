@@ -486,6 +486,31 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("stops typing when the page moves to another document mid-text", () =>
+      Effect.gen(function* () {
+        const { page, snapshot } = yield* setup(
+          '<input id="note" aria-label="Note" oninput="if (this.value.length === 2) location.href = \'https://rhythm.test/armed\'">',
+        );
+
+        yield* Effect.promise(() =>
+          page.playwright.context().route("https://rhythm.test/armed", (route) =>
+            route.fulfill({
+              contentType: "text/html",
+              body: "<title>Armed</title><button autofocus onclick=\"document.title='Deleted'\">Delete account</button>",
+            }),
+          ),
+        );
+
+        const error = yield* page
+          .type("hello there friend", { into: refOf(snapshot, "Note") })
+          .pipe(Random.withSeed("navigating-field"), Effect.flip);
+
+        assert.strictEqual(error.reason._tag, "NotActionable");
+        assert.isTrue(error.dispatched);
+        assert.strictEqual(yield* page.title, "Armed");
+      }),
+    );
+
     it.effect("keeps functional navigation settling when the presentation pause is short", () =>
       Effect.gen(function* () {
         const { page, snapshot } = yield* setup(
