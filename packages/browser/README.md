@@ -91,14 +91,16 @@ const browser = Chromium.layer({
 
 Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
 the action timeout. They do not keep the page locked. After approval, the library verifies the same
-document, target and relevant facts before sending input: a control's name is bound, other page text
-such as a live price is not. Changed targets fail undispatched; the library never retries the action
-or the policy automatically. A pointer press is checked again once the pointer has arrived and the
-page has had a frame to react: the approved control must still receive the press point, so a control
-that appears under the pointer, such as a hover menu, stops the action before the button goes down.
-A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary
-failed receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque
-frames expose their outer element's metadata.
+document, target and relevant facts before sending input: a control's name is bound but other page
+text, such as a live price, is not; the URL is bound without a fragment that only marks a place on
+the page, as scroll-spy and feed pages rewrite while scrolling (a `#/` or `#!` hash route stays
+bound). Changed targets fail undispatched; the library never retries the action or the policy
+automatically. A pointer press is checked again once the pointer has arrived and the page has had a
+frame to react: the approved control must still receive the press point, so a control that appears
+under the pointer, such as a hover menu, stops the action before the button goes down. A policy
+timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
+receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque frames
+expose their outer element's metadata.
 
 With `humanize`, off-screen ref targets are reached with visible wheel input before the pointer
 moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action

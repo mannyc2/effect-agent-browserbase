@@ -939,6 +939,73 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  // Scroll-spy documentation and feeds record where the reader is in the URL fragment.
+  const scrollSpy =
+    '<body style="margin:0"><h1>Top</h1><div style="height:2500px"></div>' +
+    '<button id="act" onclick="this.textContent=\'clicked\'">Act</button><div style="height:2500px"></div>' +
+    '<form onsubmit="event.preventDefault(); document.body.dataset.sent = \'yes\'"><input name="q"><button>Send</button></form>' +
+    '<div style="height:2500px"></div>' +
+    '<script>addEventListener("scroll", () => history.replaceState(null, "", "#y" + Math.round(scrollY / 500)))</script></body>';
+
+  for (const [label, options] of [
+    ["unguarded", {}],
+    ["guarded", { guard: () => Effect.void }],
+    ["guarded and humanized", { guard: () => Effect.void, humanize: true }],
+  ] as const) {
+    it.effect("follows a scroll-spy fragment to an off-screen control, " + label, () =>
+      Effect.gen(function* () {
+        const { page } = yield* setup(options);
+
+        yield* Effect.promise(() => page.playwright.setContent(scrollSpy));
+        const snapshot = yield* page.snapshot({ full: true });
+
+        yield* page.click(refOf(snapshot, "button", "Act"));
+        yield* page.click(refOf(snapshot, "button", "Send"));
+        assert.strictEqual(
+          yield* Effect.promise(() => page.playwright.locator("#act").textContent()),
+          "clicked",
+        );
+        assert.strictEqual(
+          yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.sent)),
+          "yes",
+        );
+      }),
+    );
+  }
+
+  it.effect("refuses a held click after its page's hash route changes", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+
+      const { page } = yield* setup({
+        guard: () =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(released))),
+      });
+
+      // A hash router's route selects what a persistent control acts on.
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<button onclick="document.body.dataset.removed = location.hash">Remove item</button>' +
+            '<script>history.replaceState(null, "", "#/items/1")</script>',
+        ),
+      );
+
+      const held = yield* failure(
+        page.click(refOf(yield* page.snapshot(), "button", "Remove item")),
+      ).pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+      yield* Effect.promise(() => page.playwright.evaluate(() => (location.hash = "#/items/2")));
+      yield* Deferred.succeed(released, undefined);
+
+      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
+      assert.isUndefined(
+        yield* Effect.promise(() => page.playwright.evaluate(() => document.body.dataset.removed)),
+      );
+    }),
+  );
+
   it.effect("finishes allowed back navigation between entries with the same URL", () =>
     Effect.gen(function* () {
       const { page } = yield* setup({ guard: () => Effect.void });
