@@ -6,6 +6,7 @@ import { Duration, Effect, Schedule, Schema, Stream } from "effect";
 import * as Agent from "effect-browser/Agent";
 import { Browser } from "effect-browser/Browser";
 import type { BrowserError } from "effect-browser/BrowserError";
+import { Frame, Screenshot } from "effect-browser/Frame";
 import * as Moment from "effect-browser/Moment";
 import type { Page } from "effect-browser/Page";
 import type { Snapshot } from "effect-browser/Snapshot";
@@ -140,6 +141,30 @@ const operate = <A, I>(spec: {
     }).pipe(Effect.scoped),
 });
 
+/** A native paint at or after the fixture's last visual change. */
+const after = (frame: Frame, frameAfter: number) =>
+  frame.timestamp !== undefined && frame.timestamp >= frameAfter;
+
+const freshFrame = (page: Page) =>
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    const startedAt = yield* browser.now;
+    const image = yield* page.screenshot({ fresh: true });
+    const finishedAt = yield* browser.now;
+
+    return new Frame({
+      page: page.id,
+      data: image.data,
+      timing: new Screenshot({
+        hostTime: startedAt + (finishedAt - startedAt) / 2,
+        uncertaintyMillis: (finishedAt - startedAt) / 2,
+      }),
+      receivedAt: finishedAt,
+      width: image.width,
+      height: image.height,
+    });
+  });
+
 const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly name: string;
   readonly summary: string;
@@ -179,34 +204,61 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       );
       yield* spec.setup(page);
       const { frameAfter } = yield* truth(page, FrameTruth);
+      const browser = yield* Browser;
+      const waiting = yield* browser.now;
 
       // A quiet host-side stream can still have the final paint in flight. The fixture records
       // the last visual change on the browser's wall clock, which its frame timestamps share.
-      yield* page.recentFrames.pipe(
+      const reached = yield* page.recentFrames.pipe(
         Effect.repeat({
           schedule: Schedule.spaced("25 millis"),
-          until: (frames) =>
-            frames.some((frame) => frame.timestamp !== undefined && frame.timestamp >= frameAfter),
+          until: (frames) => frames.some((frame) => after(frame, frameAfter)),
         }),
-        Effect.timeoutOrElse({
-          duration: "5 seconds",
-          orElse: () =>
-            Effect.fail(
-              new EvidenceIncomplete({ detail: "no frame followed the fixture's last change" }),
-            ),
-        }),
+        Effect.as(true),
+        Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed(false) }),
       );
-      const moment = yield* Moment.capture(page, spec.capture);
-      const wanted = spec.capture.frames ?? 2;
-      const first = moment.frames[0];
+
+      // A screencast can drop the final paint of a page that then stays still. A fresh screenshot
+      // still shows that state; it keeps its own capture timing and never claims a paint time.
+      const shot = reached ? undefined : yield* freshFrame(page);
+
+      // Time spent waiting for a paint that never arrived must not push earlier frames out of
+      // the evidence window.
+      const waited = shot === undefined ? 0 : (yield* browser.now) - waiting;
+
+      const captured = yield* Moment.capture(page, {
+        ...spec.capture,
+        windowMillis: (spec.capture.windowMillis ?? 5000) + waited,
+      });
+
+      const newest = captured.frames.at(-1);
+
+      const moment =
+        shot === undefined || (newest !== undefined && after(newest, frameAfter))
+          ? captured
+          : new Moment.Moment({
+              at: captured.at,
+              page: captured.page,
+              frames: [...captured.frames.slice(0, -1), shot],
+              snapshot: captured.snapshot,
+              events: captured.events,
+            });
+
       const last = moment.frames.at(-1);
 
-      const span = first === undefined || last === undefined ? 0 : last.hostTime - first.hostTime;
+      if (last === undefined || (last !== shot && !after(last, frameAfter)))
+        return yield* new EvidenceIncomplete({
+          detail: "the final frame precedes the fixture's last change",
+        });
+
+      const wanted = spec.capture.frames ?? 2;
+      const first = moment.frames[0];
+      const span = first === undefined ? 0 : last.hostTime - first.hostTime;
 
       const minimum =
         spec.minimumSpanMillis === undefined ? 0 : yield* spec.minimumSpanMillis(page);
 
-      const detail = `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events`;
+      const detail = `${moment.frames.length} of ${wanted} frames over ${Math.round(span)}ms (minimum ${minimum}ms), ${moment.events.length} events${last === shot ? ", final frame from a fresh screenshot" : ""}`;
 
       if (moment.frames.length !== wanted || span < minimum)
         return yield* new EvidenceIncomplete({ detail });

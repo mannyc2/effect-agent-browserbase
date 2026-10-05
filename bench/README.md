@@ -28,7 +28,10 @@ An operate task gives a model the browser tools (`Agent.run`). An understand tas
 a moment without a model, captures it (`Moment.capture`) and asks a model about it in one call
 (`Moment.describe`). Capture starts before the scripted setup, and multi-frame tasks check the
 retained time span as well as the frame count. The final frame must follow the fixture's last visual
-change on the browser clock; an incomplete capture is an infrastructure failure, before any model call. Bench browsers retain up to 1,200 frames for the
+change on the browser clock. A screencast can lose the final paint of a page that then stays
+still, so each fixture paints its settled state once more, and if no frame reaches the barrier the
+final frame is a fresh screenshot with its own capture timing, never a claimed paint time. An
+incomplete capture is an infrastructure failure, before any model call. Bench browsers retain up to 1,200 frames for the
 longest fixture; this does not change the library default. The tumble task selects twelve frames
 to cover its paying cascades, rather than asking the model to count transitions absent from the
 pictures. Operate tasks receive an outline and screenshot once per turn; calls within a

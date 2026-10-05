@@ -68,14 +68,20 @@ const describeWith = (
     readonly seed?: number;
     readonly frameDelayMillis?: number;
     readonly frameHistory?: number;
+    /** Lose every screencast frame once this many clicks begin, as a stalled screencast does. */
+    readonly dropFramesAfterClicks?: number;
   } = {},
 ) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
 
     const frameDelayMillis = options.frameDelayMillis ?? 0;
+    let clicks = 0;
 
-    if (frameDelayMillis > 0) {
+    const dropping = () =>
+      options.dropFramesAfterClicks !== undefined && clicks >= options.dropFramesAfterClicks;
+
+    if (frameDelayMillis > 0 || options.dropFramesAfterClicks !== undefined) {
       const context = browser.context;
       const createSession = context.newCDPSession.bind(context);
       const pending = new Set<ReturnType<typeof setTimeout>>();
@@ -91,6 +97,8 @@ const describeWith = (
 
         emitter.emit = (event, ...args) => {
           if (event !== "Page.screencastFrame") return emit(event, ...args);
+          if (dropping()) return true;
+          if (frameDelayMillis === 0) return emit(event, ...args);
 
           const timer = setTimeout(() => {
             pending.delete(timer);
@@ -120,6 +128,10 @@ const describeWith = (
 
     const observed: Page = {
       ...page,
+      click: (...target) =>
+        Effect.sync(() => {
+          clicks++;
+        }).pipe(Effect.andThen(page.click(...target))),
       recentFrames: page.recentFrames.pipe(
         Effect.tap((frames) => Effect.sync(() => histories.push(frames))),
       ),
@@ -371,6 +383,25 @@ describe("understanding evidence", () => {
         throw new Error("the final description image is not a captured frame");
       assert.isTrue(history.some((frame) => paintTime(frame) < frameAfter));
       assert.isAtLeast(paintTime(final), frameAfter);
+    }),
+  );
+
+  it.live("describes a fresh screenshot when the screencast loses the final paint", () =>
+    Effect.gen(function* () {
+      const { outcome, prompts, history } = yield* describeWith("order-filled", order, {
+        dropFramesAfterClicks: 1,
+      });
+
+      const prompt = prompts[0];
+
+      assert.isTrue(outcome.pass, outcome.detail);
+      assert.include(outcome.detail, "final frame from a fresh screenshot");
+      if (prompt === undefined) throw new Error("the description prompt is missing");
+      const final = pictures(prompt).at(-1);
+
+      // The order row only reached the screenshot; every retained paint predates the click.
+      assert.isFalse(history.some((frame) => isDeepStrictEqual(frame.data, final?.data)));
+      assert.strictEqual(pictures(prompt).length, 2);
     }),
   );
 

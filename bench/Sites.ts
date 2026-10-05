@@ -86,7 +86,7 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
     } else if (columns[1][1] === columns[0][1]) columns[1][1] = other(columns[0][1]);
     return { columns, pay: win ? state.bet * win[2] : 0, line: win ? win[1] : 0 };
   }
-  function draw(now) {
+  function paint(now) {
     g.fillStyle = "#1d1233"; g.fillRect(0, 0, 960, 600);
     g.fillStyle = "#f1e3c8"; g.font = "bold 26px sans-serif";
     g.fillText("TEMPLE REELS", 30, 44);
@@ -109,13 +109,16 @@ const reels = `<!doctype html><html><head><title>Temple Reels</title><style>${st
     g.fillStyle = "#fff"; g.font = "bold 28px sans-serif"; g.fillText("SPIN", 446, 572);
     g.fillStyle = "#333"; g.fillRect(250, 535, 52, 52); g.fillRect(320, 535, 52, 52);
     g.fillStyle = "#fff"; g.fillText("-", 268, 570); g.fillText("+", 336, 572);
+  }
+  function draw(now) {
+    paint(now);
     if (state.spinning && now >= stops[4]) {
       state.spinning = false;
       const result = state.results.at(-1);
       state.credits += result.pay; state.lastWin = result.pay;
       draw(now);
     } else if (state.spinning) requestAnimationFrame(draw);
-    else state.frameAfter = performance.timeOrigin + performance.now();
+    else __benchSettled(() => paint(performance.now()));
   }
   function spin() {
     if (state.spinning || state.credits < state.bet) return;
@@ -173,7 +176,7 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
   window.__bench = { last: price, first: candles[0].open, trend: "up", spikeAt: null, candles: 60, orders: [] };
   const state = window.__bench;
   const g = document.getElementById("chart").getContext("2d");
-  function draw() {
+  function paint() {
     const shown = candles.slice(-60), hi = Math.max(...shown.map((c) => c.high)), lo = Math.min(...shown.map((c) => c.low));
     const y = (v) => 20 + (hi - v) / (hi - lo) * 360;
     g.fillStyle = "#0b0e14"; g.fillRect(0, 0, 960, 420);
@@ -188,8 +191,12 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
     const last = shown.at(-1).close;
     g.fillStyle = "#f0b90b"; g.fillRect(850, y(last) - 11, 110, 22);
     g.fillStyle = "#111"; g.font = "bold 13px sans-serif"; g.fillText(last.toFixed(2), 856, y(last) + 5);
+  }
+  function draw() {
+    paint();
+    const shown = candles.slice(-60), last = shown.at(-1).close;
     state.last = Math.round(last * 100) / 100; state.first = shown[0].open; state.trend = last >= shown[0].open ? "up" : "down";
-    state.frameAfter = performance.timeOrigin + performance.now();
+    __benchSettled(paint);
   }
   draw();
   if (live) setInterval(() => {
@@ -206,7 +213,7 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
     state.orders.push(order);
     document.getElementById("orders").insertAdjacentHTML("beforeend", "<tr><td>" + order.id + "</td><td>" + side + "</td><td>" + qty + "</td><td>" + order.price.toFixed(2) + "</td><td>Filled</td></tr>");
     note.textContent = "Order " + order.id + " filled.";
-    state.frameAfter = performance.timeOrigin + performance.now();
+    __benchSettled(paint);
   };
 </script></body></html>`;
 
@@ -306,12 +313,18 @@ canvas{width:100%;height:95px;margin:10px 0}
   document.getElementById("tape").textContent = "PEPE-USD +18.42%     NEAR-USD -3.19%     APT-USD +5.28%     TRX-USD +0.82%     SHIB-USD -1.74%";
   document.getElementById("trending").textContent = "Trending now: PEPE-USD +18.42% · Futures turnover $284M · Figures refer to their labelled market and period.";
   const plot = document.getElementById("spark").getContext("2d");
-  plot.strokeStyle = "#42bba0"; plot.lineWidth = 2; plot.beginPath();
+  const spark = [];
   let y = 48;
-  for (let x = 0; x <= 1200; x += 8) { y = Math.max(8, Math.min(87, y + (random() - 0.5) * 13)); plot.lineTo(x, y); }
-  plot.stroke();
+  for (let x = 0; x <= 1200; x += 8) { y = Math.max(8, Math.min(87, y + (random() - 0.5) * 13)); spark.push([x, y]); }
+  const paint = () => {
+    plot.clearRect(0, 0, 1200, 95); plot.strokeStyle = "#42bba0"; plot.lineWidth = 2; plot.beginPath();
+    for (const [x, y] of spark) plot.lineTo(x, y);
+    plot.stroke();
+  };
+  paint();
   const current = rows.find((row) => row.table === "Spot markets" && row.ticker === focus);
   window.__bench = { focus, price: current.price, c1h: current.c1h, c24h: current.c24h, c7d: current.c7d, header: "24h %", table: "Spot markets", rows };
+  __benchSettled(paint);
 </script></body></html>`;
 
 // The animation is derived from elapsed time rather than a timer chain. A delayed render still
@@ -339,7 +352,8 @@ body{background:#150e26}canvas{display:block}
     state.completedTumbles = completed;
     const earned = cents.slice(0, completed).reduce((sum, value) => sum + value, 0) / 100;
     state.totalWin = elapsed >= totalAt ? Math.round(earned * multiplier * 100) / 100 : earned;
-    if (elapsed >= durationMillis && state.phase !== "ready") {
+    const settles = elapsed >= durationMillis && state.phase === "spinning";
+    if (settles) {
       state.done = true; state.phase = "complete"; state.balance = Math.round((998 + state.totalWin) * 100) / 100;
     }
     paint.fillStyle = "#291b46"; paint.fillRect(0, 0, 1000, 680);
@@ -371,7 +385,7 @@ body{background:#150e26}canvas{display:block}
     }
     paint.fillStyle = state.phase === "ready" ? "#b63557" : "#51455e"; paint.fillRect(430, 625, 140, 46);
     paint.fillStyle = "#fff"; paint.font = "bold 26px sans-serif"; paint.fillText("SPIN", 466, 657);
-    if (state.phase === "complete") state.frameAfter = performance.timeOrigin + performance.now();
+    if (settles) __benchSettled(() => draw(performance.now()));
     if (state.phase === "spinning") requestAnimationFrame(draw);
   }
   canvas.addEventListener("click", (event) => {
@@ -392,6 +406,10 @@ const pages: Readonly<Record<string, string>> = {
   [routes.tumble]: tumble,
 };
 
+// A screencast can drop an animation's final paint for good once the page goes still. A settled
+// fixture records its last change for the capture barrier, then paints the same state once more.
+const settled = `window.__benchSettled = (repaint) => { window.__bench.frameAfter = performance.timeOrigin + performance.now(); setTimeout(() => requestAnimationFrame(repaint), 150); };`;
+
 /** Serve the bench pages to every page of `browser` while the scope is open. */
 export const serve = (browser: Browser.Service, seed = 0) =>
   Effect.acquireRelease(
@@ -407,7 +425,10 @@ export const serve = (browser: Browser.Service, seed = 0) =>
                 contentType: "text/html; charset=utf-8",
                 // Seed every document at this boundary so redirects retain the trial's identity.
                 body: page
-                  .replace("<head>", `<head><script>window.__benchSeed = ${seed};</script>`)
+                  .replace(
+                    "<head>",
+                    `<head><script>window.__benchSeed = ${seed};${settled}</script>`,
+                  )
                   .replace(
                     "</body>",
                     `<script>Object.assign(window.__bench, { frameAfter: performance.timeOrigin + performance.now(), url: location.href, title: document.title, trigger: sessionStorage.getItem("bench-navigation-trigger") ?? "direct" });</script></body>`,
