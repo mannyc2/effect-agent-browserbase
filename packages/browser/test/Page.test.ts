@@ -1,5 +1,9 @@
+import type { EventEmitter } from "node:events";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+
 import { assert, layer } from "@effect/vitest";
-import { Duration, Effect, Fiber, Layer, Schedule, Stream } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Schedule, Scope, Stream } from "effect";
 
 import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { type BrowserError, PolicyDenied } from "../src/BrowserError.ts";
@@ -519,3 +523,83 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 });
+
+setFlagsFromString("--expose_gc");
+const collectGarbage = runInNewContext("gc") as () => void;
+
+const ownContext = Effect.gen(function* () {
+  const native = (yield* Browser).context.browser();
+
+  if (native === null) return yield* Effect.die("the fixture requires a launched Chromium");
+
+  return yield* Effect.acquireRelease(
+    Effect.promise(() => native.newContext()),
+    (context) => Effect.promise(() => context.close()),
+  );
+});
+
+layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(60) })(
+  "Page lifetime",
+  (it) => {
+    it.effect("releases a closed tab's frames while its browser stays open", () =>
+      Effect.gen(function* () {
+        const context = yield* ownContext;
+        const browser = yield* makeBrowser(context, { id: "lifetime", provider: "test" });
+        const frames: Array<WeakRef<object>> = [];
+
+        const visit = Effect.gen(function* () {
+          const page = yield* browser.newPage("data:text/html,<h1>Captured tab</h1>");
+
+          yield* page.screencast().pipe(Stream.take(1), Stream.runDrain);
+          for (const frame of yield* page.recentFrames) frames.push(new WeakRef(frame));
+          yield* page.close;
+        });
+
+        for (let index = 0; index < 3; index++) yield* visit;
+        yield* (yield* browser.page).close;
+        yield* browser.pages.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced(Duration.millis(50)),
+            until: (open) => open.length === 0,
+          }),
+        );
+        for (let attempt = 0; attempt < 3; attempt++) {
+          yield* Effect.sleep("100 millis");
+          collectGarbage();
+        }
+
+        assert.isAbove(frames.length, 0);
+        assert.strictEqual(frames.filter((frame) => frame.deref() !== undefined).length, 0);
+      }),
+    );
+
+    it.effect("leaves a caller's context with none of its listeners once it closes", () =>
+      Effect.gen(function* () {
+        const context = yield* ownContext;
+        const page = yield* Effect.promise(() => context.newPage());
+        const scope = yield* Scope.make();
+
+        // Playwright's pages are event emitters; its typings omit the count.
+        const listeners = () =>
+          (["dialog", "close", "framenavigated"] as const).map((event) =>
+            (page as unknown as EventEmitter).listenerCount(event),
+          );
+
+        const before = listeners();
+
+        yield* makeBrowser(context, { id: "short", provider: "test" }).pipe(Scope.provide(scope));
+        assert.notDeepEqual(listeners(), before);
+        yield* Scope.close(scope, Exit.void);
+        assert.deepStrictEqual(listeners(), before);
+
+        // The caller now answers its own dialogs; a leftover handler would dismiss them first.
+        page.on("dialog", (dialog) => {
+          dialog.accept("from the caller").catch(() => undefined);
+        });
+        const answer = yield* Effect.promise(() => page.evaluate(() => prompt("name?")));
+
+        assert.strictEqual(answer, "from the caller");
+      }),
+    );
+  },
+);
