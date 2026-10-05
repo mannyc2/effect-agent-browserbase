@@ -35,15 +35,21 @@ export const open = Effect.fn("Cdp.open")(function* (
     ? Redacted.value(options.endpoint)
     : options.endpoint;
 
+  const timeout = options.connectTimeoutMillis ?? 30_000;
+
   const connected = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: () =>
         chromium.connectOverCDP(endpoint, {
-          timeout: options.connectTimeoutMillis ?? 30_000,
+          timeout,
           ...(options.headers === undefined ? {} : { headers: { ...options.headers } }),
         }),
       catch: (cause) =>
-        new BrowserError({ operation: "connect", reason: reasonOf(cause), dispatched: false }),
+        new BrowserError({
+          operation: "connect",
+          reason: reasonOf(cause, timeout),
+          dispatched: false,
+        }),
     }),
     (browser) => Effect.tryPromise(() => browser.close()).pipe(Effect.ignore),
   );

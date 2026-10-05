@@ -256,12 +256,16 @@ const closedPattern =
 const scriptCall = (name: string, ...args: ReadonlyArray<unknown>): string =>
   `${name}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`;
 
-/** Map a Playwright or protocol failure to a reason. */
-export const reasonOf = (cause: unknown): Reason => {
+/**
+ * Map a Playwright or protocol failure to a reason. A call that gives Playwright a timeout passes
+ * the same bound, so its `Timeout` reports it; without one, Playwright's own message stays.
+ */
+export const reasonOf = (cause: unknown, timeoutMillis?: number): Reason => {
   const message = messageOf(cause);
 
   if (closedPattern.test(message)) return new Closed();
-  if (cause instanceof Error && cause.name === "TimeoutError") return new Timeout({ millis: 0 });
+  if (cause instanceof Error && cause.name === "TimeoutError" && timeoutMillis !== undefined)
+    return new Timeout({ millis: timeoutMillis });
   const line = message.split("\n")[0] ?? message;
 
   return new Failed({ detail: line.replace(/^[\w.]+: /, "") });
@@ -337,10 +341,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
-  const native = <A>(operation: string, run: () => Promise<A>) =>
+  const native = <A>(operation: string, run: () => Promise<A>, timeoutMillis?: number) =>
     Effect.tryPromise({
       try: run,
-      catch: (cause) => new BrowserError({ operation, reason: reasonOf(cause), dispatched: false }),
+      catch: (cause) =>
+        new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false }),
     });
 
   // Every run records its mapping when it begins; a missing one leaves Chromium's own receipt time.
@@ -1745,15 +1750,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       )
         return frame.value.image;
       const quality = screenshotOptions.quality ?? 80;
+      const timeout = Duration.toMillis(settings.actionTimeout);
 
-      const data = yield* native("screenshot", () =>
-        playwright.screenshot({
-          type: "jpeg",
-          quality,
-          scale: "css",
-          timeout: Duration.toMillis(settings.actionTimeout),
-          ...(screenshotOptions.clip === undefined ? {} : { clip: screenshotOptions.clip }),
-        }),
+      const data = yield* native(
+        "screenshot",
+        () =>
+          playwright.screenshot({
+            type: "jpeg",
+            quality,
+            scale: "css",
+            timeout,
+            ...(screenshotOptions.clip === undefined ? {} : { clip: screenshotOptions.clip }),
+          }),
+        timeout,
       );
 
       const size = jpegSize(data) ?? playwright.viewportSize() ?? { width: 0, height: 0 };

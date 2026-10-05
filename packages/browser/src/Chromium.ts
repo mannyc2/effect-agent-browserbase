@@ -24,8 +24,11 @@ export interface Options extends Browser.Options {
   readonly locale?: string | undefined;
 }
 
-const failed = (operation: string) => (cause: unknown) =>
-  new BrowserError({ operation, reason: reasonOf(cause), dispatched: false });
+// Playwright's own default, stated so that a launch timeout reports the bound it exceeded.
+const launchTimeoutMillis = 180_000;
+
+const failed = (operation: string, timeoutMillis?: number) => (cause: unknown) =>
+  new BrowserError({ operation, reason: reasonOf(cause, timeoutMillis), dispatched: false });
 
 /** Launch Chromium and open a `Browser` over a fresh context. */
 export const open = Effect.fn("Chromium.open")(function* (options: Options = {}) {
@@ -34,12 +37,13 @@ export const open = Effect.fn("Chromium.open")(function* (options: Options = {})
       try: () =>
         chromium.launch({
           headless: options.headless ?? true,
+          timeout: launchTimeoutMillis,
           ...(options.executablePath === undefined
             ? {}
             : { executablePath: options.executablePath }),
           ...(options.args === undefined ? {} : { args: [...options.args] }),
         }),
-      catch: failed("launch"),
+      catch: failed("launch", launchTimeoutMillis),
     }),
     (browser) => Effect.tryPromise(() => browser.close()).pipe(Effect.ignore),
   );
