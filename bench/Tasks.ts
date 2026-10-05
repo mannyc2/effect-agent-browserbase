@@ -176,6 +176,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly capture: Moment.CaptureOptions;
   /** A count alone cannot show whether the retained frames cover an earlier state. */
   readonly minimumSpanMillis?: (page: Page) => Effect.Effect<number>;
+  /** What else the selected frames must show, read after capture; a problem or undefined. */
+  readonly covers?: (frames: ReadonlyArray<Frame>, page: Page) => Effect.Effect<string | undefined>;
   readonly instructions: string;
   readonly answer: Schema.Codec<A, I>;
   /** What the moment shows, read from the page's truth as it is captured. */
@@ -263,6 +265,12 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       if (moment.frames.length !== wanted || span < minimum)
         return yield* new EvidenceIncomplete({ detail });
 
+      const uncovered =
+        spec.covers === undefined ? undefined : yield* spec.covers(moment.frames, page);
+
+      if (uncovered !== undefined)
+        return yield* new EvidenceIncomplete({ detail: `${uncovered}; ${detail}` });
+
       return { moment, detail, expected: yield* spec.expected(page) };
     }).pipe(Effect.scoped);
 
@@ -303,6 +311,43 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
         };
       }),
   };
+};
+
+/** A selected frame painted before the jump, so the pictures show the move itself. */
+export const precedesJump = (
+  frames: ReadonlyArray<Frame>,
+  spikeAt: number | null,
+): string | undefined => {
+  const first = frames[0]?.timestamp;
+
+  return spikeAt !== null && first !== undefined && first < spikeAt
+    ? undefined
+    : "no captured frame precedes the jump";
+};
+
+/** No selected frame shows the jump the control must not see. */
+export const precedesAnyJump = (
+  frames: ReadonlyArray<Frame>,
+  spikeAt: number | null,
+): string | undefined => {
+  const last = frames.at(-1)?.timestamp;
+
+  return spikeAt === null || (last !== undefined && last < spikeAt)
+    ? undefined
+    : "the control's frames include the jump";
+};
+
+/** Consecutive frames closer than one phase, so no phase can fall between two pictures. */
+export const gapsWithin = (frames: ReadonlyArray<Frame>, maximumMillis: number) => {
+  const gaps = frames
+    .slice(1)
+    .map((frame, index) => frame.hostTime - (frames[index]?.hostTime ?? 0));
+
+  const widest = Math.max(0, ...gaps);
+
+  return widest < maximumMillis
+    ? undefined
+    : `a ${Math.round(widest)}ms gap between frames could hide a whole phase`;
 };
 
 const spin = (page: Page) =>
@@ -413,6 +458,8 @@ const chartSpike = understand({
   setup: waitForMarket((market) => market.spikeAt !== null, 1500),
   capture: { frames: 3, windowMillis: 4000 },
   minimumSpanMillis: () => Effect.succeed(1500),
+  covers: (frames, page) =>
+    truth(page, MarketTruth).pipe(Effect.map((market) => precedesJump(frames, market.spikeAt))),
   instructions: moveInstructions,
   answer: MoveAnswer,
   expected: () => Effect.succeed({ movedSharply: true, direction: "up" as const }),
@@ -430,6 +477,8 @@ const chartCalm = understand({
   setup: waitForMarket((market) => market.candles >= 63, 0),
   capture: { frames: 3, windowMillis: 4000 },
   minimumSpanMillis: () => Effect.succeed(500),
+  covers: (frames, page) =>
+    truth(page, MarketTruth).pipe(Effect.map((market) => precedesAnyJump(frames, market.spikeAt))),
   instructions: moveInstructions,
   answer: MoveAnswer,
   expected: () => Effect.succeed({ movedSharply: false, direction: "flat" as const }),
@@ -568,6 +617,8 @@ const tumbleWin = understand({
   capture: { frames: 12, windowMillis: 20_000 },
   minimumSpanMillis: (page) =>
     truth(page, TumbleTruth).pipe(Effect.map((game) => Math.max(0, game.durationMillis - 300))),
+  // One paying cascade lasts 1,800 ms; a wider gap could leave one out of every picture.
+  covers: (frames) => Effect.succeed(gapsWithin(frames, 1800)),
   instructions:
     "Describe this completed spin of the 6 by 5 tumble slot: how many paying tumbles occurred, the final multiplier, TOTAL WIN, BALANCE, and whether the spin is done. Count the paying cascades, not each moving frame.",
   answer: Schema.Struct({

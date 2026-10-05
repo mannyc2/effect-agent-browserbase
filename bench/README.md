@@ -34,7 +34,10 @@ final frame is a fresh screenshot with its own capture timing, never a claimed p
 incomplete capture is an infrastructure failure, before any model call. Bench browsers retain up to 1,200 frames for the
 longest fixture; this does not change the library default. The tumble task selects twelve frames
 to cover its paying cascades, rather than asking the model to count transitions absent from the
-pictures. Operate tasks receive an outline and screenshot once per turn; calls within a
+pictures, and its capture is incomplete if two consecutive frames are 1,800 ms (one cascade) or
+more apart. The jump task's first frame must precede the jump, and its control's frames must all
+precede any jump. Half the chart seeds drift up and half down, so a constant trend answer cannot
+pass. Operate tasks receive an outline and screenshot once per turn; calls within a
 turn halt on the first failure. `browser_zoom` adds requested viewport crops to that observation;
 pixel clicks return the element under the requested point. Runs without a model still use the free
 scripted solutions. Runs allow input by default; a caller's `Browser.Options.guard` can deny or

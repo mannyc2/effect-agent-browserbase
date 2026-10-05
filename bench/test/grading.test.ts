@@ -327,7 +327,7 @@ describe("understanding evidence", () => {
           throw new Error("the selected frame sequence is incomplete");
         // One cascade lasts 1,800 ms; a larger gap could conceal an entire paying cascade.
         assert.isAbove(paintTime(later), paintTime(earlier));
-        assert.isAtMost(paintTime(later) - paintTime(earlier), 1900);
+        assert.isBelow(paintTime(later) - paintTime(earlier), 1800);
       }
       const final = selected.at(-1);
 

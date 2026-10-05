@@ -165,10 +165,12 @@ td,th{border-bottom:1px solid #2a3140;padding:4px;text-align:left}
   const params = new URLSearchParams(location.search), live = params.get("live") === "1";
   let seed = 3 + window.__benchSeed;
   const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  // Half the seeds drift up and half down, so no constant trend answer passes.
+  const drift = window.__benchSeed % 2 === 0 ? 0.42 : 0.58;
   const candles = [];
   let price = 64000;
   const next = (jump) => {
-    const open = price, close = jump ? open * 1.035 : open * (1 + (random() - 0.42) * 0.004);
+    const open = price, close = jump ? open * 1.035 : open * (1 + (random() - drift) * 0.004);
     const high = Math.max(open, close) * (1 + random() * 0.0015), low = Math.min(open, close) * (1 - random() * 0.0015);
     price = close; candles.push({ open, high, low, close });
   };
