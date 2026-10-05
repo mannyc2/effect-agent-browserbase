@@ -41,5 +41,9 @@ bun run ready                       # fmt check, lint, typecheck, test, build
   agent and moments. It depends on `effect` and `playwright-core` only.
 - `packages/browserbase` (`effect-browserbase`): the Browserbase client and sessions as a
   `Browser`. It depends on `effect-browser` through its public entry points.
-- `bench`: private graded tasks, depending on both.
+- `packages/human-strokes` (`effect-browser-human-strokes`): an optional pointer planner over
+  recorded human strokes. It depends on `effect-browser` through its public entry points only. Its
+  code is MIT; its bundled stroke data is CC BY 4.0, with attribution in its README and
+  `LICENSE-data`.
+- `bench`: private graded tasks, depending on `effect-browser` and `effect-browserbase`.
 - `tools/`: release tooling and the pinned-toolchain installer.
