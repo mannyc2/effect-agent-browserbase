@@ -10,7 +10,7 @@ import * as Chromium from "effect-browser/Chromium";
 import { AiError, LanguageModel } from "effect/ai";
 import type { BrowserContext } from "playwright-core";
 
-import { ledger } from "../Budget.ts";
+import { emptyAccounting, ledger, noTiming } from "../Budget.ts";
 import * as Quote from "../QuoteComparison.ts";
 import { isolatedTrial } from "../Trial.ts";
 import {
@@ -609,6 +609,61 @@ describe("understanding comparison", () => {
             (record) => record.status === "unrun" && record.reason === "stopped-after-charge-bound",
           ),
       );
+    }),
+  );
+
+  it.effect("counts each answer once against the wrong-ticker-or-period target", () =>
+    Effect.gen(function* () {
+      const plan = manifest(
+        yield* configuration(["--hard-trials", "1", "--control-trials", "0"]),
+        "fixed",
+      );
+
+      const pair = plan.pairs[0];
+
+      assert.isDefined(pair);
+      if (pair === undefined) return;
+
+      const right = {
+        ticker: true,
+        price: true,
+        change1h: true,
+        change24h: true,
+        column: true,
+        table: true,
+      };
+
+      const clean = { wrongTable: false, wrongRow: false, wrongPeriod: false, unsourced: false };
+
+      const record = (arm: Quote.Arm, wrong: boolean): TrialRecord => ({
+        task: pair.task,
+        trial: pair.trial,
+        seed: pair.seed,
+        arm,
+        position: pair.order.indexOf(arm),
+        mode: plan.mode,
+        status: "graded",
+        reason: "answered",
+        pass: !wrong,
+        // A neighbour's row reports its own ticker and its 7d change: one answer, three faults.
+        matches: wrong ? { ...right, ticker: false, price: false, change24h: false } : right,
+        binding: wrong ? { ...clean, wrongRow: true, wrongPeriod: true } : clean,
+        answer: null,
+        diagnostic: null,
+        lastResponse: null,
+        evidence: null,
+        accounting: emptyAccounting,
+        timing: noTiming,
+        seconds: 1,
+      });
+
+      const rules = summarize(plan, [
+        record("A", false),
+        record("B", false),
+        record("facts", true),
+      ]).prerequisitesForConsideringFacts;
+
+      assert.deepStrictEqual(rules.wrongTickerOrPeriod, { target: 0, observed: 1, met: false });
     }),
   );
 

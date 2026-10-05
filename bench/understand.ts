@@ -535,6 +535,13 @@ const summarizeArms = (records: ReadonlyArray<Record>, scheduled: number) =>
           record.matches?.table === false ||
           record.matches?.column === false,
       ).length,
+      // Answers, each counted once, with a wrong ticker, row or period: the pre-registered rule.
+      wrongTickerOrPeriod: graded.filter(
+        (record) =>
+          record.matches?.ticker === false ||
+          record.binding?.wrongRow === true ||
+          record.binding?.wrongPeriod === true,
+      ).length,
       // Provider latency excludes time spent waiting for budget admission.
       requestSeconds: { p50: percentile(times, 0.5), p95: percentile(times, 0.95) },
       queueSeconds: { p50: percentile(queued, 0.5), p95: percentile(queued, 0.95) },
@@ -616,9 +623,7 @@ const prerequisites = (plan: Manifest, dense: ReturnType<typeof byTask>[number] 
   const exact = facts === undefined || facts.graded === 0 ? null : facts.passed / facts.graded;
 
   const wrongTickerOrPeriod =
-    facts === undefined || facts.graded === 0
-      ? null
-      : facts.fieldErrors.ticker + facts.wrongRow + facts.wrongPeriod;
+    facts === undefined || facts.graded === 0 ? null : facts.wrongTickerOrPeriod;
 
   return {
     baselineReproducesBindingMistakes: {
