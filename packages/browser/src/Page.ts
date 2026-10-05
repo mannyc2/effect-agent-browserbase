@@ -230,7 +230,10 @@ export interface Page {
   /** Keys such as `"Enter"`, `"Space"`, `"ArrowLeft"` or `"Control+A"`. */
   readonly press: (keys: string, options?: PressOptions) => Effect.Effect<void, BrowserError>;
   readonly scroll: (options?: ScrollOptions) => Effect.Effect<void, BrowserError>;
-  /** Choose options of a `<select>` by value or label; returns the chosen labels. */
+  /**
+   * Choose options of a `<select>` by value or label; returns the chosen labels. A refusal, such
+   * as no matching option, is undispatched.
+   */
   readonly select: (
     ref: string,
     values: ReadonlyArray<string>,
@@ -884,6 +887,34 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
 
+  // A ref that names nothing is stale on every path, named by the target that failed.
+  const inputFailure = (
+    operation: string,
+    targets: Script.InputPlan["targets"],
+    failure: Script.InputFailure,
+  ) => {
+    const target = failure.index === undefined ? undefined : targets[failure.index];
+
+    return failWith(
+      operation,
+      failure.error === "outside"
+        ? new InvalidRequest({ detail: failure.detail })
+        : failure.error === "stale" && typeof target === "string"
+          ? new StaleRef({ ref: target })
+          : new NotActionable({ detail: failure.detail }),
+    );
+  };
+
+  const editFailure = (
+    operation: string,
+    ref: string,
+    failure: { readonly error: string; readonly stale?: boolean | undefined },
+  ) =>
+    failWith(
+      operation,
+      failure.stale === true ? new StaleRef({ ref }) : new NotActionable({ detail: failure.error }),
+    );
+
   const readPoint = (
     operation: string,
     target: Target,
@@ -983,15 +1014,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       const prepared = yield* decodeWith(action, Script.PreparedInputResultSchema)(value);
 
-      if ("error" in prepared)
-        return yield* failWith(
-          action,
-          prepared.error === "outside"
-            ? new InvalidRequest({ detail: prepared.detail })
-            : prepared.error === "stale" && typeof targets[0] === "string"
-              ? new StaleRef({ ref: targets[0] })
-              : new NotActionable({ detail: prepared.detail }),
-        );
+      if ("error" in prepared) return yield* inputFailure(action, targets, prepared);
       const first = prepared.targets[0];
       const target = targets[0];
 
@@ -1019,9 +1042,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           ),
           Effect.flatMap(decodeWith(action, Script.ValidatedInputResultSchema)),
           Effect.flatMap((result) =>
-            "error" in result
-              ? failWith(action, new NotActionable({ detail: result.detail }))
-              : Effect.void,
+            "error" in result ? inputFailure(action, targets, result) : Effect.void,
           ),
         );
 
@@ -1524,8 +1545,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               Effect.flatMap(decodeWith("type", Script.FocusResultSchema)),
             );
 
-            if ("error" in focused)
-              return yield* failWith("type", new NotActionable({ detail: focused.error }));
+            if ("error" in focused) return yield* editFailure("type", ref, focused);
             eligible = focused.prose;
           }
           yield* presentationPause("focus");
@@ -1579,8 +1599,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               approval,
             ).pipe(Effect.flatMap(decodeWith("type", Script.EditResultSchema)));
 
-            if ("error" in checked)
-              return yield* failWith("type", new NotActionable({ detail: checked.error }));
+            if ("error" in checked) return yield* editFailure("type", typeOptions.into, checked);
           }
           if (typeOptions.submit === true) {
             // Typing can move focus or change the form; Enter goes only to the approved field.
@@ -1731,15 +1750,17 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         Effect.gen(function* () {
           yield* targetFor("select", ref, approval, marks);
 
-          yield* marks.sent;
-
+          // The script refuses before it changes anything. Only a choice it made, or an answer
+          // that never arrived intact, may have reached the page.
           const result = yield* mutate("select", scriptCall("select", ref, values), approval).pipe(
             Effect.flatMap(decodeWith("select", Script.EditResultSchema)),
+            Effect.tapError(() => marks.sent),
           );
 
-          return "error" in result
-            ? yield* failWith("select", new NotActionable({ detail: result.error }))
-            : result.detail;
+          if ("error" in result) return yield* editFailure("select", ref, result);
+          yield* marks.sent;
+
+          return result.detail;
         }),
     );
 

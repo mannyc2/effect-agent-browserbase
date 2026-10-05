@@ -571,7 +571,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       );
       yield* Deferred.succeed(released, undefined);
 
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
+      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "StaleRef", dispatched: false });
       assert.strictEqual(yield* outcome(page), "Not ordered");
     }),
   );
@@ -826,7 +826,7 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
       );
       yield* Deferred.succeed(released, undefined);
 
-      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "NotActionable", dispatched: false });
+      assert.deepStrictEqual(yield* Fiber.join(held), { tag: "StaleRef", dispatched: false });
       assert.strictEqual(
         yield* Effect.promise(() => frame.evaluate(() => document.body.dataset.clicked)),
         "no",
@@ -868,6 +868,75 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           ["back"],
         );
       }),
+  );
+
+  it.effect("names the stale target, and refuses a selection undispatched, on every path", () =>
+    Effect.gen(function* () {
+      const staleness = (error: BrowserError) =>
+        error.reason._tag === "StaleRef"
+          ? { ref: error.reason.ref, dispatched: error.dispatched }
+          : { tag: error.reason._tag, dispatched: error.dispatched };
+
+      for (const guarded of [false, true]) {
+        const entered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+
+        const { page } = yield* setup(
+          guarded
+            ? {
+                guard: (request) =>
+                  request.action === "click"
+                    ? Deferred.succeed(entered, undefined).pipe(
+                        Effect.andThen(Deferred.await(released)),
+                      )
+                    : Effect.void,
+              }
+            : {},
+        );
+
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            '<button id="first">First</button><button id="second">Second</button>' +
+              '<select id="coin" aria-label="Coin"><option>Bitcoin</option></select>',
+          ),
+        );
+        const snapshot = yield* page.snapshot();
+        const first = refOf(snapshot, "button", "First");
+        const second = refOf(snapshot, "button", "Second");
+        const coin = refOf(snapshot, "combobox", "Coin");
+
+        yield* Effect.promise(() =>
+          page.playwright.evaluate(() => document.getElementById("second")?.remove()),
+        );
+        assert.deepStrictEqual(staleness(yield* Effect.flip(page.drag(first, second))), {
+          ref: second,
+          dispatched: false,
+        });
+        assert.deepStrictEqual(yield* failure(page.select(coin, ["Dogecoin"])), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+        assert.deepStrictEqual(yield* failure(page.select(first, ["Bitcoin"])), {
+          tag: "NotActionable",
+          dispatched: false,
+        });
+
+        if (guarded) {
+          // A ref removed while its approval was held is stale, as it is without a guard.
+          const held = yield* Effect.flip(page.click(first)).pipe(Effect.forkChild);
+
+          yield* Deferred.await(entered).pipe(Effect.timeout(Duration.seconds(1)));
+          yield* Effect.promise(() =>
+            page.playwright.evaluate(() => document.getElementById("first")?.remove()),
+          );
+          yield* Deferred.succeed(released, undefined);
+          assert.deepStrictEqual(staleness(yield* Fiber.join(held)), {
+            ref: first,
+            dispatched: false,
+          });
+        }
+      }
+    }),
   );
 
   it.effect("finishes allowed back navigation between entries with the same URL", () =>

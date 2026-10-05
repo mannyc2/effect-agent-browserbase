@@ -82,13 +82,16 @@ export interface PreparedInput {
   readonly destination?: string | undefined;
 }
 
-export type PreparedInputResult =
-  | PreparedInput
-  | { readonly error: string; readonly detail: string };
+/** A refusal; a stale target is named by its index in the plan. */
+export interface InputFailure {
+  readonly error: string;
+  readonly detail: string;
+  readonly index?: number | undefined;
+}
 
-export type ValidatedInputResult =
-  | { readonly ok: true }
-  | { readonly error: string; readonly detail: string };
+export type PreparedInputResult = PreparedInput | InputFailure;
+
+export type ValidatedInputResult = { readonly ok: true } | InputFailure;
 
 /** A point where a target, by its index in the plan, is about to receive a press. */
 export interface Press {
@@ -106,12 +109,12 @@ export interface ValidationOptions {
 
 export type EditResult =
   | { readonly ok: true; readonly detail: string }
-  | { readonly error: string };
+  | { readonly error: string; readonly stale?: boolean };
 
 /** A focused field, and whether opted-in prose slips may apply to it as it is now. */
 export type FocusResult =
   | { readonly ok: true; readonly detail: string; readonly prose: boolean }
-  | { readonly error: string };
+  | { readonly error: string; readonly stale?: boolean };
 
 export type TypeableResult =
   | { readonly ok: true }
@@ -625,10 +628,14 @@ export const install = (): PageApi => {
     };
   };
 
+  // A ref names an element of the current documents only: nodes of a navigated frame can stay
+  // connected to their old document, and must not be measured or typed into.
   const lookup = (ref: string): Element | undefined => {
     const element = byRef.get(ref)?.deref();
 
-    return element !== undefined && element.isConnected ? element : undefined;
+    return element !== undefined && element.isConnected && inCurrentDocument(element)
+      ? element
+      : undefined;
   };
 
   const describe = (element: Element): string => {
@@ -1232,7 +1239,7 @@ export const install = (): PageApi => {
     const classifications = new Set<Classification>();
     let destination = plan.destination ?? undefined;
 
-    for (const target of plan.targets) {
+    for (const [index, target] of plan.targets.entries()) {
       let element: Element | null | undefined;
 
       if (target === null) {
@@ -1240,7 +1247,7 @@ export const install = (): PageApi => {
       } else if (typeof target === "string") {
         element = lookup(target);
         if (element === undefined)
-          return { error: "stale", detail: target + " is not on the page any more" };
+          return { error: "stale", detail: target + " is not on the page any more", index };
       } else {
         if (
           !Number.isFinite(target.x) ||
@@ -1263,7 +1270,7 @@ export const install = (): PageApi => {
         continue;
       }
       if (!inCurrentDocument(element))
-        return { error: "stale", detail: "the input target belongs to a replaced document" };
+        return { error: "stale", detail: "the input target belongs to a replaced document", index };
       const refusal = plan.action === "type" ? typingRefusal(element, target !== null) : undefined;
 
       if (refusal !== undefined) return { error: "untypeable", detail: refusal };
@@ -1306,7 +1313,8 @@ export const install = (): PageApi => {
   ): ValidatedInputResult => {
     const current = prepareInput(plan);
 
-    if ("error" in current) return { error: "changed", detail: current.detail };
+    if ("error" in current)
+      return current.error === "stale" ? current : { error: "changed", detail: current.detail };
     if (
       current.url !== prepared.url ||
       current.destination !== prepared.destination ||
@@ -1411,7 +1419,7 @@ export const install = (): PageApi => {
   const focus = (ref: string, replace: boolean): FocusResult => {
     const element = lookup(ref);
 
-    if (element === undefined) return { error: `${ref} is not on the page any more` };
+    if (element === undefined) return { error: `${ref} is not on the page any more`, stale: true };
     if (isDisabled(element)) return { error: `${ref} is disabled` };
     if (!textEntry(element)) return { error: `${ref} is ${describe(element)}, not a text field` };
     if (isHtml(element)) element.focus();
@@ -1427,7 +1435,7 @@ export const install = (): PageApi => {
   const select = (ref: string, values: ReadonlyArray<string>): EditResult => {
     const element = lookup(ref);
 
-    if (element === undefined) return { error: `${ref} is not on the page any more` };
+    if (element === undefined) return { error: `${ref} is not on the page any more`, stale: true };
     if (!isSelect(element))
       return {
         error: `${ref} is ${describe(element)}, not a <select>; click it and pick an option`,
@@ -1510,7 +1518,11 @@ export const PointResultSchema = Schema.Union([
   }),
 ]);
 
-const InputPreparationError = Schema.Struct({ error: Schema.String, detail: Schema.String });
+const InputPreparationError = Schema.Struct({
+  error: Schema.String,
+  detail: Schema.String,
+  index: Schema.optional(Schema.Finite),
+});
 
 export const PreparedInputResultSchema = Schema.Union([
   Schema.Struct({
@@ -1558,12 +1570,14 @@ export const TypeableResultSchema = Schema.Union([
   Schema.Struct({ error: Schema.Literals(["stale", "untypeable"]), detail: Schema.String }),
 ]);
 
+const EditFailure = Schema.Struct({ error: Schema.String, stale: Schema.optional(Schema.Boolean) });
+
 export const FocusResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String, prose: Schema.Boolean }),
-  Schema.Struct({ error: Schema.String }),
+  EditFailure,
 ]);
 
 export const EditResultSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), detail: Schema.String }),
-  Schema.Struct({ error: Schema.String }),
+  EditFailure,
 ]);

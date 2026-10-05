@@ -50,6 +50,8 @@ using them as click coordinates.
 role, accessible name, cursor and link target. Pixel targeting resolves through the page script and
 keeps the original point; the receipt names the control even when a nested child received the hit.
 Refs inside same-origin frames are measured, scrolled and checked for cover in the top viewport.
+A ref that no longer names an element of the current documents, including one in a frame that has
+since navigated, fails with `StaleRef` naming that ref, with or without a guard.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged after the browser tools, so the caller's tool wins a name clash with one, and its calls

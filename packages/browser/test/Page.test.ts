@@ -227,6 +227,22 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         tag: "InvalidRequest",
         dispatched: false,
       });
+
+      // Nodes of a navigated frame can stay connected to their old document; they are stale too.
+      yield* Effect.promise(() =>
+        page.playwright.setContent(
+          '<iframe name="child" srcdoc="<button>Frame action</button>"></iframe>',
+        ),
+      );
+      const framed = refOf(yield* page.snapshot(), "button", "Frame action");
+
+      yield* Effect.promise(() =>
+        page.playwright.frame({ name: "child" })!.goto(site.url("/next")),
+      );
+      assert.deepStrictEqual(yield* reason(page.click(framed)), {
+        tag: "StaleRef",
+        dispatched: false,
+      });
     }),
   );
 
