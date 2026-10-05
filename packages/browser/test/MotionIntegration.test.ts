@@ -316,6 +316,9 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
             });
           });
 
+        // A page's first mousemove has no previous position, so its movement is 0 by definition
+        // (Chromium 153 reports it that way). Place the pointer before recording.
+        yield* page.hover({ x: 640, y: 360 });
         yield* record;
 
         const targets = [
