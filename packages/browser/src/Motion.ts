@@ -40,7 +40,9 @@ export type Plan = typeof Plan.Type;
 export interface Service {
   /**
    * Offsets start when the performer publishes the plan, before its first input. The browser
-   * decodes the result as a `Plan` whose last sample must be exactly `to`.
+   * decodes the result as a `Plan` whose last sample must be exactly `to`. Glide time counts
+   * against the browser's `actionTimeout`, and one action can glide more than once: a drag
+   * performs two glides, so two 5-second plans exceed the 10-second default.
    */
   readonly plan: (from: Point, to: Point) => Effect.Effect<ReadonlyArray<Sample>>;
 }

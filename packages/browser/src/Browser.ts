@@ -40,7 +40,10 @@ import * as Page from "./Page.ts";
 export interface Options {
   /** Move the pointer along curved paths and type with human pacing. Defaults to false. */
   readonly humanize?: boolean | undefined;
-  /** Bound on each action. Defaults to 10 seconds. */
+  /**
+   * Bound on each action. Defaults to 10 seconds. Humanized pointer glides, up to 5 seconds each
+   * and two per drag, count against it.
+   */
   readonly actionTimeout?: Duration.Input | undefined;
   /** Bound on each navigation. Defaults to 30 seconds. */
   readonly navigationTimeout?: Duration.Input | undefined;
