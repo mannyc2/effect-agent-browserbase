@@ -25,7 +25,12 @@ export interface Options extends Browser.Options {
 }
 
 /** Connect and open a `Browser` over the endpoint's first context. */
-export const open = Effect.fn("Cdp.open")(function* (options: Options) {
+export const open = Effect.fn("Cdp.open")(function* (
+  options: Options,
+  // Constructor metadata belongs to the provider. Merely connecting or observing a blank URL
+  // cannot establish freshness; attach paths leave this at the borrowed default.
+  metadata: { readonly contextOrigin?: Browser.ContextOrigin | undefined } = {},
+) {
   const endpoint = Redacted.isRedacted(options.endpoint)
     ? Redacted.value(options.endpoint)
     : options.endpoint;
@@ -53,7 +58,11 @@ export const open = Effect.fn("Cdp.open")(function* (options: Options) {
 
   return yield* Browser.make(
     context,
-    { id: options.id ?? "cdp", provider: options.provider ?? "cdp" },
+    {
+      id: options.id ?? "cdp",
+      provider: options.provider ?? "cdp",
+      contextOrigin: metadata.contextOrigin,
+    },
     options,
   );
 });

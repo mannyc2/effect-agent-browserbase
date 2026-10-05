@@ -39,10 +39,12 @@ hold classified input and navigation without a user-facing confirmation prompt. 
 pacing over delayed connections. Humanized runs use visible wheel input to reach off-screen
 targets and type near 75 WPM with overlapping holds; the optional prose flag permits corrected
 slips only in eligible fields. Presentation pauses preserve the navigation wait. Events, frame
-arrivals and moment windows use the browser’s host
-monotonic clock; these stamps are relative timings, not calendar dates. `Browser.events()` also
+arrivals and moment windows use the browser’s host monotonic clock; these stamps are relative timings, not calendar dates. `Browser.events()` also
 exposes the presentation track with sequence cursors for bounded replay. The bench’s descriptions
-continue to use narrative action events, without the cursor-rendering track.
+continue to use narrative action events, without the cursor-rendering track. Frame windows and
+evidence spans use mapped browser paint time, with screenshot timing represented separately;
+late delivery cannot make old paint count as the fixture's final state. Capture counters expose
+native filtering, paint gaps and observed subscriber loss.
 
 ## Running
 

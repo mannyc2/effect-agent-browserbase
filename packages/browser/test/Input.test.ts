@@ -1,10 +1,11 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { assert, layer } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber, Option, Random, Ref, Semaphore } from "effect";
+import { Clock, Duration, Effect, Fiber, Option, Random, Ref, Semaphore, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
+import type { BrowserEvent } from "../src/BrowserEvent.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as Page from "../src/Page.ts";
 
@@ -13,6 +14,8 @@ interface RecordedKey {
   readonly key: string;
   readonly code: string;
   readonly at: number;
+  readonly epoch: number;
+  readonly handled: number;
   readonly trusted: boolean;
   readonly shift: boolean;
   readonly control: boolean;
@@ -23,12 +26,21 @@ interface Dispatch {
   readonly type: string | undefined;
   readonly key: string | undefined;
   readonly sent: number;
+  readonly timestamp: number | undefined;
   delivered?: number;
   settled?: number;
 }
 
+interface RecordedPointer {
+  readonly type: string;
+  readonly epoch: number;
+  readonly handled: number;
+  readonly trusted: boolean;
+}
+
 interface RecordedWindow {
   readonly inputEvents: Array<RecordedKey>;
+  readonly pointerEvents: Array<RecordedPointer>;
   submissions: number;
 }
 
@@ -66,7 +78,17 @@ const setup = Effect.fnUntraced(function* (
     playwright.evaluate(() => {
       const recorded = window as unknown as RecordedWindow;
 
-      Object.assign(recorded, { inputEvents: [], submissions: 0 });
+      Object.assign(recorded, { inputEvents: [], pointerEvents: [], submissions: 0 });
+      document.body.style.height = "2000px";
+      for (const name of ["mousemove", "mousedown", "mouseup", "wheel"] as const)
+        document.addEventListener(name, (event) => {
+          recorded.pointerEvents.push({
+            type: event.type,
+            epoch: performance.timeOrigin + event.timeStamp,
+            handled: performance.timeOrigin + performance.now(),
+            trusted: event.isTrusted,
+          });
+        });
       document.addEventListener("submit", (event) => {
         event.preventDefault();
         recorded.submissions += 1;
@@ -77,7 +99,10 @@ const setup = Effect.fnUntraced(function* (
             type: event.type,
             key: event.key,
             code: event.code,
-            at: event.timeStamp,
+            // Explicit protocol stamps describe intended time, so pacing still uses handling time.
+            at: performance.now(),
+            epoch: performance.timeOrigin + event.timeStamp,
+            handled: performance.timeOrigin + performance.now(),
             trusted: event.isTrusted,
             shift: event.shiftKey,
             control: event.ctrlKey,
@@ -92,25 +117,33 @@ const setup = Effect.fnUntraced(function* (
   const originalDown = playwright.keyboard.down.bind(playwright.keyboard);
   const originalUp = playwright.keyboard.up.bind(playwright.keyboard);
   const dispatches: Array<Dispatch> = [];
+  const track: Array<BrowserEvent> = [];
   const capacityReached = Promise.withResolvers<void>();
   let gate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   let outstanding = 0;
   let maximumOutstanding = 0;
   let rejectNextKeyDown = false;
   let sequence = 0;
+  let clockBias = 0;
+  let nextDown: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 
   const invoke = async <A>(
     method: string,
     type: string | undefined,
     key: string | undefined,
     run: () => Promise<A>,
+    timestamp?: number,
   ): Promise<A> => {
     const input = method.startsWith("Input.") || method.startsWith("keyboard.");
-    const dispatch: Dispatch = { method, type, key, sent: performance.now() };
+    const dispatch: Dispatch = { method, type, key, timestamp, sent: performance.now() };
     const rejectReply = rejectNextKeyDown && type === "keyDown";
 
     if (rejectReply) rejectNextKeyDown = false;
     dispatches.push(dispatch);
+    if (method === "Input.dispatchKeyEvent" && type === "keyDown") {
+      nextDown?.resolve();
+      nextDown = undefined;
+    }
     if (input) {
       outstanding += 1;
       maximumOutstanding = Math.max(maximumOutstanding, outstanding);
@@ -141,7 +174,27 @@ const setup = Effect.fnUntraced(function* (
       params !== undefined && "key" in params && typeof params.key === "string"
         ? params.key
         : undefined,
-      () => originalSend(method, params),
+      () =>
+        originalSend(method, params).then((result) => {
+          // Recalibration is an explicit clock discontinuity; native input and frame pixels remain real.
+          if (
+            method === "Runtime.evaluate" &&
+            params !== undefined &&
+            "expression" in params &&
+            params.expression === "performance.timeOrigin + performance.now()" &&
+            "result" in result &&
+            typeof result.result === "object" &&
+            result.result !== null &&
+            "value" in result.result &&
+            typeof result.result.value === "number"
+          )
+            result.result.value += clockBias;
+
+          return result;
+        }),
+      params !== undefined && "timestamp" in params && typeof params.timestamp === "number"
+        ? params.timestamp
+        : undefined,
     );
 
   cdp.send = delayedSend;
@@ -157,7 +210,11 @@ const setup = Effect.fnUntraced(function* (
     clock: yield* Clock.Clock,
     pointer: yield* Ref.make(Option.none<Page.Point>()),
     inputLock: yield* Semaphore.make(1),
-    publish: () => ++sequence,
+    publish: (event) => {
+      track.push(event);
+
+      return ++sequence;
+    },
     settings: {
       humanize: options.humanize ?? true,
       actionTimeout: Duration.seconds(30),
@@ -174,6 +231,15 @@ const setup = Effect.fnUntraced(function* (
   return {
     page,
     dispatches,
+    track,
+    shiftClock: () => {
+      clockBias = 500;
+    },
+    watchNextDown: () => {
+      nextDown = Promise.withResolvers<void>();
+
+      return nextDown.promise;
+    },
     capacityReached: capacityReached.promise,
     holdReplies: () => {
       gate = Promise.withResolvers<void>();
@@ -253,6 +319,15 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
           );
           assert.isTrue(events.every((event) => event.trusted));
           assert.strictEqual(raw.length, text.length * 2);
+          for (const [index, command] of raw.entries()) {
+            const event = events[index];
+
+            if (command.timestamp === undefined || event === undefined)
+              return yield* Effect.die("a raw key is missing its native timestamp evidence");
+            assert.isAbove(command.timestamp, 1_000_000_000);
+            assert.closeTo(event.epoch, command.timestamp * 1000, 1);
+            assert.isAbove(event.handled - event.epoch, oneWayMillis / 2);
+          }
           assert.strictEqual(
             relay.dispatches.filter((dispatch) => dispatch.method.startsWith("Input.")).length,
             raw.length,
@@ -280,6 +355,142 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
 
         assert.isAbove(slowerDowns.length, 1);
         assert.isBelow(slowerDowns[1]?.sent ?? Infinity, slowerDowns[0]?.settled ?? 0);
+      }),
+    );
+
+    it.effect("preserves native mouse and wheel timestamps through 70 and 320ms relays", () =>
+      Effect.gen(function* () {
+        const nativeType = {
+          mouseMoved: "mousemove",
+          mousePressed: "mousedown",
+          mouseReleased: "mouseup",
+          mouseWheel: "wheel",
+        } as const;
+
+        for (const oneWayMillis of [35, 160]) {
+          const relay = yield* setup(oneWayMillis);
+
+          yield* relay.page.hover({ x: 500, y: 300 });
+          yield* relay.page.click({ x: 500, y: 300 });
+          yield* relay.page.scroll({ at: { x: 500, y: 300 }, dy: 50 });
+          yield* Effect.promise(() =>
+            relay.page.playwright.waitForFunction(() =>
+              (window as unknown as RecordedWindow).pointerEvents.some(
+                (event) => event.type === "wheel",
+              ),
+            ),
+          );
+
+          const events = yield* Effect.promise(() =>
+            relay.page.playwright.evaluate(
+              () => (window as unknown as RecordedWindow).pointerEvents,
+            ),
+          );
+
+          const commands = relay.dispatches.filter(
+            (command) => command.method === "Input.dispatchMouseEvent",
+          );
+
+          assert.isTrue(events.every((event) => event.trusted));
+          for (const type of Object.values(nativeType))
+            assert.isTrue(
+              events.some((event) => event.type === type),
+              "missing trusted " + type,
+            );
+          assert.isTrue(commands.every((command) => command.timestamp !== undefined));
+          for (const event of events) {
+            const command = commands.find((candidate) => {
+              const type = candidate.type;
+
+              return (
+                type !== undefined &&
+                type in nativeType &&
+                nativeType[type as keyof typeof nativeType] === event.type &&
+                candidate.timestamp !== undefined &&
+                Math.abs(candidate.timestamp * 1000 - event.epoch) < 1
+              );
+            });
+
+            assert.isDefined(
+              command,
+              "the native handler must observe the dispatched epoch timestamp",
+            );
+            assert.isAbove(event.handled - event.epoch, oneWayMillis / 2);
+          }
+        }
+      }),
+    );
+
+    it.effect("freezes a typing run's clock mapping across capture recalibration and cleanup", () =>
+      Effect.gen(function* () {
+        for (const interrupt of [false, true]) {
+          const relay = yield* setup(35);
+          const firstDown = relay.watchNextDown();
+
+          const typing = yield* relay.page
+            .type("the quick brown fox")
+            .pipe(Random.withSeed("clock-refresh"), Effect.forkChild);
+
+          yield* Effect.promise(() => firstDown);
+          relay.shiftClock();
+
+          const frames = yield* relay.page
+            .screencast()
+            .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+
+          const frame = frames[0];
+
+          if (frame === undefined) return yield* Effect.die("capture produced no paint evidence");
+          assert.isAbove(frame.receivedAt - frame.hostTime, 400);
+
+          if (interrupt) {
+            const held = relay.watchNextDown();
+
+            yield* Effect.promise(() => held).pipe(Effect.timeout("5 seconds"));
+            yield* Fiber.interrupt(typing);
+          } else yield* Fiber.join(typing);
+          yield* relay.page.type("z");
+
+          const commands = relay.dispatches.filter(
+            (command) => command.method === "Input.dispatchKeyEvent",
+          );
+
+          const events = relay.track.filter((event) => event._tag === "KeyChanged");
+
+          assert.strictEqual(commands.length, events.length);
+          assert.isAbove(commands.length, 4);
+
+          const offsets = commands.map((command, index) => {
+            const event = events[index];
+
+            if (command.timestamp === undefined || event === undefined)
+              throw new Error("input lacks its matching dispatch event");
+            assert.strictEqual(command.key, event.key);
+            assert.strictEqual(command.type === "keyDown" ? "down" : "up", event.phase);
+
+            return command.timestamp * 1000 - event.at;
+          });
+
+          const original = offsets[0];
+
+          if (original === undefined) return yield* Effect.die("the typing run did not dispatch");
+          for (const offset of offsets.slice(0, -2)) assert.closeTo(offset, original, 0.01);
+          for (const offset of offsets.slice(-2)) assert.closeTo(offset - original, 500, 20);
+
+          const observed = yield* keys(relay.page);
+          const heldCodes = new Set<string>();
+
+          for (const event of observed) {
+            if (event.type === "keydown") {
+              assert.isFalse(heldCodes.has(event.code));
+              heldCodes.add(event.code);
+            } else assert.isTrue(heldCodes.delete(event.code), "cleanup releases each press once");
+          }
+          assert.isEmpty(heldCodes);
+          assert.strictEqual(observed.at(-2)?.key, "z");
+          assert.strictEqual(observed.at(-1)?.key, "z");
+          if (!interrupt) assert.strictEqual(yield* value(relay.page), "the quick brown foxz");
+        }
       }),
     );
 

@@ -99,7 +99,29 @@ supplement the functional navigation delay and document wait; they never shorten
 `Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
 Compare these stamps only within that clock: they are not epoch dates or comparable across hosts.
-`Frame.timestamp` retains browser paint wall time; screenshot fallbacks use host wall time.
+`Frame.timing` distinguishes `BrowserPaint` from `Screenshot`. Native frames retain browser epoch
+milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
+Screenshot fallbacks have only a host capture interval; their `timestamp` getter is undefined.
+Moment windows and frame captions use `hostTime`, so delayed delivery cannot make old paint current.
+`Page.screenshot({ fresh: true })` bypasses the frame cache.
+
+Local launches and new Browserbase sessions measure clock offset and send-to-captured-image delay
+on a private blank page before user scripts or public pages run. `Browser.captureCalibration`
+holds those samples; `delayFor(frame)` maps their median delay onto that frame's clock estimate for
+the consumer's compositor. This measures the first observed captured marker, not pure rendering lag.
+Supplied contexts and attached sessions receive read-only clock probes and expose no active startup
+measurement. Transport asymmetry remains in the reported uncertainty.
+
+Mouse input and raw text-key events carry the calibrated epoch timestamp. Shortcut chords retain
+Playwright's platform behavior, and Unicode insertion has no timestamp field. Startup probes are
+unstamped so the measurement remains observable.
+
+`Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
+dropped out of order, observed subscriber losses and paint-time gap totals/minimum/maximum/last.
+Concurrent readers share one native screencast, each with a bounded 16-frame queue; a slow reader's
+observed sequence gaps add to `subscriberMissed`. Late subscribers do not count earlier history.
+ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
+with a typed error. Frame history remains bounded by `frameHistory`.
 
 `Browser.events()` streams `RecordedEvent` values: `{ sequence, event }`. The sequence orders
 all browser events and is the replay cursor. Call `browser.events({ after: lastSequence })` to

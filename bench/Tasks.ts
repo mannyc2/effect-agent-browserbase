@@ -178,7 +178,8 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       yield* page.recentFrames.pipe(
         Effect.repeat({
           schedule: Schedule.spaced("25 millis"),
-          until: (frames) => frames.some((frame) => frame.timestamp >= frameAfter),
+          until: (frames) =>
+            frames.some((frame) => frame.timestamp !== undefined && frame.timestamp >= frameAfter),
         }),
         Effect.timeout("5 seconds"),
         Effect.orDie,
@@ -188,8 +189,7 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
       const first = moment.frames[0];
       const last = moment.frames.at(-1);
 
-      const span =
-        first === undefined || last === undefined ? 0 : last.receivedAt - first.receivedAt;
+      const span = first === undefined || last === undefined ? 0 : last.hostTime - first.hostTime;
 
       const minimum =
         spec.minimumSpanMillis === undefined ? 0 : yield* spec.minimumSpanMillis(page);

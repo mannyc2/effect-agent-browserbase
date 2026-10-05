@@ -10,14 +10,13 @@
  * @since 0.3.0
  */
 import {
-  type Clock,
+  Clock,
   Deferred,
   Duration,
   Effect,
   Exit,
   MutableRef,
   Option,
-  PubSub,
   Ref,
   Schedule,
   Schema,
@@ -52,7 +51,9 @@ import {
   TrackPlanned,
   WheelScrolled,
 } from "./BrowserEvent.ts";
-import { Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import { type CaptureStats, type Frame, Image, type ScreencastOptions } from "./Frame.ts";
+import * as Capture from "./internal/capture.ts";
+import * as BrowserClock from "./internal/clock.ts";
 import * as Human from "./internal/human.ts";
 import * as Input from "./internal/input.ts";
 import * as Keys from "./internal/keys.ts";
@@ -126,6 +127,8 @@ export interface ScrollOptions {
 }
 
 export interface ScreenshotOptions {
+  /** Capture a new image even when a screencast frame is available. */
+  readonly fresh?: boolean | undefined;
   /** A region of the viewport, for reading a detail at full resolution. */
   readonly clip?:
     | { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
@@ -235,6 +238,8 @@ export interface Page {
 
   /** Screencast frames for as long as the stream runs. Concurrent streams share one screencast. */
   readonly screencast: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
+  /** Native delivery, filtering and observed subscriber loss across capture generations. */
+  readonly captureStats: Effect.Effect<CaptureStats>;
   readonly latestFrame: Effect.Effect<Option.Option<Frame>>;
   /** The frames received in the last `frameHistory` frames, oldest first. */
   readonly recentFrames: Effect.Effect<ReadonlyArray<Frame>>;
@@ -319,22 +324,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
   const lastInputAt = yield* Ref.make(0);
-  const frames = yield* PubSub.sliding<Frame>(16);
-  // Written from Playwright's frame callback, outside any fiber.
-  let latest = Option.none<Frame>();
-  let history: ReadonlyArray<Frame> = [];
-
-  const capture = yield* Ref.make<{
-    readonly users: number;
-    readonly stop: Option.Option<() => Promise<void>>;
-  }>({
-    users: 0,
-    stop: Option.none(),
-  });
-
-  const captureLock = yield* Semaphore.make(1);
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
   const input = Input.make();
+  const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
 
   // Every protocol or Playwright call. Errors are undispatched here; `perform` marks them
   // dispatched once input has gone out.
@@ -352,7 +344,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       ),
     );
 
-  const dispatchMouse = (event: MouseEvent, submitted?: () => void) => {
+  const dispatchMouse = (
+    event: MouseEvent,
+    estimate: BrowserClock.Estimate,
+    submitted?: () => void,
+  ) => {
+    const at = now();
     const point = { x: event.x, y: event.y };
     const button = event.button ?? "left";
 
@@ -360,7 +357,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     const track =
       event.type === "mousePressed" && button !== "none"
         ? new PointerPressed({
-            at: now(),
+            at,
             page: id,
             ...point,
             button,
@@ -368,7 +365,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           })
         : event.type === "mouseReleased" && button !== "none"
           ? new PointerReleased({
-              at: now(),
+              at,
               page: id,
               ...point,
               button,
@@ -376,7 +373,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             })
           : event.type === "mouseWheel"
             ? new WheelScrolled({
-                at: now(),
+                at,
                 page: id,
                 ...point,
                 dx: event.deltaX ?? 0,
@@ -384,7 +381,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               })
             : undefined;
 
-    const response = cdp.send("Input.dispatchMouseEvent", event);
+    const response = cdp.send("Input.dispatchMouseEvent", {
+      ...event,
+      timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+    });
 
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
@@ -403,32 +403,42 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       operation,
       Effect.gen(function* () {
         const held = `mouse:${event.button ?? "left"}`;
+        const estimate = inputClocks.get(run) ?? calibration.current;
 
         if (event.type === "mouseReleased") return yield* run.up(held);
         if (event.type === "mousePressed") {
           yield* run.reserve(2);
           yield* run.down(
             held,
-            () => dispatchMouse(event, submitted),
+            () => dispatchMouse(event, estimate, submitted),
             () =>
-              dispatchMouse({
-                type: "mouseReleased",
-                ...Option.getOrElse(Ref.getUnsafe(pointer), () => ({ x: event.x, y: event.y })),
-                button: event.button ?? "left",
-                buttons: 0,
-                clickCount: event.clickCount ?? 1,
-              }),
+              dispatchMouse(
+                {
+                  type: "mouseReleased",
+                  ...Option.getOrElse(Ref.getUnsafe(pointer), () => ({ x: event.x, y: event.y })),
+                  button: event.button ?? "left",
+                  buttons: 0,
+                  clickCount: event.clickCount ?? 1,
+                },
+                estimate,
+              ),
           );
         } else {
           yield* run.reserve(1);
-          yield* run.send(() => dispatchMouse(event, submitted));
+          yield* run.send(() => dispatchMouse(event, estimate, submitted));
         }
       }),
     );
 
-  const dispatchKey = (key: string, phase: "down" | "up", command: () => Promise<unknown>) => {
-    const event = new KeyChanged({ at: now(), page: id, key, phase });
-    const response = command();
+  const dispatchKey = (
+    key: string,
+    phase: "down" | "up",
+    command: (at: number, estimate: BrowserClock.Estimate) => Promise<unknown>,
+    run: Input.Run,
+  ) => {
+    const at = now();
+    const event = new KeyChanged({ at, page: id, key, phase });
+    const response = command(at, inputClocks.get(run) ?? calibration.current);
 
     publish(event);
 
@@ -508,6 +518,62 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const evaluate = (operation: string, call: string) =>
     evaluateWithContext(operation, call).pipe(Effect.map(({ value }) => value));
 
+  const calibrateClock = evaluateWithContext("calibrate", "version").pipe(
+    Effect.flatMap(({ contextId }) =>
+      BrowserClock.calibrate(cdp, clock, contextId).pipe(
+        Effect.mapError(
+          (failure) =>
+            new BrowserError({
+              operation: "calibrate",
+              reason: reasonOf(failure.cause),
+              dispatched: false,
+            }),
+        ),
+      ),
+    ),
+    Effect.timeoutOrElse({
+      duration: Duration.seconds(4),
+      orElse: () =>
+        Effect.fail(
+          new BrowserError({
+            operation: "calibrate",
+            reason: new Timeout({ millis: 4000 }),
+            dispatched: false,
+          }),
+        ),
+    }),
+    Effect.provideService(Clock.Clock, clock),
+  );
+
+  // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
+  const calibration = { current: yield* calibrateClock };
+
+  const capture = yield* Capture.make({
+    id,
+    cdp,
+    clock,
+    calibrate: calibrateClock.pipe(
+      Effect.tap((estimate) =>
+        Effect.sync(() => {
+          calibration.current = estimate;
+        }),
+      ),
+    ),
+    frameHistory: settings.frameHistory,
+    viewport: () => playwright.viewportSize(),
+    onClose: (listener) => {
+      playwright.on("close", listener);
+      if (playwright.isClosed()) listener();
+
+      return () => {
+        playwright.off("close", listener);
+      };
+    },
+    imageSize: jpegSize,
+    error: (cause) =>
+      new BrowserError({ operation: "screencast", reason: reasonOf(cause), dispatched: false }),
+  });
+
   const decodeWith =
     <A>(operation: string, schema: Schema.Codec<A, unknown>) =>
     (value: unknown) =>
@@ -579,6 +645,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
       const useInput = <Value>(action: (run: Input.Run) => Effect.Effect<Value, BrowserError>) =>
         input.begin.pipe(
+          // A capture can recalibrate while input is running. One run, including delayed cleanup
+          // releases, keeps one mapping so epoch stamps cannot jump backwards during a stroke.
+          Effect.tap((run) => Effect.sync(() => inputClocks.set(run, calibration.current))),
           Effect.flatMap((run) =>
             action(run).pipe(
               Effect.matchEffect({
@@ -1143,8 +1212,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           operation,
           run.down(
             `playwright:${part}`,
-            () => dispatchKey(part, "down", () => playwright.keyboard.down(part)),
-            () => dispatchKey(part, "up", () => playwright.keyboard.up(part)),
+            () => dispatchKey(part, "down", () => playwright.keyboard.down(part), run),
+            () => dispatchKey(part, "up", () => playwright.keyboard.up(part), run),
           ),
         );
       if (holdMillis > 0) yield* Effect.sleep(Duration.millis(holdMillis));
@@ -1184,31 +1253,41 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         yield* run.down(
           held,
           () =>
-            dispatchKey(key, "down", () =>
-              cdp.send("Input.dispatchKeyEvent", {
-                type: "keyDown",
-                modifiers: 0,
-                windowsVirtualKeyCode: keyCode,
-                code,
-                commands: [],
-                key,
-                text,
-                unmodifiedText: text,
-                autoRepeat: false,
-                location: 0,
-                isKeypad: false,
-              }),
+            dispatchKey(
+              key,
+              "down",
+              (at, estimate) =>
+                cdp.send("Input.dispatchKeyEvent", {
+                  type: "keyDown",
+                  timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+                  modifiers: 0,
+                  windowsVirtualKeyCode: keyCode,
+                  code,
+                  commands: [],
+                  key,
+                  text,
+                  unmodifiedText: text,
+                  autoRepeat: false,
+                  location: 0,
+                  isKeypad: false,
+                }),
+              run,
             ),
           () =>
-            dispatchKey(key, "up", () =>
-              cdp.send("Input.dispatchKeyEvent", {
-                type: "keyUp",
-                modifiers: 0,
-                windowsVirtualKeyCode: keyCode,
-                code,
-                key,
-                location: 0,
-              }),
+            dispatchKey(
+              key,
+              "up",
+              (at, estimate) =>
+                cdp.send("Input.dispatchKeyEvent", {
+                  type: "keyUp",
+                  timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+                  modifiers: 0,
+                  windowsVirtualKeyCode: keyCode,
+                  code,
+                  key,
+                  location: 0,
+                }),
+              run,
             ),
         );
       }),
@@ -1604,16 +1683,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
     Effect.gen(function* () {
-      const frame = latest;
+      const frame = yield* capture.latest;
+      const active = yield* capture.active;
       const since = yield* Ref.get(lastInputAt);
 
-      // A full-size frame that arrived after the last input already shows the page as it is.
+      // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
       const viewport = playwright.viewportSize();
 
       if (
+        screenshotOptions.fresh !== true &&
         screenshotOptions.clip === undefined &&
+        active &&
         Option.isSome(frame) &&
-        frame.value.receivedAt > since + 100 &&
+        frame.value.hostTime - frame.value.timing.uncertaintyMillis > since + 100 &&
         frame.value.width === viewport?.width &&
         frame.value.height === viewport.height
       )
@@ -1714,89 +1796,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       Effect.asVoid,
     );
 
-  // The shared screencast: the first stream starts it and the last one stops it.
-  const onFrame = (frame: {
-    readonly data: Uint8Array;
-    readonly timestamp: number;
-    readonly viewportWidth: number;
-    readonly viewportHeight: number;
-  }) => {
-    // Chromium can finish encoding two close frames out of order; keep time moving forward.
-    if (Option.isSome(latest) && frame.timestamp <= latest.value.timestamp) return;
-
-    const size = jpegSize(frame.data) ?? {
-      width: frame.viewportWidth,
-      height: frame.viewportHeight,
-    };
-
-    const next = new Frame({
-      page: id,
-      data: frame.data,
-      timestamp: frame.timestamp,
-      receivedAt: now(),
-      width: size.width,
-      height: size.height,
-    });
-
-    latest = Option.some(next);
-    history =
-      history.length >= settings.frameHistory ? [...history.slice(1), next] : [...history, next];
-    PubSub.publishUnsafe(frames, next);
-  };
-
-  const acquireCapture = (screencastOptions: ScreencastOptions) =>
-    Effect.acquireRelease(
-      captureLock.withPermits(1)(
-        Effect.gen(function* () {
-          const state = yield* Ref.get(capture);
-
-          if (Option.isNone(state.stop)) {
-            // Playwright scales frames to 800x800 unless told otherwise; default to full size.
-            const size = screencastOptions.size ?? playwright.viewportSize() ?? undefined;
-
-            yield* native("screencast", () =>
-              playwright.screencast.start({
-                onFrame,
-                quality: screencastOptions.quality ?? 80,
-                ...(size === undefined ? {} : { size: { width: size.width, height: size.height } }),
-              }),
-            );
-            yield* Ref.set(capture, {
-              users: 1,
-              stop: Option.some(() => playwright.screencast.stop()),
-            });
-          } else yield* Ref.set(capture, { users: state.users + 1, stop: state.stop });
-        }),
-      ),
-      () =>
-        captureLock.withPermits(1)(
-          Effect.gen(function* () {
-            const state = yield* Ref.get(capture);
-
-            if (state.users > 1)
-              return yield* Ref.set(capture, { users: state.users - 1, stop: state.stop });
-            yield* Ref.set(capture, { users: 0, stop: Option.none() });
-            if (Option.isSome(state.stop)) {
-              const stop = state.stop.value;
-
-              yield* Effect.tryPromise(stop).pipe(Effect.ignore);
-            }
-          }),
-        ),
-    );
-
-  const screencast = (
-    screencastOptions: ScreencastOptions = {},
-  ): Stream.Stream<Frame, BrowserError> =>
-    Stream.unwrap(
-      Effect.gen(function* () {
-        const subscription = yield* PubSub.subscribe(frames);
-
-        yield* acquireCapture(screencastOptions);
-
-        return Stream.fromSubscription(subscription);
-      }),
-    );
+  const screencast = capture.stream;
 
   const waitForStill = (
     stillOptions: { readonly quietMillis?: number; readonly timeout?: Duration.Input } = {},
@@ -1855,8 +1855,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     waitForText,
     waitForStill,
     screencast,
-    latestFrame: Effect.sync(() => latest),
-    recentFrames: Effect.sync(() => history),
+    captureStats: capture.stats,
+    latestFrame: capture.latest,
+    recentFrames: capture.recent,
   };
 
   return page;

@@ -20,7 +20,12 @@ export interface Options extends Browser.Options {
   readonly connectTimeoutMillis?: number | undefined;
 }
 
-const connect = (operation: string, session: Session, options: Options) =>
+const connect = (
+  operation: string,
+  session: Session,
+  options: Options,
+  contextOrigin: Browser.ContextOrigin,
+) =>
   session.connectUrl === undefined
     ? Effect.fail(
         new BrowserbaseError({
@@ -28,12 +33,15 @@ const connect = (operation: string, session: Session, options: Options) =>
           reason: new Decode({ detail: `session ${session.id} has no connectUrl` }),
         }),
       )
-    : Cdp.open({
-        ...options,
-        endpoint: session.connectUrl,
-        id: session.id,
-        provider: "browserbase",
-      });
+    : Cdp.open(
+        {
+          ...options,
+          endpoint: session.connectUrl,
+          id: session.id,
+          provider: "browserbase",
+        },
+        { contextOrigin },
+      );
 
 /** Create a session and open a `Browser` on it, for as long as the scope is open. */
 export const open = Effect.fn("Browserbase.open")(function* (options: Options = {}) {
@@ -45,7 +53,7 @@ export const open = Effect.fn("Browserbase.open")(function* (options: Options = 
       .pipe(Effect.ignore({ log: "Warn", message: "Browserbase session release failed" })),
   );
 
-  return yield* connect("open", session, options);
+  return yield* connect("open", session, options, "fresh");
 });
 
 /**
@@ -59,7 +67,7 @@ export const attach = Effect.fn("Browserbase.attach")(function* (
   const client = yield* BrowserbaseClient;
   const session = yield* client.getSession(sessionId);
 
-  return yield* connect("attach", session, options);
+  return yield* connect("attach", session, options, "borrowed");
 });
 
 export const layer = (
