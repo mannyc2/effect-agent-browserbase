@@ -97,8 +97,12 @@ the page, as scroll-spy and feed pages rewrite while scrolling (a `#/` or `#!` h
 bound). Changed targets fail undispatched; the library never retries the action or the policy
 automatically. A pointer press is checked again once the pointer has arrived and the page has had a
 frame to react: the approved control must still receive the press point, so a control that appears
-under the pointer, such as a hover menu, stops the action before the button goes down. A policy
-timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
+under the pointer, such as a hover menu, stops the action before the button goes down. Each
+further press of a double or triple click is checked the same way after the earlier clicks' handlers
+have run. Typing checks before each further key that the approved control still has focus, so a key
+handler that moves focus stops the typing before any key reaches another control; this waits for
+each key's answer, about two protocol round trips per key, and the typing deadline allows 250 ms
+per key for it. A policy timeout is a typed `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed
 receipts. Without a guard, actions are allowed and nothing is revalidated. Canvas and opaque frames
 expose their outer element's metadata.
 

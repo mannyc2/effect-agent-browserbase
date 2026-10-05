@@ -152,6 +152,10 @@ type MouseEvent = {
 
 const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 
+// Under a guard, each key after the first waits for the earlier keys' answers and a focus check,
+// about two protocol round trips, so the typing deadline allows this much more per key.
+const guardedKeyMillis = 250;
+
 // Several 60 Hz frame intervals: while a page changes, its stream keeps delivering and its newest
 // frame is reused; once the stream goes quiet, a real capture is taken. A lost final paint can be
 // served for at most this long after the last frame that did arrive. Delivery time, not paint
@@ -1174,6 +1178,24 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
           yield* marks.sent;
           for (let index = 1; index <= count; index++) {
+            // An earlier click of a multi-click can replace the approved control under the
+            // pointer. Under a guard, its handlers run before the next press is checked and sent.
+            if (approval !== undefined && index > 1) {
+              yield* flush("click", marks.input);
+              yield* approval.check({ presses: [{ index: 0, ...point }] }).pipe(
+                Effect.catchIf(
+                  (error) => error.reason._tag === "StaleRef",
+                  () =>
+                    failWith(
+                      "click",
+                      new NotActionable({
+                        detail:
+                          "an earlier click removed the approved target, so no further press was sent",
+                      }),
+                    ),
+                ),
+              );
+            }
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
               ...point,
@@ -1357,7 +1379,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       { target: typeOptions.into, text },
       Duration.sum(
         settings.actionTimeout,
-        Duration.millis(settings.humanize ? Human.typingDuration(text) : 0),
+        Duration.millis(
+          (settings.humanize ? Human.typingDuration(text) : 0) +
+            (settings.guard === undefined ? 0 : guardedKeyMillis * text.length),
+        ),
       ),
       preparePolicy("type", { target: typeOptions.into, text }, [typeOptions.into ?? null], {
         submit: typeOptions.submit ?? false,
@@ -1433,6 +1458,19 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
           yield* presentationPause("focus");
           if (approval !== undefined) yield* approval.check({ focused: true });
           yield* marks.sent;
+
+          // A key's handlers can move focus, and later keys then reach a control nobody approved.
+          // Under a guard, the earlier keys are answered and focus is checked before each further
+          // key, so no key goes to another control.
+          let keys = 0;
+
+          const beforeKey = Effect.gen(function* () {
+            if (approval !== undefined && keys > 0) yield* flush("type", marks.input);
+            yield* sameDocument("type", since);
+            if (approval !== undefined && keys > 0) yield* approval.check({ focused: true });
+            keys += 1;
+          });
+
           if (text === "" && replace && typeOptions.into !== undefined) {
             yield* sameDocument("type", since);
             yield* keyStroke("type", marks.input, ["Delete"]);
@@ -1456,12 +1494,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
                 yield* Effect.sleep(
                   Duration.millis(Math.max(0, started + event.afterMillis - now())),
                 );
-                if (event.phase !== "up") yield* sameDocument("type", since);
+                if (event.phase !== "up") yield* beforeKey;
                 yield* typeEvent(marks.input, event);
               }
             } else {
               for (const character of text) {
-                yield* sameDocument("type", since);
+                yield* beforeKey;
                 if (Keys.description(character) === undefined)
                   yield* typeEvent(marks.input, { phase: "insert", key: character });
                 else {
