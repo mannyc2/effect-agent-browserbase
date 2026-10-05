@@ -244,7 +244,10 @@ export interface Page {
     readonly timeout?: Duration.Input;
   }) => Effect.Effect<void, BrowserError>;
 
-  /** Screencast frames for as long as the stream runs. Concurrent streams share one screencast. */
+  /**
+   * Screencast frames for as long as the stream runs. Concurrent streams share one screencast and
+   * its settings; explicit options that differ from a running screencast's fail with InvalidRequest.
+   */
   readonly screencast: (options?: ScreencastOptions) => Stream.Stream<Frame, BrowserError>;
   /** Native delivery, filtering and observed subscriber loss across capture generations. */
   readonly captureStats: Effect.Effect<CaptureStats>;

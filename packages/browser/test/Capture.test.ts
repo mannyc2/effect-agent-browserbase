@@ -819,6 +819,48 @@ layer(Chromium.layer(), { excludeTestServices: true, timeout: Duration.seconds(6
       }),
     );
 
+    it.effect("rejects a reader whose explicit options differ from the running capture", () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup();
+        const small = { size: { width: 160, height: 120 }, quality: 10 };
+
+        // Keep painting, so a reader that joins later still receives frames.
+        yield* Effect.promise(() =>
+          fixture.page.playwright.evaluate(() => {
+            let turn = 0;
+
+            setInterval(() => {
+              document.body.style.background = `hsl(${(turn += 30)}, 70%, 50%)`;
+            }, 40);
+          }),
+        );
+
+        yield* fixture.page.screencast(small).pipe(Stream.runDrain, Effect.forkChild);
+        yield* fixture.template;
+
+        for (const conflicting of [{ quality: 95 }, { size: { width: 800, height: 600 } }]) {
+          const error = yield* fixture.page
+            .screencast(conflicting)
+            .pipe(Stream.runDrain, Effect.flip, Effect.timeout("5 seconds"));
+
+          assert.strictEqual(error.reason._tag, "InvalidRequest");
+          assert.isFalse(error.dispatched);
+        }
+        // Readers without options, or with the same ones, share the running capture.
+        for (const sharing of [{}, small]) {
+          const frames = yield* fixture.page
+            .screencast(sharing)
+            .pipe(Stream.take(1), Stream.runCollect, Effect.timeout("5 seconds"));
+
+          assert.deepStrictEqual(
+            frames.map((frame) => [frame.width, frame.height]),
+            [[160, 120]],
+          );
+        }
+        assert.strictEqual(count(fixture.calls, "Page.startScreencast"), 1);
+      }),
+    );
+
     it.effect("releases an interrupted reader and starts the next capture once", () =>
       Effect.gen(function* () {
         const fixture = yield* setup();

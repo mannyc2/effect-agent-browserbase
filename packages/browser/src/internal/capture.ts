@@ -5,7 +5,7 @@
 import { Clock, Duration, Effect, Exit, Option, Queue, Semaphore, Stream } from "effect";
 import type { CDPSession } from "playwright-core";
 
-import type { BrowserError } from "../BrowserError.ts";
+import { BrowserError, InvalidRequest } from "../BrowserError.ts";
 import { BrowserPaint, CaptureStats, Frame, type ScreencastOptions } from "../Frame.ts";
 import { type Estimate, toHostTime } from "./clock.ts";
 
@@ -43,6 +43,9 @@ interface NativeFrame {
 interface Generation {
   readonly subscribers: Set<Queue.Queue<Envelope>>;
   readonly calibration: Estimate;
+  /** The native capture's settings; every reader of this generation shares them. */
+  readonly quality: number;
+  readonly size: Size | null;
   readonly onFrame: (frame: NativeFrame) => void;
   accepting: boolean;
   predecessor: number | undefined;
@@ -192,6 +195,8 @@ export const make = (options: Options) =>
             const created: Generation = {
               subscribers: new Set(),
               calibration,
+              quality: screencast.quality ?? 80,
+              size: screencast.size ?? options.viewport(),
               accepting: true,
               predecessor: undefined,
               failure: undefined,
@@ -287,7 +292,25 @@ export const make = (options: Options) =>
             current = created;
             generation = current;
             latest = Option.none();
-          }
+          } else if (
+            (screencast.quality !== undefined && screencast.quality !== current.quality) ||
+            (screencast.size !== undefined &&
+              (screencast.size.width !== current.size?.width ||
+                screencast.size.height !== current.size.height))
+          )
+            // One native capture serves every reader; silently giving a reader other settings
+            // than it asked for would misstate its frames.
+            return yield* new BrowserError({
+              operation: "screencast",
+              reason: new InvalidRequest({
+                detail: `a screencast with quality ${current.quality}${
+                  current.size === null
+                    ? ""
+                    : ` and size ${current.size.width}x${current.size.height}`
+                } is already running on this page; read it without options or with the same ones`,
+              }),
+              dispatched: false,
+            });
           // The callback API must apply sliding synchronously; PubSub.publishUnsafe skips it.
           const subscription = yield* Queue.sliding<Envelope>(subscriberCapacity);
 
@@ -301,13 +324,13 @@ export const make = (options: Options) =>
 
           if (starting) {
             options.cdp.on("Page.screencastFrame", current.onFrame);
-            const size = screencast.size ?? options.viewport();
+            const { quality, size } = current;
 
             const started = yield* Effect.tryPromise({
               try: () =>
                 options.cdp.send("Page.startScreencast", {
                   format: "jpeg",
-                  quality: screencast.quality ?? 80,
+                  quality,
                   ...(size === null ? {} : { maxWidth: size.width, maxHeight: size.height }),
                 }),
               catch: options.error,

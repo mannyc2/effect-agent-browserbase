@@ -173,7 +173,9 @@ unstamped so the measurement remains observable.
 
 `Page.captureStats` reports lifetime received and accepted frames, missing timestamps, frames
 dropped out of order, observed subscriber losses and paint-time gap totals/minimum/maximum/last.
-Concurrent readers share one native screencast, each with a bounded 16-frame queue; a slow reader's
+Concurrent readers share one native screencast and its quality and size: a reader without options
+joins whatever is running, and one whose explicit options differ fails with `InvalidRequest` rather
+than silently receiving other frames. Each reader has a bounded 16-frame queue; a slow reader's
 observed sequence gaps add to `subscriberMissed`. Late subscribers do not count earlier history.
 ACKs are independent of reader speed and bounded to 32 unresolved replies; exhaustion ends capture
 with a typed error. Frame history remains bounded by `frameHistory`. Capture stops when its last
