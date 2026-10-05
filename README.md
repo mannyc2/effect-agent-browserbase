@@ -104,7 +104,8 @@ const watch = Effect.gen(function* () {
   the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a click
   opens a tab, the tools follow it.
 - The model receives one outline and screenshot at the start and after each turn, including failed
-  batches. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
+  batches. If the browser is gone, the run fails with its `BrowserError` rather than calling the
+  model again. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
   is `"both"`. A malformed `done` answer goes back to the model to correct, and so does a response
   that calls a tool that does not exist: none of its calls run.
 - `browser_zoom` takes a viewport region (`x`, `y`, `width`, `height`) and returns its crop beside

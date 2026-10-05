@@ -3,10 +3,10 @@
  * an answer with `done` or stops with `give_up`.
  *
  * Any `effect/ai` `LanguageModel` drives it. Tool calls run one at a time, in the order the model
- * made them, halting on failure or completion. One observation follows each turn; pictures travel
- * in a user message after the tool results. Only the latest few stay in the conversation: older
- * ones are replaced by a note, several at a time, so a provider's prompt cache keeps most of the
- * conversation between steps.
+ * made them, halting on failure or completion. One observation follows each turn, and a run whose
+ * browser is gone fails with that `BrowserError`. Pictures travel in a user message after the
+ * tool results. Only the latest few stay in the conversation: older ones are replaced by a note,
+ * several at a time, so a provider's prompt cache keeps most of the conversation between steps.
  *
  * @since 0.3.0
  */
@@ -160,25 +160,25 @@ const isUnreadable = (
 const note = (text: string) =>
   Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text })] });
 
-const observationMessage = (observation: Observation | undefined, zooms: ReadonlyArray<Zoom>) => {
+/** The observation, or why the page could not be observed. */
+const observationMessage = (observed: Observation | string, zooms: ReadonlyArray<Zoom>) => {
+  const image = typeof observed === "string" ? undefined : observed.image;
+
   const content: Array<Prompt.UserMessagePart> = [
     Prompt.makePart("text", {
       text:
-        observation === undefined
-          ? "(the page could not be observed)"
-          : (observation.snapshot?.rendered ?? "Observation of the current viewport."),
+        typeof observed === "string"
+          ? `(the page could not be observed: ${observed})`
+          : (observed.snapshot?.rendered ?? "Observation of the current viewport."),
     }),
   ];
 
-  if (observation?.image !== undefined) {
+  if (image !== undefined) {
     content.push(
       Prompt.makePart("text", {
-        text: `Screenshot: ${observation.image.width}x${observation.image.height}. Its pixel coordinates are viewport coordinates.`,
+        text: `Screenshot: ${image.width}x${image.height}. Its pixel coordinates are viewport coordinates.`,
       }),
-      Prompt.makePart("file", {
-        mediaType: observation.image.mediaType,
-        data: observation.image.data,
-      }),
+      Prompt.makePart("file", { mediaType: image.mediaType, data: image.data }),
     );
   }
 
@@ -245,18 +245,17 @@ const loop = <E, Extra extends ExtraTools>(
 
     const observe = Effect.gen(function* () {
       const zooms = yield* tools.takeZooms;
+      // Without any page, such as after the browser closed, more model calls cannot help.
+      const page = yield* tools.page;
 
-      const observation = yield* tools.page.pipe(
-        Effect.flatMap((page) =>
-          page.observe({
-            mode: options.observation ?? "both",
-            maxChars: options.tools?.snapshotChars ?? 8000,
-          }),
-        ),
-        Effect.option,
-      );
+      const observed = yield* page
+        .observe({
+          mode: options.observation ?? "both",
+          maxChars: options.tools?.snapshotChars ?? 8000,
+        })
+        .pipe(Effect.catch((error) => Effect.succeed(error.message)));
 
-      return observationMessage(Option.getOrUndefined(observation), zooms);
+      return observationMessage(observed, zooms);
     });
 
     const opening = yield* observe;

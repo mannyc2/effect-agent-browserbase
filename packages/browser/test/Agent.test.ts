@@ -4,7 +4,7 @@ import { Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
 import { LanguageModel, type Prompt, type Response, Tool, Toolkit } from "effect/ai";
 
 import * as Agent from "../src/Agent.ts";
-import { Browser } from "../src/Browser.ts";
+import { Browser, make as makeBrowser } from "../src/Browser.ts";
 import { BrowserError, Failed } from "../src/BrowserError.ts";
 import * as Chromium from "../src/Chromium.ts";
 import * as Moment from "../src/Moment.ts";
@@ -515,7 +515,10 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           assert.strictEqual(results.length, 1);
           assert.isFalse(results[0]?.isFailure);
           assert.include(String(results[0]?.result), 'Typed "1"');
-          assert.include(textOf(prompt), "could not be observed");
+          assert.include(
+            textOf(prompt),
+            "could not be observed: observe failed: fixture observation failed",
+          );
 
           return [call("done", { answer: "typed once" }), finish];
         },
@@ -543,6 +546,49 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         resultsIn(result.history).map((part) => part.name),
         ["browser_type", "done"],
       );
+    }),
+  );
+
+  it.effect("ends the run with the browser's error once no page can be had", () =>
+    Effect.gen(function* () {
+      const native = (yield* Browser).context.browser();
+
+      assert.isNotNull(native);
+      if (native === null) return;
+      const context = yield* Effect.promise(() => native.newContext());
+      const browser = yield* makeBrowser(context, { id: "closing", provider: "test" });
+
+      yield* (yield* browser.page).goto((yield* Site).url("/next"));
+
+      const Closing = Toolkit.make(
+        Tool.make("close_browser", { parameters: Schema.Struct({}), success: Schema.String }),
+      );
+
+      const closing = Closing.toLayer({
+        close_browser: () => Effect.promise(() => context.close()).pipe(Effect.as("Closed.")),
+      });
+
+      const model = scripted([() => [call("close_browser", {}), finish]]);
+
+      const failure = yield* Agent.run("Close the browser.", { additionalTools: Closing }).pipe(
+        Effect.provide([closing, model.layer]),
+        Effect.provideService(Browser, browser),
+        Effect.flip,
+      );
+
+      assert.strictEqual(failure._tag, "BrowserError");
+      assert.strictEqual(model.prompts.length, 1);
+
+      const unused = scripted([]);
+
+      const again = yield* Agent.run("Look again.").pipe(
+        Effect.provide(unused.layer),
+        Effect.provideService(Browser, browser),
+        Effect.flip,
+      );
+
+      assert.strictEqual(again._tag, "BrowserError");
+      assert.strictEqual(unused.prompts.length, 0);
     }),
   );
 
