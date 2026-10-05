@@ -336,6 +336,9 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const nextRef = yield* Ref.make(1);
   const lastInputAt = yield* Ref.make(0);
   const now = () => Number(clock.monotonicTimeNanosUnsafe()) / 1e6;
+  // Deadlines and pacing guard the browser-wide input lock, so page operations run on the
+  // owner's clock; a caller's clock, such as a TestClock, cannot stall or stretch them.
+  const owned = Effect.provideService(Clock.Clock, clock);
   const input = Input.make();
   const inputClocks = new WeakMap<Input.Run, BrowserClock.Estimate>();
 
@@ -756,7 +759,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         );
 
       return yield* exit;
-    });
+    }).pipe(owned);
 
   const failWith = (operation: string, reason: Reason) =>
     Effect.fail(new BrowserError({ operation, reason, dispatched: false }));
@@ -1710,6 +1713,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         orElse: () =>
           failWith("snapshot", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
       }),
+      owned,
     );
 
   const screenshot = (screenshotOptions: ScreenshotOptions = {}) =>
@@ -1753,41 +1757,46 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     });
 
   const zoom = (requested: Region) =>
-    lock.withPermits(1)(
-      Effect.gen(function* () {
-        const region = yield* Schema.decodeEffect(Region)(requested).pipe(
-          Effect.mapError(
-            (error) =>
-              new BrowserError({
-                operation: "zoom",
-                reason: new InvalidRequest({ detail: error.message }),
-                dispatched: false,
-              }),
-          ),
-        );
-
-        const viewport =
-          playwright.viewportSize() ??
-          (yield* evaluate("zoom", scriptCall("viewport")).pipe(
-            Effect.flatMap(decodeWith("zoom", Script.ViewportResultSchema)),
-          ));
-
-        if (region.x + region.width > viewport.width || region.y + region.height > viewport.height)
-          return yield* failWith(
-            "zoom",
-            new InvalidRequest({ detail: "the crop must fit entirely within the viewport" }),
+    lock
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const region = yield* Schema.decodeEffect(Region)(requested).pipe(
+            Effect.mapError(
+              (error) =>
+                new BrowserError({
+                  operation: "zoom",
+                  reason: new InvalidRequest({ detail: error.message }),
+                  dispatched: false,
+                }),
+            ),
           );
-        const image = yield* screenshot({ clip: region });
 
-        return new Zoom({ page: id, region, image });
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: settings.actionTimeout,
-          orElse: () =>
-            failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
-        }),
-      ),
-    );
+          const viewport =
+            playwright.viewportSize() ??
+            (yield* evaluate("zoom", scriptCall("viewport")).pipe(
+              Effect.flatMap(decodeWith("zoom", Script.ViewportResultSchema)),
+            ));
+
+          if (
+            region.x + region.width > viewport.width ||
+            region.y + region.height > viewport.height
+          )
+            return yield* failWith(
+              "zoom",
+              new InvalidRequest({ detail: "the crop must fit entirely within the viewport" }),
+            );
+          const image = yield* screenshot({ clip: region });
+
+          return new Zoom({ page: id, region, image });
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: settings.actionTimeout,
+            orElse: () =>
+              failWith("zoom", new Timeout({ millis: Duration.toMillis(settings.actionTimeout) })),
+          }),
+        ),
+      )
+      .pipe(owned);
 
   const observe = (
     observeOptions: {
@@ -1829,6 +1838,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         orElse: () => failWith("waitForText", new NotFound({ target: JSON.stringify(text) })),
       }),
       Effect.asVoid,
+      owned,
     );
 
   const screencast = capture.stream;
@@ -1851,6 +1861,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             }),
           ),
       }),
+      owned,
     );
   };
 

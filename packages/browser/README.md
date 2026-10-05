@@ -141,6 +141,8 @@ supplement the functional navigation delay and document wait; they never shorten
 
 `Browser.now`, event stamps, frame `receivedAt` and `Moment.at` share host monotonic milliseconds
 from the clock captured when the browser is made. They remain ordered across wall-clock corrections.
+Page operations also pace input and measure their deadlines on that clock, so a caller running
+under another `Clock`, such as a `TestClock`, cannot stall an action or the browser-wide input lock.
 Compare these stamps only within that clock: they are not epoch dates or comparable across hosts.
 `Frame.timing` distinguishes `BrowserPaint` from `Screenshot`. Native frames retain browser epoch
 milliseconds in `timestamp` and map them to `hostTime`, with an explicit clock uncertainty.
