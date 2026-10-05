@@ -4,13 +4,14 @@
  * The model reads a page two ways. A snapshot is a text outline whose controls carry refs such as
  * `e12`. A screenshot is a picture whose pixel coordinates are viewport coordinates. It acts by
  * ref when a control has one, and by point when it does not, as on a canvas game or a chart.
- * Actions answer with short receipts. `Agent` runs them in batches, halts on the first failure
- * and appends one observation of the current tab after each turn. Callers composing their own
- * loop can observe `page` once their batch ends.
+ * Actions answer with short receipts. A turn's calls run as a `batch`: in order, stopping at the
+ * first failure. `Agent` does that and appends one observation of the current tab after each
+ * turn; a caller composing its own loop spreads a fresh `batch` into each model call, then
+ * observes `page` and drains `takeZooms`.
  *
  * @since 0.3.0
  */
-import { Duration, Effect, Option, Schema, Semaphore } from "effect";
+import { Duration, Effect, Option, Ref, Schema, Semaphore, Stream } from "effect";
 import { Tool, Toolkit } from "effect/ai";
 
 import { Browser } from "./Browser.ts";
@@ -197,10 +198,94 @@ export interface Options {
   readonly snapshotChars?: number | undefined;
 }
 
+/**
+ * Options for one `generateText` call, from `LanguageModel` or `Chat`: spread them into the call.
+ * `effect/ai` runs a response's tool calls concurrently unless `concurrency` is 1, so the toolkit
+ * and that setting travel together.
+ */
+export interface Batch<T extends Record<string, Tool.Any>> {
+  readonly toolkit: Toolkit.WithHandler<T>;
+  readonly concurrency: 1;
+}
+
+/**
+ * One turn of tool calls over a toolkit with handlers. Calls run one at a time in the order the
+ * model made them. The first failure, or a successful call named in `endsBatch`, stops the batch:
+ * every later call answers as not executed. Build a new batch for each turn.
+ */
+export function batch<T extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<T>,
+  options?: { readonly endsBatch?: ReadonlyArray<keyof T & string> | undefined },
+): Effect.Effect<Batch<T>>;
+
+export function batch<T extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<T>,
+  options: { readonly endsBatch?: ReadonlyArray<keyof T & string> | undefined } = {},
+) {
+  const ends = new Set<string>(options.endsBatch ?? []);
+
+  return Effect.map(Ref.make(Option.none<string>()), (halted) => ({
+    concurrency: 1 as const,
+    toolkit: {
+      tools: toolkit.tools,
+      // With concurrency 1, each call starts after the previous one's final result.
+      handle: <Name extends keyof T>(
+        name: Name,
+        params: Tool.ParametersEncoded<T[Name]>,
+        id?: string,
+      ) =>
+        Effect.map(
+          Ref.get(halted),
+          Option.match({
+            onSome: (reason) => {
+              const result: typeof Tool.ExecutionFailure.Type = {
+                type: "execution-interrupted",
+                reason: "Not executed: " + reason,
+              };
+
+              return Stream.succeed({
+                result,
+                encodedResult: result,
+                isFailure: true,
+                preliminary: false,
+              });
+            },
+            onNone: () =>
+              toolkit.handle(name, params, id).pipe(
+                Stream.unwrap,
+                Stream.catch((error) => {
+                  const result: typeof Tool.ExecutionFailure.Type = {
+                    type: "execution-interrupted",
+                    reason: "The call failed and may have taken effect: " + String(error),
+                  };
+
+                  return Stream.succeed({
+                    result,
+                    encodedResult: result,
+                    isFailure: true,
+                    preliminary: false,
+                  });
+                }),
+                Stream.tap((result) =>
+                  result.preliminary
+                    ? Effect.void
+                    : result.isFailure
+                      ? Ref.set(halted, Option.some(`${String(name)} failed.`))
+                      : ends.has(String(name))
+                        ? Ref.set(halted, Option.some(`${String(name)} ended the batch.`))
+                        : Effect.void,
+                ),
+              ),
+          }),
+        ),
+    },
+  }));
+}
+
 export interface Tools {
   readonly handlers: Toolkit.HandlersFrom<BrowserTools>;
-  /** The toolkit with its handlers, for `LanguageModel.generateText` or `Chat`. */
-  readonly toolkit: Toolkit.WithHandler<BrowserTools>;
+  /** A fresh `batch` of the browser tools for one turn, to spread into a `generateText` call. */
+  readonly batch: Effect.Effect<Batch<BrowserTools>>;
   /** The tab the tools act on. */
   readonly page: Effect.Effect<Page.Page, BrowserError>;
   /** Drain the requested crops, once per batch, to include beside the observation. */
@@ -422,7 +507,7 @@ export const make = Effect.fn("Tools.make")(function* (options: Options = {}) {
 
   return {
     handlers,
-    toolkit,
+    batch: batch(toolkit),
     page,
     takeZooms,
   } satisfies Tools;

@@ -829,6 +829,43 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("runs a caller's own turn in order and halts it at the first failure", () =>
+    Effect.gen(function* () {
+      const page = yield* start("/form");
+      const tools = yield* Tools.make();
+
+      yield* Effect.promise(() => page.playwright.locator("#amount").focus());
+      yield* Effect.promise(() => page.playwright.locator("#amount").press("End"));
+
+      const model = scripted([
+        () => [
+          call("browser_type", { text: "2", append: true }),
+          call("browser_wait", { seconds: 0.5 }),
+          call("browser_click", { ref: "e99999" }),
+          call("browser_type", { text: "9", append: true }),
+          finish,
+        ],
+      ]);
+
+      const response = yield* LanguageModel.generateText({
+        prompt: "Append to the amount.",
+        ...(yield* tools.batch),
+      }).pipe(Effect.provide(model.layer));
+
+      assert.deepStrictEqual(
+        response.toolResults.map((result) => [result.name, result.isFailure]),
+        [
+          ["browser_type", false],
+          ["browser_wait", false],
+          ["browser_click", true],
+          ["browser_type", true],
+        ],
+      );
+      assert.match(JSON.stringify(response.toolResults[3]?.result), /not executed/i);
+      assert.strictEqual(yield* valueOf(page, "#amount"), "102");
+    }),
+  );
+
   it.effect("bounds concurrent pending zooms before capture and drains them once", () =>
     Effect.gen(function* () {
       const page = yield* start("/chart");

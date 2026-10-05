@@ -30,8 +30,11 @@ be corrected on the next turn.
 
 The model gets one outline and screenshot at the start and after each turn. `observation` selects
 `"outline"`, `"screenshot"`, or `"both"` (the default). `Page.observe` returns that observation as
-a schema value. `Tools.make` returns receipts; a caller writing its own loop observes the current
-`tools.page` after the batch and drains `tools.takeZooms` into that same observation message.
+a schema value. `Tools.make` returns receipts. A caller writing its own loop spreads a fresh
+`yield* tools.batch` into each `generateText` call: it carries the toolkit with the same ordered,
+halting execution and the `concurrency: 1` that `effect/ai` needs to keep calls in order.
+`Tools.batch` does the same for any toolkit with handlers. After the batch, the caller observes
+the current `tools.page` and drains `tools.takeZooms` into that same observation message.
 
 `browser_zoom` captures a region in viewport CSS pixels when the tool runs. Requested crops arrive
 with the next observation even in outline mode, labeled with their source page and viewport origin.

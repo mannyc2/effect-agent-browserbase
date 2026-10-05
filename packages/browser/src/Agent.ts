@@ -10,7 +10,7 @@
  *
  * @since 0.3.0
  */
-import { Context, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Context, Effect, Option, Ref, Schema } from "effect";
 import { Chat, Prompt, Tool, Toolkit } from "effect/ai";
 
 import * as Usage from "./internal/usage.ts";
@@ -176,66 +176,6 @@ const observationMessage = (observation: Observation | undefined, zooms: Readonl
   return Prompt.makeMessage("user", { content });
 };
 
-// Normal resolution recovers individual validation failures; disabling it rejects the whole response.
-// With concurrency 1, each call sees whether the previous result halted the batch.
-function batchToolkit<Extra extends ExtraTools>(
-  toolkit: Toolkit.WithHandler<Extra>,
-): Toolkit.WithHandler<Extra>;
-function batchToolkit<Extra extends ExtraTools>(toolkit: Toolkit.WithHandler<Extra>) {
-  let halted: string | undefined;
-
-  return {
-    tools: toolkit.tools,
-    handle: <Name extends keyof Extra>(
-      name: Name,
-      params: Tool.ParametersEncoded<Extra[Name]>,
-      id?: string,
-    ) => {
-      if (halted !== undefined) {
-        const result: typeof Tool.ExecutionFailure.Type = {
-          type: "execution-interrupted",
-          reason: "Not executed: " + halted,
-        };
-
-        return Effect.succeed(
-          Stream.succeed({ result, encodedResult: result, isFailure: true, preliminary: false }),
-        );
-      }
-
-      return Effect.succeed(
-        toolkit.handle(name, params, id).pipe(
-          Stream.unwrap,
-          Stream.catch((error) => {
-            const result: typeof Tool.ExecutionFailure.Type = {
-              type: "execution-interrupted",
-              reason: "The call failed and may have taken effect: " + String(error),
-            };
-
-            return Stream.succeed({
-              result,
-              encodedResult: result,
-              isFailure: true,
-              preliminary: false,
-            });
-          }),
-          Stream.tap((result) =>
-            Effect.sync(() => {
-              if (
-                !result.preliminary &&
-                (result.isFailure || name === "done" || name === "give_up")
-              ) {
-                halted = result.isFailure
-                  ? String(name) + " failed."
-                  : String(name) + " ended the batch.";
-              }
-            }),
-          ),
-        ),
-      );
-    },
-  };
-}
-
 const loop = <E, Extra extends ExtraTools>(
   answerSchema: Schema.Codec<unknown, unknown>,
   task: string,
@@ -314,12 +254,9 @@ const loop = <E, Extra extends ExtraTools>(
     let idle = 0;
 
     for (let step = 1; step <= maxSteps; step++) {
-      const batch = batchToolkit(toolkit);
-
       const response = yield* chat.generateText({
         prompt: Prompt.fromMessages(next),
-        toolkit: batch,
-        concurrency: 1,
+        ...(yield* Tools.batch(toolkit, { endsBatch: ["done", "give_up"] })),
       });
 
       const observation = yield* observe;

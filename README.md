@@ -100,8 +100,9 @@ const watch = Effect.gen(function* () {
   viewport CSS pixels, as they appear in a full screenshot. Pixel click receipts name the element
   under that exact point, with its role and accessible name when available.
 - Actions return short receipts. `Agent.run` executes each turn's calls in order, stops at the first
-  failure or completion, and answers the remaining calls as not executed. When a click opens a tab,
-  the tools follow it.
+  failure or completion, and answers the remaining calls as not executed. A loop of your own gets
+  the same by spreading a fresh `yield* tools.batch` into each `generateText` call. When a click
+  opens a tab, the tools follow it.
 - The model receives one outline and screenshot at the start and after each turn, including failed
   batches. Set `observation` to `"outline"` or `"screenshot"` when only one is needed; the default
   is `"both"`. A malformed `done` answer goes back to the model to correct.
