@@ -49,6 +49,7 @@ using them as click coordinates.
 `Page.click` returns a `ResolvedTarget` captured before input: the requested point, element label,
 role, accessible name, cursor and link target. Pixel targeting resolves through the page script and
 keeps the original point; the receipt names the control even when a nested child received the hit.
+Refs inside same-origin frames are measured, scrolled and checked for cover in the top viewport.
 
 Add a caller's toolkit with `additionalTools` and provide its handler layer to the run. It is
 merged after the browser tools, so the caller's tool wins a name clash with one, and its calls
@@ -84,7 +85,10 @@ const browser = Chromium.layer({
 Holds use `policyTimeout`, a finite positive duration defaulting to five minutes, separately from
 the action timeout. They do not keep the page locked. After approval, the library verifies the
 same document, target and relevant facts before sending input. Changed targets fail undispatched;
-the library never retries the action or the policy automatically. A policy timeout is a typed
+the library never retries the action or the policy automatically. A pointer press is checked again
+once the pointer has arrived and the page has had a frame to react: the approved control must still
+receive the press point, so a control that appears under the pointer, such as a hover menu, stops
+the action before the button goes down. A policy timeout is a typed
 `PolicyTimeout`, and tools surface both timeout and denial as ordinary failed receipts. Without a
 guard, actions are allowed. Canvas and opaque frames expose their outer element's metadata.
 
@@ -92,7 +96,8 @@ With `humanize`, off-screen ref targets are reached with visible wheel input bef
 moves to them. Scroll attempts are bounded and may use one instant fallback. A denied or held action
 does not scroll. After scrolling, the library checks the original target again; a page handler that
 changes its meaning can therefore stop an action after its wheel input but before a click. Drag
-endpoints are resolved together in the final viewport before the button is pressed.
+endpoints are resolved together in the final viewport, and checked under the pointer, before the
+button is pressed.
 
 Humanized pointer movement uses a tuned two-stroke sigma-lognormal planner. It evaluates the model
 every 16.7 ms but sends a move only when the pointer reaches a new pixel; the exact destination

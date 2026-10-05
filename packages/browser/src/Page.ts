@@ -532,6 +532,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         contextId,
         expression: `globalThis.__effectBrowser.${call}`,
         returnByValue: true,
+        awaitPromise: true,
       }),
     ).pipe(
       Effect.flatMap((result) =>
@@ -635,7 +636,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   interface Approval {
     readonly contextId: number;
     readonly targets: ReadonlyArray<Script.InspectedTarget | null>;
-    readonly check: (focused?: boolean) => Effect.Effect<void, BrowserError>;
+    readonly check: (options?: Script.ValidationOptions) => Effect.Effect<void, BrowserError>;
     readonly navigate?: Effect.Effect<void, BrowserError> | undefined;
   }
 
@@ -970,8 +971,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         classifications: prepared.classifications,
       });
 
-      const check = (focused = false) =>
-        evaluateIn(action, scriptCall("validateInput", input, prepared, focused), contextId).pipe(
+      const check = (options: Script.ValidationOptions = {}) =>
+        evaluateIn(action, scriptCall("validateInput", input, prepared, options), contextId).pipe(
           Effect.catchIf(contextGone, () =>
             failWith(
               action,
@@ -1233,7 +1234,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(point);
           yield* moveTo("click", marks, point, resolved.cursor);
-          if (approval !== undefined) yield* approval.check();
+          if (approval !== undefined) yield* approval.check({ presses: [{ index: 0, ...point }] });
           for (let index = 1; index <= count; index++) {
             yield* sendMouse("click", marks.input, {
               type: "mousePressed",
@@ -1296,7 +1297,15 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
           yield* marks.at(end.point);
           yield* moveTo("drag", marks, start.point, start.cursor);
-          if (approval !== undefined) yield* approval.check();
+          // Both ends are checked before the button goes down: once it is down, a release cannot
+          // be withheld, and a dragged element under the pointer would hide the drop target.
+          if (approval !== undefined)
+            yield* approval.check({
+              presses: [
+                { index: 0, ...start.point },
+                { index: 1, ...end.point },
+              ],
+            });
           yield* sendMouse("drag", marks.input, {
             type: "mousePressed",
             ...start.point,
@@ -1432,6 +1441,8 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
             yield* marks.at(target.point);
             if (settings.humanize) {
               yield* moveTo("type", marks, target.point, target.cursor);
+              if (approval !== undefined)
+                yield* approval.check({ presses: [{ index: 0, ...target.point }] });
               yield* sendMouse("type", marks.input, {
                 type: "mousePressed",
                 ...target.point,
@@ -1460,7 +1471,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               return yield* failWith("type", new NotActionable({ detail: focused.error }));
           }
           yield* presentationPause("focus");
-          if (approval !== undefined) yield* approval.check(true);
+          if (approval !== undefined) yield* approval.check({ focused: true });
           yield* marks.sent;
           if (text === "" && replace && typeOptions.into !== undefined)
             yield* keyStroke("type", marks.input, ["Delete"]);

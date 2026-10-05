@@ -402,6 +402,68 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  // A control that appears under the pointer when it arrives, as a hover menu might, must not
+  // receive a press the policy approved for the control underneath.
+  const hoverTrap =
+    '<body style="margin:0"><button id="target" style="position:absolute;left:100px;top:100px;width:200px;height:60px" onmousedown="document.body.dataset.target=\'pressed\'">Settings</button>' +
+    '<input id="field" aria-label="Notes" style="position:absolute;left:100px;top:300px;width:200px;height:40px">' +
+    '<script>for (const id of ["target", "field"]) document.getElementById(id).addEventListener("mouseover", () => {' +
+    'if (document.getElementById("danger")) return; const danger = document.createElement("button");' +
+    'danger.id = "danger"; danger.textContent = "Delete account"; danger.style.cssText = "position:fixed;inset:0;z-index:10";' +
+    'danger.onmousedown = () => (document.body.dataset.deleted = "yes"); document.body.append(danger); });</script>';
+
+  for (const [label, humanize, act] of [
+    [
+      "clicking a ref",
+      false,
+      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "button", "Settings")),
+    ],
+    ["clicking a point", false, (page: Page) => page.click({ x: 200, y: 130 })],
+    [
+      "a humanized click",
+      true,
+      (page: Page, snapshot: Snapshot) => page.click(refOf(snapshot, "button", "Settings")),
+    ],
+    [
+      "humanized typing",
+      true,
+      (page: Page, snapshot: Snapshot) =>
+        page.type("12", { into: refOf(snapshot, "textbox", "Notes") }),
+    ],
+    [
+      "a drag",
+      false,
+      (page: Page, snapshot: Snapshot) =>
+        page.drag(refOf(snapshot, "button", "Settings"), refOf(snapshot, "textbox", "Notes")),
+    ],
+  ] as const) {
+    it.effect("refuses " + label + " when the pointer's arrival covers the approved target", () =>
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
+
+        const { page } = yield* setup({
+          humanize,
+          guard: (request) => Effect.sync(() => requests.push(request)),
+        });
+
+        yield* Effect.promise(() => page.playwright.setContent(hoverTrap));
+
+        assert.deepStrictEqual(yield* failure(act(page, yield* page.snapshot())), {
+          tag: "NotActionable",
+          dispatched: true,
+        });
+        assert.lengthOf(requests, 1);
+        assert.deepStrictEqual(
+          yield* Effect.promise(() =>
+            page.playwright.evaluate(() => ({ ...document.body.dataset })),
+          ),
+          {},
+        );
+        assert.strictEqual(yield* valueOf(page, "#field"), "");
+      }),
+    );
+  }
+
   for (const change of ["label", "href", "pixel target"] as const) {
     it.effect("refuses a held click after its " + change + " changes", () =>
       Effect.gen(function* () {

@@ -451,6 +451,42 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect(
+    "measures frame refs in the top viewport: covered frames refuse, distant ones scroll",
+    () =>
+      Effect.gen(function* () {
+        const page = yield* open("/form");
+        const record = (name: string) => `parent.document.body.dataset.${name}=1`;
+
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            `<body style="margin:0;height:4000px">` +
+              `<iframe style="position:absolute;left:0;top:0;width:400px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:400px;height:200px' onclick='${record("covered")}'>Covered action</button>"></iframe>` +
+              `<div style="position:absolute;left:0;top:0;width:400px;height:200px;z-index:5" onmousedown="document.body.dataset.cover=1"></div>` +
+              `<iframe style="position:absolute;left:0;top:1500px;width:400px;height:200px;border:0" srcdoc="<body style='margin:0'><button style='width:200px;height:50px' onclick='${record("deep")}'>Deep action</button>"></iframe></body>`,
+          ),
+        );
+        const snapshot = yield* page.snapshot({ full: true });
+
+        assert.deepStrictEqual(
+          yield* reason(page.click(refOf(snapshot, "button", "Covered action"))),
+          {
+            tag: "NotActionable",
+            dispatched: false,
+          },
+        );
+
+        const deep = yield* page.click(refOf(snapshot, "button", "Deep action"));
+
+        const dataset = yield* Effect.promise(() =>
+          page.playwright.evaluate(() => ({ ...document.body.dataset })),
+        );
+
+        assert.isBelow(deep.point.y, 720);
+        assert.deepStrictEqual(dataset, { deep: "1" });
+      }),
+  );
+
   it.effect("keeps transformed iframe receipts conservative without changing the click", () =>
     Effect.gen(function* () {
       const page = yield* open("/form");
