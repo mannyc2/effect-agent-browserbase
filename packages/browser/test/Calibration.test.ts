@@ -319,6 +319,7 @@ describe("Calibration deadlines", () => {
       Effect.gen(function* () {
         const context = yield* fresh;
         const live = yield* EffectClock.Clock;
+        const entered = Promise.withResolvers<void>();
 
         const ownerClock: EffectClock.Clock = {
           currentTimeMillisUnsafe: () => live.currentTimeMillisUnsafe(),
@@ -327,16 +328,21 @@ describe("Calibration deadlines", () => {
           currentTimeNanos: live.currentTimeNanos,
           monotonicTimeNanosUnsafe: () => live.monotonicTimeNanosUnsafe(),
           monotonicTimeNanos: live.monotonicTimeNanos,
-          // Only the measurement deadline is shortened; closing keeps its real bound.
+          // Only the measurement deadline is shortened, and only once the allocation under test
+          // has begun: a slow page allocation must not end the measurement before the session
+          // wait this case is about. Closing keeps its real bound.
           sleep: (duration) => {
             const millis = Duration.toMillis(duration);
 
-            return live.sleep(Duration.millis(millis >= 8000 ? millis / 100 : millis));
+            return millis >= 8000
+              ? Effect.promise(() => entered.promise).pipe(
+                  Effect.andThen(live.sleep(Duration.millis(millis / 100))),
+                )
+              : live.sleep(duration);
           },
         };
 
         const gate = Promise.withResolvers<void>();
-        const entered = Promise.withResolvers<void>();
         const pageClosed = Promise.withResolvers<void>();
         const sessionDetached = Promise.withResolvers<void>();
         const createPage = context.newPage.bind(context);
