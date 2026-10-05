@@ -1,13 +1,36 @@
 // Adapted from danieljvdm/effect-agent@bcc2bb7 oxlint/plugin-exports.ts under the MIT License; see
 // LICENSE-effect-agent.
+import { readFileSync } from "node:fs";
+
 import type { RuleTester } from "vite-plus/lint/plugins-dev";
 
 type Rule = Parameters<RuleTester["run"]>[1];
 type Visitor = ReturnType<NonNullable<Rule["create"]>>;
 type Node = Parameters<NonNullable<Visitor[string]>>[0];
 
-const packageDirectory = (filename: string) =>
-  /(?:^|\/)packages\/([^/]+)\/src\//.exec(filename.replaceAll("\\", "/"))?.[1];
+const names = new Map<string, string | undefined>();
+
+/** The published name of the package whose `src` holds `filename`, read from its manifest. */
+const packageName = (filename: string) => {
+  const root = /^(.*?(?:^|\/)packages\/[^/]+)\/src\//.exec(filename.replaceAll("\\", "/"))?.[1];
+
+  if (root === undefined) return undefined;
+  if (!names.has(root)) {
+    const manifest: unknown = JSON.parse(readFileSync(`${root}/package.json`, "utf8"));
+
+    names.set(
+      root,
+      typeof manifest === "object" &&
+        manifest !== null &&
+        "name" in manifest &&
+        typeof manifest.name === "string"
+        ? manifest.name
+        : undefined,
+    );
+  }
+
+  return names.get(root);
+};
 
 const literalSource = (node: Node): string | undefined => {
   if (node.type === "Literal" && typeof node.value === "string") return node.value;
@@ -128,11 +151,9 @@ const noSelfBarrelImport = {
     },
   },
   create(context) {
-    const directory = packageDirectory(context.filename);
+    const ownPackage = packageName(context.filename);
 
-    if (directory === undefined) return {};
-
-    const ownPackage = directory === "effect-agent" ? "effect-agent" : `@effect-agent/${directory}`;
+    if (ownPackage === undefined) return {};
 
     const isIndirect = (source: string) =>
       source === ownPackage ||
