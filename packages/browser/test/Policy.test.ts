@@ -834,6 +834,42 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect(
+    "refuses back before asking when there is nothing behind, and leaves frame history",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<InputRequest> = [];
+
+        const { browser, page } = yield* setup({
+          guard: (request) => Effect.sync(() => requests.push(request)),
+        });
+
+        const fresh = yield* browser.newPage();
+
+        requests.splice(0);
+        assert.deepStrictEqual(yield* failure(fresh.back), { tag: "NotFound", dispatched: false });
+        assert.isEmpty(requests);
+
+        const site = yield* Site;
+
+        yield* Effect.promise(() =>
+          page.playwright.setContent(`<iframe name="child" src="${site.url("/next")}"></iframe>`),
+        );
+        const child = page.playwright.frame({ name: "child" });
+
+        assert.isNotNull(child);
+        if (child === null) return;
+        yield* Effect.promise(() => child.waitForLoadState());
+        yield* Effect.promise(() => child.goto(site.url("/chart")));
+        yield* page.back.pipe(Effect.timeout(Duration.seconds(5)));
+        assert.strictEqual(child.url(), site.url("/next"));
+        assert.deepStrictEqual(
+          requests.map((request) => request.action),
+          ["back"],
+        );
+      }),
+  );
+
   it.effect("finishes allowed back navigation between entries with the same URL", () =>
     Effect.gen(function* () {
       const { page } = yield* setup({ guard: () => Effect.void });

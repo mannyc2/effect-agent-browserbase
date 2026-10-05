@@ -230,6 +230,32 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  it.effect("goes back through frame-only history and refuses when there is nothing behind", () =>
+    Effect.gen(function* () {
+      const browser = yield* Browser;
+      const site = yield* Site;
+      const fresh = yield* Effect.acquireRelease(browser.newPage(), (page) => page.close);
+
+      assert.deepStrictEqual(yield* reason(fresh.back), { tag: "NotFound", dispatched: false });
+
+      const page = yield* open("/form");
+
+      yield* Effect.promise(() =>
+        page.playwright.setContent(`<iframe name="child" src="${site.url("/next")}"></iframe>`),
+      );
+      const child = page.playwright.frame({ name: "child" });
+
+      assert.isNotNull(child);
+      if (child === null) return;
+      yield* Effect.promise(() => child.waitForLoadState());
+      yield* Effect.promise(() => child.goto(site.url("/chart")));
+
+      // Only the frame navigated: the traversal must finish without a main-frame navigation.
+      yield* page.back.pipe(Effect.timeout(Duration.seconds(5)));
+      assert.strictEqual(child.url(), site.url("/next"));
+    }),
+  );
+
   it.effect("reports a refused connection as a failed navigation", () =>
     Effect.gen(function* () {
       const page = yield* open("/next");
