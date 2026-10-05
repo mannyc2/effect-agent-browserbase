@@ -3,7 +3,7 @@
 import { createServer } from "node:net";
 
 import { assert, it } from "@effect/vitest";
-import { Duration, Effect, Exit, Layer, Option } from "effect";
+import { Duration, Effect, Exit, Layer, Option, Stream } from "effect";
 import { chromium } from "playwright-core";
 
 import { Browser } from "../src/Browser.ts";
@@ -109,4 +109,32 @@ it.live("bounds a viewport read on a busy page by the action's deadline and reco
 
     assert.strictEqual(scrolls.length, 1);
   }).pipe(Effect.provide(attachedWith([], { actionTimeout: Duration.seconds(1) }))),
+);
+
+it.live("captures an unsized page at its CSS viewport and reuses current frames", () =>
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    const page = yield* browser.page;
+
+    yield* page.goto(
+      "data:text/html,<title>Spin</title><body style='margin:0'><canvas id=c width=300 height=300></canvas><script>const g=c.getContext('2d');(function f(t){g.fillStyle='hsl('+(t/5%360)+',80%,50%)';g.fillRect(0,0,300,300);requestAnimationFrame(f)})(0)</script></body>",
+    );
+    const viewport = yield* page.viewport;
+
+    yield* page.screencast().pipe(Stream.runDrain, Effect.forkScoped);
+    yield* Effect.sleep("500 millis");
+    const frame = Option.getOrThrow(yield* page.latestFrame);
+
+    // At a device scale factor of 2 the native frame would be twice the CSS viewport.
+    assert.deepStrictEqual([frame.width, frame.height], [viewport.width, viewport.height]);
+    let reused = 0;
+
+    for (let index = 0; index < 5; index++) {
+      const shot = yield* page.screenshot();
+
+      if ((yield* page.recentFrames).some((recent) => recent.data === shot.data)) reused++;
+      yield* Effect.sleep("50 millis");
+    }
+    assert.isAbove(reused, 0);
+  }).pipe(Effect.scoped, Effect.provide(attachedWith(["--force-device-scale-factor=2"]))),
 );

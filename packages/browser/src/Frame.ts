@@ -120,6 +120,6 @@ export class CaptureStats extends Schema.Class<CaptureStats>("effect-browser/Cap
 export interface ScreencastOptions {
   /** JPEG quality, 0 to 100. Defaults to 80. */
   readonly quality?: number | undefined;
-  /** Frames are scaled down to fit this box. Defaults to the viewport. */
+  /** Frames are scaled down to fit this box. Defaults to the viewport in CSS pixels. */
   readonly size?: { readonly width: number; readonly height: number } | undefined;
 }

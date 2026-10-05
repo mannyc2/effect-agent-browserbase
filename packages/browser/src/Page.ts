@@ -656,7 +656,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
     clock,
     calibrate: mapping.refresh(calibrateClock),
     frameHistory: settings.frameHistory,
-    viewport: () => playwright.viewportSize(),
+    viewport: Effect.suspend(() => viewportFor("screencast")),
     onClose: (listener) => {
       playwright.on("close", listener);
       if (playwright.isClosed()) listener();
@@ -685,7 +685,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       );
 
   // Playwright knows the viewport only of a context it created; over CDP it reports none, so the
-  // page answers. Pointer bounds, page scrolls and crops all read this one source.
+  // page answers. Pointer bounds, page scrolls, crops, capture size and frame reuse all read this
+  // one source; the latest answer serves checks that cannot wait for the page.
+  let measuredViewport: { readonly width: number; readonly height: number } | null = null;
+
+  const knownViewport = () => playwright.viewportSize() ?? measuredViewport;
+
   const viewportFor = (operation: string) =>
     Effect.suspend(() => {
       const known = playwright.viewportSize();
@@ -693,6 +698,11 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       return known === null
         ? evaluate(operation, scriptCall("viewport")).pipe(
             Effect.flatMap(decodeWith(operation, Script.ViewportResultSchema)),
+            Effect.tap((measured) =>
+              Effect.sync(() => {
+                measuredViewport = measured;
+              }),
+            ),
           )
         : Effect.succeed(known);
     });
@@ -1996,7 +2006,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       // Delivery can be delayed. Only paint whose entire clock interval follows input is reusable.
       // A screencast sends only changes and can miss a page's final paint, so a quiet stream is no
       // evidence that its newest frame is still current: reuse needs recent paint as well.
-      const viewport = playwright.viewportSize();
+      const viewport = knownViewport();
 
       if (
         screenshotOptions.fresh !== true &&
@@ -2025,7 +2035,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         timeout,
       );
 
-      const size = jpegSize(data) ?? playwright.viewportSize() ?? { width: 0, height: 0 };
+      const size = jpegSize(data) ?? knownViewport() ?? { width: 0, height: 0 };
 
       return new Image({ data, mediaType: "image/jpeg", width: size.width, height: size.height });
     });
