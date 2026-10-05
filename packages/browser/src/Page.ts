@@ -130,7 +130,7 @@ export interface ScrollOptions {
 export interface ScreenshotOptions {
   /** Capture a new image even when a screencast frame is available. */
   readonly fresh?: boolean | undefined;
-  /** A region of the viewport, for reading a detail at full resolution. */
+  /** A region of the viewport, captured in CSS pixels at the viewport's own scale. */
   readonly clip?:
     | { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
     | undefined;
@@ -201,7 +201,7 @@ export interface Page {
   readonly snapshot: (options?: SnapshotOptions) => Effect.Effect<Snapshot, BrowserError>;
   /** A picture of the viewport: the latest screencast frame when one is current, else a screenshot. */
   readonly screenshot: (options?: ScreenshotOptions) => Effect.Effect<Image, BrowserError>;
-  /** A full-resolution crop, with the origin needed to keep subsequent input in viewport pixels. */
+  /** A crop in CSS pixels, unmagnified, with the origin that keeps later input in viewport pixels. */
   readonly zoom: (region: Region) => Effect.Effect<Zoom, BrowserError>;
   /** An outline, a picture, or both (the default), taken together. */
   readonly observe: (options?: {

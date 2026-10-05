@@ -105,7 +105,7 @@ const system = (instructions: string | undefined) =>
     "Seeing the page:",
     "- browser_snapshot gives a text outline of the viewport. Controls carry refs such as e12 for the other tools. Refs from an old snapshot can be stale.",
     "- The observation after each turn shows the viewport as an outline, a picture, or both. The full screenshot uses viewport coordinates: use x and y for anything without a ref, such as a canvas game, a chart or a video.",
-    "- browser_zoom shows a small viewport region at full resolution after the batch. Its caption gives the viewport origin; keep using viewport coordinates for clicks.",
+    "- browser_zoom crops a small viewport region and shows it on its own after the batch, at the viewport's own CSS pixel scale: a closer look, not a magnification. Its caption gives the viewport origin; keep using viewport coordinates for clicks.",
     "- Tool calls return receipts. One fresh observation follows the whole batch.",
     "",
     "Acting:",

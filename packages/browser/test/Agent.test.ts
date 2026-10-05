@@ -900,17 +900,23 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
           const tracked = yield* trackObservations(page);
 
           const model = scripted([
-            () => [
-              ...Array.from({ length: 8 }, (_, index) =>
-                call("browser_zoom", {
-                  x: index * 10,
-                  y: 0,
-                  width: 100,
-                  height: 60,
-                }),
-              ),
-              finish,
-            ],
+            (prompt) => {
+              // Crops are not magnified, and the model must not be told they are.
+              assert.notInclude(textOf(prompt), "full resolution");
+              assert.include(textOf(prompt), "the viewport's own CSS pixel scale");
+
+              return [
+                ...Array.from({ length: 8 }, (_, index) =>
+                  call("browser_zoom", {
+                    x: index * 10,
+                    y: 0,
+                    width: 100,
+                    height: 60,
+                  }),
+                ),
+                finish,
+              ];
+            },
             (prompt) => {
               const observation = prompt.content
                 .filter((message) => message.role === "user")

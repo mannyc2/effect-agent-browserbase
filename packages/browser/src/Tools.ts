@@ -75,7 +75,7 @@ export const Snapshot = tool(
 
 export const Zoom = tool(
   "browser_zoom",
-  "Read a small viewport region at full CSS resolution. Its image follows the batch; click coordinates stay in viewport space. At most 8 crops per observation.",
+  "Crop a small viewport region at the viewport's own CSS pixel scale, without magnification. Its image follows the batch; click coordinates stay in viewport space. At most 8 crops per observation.",
   Page.Region.fields,
 );
 
