@@ -15,6 +15,7 @@ import type { AiError, LanguageModel } from "effect/ai";
 import * as QuoteComparison from "./QuoteComparison.ts";
 import {
   CheckoutTruth,
+  type FixtureUnreadable,
   FrameTruth,
   MarketTruth,
   NavigationTruth,
@@ -58,12 +59,12 @@ export interface Task {
     options: ModelOptions<E>,
   ) => Effect.Effect<
     Outcome,
-    AiError.AiError | BrowserError | Agent.AgentError | EvidenceIncomplete | E,
+    AiError.AiError | BrowserError | Agent.AgentError | EvidenceIncomplete | FixtureUnreadable | E,
     Browser | LanguageModel.LanguageModel
   >;
   readonly scripted: (
     options?: TrialOptions,
-  ) => Effect.Effect<Outcome, BrowserError | EvidenceIncomplete, Browser>;
+  ) => Effect.Effect<Outcome, BrowserError | EvidenceIncomplete | FixtureUnreadable, Browser>;
 }
 
 const noUsage: Agent.Usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
@@ -104,6 +105,10 @@ const fill = (page: Page, name: string, text: string) =>
       Effect.flatMap((snapshot) => page.type(text, { into: refOf(snapshot, "textbox", name) })),
     );
 
+// A model that leaves the fixture, for another page or another tab's game, has not done the task.
+const unreadable = (error: FixtureUnreadable): Effect.Effect<Grade> =>
+  Effect.succeed({ pass: false, detail: error.message });
+
 const operate = <A, I>(spec: {
   readonly name: string;
   readonly summary: string;
@@ -111,8 +116,9 @@ const operate = <A, I>(spec: {
   readonly prompt: string;
   readonly answer: Schema.Codec<A, I>;
   readonly maxSteps: number;
-  readonly solve: (page: Page) => Effect.Effect<A, BrowserError>;
-  readonly grade: (answer: A, page: Page) => Effect.Effect<Grade>;
+  readonly solve: (page: Page) => Effect.Effect<A, BrowserError | FixtureUnreadable>;
+  /** Fails with `FixtureUnreadable` when the page no longer holds the fixture's state. */
+  readonly grade: (answer: A, page: Page) => Effect.Effect<Grade, BrowserError | FixtureUnreadable>;
 }): Task => ({
   name: spec.name,
   kind: "operate",
@@ -127,7 +133,9 @@ const operate = <A, I>(spec: {
         onStep: (step) => options.onUsage(step.usage),
       });
 
-      const grade = yield* spec.grade(result.answer, page);
+      const grade = yield* spec
+        .grade(result.answer, page)
+        .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
       return { ...grade, answer: result.answer, steps: result.steps, usage: result.usage };
     }).pipe(Effect.scoped),
@@ -135,7 +143,10 @@ const operate = <A, I>(spec: {
     Effect.gen(function* () {
       const page = yield* open(spec.start, options.seed);
       const answer = yield* spec.solve(page);
-      const grade = yield* spec.grade(answer, page);
+
+      const grade = yield* spec
+        .grade(answer, page)
+        .pipe(Effect.catchTag("FixtureUnreadable", unreadable));
 
       return { ...grade, answer, steps: 0, usage: noUsage };
     }).pipe(Effect.scoped),
@@ -175,13 +186,18 @@ const understand = <A, I extends Record<string, unknown>>(spec: {
   readonly setup: (page: Page) => Effect.Effect<void, BrowserError>;
   readonly capture: Moment.CaptureOptions;
   /** A count alone cannot show whether the retained frames cover an earlier state. */
-  readonly minimumSpanMillis?: (page: Page) => Effect.Effect<number>;
+  readonly minimumSpanMillis?: (
+    page: Page,
+  ) => Effect.Effect<number, BrowserError | FixtureUnreadable>;
   /** What else the selected frames must show, read after capture; a problem or undefined. */
-  readonly covers?: (frames: ReadonlyArray<Frame>, page: Page) => Effect.Effect<string | undefined>;
+  readonly covers?: (
+    frames: ReadonlyArray<Frame>,
+    page: Page,
+  ) => Effect.Effect<string | undefined, BrowserError | FixtureUnreadable>;
   readonly instructions: string;
   readonly answer: Schema.Codec<A, I>;
   /** What the moment shows, read from the page's truth as it is captured. */
-  readonly expected: (page: Page) => Effect.Effect<A>;
+  readonly expected: (page: Page) => Effect.Effect<A, BrowserError | FixtureUnreadable>;
   readonly grade: (answer: A, expected: A) => Grade;
 }): Task => {
   const prepare = (options: TrialOptions) =>

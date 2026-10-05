@@ -12,6 +12,7 @@ import { BrowserbaseError } from "effect-browserbase/BrowserbaseError";
 import { AiError } from "effect/ai";
 
 import { type Account, type Calls, type Endpoint, noCalls, noTiming } from "./Budget.ts";
+import { FixtureUnreadable } from "./Sites.ts";
 
 /** The captured evidence cannot support a graded answer, so no model is asked about it. */
 export class EvidenceIncomplete extends Schema.TaggedError<EvidenceIncomplete>()(
@@ -85,6 +86,7 @@ export type Reason =
   | "gave-up"
   | "step-limit"
   | "evidence-incomplete"
+  | "fixture-unreadable"
   | "preparation-failed"
   | "model-setup-failed"
   | "browser-failed"
@@ -128,6 +130,7 @@ const modelOutput: ReadonlySet<string> = new Set([
 const isBrowserError = Schema.is(BrowserError);
 const isBrowserbaseError = Schema.is(BrowserbaseError);
 const isEvidenceIncomplete = Schema.is(EvidenceIncomplete);
+const isFixtureUnreadable = Schema.is(FixtureUnreadable);
 
 /**
  * One policy for both runners. A model that gives up, runs out of steps, or returns output that
@@ -166,6 +169,8 @@ export const classify = (
   )
     return { status: "graded", reason: "invalid-output", pass: false };
   if (isEvidenceIncomplete(error)) return infrastructure("evidence-incomplete");
+  // Operate graders turn an unreadable fixture into a failed grade; elsewhere the fixture is ours.
+  if (isFixtureUnreadable(error)) return infrastructure("fixture-unreadable");
   if (Cause.isTimeoutError(error)) return infrastructure("timed-out");
   if (isBrowserError(error)) return infrastructure("browser-failed");
   if (isBrowserbaseError(error)) return infrastructure("hosted-session-failed");

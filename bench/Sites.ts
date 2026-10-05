@@ -3,6 +3,7 @@
 // its ground truth in `window.__bench` for grading; models never see it.
 import { Effect, Schema } from "effect";
 import type * as Browser from "effect-browser/Browser";
+import { BrowserError, Closed } from "effect-browser/BrowserError";
 import type { Page } from "effect-browser/Page";
 
 export const origin = "https://bench.test";
@@ -443,10 +444,45 @@ export const serve = (browser: Browser.Service, seed = 0) =>
   );
 
 /** A page's ground truth, decoded with `schema`. */
-export const truth = <A, I>(page: Page, schema: Schema.Codec<A, I>) =>
-  Effect.promise(() =>
-    page.playwright.evaluate(() => (window as unknown as { __bench: unknown }).__bench),
-  ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)), Effect.orDie);
+/**
+ * The open page does not hold the fixture state a grader expects, such as after a model left the
+ * fixture for another page. That is the model's outcome to grade, not a broken browser.
+ */
+export class FixtureUnreadable extends Schema.TaggedError<FixtureUnreadable>()(
+  "FixtureUnreadable",
+  { detail: Schema.String },
+) {
+  override get message() {
+    return `the fixture state is unreadable: ${this.detail}`;
+  }
+}
+
+/**
+ * A page's ground truth, decoded with `schema`. A closed page is a `BrowserError`; an open page
+ * that has left or lost its fixture state is `FixtureUnreadable`.
+ */
+export const truth = <A, I>(
+  page: Page,
+  schema: Schema.Codec<A, I>,
+): Effect.Effect<A, BrowserError | FixtureUnreadable> =>
+  Effect.tryPromise({
+    try: () => page.playwright.evaluate(() => (window as unknown as { __bench: unknown }).__bench),
+    catch: (cause) =>
+      page.playwright.isClosed()
+        ? new BrowserError({ operation: "truth", reason: new Closed({}), dispatched: false })
+        : new FixtureUnreadable({
+            detail: `${page.playwright.url()} could not be evaluated: ${cause instanceof Error ? cause.message.split("\n")[0] : "unknown"}`,
+          }),
+  }).pipe(
+    Effect.flatMap((value) =>
+      Schema.decodeUnknownEffect(schema)(value).pipe(
+        Effect.mapError(
+          () =>
+            new FixtureUnreadable({ detail: `${page.playwright.url()} holds no matching state` }),
+        ),
+      ),
+    ),
+  );
 
 export const ReelsTruth = Schema.Struct({
   credits: Schema.Finite,

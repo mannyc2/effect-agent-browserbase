@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Stream } from "effect";
 import { Browser } from "effect-browser/Browser";
+import type { BrowserError } from "effect-browser/BrowserError";
 import * as Chromium from "effect-browser/Chromium";
 import type { Frame } from "effect-browser/Frame";
 import type { Page } from "effect-browser/Page";
@@ -11,6 +12,7 @@ import { LanguageModel, type Prompt, type Response } from "effect/ai";
 
 import { noCalls } from "../Budget.ts";
 import {
+  type FixtureUnreadable,
   FrameTruth,
   MarketTruth,
   NavigationTruth,
@@ -63,7 +65,7 @@ const run = (name: string, model: Layer.Layer<LanguageModel.LanguageModel>) =>
 /** Inspect the actual description request and retained frames without replacing capture. */
 const describeWith = (
   name: string,
-  answer: (page: Page) => Effect.Effect<unknown>,
+  answer: (page: Page) => Effect.Effect<unknown, BrowserError | FixtureUnreadable>,
   options: {
     readonly seed?: number;
     readonly frameDelayMillis?: number;
@@ -139,16 +141,19 @@ const describeWith = (
 
     const model = yield* LanguageModel.make({
       generateText: (options) =>
+        // The scripted model reads the fixture it describes; a failure there is the test's own.
         Effect.gen(function* () {
           prompts.push(options.prompt);
           frameAfter = (yield* truth(page, FrameTruth)).frameAfter;
           const value = yield* answer(page);
 
-          return [
+          const parts: Array<Response.PartEncoded> = [
             { type: "text", text: JSON.stringify(value) },
             { type: "finish", reason: "stop", usage },
           ];
-        }),
+
+          return parts;
+        }).pipe(Effect.orDie),
       streamText: () => Stream.empty,
     });
 

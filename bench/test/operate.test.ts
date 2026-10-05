@@ -2,7 +2,7 @@
 // local Chromium. Every HTTP answer is in memory: no credentials and no paid calls.
 import { OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import * as Chromium from "effect-browser/Chromium";
 import { LanguageModel } from "effect/ai";
 import { HttpClient, HttpClientResponse } from "effect/http";
@@ -28,8 +28,8 @@ const toolCall = (name: string, args: string) =>
     tool_calls: [{ id: "call-1", type: "function", function: { name, arguments: args } }],
   });
 
-/** Run chart-trade with a model whose every HTTP answer is `body`. */
-const trade = Effect.fnUntraced(function* (model: string, body: unknown) {
+/** Run chart-trade with a model whose n-th HTTP answer is `answers(n)`. */
+const trade = Effect.fnUntraced(function* (model: string, answers: (request: number) => unknown) {
   const task = tasks.find((candidate) => candidate.name === "chart-trade");
 
   if (task === undefined) return yield* Effect.die("the bench has no chart-trade task");
@@ -39,11 +39,13 @@ const trade = Effect.fnUntraced(function* (model: string, body: unknown) {
 
   const http = HttpClient.make((request) =>
     Effect.sync(() => {
+      const answer = answers(requests);
+
       requests += 1;
 
       return HttpClientResponse.fromWeb(
         request,
-        new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }),
+        new Response(JSON.stringify(answer), { headers: { "content-type": "application/json" } }),
       );
     }),
   );
@@ -69,14 +71,19 @@ const trade = Effect.fnUntraced(function* (model: string, body: unknown) {
 
   const calls = yield* account.calls;
 
-  return { outcome: classify(exit, calls), calls, requests, ledger: yield* budget.snapshot };
+  return {
+    outcome: classify(exit, calls),
+    detail: Exit.isSuccess(exit) ? exit.value.detail : null,
+    calls,
+    requests,
+    ledger: yield* budget.snapshot,
+  };
 });
 
 describe("operate trials on the real adapter", () => {
   it.live("reach the provider for an openai/ model and grade its answer", () =>
     Effect.gen(function* () {
-      const result = yield* trade(
-        "openai/test",
+      const result = yield* trade("openai/test", () =>
         toolCall("done", JSON.stringify({ answer: { orderId: "ORD-0000" } })),
       );
 
@@ -88,7 +95,7 @@ describe("operate trials on the real adapter", () => {
 
   it.live("grade malformed tool arguments from a decoded, charged response", () =>
     Effect.gen(function* () {
-      const result = yield* trade("google/test", toolCall("browser_snapshot", "{not json"));
+      const result = yield* trade("google/test", () => toolCall("browser_snapshot", "{not json"));
 
       assert.isAtLeast(result.requests, 1);
       assert.strictEqual(result.outcome.status, "graded");
@@ -98,11 +105,24 @@ describe("operate trials on the real adapter", () => {
     }),
   );
 
+  it.live("grade a model that leaves the fixture page before answering", () =>
+    Effect.gen(function* () {
+      const result = yield* trade("google/test", (request) =>
+        request === 0
+          ? toolCall("browser_navigate", JSON.stringify({ url: "https://bench.test/nowhere" }))
+          : toolCall("done", JSON.stringify({ answer: { orderId: "ORD-1001" } })),
+      );
+
+      assert.deepStrictEqual(result.outcome, { status: "graded", reason: "answered", pass: false });
+      assert.include(result.detail ?? "", "the fixture state is unreadable");
+    }),
+  );
+
   it.live("fail an undecodable provider answer as infrastructure without replaying it", () =>
     Effect.gen(function* () {
-      const result = yield* trade("google/test", {
+      const result = yield* trade("google/test", () => ({
         error: { message: "upstream provider error", code: 502 },
-      });
+      }));
 
       assert.deepStrictEqual(result.outcome, {
         status: "infrastructure-failed",

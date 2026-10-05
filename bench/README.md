@@ -109,7 +109,10 @@ start time is a calendar date; elapsed time uses a monotonic clock.
 Both runners classify every trial or arm with one policy (`Trial.ts`) and give it exactly one
 status:
 
-- `graded`: the model answered, and `pass` says whether the answer was right. A model that gives
+- `graded`: the model answered, and `pass` says whether the answer was right. An operate task
+  whose page no longer holds the fixture's state when graded, because the model left it for
+  another page or played in another tab, has failed with a detail saying so; only a closed page
+  or another browser failure is infrastructure. A model that gives
   up, runs out of steps, or returns output that does not decode as the requested answer (invalid
   JSON or a mismatched schema, tool arguments that do not parse, or a tool that does not exist,
   after its receipt was decoded and accounted) has answered wrongly.
