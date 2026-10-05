@@ -111,11 +111,15 @@ status:
 
 - `graded`: the model answered, and `pass` says whether the answer was right. A model that gives
   up, runs out of steps, or returns output that does not decode as the requested answer (invalid
-  JSON or a mismatched schema, after its receipt was decoded and accounted) has answered wrongly.
+  JSON or a mismatched schema, tool arguments that do not parse, or a tool that does not exist,
+  after its receipt was decoded and accounted) has answered wrongly.
   Such output is a graded failure (`reason: "invalid-output"`) and stops nothing else.
 - `infrastructure-failed`: something other than the answer failed: incomplete or stale capture
   evidence, the browser, the hosted session, the provider, a charge above its bound, a deadline or
-  a defect. These are never counted as wrong answers.
+  a defect. These are never counted as wrong answers. A request that ends without a decoded
+  response (a transport failure, or a provider answer that does not decode) may still have run
+  and been billed, so its trial or arm makes no further model call: an agent loop cannot replay
+  it.
 - `denied`: the budget refused admission, before the browser started or at a later call.
 - `unrun`: the unit never reached an outcome, because the run stopped or was interrupted.
 

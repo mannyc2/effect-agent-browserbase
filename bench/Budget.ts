@@ -1,7 +1,7 @@
 // Paid model calls for both runners: one admission ledger, the budgeted OpenRouter client and the
 // pinned endpoint whose bounds every reservation uses.
 import { Generated, OpenRouterClient, OpenRouterLanguageModel } from "@effect/ai-openrouter";
-import { Clock, Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
+import { Cause, Clock, Config, Deferred, Effect, Exit, Layer, Option, Ref, Schema } from "effect";
 import type * as Agent from "effect-browser/Agent";
 import { AiError, type LanguageModel } from "effect/ai";
 import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
@@ -139,9 +139,11 @@ export const noTiming: Timing = { queueSeconds: 0, requestSeconds: 0 };
 
 /**
  * Why the ledger stopped one of an account's calls: `budget` refused admission before dispatch;
- * `bound` withheld a response whose charge exceeded its reservation.
+ * `bound` withheld a response whose charge exceeded its reservation; `unresolved` refused a call
+ * after an earlier request of the same account ended without a decoded response, whose outcome
+ * and charge are unknown and which must not be replayed.
  */
-export type Refusal = "budget" | "bound";
+export type Refusal = "budget" | "bound" | "unresolved";
 
 /** What classifying one unit of work needs to know about its calls. */
 export interface Calls {
@@ -248,6 +250,9 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
           ): Effect.Effect<A, E | BenchError, R> =>
             Effect.uninterruptibleMask((restore) =>
               Effect.gen(function* () {
+                if ((yield* Ref.get(refusal)) === "unresolved")
+                  return yield* refuse("an earlier request has an unknown outcome; not replaying");
+
                 const entered = yield* Clock.monotonicTimeNanos;
 
                 // A pending receipt may release enough capacity. Permanent uncertainty may not.
@@ -305,10 +310,22 @@ export const ledger = (maxUsd: number, requestUsd: number) =>
 
                 // Only the provider request is interruptible. Once a receipt arrives, account for
                 // it before any tool, answer decoder, or caller interruption can discard it.
+                // A request that ends without a decoded response may still have run and been
+                // billed. Its account makes no further call, so an agent loop cannot replay it.
                 const response = yield* restore(request).pipe(
                   Effect.onExit((exit) =>
                     spent(admitted, "requestSeconds").pipe(
-                      Effect.andThen(Exit.isFailure(exit) ? settle(undefined) : Effect.void),
+                      Effect.andThen(
+                        Exit.isSuccess(exit)
+                          ? Effect.void
+                          : settle(undefined).pipe(
+                              Effect.andThen(
+                                Cause.hasInterruptsOnly(exit.cause)
+                                  ? Effect.void
+                                  : Ref.set(refusal, "unresolved"),
+                              ),
+                            ),
+                      ),
                     ),
                   ),
                 );

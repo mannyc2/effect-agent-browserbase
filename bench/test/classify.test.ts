@@ -43,6 +43,20 @@ describe("classify", () => {
     });
     assert.deepStrictEqual(
       classify(
+        Exit.fail(
+          aiError(
+            new AiError.ToolParameterValidationError({
+              toolName: "browser_click",
+              description: "not JSON",
+            }),
+          ),
+        ),
+        answered,
+      ),
+      { status: "graded", reason: "invalid-output", pass: false },
+    );
+    assert.deepStrictEqual(
+      classify(
         Exit.fail(new AgentError({ reason: new StepLimit({ steps: 3 }), steps: 3 })),
         answered,
       ),
@@ -74,6 +88,8 @@ describe("classify", () => {
       [Exit.fail(new Cause.TimeoutError()), noCalls, "timed-out"],
       [Exit.die(new Error("fixture never settled")), noCalls, "defect"],
       [Exit.fail(outage), { ...answered, refusal: "bound" }, "charge-exceeded-bound"],
+      // A later call refused because an earlier request has an unknown outcome.
+      [Exit.fail(malformed), { ...answered, refusal: "unresolved" }, "provider-failed"],
     ] as const) {
       assert.deepStrictEqual(classify(exit, calls), {
         status: "infrastructure-failed",

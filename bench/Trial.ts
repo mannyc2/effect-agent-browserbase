@@ -115,15 +115,25 @@ const infrastructure = (reason: Reason): Classification => ({
 });
 
 const isAgentError = Schema.is(Agent.AgentError);
+
+// Reasons the model's own decoded output caused: an answer or tool arguments that do not parse
+// or fit their schema, or a tool that does not exist. A provider envelope that does not decode
+// is not among them.
+const modelOutput: ReadonlySet<string> = new Set([
+  "StructuredOutputError",
+  "ToolParameterValidationError",
+  "ToolNotFoundError",
+]);
+
 const isBrowserError = Schema.is(BrowserError);
 const isBrowserbaseError = Schema.is(BrowserbaseError);
 const isEvidenceIncomplete = Schema.is(EvidenceIncomplete);
 
 /**
  * One policy for both runners. A model that gives up, runs out of steps, or returns output that
- * does not decode as the requested answer after its receipt was decoded and accounted has
- * answered wrongly. Budget refusals are denials. Everything else that prevents an answer is
- * infrastructure, never a wrong answer.
+ * does not decode as the requested answer or tool call after its receipt was decoded and
+ * accounted has answered wrongly. Budget refusals are denials. A request without a decoded
+ * response, and everything else that prevents an answer, is infrastructure, never a wrong answer.
  */
 export const classify = (
   exit: Exit.Exit<{ readonly pass: boolean }, unknown>,
@@ -135,6 +145,7 @@ export const classify = (
   if (calls.refusal === "budget")
     return { status: "denied", reason: "budget-exhausted", pass: null };
   if (calls.refusal === "bound") return infrastructure("charge-exceeded-bound");
+  if (calls.refusal === "unresolved") return infrastructure("provider-failed");
 
   const found = Cause.findErrorOption(exit.cause);
 
@@ -149,7 +160,7 @@ export const classify = (
     };
   if (
     AiError.isAiError(error) &&
-    error.reason._tag === "StructuredOutputError" &&
+    modelOutput.has(error.reason._tag) &&
     calls.lastResponse !== null &&
     calls.lastResponse.call === calls.accounting.calls
   )
