@@ -56,6 +56,42 @@ export const estimate = (probes: ReadonlyArray<Probe>): Option.Option<Estimate> 
   return Option.fromUndefinedOr(best);
 };
 
+/** The browser's one epoch mapping, shared by its pages, input runs and capture generations. */
+export interface Mapping {
+  /** The latest estimate, measured through `measure` only while the browser has none. */
+  readonly current: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<Estimate, E>;
+  /** Measure again; a failed measurement keeps the previous estimate when there is one. */
+  readonly refresh: <E>(measure: Effect.Effect<Estimate, E>) => Effect.Effect<Estimate, E>;
+}
+
+/**
+ * Every renderer of a browser reads the same host wall clock, so the offset belongs to the
+ * browser rather than a page. A busy page cannot fail work that an earlier estimate can serve.
+ */
+export const mapping = (seed: Option.Option<Estimate>): Mapping => {
+  let latest = Option.getOrUndefined(seed);
+
+  const adopt = <E>(measure: Effect.Effect<Estimate, E>) =>
+    measure.pipe(
+      Effect.tap((estimate) =>
+        Effect.sync(() => {
+          latest = estimate;
+        }),
+      ),
+    );
+
+  return {
+    current: (measure) =>
+      Effect.suspend(() => (latest === undefined ? adopt(measure) : Effect.succeed(latest))),
+    refresh: (measure) =>
+      adopt(measure).pipe(
+        Effect.catch((error) =>
+          latest === undefined ? Effect.fail(error) : Effect.succeed(latest),
+        ),
+      ),
+  };
+};
+
 export const toHostTime = (calibration: Estimate, browserEpochMillis: number): number =>
   browserEpochMillis - calibration.offsetMillis;
 

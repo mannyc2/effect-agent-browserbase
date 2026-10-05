@@ -302,6 +302,8 @@ export interface MakeOptions {
   readonly settings: Settings;
   readonly motion: Motion.Service;
   readonly clock: Clock.Clock;
+  /** The browser's epoch mapping; pages measure it only when the browser has none. */
+  readonly mapping: BrowserClock.Mapping;
   readonly pointer: Ref.Ref<Option.Option<Point>>;
   readonly inputLock: Semaphore.Semaphore;
   readonly publish: (event: BrowserEvent) => number;
@@ -322,7 +324,9 @@ const buttonMask = { none: 0, left: 1, right: 2, middle: 4 } as const;
 const isReadonlyArray = (value: unknown): value is ReadonlyArray<unknown> => Array.isArray(value);
 
 export const make = Effect.fnUntraced(function* (options: MakeOptions) {
-  const { id, playwright, cdp, settings, motion, clock, pointer, inputLock, publish } = options;
+  const { id, playwright, cdp, settings, motion, clock, mapping, pointer, inputLock, publish } =
+    options;
+
   const lock = yield* Semaphore.make(1);
   const world = yield* Ref.make(Option.none<number>());
   const nextRef = yield* Ref.make(1);
@@ -339,6 +343,10 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       catch: (cause) => new BrowserError({ operation, reason: reasonOf(cause), dispatched: false }),
     });
 
+  // Every run records its mapping when it begins; a missing one leaves Chromium's own receipt time.
+  const stamp = (estimate: BrowserClock.Estimate | undefined, at: number) =>
+    estimate === undefined ? {} : { timestamp: BrowserClock.toBrowserSeconds(estimate, at) };
+
   const inputCall = <A>(operation: string, effect: Effect.Effect<A, Input.InputFailure>) =>
     effect.pipe(
       Effect.mapError(
@@ -349,7 +357,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
 
   const dispatchMouse = (
     event: MouseEvent,
-    estimate: BrowserClock.Estimate,
+    estimate: BrowserClock.Estimate | undefined,
     submitted?: () => void,
   ) => {
     const at = now();
@@ -384,10 +392,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               })
             : undefined;
 
-    const response = cdp.send("Input.dispatchMouseEvent", {
-      ...event,
-      timestamp: BrowserClock.toBrowserSeconds(estimate, at),
-    });
+    const response = cdp.send("Input.dispatchMouseEvent", { ...event, ...stamp(estimate, at) });
 
     if (event.type === "mouseMoved") MutableRef.set(pointer.ref, Option.some(point));
     if (track !== undefined) publish(track);
@@ -406,7 +411,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       operation,
       Effect.gen(function* () {
         const held = `mouse:${event.button ?? "left"}`;
-        const estimate = inputClocks.get(run) ?? calibration.current;
+        const estimate = inputClocks.get(run);
 
         if (event.type === "mouseReleased") return yield* run.up(held);
         if (event.type === "mousePressed") {
@@ -436,12 +441,12 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   const dispatchKey = (
     key: string,
     phase: "down" | "up",
-    command: (at: number, estimate: BrowserClock.Estimate) => Promise<unknown>,
+    command: (at: number, estimate: BrowserClock.Estimate | undefined) => Promise<unknown>,
     run: Input.Run,
   ) => {
     const at = now();
     const event = new KeyChanged({ at, page: id, key, phase });
-    const response = command(at, inputClocks.get(run) ?? calibration.current);
+    const response = command(at, inputClocks.get(run));
 
     publish(event);
 
@@ -549,19 +554,14 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
   );
 
   // Input and capture share the owner's monotonic clock; caller-provided clocks cannot move it.
-  const calibration = { current: yield* calibrateClock };
-
+  // Registration measures nothing: a page that is busy while it opens, such as a popup running
+  // its first script, must still be tracked. The browser's mapping serves every other page, so
+  // only a browser with no estimate yet needs this page's renderer to answer.
   const capture = yield* Capture.make({
     id,
     cdp,
     clock,
-    calibrate: calibrateClock.pipe(
-      Effect.tap((estimate) =>
-        Effect.sync(() => {
-          calibration.current = estimate;
-        }),
-      ),
-    ),
+    calibrate: mapping.refresh(calibrateClock),
     frameHistory: settings.frameHistory,
     viewport: () => playwright.viewportSize(),
     onClose: (listener) => {
@@ -647,10 +647,18 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
         );
 
       const useInput = <Value>(action: (run: Input.Run) => Effect.Effect<Value, BrowserError>) =>
-        input.begin.pipe(
+        mapping.current(calibrateClock).pipe(
+          Effect.mapError(
+            (error) =>
+              new BrowserError({ operation: name, reason: error.reason, dispatched: false }),
+          ),
           // A capture can recalibrate while input is running. One run, including delayed cleanup
           // releases, keeps one mapping so epoch stamps cannot jump backwards during a stroke.
-          Effect.tap((run) => Effect.sync(() => inputClocks.set(run, calibration.current))),
+          Effect.flatMap((estimate) =>
+            input.begin.pipe(
+              Effect.tap((run) => Effect.sync(() => inputClocks.set(run, estimate))),
+            ),
+          ),
           Effect.flatMap((run) =>
             action(run).pipe(
               Effect.matchEffect({
@@ -1035,7 +1043,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
       // stretched by per-sample reply backpressure; unsent reservations belong to this run.
       yield* inputCall(operation, run.reserveMotion(samples.length));
       yield* Ref.set(pointer, Option.some(from));
-      const estimate = inputClocks.get(run) ?? calibration.current;
+      const estimate = inputClocks.get(run);
       const at = now();
       let dispatched = 0;
       let last = from;
@@ -1297,7 +1305,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               (at, estimate) =>
                 cdp.send("Input.dispatchKeyEvent", {
                   type: "keyDown",
-                  timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+                  ...stamp(estimate, at),
                   modifiers: 0,
                   windowsVirtualKeyCode: keyCode,
                   code,
@@ -1318,7 +1326,7 @@ export const make = Effect.fnUntraced(function* (options: MakeOptions) {
               (at, estimate) =>
                 cdp.send("Input.dispatchKeyEvent", {
                   type: "keyUp",
-                  timestamp: BrowserClock.toBrowserSeconds(estimate, at),
+                  ...stamp(estimate, at),
                   modifiers: 0,
                   windowsVirtualKeyCode: keyCode,
                   code,

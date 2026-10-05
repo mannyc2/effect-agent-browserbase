@@ -33,6 +33,7 @@ import {
 } from "./BrowserEvent.ts";
 import { CaptureCalibration } from "./Frame.ts";
 import * as Startup from "./internal/calibration.ts";
+import * as BrowserClock from "./internal/clock.ts";
 import * as Timeline from "./internal/timeline.ts";
 import * as Motion from "./Motion.ts";
 import * as Page from "./Page.ts";
@@ -144,23 +145,25 @@ export const make = Effect.fn("Browser.make")(function* (
 
   // A caller's scripts or existing tabs can react to probe input. Providers opt fresh allocations
   // into this private phase before scripts, page registration or the public service exist.
-  const captureCalibration =
+  const startup =
     info.contextOrigin === "fresh"
       ? Option.some(
-          new CaptureCalibration(
-            yield* Startup.owned(context, clock).pipe(
-              Effect.mapError(
-                (error) =>
-                  new BrowserError({
-                    operation: "calibrate",
-                    reason: Page.reasonOf(error.cause),
-                    dispatched: false,
-                  }),
-              ),
+          yield* Startup.owned(context, clock).pipe(
+            Effect.mapError(
+              (error) =>
+                new BrowserError({
+                  operation: "calibrate",
+                  reason: Page.reasonOf(error.cause),
+                  dispatched: false,
+                }),
             ),
           ),
         )
-      : Option.none<CaptureCalibration>();
+      : Option.none<Startup.StartupCalibration>();
+
+  const captureCalibration = Option.map(startup, (measured) => new CaptureCalibration(measured));
+  // The startup page measured the same host wall clock every later renderer reads.
+  const mapping = BrowserClock.mapping(Option.map(startup, (measured) => measured.clock));
 
   const timeline = Timeline.make(eventHistory);
 
@@ -211,6 +214,7 @@ export const make = Effect.fn("Browser.make")(function* (
           settings,
           motion,
           clock,
+          mapping,
           publish,
           pointer,
           inputLock,

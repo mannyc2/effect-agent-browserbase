@@ -138,6 +138,11 @@ the consumer's compositor. This measures the first observed captured marker, not
 Supplied contexts and attached sessions receive read-only clock probes and expose no active startup
 measurement. Transport asymmetry remains in the reported uncertainty.
 
+Every renderer reads the same host wall clock, so the browser keeps one clock mapping for all of its
+pages. The startup measurement seeds it; otherwise the first page that needs it probes it. Each new
+capture refreshes the mapping and keeps the previous estimate if the page cannot answer in time, so a
+busy page only fails while its browser has no estimate at all; that failure is undispatched.
+
 Mouse input and raw text-key events carry the calibrated epoch timestamp. Shortcut chords retain
 Playwright's platform behavior, and Unicode insertion has no timestamp field. Startup probes are
 unstamped so the measurement remains observable.
