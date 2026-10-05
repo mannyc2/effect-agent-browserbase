@@ -71,12 +71,18 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
         ],
       );
       assert.deepStrictEqual(
-        events.map((event) => event.at),
+        events
+          .filter((event) => ["PageOpened", "Navigated", "Action"].includes(event._tag))
+          .map((event) => event.at),
         [1000, 1100, 1100, 1200],
       );
       assert.strictEqual(observation.at, 1200);
       assert.strictEqual(yield* browser.now, 1200);
-      assert.isTrue(events.every((event) => Number.isFinite(event.at)));
+      assert.isTrue(events.every((event) => event.at >= 1000 && event.at <= 1200));
+      assert.deepStrictEqual(
+        events.map((event) => event.at),
+        events.map((event) => event.at).toSorted((left, right) => left - right),
+      );
       assert.doesNotThrow(() => JSON.stringify({ events, at: observation.at }));
     }),
   );

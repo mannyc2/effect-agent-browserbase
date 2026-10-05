@@ -15,6 +15,8 @@
   holds and validation before held actions resume.
 - Bounded, pipelined typing and shortcut chords, plus one host monotonic clock for events, frame
   arrivals, observations and moments.
+- A timed input track with planned glides, submission receipts, button/key phases, wheel and cursor
+  events; browser-wide pointer ownership and bounded event replay with explicit expiration.
 - `bench` (private): seven tasks over canvas games, live charts and forms, graded against the
   pages' own truth. Paid runs are opt-in and capped.
 

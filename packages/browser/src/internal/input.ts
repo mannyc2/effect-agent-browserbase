@@ -1,7 +1,7 @@
 /**
  * Bounded input replies owned by the page, including after an action is interrupted.
  * Canceling a caller cannot cancel a protocol command already sent. The next action waits for
- * those replies, while a stopped run releases only keys whose release was never submitted.
+ * those replies, while a stopped run releases only held keys or buttons whose release was never submitted.
  */
 import { Data, Effect } from "effect";
 
@@ -119,7 +119,7 @@ export const make = () => {
 
             if (entry === undefined) return;
             // Submission owns the release, even if its reply fails. Retrying an uncertain
-            // key-up could run page handlers twice, so cleanup never sends it again.
+            // release could run page handlers twice, so cleanup never sends it again.
             held.splice(index, 1);
             submit(entry.release);
           });

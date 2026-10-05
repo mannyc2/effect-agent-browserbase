@@ -85,5 +85,32 @@ from the clock captured when the browser is made. They remain ordered across wal
 Compare these stamps only within that clock: they are not epoch dates or comparable across hosts.
 `Frame.timestamp` retains browser paint wall time; screenshot fallbacks use host wall time.
 
+`Browser.events()` streams `RecordedEvent` values: `{ sequence, event }`. The sequence orders
+all browser events and is the replay cursor. Call `browser.events({ after: lastSequence })` to
+resume, or use `after: 0` for everything since the browser opened if it is still retained. With
+no cursor, streaming begins at subscription. `eventHistory` keeps a positive bounded number of
+events (4,096 by default), also exposed without envelopes by `recentEvents`. A reader whose next
+event has expired fails with `EventHistoryExpired`; it never skips events silently. Consume the
+stream promptly and size retention for the consumer’s delay. Closing the browser scope wakes and
+ends idle readers.
+
+The presentation track uses the same channel. `TrackPlanned` publishes a whole glide before
+input, with `from` and samples whose `afterMillis` are offsets from `at`. Its sequence identifies
+the plan. `TrackPerformed` ends that plan, names it in `plan`, and records the number of samples
+actually submitted plus the last submitted point. The consumer must trim the planned suffix to
+that count after interruption or failure. `complete` means all samples were submitted; it does
+not claim that the browser acknowledged or painted them.
+
+`PointerPressed`, `PointerReleased`, `WheelScrolled`, `KeyChanged`, `TextInserted` and
+`CursorChanged` describe the remaining input. Button, key and text events are published at
+submission, including cleanup releases. Cursor shape comes from resolved target metadata.
+`TrackEvent` is the schema union for these presentation events; `Moment` excludes them from its
+narrative timeline. Compositing remains the consumer’s job.
+
+The pointer starts at the first active viewport’s center and belongs to the browser across tabs.
+Input actions share ownership of it; a policy hold still leaves that ownership free. Every sent
+move updates the position, including a partially cancelled glide. A later viewport clamps the
+starting point to its bounds if necessary.
+
 Every module is also an entry point, such as `effect-browser/Agent`. The
 [repository README](https://github.com/mannyc2/effect-agent-browserbase#readme) has examples.
