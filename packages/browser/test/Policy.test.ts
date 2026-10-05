@@ -358,6 +358,107 @@ layer(Layer.mergeAll(Chromium.layer(), SiteLayer), {
     }),
   );
 
+  for (const humanize of [false, true]) {
+    const mode = humanize ? "humanized" : "plain";
+
+    it.effect("stops typing before a newly focused control receives keys, " + mode, () =>
+      Effect.gen(function* () {
+        const { page } = yield* setup({
+          humanize,
+          guard: (request) =>
+            request.classifications.some((kind) => kind === "delete" || kind === "form-submit")
+              ? Effect.fail(new PolicyDenied({ detail: "deletion and submission are denied" }))
+              : Effect.void,
+        });
+
+        // Approval for a text field must not authorize Space on a control its input handler focuses.
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            "<form onsubmit=\"event.preventDefault(); document.body.dataset.submitted='yes'\">" +
+              '<label>Query <input id="query"></label><button id="remove">Delete order</button></form>' +
+              '<script>query.addEventListener("input", () => remove.focus());' +
+              "remove.addEventListener(\"keydown\", () => document.body.dataset.activated='yes');</script>",
+          ),
+        );
+
+        const result = yield* page
+          .type("a b", { into: refOf(yield* page.snapshot(), "textbox", "Query") })
+          .pipe(
+            Effect.match({
+              onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
+              onSuccess: () => undefined,
+            }),
+          );
+
+        const effects = yield* Effect.promise(() =>
+          page.playwright.evaluate(() => ({
+            submitted: document.body.dataset.submitted,
+            activated: document.body.dataset.activated,
+          })),
+        );
+
+        assert.deepStrictEqual(
+          { result, typed: yield* valueOf(page, "#query"), ...effects },
+          {
+            result: { tag: "NotActionable", dispatched: true },
+            typed: "a",
+            submitted: undefined,
+            activated: undefined,
+          },
+        );
+      }),
+    );
+
+    it.effect("stops a double-click before pressing a replacement control, " + mode, () =>
+      Effect.gen(function* () {
+        const { page } = yield* setup({
+          humanize,
+          guard: (request) =>
+            request.classifications.some((kind) => kind === "delete" || kind === "form-submit")
+              ? Effect.fail(new PolicyDenied({ detail: "deletion and submission are denied" }))
+              : Effect.void,
+        });
+
+        // A second press must still hit the approved control after its first click changes the DOM.
+        yield* Effect.promise(() =>
+          page.playwright.setContent(
+            "<style>button{position:absolute;left:10px;top:10px;width:150px;height:60px}</style>" +
+              '<button id="first" type="button" onclick="this.remove(); document.getElementById(\'remove\').hidden=false">Continue</button>' +
+              "<form onsubmit=\"event.preventDefault(); document.body.dataset.submitted='yes'\">" +
+              '<button id="remove" hidden onpointerdown="document.body.dataset.activated=\'yes\'">Delete order</button></form>',
+          ),
+        );
+
+        const result = yield* page
+          .click(refOf(yield* page.snapshot(), "button", "Continue"), { clickCount: 2 })
+          .pipe(
+            Effect.match({
+              onFailure: (error) => ({ tag: error.reason._tag, dispatched: error.dispatched }),
+              onSuccess: () => undefined,
+            }),
+          );
+
+        const effects = yield* Effect.promise(() =>
+          page.playwright.evaluate(() => ({
+            firstPresent: document.getElementById("first") !== null,
+            submitted: document.body.dataset.submitted,
+            activated: document.body.dataset.activated,
+          })),
+        );
+
+        assert.deepStrictEqual(
+          { result, ...effects },
+          {
+            result: { tag: "NotActionable", dispatched: true },
+            firstPresent: false,
+            submitted: undefined,
+            activated: undefined,
+          },
+        );
+      }),
+    );
+  }
+
   it.effect("consults one policy for every supported input and navigation", () =>
     Effect.gen(function* () {
       const requests: Array<InputRequest> = [];
